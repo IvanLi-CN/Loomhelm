@@ -16,6 +16,10 @@ _Avoid_: Labeling one selected project's task list as the global Tasks entry.
 
 _Avoid_: Treating conversations as an additional kind of session or as a host-management surface.
 
+**Standalone conversation (独立对话)**: A conversation that is not associated with a task and may also have no project. It can later become a task's main conversation without losing its identity or existing context.
+
+_Avoid_: Treating every conversation as requiring a task or a project at creation.
+
 **Project workspace (项目工作区)**: A workspace scoped to one selected project's tasks and conversations.
 
 _Avoid_: Global workbench when referring to a single project's context, or Projects and tasks as a label for one selected project's task list.

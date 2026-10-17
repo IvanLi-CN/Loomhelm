@@ -140,7 +140,7 @@
     .messages { padding: 24px; overflow-y: auto; flex: 1; min-height: 0; }
     .message { max-width: 72ch; margin: 0 auto 25px; line-height: 1.8; }
     .message-label { font-size: 12px; font-weight: 600; margin-bottom: 7px; }
-    .message p { margin-bottom: 8px; }
+    .message p { margin-bottom: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .message.user { border-bottom: 1px solid var(--line); padding-bottom: 18px; }
     details { border-top: 1px solid var(--line); padding: 12px 0; }
     summary { cursor: pointer; line-height: 1.7; font-size: 13px; }
@@ -159,6 +159,8 @@
     .notice { border-top: 1px solid var(--line); background: #f0f3f1; padding: 10px 16px; position: fixed; bottom: 0; left: 208px; right: 0; z-index: 5; font-size: 13px; line-height: 1.5; }
     dialog { width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 18px; border: 1px solid var(--line); border-radius: 8px; }
     dialog::backdrop { background: #20282555; }
+    dialog.association-dialog { width: min(560px, calc(100vw - 32px)); }
+    .association-dialog .form-field { margin-top: 18px; margin-bottom: 16px; }
     .session-choice { padding: 18px 0; }
     @media (max-width: 79.99rem) { .overview { grid-template-columns: minmax(0, 1fr); } .session-column { margin-top: 8px; } }
     @media (max-width: 63.99rem) { .prototype { grid-template-columns: minmax(0, 1fr); } .sidebar { display: none; } .mobile-menu { display: block; } .notice { left: 0; } .task-layout { grid-template-columns: minmax(0, 1fr) 270px; } }
@@ -230,8 +232,9 @@
       <section><h2>已确认的工作方式</h2><p>主要使用者是主人一人，可同时使用多个桌面或手机终端。界面以高效工作台为目标，两端功能一致。</p>
         <ol><li>全局导航为工作台、任务、对话；下方项目列表用于直接切换项目上下文。</li><li>默认进入跨项目的工作台，优先呈现需要人工介入的工作，其余对话保持紧凑、可直达。</li><li>审批在工作台内展开完整请求及上下文后，可以直接批准或拒绝，也能进入完整对话。</li><li>同一主人的终端共享任务、对话、已提交操作与未发送草稿；切换设备不要求接管控制。</li><li>每端独立导航和滚动，手机换对话不会带走电脑的阅读位置。</li><li>每个任务最多直接关联一个 Codex 主对话；审查、资料收集等支持工作通常交给其中的 sub-agent。</li><li>sub-agent 在主对话内按可展开分支呈现，具体内容以真实事件支持为准。</li><li>任务直接进入主对话与任务信息结合的工作区；桌面并排查看，手机在任务内切换面板。</li><li>任务提供列表、看板、图谱三种视图并记住选择；首次默认紧凑列表。图谱同时表达项目／任务／子任务层级及任务依赖。</li><li>文件跟随相关对话呈现；远程文件浏览留待后续按需考虑。</li><li>当前按单一工作环境设计。</li><li>工程工作流沿用现有方案，本设计先聚焦可见的工作内容与操作。</li></ol>
       </section>
-      <section><h2>本轮可试用的路径</h2><p>从全局任务查看各项目工作，切换列表、看板和图谱，重新打开后恢复上次选择；切到全局对话查看最近活动；点击项目进入该项目的任务。在工作台展开审批并处理，或进入主对话展开子代理、编辑输入、查看任务信息。</p><p>场景菜单用于检查离线、恢复同步、结果待核对、审批已处理、只读权限和空任务状态。演示交互只改变此原型的数据，不代表真实后端、Codex 控制或 PWA 安装验证已通过。</p></section>
-      <section><h2>当前信息架构</h2><div class="table-scroll"><table class="notes-table"><thead><tr><th>入口</th><th>主内容</th><th>进一步操作</th></tr></thead><tbody><tr><td>工作台 · 全局</td><td>待介入事项、最近对话</td><td>就地核对审批，进入对应工作</td></tr><tr><td>任务 · 全局</td><td>全部项目的任务目标与进度</td><td>列表／看板／图谱切换、筛选、进入任务</td></tr><tr><td>对话 · 全局</td><td>全部项目的对话与最近活动</td><td>搜索、按对话状态筛选、继续沟通</td></tr><tr><td>项目列表</td><td>项目上下文切换</td><td>查看当前项目任务，恢复该项目视图</td></tr><tr><td>任务工作区</td><td>一个主对话、可展开子代理、共享草稿</td><td>消息、审批、任务信息；文件保留在对话上下文中</td></tr></tbody></table></div><p>文件跟随相关对话呈现。远程文件浏览仅作为后续按需考虑的能力，不纳入当前结构。</p></section>
+      <section><h2>独立对话与任务关联</h2><p>可以从全局“对话”直接开始临时讨论，不必先建立任务或选择项目；创建时也可以选择项目。独立对话之后可关联任务，尚未归属项目的对话随关联进入该任务的项目。</p><p>关联继续使用同一段对话，保留已有消息、未发送草稿与阅读位置。每项任务仍最多直接关联一个主对话。原型提供选择尚无主对话的任务及新建任务两条路径；已有对话的替换与跨项目迁移规则尚未确定。</p></section>
+      <section><h2>本轮可试用的路径</h2><p>在全局对话新建不选项目的独立对话，继续发送或保留草稿，再关联已有任务或新建任务。也可从全局任务查看各项目工作，切换列表、看板和图谱，重新打开后恢复上次选择；点击项目进入该项目的任务。在工作台展开审批并处理，或进入主对话展开子代理、编辑输入、查看任务信息。</p><p>场景菜单用于检查离线、恢复同步、结果待核对、审批已处理、只读权限和空任务状态。演示交互只改变此原型的数据，不代表真实后端、Codex 控制或 PWA 安装验证已通过。</p></section>
+      <section><h2>当前信息架构</h2><div class="table-scroll"><table class="notes-table"><thead><tr><th>入口</th><th>主内容</th><th>进一步操作</th></tr></thead><tbody><tr><td>工作台 · 全局</td><td>待介入事项、最近对话</td><td>就地核对审批，进入对应工作</td></tr><tr><td>任务 · 全局</td><td>全部项目的任务目标与进度</td><td>列表／看板／图谱切换、筛选、进入任务</td></tr><tr><td>对话 · 全局</td><td>全部对话与最近活动，包含未归属项目或任务的对话</td><td>新建对话、搜索、按状态筛选、继续沟通及关联任务</td></tr><tr><td>项目列表</td><td>项目上下文切换</td><td>查看当前项目任务，恢复该项目视图</td></tr><tr><td>任务工作区</td><td>一个主对话、可展开子代理、共享草稿</td><td>消息、审批、任务信息；文件保留在对话上下文中</td></tr></tbody></table></div><p>文件跟随相关对话呈现。远程文件浏览仅作为后续按需考虑的能力，不纳入当前结构。</p></section>
       <section><h2>状态与能力覆盖</h2><div class="table-scroll"><table class="notes-table"><thead><tr><th>范围</th><th>当前表达</th><th>仍需补齐</th></tr></thead><tbody><tr><td>审批与拒绝</td><td>完整请求、就地显式响应、过期入口停用</td><td>真实审批修订、重复及冲突响应</td></tr><tr><td>多端与草稿</td><td>同一模型的桌面/手机布局、面板切换保留输入</td><td>真实多客户端同步、并发编辑与断线恢复规则</td></tr><tr><td>离线与重连</td><td>明确状态、控制操作停用、无自动提交</td><td>PWA 离线外壳、安装更新与旧客户端兼容</td></tr><tr><td>结果不确定</td><td>待核对说明、查看会话入口</td><td>实际命令状态、对账进度、控制冲突与中断</td></tr><tr><td>会话与子代理</td><td>一个主会话、可展开过程与未知内容回退</td><td>真实内容夹具、两个会话创建/接入路径</td></tr><tr><td>通用状态</td><td>空任务、只读权限、键盘焦点、窄屏布局</td><td>加载、失败恢复、长内容与完整组件状态</td></tr><tr><td>对话文件</td><td>相关消息中的文件引用</td><td>真实文件访问与权限表现</td></tr></tbody></table></div></section>
       <section><h2>视觉与组件</h2><p>当前只使用中性排版评审结构。产品配色、tokens、组件细节、桌面/手机视觉及完整状态会继续补在此文件；当前排版不构成产品视觉批准。</p></section>
       <section><h2>实现交接</h2><p>F02 框架、R02 脱敏真实内容、F05 公共合同及 RD03/G0 实际输入到位后，在此逐项补齐 U01–U04 的页面、组件、状态和 API 对照。当前未锁定接口字段、草稿合并算法或桌面同实例控制能力。</p><p>只有主人明确确认完整一期设计后，D01 才能完成。对本轮结构、某个页面或某张截图的确认仅作用于对应部分。</p></section>
@@ -241,6 +244,7 @@
     <div id="app" class="prototype" data-visual-evidence-target></div>
     <div id="notice" class="notice" role="status" hidden></div>
     <dialog id="navigationDialog" aria-label="工作区导航"><div class="row between"><strong>Loomhelm</strong><form method="dialog"><button>关闭导航</button></form></div><nav id="dialogNavigation"></nav></dialog>
+    <dialog id="associationDialog" class="association-dialog" aria-labelledby="associationTitle"></dialog>
   </div>
   <script>
     const parameters = new URLSearchParams(location.search);
@@ -257,14 +261,23 @@
       { id: "LH-43", title: "验证重复审批的处理结果", project: "loomhelm", parent: "LH-42", state: "待处理", execution: "未开始", goal: "在完成对账提示后核对重复响应的结果。" }
     ];
     const demoDependencies = [["LH-35", "LH-38"], ["LH-38", "LH-42"], ["LH-42", "LH-43"]];
+    const initialConversations = [
+      { id: "C-101", title: "整理今天的工作想法", project: null, execution: "已结束", preview: "先整理想法，需要正式推进时再关联任务。", updated: "1 分钟前", history: [{ role: "user", text: "先帮我整理今天想做的几件事，暂时不用建任务。" }, { role: "assistant", text: "可以先在这里梳理目标与优先级，确定要推进的工作后再关联任务。" }] },
+      { id: "C-102", title: "讨论工作区的键盘操作", project: "notes", execution: "已结束", preview: "先讨论导航与焦点顺序，还未关联任务。", updated: "8 分钟前", history: [{ role: "user", text: "我们先讨论一下项目工作区的键盘操作。" }, { role: "assistant", text: "可以从全局导航、任务切换和输入焦点这几个路径开始梳理。" }] }
+    ];
     function readTaskViews() { try { const saved = JSON.parse(localStorage.getItem("loomhelm.design.task-views") || "{}"); return Object.fromEntries(Object.entries(saved || {}).filter(([, view]) => ["list", "board", "graph"].includes(view))); } catch { return {}; } }
-    const model = { view: "global", entry: "global", project: "loomhelm", task: "LH-42", attention: "approval-1", panel: "chat", tasks: structuredClone(initialTasks), drafts: {}, messages: {}, readPositions: {}, expandedDetails: {}, decisions: {}, search: "", filter: "all", taskViews: readTaskViews(), graphZoom: 1, scenario: parameters.get("scenario") || "normal" };
+    const model = { view: "global", entry: "global", project: "loomhelm", task: "LH-42", conversation: "C-101", attention: "approval-1", panel: "chat", tasks: parameters.get("scenario") === "empty" ? [] : structuredClone(initialTasks), conversations: parameters.get("scenario") === "empty" ? [] : structuredClone(initialConversations), drafts: {}, messages: {}, readPositions: {}, expandedDetails: {}, decisions: {}, search: "", filter: "all", taskViews: readTaskViews(), graphZoom: 1, scenario: parameters.get("scenario") || "normal" };
     const taskStates = ["待处理", "进行中", "待验收", "已完成"];
     const taskScopeKey = () => model.view === "project" ? `project:${model.project}` : "global";
     const currentTaskView = () => model.taskViews[taskScopeKey()] || "list";
-    const scopedTasks = () => model.scenario === "empty" ? [] : model.tasks.filter(task => model.view !== "project" || task.project === model.project);
-    const projectName = id => projects.find(project => project.id === id)?.name || id;
+    const scopedTasks = () => model.tasks.filter(task => model.view !== "project" || task.project === model.project);
+    const projectName = id => projects.find(project => project.id === id)?.name || id || "未归属项目";
     const findTask = id => model.tasks.find(task => task.id === id);
+    const conversationEntries = () => [...model.conversations, ...model.tasks.filter(task => task.execution !== "未开始" && !task.conversationId).map(task => ({ ...task, taskId: task.id }))].sort((a, b) => activityRank(a.updated) - activityRank(b.updated));
+    const activityRank = updated => updated === "昨天" ? 1440 : Number.parseInt(updated, 10) || 0;
+    const findConversation = id => conversationEntries().find(conversation => conversation.id === id);
+    const conversationKey = () => model.view === "conversation" ? model.conversation : findTask(model.task)?.conversationId || model.task;
+    const conversationScope = conversation => `${projectName(conversation.project)} / ${conversation.taskId || "未关联任务"}`;
     const blocked = () => ["offline", "syncing", "readonly"].includes(model.scenario);
     const disabled = () => blocked() ? "disabled" : "";
     const attentionItems = () => model.scenario === "empty" ? [] : [
@@ -320,8 +333,8 @@
     function globalView() {
       const items = attentionItems();
       const selected = items.find(item => item.id === model.attention) || items[0];
-      const activeTasks = model.scenario === "empty" ? [] : model.tasks.filter(task => task.execution !== "未开始");
-      return `<div class="page-title"><h1>工作台</h1><p>跨项目查看需要你介入的工作，再继续当前任务。</p></div>${condition()}<div class="overview"><section><h2>待介入事项 <span class="count">${items.length} 项</span></h2><div class="attention-list">${items.map(item => `<button class="attention-row ${selected?.id === item.id ? "selected" : ""}" data-attention="${item.id}" aria-pressed="${selected?.id === item.id}"><span class="attention-kind">${item.kind}</span><span class="grow"><strong>${item.title}</strong><small>${projectName(findTask(item.task).project)} / ${item.task} · ${item.context}</small></span></button>`).join("") || '<div class="empty"><h3>没有待介入事项</h3><p>你可以继续查看对话，或开始一项新任务。</p></div>'}</div>${requestDetails(selected)}</section><section class="session-column"><div class="row between"><h2>最近对话</h2><button class="quiet" data-nav="conversations">全部对话</button></div><div class="session-list">${activeTasks.map(task => `<div class="session-row"><div class="row between"><small>${projectName(task.project)} / ${task.id}</small><span class="state">${task.execution}</span></div><button class="title-button" data-task="${task.id}">${escapeHTML(task.title)}</button><small>${task.updated || "刚刚"} · 任务：${task.state}</small></div>`).join("") || '<p class="muted">开始对话后，最近活动会出现在这里。</p>'}</div></section></div>`;
+      const conversations = conversationEntries();
+      return `<div class="page-title"><h1>工作台</h1><p>跨项目查看需要你介入的工作，再继续当前任务。</p></div>${condition()}<div class="overview"><section><h2>待介入事项 <span class="count">${items.length} 项</span></h2><div class="attention-list">${items.map(item => `<button class="attention-row ${selected?.id === item.id ? "selected" : ""}" data-attention="${item.id}" aria-pressed="${selected?.id === item.id}"><span class="attention-kind">${item.kind}</span><span class="grow"><strong>${item.title}</strong><small>${projectName(findTask(item.task).project)} / ${item.task} · ${item.context}</small></span></button>`).join("") || '<div class="empty"><h3>没有待介入事项</h3><p>你可以继续查看对话，或开始一项新任务。</p></div>'}</div>${requestDetails(selected)}</section><section class="session-column"><div class="row between"><h2>最近对话</h2><button class="quiet" data-nav="conversations">全部对话</button></div><div class="session-list">${conversations.map(conversation => `<div class="session-row"><div class="row between"><small>${escapeHTML(conversationScope(conversation))}</small><span class="state">${conversation.execution}</span></div><button class="title-button" data-conversation="${conversation.id}">${escapeHTML(conversation.title)}</button><small>${conversation.updated || "刚刚"}</small></div>`).join("") || '<p class="muted">开始对话后，最近活动会出现在这里。</p>'}</div></section></div>`;
     }
     function tasksView() {
       const global = model.view === "tasks";
@@ -330,46 +343,67 @@
     function filterTasks(tasks) { const query = model.search.toLocaleLowerCase(); return tasks.filter(task => `${task.title} ${task.id} ${projectName(task.project)}`.toLocaleLowerCase().includes(query) && (model.filter === "all" || task.state === model.filter)); }
     function conversationRows() {
       const query = model.search.toLocaleLowerCase();
-      const conversations = model.scenario === "empty" ? [] : model.tasks.filter(task => task.execution !== "未开始" && `${task.title} ${task.id} ${projectName(task.project)} ${task.preview || ""}`.toLocaleLowerCase().includes(query) && (model.filter === "all" || task.execution === model.filter));
-      return conversations.map(task => `<div class="session-row"><div class="row between"><small>${projectName(task.project)} / ${task.id} · ${task.updated || "刚刚"}</small><span class="state">${task.execution}</span></div><button class="title-button" data-task="${task.id}">${escapeHTML(task.title)}</button><p class="conversation-preview">${escapeHTML(task.preview || "继续当前对话。")}</p></div>`).join("") || `<div class="empty"><h2>${model.search || model.filter !== "all" ? "没有匹配的对话" : "还没有对话"}</h2><p>${model.search || model.filter !== "all" ? "试试其他关键词或对话状态。" : "进入任务后即可开始主对话。"}</p></div>`;
+      const conversations = conversationEntries().filter(conversation => `${conversation.title} ${conversation.taskId || "未关联任务"} ${projectName(conversation.project)} ${conversation.preview || ""}`.toLocaleLowerCase().includes(query) && (model.filter === "all" || conversation.execution === model.filter));
+      return conversations.map(conversation => `<div class="session-row"><div class="row between"><small>${escapeHTML(conversationScope(conversation))} · ${conversation.updated || "刚刚"}</small><span class="state">${conversation.execution}</span></div><button class="title-button" data-conversation="${conversation.id}">${escapeHTML(conversation.title)}</button><p class="conversation-preview">${escapeHTML(conversation.preview || "继续当前对话。")}</p></div>`).join("") || `<div class="empty"><h2>${model.search || model.filter !== "all" ? "没有匹配的对话" : "还没有对话"}</h2><p>${model.search || model.filter !== "all" ? "试试其他关键词或对话状态。" : "可以直接开始对话，稍后再选择项目或关联任务。"}</p></div>`;
     }
     function conversationsView() {
-      return `<div class="page-title"><h1>对话</h1><p>跨项目继续对话，查看最近活动与等待处理的事项。</p></div>${condition()}<div class="row filters wrap"><label class="grow"><input id="conversationSearch" type="search" placeholder="搜索对话" aria-label="搜索对话" value="${escapeHTML(model.search)}"></label><label>对话状态 <select id="conversationFilter"><option value="all" ${model.filter === "all" ? "selected" : ""}>全部</option>${["待审批", "执行中", "待核对", "已结束"].map(state => `<option ${model.filter === state ? "selected" : ""}>${state}</option>`).join("")}</select></label></div><div class="session-list" id="conversationList">${conversationRows()}</div>`;
+      return `<div class="page-title row between wrap"><div><h1>对话</h1><p>继续已有对话，或直接开始讨论；项目与任务可以稍后关联。</p></div><button class="primary" data-nav="create-conversation" ${disabled()}>新建对话</button></div>${condition()}<div class="row filters wrap"><label class="grow"><input id="conversationSearch" type="search" placeholder="搜索对话" aria-label="搜索对话" value="${escapeHTML(model.search)}"></label><label>对话状态 <select id="conversationFilter"><option value="all" ${model.filter === "all" ? "selected" : ""}>全部</option>${["待审批", "执行中", "待核对", "已结束", "已连接", "已拒绝"].map(state => `<option ${model.filter === state ? "selected" : ""}>${state}</option>`).join("")}</select></label></div><div class="session-list" id="conversationList">${conversationRows()}</div>`;
     }
     function taskView() {
       const task = findTask(model.task);
-      const draft = model.drafts[task.id] || "";
+      const key = conversationKey();
+      const draft = model.drafts[key] || "";
+      const independent = model.conversations.find(conversation => conversation.id === task.conversationId);
       const waiting = attentionItems().find(item => item.task === task.id && item.kind === "待审批");
       const noSession = task.execution === "未开始";
       const fileReference = task.id === "LH-35" ? '<p>核对说明保留在这条对话中：<button class="quiet conversation-file" data-message-file="verification-notes.md">verification-notes.md</button>。</p>' : "";
       return `<header class="task-heading"><div class="muted">${projectName(task.project)} / ${task.id}</div><h1>${escapeHTML(task.title)}</h1><div class="row wrap muted"><span>任务：${task.state}</span><span>对话：${task.execution}</span>${task.parent ? `<span>父任务：${task.parent}</span>` : ""}</div></header>
         <div class="task-panels">${[["chat", "对话"], ["info", "任务信息"]].map(([panel, label]) => `<button data-panel="${panel}" aria-pressed="${model.panel === panel}">${label}</button>`).join("")}</div>
-        <div class="task-layout" data-panel="${model.panel}"><section class="chat-panel" aria-label="任务主对话"><div class="messages" id="messages">${condition()}${noSession ? `<div class="empty"><h2>为任务开始一个主对话</h2><p>新建对话，或接入现有桌面对话，继续这项任务。</p><div class="row wrap"><button data-session-path="new" ${disabled()}>新建主对话</button><button data-session-path="existing" ${disabled()}>接入现有桌面对话</button></div><div class="session-choice" id="sessionChoice" hidden></div></div>` : `
+        <div class="task-layout" data-panel="${model.panel}"><section class="chat-panel" aria-label="任务主对话"><div class="messages" id="messages">${condition()}${noSession ? `<div class="empty"><h2>为任务开始一个主对话</h2><p>新建对话，或接入现有桌面对话，继续这项任务。</p><div class="row wrap"><button data-session-path="new" ${disabled()}>新建主对话</button><button data-session-path="existing" ${disabled()}>接入现有桌面对话</button></div><div class="session-choice" id="sessionChoice" hidden></div></div>` : independent ? conversationHistory(independent) : `
           <div class="message user"><div class="message-label">你</div><p>${escapeHTML(task.goal)}</p></div>
           <div class="message"><div class="message-label">Codex · 主对话</div><p>${task.execution === "已结束" ? "已完成核对，切换任务后草稿仍保留在原对话中。" : "我会先检查当前状态，整理需要确认的边界，再继续处理这项任务。"}</p>${fileReference}
             <details><summary>工具过程 · 检查已有记录</summary><div class="detail-body">已读取当前任务的上下文和操作记录。此处为结构演示，实际字段将按内容夹具对齐。</div></details>
             <details class="sub-agent"><summary>子代理 · code review · ${task.execution === "已结束" ? "已完成" : "进行中"}</summary><div class="detail-body"><p><strong>分工</strong>：检查状态变化与重复响应。</p><p>${task.execution === "已结束" ? "已核对状态变化与重复响应的记录。" : "正在核对审批完成前后，各终端呈现的状态是否一致。"}</p><details><summary>展开工具过程</summary><pre>Example tool activity\nInspect the request state and decision history.</pre></details></div></details>
             <details class="sub-agent"><summary>子代理 · 资料收集 · 已完成</summary><div class="detail-body"><p><strong>结论</strong>：操作结果需要与请求身份对应，重新连接后先核对已有记录。</p><p class="muted">消息与工具显示范围待真实事件夹具核对。</p></div></details>
             ${waiting ? requestDetails(waiting) : '<p class="muted">当前没有待审批请求，可继续在主对话沟通。</p>'}</div>
-          ${(model.messages[task.id] || []).map(text => `<div class="message user"><div class="message-label">你</div><p>${escapeHTML(text)}</p></div>`).join("")}
+          ${(model.messages[key] || []).map(text => `<div class="message user"><div class="message-label">你</div><p>${escapeHTML(text)}</p></div>`).join("")}
           <div class="message"><details><summary>未知内容回退示意 · 查看保留字段</summary><pre>{ "type": "example.unknown", "original": { "content": "Preserved demonstration content" } }</pre></details></div>`}</div>
           ${noSession ? "" : `<form class="composer" id="composerForm"><label for="messageInput" class="muted">对话共享草稿</label><textarea id="messageInput" aria-label="对话共享草稿" placeholder="继续说明目标或补充上下文…" ${blocked() || task.execution === "待核对" ? "disabled" : ""}>${escapeHTML(draft)}</textarea><div class="row between"><small>同一对话的输入跨端共享。发送需要明确点击。</small><button class="primary" type="submit" ${blocked() || task.execution === "待核对" ? "disabled" : ""}>发送</button></div></form>`}</section>
-          <aside class="task-info"><section class="info-section"><h2>任务信息</h2><h3>目标</h3><p>${escapeHTML(task.goal)}</p><label for="businessState">任务状态</label><select id="businessState" ${disabled()}>${taskStates.map(state => `<option ${task.state === state ? "selected" : ""}>${state}</option>`).join("")}</select><h3 class="section-heading">关联对话</h3><dl><dt>主对话</dt><dd>${noSession ? "尚未开始" : "此任务唯一关联的主对话"}</dd><dt>对话状态</dt><dd>${task.execution}</dd>${task.parent ? `<dt>父任务</dt><dd><button class="quiet" data-task="${task.parent}">${task.parent}</button></dd>` : ""}</dl><p class="muted" style="margin-top:16px">子代理的过程在主对话内展开。任务状态与对话执行状态分别保留。</p></section></aside></div>`;
+          <aside class="task-info"><section class="info-section"><h2>任务信息</h2><h3>目标</h3><p>${escapeHTML(task.goal)}</p><label for="businessState">任务状态</label><select id="businessState" ${disabled()}>${taskStates.map(state => `<option ${task.state === state ? "selected" : ""}>${state}</option>`).join("")}</select><h3 class="section-heading">关联对话</h3><dl><dt>主对话</dt><dd>${noSession ? "尚未开始" : independent ? escapeHTML(independent.title) : "此任务唯一关联的主对话"}</dd><dt>对话状态</dt><dd>${task.execution}</dd>${task.parent ? `<dt>父任务</dt><dd><button class="quiet" data-task="${task.parent}">${task.parent}</button></dd>` : ""}</dl><p class="muted" style="margin-top:16px">子代理的过程在主对话内展开。任务状态与对话执行状态分别保留。</p></section></aside></div>`;
+    }
+    function conversationHistory(conversation) {
+      return [...(conversation.history || []), ...(model.messages[conversation.id] || []).map(text => ({ role: "user", text }))].map(message => `<div class="message ${message.role === "user" ? "user" : ""}"><div class="message-label">${message.role === "user" ? "你" : "Codex"}</div><p>${escapeHTML(message.text)}</p></div>`).join("") || '<p class="muted">在下方输入，开始这段对话。</p>';
+    }
+    function conversationView() {
+      const conversation = findConversation(model.conversation);
+      return `<header class="task-heading"><div class="muted">${escapeHTML(conversationScope(conversation))}</div><h1>${escapeHTML(conversation.title)}</h1><div class="row between wrap"><span class="state">${conversation.execution}</span><button data-associate="${conversation.id}" ${disabled()}>关联任务</button></div></header><div class="task-panels">${[["chat", "对话"], ["info", "对话信息"]].map(([panel, label]) => `<button data-panel="${panel}" aria-pressed="${model.panel === panel}">${label}</button>`).join("")}</div><div class="task-layout" data-panel="${model.panel}"><section class="chat-panel" aria-label="独立对话"><div class="messages" id="messages">${condition()}${conversationHistory(conversation)}</div><form class="composer" id="composerForm"><label for="messageInput" class="muted">对话共享草稿</label><textarea id="messageInput" aria-label="对话共享草稿" placeholder="继续讨论或补充上下文…" ${disabled()}>${escapeHTML(model.drafts[conversation.id] || "")}</textarea><div class="row between"><small>同一对话的输入跨端共享。发送需要明确点击。</small><button class="primary" type="submit" ${disabled()}>发送</button></div></form></section><aside class="task-info"><section><h2>对话信息</h2><dl><dt>项目</dt><dd>${escapeHTML(projectName(conversation.project))}</dd><dt>任务</dt><dd>未关联任务</dd></dl><p class="muted" style="margin-top:16px">可以继续独立讨论。需要正式推进时，再关联已有任务或新建任务。</p>${!conversation.project ? '<p class="muted">关联任务后，对话归入该任务的项目。</p>' : ""}<button data-associate="${conversation.id}" ${disabled()}>关联任务</button></section></aside></div>`;
+    }
+    function createConversationView() {
+      return `<div class="page-title"><h1>新建对话</h1><p>先开始讨论；不必先建立任务或选择项目。</p></div>${condition()}<form id="createConversationForm" class="task-form"><label class="form-field">项目（可选）<select name="project"><option value="">暂不选择项目</option>${projects.map(project => `<option value="${project.id}">${project.name}</option>`).join("")}</select></label><label class="form-field">想讨论什么<textarea name="message" rows="5" required placeholder="说说你的问题或想法…"></textarea></label><div class="row wrap"><button class="primary" ${disabled()}>开始对话</button><button type="button" data-nav="conversations">返回对话</button></div></form>`;
+    }
+    function showAssociation(id) {
+      const conversation = model.conversations.find(item => item.id === id); if (!conversation || conversation.taskId || blocked()) return;
+      rememberPosition();
+      const available = model.tasks.filter(task => task.execution === "未开始" && (!conversation.project || task.project === conversation.project));
+      const dialog = document.getElementById("associationDialog");
+      dialog.innerHTML = `<div class="row between"><h2 id="associationTitle" style="margin:0">关联任务</h2><button type="button" data-close-association="true">取消</button></div><p class="muted" style="margin-top:14px">${escapeHTML(conversation.title)}</p><form id="associateConversationForm" data-conversation-id="${id}"><label class="form-field">任务<select name="task" id="associationTarget" required><option value="">选择任务</option>${available.map(task => `<option value="${task.id}">${projectName(task.project)} / ${task.id} · ${escapeHTML(task.title)}</option>`).join("")}<option value="new">新建任务…</option></select></label><p class="muted">${conversation.project ? "可选择同项目中尚无主对话的任务。" : "选定任务后，此对话归入它的项目。"}关联后保留当前对话、消息和草稿。</p><div id="associationNewFields" hidden>${conversation.project ? `<input type="hidden" name="project" value="${conversation.project}" disabled>` : `<label class="form-field">项目<select name="project" required disabled><option value="">选择项目</option>${projects.map(project => `<option value="${project.id}">${project.name}</option>`).join("")}</select></label>`}<label class="form-field">任务名称<input name="title" value="${escapeHTML(conversation.title)}" required maxlength="160" disabled></label><label class="form-field">任务目标<textarea name="goal" rows="3" required disabled placeholder="这项任务要达成什么结果"></textarea></label></div><button class="primary" type="submit">关联任务</button></form>`;
+      dialog.showModal();
     }
     function createView() { return `<div class="page-title"><h1>新建任务</h1><p>先确定目标，再在任务内连接一个主会话。</p></div>${condition()}<form id="createTaskForm" class="task-form"><label class="form-field">项目<select name="project">${projects.map(project => `<option value="${project.id}" ${model.project === project.id ? "selected" : ""}>${project.name}</option>`).join("")}</select></label><label class="form-field">任务名称<input name="title" required maxlength="160" placeholder="这项任务要完成什么"></label><label class="form-field">目标与上下文<textarea name="goal" rows="5" required placeholder="说明期望结果，以及需要保留的约束"></textarea></label><div class="row"><button class="primary" ${disabled()}>保存演示任务</button><button type="button" data-nav="global">返回工作台</button></div></form>`; }
     function render() {
       const focused = document.activeElement;
       const focusSelector = focused?.id ? `#${focused.id}` : focused?.dataset.panel ? `[data-panel="${focused.dataset.panel}"]` : focused?.dataset.attention ? `[data-attention="${focused.dataset.attention}"]` : focused?.dataset.taskView ? `[data-task-view="${focused.dataset.taskView}"]` : null;
       const selection = focused instanceof HTMLInputElement ? [focused.selectionStart, focused.selectionEnd] : null;
-      const views = { global: globalView, tasks: tasksView, project: tasksView, conversations: conversationsView, task: taskView, create: createView };
-      const breadcrumb = model.view === "task" ? `${model.entry === "project" ? projectName(model.project) : ({ global: "工作台", tasks: "任务", conversations: "对话" }[model.entry])} / ${findTask(model.task).id}` : model.view === "project" ? `${projectName(model.project)} / 任务` : ({ global: "工作台", tasks: "任务 / 全部项目", conversations: "对话 / 全部项目", create: "新建任务" }[model.view]);
-      document.getElementById("app").innerHTML = `<aside class="sidebar"><div class="brand">Loomhelm</div><nav>${navigation()}</nav><div class="sidebar-foot">主人的工作区<br>桌面与手机共享工作内容</div></aside><div class="work-area"><header class="app-header row"><button class="mobile-menu quiet" data-menu="open">导航</button><span class="breadcrumb grow">${breadcrumb}</span><span class="prototype-label">结构原型 · 演示数据</span><button data-nav="create" ${disabled()}>新建任务</button></header><main id="workspace" class="content ${model.view === "task" ? "task-mode" : ""}">${views[model.view]()}</main></div>`;
+      const views = { global: globalView, tasks: tasksView, project: tasksView, conversations: conversationsView, conversation: conversationView, "create-conversation": createConversationView, task: taskView, create: createView };
+      const breadcrumb = model.view === "task" ? `${model.entry === "project" ? projectName(model.project) : ({ global: "工作台", tasks: "任务", conversations: "对话" }[model.entry])} / ${findTask(model.task).id}` : model.view === "conversation" ? `对话 / ${findConversation(model.conversation).title}` : model.view === "project" ? `${projectName(model.project)} / 任务` : ({ global: "工作台", tasks: "任务 / 全部项目", conversations: "对话 / 全部项目", "create-conversation": "对话 / 新建对话", create: "新建任务" }[model.view]);
+      document.getElementById("app").innerHTML = `<aside class="sidebar"><div class="brand">Loomhelm</div><nav>${navigation()}</nav><div class="sidebar-foot">主人的工作区<br>桌面与手机共享工作内容</div></aside><div class="work-area"><header class="app-header row"><button class="mobile-menu quiet" data-menu="open">导航</button><span class="breadcrumb grow">${escapeHTML(breadcrumb)}</span><span class="prototype-label">结构原型 · 演示数据</span><button data-nav="create" ${disabled()}>新建任务</button></header><main id="workspace" class="content ${["task", "conversation"].includes(model.view) ? "task-mode" : ""}">${views[model.view]()}</main></div>`;
       document.getElementById("dialogNavigation").innerHTML = navigation();
-      if (model.view === "task") { const messages = document.getElementById("messages"); messages.querySelectorAll("details").forEach((detail, index) => { detail.open = model.expandedDetails[model.task]?.[index] || false; }); messages.scrollTop = model.readPositions[model.task] || 0; }
+      if (["task", "conversation"].includes(model.view)) { const key = conversationKey(); const messages = document.getElementById("messages"); messages.querySelectorAll("details").forEach((detail, index) => { detail.open = model.expandedDetails[key]?.[index] || false; }); messages.scrollTop = model.readPositions[key] || 0; }
       if (focusSelector) { const replacement = document.querySelector(focusSelector); replacement?.focus({ preventScroll: true }); if (selection && selection[0] !== null && replacement instanceof HTMLInputElement) replacement.setSelectionRange(...selection); }
     }
-    function rememberPosition() { const messages = document.getElementById("messages"); if (messages?.getClientRects().length) { model.readPositions[model.task] = messages.scrollTop; model.expandedDetails[model.task] = [...messages.querySelectorAll("details")].map(detail => detail.open); } }
+    function rememberPosition() { const messages = document.getElementById("messages"); if (messages?.getClientRects().length) { const key = conversationKey(); model.readPositions[key] = messages.scrollTop; model.expandedDetails[key] = [...messages.querySelectorAll("details")].map(detail => detail.open); } }
     function openTask(id) { rememberPosition(); model.task = id; model.project = findTask(id).project; model.view = "task"; model.panel = "chat"; render(); }
+    function openConversation(id) { const conversation = findConversation(id); if (!conversation) return; if (conversation.taskId) { openTask(conversation.taskId); return; } rememberPosition(); model.conversation = id; model.view = "conversation"; model.panel = "chat"; render(); }
     if (isCanvas) {
       document.getElementById("reviewRoot").hidden = true;
       document.getElementById("canvasRoot").hidden = false;
@@ -378,14 +412,17 @@
       document.addEventListener("click", event => {
         const button = event.target.closest("button"); if (!button || button.disabled) return;
         if (button.dataset.menu) { document.getElementById("navigationDialog").showModal(); return; }
-        if (button.dataset.nav || button.dataset.project || button.dataset.task) {
+        if (button.dataset.nav || button.dataset.project || button.dataset.task || button.dataset.conversation) {
           rememberPosition(); document.getElementById("notice").hidden = true;
           if (button.dataset.task) openTask(button.dataset.task);
-          else { model.view = button.dataset.nav || "project"; model.entry = button.dataset.nav === "create" ? model.entry : button.dataset.nav || "project"; model.search = ""; model.filter = "all"; if (button.dataset.project) model.project = button.dataset.project; render(); }
+          else if (button.dataset.conversation) openConversation(button.dataset.conversation);
+          else { model.view = button.dataset.nav || "project"; model.entry = ["create", "create-conversation"].includes(button.dataset.nav) ? model.entry : button.dataset.nav || "project"; model.search = ""; model.filter = "all"; if (button.dataset.project) model.project = button.dataset.project; render(); }
           const dialog = document.getElementById("navigationDialog"); if (dialog.open) dialog.close(); return;
         }
         if (button.dataset.attention) { model.attention = button.dataset.attention; render(); return; }
         if (button.dataset.panel) { rememberPosition(); model.panel = button.dataset.panel; render(); return; }
+        if (button.dataset.associate) { showAssociation(button.dataset.associate); return; }
+        if (button.dataset.closeAssociation) { document.getElementById("associationDialog").close(); return; }
         if (button.dataset.taskView) { model.taskViews[taskScopeKey()] = button.dataset.taskView; try { localStorage.setItem("loomhelm.design.task-views", JSON.stringify(model.taskViews)); } catch {} render(); return; }
         if (button.dataset.zoom) { model.graphZoom = button.dataset.zoom === "reset" ? 1 : Math.min(1.4, Math.max(.6, Math.round((model.graphZoom + (button.dataset.zoom === "in" ? .2 : -.2)) * 10) / 10)); render(); return; }
         if (button.dataset.clearFilters) { model.search = ""; model.filter = "all"; render(); document.getElementById("taskSearch").focus(); return; }
@@ -402,18 +439,29 @@
         if (button.dataset.createSession) { const task = findTask(model.task); task.execution = "已连接"; render(); notify("演示：进入新对话布局，未创建真实 Codex 对话。"); }
       });
       document.addEventListener("input", event => {
-        if (event.target.id === "messageInput") model.drafts[model.task] = event.target.value;
+        if (event.target.id === "messageInput") model.drafts[conversationKey()] = event.target.value;
         if (event.target.id === "taskSearch") { model.search = event.target.value; document.getElementById("projectTaskList").innerHTML = taskResults(); }
         if (event.target.id === "conversationSearch") { model.search = event.target.value; document.getElementById("conversationList").innerHTML = conversationRows(); }
       });
       document.addEventListener("change", event => {
         if (event.target.id === "taskFilter") { model.filter = event.target.value; render(); }
         if (event.target.id === "conversationFilter") { model.filter = event.target.value; render(); }
+        if (event.target.id === "associationTarget") { const fields = document.getElementById("associationNewFields"); fields.hidden = event.target.value !== "new"; fields.querySelectorAll("input, textarea, select").forEach(field => { field.disabled = fields.hidden; }); }
         if (event.target.id === "businessState" && !blocked()) { findTask(model.task).state = event.target.value; rememberPosition(); render(); }
       });
       document.addEventListener("submit", event => {
-        if (event.target.id === "composerForm") { event.preventDefault(); if (blocked()) return; const text = (model.drafts[model.task] || "").trim(); if (!text) { document.getElementById("messageInput").focus(); return; } model.messages[model.task] ||= []; model.messages[model.task].push(text); model.drafts[model.task] = ""; render(); const messages = document.getElementById("messages"); messages.scrollTop = messages.scrollHeight; notify("演示：内容已加入当前原型会话，未向 Codex 提交。"); }
+        if (event.target.id === "composerForm") { event.preventDefault(); const key = conversationKey(); const conversation = findConversation(key); if (blocked() || conversation?.execution === "待核对") return; const text = (model.drafts[key] || "").trim(); if (!text) { document.getElementById("messageInput").focus(); return; } model.messages[key] ||= []; model.messages[key].push(text); model.drafts[key] = ""; if (conversation) { conversation.preview = text; conversation.updated = "刚刚"; } if (model.view === "task") { findTask(model.task).preview = text; findTask(model.task).updated = "刚刚"; } render(); const messages = document.getElementById("messages"); messages.scrollTop = messages.scrollHeight; notify("演示：内容已加入当前原型会话，未向 Codex 提交。"); }
         if (event.target.id === "createTaskForm") { event.preventDefault(); if (blocked()) return; const form = new FormData(event.target); const id = `TASK-${model.tasks.length + 1}`; model.tasks.push({ id, title: form.get("title"), goal: form.get("goal"), project: form.get("project"), state: "待处理", execution: "未开始" }); openTask(id); }
+        if (event.target.id === "createConversationForm") { event.preventDefault(); if (blocked()) return; const form = new FormData(event.target); const text = String(form.get("message") || "").trim(); if (!text) return; const id = `C-${103 + model.conversations.filter(conversation => !initialConversations.some(initial => initial.id === conversation.id)).length}`; model.conversations.unshift({ id, title: text.slice(0, 28), project: form.get("project") || null, execution: "已连接", preview: text, updated: "刚刚", history: [] }); model.messages[id] = [text]; model.entry = "conversations"; openConversation(id); notify("演示：已开始独立对话，未向 Codex 提交。"); }
+        if (event.target.id === "associateConversationForm") {
+          event.preventDefault(); if (blocked()) return;
+          const conversation = model.conversations.find(item => item.id === event.target.dataset.conversationId); if (!conversation || conversation.taskId) return;
+          const form = new FormData(event.target); let task;
+          if (form.get("task") === "new") { const project = String(form.get("project") || ""); if (!projects.some(item => item.id === project) || (conversation.project && conversation.project !== project)) return; task = { id: `TASK-${model.tasks.length + 1}`, title: String(form.get("title") || "").trim(), goal: String(form.get("goal") || "").trim(), project, state: "待处理", execution: "未开始" }; if (!task.title || !task.goal) return; model.tasks.push(task); }
+          else task = findTask(form.get("task"));
+          if (!task || task.execution !== "未开始" || (conversation.project && conversation.project !== task.project)) { notify("此任务已有主对话，或不属于当前项目，请重新选择。"); return; }
+          rememberPosition(); task.conversationId = conversation.id; task.execution = conversation.execution; task.preview = conversation.preview; task.updated = "刚刚"; conversation.taskId = task.id; conversation.project = task.project; document.getElementById("associationDialog").close(); openTask(task.id); notify("演示：已关联任务，原对话、消息与未发送草稿已保留。");
+        }
       });
     } else {
       const frame = document.getElementById("prototypeFrame");

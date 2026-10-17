@@ -20,13 +20,15 @@ The global navigation is Workbench, Tasks and Conversations. The workbench prior
 
 Named projects appear below the global navigation and switch the current project context. Project tasks support the same three views. The prototype stores the chosen view independently for global Tasks and each project in client-local prototype storage; the default is list. The active navigation entry and breadcrumb track the actual global or project scope.
 
+Global Conversations includes task-associated and standalone conversations. New conversations can start without a task or project; project selection is optional. The standalone conversation workspace offers later task association while preserving the same conversation, messages, shared draft and reading position. A projectless conversation joins the selected task's project. The prototype offers tasks without a main conversation and a new-task path; it does not replace an existing task conversation or silently move an already scoped conversation across projects. These are prototype boundaries, not a settled reassignment contract.
+
 The graph shows project/task/subtask containment with solid lines and prerequisite-to-dependent task edges with directed dashed lines. It supports scrolling, zoom and opening the same task nodes. Relationships use explicit mock fixtures and need a real public contract before implementation handoff; the prototype does not implement relationship editing.
 
-The owner has ruled out a user-facing host concept and has no current multi-host connection plan. Host navigation, selectors and sample machine names are removed. Execution/pairing contracts require parent reconciliation; this design change does not rewrite backend architecture.
+The owner has ruled out a user-facing host concept and has no current multi-host connection plan. Host navigation, selectors and sample machine names are removed. The integrated contract uses one preconfigured logical execution environment, keeps Server/Worker/Connector separate and treats Connector administration as deployment-internal. The execution machine may be separate from the platform; existing desktop-session control still needs actual capability evidence.
 
 Files stay in their conversation context. The owner has rejected a standalone artifacts module, including a global page and task-specific panel. A remote file browser is only a possible future capability, outside the current design scope.
 
-All content is labeled demonstration data. Approval and input interactions update only prototype state. Real cross-client draft synchronization, Codex execution, original-file downloads and PWA installation are not implemented or accepted by this artifact. Scenario controls demonstrate intended state presentation only.
+All content is labeled demonstration data. Approval, input, conversation creation and task-association interactions update only prototype state. Real cross-client draft synchronization, Codex execution, original-file downloads and PWA installation are not implemented or accepted by this artifact. Scenario controls demonstrate intended state presentation only. Projectless conversation ownership and later project association require integration-owner reconciliation with the core project-permission contract.
 
 ## Open Decisions and Dependencies
 
