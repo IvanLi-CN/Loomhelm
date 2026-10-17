@@ -24,7 +24,7 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	workerContext, cancelWorker := context.WithCancel(context.Background())
 	workerResult := make(chan error, 1)
 	go func() { workerResult <- worker.Run(workerContext) }()
-	waitForLifecycleState(t, worker.Lifecycle(), platform.StateRunning)
+	waitForLifecycleState(t, worker.lifecycle, platform.StateRunning)
 	if generation := worker.GenerationController(); generation == nil || generation.Current() != 7 {
 		t.Fatalf("unexpected worker generation controller: %#v", generation)
 	}
@@ -36,7 +36,7 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	default:
 		t.Fatal("worker generation context was not canceled")
 	}
-	if snapshot := worker.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+	if snapshot := worker.Lifecycle(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected worker snapshot: %+v", snapshot)
 	}
 
@@ -52,10 +52,10 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	connectorContext, cancelConnector := context.WithCancel(context.Background())
 	connectorResult := make(chan error, 1)
 	go func() { connectorResult <- connector.Run(connectorContext) }()
-	waitForLifecycleState(t, connector.Lifecycle(), platform.StateRunning)
+	waitForLifecycleState(t, connector.lifecycle, platform.StateRunning)
 	cancelConnector()
 	waitForProcessResult(t, connectorResult)
-	if snapshot := connector.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped {
+	if snapshot := connector.Lifecycle(); snapshot.State != platform.StateStopped {
 		t.Fatalf("unexpected connector snapshot: %+v", snapshot)
 	}
 }
@@ -75,7 +75,7 @@ func TestConnectorPreCanceledContextStopsBeforeReadiness(t *testing.T) {
 	if err := connector.Run(ctx); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if snapshot := connector.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+	if snapshot := connector.Lifecycle(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected pre-canceled connector snapshot: %+v", snapshot)
 	}
 }
@@ -93,14 +93,14 @@ func TestConnectorRejectsSecondRunWithoutStoppingActiveProcess(t *testing.T) {
 	firstContext, cancelFirst := context.WithCancel(context.Background())
 	firstResult := make(chan error, 1)
 	go func() { firstResult <- connector.Run(firstContext) }()
-	waitForLifecycleState(t, connector.Lifecycle(), platform.StateRunning)
+	waitForLifecycleState(t, connector.lifecycle, platform.StateRunning)
 
 	secondContext, cancelSecond := context.WithCancel(context.Background())
 	cancelSecond()
 	if err := connector.Run(secondContext); err == nil {
 		t.Fatal("second Run() succeeded")
 	}
-	if snapshot := connector.Lifecycle().Snapshot(); snapshot.State != platform.StateRunning || !snapshot.Ready {
+	if snapshot := connector.Lifecycle(); snapshot.State != platform.StateRunning || !snapshot.Ready {
 		t.Fatalf("second Run() changed active connector snapshot: %+v", snapshot)
 	}
 	cancelFirst()
@@ -120,7 +120,7 @@ func TestWorkerRejectsSecondRunWithoutReplacingGeneration(t *testing.T) {
 	firstContext, cancelFirst := context.WithCancel(context.Background())
 	firstResult := make(chan error, 1)
 	go func() { firstResult <- worker.Run(firstContext) }()
-	waitForLifecycleState(t, worker.Lifecycle(), platform.StateRunning)
+	waitForLifecycleState(t, worker.lifecycle, platform.StateRunning)
 	firstGeneration := worker.GenerationController()
 	secondContext, cancelSecond := context.WithCancel(context.Background())
 	cancelSecond()

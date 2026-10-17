@@ -81,7 +81,7 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Serve() did not stop after context cancellation")
 	}
-	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+	if snapshot := server.Lifecycle(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected final lifecycle snapshot: %+v", snapshot)
 	}
 }
@@ -134,7 +134,7 @@ func TestServerReadyEndpointReturnsUnavailableDuringDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
-	if err := server.Lifecycle().Start(); err != nil {
+	if err := server.lifecycle.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	readyRequest := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -173,7 +173,7 @@ func TestServerRejectsRemoteDrainRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
-	if err := server.Lifecycle().Start(); err != nil {
+	if err := server.lifecycle.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	for _, test := range []struct {
@@ -202,7 +202,7 @@ func TestServerRejectsRemoteDrainRequest(t *testing.T) {
 			}
 		})
 	}
-	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateRunning || !snapshot.Ready {
+	if snapshot := server.Lifecycle(); snapshot.State != platform.StateRunning || !snapshot.Ready {
 		t.Fatalf("remote drain changed lifecycle: %+v", snapshot)
 	}
 }
@@ -292,7 +292,7 @@ func TestServerPreCanceledServeDoesNotBecomeReady(t *testing.T) {
 	if err := server.Serve(ctx, listener); err != nil {
 		t.Fatalf("Serve() error = %v", err)
 	}
-	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateNew || snapshot.Live || snapshot.Ready {
+	if snapshot := server.Lifecycle(); snapshot.State != platform.StateNew || snapshot.Live || snapshot.Ready {
 		t.Fatalf("unexpected pre-canceled Serve() snapshot: %+v", snapshot)
 	}
 	if err := listener.Close(); err != nil {
@@ -322,7 +322,7 @@ func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
 	if !errors.Is(err, serveError) {
 		t.Fatalf("Serve() error = %v, want %v", err, serveError)
 	}
-	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+	if snapshot := server.Lifecycle(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected final lifecycle snapshot: %+v", snapshot)
 	}
 }
@@ -455,7 +455,7 @@ func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
 	cancel()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		snapshot := server.Lifecycle().Snapshot()
+		snapshot := server.Lifecycle()
 		if snapshot.State == platform.StateDraining {
 			if snapshot.Ready || !snapshot.Live {
 				t.Fatalf("unexpected cancellation drain snapshot: %+v", snapshot)
@@ -464,7 +464,7 @@ func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateDraining {
+	if snapshot := server.Lifecycle(); snapshot.State != platform.StateDraining {
 		t.Fatalf("server did not enter draining state after cancellation: %+v", snapshot)
 	}
 	close(releaseHandler)
@@ -547,7 +547,7 @@ func TestServerForceClosesStuckRequestAfterDrainTimeout(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("blocking request did not finish after forced close")
 	}
-	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+	if snapshot := server.Lifecycle(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected forced-close lifecycle snapshot: %+v", snapshot)
 	}
 }
@@ -568,7 +568,7 @@ func TestServerCanceledRunStopsLifecycleBeforeListen(t *testing.T) {
 	if err := server.Run(ctx); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped {
+	if snapshot := server.Lifecycle(); snapshot.State != platform.StateStopped {
 		t.Fatalf("canceled Run() lifecycle snapshot = %+v", snapshot)
 	}
 	if err := server.Run(context.Background()); err == nil {

@@ -198,14 +198,39 @@ func validateServerURL(raw string) error {
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("query and fragment must not be included")
 	}
-	if strings.HasSuffix(parsed.Host, ":") {
-		return fmt.Errorf("port must be an integer from 1 to 65535")
+	port, hasPort, err := explicitURLPort(parsed.Host)
+	if err != nil {
+		return err
 	}
-	if port := parsed.Port(); port != "" {
+	if hasPort {
 		portNumber, err := strconv.Atoi(port)
 		if err != nil || portNumber < 1 || portNumber > 65535 {
 			return fmt.Errorf("port must be an integer from 1 to 65535")
 		}
 	}
 	return nil
+}
+
+func explicitURLPort(host string) (string, bool, error) {
+	if strings.HasPrefix(host, "[") {
+		closingBracket := strings.IndexByte(host, ']')
+		if closingBracket < 0 {
+			return "", false, fmt.Errorf("host must contain a closing bracket")
+		}
+		rest := host[closingBracket+1:]
+		if rest == "" {
+			return "", false, nil
+		}
+		if !strings.HasPrefix(rest, ":") {
+			return "", false, fmt.Errorf("port must be an integer from 1 to 65535")
+		}
+		return rest[1:], true, nil
+	}
+	if strings.Count(host, ":") == 0 {
+		return "", false, nil
+	}
+	if strings.Count(host, ":") != 1 {
+		return "", false, fmt.Errorf("IPv6 hosts must be enclosed in brackets")
+	}
+	return host[strings.LastIndexByte(host, ':')+1:], true, nil
 }

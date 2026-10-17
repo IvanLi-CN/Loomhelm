@@ -70,6 +70,6 @@ func (c *Connector) Run(ctx context.Context) error {
 	return nil
 }
 
-func (c *Connector) Lifecycle() *platform.Lifecycle {
-	return c.lifecycle
+func (c *Connector) Lifecycle() platform.LifecycleSnapshot {
+	return c.lifecycle.Snapshot()
 }

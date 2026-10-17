@@ -165,8 +165,8 @@ func (s *Server) Router() http.Handler {
 	return s.router
 }
 
-func (s *Server) Lifecycle() *platform.Lifecycle {
-	return s.lifecycle
+func (s *Server) Lifecycle() platform.LifecycleSnapshot {
+	return s.lifecycle.Snapshot()
 }
 
 func (s *Server) BeginDrain(reason string) bool {
@@ -342,7 +342,21 @@ func (s *Server) handleDrain(writer http.ResponseWriter, request *http.Request) 
 		})
 		return
 	}
-	s.BeginDrain("HTTP drain request")
+	if !s.BeginDrain("HTTP drain request") {
+		snapshot = s.lifecycle.Snapshot()
+		if snapshot.State != platform.StateDraining {
+			s.writeJSON(writer, http.StatusConflict, healthResponse{
+				Status:      "not_running",
+				Component:   string(s.cfg.Component),
+				Version:     s.cfg.Version,
+				State:       snapshot.State,
+				Live:        snapshot.Live,
+				Ready:       snapshot.Ready,
+				DrainReason: snapshot.DrainReason,
+			})
+			return
+		}
+	}
 	snapshot = s.lifecycle.Snapshot()
 	s.writeJSON(writer, http.StatusAccepted, healthResponse{
 		Status:      string(snapshot.State),

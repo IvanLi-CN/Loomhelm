@@ -79,8 +79,8 @@ func (w *Worker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (w *Worker) Lifecycle() *platform.Lifecycle {
-	return w.lifecycle
+func (w *Worker) Lifecycle() platform.LifecycleSnapshot {
+	return w.lifecycle.Snapshot()
 }
 
 func (w *Worker) GenerationController() *platform.GenerationController {

@@ -94,6 +94,12 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 			env:       map[string]string{"LOOMHELM_CONNECTOR_SERVER_URL": "https://platform.example.test:65536"},
 			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
 		},
+		{
+			name:      "connector URL with non-numeric port",
+			component: ComponentConnector,
+			env:       map[string]string{"LOOMHELM_CONNECTOR_SERVER_URL": "https://platform.example.test:bad"},
+			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
+		},
 	}
 
 	for _, test := range tests {

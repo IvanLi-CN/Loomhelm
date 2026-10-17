@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The repository contains the F01 Go process-lifecycle skeleton: runnable Server, Worker and Connector entrypoints, configuration validation, local lifecycle state, health/version/drain control for Server and process signal handling. The product APIs, persistence and deployed environment are not implemented.
+The repository contains the F01 Go process-lifecycle skeleton: runnable Server, Worker and Connector entrypoints, configuration validation, local lifecycle state, health/version/drain control for Server and process signal handling. Server startup requires `LOOMHELM_DRAIN_TOKEN`; the product APIs, persistence and deployed environment are not implemented.
 
 ## Implementation Coverage
 
