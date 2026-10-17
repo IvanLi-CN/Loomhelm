@@ -70,7 +70,9 @@ func (w *Worker) Run(ctx context.Context) error {
 
 	w.logger.Info("worker started", "generation", generation.Current())
 	<-ctx.Done()
-	w.lifecycle.BeginDrain("context canceled")
+	if w.lifecycle.BeginDrain("context canceled") {
+		w.logger.Info("worker entering drain", "reason", "context canceled")
+	}
 	generation.Stop()
 	w.lifecycle.Stop()
 	w.logger.Info("worker stopped", "generation", generation.Current())

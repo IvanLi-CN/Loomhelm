@@ -93,28 +93,37 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		return fmt.Errorf("listen on %s: %w", s.cfg.HTTPAddr, err)
 	}
-	return s.Serve(ctx, listener)
+	serveErr, admitted := s.serve(ctx, listener)
+	if admitted {
+		return serveErr
+	}
+	return withListenerCloseError(serveErr, listener.Close())
 }
 
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
+	serveErr, _ := s.serve(ctx, listener)
+	return serveErr
+}
+
+func (s *Server) serve(ctx context.Context, listener net.Listener) (error, bool) {
 	if ctx == nil {
-		return fmt.Errorf("server context must not be nil")
+		return fmt.Errorf("server context must not be nil"), false
 	}
 	if listener == nil {
-		return fmt.Errorf("server listener must not be nil")
+		return fmt.Errorf("server listener must not be nil"), false
 	}
 	s.serveMu.Lock()
 	if err := s.lifecycle.Start(); err != nil {
 		s.serveMu.Unlock()
 		// Rejected admission never takes ownership of the listener; the caller retains it.
-		return err
+		return err, false
 	}
 	s.serveMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		s.BeginDrain("context canceled")
 		closeErr := listener.Close()
 		s.lifecycle.Stop()
-		return withListenerCloseError(nil, closeErr)
+		return withListenerCloseError(nil, closeErr), true
 	}
 
 	server := &http.Server{
@@ -134,19 +143,19 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	s.logger.Info("server started", "address", listener.Addr().String())
 	select {
 	case <-ctx.Done():
-		return s.shutdownAndWait(server, tracked, serveResult, "context canceled")
+		return s.shutdownAndWait(server, tracked, serveResult, "context canceled"), true
 	case <-s.shutdown:
-		return s.shutdownAndWait(server, tracked, serveResult, "HTTP drain request")
+		return s.shutdownAndWait(server, tracked, serveResult, "HTTP drain request"), true
 	case err := <-serveResult:
 		s.BeginDrain("HTTP server stopped unexpectedly")
 		shutdownErr := s.shutdownHTTP(server)
 		closeErr := tracked.closeError()
 		s.lifecycle.Stop()
 		if combined := withListenerCloseError(combineServerErrors(err, shutdownErr), closeErr); combined != nil {
-			return combined
+			return combined, true
 		}
 		s.logger.Info("server stopped")
-		return nil
+		return nil, true
 	}
 }
 
@@ -300,11 +309,15 @@ func (s *Server) handleDrainStatus(writer http.ResponseWriter, _ *http.Request) 
 
 func (s *Server) handleDrain(writer http.ResponseWriter, request *http.Request) {
 	if !isLoopbackRequest(request) || !s.validDrainToken(request) {
+		snapshot := s.lifecycle.Snapshot()
 		s.writeJSON(writer, http.StatusForbidden, healthResponse{
-			Status:    "forbidden",
-			Component: string(s.cfg.Component),
-			Version:   s.cfg.Version,
-			State:     s.lifecycle.Snapshot().State,
+			Status:      "forbidden",
+			Component:   string(s.cfg.Component),
+			Version:     s.cfg.Version,
+			State:       snapshot.State,
+			Live:        snapshot.Live,
+			Ready:       snapshot.Ready,
+			DrainReason: snapshot.DrainReason,
 		})
 		return
 	}

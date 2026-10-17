@@ -193,6 +193,13 @@ func TestServerRejectsRemoteDrainRequest(t *testing.T) {
 			if response.Code != http.StatusForbidden {
 				t.Fatalf("drain status = %d, want %d", response.Code, http.StatusForbidden)
 			}
+			var body healthResponse
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatalf("decode forbidden drain response: %v", err)
+			}
+			if !body.Live || !body.Ready || body.State != platform.StateRunning {
+				t.Fatalf("unexpected forbidden drain response: %+v", body)
+			}
 		})
 	}
 	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateRunning || !snapshot.Ready {

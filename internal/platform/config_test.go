@@ -54,6 +54,12 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 			wantError: "drain token",
 		},
 		{
+			name:      "missing drain token",
+			component: ComponentServer,
+			env:       map[string]string{"LOOMHELM_HTTP_ADDR": "127.0.0.1:8080"},
+			wantError: "drain token",
+		},
+		{
 			name:      "invalid timeout",
 			component: ComponentWorker,
 			env:       map[string]string{"LOOMHELM_SHUTDOWN_TIMEOUT": "0s"},

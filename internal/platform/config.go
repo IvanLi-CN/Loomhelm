@@ -98,6 +98,9 @@ func (c Config) Validate() error {
 		if err := validateListenAddress(c.HTTPAddr); err != nil {
 			return fmt.Errorf("invalid HTTP address: %w", err)
 		}
+		if strings.TrimSpace(c.DrainToken) == "" {
+			return fmt.Errorf("drain token must not be empty")
+		}
 		if strings.ContainsAny(c.DrainToken, " \t\r\n") {
 			return fmt.Errorf("drain token must not contain whitespace")
 		}

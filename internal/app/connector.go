@@ -48,7 +48,9 @@ func (c *Connector) Run(ctx context.Context) error {
 	serverURL, _ := url.Parse(c.cfg.ConnectorServerURL)
 	c.logger.Info("connector started", "server_host", serverURL.Host)
 	<-ctx.Done()
-	c.lifecycle.BeginDrain("context canceled")
+	if c.lifecycle.BeginDrain("context canceled") {
+		c.logger.Info("connector entering drain", "reason", "context canceled")
+	}
 	c.lifecycle.Stop()
 	c.logger.Info("connector stopped")
 	return nil

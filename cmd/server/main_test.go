@@ -139,7 +139,10 @@ func TestServerEntrypointServesHealthVersionAndDrain(t *testing.T) {
 func TestServerEntrypointRejectsInvalidConfiguration(t *testing.T) {
 	binary := buildServerEntrypoint(t)
 	command := exec.Command(binary)
-	command.Env = commandEnv(map[string]string{"LOOMHELM_HTTP_ADDR": "invalid"})
+	command.Env = commandEnv(map[string]string{
+		"LOOMHELM_HTTP_ADDR":   "invalid",
+		"LOOMHELM_DRAIN_TOKEN": "test-token",
+	})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 2)
 	if !strings.Contains(string(output), "invalid configuration: invalid LOOMHELM_HTTP_ADDR") {
@@ -156,7 +159,10 @@ func TestServerEntrypointReturnsRuntimeFailure(t *testing.T) {
 	defer listener.Close()
 
 	command := exec.Command(binary)
-	command.Env = commandEnv(map[string]string{"LOOMHELM_HTTP_ADDR": listener.Addr().String()})
+	command.Env = commandEnv(map[string]string{
+		"LOOMHELM_HTTP_ADDR":   listener.Addr().String(),
+		"LOOMHELM_DRAIN_TOKEN": "test-token",
+	})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 1)
 	if !strings.Contains(string(output), "server exited with error") {
