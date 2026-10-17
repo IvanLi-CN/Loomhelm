@@ -32,9 +32,9 @@ _Avoid_: Inserting a task level between a project and its conversations, or trea
 
 _Avoid_: Treating a list item and board card as separate tasks.
 
-**Task graph (任务图谱)**: A view combining project/task/subtask hierarchy and dependencies between tasks.
+**Task graph (任务图谱)**: A view combining task hierarchy and prerequisite dependencies, both of which may cross projects while each task retains its own project.
 
-_Avoid_: Treating containment and dependency as the same relationship, or native sub-agent activity as task hierarchy.
+_Avoid_: Treating containment and dependency as the same relationship, assuming a parent and child share a project, or native sub-agent activity as task hierarchy.
 
 **Desktop/mobile feature parity (桌面与手机功能一致)**: Availability of the same product capabilities on desktop and mobile, with interaction and layout suited to each device.
 
