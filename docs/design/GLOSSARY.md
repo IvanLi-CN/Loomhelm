@@ -32,10 +32,14 @@ _Avoid_: Queued message or pending command for text the owner has not explicitly
 
 _Avoid_: Separate implementation, review and research sessions attached to the same task.
 
-**Task workspace (任务工作区)**: The working surface combining a task's main session with its goals, business state and artifacts.
+**Task workspace (任务工作区)**: The working surface combining a task's main session with its goals and business state.
 
 _Avoid_: Using task workspace to mean only the conversation or only the task metadata.
 
 **Sub-agent (子代理)**: A delegated participant doing bounded work for the task session, such as code review or research.
 
 _Avoid_: Treating each sub-agent as another directly associated task session.
+
+**Conversation file (对话文件)**: A file referenced or produced within a conversation, understood in the context of the associated messages and work.
+
+_Avoid_: Artifacts module as a user-facing category for these files.

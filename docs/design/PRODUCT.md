@@ -28,7 +28,9 @@ Pending approvals can be handled in place from the global workbench. The user fi
 
 Each task associates with at most one Codex session, its task session. Code review, research and similar supporting work generally use sub-agents within that session's delegation context. These activities do not require additional directly associated task sessions.
 
-Opening a task enters one combined workspace containing its task session and task information. Desktop uses the conversation as the main area with goals, task state and artifacts beside it. Mobile offers the same information through panels within the task, retaining input and reading position when switching panels.
+Opening a task enters one combined workspace containing its task session and task information. Desktop uses the conversation as the main area with goals and task state beside it. Mobile offers the same information through conversation and task-information panels within the task, retaining input and reading position when switching panels.
+
+There is no standalone artifacts module, global artifacts page or task artifacts panel. Files mentioned or produced during work belong to their conversation context. A remote file browser is a possible future capability to consider if needed; it is not added to the current design scope.
 
 Sub-agent activity is presented as expandable branches within the task session. The default summary shows the assigned work, state and outcome; supported messages and tool activity can be inspected on expansion. Available detail must be reconciled against real event fixtures and public contracts.
 
@@ -46,7 +48,7 @@ Actual permission limits, connection loss and conflicting execution remain disti
 
 ## Capabilities and Constraints
 
-The initial scope includes projects, tasks, host pairing and status, new and existing desktop session paths, messages, tools, approvals and denial, interruption, control conflicts, uncertain results, reconnection, original artifacts and PWA installation, updates and offline behavior.
+The initial scope includes projects, tasks, host pairing and status, new and existing desktop session paths, messages, tools, approvals and denial, interruption, control conflicts, uncertain results, reconnection, conversation-associated original files and PWA installation, updates and offline behavior. The core specification's original-file retention and access requirements do not imply a separate user-facing artifacts module.
 
 Task progress and execution status are distinct. Offline control commands are never queued or automatically replayed. Existing active desktop-session control requires evidence from the actual same instance and remains unproven at this design baseline.
 
