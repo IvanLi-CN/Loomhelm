@@ -12,7 +12,7 @@ _Avoid_: Project workbench when referring to the cross-project entry.
 
 _Avoid_: Labeling one selected project's task list as the global Tasks entry.
 
-**Conversations (对话)**: The global entry for conversations and their activity across projects; a conversation is the user-facing name for a Codex session.
+**Conversations (对话)**: The global entry for all conversations and their activity, including projectless conversations; a conversation is the user-facing name for a Codex session.
 
 _Avoid_: Treating conversations as an additional kind of session or as a host-management surface.
 
@@ -23,6 +23,10 @@ _Avoid_: Treating every conversation as requiring a task or a project at creatio
 **Project workspace (项目工作区)**: A workspace scoped to one selected project's tasks and conversations.
 
 _Avoid_: Global workbench when referring to a single project's context, or Projects and tasks as a label for one selected project's task list.
+
+**Project navigation tree (项目导航树)**: The navigation hierarchy from the Projects root to named projects and then directly to their conversations, with task-associated and standalone conversations both included.
+
+_Avoid_: Inserting a task level between a project and its conversations, or treating projectless conversations as a named project.
 
 **Task view (任务视图)**: A list, board or graph presentation of the same tasks; changing the view does not change a task's identity or business state.
 
