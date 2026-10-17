@@ -2,7 +2,9 @@
 
 <!-- impeccable:product-schema 1 -->
 
-This is supporting context for the single complete UI design. The [core specification](../specs/phase1-core/SPEC.md) remains the source of product requirements; design approval requires the owner's explicit confirmation of the complete design.
+This is supporting context for the single complete UI design. Read the main coordinator's [product requirements](../PRD.md) for complete product scope, journeys, business decisions and acceptance, then the [core specification](../specs/phase1-core/SPEC.md) for established engineering contracts, before this design context. Confirmed design decisions return to the product requirements through the main coordinator.
+
+The complete PRD and complete UI design each require the owner's explicit confirmation. Proposed product defaults remain unapproved until answered; the existing design discussion and prototype can continue while those decisions are being resolved.
 
 ## Platform
 
@@ -32,7 +34,7 @@ Pending approvals can be handled in place from the global workbench. The user fi
 
 Each task associates with at most one Codex session, its task session. Code review, research and similar supporting work generally use sub-agents within that session's delegation context. These activities do not require additional directly associated task sessions.
 
-Conversations can be started independently from the global Conversations entry, without first creating a task or selecting a project. Project selection is optional at creation. A standalone conversation can later associate with a task; when a projectless conversation is associated, it joins that task's project. The association continues the same conversation, including its existing messages and shared unsent draft, rather than starting a replacement conversation. A task still has at most one directly associated main conversation.
+Conversations can be started independently from the global Conversations entry, without first creating a task or selecting a project. Project selection is optional at creation, and standalone conversations support actual execution. A standalone conversation can later associate with a task; when a projectless conversation is associated, it joins that task's project. The association continues the same conversation and preserves its messages, runs, events, file references and shared unsent draft. A task still has at most one directly associated main conversation.
 
 Opening a task enters one combined workspace containing its task session and task information. Desktop uses the conversation as the main area with goals and task state beside it. Mobile offers the same information through conversation and task-information panels within the task, retaining input and reading position when switching panels.
 
@@ -54,7 +56,7 @@ Actual permission limits, connection loss and conflicting execution remain disti
 
 ## Capabilities and Constraints
 
-The current UI scope includes global Workbench, Tasks and Conversations, project switching, list/board/graph task views with remembered preference, task hierarchy and dependencies, standalone conversations with optional project selection and later task association, new and existing conversation paths, messages, tools, approvals and denial, interruption, control conflicts, uncertain results, reconnection, conversation-associated original files and PWA installation, updates and offline behavior. Projectless conversation authorization and execution, later task association and the task-relationship contract need integration-owner reconciliation with the owner's direction. The core specification's original-file retention and access requirements do not imply a separate user-facing artifacts module.
+The current UI scope includes global Workbench, Tasks and Conversations, project switching, list/board/graph task views with remembered preference, task hierarchy and dependencies, standalone conversations with optional project selection and later task association, new and existing conversation paths, messages, tools, approvals and denial, interruption, control conflicts, uncertain results, reconnection, conversation-associated original files and PWA installation, updates and offline behavior. Projectless conversation authorization and history sharing, reverse task/conversation cardinality and reassociation, draft conflict recovery and task-relationship rules remain subject to the open decisions in the product requirements. The core specification's original-file retention and access requirements do not imply a separate user-facing artifacts module.
 
 Task progress and execution status are distinct. Offline control commands are never queued or automatically replayed. Existing active desktop-session control requires evidence from the actual same instance and remains unproven at this design baseline.
 
@@ -62,7 +64,7 @@ Autonomous master/project/task Agent orchestration is a future capability. The i
 
 ## Evidence on Hand
 
-The core specification, implementation coverage, topic history and ADRs 0001 and 0002 define the baseline. Final handoff must incorporate the actual framework, sanitized content fixtures, public contracts and recovery/deployment inputs when available.
+The product requirements are the product entry point; the core specification, implementation coverage, topic history and ADRs 0001 and 0002 provide engineering constraints and capability evidence. This design context supports those documents. Final handoff must incorporate the actual framework, sanitized content fixtures, public contracts and recovery/deployment inputs when available.
 
 ## Product Principles
 

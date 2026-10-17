@@ -1,6 +1,6 @@
 # Loomhelm workspace design
 
-Design vocabulary for the shared desktop and mobile workspace. Product entity definitions remain in the core specification.
+Design vocabulary for the shared desktop and mobile workspace. Product meanings and rules belong to the [product requirements](../PRD.md); established engineering definitions belong to the [core specification](../specs/phase1-core/SPEC.md).
 
 ## Language
 
