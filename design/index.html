@@ -44,7 +44,7 @@
     .review-header { padding: 22px 28px 16px; border-bottom: 1px solid var(--line); }
     .review-header h1 { margin: 0 0 5px; }
     .review-header p { margin: 0; max-width: 75ch; color: var(--muted); }
-    .review-toolbar { padding: 12px 28px; border-bottom: 1px solid var(--line); background: var(--soft); }
+    .review-toolbar { padding: 12px 28px; border-bottom: 1px solid var(--line); background: var(--soft); position: sticky; top: 0; z-index: 10; }
     .review-stage { padding: 22px; background: #e9ecea; }
     .preview-shell { width: 100%; max-width: 1440px; margin: auto; background: #fff; }
     .preview-shell.mobile { max-width: 393px; }
@@ -225,23 +225,174 @@
       .table-scroll { overflow-x: auto; }
     }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+    .direction-picker { max-width: 1440px; margin: 0 auto; padding: 24px 28px; }
+    .direction-picker h2 { margin-bottom: 6px; }
+    .direction-picker > p { color: var(--muted); margin-bottom: 18px; }
+    .direction-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .direction-option { text-align: left; padding: 16px 18px; border-radius: 8px; }
+    .direction-option strong, .direction-option span { display: block; }
+    .direction-option strong { margin-bottom: 7px; font-size: 16px; }
+    .direction-option span { font-weight: 400; color: var(--muted); line-height: 1.65; }
+    .direction-option[aria-pressed="true"] { border-color: #354c41; box-shadow: inset 0 0 0 1px #354c41; }
+    .direction-canon { margin-top: 12px; width: 100%; text-align: left; }
+    .direction-caption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 24px; margin: 18px 0 0; font-size: 13px; line-height: 1.7; }
+    .direction-caption p { margin: 0; max-width: 85ch; }
+    .direction-alternates { margin-top: 18px; color: var(--muted); font-size: 12px; }
+    .direction-alternates ul { padding-left: 20px; line-height: 1.8; }
+    .direction-review-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+    .direction-review-controls label { display: flex; align-items: center; gap: 8px; }
+    body[data-direction] { --surface: #fff; --canvas-bg: #f2f4f7; --soft: #edf0f4; --line: #dce1e8; --ink: #202b39; --muted: #5d6877; --accent: #315c72; --selected: #e5eef2; --nav-bg: #1c2835; --nav-ink: #e6edf5; --nav-muted: #adbaca; --nav-line: #3b4858; --nav-selected: #334356; --warn: #8a520e; --warn-bg: #fff0d6; --active: #316d63; --active-bg: #e3f1ed; --focus: #2d6c8c; color: var(--ink); background: var(--canvas-bg); }
+    body[data-direction="journal"] { --canvas-bg: #fafbfc; --soft: #f3f5fa; --ink: #263246; --muted: #606d80; --accent: #425bb8; --selected: #edf0fc; --nav-bg: #f0f3f9; --nav-ink: #34425a; --nav-muted: #56647a; --nav-line: #d5ddea; --nav-selected: #dfe6f7; --focus: #425bb8; }
+    body[data-direction="standard"] { --canvas-bg: #fff; --soft: #f5f5f6; --line: #e3e3e7; --ink: #26262d; --muted: #676770; --accent: #5152ba; --selected: #efeffb; --nav-bg: #f7f7f8; --nav-ink: #35353e; --nav-muted: #686873; --nav-line: #dedee4; --nav-selected: #e9e9f5; --focus: #5152ba; }
+    body[data-direction][data-theme="dark"] { color-scheme: dark; --surface: #1c2632; --canvas-bg: #141d27; --soft: #263241; --line: #3a4656; --ink: #e6edf5; --muted: #aebaca; --accent: #9cc8dc; --selected: #2e4657; --nav-bg: #111923; --nav-ink: #e6edf5; --nav-muted: #a6b5c8; --nav-line: #354152; --nav-selected: #2e4054; --warn: #f2c376; --warn-bg: #483a27; --active: #91d0ba; --active-bg: #263f3b; --focus: #9cc8dc; }
+    body[data-direction="journal"][data-theme="dark"] { --surface: #202634; --canvas-bg: #171d28; --soft: #2a3345; --ink: #e7ecf6; --muted: #aebbd0; --accent: #b0bffc; --selected: #343f64; --nav-bg: #1c2332; --nav-selected: #34405c; --nav-line: #3b465c; --focus: #b0bffc; }
+    body[data-direction="standard"][data-theme="dark"] { --surface: #222229; --canvas-bg: #1a1a20; --soft: #2c2c36; --line: #41414e; --ink: #ebebf2; --muted: #b0b0bf; --accent: #b7b6fa; --selected: #3b3a58; --nav-bg: #202027; --nav-line: #3b3b46; --nav-selected: #3a3a50; --focus: #b7b6fa; }
+    body[data-direction] .prototype { grid-template-columns: 240px minmax(0, 1fr); background: var(--canvas-bg); }
+    body[data-direction] button { background: var(--surface); border-color: var(--line); border-radius: 5px; transition: background-color 160ms ease-out, border-color 160ms ease-out; }
+    body[data-direction] button:hover:not(:disabled) { background: var(--soft); border-color: var(--muted); }
+    body[data-direction] button.quiet { border-color: transparent; background: transparent; }
+    body[data-direction] button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+    body[data-direction] button.primary:hover:not(:disabled) { filter: brightness(.92); }
+    body[data-direction] button:disabled { color: var(--muted); background: var(--soft); border-color: var(--line); }
+    body[data-direction] button[aria-pressed="true"], body[data-direction] button[aria-current] { color: var(--accent); background: var(--selected); border-color: var(--line); }
+    body[data-direction] :focus-visible { outline-color: var(--focus); }
+    body[data-direction] ::selection { color: var(--surface); background: var(--accent); }
+    body[data-direction] * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+    body[data-direction] input, body[data-direction] select, body[data-direction] textarea { background: var(--surface); border-color: var(--line); color: var(--ink); caret-color: var(--accent); }
+    body[data-direction] input::placeholder, body[data-direction] textarea::placeholder { color: var(--muted); }
+    body[data-direction] .sidebar { display: flex; flex-direction: column; padding: 22px 10px 12px; background: var(--nav-bg); color: var(--nav-ink); border-color: var(--nav-line); --muted: var(--nav-muted); --line: var(--nav-line); }
+    body[data-direction] .sidebar nav { flex: 1; }
+    body[data-direction] .brand { display: flex; align-items: center; gap: 10px; padding-bottom: 26px; font-size: 19px; }
+    .brand-mark { width: 24px; height: 24px; flex: 0 0 auto; }
+    body[data-direction] .nav-group { margin-bottom: 22px; }
+    body[data-direction] .sidebar button { background: transparent; border-color: transparent; color: var(--nav-ink); }
+    body[data-direction] .sidebar button:hover:not(:disabled) { background: var(--nav-selected); }
+    body[data-direction] .sidebar button[aria-current] { background: var(--nav-selected); color: var(--nav-ink); border-color: var(--nav-selected); }
+    body[data-direction] .sidebar .nav-tree-toggle { color: var(--nav-muted); }
+    body[data-direction] .nav-conversation-list { border-color: var(--nav-line); }
+    body[data-direction] .sidebar-foot { padding-top: 22px; font-size: 11px; }
+    body[data-direction] .nav-conversation-meta { font-size: 11px; }
+    body[data-direction] .work-area { grid-template-rows: 56px minmax(0, 1fr); }
+    body[data-direction] .app-header { background: var(--surface); }
+    body[data-direction] .app-header .prototype-label { font-size: 11px; }
+    body[data-direction] .content { padding: 28px; }
+    body[data-direction] .page-title { margin-bottom: 26px; }
+    body[data-direction] .page-title h1 { font-size: 23px; margin-bottom: 7px; font-weight: 650; letter-spacing: -.025em; }
+    body[data-direction] .page-title p { font-size: 13px; }
+    body[data-direction] .triage-layout { display: grid; grid-template-columns: 248px minmax(280px, 1fr) 265px; grid-template-areas: "queue request recent"; gap: 24px; align-items: start; }
+    body[data-direction] .triage-queue { grid-area: queue; }
+    body[data-direction] .triage-request { grid-area: request; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
+    body[data-direction] .triage-recent { grid-area: recent; }
+    body[data-direction] .triage-layout h2 { font-size: 14px; margin-bottom: 14px; font-weight: 600; }
+    body[data-direction] .attention-list { border: 0; }
+    body[data-direction] .attention-row { display: grid; grid-template-columns: 1fr; gap: 9px; padding: 14px 12px; background: transparent; border: 1px solid var(--line); border-radius: 5px; margin-bottom: 10px; }
+    body[data-direction] .attention-row.selected { background: var(--surface); border-color: var(--accent); }
+    body[data-direction] .attention-row strong { font-size: 13px; margin-bottom: 5px; }
+    body[data-direction] .attention-row small { font-size: 12px; }
+    body[data-direction] .attention-kind { width: auto; justify-self: start; padding: 2px 7px; border-radius: 4px; color: var(--warn); background: var(--warn-bg); font-size: 11px; }
+    body[data-direction] .review-request { padding: 0; }
+    body[data-direction] .review-request h3 { font-size: 16px; margin: 0 0 22px; line-height: 1.6; }
+    body[data-direction] .review-request dl { grid-template-columns: 1fr; gap: 4px; font-size: 13px; }
+    body[data-direction] .review-request dd { margin-bottom: 12px; }
+    body[data-direction] pre { background: var(--soft); border: 1px solid var(--line); padding: 13px; border-radius: 4px; line-height: 1.7; }
+    body[data-direction] .request-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 22px; }
+    body[data-direction] .request-actions .open-session { grid-column: 1 / -1; }
+    body[data-direction] .session-list { border-color: var(--line); }
+    body[data-direction] .session-row { padding: 15px 0; }
+    body[data-direction] .session-row .title-button { color: var(--ink); font-weight: 500; font-size: 13px; line-height: 1.6; }
+    body[data-direction] .session-row .row > small { font-size: 11px; }
+    body[data-direction] .session-row > small { font-size: 11px; }
+    body[data-direction] .state { font-size: 11px; color: var(--muted); }
+    body[data-direction] .state[data-status="待审批"], body[data-direction] .state[data-status="待核对"] { color: var(--warn); }
+    body[data-direction] .state[data-status="执行中"] { color: var(--active); }
+    body[data-direction] .triage-recent > .row { align-items: start; }
+    body[data-direction] .triage-recent > .row button { font-size: 12px; min-height: 24px; padding: 0 2px; }
+    body[data-direction] .condition, body[data-direction] .task-info, body[data-direction] .graph-viewport, body[data-direction] .composer, body[data-direction] dialog, body[data-direction] .notice { background: var(--surface); color: var(--ink); border-color: var(--line); }
+    body[data-direction] .board-task, body[data-direction] .graph-node { background: var(--surface); }
+    body[data-direction] .task-mode { padding: 0; }
+    body[data-direction="journal"] .prototype { grid-template-columns: 228px minmax(0, 1fr); }
+    body[data-direction="journal"] .content { padding: 36px 42px; }
+    body[data-direction="journal"] .page-title h1 { font-size: 27px; }
+    body[data-direction="journal"] .triage-layout { max-width: 1100px; grid-template-columns: minmax(0, 1.35fr) minmax(260px, 1fr); grid-template-areas: "queue queue" "request recent"; gap: 32px 42px; }
+    body[data-direction="journal"] .attention-list { border-top: 1px solid var(--line); }
+    body[data-direction="journal"] .attention-row { display: flex; align-items: center; gap: 16px; padding: 15px 10px; margin: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
+    body[data-direction="journal"] .attention-row.selected { background: var(--selected); border-color: var(--line); }
+    body[data-direction="journal"] .attention-row strong { font-size: 14px; }
+    body[data-direction="journal"] .attention-row .grow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .9fr); gap: 20px; align-items: center; }
+    body[data-direction="journal"] .attention-row small { font-size: 12px; }
+    body[data-direction="journal"] .triage-request { border: 0; background: transparent; border-radius: 0; padding: 0; }
+    body[data-direction="journal"] .review-request h3 { font-size: 18px; }
+    body[data-direction="journal"] .review-request dl { grid-template-columns: 80px minmax(0, 1fr); gap: 12px 14px; }
+    body[data-direction="journal"] .review-request dd { margin: 0; }
+    body[data-direction="journal"] .request-actions { display: flex; flex-wrap: wrap; }
+    body[data-direction="journal"] .task-mode { padding: 0; }
+    body[data-direction="standard"] .prototype { grid-template-columns: 240px minmax(0, 1fr); }
+    body[data-direction="standard"] .triage-layout { grid-template-columns: minmax(0, 1.5fr) minmax(270px, 1fr); grid-template-rows: min-content 1fr; grid-template-areas: "queue recent" "request recent"; gap: 20px 36px; max-width: 1150px; }
+    body[data-direction="standard"] .attention-row { display: flex; gap: 12px; padding: 12px 8px; margin-bottom: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
+    body[data-direction="standard"] .attention-list { border-top: 1px solid var(--line); }
+    body[data-direction="standard"] .attention-row.selected { background: var(--selected); }
+    body[data-direction="standard"] .attention-kind { padding: 2px 5px; white-space: nowrap; }
+    body[data-direction="standard"] .triage-request { border: 0; background: transparent; padding: 0; }
+    body[data-direction="standard"] .review-request dl { grid-template-columns: 80px minmax(0, 1fr); gap: 10px 14px; }
+    body[data-direction="standard"] .review-request dd { margin: 0; }
+    body[data-direction="standard"] .request-actions { display: flex; flex-wrap: wrap; }
+    @media (max-width: 79.99rem) and (min-width: 64rem) {
+      body[data-direction="ops"] .triage-layout { grid-template-columns: 235px minmax(0, 1fr); grid-template-areas: "queue request" "recent recent"; }
+      body[data-direction="ops"] .triage-recent .session-list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; }
+    }
+    @media (max-width: 63.99rem) {
+      body[data-direction] .prototype { grid-template-columns: minmax(0, 1fr); }
+      body[data-direction] .sidebar { display: none; }
+      body[data-direction] .triage-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); grid-template-areas: "queue request" "recent recent"; }
+      body[data-direction="journal"] .attention-row .grow { display: block; }
+    }
+    @media (max-width: 47.99rem) {
+      .direction-picker { padding: 20px 16px; }
+      .direction-options { grid-template-columns: minmax(0, 1fr); }
+      .direction-option { padding: 14px; }
+      body[data-direction] .content, body[data-direction="journal"] .content { padding: 22px 16px; }
+      body[data-direction] .task-mode { padding: 0; }
+      body[data-direction] .page-title { margin-bottom: 24px; }
+      body[data-direction] .page-title h1, body[data-direction="journal"] .page-title h1 { font-size: 22px; }
+      body[data-direction] .triage-layout, body[data-direction="journal"] .triage-layout, body[data-direction="standard"] .triage-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "queue" "request" "recent"; gap: 28px; }
+      body[data-direction] .attention-row { min-height: 64px; }
+      body[data-direction] .request-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      body[data-direction] .request-actions .open-session { grid-column: 1 / -1; }
+      body[data-direction="journal"] .attention-row { gap: 12px; }
+      body[data-direction="journal"] .attention-row strong { font-size: 14px; }
+      body[data-direction="journal"] .review-request dl, body[data-direction="standard"] .review-request dl { grid-template-columns: 70px minmax(0, 1fr); }
+      body[data-direction] .triage-recent .session-list { display: block; }
+      body[data-direction] .page-title p { font-size: 13px; }
+    }
   </style>
 </head>
 <body>
   <div id="reviewRoot">
     <header class="review-header">
-      <div class="row between wrap"><h1>Loomhelm 主设计文件</h1><span class="muted">当前评审：信息架构与操作路径</span></div>
-      <p>此入口持续原地更新。当前为中性结构原型，使用演示数据；产品视觉、完整状态及技术交接仍待逐轮确认。</p>
+      <div class="row between wrap"><h1>Loomhelm 主设计文件</h1><span class="muted">当前评审：整体视觉方向</span></div>
+      <p>先选整体风格，再细化桌面、手机与完整状态。各方向使用相同演示内容，原有结构原型保留。</p>
     </header>
     <div class="review-toolbar row between wrap">
-      <div class="row wrap"><button data-review="prototype" aria-pressed="true">可点击原型</button><button data-review="notes" aria-pressed="false">设计结论与交接</button></div>
+      <div class="row wrap"><button data-review="directions" aria-pressed="true">视觉方向</button><button data-review="prototype" aria-pressed="false">结构原型</button><button data-review="notes" aria-pressed="false">设计结论与交接</button></div>
       <div class="row wrap" id="previewControls">
+        <label id="directionQuickControl">方向 <select id="directionQuickSelect" aria-label="快速切换视觉方向"><option value="ops">A · 值守台</option><option value="journal">B · 工作日志</option><option value="standard">C · 标准工具台</option></select></label>
         <button data-device="desktop" aria-pressed="true">桌面</button><button data-device="mobile" aria-pressed="false">手机</button>
         <label>场景 <select id="scenarioSelect" aria-label="原型场景"><option value="normal">正常</option><option value="offline">离线</option><option value="syncing">恢复同步中</option><option value="unknown">结果待核对</option><option value="resolved">审批已在另一端处理</option><option value="readonly">只读权限</option><option value="empty">无任务</option></select></label>
-        <button id="resetDemo">重置演示</button><a href="?canvas=1" target="_blank" rel="noopener">单独打开原型</a>
+        <button id="resetDemo">重置演示</button><a href="?canvas=1" target="_blank" rel="noopener">单独打开结构原型</a>
       </div>
     </div>
-    <main id="prototypeReview" class="review-stage"><div id="previewShell" class="preview-shell"><iframe id="prototypeFrame" title="Loomhelm 可点击结构原型" src="about:blank"></iframe></div></main>
+    <section id="directionReview" class="direction-picker" aria-label="视觉方向对照">
+      <h2>让工作台成为你愿意长期使用的工具</h2>
+      <p>同样的 3 项待介入工作、同样的最近对话。切换方向看完整画面，再比较浅深主题和手机布局。</p>
+      <div class="direction-options">
+        <button class="direction-option" data-direction-choice="ops" aria-pressed="true"><strong>A · 值守台</strong><span>深色导航、清晰分区、紧凑状态。待介入队列、审批上下文和最近对话并排，切换处理更直接。</span></button>
+        <button class="direction-option" data-direction-choice="journal" aria-pressed="false"><strong>B · 工作日志</strong><span>浅色导航、舒展排版、连续记录。先扫读横向事项清单，再查看完整请求；适合长时间阅读和思考。</span></button>
+      </div>
+      <button class="direction-canon" data-direction-choice="standard" aria-pressed="false">C · 标准工具台：中性色、常规双栏、熟悉的控件与紧凑列表</button>
+      <div class="direction-caption"><p id="directionDescription" aria-live="polite"></p><div class="direction-review-controls"><label>预览主题 <select id="directionTheme" aria-label="方向预览主题"><option value="light">浅色</option><option value="dark">深色</option></select></label><a id="directionStandalone" href="?canvas=1&direction=ops&theme=light" target="_blank" rel="noopener">单独打开当前方向</a></div></div>
+      <details class="direction-alternates"><summary>其他探索与调整方向</summary><p>如果这组都不合适，可以在对话中提出“换一组”、更稳妥、更鲜明，或给出参考界面。</p><ul><li>字形试样：大尺度字形会挤占任务信息；保留严格的文字层级。</li><li>网格字样：可见构造网格对日常操作帮助有限；保留对齐精度。</li><li>全屏磁贴：低密度与横向全景不适合快速扫读；保留明确的当前选择。</li><li>定向地图：适合关系浏览，但不适合默认审批工作台；保留统一的关系与状态图例。</li><li>园区导览：自由轮廓会分散注意力；保留清楚的区域边界。</li><li>行程票据：固定顺序不符合并行工作；保留请求、决定和结果的可追溯性。</li></ul></details>
+    </section>
+    <main id="prototypeReview" class="review-stage"><div id="previewShell" class="preview-shell"><iframe id="prototypeFrame" title="Loomhelm 设计预览" src="about:blank"></iframe></div></main>
     <main id="notesReview" class="design-notes" hidden>
       <section><h2>已确认的工作方式</h2><p>主要使用者是主人一人，可同时使用多个桌面或手机终端。界面以高效工作台为目标，两端功能一致。</p>
         <ol><li>全局导航为工作台、任务；下方“对话”分组直接列出未归属项目的对话，“项目”分组以“项目 → 具体项目 → 对话”组织导航。</li><li>默认进入跨项目的工作台，优先呈现需要人工介入的工作，其余对话保持紧凑、可直达。</li><li>审批在工作台内展开完整请求及上下文后，可以直接批准或拒绝，也能进入完整对话。</li><li>同一主人的终端共享任务、对话、已提交操作与未发送草稿；切换设备不要求接管控制。</li><li>每端独立导航和滚动，手机换对话不会带走电脑的阅读位置。</li><li>每个任务最多直接关联一个 Codex 主对话；审查、资料收集等支持工作通常交给其中的 sub-agent。</li><li>sub-agent 在主对话内按可展开分支呈现，具体内容以真实事件支持为准。</li><li>任务直接进入主对话与任务信息结合的工作区；桌面并排查看，手机在任务内切换面板。</li><li>任务提供列表、看板、图谱三种视图并记住选择；首次默认紧凑列表。图谱同时表达项目／任务／子任务层级及任务依赖。</li><li>文件跟随相关对话呈现；远程文件浏览留待后续按需考虑。</li><li>当前按单一工作环境设计。</li><li>工程工作流沿用现有方案，本设计先聚焦可见的工作内容与操作。</li></ol>
@@ -264,6 +415,8 @@
   <script>
     const parameters = new URLSearchParams(location.search);
     const isCanvas = parameters.has("canvas");
+    const visualDirection = ["ops", "journal", "standard"].includes(parameters.get("direction")) ? parameters.get("direction") : null;
+    if (isCanvas && visualDirection) { document.body.dataset.direction = visualDirection; document.body.dataset.theme = parameters.get("theme") === "dark" ? "dark" : "light"; }
     const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
     const projects = [{ id: "loomhelm", name: "Loomhelm" }, { id: "notes", name: "Sidecar Notes" }, { id: "lab", name: "Device Lab" }];
     const initialTasks = [
@@ -353,7 +506,11 @@
       const items = attentionItems();
       const selected = items.find(item => item.id === model.attention) || items[0];
       const conversations = conversationEntries();
-      return `<div class="page-title"><h1>工作台</h1><p>跨项目查看需要你介入的工作，再继续当前任务。</p></div>${condition()}<div class="overview"><section><h2>待介入事项 <span class="count">${items.length} 项</span></h2><div class="attention-list">${items.map(item => `<button class="attention-row ${selected?.id === item.id ? "selected" : ""}" data-attention="${item.id}" aria-pressed="${selected?.id === item.id}"><span class="attention-kind">${item.kind}</span><span class="grow"><strong>${item.title}</strong><small>${projectName(findTask(item.task).project)} / ${item.task} · ${item.context}</small></span></button>`).join("") || '<div class="empty"><h3>没有待介入事项</h3><p>你可以继续查看对话，或开始一项新任务。</p></div>'}</div>${requestDetails(selected)}</section><section class="session-column"><div class="row between"><h2>最近对话</h2><button class="quiet" data-nav="conversations">全部对话</button></div><div class="session-list">${conversations.map(conversation => `<div class="session-row"><div class="row between"><small>${escapeHTML(conversationScope(conversation))}</small><span class="state">${conversation.execution}</span></div><button class="title-button" data-conversation="${conversation.id}">${escapeHTML(conversation.title)}</button><small>${conversation.updated || "刚刚"}</small></div>`).join("") || '<p class="muted">开始对话后，最近活动会出现在这里。</p>'}</div></section></div>`;
+      const heading = `<div class="page-title"><h1>工作台</h1><p>跨项目查看需要你介入的工作，再继续当前任务。</p></div>${condition()}`;
+      const queue = `<h2>待介入事项 <span class="count">${items.length} 项</span></h2><div class="attention-list">${items.map(item => `<button class="attention-row ${selected?.id === item.id ? "selected" : ""}" data-attention="${item.id}" aria-pressed="${selected?.id === item.id}"><span class="attention-kind">${item.kind}</span><span class="grow"><strong>${item.title}</strong><small>${projectName(findTask(item.task).project)} / ${item.task} · ${item.context}</small></span></button>`).join("") || '<div class="empty"><h3>没有待介入事项</h3><p>你可以继续查看对话，或开始一项新任务。</p></div>'}</div>`;
+      const recent = `<div class="row between"><h2>最近对话</h2><button class="quiet" data-nav="conversations">全部对话</button></div><div class="session-list">${conversations.map(conversation => `<div class="session-row"><div class="row between"><small>${escapeHTML(conversationScope(conversation))}</small><span class="state" data-status="${conversation.execution}">${conversation.execution}</span></div><button class="title-button" data-conversation="${conversation.id}">${escapeHTML(conversation.title)}</button><small>${conversation.updated || "刚刚"}</small></div>`).join("") || '<p class="muted">开始对话后，最近活动会出现在这里。</p>'}</div>`;
+      if (visualDirection) return `${heading}<div class="triage-layout"><section class="triage-queue" aria-label="待介入事项">${queue}</section><section class="triage-request" aria-label="当前事项上下文">${requestDetails(selected)}</section><section class="triage-recent" aria-label="最近对话">${recent}</section></div>`;
+      return `${heading}<div class="overview"><section>${queue}${requestDetails(selected)}</section><section class="session-column">${recent}</section></div>`;
     }
     function tasksView() {
       const global = model.view === "tasks";
@@ -427,7 +584,8 @@
       const views = { global: globalView, tasks: tasksView, project: projectView, conversations: conversationsView, conversation: conversationView, "create-conversation": createConversationView, task: taskView, create: createView };
       const entryLabel = model.entry === "project" ? projectName(model.project) : ({ global: "工作台", tasks: "任务", conversations: "对话", unassigned: "对话" }[model.entry] || "对话");
       const breadcrumb = model.view === "task" ? `${entryLabel} / ${findTask(model.task).id}` : model.view === "conversation" ? `${entryLabel} / ${findConversation(model.conversation).title}` : model.view === "project" ? `${projectName(model.project)} / ${model.projectPanel === "conversations" ? "对话" : "任务"}` : ({ global: "工作台", tasks: "任务 / 全部项目", conversations: "对话 / 全部项目", "create-conversation": "对话 / 新建对话", create: "新建任务" }[model.view]);
-      document.getElementById("app").innerHTML = `<aside class="sidebar"><div class="brand">Loomhelm</div><nav>${navigation("sidebar")}</nav><div class="sidebar-foot">主人的工作区<br>桌面与手机共享工作内容</div></aside><div class="work-area"><header class="app-header row"><button class="mobile-menu quiet" data-menu="open">导航</button><span class="breadcrumb grow">${escapeHTML(breadcrumb)}</span><span class="prototype-label">结构原型 · 演示数据</span><button data-nav="create" ${disabled()}>新建任务</button></header><main id="workspace" class="content ${["task", "conversation"].includes(model.view) ? "task-mode" : ""}">${views[model.view]()}</main></div>`;
+      const mark = visualDirection ? '<svg class="brand-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4v16h16M9 4v11h11M14 4v6h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>' : "";
+      document.getElementById("app").innerHTML = `<aside class="sidebar"><div class="brand">${mark}Loomhelm</div><nav>${navigation("sidebar")}</nav><div class="sidebar-foot">主人的工作区<br>桌面与手机共享工作内容</div></aside><div class="work-area"><header class="app-header row"><button class="mobile-menu quiet" data-menu="open">导航</button><span class="breadcrumb grow">${escapeHTML(breadcrumb)}</span><span class="prototype-label">${visualDirection ? "视觉提案" : "结构原型"} · 演示数据</span><button data-nav="create" ${disabled()}>新建任务</button></header><main id="workspace" class="content ${["task", "conversation"].includes(model.view) ? "task-mode" : ""}">${views[model.view]()}</main></div>`;
       document.getElementById("dialogNavigation").innerHTML = navigation("dialog");
       if (["task", "conversation"].includes(model.view)) { const key = conversationKey(); const messages = document.getElementById("messages"); messages.querySelectorAll("details").forEach((detail, index) => { detail.open = model.expandedDetails[key]?.[index] || false; }); messages.scrollTop = model.readPositions[key] || 0; }
       if (focusSelector) { const replacement = document.querySelector(focusSelector); replacement?.focus({ preventScroll: true }); if (selection && selection[0] !== null && replacement instanceof HTMLInputElement) replacement.setSelectionRange(...selection); }
@@ -498,9 +656,19 @@
       });
     } else {
       const frame = document.getElementById("prototypeFrame");
-      const loadScenario = () => { frame.src = `${location.pathname}?canvas=1&scenario=${document.getElementById("scenarioSelect").value}`; };
+      let reviewMode = "directions";
+      let direction = "ops";
+      const descriptions = {
+        ops: "A · 值守台：信息分区明确，状态优先，操作上下文始终相邻。代价是桌面更紧凑，长说明需要更多纵向阅读。",
+        journal: "B · 工作日志：我更推荐用于长时间工作。层级靠排版与留白，事项和上下文像连续记录；代价是同屏密度稍低，风格更熟悉。",
+        standard: "C · 标准工具台：常规双栏与中性控件，学习成本低。代价是产品辨识度较弱。"
+      };
+      const loadScenario = () => { const query = new URLSearchParams({ canvas: "1", scenario: document.getElementById("scenarioSelect").value }); if (reviewMode === "directions") { query.set("direction", direction); query.set("theme", document.getElementById("directionTheme").value); } frame.src = `${location.pathname}?${query}`; document.getElementById("directionDescription").textContent = descriptions[direction]; document.getElementById("directionStandalone").href = `${location.pathname}?canvas=1&direction=${direction}&theme=${document.getElementById("directionTheme").value}`; document.getElementById("directionQuickSelect").value = direction; document.querySelectorAll("[data-direction-choice]").forEach(option => option.setAttribute("aria-pressed", option.dataset.directionChoice === direction)); };
       loadScenario();
-      document.querySelectorAll("[data-review]").forEach(button => button.addEventListener("click", () => { const prototype = button.dataset.review === "prototype"; document.getElementById("prototypeReview").hidden = !prototype; document.getElementById("notesReview").hidden = prototype; document.getElementById("previewControls").hidden = !prototype; document.querySelectorAll("[data-review]").forEach(tab => tab.setAttribute("aria-pressed", tab === button)); }));
+      document.querySelectorAll("[data-review]").forEach(button => button.addEventListener("click", () => { reviewMode = button.dataset.review; const notes = reviewMode === "notes"; document.getElementById("prototypeReview").hidden = notes; document.getElementById("notesReview").hidden = !notes; document.getElementById("directionReview").hidden = reviewMode !== "directions"; document.getElementById("directionQuickControl").hidden = reviewMode !== "directions"; document.getElementById("previewControls").hidden = notes; document.querySelectorAll("[data-review]").forEach(tab => tab.setAttribute("aria-pressed", tab === button)); if (!notes) loadScenario(); }));
+      document.querySelectorAll("[data-direction-choice]").forEach(button => button.addEventListener("click", () => { direction = button.dataset.directionChoice; loadScenario(); }));
+      document.getElementById("directionQuickSelect").addEventListener("change", event => { direction = event.target.value; loadScenario(); });
+      document.getElementById("directionTheme").addEventListener("change", loadScenario);
       document.querySelectorAll("[data-device]").forEach(button => button.addEventListener("click", () => { document.getElementById("previewShell").classList.toggle("mobile", button.dataset.device === "mobile"); document.querySelectorAll("[data-device]").forEach(tab => tab.setAttribute("aria-pressed", tab === button)); }));
       document.getElementById("scenarioSelect").addEventListener("change", loadScenario);
       document.getElementById("resetDemo").addEventListener("click", loadScenario);
