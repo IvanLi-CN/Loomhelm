@@ -11,7 +11,7 @@ The topic owns projects, tasks and their relationships, Codex sessions and runs,
 ## Terms and Interfaces
 
 - Project: the authorization and organization scope containing tasks and project-associated conversations and execution results. A conversation may initially have no project.
-- Task: a durable work item whose business status is independent from the execution status of any Run. Task hierarchy and prerequisite dependencies are distinct relationships; a subtask remains a Task.
+- Task: a durable work item whose business status is independent from the execution status of any Run. Task hierarchy and prerequisite dependencies are distinct relationships, both permitted across projects without changing either task's project ownership; a subtask remains a Task.
 - Execution environment: the single configured Codex execution endpoint for an installation. Connector enrollment and credentials are deployment concerns; public product operations do not select or manage hosts. The physical execution machine may be separate from Server and Worker.
 - Session: a platform association with an actual Codex thread, presented to the user as a conversation, including an existing active desktop thread when supported by the verified adapter. A Session may exist without a Task or Project. Each Task has at most one directly associated Session, and each Session has at most one associated Task. Established task/session bindings remain fixed in phase one.
 - Run: one execution attempt bound to a session and the configured execution environment, with observable state and event history. Task association is optional because standalone conversations can execute. A Session may contain multiple Runs; later task association must not recreate their identities.
@@ -51,6 +51,8 @@ The product MUST provide a responsive, installable Web/PWA with desktop/mobile c
 
 Project navigation MUST provide a collapsible Projects group, concrete projects and their conversations as direct leaves, including both task-associated and taskless project conversations without an intervening task-navigation level. The projectless group and its breadcrumb MUST use Conversations rather than Unassigned Project. A project's workspace MUST provide task and conversation panels, and its conversation panel MUST include all authorized conversations in that project. Project-scoped creation MUST preselect that project; global creation MUST allow no project. Navigation placement, selection and breadcrumbs MUST follow actual association changes using the same Session identity. This navigation tree does not establish a nested-project business model.
 
+The interface MUST follow the system theme by default and allow manual light/dark selection and returning to system preference. Each client MUST independently retain its choice across reloads without overwriting another client's preference. Both themes MUST provide the same capabilities and readable content, focus and state indicators.
+
 Business feature implementation and public business contract finalization MUST follow explicit owner confirmation of the phase-one PRD and resolution of the affected business decisions. A single complete UI design task MUST involve the owner and produce the approved information architecture, prototype, desktop/mobile visuals, component states and implementation handoff before product UI implementation. Engineering skeletons, infrastructure, capability research and the existing design discussion MAY proceed before those product approvals. Offline control commands MUST NOT be queued or automatically replayed.
 
 ### REQ-LH-007
@@ -67,7 +69,9 @@ The system MUST preserve original Codex event fields and unknown content types. 
 
 ### REQ-LH-010
 
-The system MUST persist task hierarchy and prerequisite dependencies as separate relationships and expose them consistently through the shared application services. Global Tasks and each project context MUST support list, board and graph views of the same Task identities. The board MUST group by task business state; the graph MUST distinguish project/task/subtask containment from directed prerequisite dependencies. Changing the presentation MUST NOT change task identity, task business state or Run execution state. Each client MUST remember the selected view separately for global Tasks and each project across reloads, with list as the initial default.
+The system MUST persist task hierarchy and prerequisite dependencies as separate relationships and expose them consistently through the shared application services. Both parent/child relationships and prerequisite dependencies MUST support tasks in different projects. Relationship changes MUST preserve each task's project, main Session and execution ownership and enforce authorization at both endpoints. A relationship MUST NOT grant access to an otherwise unauthorized task or project or disclose its protected contents.
+
+Global Tasks and each project context MUST support list, board and graph views of the same Task identities. Project views MUST express relationships to authorized external tasks with their actual project identified, without presenting those tasks as members of the selected project. The board MUST group by task business state; the graph MUST distinguish project/task/subtask containment from directed prerequisite dependencies. Changing the presentation MUST NOT change task identity, task business state or Run execution state. Each client MUST remember the selected view separately for global Tasks and each project across reloads, with list as the initial default.
 
 ### REQ-LH-011
 
@@ -109,9 +113,9 @@ Association MUST retain the same Session and the identities and continuity of it
 
 ### VER-LH-005
 
-- Method: explicit owner PRD confirmation and resolution of the affected business decisions before implementation, followed by owner review of the complete UI design, controlled component/page evidence, real-backend interaction and install/update/offline scenarios, including global/project navigation and conversation-context file access.
+- Method: explicit owner PRD confirmation and resolution of the affected business decisions before implementation, followed by owner review of the complete UI design, controlled component/page evidence, real-backend interaction and install/update/offline scenarios, including global/project navigation, conversation-context file access, system theme changes and independent client theme preferences.
 - covers: `REQ-LH-006`
-- Pass condition: product implementation follows the confirmed product requirements and design; the two top-level entries, projectless Conversations group, Workbench All Conversations action, project/conversation tree and project panels expose the correct authorized scope, including taskless project conversations. The application installs, update retains context and offline control cannot silently execute later. No host-management or standalone artifacts surface is introduced.
+- Pass condition: product implementation follows the confirmed product requirements and design; the two top-level entries, projectless Conversations group, Workbench All Conversations action, project/conversation tree and project panels expose the correct authorized scope, including taskless project conversations. The theme initially follows the system, manual choices survive reload independently per client, returning to system preference works, and both themes retain readable states and equal capability. The application installs, update retains context and offline control cannot silently execute later. No host-management or standalone artifacts surface is introduced.
 
 ### VER-LH-006
 
@@ -133,9 +137,9 @@ Association MUST retain the same Session and the identities and continuity of it
 
 ### VER-LH-009
 
-- Method: authenticated HTTP/MCP task-relationship round trips, database restart, and list/board/graph interaction in global and project contexts.
+- Method: authenticated HTTP/MCP round trips for both cross-project parent/child relationships and prerequisite dependencies, database restart, unauthorized-endpoint scenarios and list/board/graph interaction in global and project contexts.
 - covers: `REQ-LH-001`, `REQ-LH-006`, `REQ-LH-010`
-- Pass condition: stored hierarchy and dependencies remain distinct and authorized, all views reference the same tasks, graph edge types remain distinguishable, and each context's chosen view survives reload without altering task or execution state.
+- Pass condition: both cross-project relationship types persist and remain distinct; task project, main Session and execution ownership stay unchanged, endpoint authorization holds and no protected task content leaks through relationships. All views reference the same tasks, external project identities and graph edge types remain distinguishable, and each context's chosen view survives reload without altering task or execution state.
 
 ### VER-LH-010
 
@@ -147,7 +151,7 @@ Association MUST retain the same Session and the identities and continuity of it
 
 - Method: authenticated Web/HTTP/MCP creation of a conversation without a project or task, real execution and file production, later task association, failure/conflict and authorization scenarios, reconnect and process restart.
 - covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-005`, `REQ-LH-008`, `REQ-LH-011`, `REQ-LH-012`
-- Pass condition: projectless conversations are creator-private and executable; association requires explicit sharing confirmation, preserves Session/Run/event/message/file/draft continuity and applies target-project history permissions while keeping drafts private. Both association cardinalities hold, occupied/replacement/detach/cross-project operations are rejected, and failed association leaves prior state intact.
+- Pass condition: projectless conversations are creator-private and executable; association requires explicit sharing confirmation, preserves Session/Run/event/message/file/draft continuity and applies target-project history permissions while keeping drafts private. Both association cardinalities hold, occupied/replacement/detach and cross-project Session reassociation operations are rejected, and failed association leaves prior state intact. Cross-project task hierarchy and prerequisite relationships remain supported independently of Session binding.
 
 ## Related ADRs
 

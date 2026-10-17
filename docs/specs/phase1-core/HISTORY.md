@@ -28,6 +28,8 @@ The owner subsequently removed the top-level Conversations button, leaving Workb
 
 The owner directly confirmed one task per conversation, fixed bindings without replacement/detachment/cross-project migration, private projectless conversations with explicit confirmation before project sharing of historical messages/execution/files, and private same-user drafts. The owner chose automatic last-modification-wins draft reconciliation rather than manual conflict-copy selection, and chose a task status set including Blocked. These answers refine product contracts, not implementation coverage or approval of the entire PRD/design. Business-rule confirmation is consolidated in the parent conversation rather than duplicated in the UI task.
 
+The owner explicitly permitted both task parent/child relationships and prerequisite dependencies across project boundaries. Task relationships preserve the endpoint tasks' project ownership and do not widen project permissions. This decision concerns task relationships and does not change the fixed task/Session binding rule. The design discussion also established system-following theme by default, manual light/dark override and independently remembered choices per client, without selecting a storage technology. Neither clarification establishes implementation coverage or complete product/design approval.
+
 ## References
 
 - [Requirements](SPEC.md)
