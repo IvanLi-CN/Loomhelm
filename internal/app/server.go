@@ -65,14 +65,15 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	if listener == nil {
 		return fmt.Errorf("server listener must not be nil")
 	}
-	if err := ctx.Err(); err != nil {
-		_ = listener.Close()
-		s.lifecycle.Stop()
-		return nil
-	}
 	if err := s.lifecycle.Start(); err != nil {
 		_ = listener.Close()
 		return err
+	}
+	if err := ctx.Err(); err != nil {
+		s.BeginDrain("context canceled")
+		_ = listener.Close()
+		s.lifecycle.Stop()
+		return nil
 	}
 
 	server := &http.Server{
@@ -140,7 +141,9 @@ func (s *Server) shutdownHTTP(server *http.Server) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		_ = server.Close()
+		if closeErr := server.Close(); closeErr != nil {
+			return errors.Join(err, fmt.Errorf("force close HTTP server: %w", closeErr))
+		}
 		return err
 	}
 	return nil

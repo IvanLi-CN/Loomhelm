@@ -57,6 +57,33 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	}
 }
 
+func TestWorkerRejectsSecondRunWithoutReplacingGeneration(t *testing.T) {
+	worker, err := NewWorker(platform.Config{
+		Component:        platform.ComponentWorker,
+		Version:          "test",
+		ShutdownTimeout:  time.Second,
+		WorkerGeneration: 3,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- worker.Run(firstContext) }()
+	waitForLifecycleState(t, worker.Lifecycle(), platform.StateRunning)
+	firstGeneration := worker.GenerationController()
+	secondContext, cancelSecond := context.WithCancel(context.Background())
+	cancelSecond()
+	if err := worker.Run(secondContext); err == nil {
+		t.Fatal("second Run() succeeded")
+	}
+	if worker.GenerationController() != firstGeneration {
+		t.Fatal("second Run() replaced the active generation controller")
+	}
+	cancelFirst()
+	waitForProcessResult(t, firstResult)
+}
+
 func waitForLifecycleState(t *testing.T, lifecycle *platform.Lifecycle, want platform.State) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -126,6 +127,38 @@ func TestServerPreservesUnexpectedServerClosedError(t *testing.T) {
 	}
 }
 
+func TestServerReturnsErrorAfterReadyListenerFails(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	serveError := io.ErrUnexpectedEOF
+	failing := &failingAfterFirstListener{Listener: listener, err: serveError, fail: make(chan struct{})}
+	runResult := make(chan error, 1)
+	go func() { runResult <- server.Serve(context.Background(), failing) }()
+
+	client := &http.Client{Timeout: time.Second}
+	waitForStatus(t, client, "http://"+listener.Addr().String()+"/readyz", http.StatusOK)
+	close(failing.fail)
+	select {
+	case err := <-runResult:
+		if !errors.Is(err, serveError) {
+			t.Fatalf("Serve() error = %v, want %v", err, serveError)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve() did not report listener failure")
+	}
+}
+
 func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
 	server, err := NewServer(platform.Config{
 		Component:       platform.ComponentServer,
@@ -142,23 +175,56 @@ func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	releaseHandler := make(chan struct{})
+	enteredHandler := make(chan struct{})
+	server.router.Get("/block", func(writer http.ResponseWriter, _ *http.Request) {
+		close(enteredHandler)
+		<-releaseHandler
+		writer.WriteHeader(http.StatusOK)
+	})
 	runResult := make(chan error, 1)
 	go func() { runResult <- server.Serve(ctx, listener) }()
 
 	client := &http.Client{Timeout: time.Second}
 	baseURL := "http://" + listener.Addr().String()
 	waitForStatus(t, client, baseURL+"/readyz", http.StatusOK)
-	if !server.BeginDrain("test drain") {
-		t.Fatal("BeginDrain() = false, want true")
-	}
-	waitForStatus(t, client, baseURL+"/readyz", http.StatusServiceUnavailable)
-	if live := getJSON(t, client, baseURL+"/livez"); live["live"] != true {
-		t.Fatalf("unexpected draining liveness response: %+v", live)
-	}
-	if drain := getJSON(t, client, baseURL+"/-/drain"); drain["state"] != string(platform.StateDraining) {
-		t.Fatalf("unexpected drain status response: %+v", drain)
+	blockResult := make(chan error, 1)
+	go func() {
+		response, err := client.Get(baseURL + "/block")
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		blockResult <- err
+	}()
+	select {
+	case <-enteredHandler:
+	case <-time.After(time.Second):
+		t.Fatal("blocking handler did not start")
 	}
 	cancel()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := server.Lifecycle().Snapshot()
+		if snapshot.State == platform.StateDraining {
+			if snapshot.Ready || !snapshot.Live {
+				t.Fatalf("unexpected cancellation drain snapshot: %+v", snapshot)
+			}
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateDraining {
+		t.Fatalf("server did not enter draining state after cancellation: %+v", snapshot)
+	}
+	close(releaseHandler)
+	select {
+	case err := <-blockResult:
+		if err != nil {
+			t.Fatalf("blocking request error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocking handler did not finish")
+	}
 	waitForProcessResult(t, runResult)
 }
 
@@ -214,5 +280,20 @@ type failingListener struct {
 }
 
 func (l *failingListener) Accept() (net.Conn, error) {
+	return nil, l.err
+}
+
+type failingAfterFirstListener struct {
+	net.Listener
+	err      error
+	accepted atomic.Bool
+	fail     chan struct{}
+}
+
+func (l *failingAfterFirstListener) Accept() (net.Conn, error) {
+	if l.accepted.CompareAndSwap(false, true) {
+		return l.Listener.Accept()
+	}
+	<-l.fail
 	return nil, l.err
 }

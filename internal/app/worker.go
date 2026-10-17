@@ -15,6 +15,7 @@ type Worker struct {
 	logger    *slog.Logger
 	lifecycle *platform.Lifecycle
 
+	runMu      sync.Mutex
 	mu         sync.RWMutex
 	generation *platform.GenerationController
 }
@@ -40,8 +41,15 @@ func (w *Worker) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("worker context must not be nil")
 	}
+	w.runMu.Lock()
+	if snapshot := w.lifecycle.Snapshot(); snapshot.State != platform.StateNew {
+		w.runMu.Unlock()
+		return fmt.Errorf("worker lifecycle already started in state %q", snapshot.State)
+	}
+	// Keep cancellation under Run so readiness is revoked before generation work is stopped.
 	generation, err := platform.NewGenerationController(context.Background(), w.cfg.WorkerGeneration)
 	if err != nil {
+		w.runMu.Unlock()
 		return err
 	}
 	w.mu.Lock()
@@ -50,12 +58,15 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		generation.Stop()
 		w.lifecycle.Stop()
+		w.runMu.Unlock()
 		return nil
 	}
 	if err := w.lifecycle.Start(); err != nil {
 		generation.Stop()
+		w.runMu.Unlock()
 		return err
 	}
+	w.runMu.Unlock()
 
 	w.logger.Info("worker started", "generation", generation.Current())
 	<-ctx.Done()
