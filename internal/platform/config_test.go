@@ -10,6 +10,7 @@ func TestLoadConfigValidatesComponentSpecificValues(t *testing.T) {
 	lookup := envLookup(map[string]string{
 		"LOOMHELM_VERSION":          "test-version",
 		"LOOMHELM_HTTP_ADDR":        "127.0.0.1:0",
+		"LOOMHELM_DRAIN_TOKEN":      "test-token",
 		"LOOMHELM_SHUTDOWN_TIMEOUT": "250ms",
 	})
 
@@ -17,7 +18,7 @@ func TestLoadConfigValidatesComponentSpecificValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigWithLookup() error = %v", err)
 	}
-	if config.Version != "test-version" || config.HTTPAddr != "127.0.0.1:0" || config.ShutdownTimeout != 250*time.Millisecond {
+	if config.Version != "test-version" || config.HTTPAddr != "127.0.0.1:0" || config.DrainToken != "test-token" || config.ShutdownTimeout != 250*time.Millisecond {
 		t.Fatalf("unexpected config: %+v", config)
 	}
 }
@@ -45,6 +46,12 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 			component: ComponentServer,
 			env:       map[string]string{"LOOMHELM_HTTP_ADDR": " :8080"},
 			wantError: "LOOMHELM_HTTP_ADDR",
+		},
+		{
+			name:      "drain token whitespace",
+			component: ComponentServer,
+			env:       map[string]string{"LOOMHELM_DRAIN_TOKEN": "test token"},
+			wantError: "drain token",
 		},
 		{
 			name:      "invalid timeout",

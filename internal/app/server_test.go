@@ -20,6 +20,7 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
 		ShutdownTimeout: time.Second,
 	}, nil)
 	if err != nil {
@@ -51,7 +52,12 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 		t.Fatalf("unexpected version response: %+v", version)
 	}
 
-	response, err := client.Post(baseURL+"/-/drain", "", nil)
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/-/drain", nil)
+	if err != nil {
+		t.Fatalf("create drain request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer test-token")
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatalf("POST /-/drain error = %v", err)
 	}
@@ -80,11 +86,49 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 	}
 }
 
+func TestServerSocketHealthDuringDrain(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runResult := make(chan error, 1)
+	go func() { runResult <- server.Serve(ctx, listener) }()
+
+	client := &http.Client{Timeout: time.Second}
+	baseURL := "http://" + listener.Addr().String()
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusOK)
+	if !server.BeginDrain("test drain") {
+		t.Fatal("BeginDrain() did not transition the server")
+	}
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusServiceUnavailable)
+	waitForStatus(t, client, baseURL+"/livez", http.StatusOK)
+	drain := getJSON(t, client, baseURL+"/-/drain")
+	if drain["state"] != string(platform.StateDraining) || drain["ready"] != false || drain["live"] != true {
+		t.Fatalf("unexpected socket drain response: %+v", drain)
+	}
+
+	cancel()
+	waitForProcessResult(t, runResult)
+}
+
 func TestServerReadyEndpointReturnsUnavailableDuringDrain(t *testing.T) {
 	server, err := NewServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
 		ShutdownTimeout: time.Second,
 	}, nil)
 	if err != nil {
@@ -123,6 +167,7 @@ func TestServerRejectsRemoteDrainRequest(t *testing.T) {
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
 		ShutdownTimeout: time.Second,
 	}, nil)
 	if err != nil {
@@ -148,6 +193,7 @@ func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
 		ShutdownTimeout: time.Second,
 	}, nil)
 	if err != nil {
@@ -174,6 +220,7 @@ func TestServerPreservesUnexpectedServerClosedError(t *testing.T) {
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
 		ShutdownTimeout: time.Second,
 	}, nil)
 	if err != nil {
@@ -196,6 +243,7 @@ func TestServerReturnsErrorAfterReadyListenerFails(t *testing.T) {
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
 		ShutdownTimeout: time.Second,
 	}, nil)
 	if err != nil {
@@ -228,6 +276,7 @@ func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
 		ShutdownTimeout: time.Second,
 	}, nil)
 	if err != nil {
@@ -290,6 +339,76 @@ func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
 		t.Fatal("blocking handler did not finish")
 	}
 	waitForProcessResult(t, runResult)
+}
+
+func TestServerForceClosesStuckRequestAfterDrainTimeout(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
+		ShutdownTimeout: 20 * time.Millisecond,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	releaseHandler := make(chan struct{})
+	var released atomic.Bool
+	release := func() {
+		if released.CompareAndSwap(false, true) {
+			close(releaseHandler)
+		}
+	}
+	defer release()
+	enteredHandler := make(chan struct{})
+	server.router.Get("/block", func(writer http.ResponseWriter, _ *http.Request) {
+		close(enteredHandler)
+		<-releaseHandler
+		writer.WriteHeader(http.StatusOK)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runResult := make(chan error, 1)
+	go func() { runResult <- server.Serve(ctx, listener) }()
+
+	client := &http.Client{Timeout: time.Second}
+	baseURL := "http://" + listener.Addr().String()
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusOK)
+	blockResult := make(chan error, 1)
+	go func() {
+		response, err := client.Get(baseURL + "/block")
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		blockResult <- err
+	}()
+	select {
+	case <-enteredHandler:
+	case <-time.After(time.Second):
+		t.Fatal("blocking handler did not start")
+	}
+	cancel()
+	select {
+	case err := <-runResult:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Serve() error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve() did not force close the stuck request")
+	}
+	release()
+	select {
+	case <-blockResult:
+	case <-time.After(time.Second):
+		t.Fatal("blocking request did not finish after forced close")
+	}
+	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+		t.Fatalf("unexpected forced-close lifecycle snapshot: %+v", snapshot)
+	}
 }
 
 func TestServerRejectsInvalidConfiguration(t *testing.T) {

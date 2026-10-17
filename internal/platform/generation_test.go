@@ -94,3 +94,32 @@ func TestGenerationControllerConcurrentAccess(t *testing.T) {
 		t.Fatalf("current generation = %d, want 2", controller.Current())
 	}
 }
+
+func TestGenerationControllerConcurrentTransitions(t *testing.T) {
+	controller, err := NewGenerationController(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("NewGenerationController() error = %v", err)
+	}
+
+	var group sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for generation := uint64(2); generation < 102; generation++ {
+				_ = controller.Advance(generation)
+				_ = controller.CancelCurrent()
+			}
+		}()
+	}
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		_ = controller.Stop()
+	}()
+	group.Wait()
+	controller.Stop()
+	if controller.IsCurrent(controller.Current()) {
+		t.Fatal("stopped controller still reports a current generation")
+	}
+}

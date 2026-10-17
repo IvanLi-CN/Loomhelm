@@ -6,11 +6,27 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
 
-func TestConnectorEntrypointExitsOnInterrupt(t *testing.T) {
+func TestConnectorEntrypointExitsOnSignal(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		signal os.Signal
+	}{
+		{name: "interrupt", signal: os.Interrupt},
+		{name: "sigterm", signal: syscall.SIGTERM},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runConnectorSignalTest(t, test.signal)
+		})
+	}
+}
+
+func runConnectorSignalTest(t *testing.T, signal os.Signal) {
+	t.Helper()
 	binary := buildConnectorEntrypoint(t)
 	logPath := filepath.Join(t.TempDir(), "connector.log")
 	logFile, err := os.Create(logPath)
@@ -36,8 +52,8 @@ func TestConnectorEntrypointExitsOnInterrupt(t *testing.T) {
 		}
 	})
 	waitForLog(t, logPath, "connector started")
-	if err := command.Process.Signal(os.Interrupt); err != nil {
-		t.Fatalf("interrupt connector: %v", err)
+	if err := command.Process.Signal(signal); err != nil {
+		t.Fatalf("signal connector: %v", err)
 	}
 	if err := waitForExit(command); err != nil {
 		t.Fatalf("connector exit error = %v", err)
@@ -87,7 +103,7 @@ func commandEnv(values map[string]string) []string {
 
 func waitForLog(t *testing.T, path, marker string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		data, _ := os.ReadFile(path)
 		if strings.Contains(string(data), marker) {

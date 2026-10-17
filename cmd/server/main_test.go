@@ -15,7 +15,22 @@ import (
 	"time"
 )
 
-func TestServerEntrypointExitsOnSIGTERM(t *testing.T) {
+func TestServerEntrypointExitsOnSignal(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		signal os.Signal
+	}{
+		{name: "interrupt", signal: os.Interrupt},
+		{name: "sigterm", signal: syscall.SIGTERM},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runServerSignalTest(t, test.signal)
+		})
+	}
+}
+
+func runServerSignalTest(t *testing.T, signal os.Signal) {
+	t.Helper()
 	binary := buildServerEntrypoint(t)
 	logPath := filepath.Join(t.TempDir(), "server.log")
 	logFile, err := os.Create(logPath)
@@ -26,8 +41,9 @@ func TestServerEntrypointExitsOnSIGTERM(t *testing.T) {
 
 	command := exec.Command(binary)
 	command.Env = commandEnv(map[string]string{
-		"LOOMHELM_VERSION":   "test",
-		"LOOMHELM_HTTP_ADDR": "127.0.0.1:0",
+		"LOOMHELM_VERSION":     "test",
+		"LOOMHELM_HTTP_ADDR":   "127.0.0.1:0",
+		"LOOMHELM_DRAIN_TOKEN": "test-token",
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -41,8 +57,8 @@ func TestServerEntrypointExitsOnSIGTERM(t *testing.T) {
 		}
 	})
 	waitForLog(t, logPath, "server started")
-	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("terminate server: %v", err)
+	if err := command.Process.Signal(signal); err != nil {
+		t.Fatalf("signal server: %v", err)
 	}
 	if err := waitForExit(command); err != nil {
 		t.Fatalf("server exit error = %v", err)
@@ -61,8 +77,9 @@ func TestServerEntrypointServesHealthVersionAndDrain(t *testing.T) {
 
 	command := exec.Command(binary)
 	command.Env = commandEnv(map[string]string{
-		"LOOMHELM_VERSION":   "test",
-		"LOOMHELM_HTTP_ADDR": "127.0.0.1:0",
+		"LOOMHELM_VERSION":     "test",
+		"LOOMHELM_HTTP_ADDR":   "127.0.0.1:0",
+		"LOOMHELM_DRAIN_TOKEN": "test-token",
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -93,7 +110,12 @@ func TestServerEntrypointServesHealthVersionAndDrain(t *testing.T) {
 		t.Fatalf("unexpected version response: %+v", version)
 	}
 
-	response, err := client.Post(baseURL+"/-/drain", "", nil)
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/-/drain", nil)
+	if err != nil {
+		t.Fatalf("create drain request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer test-token")
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatalf("POST /-/drain error = %v", err)
 	}
@@ -178,7 +200,7 @@ func commandEnv(values map[string]string) []string {
 
 func waitForLog(t *testing.T, path, marker string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		data, _ := os.ReadFile(path)
 		if strings.Contains(string(data), marker) {

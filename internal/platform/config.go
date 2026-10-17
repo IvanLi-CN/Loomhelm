@@ -22,6 +22,7 @@ type Config struct {
 	Component          Component
 	Version            string
 	HTTPAddr           string
+	DrainToken         string
 	ShutdownTimeout    time.Duration
 	WorkerGeneration   uint64
 	ConnectorServerURL string
@@ -58,6 +59,7 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 	switch component {
 	case ComponentServer:
 		config.HTTPAddr = lookupOrDefault(lookup, "LOOMHELM_HTTP_ADDR", "127.0.0.1:8080")
+		config.DrainToken = lookupOrDefault(lookup, "LOOMHELM_DRAIN_TOKEN", "")
 		if err := validateListenAddress(config.HTTPAddr); err != nil {
 			return Config{}, fmt.Errorf("invalid LOOMHELM_HTTP_ADDR: %w", err)
 		}
@@ -95,6 +97,9 @@ func (c Config) Validate() error {
 	case ComponentServer:
 		if err := validateListenAddress(c.HTTPAddr); err != nil {
 			return fmt.Errorf("invalid HTTP address: %w", err)
+		}
+		if strings.ContainsAny(c.DrainToken, " \t\r\n") {
+			return fmt.Errorf("drain token must not contain whitespace")
 		}
 	case ComponentWorker:
 		if c.WorkerGeneration == 0 {

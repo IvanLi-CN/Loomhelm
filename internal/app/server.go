@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,10 +100,9 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return s.shutdownAndWait(server, serveResult, "HTTP drain request")
 	case err := <-serveResult:
 		s.BeginDrain("HTTP server stopped unexpectedly")
-		closeErr := listener.Close()
 		shutdownErr := s.shutdownHTTP(server)
 		s.lifecycle.Stop()
-		if combined := withListenerCloseError(combineServerErrors(err, shutdownErr), closeErr); combined != nil {
+		if combined := combineServerErrors(err, shutdownErr); combined != nil {
 			return combined
 		}
 		s.logger.Info("server stopped")
@@ -257,7 +257,7 @@ func (s *Server) handleDrainStatus(writer http.ResponseWriter, _ *http.Request) 
 }
 
 func (s *Server) handleDrain(writer http.ResponseWriter, request *http.Request) {
-	if !isLoopbackRequest(request) {
+	if !isLoopbackRequest(request) || !s.validDrainToken(request) {
 		s.writeJSON(writer, http.StatusForbidden, healthResponse{
 			Status:    "forbidden",
 			Component: string(s.cfg.Component),
@@ -294,6 +294,19 @@ func (s *Server) handleDrain(writer http.ResponseWriter, request *http.Request) 
 	case s.shutdown <- struct{}{}:
 	default:
 	}
+}
+
+func (s *Server) validDrainToken(request *http.Request) bool {
+	if s.cfg.DrainToken == "" {
+		return false
+	}
+	const bearerPrefix = "Bearer "
+	authorization := request.Header.Get("Authorization")
+	if len(authorization) <= len(bearerPrefix) || authorization[:len(bearerPrefix)] != bearerPrefix {
+		return false
+	}
+	token := authorization[len(bearerPrefix):]
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.DrainToken)) == 1
 }
 
 func isLoopbackRequest(request *http.Request) bool {
