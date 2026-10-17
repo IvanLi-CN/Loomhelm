@@ -1,4 +1,5 @@
 import { Check, CircleDashed, Code2, Database, Route, ServerCog } from "lucide-react";
+import { useId } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -50,9 +51,11 @@ interface VerificationPanelProps {
 }
 
 export function VerificationPanel({ compact = false, className }: VerificationPanelProps) {
+  const titleId = useId();
+
   return (
     <section
-      aria-labelledby="verification-panel-title"
+      aria-labelledby={titleId}
       className={cn(
         "w-full border border-slate-200 bg-white p-5 shadow-sm sm:p-7",
         compact ? "rounded-md" : "rounded-lg",
@@ -63,7 +66,7 @@ export function VerificationPanel({ compact = false, className }: VerificationPa
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">
           Technical verification
         </p>
-        <h1 id="verification-panel-title" className="text-2xl font-semibold tracking-tight text-slate-950">
+        <h1 id={titleId} className="text-2xl font-semibold tracking-tight text-slate-950">
           Web foundation
         </h1>
         <p className="max-w-2xl text-sm leading-6 text-slate-600">
