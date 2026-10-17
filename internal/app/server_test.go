@@ -271,6 +271,31 @@ func TestServerRunRejectsAfterServeAdmission(t *testing.T) {
 	waitForProcessResult(t, runResult)
 }
 
+func TestServerPreCanceledServeDoesNotBecomeReady(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := server.Serve(ctx, listener); err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateNew || snapshot.Live || snapshot.Ready {
+		t.Fatalf("unexpected pre-canceled Serve() snapshot: %+v", snapshot)
+	}
+}
+
 func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
 	server, err := NewServer(platform.Config{
 		Component:       platform.ComponentServer,

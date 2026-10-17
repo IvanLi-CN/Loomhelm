@@ -2,17 +2,18 @@
 
 ## Current Status
 
-The repository has an initial Git baseline and engineering conventions. No runnable product, public interface, Connector, migration or deployed environment is implemented yet.
+The repository contains the F01 Go process-lifecycle skeleton: runnable Server, Worker and Connector entrypoints, configuration validation, local lifecycle state, health/version/drain control for Server and process signal handling. The product APIs, persistence and deployed environment are not implemented.
 
 ## Implementation Coverage
 
 | Requirements | Implementation | Verification |
 | - | - | - |
-| REQ-LH-001 through REQ-LH-012 | Product implementation absent | Product verification not run |
+| F01 slice of REQ-LH-007 | Server/Worker/Connector lifecycle skeleton, Server health/version/drain endpoints, loopback-plus-Bearer drain authorization, process-local Worker generation control and signal exits | Go unit, race and shuffled tests; `go vet`; native and `linux/amd64` cross-builds |
+| REQ-LH-001 through REQ-LH-006, REQ-LH-008 through REQ-LH-012 | Product implementation absent; business APIs, persistence, Connector connectivity/authentication and UI are not established by F01 | Product verification not run |
 
 ## Development and Validation
 
-The baseline is checked with the topic Spec structural checker, Git whitespace checks and inspection of Policy package/lock consistency. Runtime and product commands will be documented when their actual implementations exist; no placeholder check reports success on their behalf.
+The baseline and F01 skeleton are checked with the topic Spec structural checker, Git whitespace checks, `go test`, `go test -race`, shuffled tests, `go vet`, native builds, `linux/amd64` cross-builds and inspection of Policy package/lock consistency. These checks do not establish product acceptance, durable cross-process fencing or deployment cutover evidence.
 
 ## Rollout and Compatibility
 
@@ -20,7 +21,7 @@ No database schema or runtime state format is deployed. Candidate identity, migr
 
 ## Remaining Gaps
 
-All product requirements still require implementation and the observations described by their VER entries. In particular, existing active desktop-session control has not been proven, and the complete product UI awaits owner participation and confirmation.
+All product requirements still require implementation and the observations described by their VER entries. In particular, durable cross-process Worker fencing, Connector enrollment/authentication/recovery, persistence, authenticated business APIs and deployment cutover remain unimplemented; existing active desktop-session control has not been proven, and the complete product UI awaits owner participation and confirmation.
 
 The approved product boundaries require a single configured execution environment, top-level Workbench/Tasks entries, a projectless Conversations group and project/conversation tree, conversation-context files, shared drafts and task relationships. All Conversations remains accessible from Workbench. Their presence in the specification is not evidence of backend support. Structural prototype checks do not establish real Codex, persistence, cross-client synchronization or PWA acceptance.
 

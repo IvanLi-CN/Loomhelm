@@ -111,6 +111,10 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return fmt.Errorf("server listener must not be nil")
 	}
 	s.serveMu.Lock()
+	if err := ctx.Err(); err != nil {
+		s.serveMu.Unlock()
+		return withListenerCloseError(nil, listener.Close())
+	}
 	if err := s.lifecycle.Start(); err != nil {
 		s.serveMu.Unlock()
 		// Rejected admission never takes ownership of the listener; the caller retains it.

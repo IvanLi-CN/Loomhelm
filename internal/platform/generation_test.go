@@ -100,13 +100,28 @@ func TestGenerationControllerConcurrentTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGenerationController() error = %v", err)
 	}
+	if err := controller.Advance(2); err != nil {
+		t.Fatalf("initial Advance() error = %v", err)
+	}
+	currentContext := controller.Context()
+	if !controller.CancelCurrent() {
+		t.Fatal("initial CancelCurrent() = false, want true")
+	}
+	select {
+	case <-currentContext.Done():
+	default:
+		t.Fatal("initial generation context was not canceled")
+	}
+	if err := controller.Advance(3); err != nil {
+		t.Fatalf("second Advance() error = %v", err)
+	}
 
 	var group sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			for generation := uint64(2); generation < 102; generation++ {
+			for generation := uint64(4); generation < 102; generation++ {
 				_ = controller.Advance(generation)
 				_ = controller.CancelCurrent()
 			}
