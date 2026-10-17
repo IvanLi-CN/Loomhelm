@@ -3,12 +3,12 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -20,9 +20,7 @@ type Server struct {
 	logger    *slog.Logger
 	lifecycle *platform.Lifecycle
 	router    chi.Router
-
-	mu         sync.RWMutex
-	httpServer *http.Server
+	shutdown  chan struct{}
 }
 
 func NewServer(cfg platform.Config, logger *slog.Logger) (*Server, error) {
@@ -41,6 +39,7 @@ func NewServer(cfg platform.Config, logger *slog.Logger) (*Server, error) {
 		logger:    logger,
 		lifecycle: platform.NewLifecycle(),
 		router:    chi.NewRouter(),
+		shutdown:  make(chan struct{}, 1),
 	}
 	server.registerRoutes()
 	return server, nil
@@ -73,10 +72,6 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		Handler:           s.router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	s.mu.Lock()
-	s.httpServer = server
-	s.mu.Unlock()
-
 	serveResult := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)
@@ -89,23 +84,16 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	s.logger.Info("server started", "address", listener.Addr().String())
 	select {
 	case <-ctx.Done():
-		s.BeginDrain("context canceled")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
-		shutdownErr := server.Shutdown(shutdownCtx)
-		cancel()
-		if shutdownErr != nil {
-			_ = server.Close()
-			s.lifecycle.Stop()
-			return fmt.Errorf("server shutdown: %w", shutdownErr)
-		}
-		<-serveResult
-		s.lifecycle.Stop()
-		s.logger.Info("server stopped")
-		return nil
+		return s.shutdownAndWait(server, serveResult, "context canceled")
+	case <-s.shutdown:
+		return s.shutdownAndWait(server, serveResult, "HTTP drain request")
 	case err := <-serveResult:
+		s.BeginDrain("HTTP server stopped unexpectedly")
+		_ = listener.Close()
+		shutdownErr := s.shutdownHTTP(server)
 		s.lifecycle.Stop()
-		if err != nil {
-			return fmt.Errorf("serve HTTP: %w", err)
+		if combined := combineServerErrors(err, shutdownErr); combined != nil {
+			return combined
 		}
 		s.logger.Info("server stopped")
 		return nil
@@ -126,6 +114,41 @@ func (s *Server) BeginDrain(reason string) bool {
 		s.logger.Info("server entering drain", "reason", reason)
 	}
 	return changed
+}
+
+func (s *Server) shutdownAndWait(server *http.Server, serveResult <-chan error, reason string) error {
+	s.BeginDrain(reason)
+	shutdownErr := s.shutdownHTTP(server)
+	serveErr := <-serveResult
+	s.lifecycle.Stop()
+	if combined := combineServerErrors(serveErr, shutdownErr); combined != nil {
+		return combined
+	}
+	s.logger.Info("server stopped")
+	return nil
+}
+
+func (s *Server) shutdownHTTP(server *http.Server) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		_ = server.Close()
+		return err
+	}
+	return nil
+}
+
+func combineServerErrors(serveErr, shutdownErr error) error {
+	if serveErr == nil && shutdownErr == nil {
+		return nil
+	}
+	if serveErr == nil {
+		return fmt.Errorf("server shutdown: %w", shutdownErr)
+	}
+	if shutdownErr == nil {
+		return fmt.Errorf("serve HTTP: %w", serveErr)
+	}
+	return errors.Join(fmt.Errorf("serve HTTP: %w", serveErr), fmt.Errorf("server shutdown: %w", shutdownErr))
 }
 
 func (s *Server) registerRoutes() {
@@ -234,6 +257,10 @@ func (s *Server) handleDrain(writer http.ResponseWriter, _ *http.Request) {
 		Ready:       snapshot.Ready,
 		DrainReason: snapshot.DrainReason,
 	})
+	select {
+	case s.shutdown <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Server) writeJSON(writer http.ResponseWriter, status int, value any) {

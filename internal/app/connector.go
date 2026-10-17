@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
@@ -39,7 +40,8 @@ func (c *Connector) Run(ctx context.Context) error {
 	if err := c.lifecycle.Start(); err != nil {
 		return err
 	}
-	c.logger.Info("connector started", "server_url", c.cfg.ConnectorServerURL)
+	serverURL, _ := url.Parse(c.cfg.ConnectorServerURL)
+	c.logger.Info("connector started", "server_host", serverURL.Host)
 	<-ctx.Done()
 	c.lifecycle.BeginDrain("context canceled")
 	c.lifecycle.Stop()

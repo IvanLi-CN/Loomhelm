@@ -58,6 +58,17 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 			env:       map[string]string{"LOOMHELM_CONNECTOR_SERVER_URL": "ftp://example.test"},
 			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
 		},
+		{
+			name:      "missing connector URL",
+			component: ComponentConnector,
+			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
+		},
+		{
+			name:      "connector URL with credentials",
+			component: ComponentConnector,
+			env:       map[string]string{"LOOMHELM_CONNECTOR_SERVER_URL": "https://user:pass@example.test"},
+			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
+		},
 	}
 
 	for _, test := range tests {

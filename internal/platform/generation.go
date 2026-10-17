@@ -91,13 +91,12 @@ func (c *GenerationController) Advance(next uint64) error {
 		return fmt.Errorf("generation %d must be greater than current generation %d", next, current)
 	}
 	oldCancel := c.cancel
+	oldCancel()
 	ctx, cancel := context.WithCancel(c.parent)
 	c.current = next
 	c.ctx = ctx
 	c.cancel = cancel
 	c.mu.Unlock()
-
-	oldCancel()
 	return nil
 }
 
@@ -109,8 +108,7 @@ func (c *GenerationController) Stop() bool {
 	}
 	c.stopped = true
 	cancel := c.cancel
-	c.mu.Unlock()
-
 	cancel()
+	c.mu.Unlock()
 	return true
 }

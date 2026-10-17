@@ -32,9 +32,10 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	}
 
 	connector, err := NewConnector(platform.Config{
-		Component:       platform.ComponentConnector,
-		Version:         "test",
-		ShutdownTimeout: time.Second,
+		Component:          platform.ComponentConnector,
+		Version:            "test",
+		ShutdownTimeout:    time.Second,
+		ConnectorServerURL: "https://platform.example.test",
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewConnector() error = %v", err)

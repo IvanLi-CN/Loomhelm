@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -56,17 +57,14 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("POST /-/drain status = %d, want %d", response.StatusCode, http.StatusAccepted)
 	}
-	waitForStatus(t, client, baseURL+"/readyz", http.StatusServiceUnavailable)
-	live = getJSON(t, client, baseURL+"/livez")
-	if live["status"] != "alive" || live["live"] != true {
-		t.Fatalf("server stopped being live while draining: %+v", live)
+	var drain map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&drain); err != nil {
+		t.Fatalf("decode drain response: %v", err)
 	}
-	drain := getJSON(t, client, baseURL+"/-/drain")
 	if drain["state"] != string(platform.StateDraining) || drain["ready"] != false {
 		t.Fatalf("unexpected drain response: %+v", drain)
 	}
 
-	cancel()
 	select {
 	case err := <-runResult:
 		if err != nil {
@@ -74,6 +72,32 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Serve() did not stop after context cancellation")
+	}
+	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+		t.Fatalf("unexpected final lifecycle snapshot: %+v", snapshot)
+	}
+}
+
+func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	serveError := io.ErrUnexpectedEOF
+	failing := &failingListener{Listener: listener, err: serveError}
+
+	err = server.Serve(context.Background(), failing)
+	if !errors.Is(err, serveError) {
+		t.Fatalf("Serve() error = %v, want %v", err, serveError)
 	}
 	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected final lifecycle snapshot: %+v", snapshot)
@@ -124,4 +148,13 @@ func getJSON(t *testing.T, client *http.Client, endpoint string) map[string]any 
 		t.Fatalf("decode %s response: %v", endpoint, err)
 	}
 	return value
+}
+
+type failingListener struct {
+	net.Listener
+	err error
+}
+
+func (l *failingListener) Accept() (net.Conn, error) {
+	return nil, l.err
 }

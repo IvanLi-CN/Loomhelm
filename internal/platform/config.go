@@ -69,10 +69,8 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		config.WorkerGeneration = generation
 	case ComponentConnector:
 		config.ConnectorServerURL = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_SERVER_URL", ""))
-		if config.ConnectorServerURL != "" {
-			if err := validateServerURL(config.ConnectorServerURL); err != nil {
-				return Config{}, fmt.Errorf("invalid LOOMHELM_CONNECTOR_SERVER_URL: %w", err)
-			}
+		if err := validateServerURL(config.ConnectorServerURL); err != nil {
+			return Config{}, fmt.Errorf("invalid LOOMHELM_CONNECTOR_SERVER_URL: %w", err)
 		}
 	}
 
@@ -103,10 +101,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("worker generation must be greater than zero")
 		}
 	case ComponentConnector:
-		if c.ConnectorServerURL != "" {
-			if err := validateServerURL(c.ConnectorServerURL); err != nil {
-				return fmt.Errorf("invalid connector server URL: %w", err)
-			}
+		if err := validateServerURL(c.ConnectorServerURL); err != nil {
+			return fmt.Errorf("invalid connector server URL: %w", err)
 		}
 	}
 	return nil
@@ -172,15 +168,24 @@ func validateListenAddress(address string) error {
 }
 
 func validateServerURL(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("must not be empty")
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("must be a valid URL: %w", err)
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("scheme must be http or https")
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("scheme must be https")
 	}
-	if parsed.Host == "" {
+	if parsed.Hostname() == "" {
 		return fmt.Errorf("host must not be empty")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("user information must not be included")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("query and fragment must not be included")
 	}
 	return nil
 }
