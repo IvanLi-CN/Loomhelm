@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -116,24 +117,36 @@ func TestGenerationControllerConcurrentTransitions(t *testing.T) {
 		t.Fatalf("second Advance() error = %v", err)
 	}
 
+	var advances atomic.Int64
+	var cancellations atomic.Int64
 	var group sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		group.Add(1)
 		go func() {
 			defer group.Done()
 			for generation := uint64(4); generation < 102; generation++ {
-				_ = controller.Advance(generation)
-				_ = controller.CancelCurrent()
+				if err := controller.Advance(generation); err == nil {
+					advances.Add(1)
+				}
+				if controller.CancelCurrent() {
+					cancellations.Add(1)
+				}
 			}
 		}()
 	}
-	group.Add(1)
-	go func() {
-		defer group.Done()
-		_ = controller.Stop()
-	}()
 	group.Wait()
-	controller.Stop()
+	if advances.Load() == 0 {
+		t.Fatal("concurrent transitions accepted no generation advance")
+	}
+	if cancellations.Load() == 0 {
+		t.Fatal("concurrent transitions accepted no generation cancellation")
+	}
+	if !controller.IsCurrent(controller.Current()) {
+		t.Fatal("active controller rejected its current generation")
+	}
+	if !controller.Stop() {
+		t.Fatal("Stop() = false, want true")
+	}
 	if controller.IsCurrent(controller.Current()) {
 		t.Fatal("stopped controller still reports a current generation")
 	}

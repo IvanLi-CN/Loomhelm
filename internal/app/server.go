@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -19,13 +18,12 @@ import (
 )
 
 type Server struct {
-	cfg          platform.Config
-	logger       *slog.Logger
-	lifecycle    *platform.Lifecycle
-	router       chi.Router
-	shutdown     chan struct{}
-	shuttingDown atomic.Bool
-	serveMu      sync.Mutex
+	cfg       platform.Config
+	logger    *slog.Logger
+	lifecycle *platform.Lifecycle
+	router    chi.Router
+	shutdown  chan struct{}
+	serveMu   sync.Mutex
 }
 
 type trackedListener struct {
@@ -113,7 +111,8 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	s.serveMu.Lock()
 	if err := ctx.Err(); err != nil {
 		s.serveMu.Unlock()
-		return withListenerCloseError(nil, listener.Close())
+		// Pre-canceled admission never takes ownership of the listener; the caller retains it.
+		return nil
 	}
 	if err := s.lifecycle.Start(); err != nil {
 		s.serveMu.Unlock()
@@ -140,9 +139,6 @@ func (s *Server) serveAdmitted(ctx context.Context, listener net.Listener) error
 	serveResult := make(chan error, 1)
 	go func() {
 		err := server.Serve(tracked)
-		if err == http.ErrServerClosed && s.shuttingDown.Load() {
-			err = nil
-		}
 		serveResult <- err
 	}()
 
@@ -185,6 +181,9 @@ func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener,
 	s.BeginDrain(reason)
 	shutdownErr := s.shutdownHTTP(server)
 	serveErr := <-serveResult
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
 	closeErr := listener.closeError()
 	s.lifecycle.Stop()
 	if combined := withListenerCloseError(combineServerErrors(serveErr, shutdownErr), closeErr); combined != nil {
@@ -195,7 +194,6 @@ func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener,
 }
 
 func (s *Server) shutdownHTTP(server *http.Server) error {
-	s.shuttingDown.Store(true)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {

@@ -286,6 +286,7 @@ func TestServerPreCanceledServeDoesNotBecomeReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
+	defer listener.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := server.Serve(ctx, listener); err != nil {
@@ -293,6 +294,9 @@ func TestServerPreCanceledServeDoesNotBecomeReady(t *testing.T) {
 	}
 	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateNew || snapshot.Live || snapshot.Ready {
 		t.Fatalf("unexpected pre-canceled Serve() snapshot: %+v", snapshot)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("pre-canceled Serve() took ownership of listener: %v", err)
 	}
 }
 
