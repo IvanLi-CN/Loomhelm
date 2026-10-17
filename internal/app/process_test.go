@@ -1,0 +1,75 @@
+package app
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/platform"
+)
+
+func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
+	worker, err := NewWorker(platform.Config{
+		Component:        platform.ComponentWorker,
+		Version:          "test",
+		ShutdownTimeout:  time.Second,
+		WorkerGeneration: 7,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+	workerContext, cancelWorker := context.WithCancel(context.Background())
+	workerResult := make(chan error, 1)
+	go func() { workerResult <- worker.Run(workerContext) }()
+	waitForLifecycleState(t, worker.Lifecycle(), platform.StateRunning)
+	if generation := worker.GenerationController(); generation == nil || generation.Current() != 7 {
+		t.Fatalf("unexpected worker generation controller: %#v", generation)
+	}
+	cancelWorker()
+	waitForProcessResult(t, workerResult)
+	if snapshot := worker.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+		t.Fatalf("unexpected worker snapshot: %+v", snapshot)
+	}
+
+	connector, err := NewConnector(platform.Config{
+		Component:       platform.ComponentConnector,
+		Version:         "test",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewConnector() error = %v", err)
+	}
+	connectorContext, cancelConnector := context.WithCancel(context.Background())
+	connectorResult := make(chan error, 1)
+	go func() { connectorResult <- connector.Run(connectorContext) }()
+	waitForLifecycleState(t, connector.Lifecycle(), platform.StateRunning)
+	cancelConnector()
+	waitForProcessResult(t, connectorResult)
+	if snapshot := connector.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped {
+		t.Fatalf("unexpected connector snapshot: %+v", snapshot)
+	}
+}
+
+func waitForLifecycleState(t *testing.T, lifecycle *platform.Lifecycle, want platform.State) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if lifecycle.Snapshot().State == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("lifecycle did not reach state %q", want)
+}
+
+func waitForProcessResult(t *testing.T, result <-chan error) {
+	t.Helper()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("process returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("process did not stop after context cancellation")
+	}
+}
