@@ -10,7 +10,7 @@ _Avoid_: Project workbench when referring to the cross-project entry.
 
 **Project workbench (项目工作台)**: A workspace scoped to one project's tasks, sessions and execution results.
 
-_Avoid_: Global workbench when referring to a single project's context.
+_Avoid_: Global workbench when referring to a single project's context, or Projects and tasks as a label for one selected project's task list.
 
 **Desktop/mobile feature parity (桌面与手机功能一致)**: Availability of the same product capabilities on desktop and mobile, with interaction and layout suited to each device.
 

@@ -24,6 +24,8 @@ The global workbench prioritizes work requiring the user's intervention, includi
 
 The project workspace defaults to a compact task list with state grouping and filtering. Task business state and session execution state remain separately readable in that list.
 
+Project navigation has one direct path: choose a named project to open its task list, then choose a task to enter its workspace. A separate generic "Projects and tasks" shortcut is redundant when it opens the same selected project's list. The selected project and page breadcrumb must identify the displayed project consistently.
+
 Pending approvals can be handled in place from the global workbench. The user first expands the item's project/task association, host, complete operation request and relevant context, then explicitly approves or denies it. The full session remains accessible from that review.
 
 Each task associates with at most one Codex session, its task session. Code review, research and similar supporting work generally use sub-agents within that session's delegation context. These activities do not require additional directly associated task sessions.

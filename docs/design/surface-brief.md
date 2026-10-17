@@ -18,6 +18,8 @@ The default root invocation cannot resolve the scoped PRODUCT.md. Running `conce
 
 The global entry prioritizes a short attention queue with an adjacent or following request review and compact session access. Projects use compact task lists. Opening a task keeps its conversation, sub-agent activity, shared draft and task state in the same workspace. Mobile reorganizes conversation and task information into task-local panels with the same capabilities.
 
+Named projects lead directly to their task lists. There is no duplicate generic "Projects and tasks" navigation item leading to the same selected project. The active project and breadcrumb track both its list and task workspace.
+
 Files stay in their conversation context. The owner has rejected a standalone artifacts module, including a global page and task-specific panel. A remote file browser is only a possible future capability, outside the current design scope.
 
 All content is labeled demonstration data. Approval and input interactions update only prototype state. Real cross-client draft synchronization, host/Codex execution, original-file downloads and PWA installation are not implemented or accepted by this artifact. Scenario controls demonstrate intended state presentation only.

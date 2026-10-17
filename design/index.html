@@ -20,7 +20,7 @@
     button.primary:hover:not(:disabled) { background: #414a46; }
     button.primary:disabled { background: #6a736e; border-color: #6a736e; color: #fff; }
     button.quiet { border-color: transparent; background: transparent; }
-    button[aria-pressed="true"], button[aria-current="page"] { background: #e3e8e5; border-color: #aeb9b2; }
+    button[aria-pressed="true"], button[aria-current] { background: #e3e8e5; border-color: #aeb9b2; }
     :focus-visible { outline: 2px solid #354c41; outline-offset: 3px; }
     ::selection { color: #fff; background: #3d5548; }
     input, textarea, select { border: 1px solid #aeb9b2; border-radius: 5px; padding: 9px 10px; background: #fff; caret-color: #354c41; }
@@ -247,7 +247,8 @@
     ].filter(item => !model.decisions[item.id]);
     function notify(message) { const notice = document.getElementById("notice"); notice.textContent = message; notice.hidden = false; }
     function navigation() {
-      return `<div class="nav-group"><button class="nav-button" data-nav="global" ${model.view === "global" ? 'aria-current="page"' : ""}>全局工作台 <span class="count">${attentionItems().length}</span></button><button class="nav-button" data-nav="projects" ${model.view === "projects" ? 'aria-current="page"' : ""}>项目与任务</button><button class="nav-button" data-nav="hosts">主机</button></div><div class="nav-group"><div class="nav-label">项目</div>${projects.map(project => `<button class="nav-button" data-project="${project.id}">${escapeHTML(project.name)}</button>`).join("")}</div>`;
+      const activeProject = model.view === "projects" ? model.project : model.view === "task" ? findTask(model.task).project : null;
+      return `<div class="nav-group"><button class="nav-button" data-nav="global" ${model.view === "global" ? 'aria-current="page"' : ""}>全局工作台 <span class="count">${attentionItems().length}</span></button><button class="nav-button" data-nav="hosts" ${model.view === "hosts" ? 'aria-current="page"' : ""}>主机</button></div><div class="nav-group"><div class="nav-label">项目</div>${projects.map(project => `<button class="nav-button" data-project="${project.id}" ${activeProject === project.id ? `aria-current="${model.view === "task" ? "location" : "page"}"` : ""}>${escapeHTML(project.name)}</button>`).join("")}</div>`;
     }
     function condition() {
       const text = { offline: "当前离线。可查看演示内容，控制操作已停用；不会排队或自动提交命令。", syncing: "正在恢复同步。读取最新状态完成前，控制操作暂停。", readonly: "当前项目仅可查看。你仍可阅读已有内容，操作需要对应项目权限。", unknown: "有一项操作结果待核对。先确认已有结果，再决定下一步。", resolved: "此审批已在另一端处理，旧请求不能再次批准。" }[model.scenario];
@@ -290,14 +291,14 @@
       const focused = document.activeElement;
       const focusSelector = focused?.id ? `#${focused.id}` : focused?.dataset.panel ? `[data-panel="${focused.dataset.panel}"]` : focused?.dataset.attention ? `[data-attention="${focused.dataset.attention}"]` : null;
       const views = { global: globalView, projects: projectView, task: taskView, hosts: hostsView, create: createView };
-      const breadcrumb = model.view === "task" ? `${projectName(findTask(model.task).project)} / 任务工作区` : ({ global: "全局工作台", projects: "项目与任务", hosts: "主机", create: "新建任务" }[model.view]);
+      const breadcrumb = model.view === "task" ? `${projectName(findTask(model.task).project)} / 任务工作区` : model.view === "projects" ? `${projectName(model.project)} / 任务` : ({ global: "全局工作台", hosts: "主机", create: "新建任务" }[model.view]);
       document.getElementById("app").innerHTML = `<aside class="sidebar"><div class="brand">Loomhelm</div><nav>${navigation()}</nav><div class="sidebar-foot">主人的工作区<br>桌面与手机共享工作内容</div></aside><div class="work-area"><header class="app-header row"><button class="mobile-menu quiet" data-menu="open">导航</button><span class="breadcrumb grow">${breadcrumb}</span><span class="prototype-label">结构原型 · 演示数据</span><button data-nav="create" ${disabled()}>新建任务</button></header><main id="workspace" class="content ${model.view === "task" ? "task-mode" : ""}">${views[model.view]()}</main></div>`;
       document.getElementById("dialogNavigation").innerHTML = navigation();
       if (model.view === "task") { const messages = document.getElementById("messages"); messages.querySelectorAll("details").forEach((detail, index) => { detail.open = model.expandedDetails[model.task]?.[index] || false; }); messages.scrollTop = model.readPositions[model.task] || 0; }
       if (focusSelector) document.querySelector(focusSelector)?.focus({ preventScroll: true });
     }
     function rememberPosition() { const messages = document.getElementById("messages"); if (messages?.getClientRects().length) { model.readPositions[model.task] = messages.scrollTop; model.expandedDetails[model.task] = [...messages.querySelectorAll("details")].map(detail => detail.open); } }
-    function openTask(id) { rememberPosition(); model.task = id; model.view = "task"; model.panel = "chat"; render(); }
+    function openTask(id) { rememberPosition(); model.task = id; model.project = findTask(id).project; model.view = "task"; model.panel = "chat"; render(); }
     if (isCanvas) {
       document.getElementById("reviewRoot").hidden = true;
       document.getElementById("canvasRoot").hidden = false;
