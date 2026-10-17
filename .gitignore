@@ -1,0 +1,13 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+!.env.*.example
+node_modules/
+/.tmp/
+/bin/
+/dist/
+/coverage/
+/web/dist/
+/web/storybook-static/
+*.log
