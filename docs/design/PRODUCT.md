@@ -14,19 +14,21 @@ The primary design scenario is one human owner using the self-hosted workspace f
 
 ## Product Purpose
 
-Connect durable project and task management with human-supervised Codex execution on selected paired hosts.
+Connect durable project and task management with human-supervised Codex conversations in the owner's workspace.
 
 ## Operating Context
 
-The default entry is a global workbench spanning projects, sessions, pending decisions and exceptions. Users can enter a specific project or session from this shared context.
+The global navigation consists of Workbench, Tasks and Conversations. All three span projects. The workbench is the default entry and highlights pending decisions and exceptions. Tasks provides a cross-project view of work goals and progress; Conversations provides cross-project access to conversations and their recent activity.
 
 The global workbench prioritizes work requiring the user's intervention, including pending approvals and exceptions that require manual handling. Other sessions remain directly accessible in a compact list, with their full context available on selection.
 
-The project workspace defaults to a compact task list with state grouping and filtering. Task business state and session execution state remain separately readable in that list.
+Tasks support list, board and graph views and remember the chosen view. The initial default is a compact list; the board groups by task business state. The graph combines project/task/subtask hierarchy with task dependencies, using distinct relationships. All three present the same tasks and lead to the same task workspace. Task business state and conversation execution state remain separately readable.
 
-Project navigation has one direct path: choose a named project to open its task list, then choose a task to enter its workspace. A separate generic "Projects and tasks" shortcut is redundant when it opens the same selected project's list. The selected project and page breadcrumb must identify the displayed project consistently.
+Named projects form a separate list below the global navigation. Choosing a project switches to that project's context and tasks. The global Tasks view is distinct because it spans projects. A generic "Projects and tasks" shortcut opening the same selected project is redundant. The selected navigation entry and page breadcrumb must identify the displayed scope consistently.
 
-Pending approvals can be handled in place from the global workbench. The user first expands the item's project/task association, host, complete operation request and relevant context, then explicitly approves or denies it. The full session remains accessible from that review.
+There is no user-facing host concept or host-management navigation in the current design. The owner has no current plan to connect multiple hosts. This scope correction must be reconciled by the integration owner against earlier execution and pairing contracts; the design prototype does not modify backend architecture or implement multi-host management.
+
+Pending approvals can be handled in place from the global workbench. The user first expands the item's project/task association, complete operation request, affected scope and relevant context, then explicitly approves or denies it. The full conversation remains accessible from that review.
 
 Each task associates with at most one Codex session, its task session. Code review, research and similar supporting work generally use sub-agents within that session's delegation context. These activities do not require additional directly associated task sessions.
 
@@ -50,7 +52,7 @@ Actual permission limits, connection loss and conflicting execution remain disti
 
 ## Capabilities and Constraints
 
-The initial scope includes projects, tasks, host pairing and status, new and existing desktop session paths, messages, tools, approvals and denial, interruption, control conflicts, uncertain results, reconnection, conversation-associated original files and PWA installation, updates and offline behavior. The core specification's original-file retention and access requirements do not imply a separate user-facing artifacts module.
+The current UI scope includes global Workbench, Tasks and Conversations, project switching, list/board/graph task views with remembered preference, task hierarchy and dependencies, new and existing conversation paths, messages, tools, approvals and denial, interruption, control conflicts, uncertain results, reconnection, conversation-associated original files and PWA installation, updates and offline behavior. Earlier core execution/pairing requirements and the task-relationship contract need integration-owner reconciliation with the owner's direction. The core specification's original-file retention and access requirements do not imply a separate user-facing artifacts module.
 
 Task progress and execution status are distinct. Offline control commands are never queued or automatically replayed. Existing active desktop-session control requires evidence from the actual same instance and remains unproven at this design baseline.
 
@@ -70,4 +72,4 @@ The core specification, implementation coverage, topic history and ADRs 0001 and
 
 ## Open Design Decisions
 
-Detailed workbench layout, concurrent draft editing and recovery, treatment of other attention items and visual direction require further owner decisions. The confirmed compact project task list, combined task workspace and expandable sub-agent visibility do not approve the complete design.
+Detailed workbench layout, concurrent draft editing and recovery, treatment of other attention items and visual direction require further owner decisions. The global navigation, list/board/graph task views, combined task workspace and expandable sub-agent visibility do not approve the complete design. The prototype remembers task view choices independently for global Tasks and each project on the current client, consistent with independent browsing; the production preference-storage contract remains to be aligned. Mock task relationships demonstrate the graph structure and do not establish backend support or a relationship-editing contract.

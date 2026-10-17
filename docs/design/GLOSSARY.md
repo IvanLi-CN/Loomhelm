@@ -4,13 +4,29 @@ Design vocabulary for the shared desktop and mobile workspace. Product entity de
 
 ## Language
 
-**Global workbench (全局工作台)**: The default workspace spanning projects and their sessions, pending decisions and exceptions.
+**Workbench (工作台)**: The default global workspace spanning projects and their conversations, pending decisions and exceptions.
 
 _Avoid_: Project workbench when referring to the cross-project entry.
 
-**Project workbench (项目工作台)**: A workspace scoped to one project's tasks, sessions and execution results.
+**Global tasks (全局任务)**: The cross-project view of tasks and their goals, progress and associated conversation state.
+
+_Avoid_: Labeling one selected project's task list as the global Tasks entry.
+
+**Conversations (对话)**: The global entry for conversations and their activity across projects; a conversation is the user-facing name for a Codex session.
+
+_Avoid_: Treating conversations as an additional kind of session or as a host-management surface.
+
+**Project workspace (项目工作区)**: A workspace scoped to one selected project's tasks and conversations.
 
 _Avoid_: Global workbench when referring to a single project's context, or Projects and tasks as a label for one selected project's task list.
+
+**Task view (任务视图)**: A list, board or graph presentation of the same tasks; changing the view does not change a task's identity or business state.
+
+_Avoid_: Treating a list item and board card as separate tasks.
+
+**Task graph (任务图谱)**: A view combining project/task/subtask hierarchy and dependencies between tasks.
+
+_Avoid_: Treating containment and dependency as the same relationship, or native sub-agent activity as task hierarchy.
 
 **Desktop/mobile feature parity (桌面与手机功能一致)**: Availability of the same product capabilities on desktop and mobile, with interaction and layout suited to each device.
 
