@@ -8,7 +8,9 @@ The single owner-facing design entry is `design/index.html`. Its controlled stru
 
 The owner has confirmed an efficient global workbench, attention-first hierarchy, in-place approval review, complete mobile capability parity and a task workspace combining one main session with task information. Native supporting sub-agent work is expandable within the main session. The owner's engineering flows remain external context.
 
-The owner-pinned sequence proceeds through information architecture and a clickable prototype before final desktop/mobile visuals. The current render therefore uses neutral structural styling; it does not select or approve a product visual world. The next owner review concerns layout and operation paths.
+The owner has accepted the navigation hierarchy and its desktop/mobile structural screenshots. The current render uses neutral structural styling; that acceptance does not select a product visual world or approve the complete design. The next design work concerns desktop/mobile layout, visual direction and complete interaction states.
+
+The theme follows the operating system by default and supports manual light/dark selection. Desktop and mobile remember that preference independently. Both themes must preserve the same information hierarchy, controls and readable state distinctions.
 
 ## Tool Context
 
@@ -34,4 +36,12 @@ All content is labeled demonstration data. Approval, input, conversation creatio
 
 ## Open Decisions and Dependencies
 
-The owner still needs to review the structural composition, choose final visual direction, resolve shared-draft concurrency/recovery behavior and confirm the complete design. F02, R02, F05 and RD03/G0 actual inputs must supply the framework, real fixtures, public interfaces and recovery/deployment contracts before final U01–U04 page/component/state/API handoff.
+The owner still needs to choose final visual direction, review detailed page layouts and confirm the complete design. The main coordinator owns the remaining PRD business-rule interview, including shared-draft concurrency/recovery; this design task consumes those answers without repeating the questions. F02, R02, F05 and RD03/G0 actual inputs must supply the framework, real fixtures, public interfaces and recovery/deployment contracts before final U01–U04 page/component/state/API handoff.
+
+## Visual Evidence
+
+The owner accepted this structural navigation set: Workbench and Tasks at the top, projectless conversation leaves under Conversations, and Projects → named project → conversation leaves. This is approval of the displayed navigation and screenshots, not final visual design or real backend behavior. The source is the login-free, mock-only `design/index.html?canvas=1`; viewport emulation uses desktop 1440×900 and mobile 393×852 CSS pixels. Trim-only normalization left both captures unchanged. The render source is unchanged from the accepted capture.
+
+![Accepted desktop navigation](../../design/evidence/project-tree-desktop.png)
+
+![Accepted mobile navigation](../../design/evidence/project-tree-mobile.png)
