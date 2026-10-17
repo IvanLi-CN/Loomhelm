@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +26,6 @@ type Server struct {
 	shutdown     chan struct{}
 	shuttingDown atomic.Bool
 	serveMu      sync.Mutex
-	active       net.Listener
 }
 
 type trackedListener struct {
@@ -86,7 +84,11 @@ func (s *Server) Run(ctx context.Context) error {
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.cfg.HTTPAddr)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
-			s.lifecycle.Stop()
+			s.serveMu.Lock()
+			if s.lifecycle.Snapshot().State == platform.StateNew {
+				s.lifecycle.Stop()
+			}
+			s.serveMu.Unlock()
 			return nil
 		}
 		return fmt.Errorf("listen on %s: %w", s.cfg.HTTPAddr, err)
@@ -103,16 +105,11 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	}
 	s.serveMu.Lock()
 	if err := s.lifecycle.Start(); err != nil {
-		sameListener := listenersSame(s.active, listener)
 		s.serveMu.Unlock()
-		if sameListener {
-			return err
-		}
-		return withListenerCloseError(err, listener.Close())
+		// Rejected admission never takes ownership of the listener; the caller retains it.
+		return err
 	}
-	s.active = listener
 	s.serveMu.Unlock()
-	defer s.releaseListener(listener)
 	if err := ctx.Err(); err != nil {
 		s.BeginDrain("context canceled")
 		closeErr := listener.Close()
@@ -194,26 +191,6 @@ func (s *Server) shutdownHTTP(server *http.Server) error {
 		return err
 	}
 	return nil
-}
-
-func (s *Server) releaseListener(listener net.Listener) {
-	s.serveMu.Lock()
-	defer s.serveMu.Unlock()
-	if listenersSame(s.active, listener) {
-		s.active = nil
-	}
-}
-
-func listenersSame(left, right net.Listener) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	leftValue := reflect.ValueOf(left)
-	rightValue := reflect.ValueOf(right)
-	if leftValue.Type() != rightValue.Type() || !leftValue.Type().Comparable() {
-		return false
-	}
-	return leftValue.Interface() == rightValue.Interface()
 }
 
 func combineServerErrors(serveErr, shutdownErr error) error {
