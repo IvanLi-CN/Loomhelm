@@ -60,6 +60,53 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	}
 }
 
+func TestConnectorPreCanceledContextStopsBeforeReadiness(t *testing.T) {
+	connector, err := NewConnector(platform.Config{
+		Component:          platform.ComponentConnector,
+		Version:            "test",
+		ShutdownTimeout:    time.Second,
+		ConnectorServerURL: "https://platform.example.test",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewConnector() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := connector.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if snapshot := connector.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
+		t.Fatalf("unexpected pre-canceled connector snapshot: %+v", snapshot)
+	}
+}
+
+func TestConnectorRejectsSecondRunWithoutStoppingActiveProcess(t *testing.T) {
+	connector, err := NewConnector(platform.Config{
+		Component:          platform.ComponentConnector,
+		Version:            "test",
+		ShutdownTimeout:    time.Second,
+		ConnectorServerURL: "https://platform.example.test",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewConnector() error = %v", err)
+	}
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- connector.Run(firstContext) }()
+	waitForLifecycleState(t, connector.Lifecycle(), platform.StateRunning)
+
+	secondContext, cancelSecond := context.WithCancel(context.Background())
+	cancelSecond()
+	if err := connector.Run(secondContext); err == nil {
+		t.Fatal("second Run() succeeded")
+	}
+	if snapshot := connector.Lifecycle().Snapshot(); snapshot.State != platform.StateRunning || !snapshot.Ready {
+		t.Fatalf("second Run() changed active connector snapshot: %+v", snapshot)
+	}
+	cancelFirst()
+	waitForProcessResult(t, firstResult)
+}
+
 func TestWorkerRejectsSecondRunWithoutReplacingGeneration(t *testing.T) {
 	worker, err := NewWorker(platform.Config{
 		Component:        platform.ComponentWorker,

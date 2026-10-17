@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"sync"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
@@ -14,6 +15,7 @@ type Connector struct {
 	cfg       platform.Config
 	logger    *slog.Logger
 	lifecycle *platform.Lifecycle
+	runMu     sync.Mutex
 }
 
 func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) {
@@ -37,9 +39,21 @@ func (c *Connector) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("connector context must not be nil")
 	}
+	c.runMu.Lock()
+	if snapshot := c.lifecycle.Snapshot(); snapshot.State != platform.StateNew {
+		c.runMu.Unlock()
+		return fmt.Errorf("connector lifecycle already started in state %q", snapshot.State)
+	}
+	if err := ctx.Err(); err != nil {
+		c.lifecycle.Stop()
+		c.runMu.Unlock()
+		return nil
+	}
 	if err := c.lifecycle.Start(); err != nil {
+		c.runMu.Unlock()
 		return err
 	}
+	c.runMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		c.lifecycle.BeginDrain("context canceled")
 		c.lifecycle.Stop()

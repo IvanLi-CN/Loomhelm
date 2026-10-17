@@ -57,6 +57,9 @@ func runServerSignalTest(t *testing.T, signal os.Signal) {
 		}
 	})
 	waitForLog(t, logPath, "server started")
+	client := &http.Client{Timeout: time.Second}
+	baseURL := "http://" + serverAddressFromLog(t, logPath)
+	waitForHTTPStatus(t, client, baseURL+"/readyz", http.StatusOK)
 	if err := command.Process.Signal(signal); err != nil {
 		t.Fatalf("signal server: %v", err)
 	}

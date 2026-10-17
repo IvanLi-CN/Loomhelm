@@ -238,6 +238,39 @@ func TestServerRejectsReentrantServeWithoutClosingActiveListener(t *testing.T) {
 	waitForProcessResult(t, runResult)
 }
 
+func TestServerRunRejectsAfterServeAdmission(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runResult := make(chan error, 1)
+	go func() { runResult <- server.Serve(ctx, listener) }()
+
+	client := &http.Client{Timeout: time.Second}
+	baseURL := "http://" + listener.Addr().String()
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusOK)
+	canceled, cancelCanceled := context.WithCancel(context.Background())
+	cancelCanceled()
+	if err := server.Run(canceled); err == nil {
+		t.Fatal("Run() succeeded after Serve() admission")
+	}
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusOK)
+	cancel()
+	waitForProcessResult(t, runResult)
+}
+
 func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
 	server, err := NewServer(platform.Config{
 		Component:       platform.ComponentServer,

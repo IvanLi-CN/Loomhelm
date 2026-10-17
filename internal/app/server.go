@@ -78,52 +78,54 @@ func (s *Server) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("server context must not be nil")
 	}
+	s.serveMu.Lock()
 	if snapshot := s.lifecycle.Snapshot(); snapshot.State != platform.StateNew {
+		s.serveMu.Unlock()
 		return fmt.Errorf("server lifecycle already started in state %q", snapshot.State)
 	}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.cfg.HTTPAddr)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
-			s.serveMu.Lock()
 			if s.lifecycle.Snapshot().State == platform.StateNew {
 				s.lifecycle.Stop()
 			}
 			s.serveMu.Unlock()
 			return nil
 		}
+		s.serveMu.Unlock()
 		return fmt.Errorf("listen on %s: %w", s.cfg.HTTPAddr, err)
 	}
-	serveErr, admitted := s.serve(ctx, listener)
-	if admitted {
-		return serveErr
+	if err := s.lifecycle.Start(); err != nil {
+		s.serveMu.Unlock()
+		return withListenerCloseError(err, listener.Close())
 	}
-	return withListenerCloseError(serveErr, listener.Close())
+	s.serveMu.Unlock()
+	return s.serveAdmitted(ctx, listener)
 }
 
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
-	serveErr, _ := s.serve(ctx, listener)
-	return serveErr
-}
-
-func (s *Server) serve(ctx context.Context, listener net.Listener) (error, bool) {
 	if ctx == nil {
-		return fmt.Errorf("server context must not be nil"), false
+		return fmt.Errorf("server context must not be nil")
 	}
 	if listener == nil {
-		return fmt.Errorf("server listener must not be nil"), false
+		return fmt.Errorf("server listener must not be nil")
 	}
 	s.serveMu.Lock()
 	if err := s.lifecycle.Start(); err != nil {
 		s.serveMu.Unlock()
 		// Rejected admission never takes ownership of the listener; the caller retains it.
-		return err, false
+		return err
 	}
 	s.serveMu.Unlock()
+	return s.serveAdmitted(ctx, listener)
+}
+
+func (s *Server) serveAdmitted(ctx context.Context, listener net.Listener) error {
 	if err := ctx.Err(); err != nil {
 		s.BeginDrain("context canceled")
 		closeErr := listener.Close()
 		s.lifecycle.Stop()
-		return withListenerCloseError(nil, closeErr), true
+		return withListenerCloseError(nil, closeErr)
 	}
 
 	server := &http.Server{
@@ -143,19 +145,19 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) (error, bool)
 	s.logger.Info("server started", "address", listener.Addr().String())
 	select {
 	case <-ctx.Done():
-		return s.shutdownAndWait(server, tracked, serveResult, "context canceled"), true
+		return s.shutdownAndWait(server, tracked, serveResult, "context canceled")
 	case <-s.shutdown:
-		return s.shutdownAndWait(server, tracked, serveResult, "HTTP drain request"), true
+		return s.shutdownAndWait(server, tracked, serveResult, "HTTP drain request")
 	case err := <-serveResult:
 		s.BeginDrain("HTTP server stopped unexpectedly")
 		shutdownErr := s.shutdownHTTP(server)
 		closeErr := tracked.closeError()
 		s.lifecycle.Stop()
 		if combined := withListenerCloseError(combineServerErrors(err, shutdownErr), closeErr); combined != nil {
-			return combined, true
+			return combined
 		}
 		s.logger.Info("server stopped")
-		return nil, true
+		return nil
 	}
 }
 
@@ -193,7 +195,11 @@ func (s *Server) shutdownHTTP(server *http.Server) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		s.logger.Warn("server shutdown timed out; forcing HTTP close", "error", err)
+		message := "server shutdown failed; forcing HTTP close"
+		if errors.Is(err, context.DeadlineExceeded) {
+			message = "server shutdown timed out; forcing HTTP close"
+		}
+		s.logger.Warn(message, "error", err)
 		if closeErr := server.Close(); closeErr != nil {
 			return errors.Join(err, fmt.Errorf("force close HTTP server: %w", closeErr))
 		}
