@@ -104,6 +104,64 @@ func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
 	}
 }
 
+func TestServerPreservesUnexpectedServerClosedError(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	failing := &failingListener{Listener: listener, err: http.ErrServerClosed}
+
+	err = server.Serve(context.Background(), failing)
+	if !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("Serve() error = %v, want %v", err, http.ErrServerClosed)
+	}
+}
+
+func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runResult := make(chan error, 1)
+	go func() { runResult <- server.Serve(ctx, listener) }()
+
+	client := &http.Client{Timeout: time.Second}
+	baseURL := "http://" + listener.Addr().String()
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusOK)
+	if !server.BeginDrain("test drain") {
+		t.Fatal("BeginDrain() = false, want true")
+	}
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusServiceUnavailable)
+	if live := getJSON(t, client, baseURL+"/livez"); live["live"] != true {
+		t.Fatalf("unexpected draining liveness response: %+v", live)
+	}
+	if drain := getJSON(t, client, baseURL+"/-/drain"); drain["state"] != string(platform.StateDraining) {
+		t.Fatalf("unexpected drain status response: %+v", drain)
+	}
+	cancel()
+	waitForProcessResult(t, runResult)
+}
+
 func TestServerRejectsInvalidConfiguration(t *testing.T) {
 	_, err := NewServer(platform.Config{
 		Component:       platform.ComponentServer,

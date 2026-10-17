@@ -187,5 +187,14 @@ func validateServerURL(raw string) error {
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("query and fragment must not be included")
 	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return fmt.Errorf("port must be an integer from 1 to 65535")
+	}
+	if port := parsed.Port(); port != "" {
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return fmt.Errorf("port must be an integer from 1 to 65535")
+		}
+	}
 	return nil
 }

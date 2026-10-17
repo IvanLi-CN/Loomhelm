@@ -37,6 +37,10 @@ func (c *Connector) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("connector context must not be nil")
 	}
+	if err := ctx.Err(); err != nil {
+		c.lifecycle.Stop()
+		return nil
+	}
 	if err := c.lifecycle.Start(); err != nil {
 		return err
 	}

@@ -40,17 +40,22 @@ func (w *Worker) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("worker context must not be nil")
 	}
-	if err := w.lifecycle.Start(); err != nil {
-		return err
-	}
-	generation, err := platform.NewGenerationController(ctx, w.cfg.WorkerGeneration)
+	generation, err := platform.NewGenerationController(context.Background(), w.cfg.WorkerGeneration)
 	if err != nil {
-		w.lifecycle.Stop()
 		return err
 	}
 	w.mu.Lock()
 	w.generation = generation
 	w.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		generation.Stop()
+		w.lifecycle.Stop()
+		return nil
+	}
+	if err := w.lifecycle.Start(); err != nil {
+		generation.Stop()
+		return err
+	}
 
 	w.logger.Info("worker started", "generation", generation.Current())
 	<-ctx.Done()

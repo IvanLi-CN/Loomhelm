@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -16,11 +17,12 @@ import (
 )
 
 type Server struct {
-	cfg       platform.Config
-	logger    *slog.Logger
-	lifecycle *platform.Lifecycle
-	router    chi.Router
-	shutdown  chan struct{}
+	cfg          platform.Config
+	logger       *slog.Logger
+	lifecycle    *platform.Lifecycle
+	router       chi.Router
+	shutdown     chan struct{}
+	shuttingDown atomic.Bool
 }
 
 func NewServer(cfg platform.Config, logger *slog.Logger) (*Server, error) {
@@ -63,6 +65,11 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	if listener == nil {
 		return fmt.Errorf("server listener must not be nil")
 	}
+	if err := ctx.Err(); err != nil {
+		_ = listener.Close()
+		s.lifecycle.Stop()
+		return nil
+	}
 	if err := s.lifecycle.Start(); err != nil {
 		_ = listener.Close()
 		return err
@@ -75,7 +82,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	serveResult := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)
-		if err == http.ErrServerClosed {
+		if err == http.ErrServerClosed && s.shuttingDown.Load() {
 			err = nil
 		}
 		serveResult <- err
@@ -129,6 +136,7 @@ func (s *Server) shutdownAndWait(server *http.Server, serveResult <-chan error, 
 }
 
 func (s *Server) shutdownHTTP(server *http.Server) error {
+	s.shuttingDown.Store(true)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {

@@ -25,8 +25,14 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	if generation := worker.GenerationController(); generation == nil || generation.Current() != 7 {
 		t.Fatalf("unexpected worker generation controller: %#v", generation)
 	}
+	generation := worker.GenerationController()
 	cancelWorker()
 	waitForProcessResult(t, workerResult)
+	select {
+	case <-generation.Context().Done():
+	default:
+		t.Fatal("worker generation context was not canceled")
+	}
 	if snapshot := worker.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected worker snapshot: %+v", snapshot)
 	}
