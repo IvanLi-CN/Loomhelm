@@ -4,18 +4,20 @@
 
 Loomhelm connects project management with human-supervised Codex conversations in one configured execution environment. Its users are individuals and small teams operating a self-hosted Web/PWA, HTTP interface or MCP client. The primary interface supports one owner working concurrently from desktop and mobile clients.
 
+The [product requirements](../../PRD.md) define the complete phase-one scope, user journeys, acceptance and product decision process. This specification records established engineering constraints; product suggestions require explicit confirmation before becoming implementation contracts.
+
 The topic owns projects, tasks and their relationships, Codex sessions and runs, approvals, conversation-associated original files, shared drafts, recovery and the initial product interface. Autonomous master/project/task Agent orchestration, multiple execution environments, remote filesystem browsing, arbitrary plugin view hosting, rich document conversion and production release operations are outside this topic.
 
 ## Terms and Interfaces
 
-- Project: the authorization and organization scope containing tasks and execution results.
+- Project: the authorization and organization scope containing tasks and project-associated conversations and execution results. A conversation may initially have no project.
 - Task: a durable work item whose business status is independent from the execution status of any Run. Task hierarchy and prerequisite dependencies are distinct relationships; a subtask remains a Task.
 - Execution environment: the single configured Codex execution endpoint for an installation. Connector enrollment and credentials are deployment concerns; public product operations do not select or manage hosts. The physical execution machine may be separate from Server and Worker.
-- Session: a platform association with an actual Codex thread, presented to the user as a conversation, including an existing active desktop thread when supported by the verified adapter. Each Task has at most one directly associated Session; this does not establish the reverse cardinality.
-- Run: one execution attempt bound to a task, the configured execution environment and a session, with observable state and event history. A Session may contain multiple Runs.
+- Session: a platform association with an actual Codex thread, presented to the user as a conversation, including an existing active desktop thread when supported by the verified adapter. A Session may exist without a Task or Project. Each Task has at most one directly associated Session; this does not establish the reverse cardinality.
+- Run: one execution attempt bound to a session and the configured execution environment, with observable state and event history. Task association is optional because standalone conversations can execute. A Session may contain multiple Runs; later task association must not recreate their identities.
 - Sub-agent: supporting work delegated within a task conversation's Codex context. Its activity is not automatically another Task or another directly associated task Session.
 - Approval: a versioned request requiring an explicit approve or deny response.
-- Conversation file: an original file referenced or produced in conversation context, with metadata, task/session association and controlled access. Artifact and ArtifactStore may remain internal technical names; they do not define an independent product module.
+- Conversation file: an original file referenced or produced in conversation context, with metadata, session association, an optional task association and controlled access. Artifact and ArtifactStore may remain internal technical names; they do not define an independent product module.
 - Shared draft: unsent conversation input shared by the owner's authorized clients. Draft synchronization is separate from explicit command submission.
 - Public interfaces: authenticated HTTP under `/api/v1`, browser event streaming, MCP tools/resources and the authenticated outbound Connector link.
 
@@ -31,7 +33,7 @@ The system MUST support creating a Codex session in the installation's configure
 
 ### REQ-LH-003
 
-An authorized user MUST be able to associate at most one direct session with a task, send input, observe streamed execution, approve or deny a pending request and interrupt a run. Supported sub-agent activity MUST be inspectable within the task conversation using actual available events. Stale or repeated approval responses MUST NOT authorize additional execution.
+An authorized user MUST be able to associate at most one direct session with a task, send input, observe streamed execution, approve or deny a pending request and interrupt a run. These conversation operations MUST also work without prior Task or Project association. Supported sub-agent activity MUST be inspectable within the conversation using actual available events. Stale or repeated approval responses MUST NOT authorize additional execution.
 
 ### REQ-LH-004
 
@@ -39,13 +41,15 @@ The system MUST persist command identity and ordered events across connection lo
 
 ### REQ-LH-005
 
-The system MUST retain original conversation-related files and metadata associated with tasks and sessions, provide authorized query/download and preserve them across process restart and deployment cutover. Available message references MUST retain their conversation context. The system MUST reject cross-project access and paths outside the authorized source scope. This contract does not require a standalone files page or access to an arbitrary remote filesystem.
+The system MUST retain original conversation-related files and metadata associated with sessions and, when applicable, tasks, provide authorized query/download and preserve them across process restart and deployment cutover. Available message references MUST retain their conversation context. The system MUST reject out-of-scope conversation or project access and paths outside the authorized source scope. This contract does not require a standalone files page or access to an arbitrary remote filesystem.
 
 ### REQ-LH-006
 
 The product MUST provide a responsive, installable Web/PWA with desktop/mobile capability parity. Global navigation MUST consist of Workbench, Tasks and Conversations spanning projects, with named projects separately switching the current project context. The workbench MUST prioritize pending decisions and exceptions; approval review MUST expose the full request and relevant context before explicit approve/deny actions. A task MUST open a combined conversation and task-information workspace. Files MUST appear in their conversation context; the product MUST NOT introduce a host-management surface, standalone artifacts navigation/page or task artifacts panel.
 
-A single complete UI design task MUST involve the owner and produce the approved information architecture, prototype, desktop/mobile visuals, component states and implementation handoff before product UI implementation. Offline control commands MUST NOT be queued or automatically replayed.
+Project navigation MUST provide a collapsible Projects group, concrete projects and their conversations as direct leaves, including both task-associated and taskless project conversations without an intervening task-navigation level. Authorized projectless conversations MUST also have a directly reachable group. A project's workspace MUST provide task and conversation panels, and its conversation panel MUST include all authorized conversations in that project. Project-scoped creation MUST preselect that project; global creation MUST allow no project. Navigation placement, selection and breadcrumbs MUST follow actual association changes using the same Session identity. This navigation tree does not establish a nested-project business model.
+
+Business feature implementation and public business contract finalization MUST follow explicit owner confirmation of the phase-one PRD and resolution of the affected business decisions. A single complete UI design task MUST involve the owner and produce the approved information architecture, prototype, desktop/mobile visuals, component states and implementation handoff before product UI implementation. Engineering skeletons, infrastructure, capability research and the existing design discussion MAY proceed before those product approvals. Offline control commands MUST NOT be queued or automatically replayed.
 
 ### REQ-LH-007
 
@@ -53,7 +57,7 @@ The deployment system MUST bind candidates to actual source SHA and artifact dig
 
 ### REQ-LH-008
 
-The configured Connector's enrollment and credentials MUST be authenticated and revocable through deployment administration without introducing a user-facing multi-host resource model. Project authorization MUST cover commands, events, drafts, task relationships and original files. Codex credentials MUST remain on the execution machine. Platform control leases MUST govern platform-issued commands without making one browser or device the owner's sole authorized client. Native desktop actions MUST be observed and reconciled from Codex state.
+The configured Connector's enrollment and credentials MUST be authenticated and revocable through deployment administration without introducing a user-facing multi-host resource model. Authorization MUST cover commands, events, drafts, task relationships and original files in both standalone-conversation and project scopes; the absence of a project MUST NOT bypass access control. Codex credentials MUST remain on the execution machine. Platform control leases MUST govern platform-issued commands without making one browser or device the owner's sole authorized client. Native desktop actions MUST be observed and reconciled from Codex state.
 
 ### REQ-LH-009
 
@@ -66,6 +70,10 @@ The system MUST persist task hierarchy and prerequisite dependencies as separate
 ### REQ-LH-011
 
 The owner's authorized Web/PWA clients MUST support concurrent work with synchronized task, conversation and submitted-operation state, without a device takeover step. A conversation MUST provide a live shared unsent draft; synchronizing that draft MUST NOT submit or queue a Codex command. Explicit submission MUST retain the command identity and reconciliation requirements. Each client MUST retain independent navigation, selected conversation and reading position; another client's navigation or view choice MUST NOT move its current view. Each event subscriber MUST be able to recover its own authorized event position.
+
+### REQ-LH-012
+
+The system MUST allow an authorized user to create and operate a standalone conversation without first choosing a Task or Project, and later associate it with a task. A previously projectless conversation MUST join that task's project. Association MUST retain the same Session and the identities and continuity of its messages, Runs, events, original-file references and shared unsent draft; it MUST NOT fork or replace the conversation or create duplicate list identities. Every Task MUST retain at most one directly associated main Session. Creation, execution, retrieval and later association MUST enforce the explicitly approved ownership and visibility rules. A failed association MUST leave the original conversation and association intact.
 
 ## Verification
 
@@ -95,9 +103,9 @@ The owner's authorized Web/PWA clients MUST support concurrent work with synchro
 
 ### VER-LH-005
 
-- Method: owner review of the complete UI design, controlled component/page evidence, real-backend interaction and install/update/offline scenarios, including global/project navigation and conversation-context file access.
+- Method: explicit owner PRD confirmation and resolution of the affected business decisions before implementation, followed by owner review of the complete UI design, controlled component/page evidence, real-backend interaction and install/update/offline scenarios, including global/project navigation and conversation-context file access.
 - covers: `REQ-LH-006`
-- Pass condition: implemented desktop/mobile flows match the confirmed design and display the correct scope, the application installs, update retains context and offline control cannot silently execute later. No host-management or standalone artifacts surface is introduced.
+- Pass condition: product implementation follows the confirmed product requirements and design; global entries, project/conversation tree, projectless group and project panels expose the correct authorized scope, including taskless project conversations. The application installs, update retains context and offline control cannot silently execute later. No host-management or standalone artifacts surface is introduced.
 
 ### VER-LH-006
 
@@ -128,6 +136,12 @@ The owner's authorized Web/PWA clients MUST support concurrent work with synchro
 - Method: concurrent authorized desktop/mobile clients, draft changes and explicit send, competing approvals, reconnect, navigation changes and scoped view-preference reloads.
 - covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-006`, `REQ-LH-008`, `REQ-LH-011`
 - Pass condition: clients observe shared durable work and draft state without device takeover, draft synchronization alone never executes work, conflicting or uncertain commands retain their defined results, and each client's current navigation and reading position remain independent.
+
+### VER-LH-011
+
+- Method: authenticated Web/HTTP/MCP creation of a conversation without a project or task, real execution and file production, later task association, failure/conflict and authorization scenarios, reconnect and process restart.
+- covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-005`, `REQ-LH-008`, `REQ-LH-011`, `REQ-LH-012`
+- Pass condition: standalone execution works and unauthorized requests fail; later association preserves Session, Run, event, message, file and draft continuity under the approved visibility rules, projectless conversations join the task's project, task cardinality holds and failed association leaves prior state intact.
 
 ## Related ADRs
 

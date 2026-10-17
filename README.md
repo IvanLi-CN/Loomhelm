@@ -20,4 +20,4 @@ Loomhelm 是面向个人与小型团队的自部署项目管理与 Agent 工作�
 
 Markdown 工具已提供固定版本入口：首次运行 `python3 tools/markdown.py setup`，检查使用 `python3 tools/markdown.py check`，格式修复使用 `python3 tools/markdown.py fix`。Lefthook 的统一检查配置将在开发环境中接入；当前命令不会自行安装提交钩子。
 
-长期需求与验证标准见 [项目规范](docs/specs/phase1-core/SPEC.md)，工程边界见 [AGENTS.md](AGENTS.md)。源码目录按职责组织为 `cmd/`、`internal/`、`web/`、`packages/`、`api/`、`protocol/`、`deploy/` 和 `tests/`；各目录在对应实现加入时创建。
+完整产品需求与一期验收见 [PRD](docs/PRD.md)，已确定的工程合同见 [项目规范](docs/specs/phase1-core/SPEC.md)，工程边界见 [AGENTS.md](AGENTS.md)。PRD 及相关业务规则须经主人明确确认后才能实施功能，产品 UI 还需完整设计确认；工程骨架、基础设施、能力验证和现有设计讨论可以并行。源码目录按职责组织为 `cmd/`、`internal/`、`web/`、`packages/`、`api/`、`protocol/`、`deploy/` 和 `tests/`；各目录在对应实现加入时创建。

@@ -2,11 +2,11 @@
 
 ## Product and scope
 
-Loomhelm is a self-hosted project management Web/PWA and remote Codex workspace for individuals and small teams. Read `docs/specs/phase1-core/SPEC.md` before changing product behavior, and read its companions for implemented coverage and compatibility history. These documents hold durable product truth; task scheduling and coordination stay outside the repository.
+Loomhelm is a self-hosted project management Web/PWA and remote Codex workspace for individuals and small teams. Read `docs/PRD.md` for the complete product scope, user journeys, business decisions and acceptance, then `docs/specs/phase1-core/SPEC.md` for established engineering contracts. Read its companions for implementation coverage and compatibility history. The main coordinator maintains the PRD and synchronizes confirmed product decisions into the engineering contracts; design context is supporting material. Resolve contradictions before implementation. Task scheduling and coordination stay outside the repository.
 
 The backend is Go with chi, PostgreSQL, pgx/sqlc, goose and River. Server, Worker and Connector are separate processes. React/Vite/TypeScript, Bun workspaces, TanStack Router/Query, shadcn/Tailwind and Storybook form the frontend. Bun is not the business backend runtime.
 
-Until the owner approves the complete UI design, frontend work is limited to the technical framework and neutral verification surfaces. There is exactly one complete UI design task; information architecture, prototype, visual design and handoff are internal steps of that task. Do not invent a product visual direction or split design into extra tasks. Implement only the approved design afterward.
+Business feature implementation and public business contract finalization require the owner's explicit confirmation of the phase-one PRD and resolution of the affected business decisions. Proposed defaults in the PRD are not approval. Engineering skeletons, infrastructure, capability research and the existing design discussion may proceed independently. Product UI implementation additionally requires the owner's approval of the complete UI design. There is exactly one complete UI design task; information architecture, prototype, visual design and handoff are internal steps of that task. Before UI approval, frontend work remains limited to the technical framework, neutral verification surfaces and that design task's prototypes.
 
 ## Working conventions
 

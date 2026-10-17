@@ -8,7 +8,7 @@ The repository has an initial Git baseline and engineering conventions. No runna
 
 | Requirements | Implementation | Verification |
 | - | - | - |
-| REQ-LH-001 through REQ-LH-011 | Product implementation absent | Product verification not run |
+| REQ-LH-001 through REQ-LH-012 | Product implementation absent | Product verification not run |
 
 ## Development and Validation
 
@@ -24,7 +24,11 @@ All product requirements still require implementation and the observations descr
 
 The approved product boundaries require a single configured execution environment, global Workbench/Tasks/Conversations navigation, conversation-context files, shared drafts and task relationships. Their presence in the specification is not evidence of backend support. Structural prototype checks do not establish real Codex, persistence, cross-client synchronization or PWA acceptance.
 
-The public relationship contract must settle cross-project dependency rules, cycle handling, relationship editing and removal semantics before implementation. Standalone conversation ownership and reverse task/session association also need settled rules. Shared-draft concurrent editing, merge and disconnection recovery remain unresolved. Client-local, identity/workspace-scoped view preferences are the implementation default; they do not introduce a server preference service or move another client's active view.
+The complete [product requirements](../../PRD.md) await explicit owner confirmation. Its business suggestions are not approved defaults. Business implementation and public business contract finalization wait for that confirmation and resolution of the affected decisions; product UI additionally waits for complete design approval. Skeleton, infrastructure, capability research and the existing design discussion remain permitted.
+
+Standalone creation with optional project selection and later task association is established product intent, including actual execution before a task exists. The task-mandatory Run definition has been corrected; existing adapter capability and authorization support are not thereby proven. Projectless conversation ownership, historical visibility on association, reverse task/session cardinality and reassignment semantics require decisions before implementation. The public task-relationship contract must settle state enumeration, cross-project rules, cycle handling, editing and removal. Shared-draft concurrent editing, send consumption and disconnection recovery, and the small-team permission matrix remain unresolved. These decisions are collected in the PRD rather than treated as settled engineering behavior.
+
+Client-local, identity/workspace-scoped view preferences are the implementation default; they do not introduce a server preference service or move another client's active view.
 
 ## References
 

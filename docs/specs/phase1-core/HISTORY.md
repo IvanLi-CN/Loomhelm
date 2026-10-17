@@ -18,6 +18,12 @@ The owner's design direction establishes cross-project Workbench, Tasks and Conv
 
 These product constraints do not constitute approval of the complete UI design. No existing desktop-session control acceptance, deployed schema or public API compatibility evidence is established by the structural prototype.
 
+The owner's design answers permit standalone conversations, optional project selection and later task association without losing conversation identity. Projectless conversations join the target task's project. This corrects the earlier engineering definition that required every Run to have a Task; it does not settle reverse association, reassignment or historical visibility. The verified design checkpoint is `1bdbc53f027c7a5575bc267c14ed2d18a38c4bad`.
+
+The complete product requirements were consolidated into `docs/PRD.md` after the owner identified the missing product-definition responsibility. The coordinator owns that document. PRD confirmation and resolution of affected business decisions precede feature implementation and public business contract finalization; complete UI design confirmation remains an additional UI gate. Suggested business rules are collected for owner decision and do not constitute approval or implemented coverage.
+
+The owner further specified a collapsible Projects group with concrete projects and conversation leaves, without a task-navigation level. Project-associated taskless conversations and projectless conversations both need direct access, and project workspaces include task and conversation panels. This navigation clarification is recorded by design checkpoint `0499ba8144200e84b32dd46e8aea5720a9a86999`; it does not establish a nested-project model or completed browser/visual acceptance.
+
 ## References
 
 - [Requirements](SPEC.md)
