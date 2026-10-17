@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"sync"
 	"testing"
 )
 
@@ -62,5 +63,34 @@ func TestGenerationControllerStopPreventsResurrection(t *testing.T) {
 	}
 	if controller.IsCurrent(1) {
 		t.Fatal("stopped generation is still current")
+	}
+}
+
+func TestGenerationControllerConcurrentAccess(t *testing.T) {
+	controller, err := NewGenerationController(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("NewGenerationController() error = %v", err)
+	}
+
+	var group sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for j := 0; j < 1000; j++ {
+				_ = controller.Current()
+				_ = controller.Context()
+				_, _ = controller.ContextFor(1)
+				_ = controller.IsCurrent(1)
+				_ = controller.Cancel(99)
+			}
+		}()
+	}
+	if err := controller.Advance(2); err != nil {
+		t.Fatalf("Advance() error = %v", err)
+	}
+	group.Wait()
+	if controller.Current() != 2 {
+		t.Fatalf("current generation = %d, want 2", controller.Current())
 	}
 }

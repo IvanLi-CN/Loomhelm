@@ -157,6 +157,9 @@ func validateListenAddress(address string) error {
 	if err != nil {
 		return fmt.Errorf("must be a host:port address: %w", err)
 	}
+	if host != strings.TrimSpace(host) || strings.ContainsAny(host, " \t\r\n") {
+		return fmt.Errorf("host must not contain whitespace")
+	}
 	if strings.Contains(host, "/") {
 		return fmt.Errorf("host must not contain a slash")
 	}

@@ -18,6 +18,9 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorker() error = %v", err)
 	}
+	if worker.GenerationController() != nil {
+		t.Fatal("worker exposed a generation controller before it was running")
+	}
 	workerContext, cancelWorker := context.WithCancel(context.Background())
 	workerResult := make(chan error, 1)
 	go func() { workerResult <- worker.Run(workerContext) }()

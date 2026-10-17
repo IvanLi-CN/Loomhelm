@@ -82,6 +82,9 @@ func (w *Worker) Lifecycle() *platform.Lifecycle {
 }
 
 func (w *Worker) GenerationController() *platform.GenerationController {
+	if w.lifecycle.Snapshot().State == platform.StateNew {
+		return nil
+	}
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.generation

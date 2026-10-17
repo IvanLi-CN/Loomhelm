@@ -35,7 +35,7 @@ func TestWorkerEntrypointExitsOnInterrupt(t *testing.T) {
 			_ = command.Wait()
 		}
 	})
-	waitForLog(t, command, logPath, "worker started")
+	waitForLog(t, logPath, "worker started")
 	if err := command.Process.Signal(os.Interrupt); err != nil {
 		t.Fatalf("interrupt worker: %v", err)
 	}
@@ -85,16 +85,13 @@ func commandEnv(values map[string]string) []string {
 	return env
 }
 
-func waitForLog(t *testing.T, command *exec.Cmd, path, marker string) {
+func waitForLog(t *testing.T, path, marker string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		data, _ := os.ReadFile(path)
 		if strings.Contains(string(data), marker) {
 			return
-		}
-		if command.ProcessState != nil {
-			t.Fatalf("process exited before log %q: %s", marker, data)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

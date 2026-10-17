@@ -41,6 +41,12 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 			wantError: "LOOMHELM_HTTP_ADDR",
 		},
 		{
+			name:      "HTTP address host whitespace",
+			component: ComponentServer,
+			env:       map[string]string{"LOOMHELM_HTTP_ADDR": " :8080"},
+			wantError: "LOOMHELM_HTTP_ADDR",
+		},
+		{
 			name:      "invalid timeout",
 			component: ComponentWorker,
 			env:       map[string]string{"LOOMHELM_SHUTDOWN_TIMEOUT": "0s"},

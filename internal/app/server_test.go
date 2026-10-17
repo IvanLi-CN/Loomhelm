@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,6 +77,69 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 	}
 	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected final lifecycle snapshot: %+v", snapshot)
+	}
+}
+
+func TestServerReadyEndpointReturnsUnavailableDuringDrain(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if err := server.Lifecycle().Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	readyRequest := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	readyResponse := httptest.NewRecorder()
+	server.Router().ServeHTTP(readyResponse, readyRequest)
+	if readyResponse.Code != http.StatusOK {
+		t.Fatalf("ready status before drain = %d", readyResponse.Code)
+	}
+
+	if !server.BeginDrain("test drain") {
+		t.Fatal("BeginDrain() did not transition the server")
+	}
+	drainRequest := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	drainResponse := httptest.NewRecorder()
+	server.Router().ServeHTTP(drainResponse, drainRequest)
+	if drainResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("ready status during drain = %d, want %d", drainResponse.Code, http.StatusServiceUnavailable)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(drainResponse.Body).Decode(&body); err != nil {
+		t.Fatalf("decode draining readiness response: %v", err)
+	}
+	if body["ready"] != false || body["state"] != string(platform.StateDraining) {
+		t.Fatalf("unexpected draining readiness response: %+v", body)
+	}
+}
+
+func TestServerRejectsRemoteDrainRequest(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if err := server.Lifecycle().Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/-/drain", nil)
+	request.RemoteAddr = "192.0.2.10:1234"
+	response := httptest.NewRecorder()
+	server.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("remote drain status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateRunning || !snapshot.Ready {
+		t.Fatalf("remote drain changed lifecycle: %+v", snapshot)
 	}
 }
 

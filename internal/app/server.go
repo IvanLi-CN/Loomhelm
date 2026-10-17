@@ -51,8 +51,11 @@ func (s *Server) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("server context must not be nil")
 	}
-	listener, err := net.Listen("tcp", s.cfg.HTTPAddr)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.cfg.HTTPAddr)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return fmt.Errorf("listen on %s: %w", s.cfg.HTTPAddr, err)
 	}
 	return s.Serve(ctx, listener)
@@ -66,14 +69,13 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return fmt.Errorf("server listener must not be nil")
 	}
 	if err := s.lifecycle.Start(); err != nil {
-		_ = listener.Close()
-		return err
+		return withListenerCloseError(err, listener.Close())
 	}
 	if err := ctx.Err(); err != nil {
 		s.BeginDrain("context canceled")
-		_ = listener.Close()
+		closeErr := listener.Close()
 		s.lifecycle.Stop()
-		return nil
+		return withListenerCloseError(nil, closeErr)
 	}
 
 	server := &http.Server{
@@ -97,10 +99,10 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return s.shutdownAndWait(server, serveResult, "HTTP drain request")
 	case err := <-serveResult:
 		s.BeginDrain("HTTP server stopped unexpectedly")
-		_ = listener.Close()
+		closeErr := listener.Close()
 		shutdownErr := s.shutdownHTTP(server)
 		s.lifecycle.Stop()
-		if combined := combineServerErrors(err, shutdownErr); combined != nil {
+		if combined := withListenerCloseError(combineServerErrors(err, shutdownErr), closeErr); combined != nil {
 			return combined
 		}
 		s.logger.Info("server stopped")
@@ -160,6 +162,17 @@ func combineServerErrors(serveErr, shutdownErr error) error {
 		return fmt.Errorf("serve HTTP: %w", serveErr)
 	}
 	return errors.Join(fmt.Errorf("serve HTTP: %w", serveErr), fmt.Errorf("server shutdown: %w", shutdownErr))
+}
+
+func withListenerCloseError(base, closeErr error) error {
+	if closeErr == nil {
+		return base
+	}
+	closeErr = fmt.Errorf("close listener: %w", closeErr)
+	if base == nil {
+		return closeErr
+	}
+	return errors.Join(base, closeErr)
 }
 
 func (s *Server) registerRoutes() {
@@ -243,7 +256,16 @@ func (s *Server) handleDrainStatus(writer http.ResponseWriter, _ *http.Request) 
 	})
 }
 
-func (s *Server) handleDrain(writer http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleDrain(writer http.ResponseWriter, request *http.Request) {
+	if !isLoopbackRequest(request) {
+		s.writeJSON(writer, http.StatusForbidden, healthResponse{
+			Status:    "forbidden",
+			Component: string(s.cfg.Component),
+			Version:   s.cfg.Version,
+			State:     s.lifecycle.Snapshot().State,
+		})
+		return
+	}
 	snapshot := s.lifecycle.Snapshot()
 	if snapshot.State == platform.StateNew || snapshot.State == platform.StateStopped {
 		s.writeJSON(writer, http.StatusConflict, healthResponse{
@@ -272,6 +294,15 @@ func (s *Server) handleDrain(writer http.ResponseWriter, _ *http.Request) {
 	case s.shutdown <- struct{}{}:
 	default:
 	}
+}
+
+func isLoopbackRequest(request *http.Request) bool {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err != nil {
+		host = request.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Server) writeJSON(writer http.ResponseWriter, status int, value any) {
