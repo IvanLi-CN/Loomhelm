@@ -117,7 +117,7 @@
     .task-table .business-state { color: var(--muted); white-space: nowrap; }
     .view-switch { display: flex; gap: 6px; }
     .task-board-scroll { overflow-x: auto; }
-    .task-board { display: grid; grid-template-columns: repeat(4, minmax(230px, 1fr)); gap: 14px; }
+    .task-board { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 14px; }
     .board-column { background: var(--soft); padding: 12px; min-width: 0; border-top: 2px solid #bfc7c4; }
     .board-column h2 { font-size: 14px; }
     .board-task { display: block; width: 100%; text-align: left; background: #fff; border: 1px solid var(--line); padding: 12px; margin-bottom: 10px; }
@@ -171,7 +171,10 @@
     dialog { width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 18px; border: 1px solid var(--line); border-radius: 8px; }
     dialog::backdrop { background: #20282555; }
     dialog.association-dialog { width: min(560px, calc(100vw - 32px)); }
-    .association-dialog .form-field { margin-top: 18px; margin-bottom: 16px; }
+    .association-dialog .form-field { margin-top: 18px; margin-bottom: 16px; min-width: 0; }
+    .association-dialog .form-field > :is(input, select, textarea) { width: 100%; min-width: 0; }
+    .sharing-confirmation { display: flex; align-items: flex-start; gap: 10px; margin: 18px 0; line-height: 1.65; }
+    .sharing-confirmation input { flex: 0 0 auto; width: 18px; height: 18px; min-height: 0; margin-top: 3px; }
     .session-choice { padding: 18px 0; }
     @media (max-width: 79.99rem) { .overview { grid-template-columns: minmax(0, 1fr); } .session-column { margin-top: 8px; } }
     @media (max-width: 63.99rem) { .prototype { grid-template-columns: minmax(0, 1fr); } .sidebar { display: none; } .mobile-menu { display: block; } .notice { left: 0; } .task-layout { grid-template-columns: minmax(0, 1fr) 270px; } }
@@ -213,7 +216,7 @@
       .composer { padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
       .composer textarea { min-height: 76px; }
       .composer small { max-width: 220px; line-height: 1.5; }
-      .task-board { grid-template-columns: repeat(4, 270px); }
+      .task-board { grid-template-columns: repeat(5, 270px); }
       .board-scroll-hint { display: block; margin-bottom: 10px; }
       .graph-viewport { max-height: max(250px, calc(100dvh - 460px)); }
       .filters { align-items: stretch; }
@@ -243,7 +246,8 @@
       <section><h2>已确认的工作方式</h2><p>主要使用者是主人一人，可同时使用多个桌面或手机终端。界面以高效工作台为目标，两端功能一致。</p>
         <ol><li>全局导航为工作台、任务；下方“对话”分组直接列出未归属项目的对话，“项目”分组以“项目 → 具体项目 → 对话”组织导航。</li><li>默认进入跨项目的工作台，优先呈现需要人工介入的工作，其余对话保持紧凑、可直达。</li><li>审批在工作台内展开完整请求及上下文后，可以直接批准或拒绝，也能进入完整对话。</li><li>同一主人的终端共享任务、对话、已提交操作与未发送草稿；切换设备不要求接管控制。</li><li>每端独立导航和滚动，手机换对话不会带走电脑的阅读位置。</li><li>每个任务最多直接关联一个 Codex 主对话；审查、资料收集等支持工作通常交给其中的 sub-agent。</li><li>sub-agent 在主对话内按可展开分支呈现，具体内容以真实事件支持为准。</li><li>任务直接进入主对话与任务信息结合的工作区；桌面并排查看，手机在任务内切换面板。</li><li>任务提供列表、看板、图谱三种视图并记住选择；首次默认紧凑列表。图谱同时表达项目／任务／子任务层级及任务依赖。</li><li>文件跟随相关对话呈现；远程文件浏览留待后续按需考虑。</li><li>当前按单一工作环境设计。</li><li>工程工作流沿用现有方案，本设计先聚焦可见的工作内容与操作。</li></ol>
       </section>
-      <section><h2>独立对话与任务关联</h2><p>可以从工作台的“全部对话”开始临时讨论，不必先建立任务或选择项目；创建时也可以选择项目。独立对话之后可关联任务，尚未归属项目的对话随关联进入该任务的项目。</p><p>关联继续使用同一段对话，保留已有消息、未发送草稿与阅读位置。每项任务仍最多直接关联一个主对话。原型提供选择尚无主对话的任务及新建任务两条路径；已有对话的替换与跨项目迁移规则尚未确定。</p></section>
+      <section><h2>独立对话与任务关联</h2><p>可以从工作台的“全部对话”开始临时讨论，不必先建立任务或选择项目；创建时也可以选择项目。无项目对话由创建者私有。创建者明确确认后，才能随关联进入任务项目，历史消息、执行和文件按该项目权限共享；未发送草稿仍只在本人设备间共享。</p><p>任务与对话双方至多关联一个，绑定后不变，不提供替换、解绑或跨项目迁移。原型提供选择尚无主对话的任务及新建任务两条路径；有项目的对话只能关联同项目任务。关联保留同一对话、已有消息、草稿与阅读位置。</p></section>
+      <section><h2>任务状态与草稿</h2><p>任务状态为待办、进行中、阻塞、完成、取消；对话执行结束不会自动完成任务。多端草稿冲突自动采用最后一次修改；发送只清除实际发送的内容，保留后续新输入，恢复不会自动发送。原型仍不实现真实跨端同步，排序、去重和恢复需要公共合同及实际验证。</p></section>
       <section><h2>本轮可试用的路径</h2><p>从导航的“对话”分组直接打开未归属项目的对话；展开项目树，在具体项目下打开任务主对话或尚未关联任务的对话。点击项目后可切换任务和对话视图。从工作台的“全部对话”新建不选项目的独立对话，继续发送或保留草稿，再关联已有任务或新建任务。任务支持列表、看板和图谱，重新打开后恢复上次选择。在工作台展开审批并处理，或进入主对话展开子代理、编辑输入、查看任务信息。</p><p>场景菜单用于检查离线、恢复同步、结果待核对、审批已处理、只读权限和空任务状态。演示交互只改变此原型的数据，不代表真实后端、Codex 控制或 PWA 安装验证已通过。</p></section>
       <section><h2>当前信息架构</h2><div class="table-scroll"><table class="notes-table"><thead><tr><th>入口</th><th>主内容</th><th>进一步操作</th></tr></thead><tbody><tr><td>工作台 · 全局</td><td>待介入事项、最近对话</td><td>就地核对审批，进入对应工作；查看全部对话及新建对话</td></tr><tr><td>任务 · 全局</td><td>全部项目的任务目标与进度</td><td>列表／看板／图谱切换、筛选、进入任务</td></tr><tr><td>对话分组</td><td>未归属项目的对话叶子</td><td>展开、折叠、直接打开对话</td></tr><tr><td>项目树</td><td>项目 → 具体项目 → 对话</td><td>直接打开对话；点击项目后查看任务或全部项目对话</td></tr><tr><td>任务工作区</td><td>一个主对话、可展开子代理、共享草稿</td><td>消息、审批、任务信息；文件保留在对话上下文中</td></tr></tbody></table></div><p>文件跟随相关对话呈现。远程文件浏览仅作为后续按需考虑的能力，不纳入当前结构。</p></section>
       <section><h2>状态与能力覆盖</h2><div class="table-scroll"><table class="notes-table"><thead><tr><th>范围</th><th>当前表达</th><th>仍需补齐</th></tr></thead><tbody><tr><td>审批与拒绝</td><td>完整请求、就地显式响应、过期入口停用</td><td>真实审批修订、重复及冲突响应</td></tr><tr><td>多端与草稿</td><td>同一模型的桌面/手机布局、面板切换保留输入</td><td>真实多客户端同步、并发编辑与断线恢复规则</td></tr><tr><td>离线与重连</td><td>明确状态、控制操作停用、无自动提交</td><td>PWA 离线外壳、安装更新与旧客户端兼容</td></tr><tr><td>结果不确定</td><td>待核对说明、查看会话入口</td><td>实际命令状态、对账进度、控制冲突与中断</td></tr><tr><td>会话与子代理</td><td>一个主会话、可展开过程与未知内容回退</td><td>真实内容夹具、两个会话创建/接入路径</td></tr><tr><td>通用状态</td><td>空任务、只读权限、键盘焦点、窄屏布局</td><td>加载、失败恢复、长内容与完整组件状态</td></tr><tr><td>对话文件</td><td>相关消息中的文件引用</td><td>真实文件访问与权限表现</td></tr></tbody></table></div></section>
@@ -267,9 +271,9 @@
       { id: "LH-38", title: "保持切换任务后的输入上下文", project: "loomhelm", state: "进行中", execution: "执行中", goal: "切换任务或面板时，保留正在编辑的内容和阅读位置。", preview: "正在核对任务切换前后的输入与阅读位置。", updated: "2 分钟前" },
       { id: "SN-12", title: "整理离线阅读的边界", project: "notes", state: "进行中", execution: "执行中", goal: "说明离线可读内容与需要在线执行的操作。", preview: "资料收集需要读取所选目录，等待你的决定。", updated: "5 分钟前" },
       { id: "DL-08", title: "排查连接中断后的状态恢复", project: "lab", state: "进行中", execution: "待核对", goal: "在重新连接后核对结果，避免重复提交不确定的操作。", preview: "连接恢复后，仍需核对之前的操作是否生效。", updated: "10 分钟前" },
-      { id: "LH-35", title: "核对任务切换后的草稿保留", project: "loomhelm", state: "待验收", execution: "已结束", goal: "切换任务后仍能接着编辑原来的输入。", preview: "核对已完成，说明文件保留在相关对话中。", updated: "昨天" },
-      { id: "SN-09", title: "完善键盘焦点顺序", project: "notes", state: "待处理", execution: "未开始", goal: "让核心工作路径可以清楚地使用键盘完成。" },
-      { id: "LH-43", title: "验证重复审批的处理结果", project: "loomhelm", parent: "LH-42", state: "待处理", execution: "未开始", goal: "在完成对账提示后核对重复响应的结果。" }
+      { id: "LH-35", title: "核对任务切换后的草稿保留", project: "loomhelm", state: "进行中", execution: "已结束", goal: "切换任务后仍能接着编辑原来的输入。", preview: "核对已完成，说明文件保留在相关对话中。", updated: "昨天" },
+      { id: "SN-09", title: "完善键盘焦点顺序", project: "notes", state: "待办", execution: "未开始", goal: "让核心工作路径可以清楚地使用键盘完成。" },
+      { id: "LH-43", title: "验证重复审批的处理结果", project: "loomhelm", parent: "LH-42", state: "待办", execution: "未开始", goal: "在完成对账提示后核对重复响应的结果。" }
     ];
     const demoDependencies = [["LH-35", "LH-38"], ["LH-38", "LH-42"], ["LH-42", "LH-43"]];
     const initialConversations = [
@@ -278,7 +282,7 @@
     ];
     function readTaskViews() { try { const saved = JSON.parse(localStorage.getItem("loomhelm.design.task-views") || "{}"); return Object.fromEntries(Object.entries(saved || {}).filter(([, view]) => ["list", "board", "graph"].includes(view))); } catch { return {}; } }
     const model = { view: "global", entry: "global", project: "loomhelm", projectPanel: "tasks", newConversationProject: "", task: "LH-42", conversation: "C-101", attention: "approval-1", panel: "chat", tasks: parameters.get("scenario") === "empty" ? [] : structuredClone(initialTasks), conversations: parameters.get("scenario") === "empty" ? [] : structuredClone(initialConversations), navExpanded: { projects: true, unassigned: true, ...Object.fromEntries(projects.map(project => [`project:${project.id}`, true])) }, drafts: {}, messages: {}, readPositions: {}, expandedDetails: {}, decisions: {}, search: "", filter: "all", taskViews: readTaskViews(), graphZoom: 1, scenario: parameters.get("scenario") || "normal" };
-    const taskStates = ["待处理", "进行中", "待验收", "已完成"];
+    const taskStates = ["待办", "进行中", "阻塞", "完成", "取消"];
     const taskScopeKey = () => model.view === "project" ? `project:${model.project}` : "global";
     const currentTaskView = () => model.taskViews[taskScopeKey()] || "list";
     const scopedTasks = () => model.tasks.filter(task => model.view !== "project" || task.project === model.project);
@@ -402,9 +406,17 @@
     function showAssociation(id) {
       const conversation = model.conversations.find(item => item.id === id); if (!conversation || conversation.taskId || blocked()) return;
       rememberPosition();
-      const available = model.tasks.filter(task => task.execution === "未开始" && (!conversation.project || task.project === conversation.project));
+      const available = model.tasks.filter(task => !task.conversationId && task.execution === "未开始" && (!conversation.project || task.project === conversation.project));
       const dialog = document.getElementById("associationDialog");
-      dialog.innerHTML = `<div class="row between"><h2 id="associationTitle" style="margin:0">关联任务</h2><button type="button" data-close-association="true">取消</button></div><p class="muted" style="margin-top:14px">${escapeHTML(conversation.title)}</p><form id="associateConversationForm" data-conversation-id="${id}"><label class="form-field">任务<select name="task" id="associationTarget" required><option value="">选择任务</option>${available.map(task => `<option value="${task.id}">${projectName(task.project)} / ${task.id} · ${escapeHTML(task.title)}</option>`).join("")}<option value="new">新建任务…</option></select></label><p class="muted">${conversation.project ? "可选择同项目中尚无主对话的任务。" : "选定任务后，此对话归入它的项目。"}关联后保留当前对话、消息和草稿。</p><div id="associationNewFields" hidden>${conversation.project ? `<input type="hidden" name="project" value="${conversation.project}" disabled>` : `<label class="form-field">项目<select name="project" required disabled><option value="">选择项目</option>${projects.map(project => `<option value="${project.id}">${project.name}</option>`).join("")}</select></label>`}<label class="form-field">任务名称<input name="title" value="${escapeHTML(conversation.title)}" required maxlength="160" disabled></label><label class="form-field">任务目标<textarea name="goal" rows="3" required disabled placeholder="这项任务要达成什么结果"></textarea></label></div><button class="primary" type="submit">关联任务</button></form>`;
+      dialog.innerHTML = `<div class="row between"><h2 id="associationTitle" style="margin:0">关联任务</h2><button type="button" data-close-association="true">取消</button></div>
+        <p class="muted" style="margin-top:14px">${escapeHTML(conversation.title)}</p>
+        <form id="associateConversationForm" data-conversation-id="${id}">
+          <label class="form-field">任务<select name="task" id="associationTarget" required><option value="">选择任务</option>${available.map(task => `<option value="${task.id}">${projectName(task.project)} / ${task.id} · ${escapeHTML(task.title)}</option>`).join("")}<option value="new">新建任务…</option></select></label>
+          <p class="muted">${conversation.project ? "可选择同项目中尚无主对话的任务。" : "选定任务后，此对话归入它的项目。"}保留同一对话、历史消息、执行、文件和私人草稿。绑定后不提供替换、解绑或跨项目迁移。</p>
+          <div id="associationNewFields" hidden>${conversation.project ? `<input type="hidden" name="project" value="${conversation.project}" disabled>` : `<label class="form-field">项目<select name="project" required disabled><option value="">选择项目</option>${projects.map(project => `<option value="${project.id}">${project.name}</option>`).join("")}</select></label>`}<label class="form-field">任务名称<input name="title" value="${escapeHTML(conversation.title)}" required maxlength="160" disabled></label><label class="form-field">任务目标<textarea name="goal" rows="3" required disabled placeholder="这项任务要达成什么结果"></textarea></label></div>
+          ${conversation.project ? "" : '<label class="sharing-confirmation"><input type="checkbox" name="shareHistory" value="confirmed" required><span>我确认将此对话的历史消息、执行和文件按所选项目的权限共享。未发送草稿仍仅在我自己的设备间共享。</span></label>'}
+          <button class="primary" type="submit">关联任务</button>
+        </form>`;
       dialog.showModal();
     }
     function createView() { return `<div class="page-title"><h1>新建任务</h1><p>先确定目标，再在任务内连接一个主会话。</p></div>${condition()}<form id="createTaskForm" class="task-form"><label class="form-field">项目<select name="project">${projects.map(project => `<option value="${project.id}" ${model.project === project.id ? "selected" : ""}>${project.name}</option>`).join("")}</select></label><label class="form-field">任务名称<input name="title" required maxlength="160" placeholder="这项任务要完成什么"></label><label class="form-field">目标与上下文<textarea name="goal" rows="5" required placeholder="说明期望结果，以及需要保留的约束"></textarea></label><div class="row"><button class="primary" ${disabled()}>保存演示任务</button><button type="button" data-nav="global">返回工作台</button></div></form>`; }
@@ -472,15 +484,15 @@
       });
       document.addEventListener("submit", event => {
         if (event.target.id === "composerForm") { event.preventDefault(); const key = conversationKey(); const conversation = findConversation(key); if (blocked() || conversation?.execution === "待核对") return; const text = (model.drafts[key] || "").trim(); if (!text) { document.getElementById("messageInput").focus(); return; } model.messages[key] ||= []; model.messages[key].push(text); model.drafts[key] = ""; if (conversation) { conversation.preview = text; conversation.updated = "刚刚"; } if (model.view === "task") { findTask(model.task).preview = text; findTask(model.task).updated = "刚刚"; } render(); const messages = document.getElementById("messages"); messages.scrollTop = messages.scrollHeight; notify("演示：内容已加入当前原型会话，未向 Codex 提交。"); }
-        if (event.target.id === "createTaskForm") { event.preventDefault(); if (blocked()) return; const form = new FormData(event.target); const id = `TASK-${model.tasks.length + 1}`; model.tasks.push({ id, title: form.get("title"), goal: form.get("goal"), project: form.get("project"), state: "待处理", execution: "未开始" }); openTask(id); }
+        if (event.target.id === "createTaskForm") { event.preventDefault(); if (blocked()) return; const form = new FormData(event.target); const id = `TASK-${model.tasks.length + 1}`; model.tasks.push({ id, title: form.get("title"), goal: form.get("goal"), project: form.get("project"), state: "待办", execution: "未开始" }); openTask(id); }
         if (event.target.id === "createConversationForm") { event.preventDefault(); if (blocked()) return; const form = new FormData(event.target); const text = String(form.get("message") || "").trim(); if (!text) return; const id = `C-${103 + model.conversations.filter(conversation => !initialConversations.some(initial => initial.id === conversation.id)).length}`; model.conversations.unshift({ id, title: text.slice(0, 28), project: form.get("project") || null, execution: "已连接", preview: text, updated: "刚刚", history: [] }); model.messages[id] = [text]; const created = findConversation(id); model.entry = created.project ? "project" : "unassigned"; if (created.project) { model.project = created.project; model.navExpanded.projects = true; model.navExpanded[`project:${created.project}`] = true; } else model.navExpanded.unassigned = true; openConversation(id); notify("演示：已开始独立对话，未向 Codex 提交。"); }
         if (event.target.id === "associateConversationForm") {
           event.preventDefault(); if (blocked()) return;
           const conversation = model.conversations.find(item => item.id === event.target.dataset.conversationId); if (!conversation || conversation.taskId) return;
-          const form = new FormData(event.target); let task;
-          if (form.get("task") === "new") { const project = String(form.get("project") || ""); if (!projects.some(item => item.id === project) || (conversation.project && conversation.project !== project)) return; task = { id: `TASK-${model.tasks.length + 1}`, title: String(form.get("title") || "").trim(), goal: String(form.get("goal") || "").trim(), project, state: "待处理", execution: "未开始" }; if (!task.title || !task.goal) return; model.tasks.push(task); }
+          const form = new FormData(event.target); if (!conversation.project && form.get("shareHistory") !== "confirmed") return; let task;
+          if (form.get("task") === "new") { const project = String(form.get("project") || ""); if (!projects.some(item => item.id === project) || (conversation.project && conversation.project !== project)) return; task = { id: `TASK-${model.tasks.length + 1}`, title: String(form.get("title") || "").trim(), goal: String(form.get("goal") || "").trim(), project, state: "待办", execution: "未开始" }; if (!task.title || !task.goal) return; model.tasks.push(task); }
           else task = findTask(form.get("task"));
-          if (!task || task.execution !== "未开始" || (conversation.project && conversation.project !== task.project)) { notify("此任务已有主对话，或不属于当前项目，请重新选择。"); return; }
+          if (!task || task.conversationId || task.execution !== "未开始" || (conversation.project && conversation.project !== task.project)) { notify("此任务已有主对话，或不属于当前项目，请重新选择。"); return; }
           rememberPosition(); task.conversationId = conversation.id; task.execution = conversation.execution; task.preview = conversation.preview; task.updated = "刚刚"; conversation.taskId = task.id; conversation.project = task.project; document.getElementById("associationDialog").close(); openTask(task.id); notify("演示：已关联任务，原对话、消息与未发送草稿已保留。");
         }
       });

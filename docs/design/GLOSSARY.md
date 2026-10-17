@@ -48,11 +48,11 @@ _Avoid_: Activity or running session as a synonym; execution alone does not impl
 
 _Avoid_: Device takeover as a name for ordinary movement between the owner's Web/PWA clients.
 
-**Shared session draft (会话共享草稿)**: The unsent conversation input associated with a session that the owner's clients can view and continue editing together.
+**Shared session draft (会话共享草稿)**: The private unsent conversation input shared across the creating user's own authorized clients, including after conversation history joins a project.
 
 _Avoid_: Queued message or pending command for text the owner has not explicitly submitted.
 
-**Task session (任务主会话)**: The sole Codex session directly associated with a task, containing its main working conversation and the context for delegated sub-agent work.
+**Task session (任务主会话)**: The sole Codex session directly associated with a task, containing its main working conversation and the context for delegated sub-agent work; that session belongs to at most one task and the binding stays fixed in phase one.
 
 _Avoid_: Separate implementation, review and research sessions attached to the same task.
 
