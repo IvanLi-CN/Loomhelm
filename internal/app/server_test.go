@@ -176,16 +176,59 @@ func TestServerRejectsRemoteDrainRequest(t *testing.T) {
 	if err := server.Lifecycle().Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/-/drain", nil)
-	request.RemoteAddr = "192.0.2.10:1234"
-	response := httptest.NewRecorder()
-	server.Router().ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("remote drain status = %d, want %d", response.Code, http.StatusForbidden)
+	for _, test := range []struct {
+		name          string
+		remoteAddr    string
+		authorization string
+	}{
+		{name: "remote peer with valid token", remoteAddr: "192.0.2.10:1234", authorization: "Bearer test-token"},
+		{name: "loopback peer with invalid token", remoteAddr: "127.0.0.1:1234", authorization: "Bearer wrong-token"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/-/drain", nil)
+			request.RemoteAddr = test.remoteAddr
+			request.Header.Set("Authorization", test.authorization)
+			response := httptest.NewRecorder()
+			server.Router().ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("drain status = %d, want %d", response.Code, http.StatusForbidden)
+			}
+		})
 	}
 	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateRunning || !snapshot.Ready {
 		t.Fatalf("remote drain changed lifecycle: %+v", snapshot)
 	}
+}
+
+func TestServerRejectsReentrantServeWithoutClosingActiveListener(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runResult := make(chan error, 1)
+	go func() { runResult <- server.Serve(ctx, listener) }()
+
+	client := &http.Client{Timeout: time.Second}
+	baseURL := "http://" + listener.Addr().String()
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusOK)
+	if err := server.Serve(context.Background(), listener); err == nil {
+		t.Fatal("reentrant Serve() succeeded")
+	}
+	waitForStatus(t, client, baseURL+"/readyz", http.StatusOK)
+	cancel()
+	waitForProcessResult(t, runResult)
 }
 
 func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
@@ -212,6 +255,32 @@ func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
 	}
 	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected final lifecycle snapshot: %+v", snapshot)
+	}
+}
+
+func TestServerPropagatesListenerCloseErrorAfterServeFailure(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	serveErr := io.ErrUnexpectedEOF
+	closeErr := errors.New("listener close failed")
+	failing := &failingListener{Listener: listener, err: serveErr}
+	wrapped := &closeErrorListener{Listener: failing, err: closeErr}
+
+	err = server.Serve(context.Background(), wrapped)
+	if !errors.Is(err, serveErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("Serve() error = %v, want serve and close errors", err)
 	}
 }
 
@@ -402,12 +471,39 @@ func TestServerForceClosesStuckRequestAfterDrainTimeout(t *testing.T) {
 	}
 	release()
 	select {
-	case <-blockResult:
+	case err := <-blockResult:
+		if err == nil {
+			t.Fatal("blocking request completed successfully after forced close")
+		}
 	case <-time.After(time.Second):
 		t.Fatal("blocking request did not finish after forced close")
 	}
 	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped || snapshot.Ready || snapshot.Live {
 		t.Fatalf("unexpected forced-close lifecycle snapshot: %+v", snapshot)
+	}
+}
+
+func TestServerCanceledRunStopsLifecycleBeforeListen(t *testing.T) {
+	server, err := NewServer(platform.Config{
+		Component:       platform.ComponentServer,
+		Version:         "test-version",
+		HTTPAddr:        "127.0.0.1:0",
+		DrainToken:      "test-token",
+		ShutdownTimeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := server.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if snapshot := server.Lifecycle().Snapshot(); snapshot.State != platform.StateStopped {
+		t.Fatalf("canceled Run() lifecycle snapshot = %+v", snapshot)
+	}
+	if err := server.Run(context.Background()); err == nil {
+		t.Fatal("second Run() succeeded after canceled startup")
 	}
 }
 
@@ -460,6 +556,16 @@ func getJSON(t *testing.T, client *http.Client, endpoint string) map[string]any 
 type failingListener struct {
 	net.Listener
 	err error
+}
+
+type closeErrorListener struct {
+	net.Listener
+	err error
+}
+
+func (l *closeErrorListener) Close() error {
+	_ = l.Listener.Close()
+	return l.err
 }
 
 func (l *failingListener) Accept() (net.Conn, error) {

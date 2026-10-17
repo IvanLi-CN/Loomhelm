@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +26,32 @@ type Server struct {
 	router       chi.Router
 	shutdown     chan struct{}
 	shuttingDown atomic.Bool
+	serveMu      sync.Mutex
+	active       net.Listener
+}
+
+type trackedListener struct {
+	net.Listener
+	mu       sync.Mutex
+	closeErr error
+}
+
+func (l *trackedListener) Close() error {
+	err := l.Listener.Close()
+	if err != nil {
+		l.mu.Lock()
+		if l.closeErr == nil {
+			l.closeErr = err
+		}
+		l.mu.Unlock()
+	}
+	return err
+}
+
+func (l *trackedListener) closeError() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closeErr
 }
 
 func NewServer(cfg platform.Config, logger *slog.Logger) (*Server, error) {
@@ -52,9 +80,13 @@ func (s *Server) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("server context must not be nil")
 	}
+	if snapshot := s.lifecycle.Snapshot(); snapshot.State != platform.StateNew {
+		return fmt.Errorf("server lifecycle already started in state %q", snapshot.State)
+	}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.cfg.HTTPAddr)
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+			s.lifecycle.Stop()
 			return nil
 		}
 		return fmt.Errorf("listen on %s: %w", s.cfg.HTTPAddr, err)
@@ -69,9 +101,18 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	if listener == nil {
 		return fmt.Errorf("server listener must not be nil")
 	}
+	s.serveMu.Lock()
 	if err := s.lifecycle.Start(); err != nil {
+		sameListener := listenersSame(s.active, listener)
+		s.serveMu.Unlock()
+		if sameListener {
+			return err
+		}
 		return withListenerCloseError(err, listener.Close())
 	}
+	s.active = listener
+	s.serveMu.Unlock()
+	defer s.releaseListener(listener)
 	if err := ctx.Err(); err != nil {
 		s.BeginDrain("context canceled")
 		closeErr := listener.Close()
@@ -83,9 +124,10 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		Handler:           s.router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	tracked := &trackedListener{Listener: listener}
 	serveResult := make(chan error, 1)
 	go func() {
-		err := server.Serve(listener)
+		err := server.Serve(tracked)
 		if err == http.ErrServerClosed && s.shuttingDown.Load() {
 			err = nil
 		}
@@ -95,14 +137,15 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	s.logger.Info("server started", "address", listener.Addr().String())
 	select {
 	case <-ctx.Done():
-		return s.shutdownAndWait(server, serveResult, "context canceled")
+		return s.shutdownAndWait(server, tracked, serveResult, "context canceled")
 	case <-s.shutdown:
-		return s.shutdownAndWait(server, serveResult, "HTTP drain request")
+		return s.shutdownAndWait(server, tracked, serveResult, "HTTP drain request")
 	case err := <-serveResult:
 		s.BeginDrain("HTTP server stopped unexpectedly")
 		shutdownErr := s.shutdownHTTP(server)
+		closeErr := tracked.closeError()
 		s.lifecycle.Stop()
-		if combined := combineServerErrors(err, shutdownErr); combined != nil {
+		if combined := withListenerCloseError(combineServerErrors(err, shutdownErr), closeErr); combined != nil {
 			return combined
 		}
 		s.logger.Info("server stopped")
@@ -126,12 +169,13 @@ func (s *Server) BeginDrain(reason string) bool {
 	return changed
 }
 
-func (s *Server) shutdownAndWait(server *http.Server, serveResult <-chan error, reason string) error {
+func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener, serveResult <-chan error, reason string) error {
 	s.BeginDrain(reason)
 	shutdownErr := s.shutdownHTTP(server)
 	serveErr := <-serveResult
+	closeErr := listener.closeError()
 	s.lifecycle.Stop()
-	if combined := combineServerErrors(serveErr, shutdownErr); combined != nil {
+	if combined := withListenerCloseError(combineServerErrors(serveErr, shutdownErr), closeErr); combined != nil {
 		return combined
 	}
 	s.logger.Info("server stopped")
@@ -143,12 +187,33 @@ func (s *Server) shutdownHTTP(server *http.Server) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
+		s.logger.Warn("server shutdown timed out; forcing HTTP close", "error", err)
 		if closeErr := server.Close(); closeErr != nil {
 			return errors.Join(err, fmt.Errorf("force close HTTP server: %w", closeErr))
 		}
 		return err
 	}
 	return nil
+}
+
+func (s *Server) releaseListener(listener net.Listener) {
+	s.serveMu.Lock()
+	defer s.serveMu.Unlock()
+	if listenersSame(s.active, listener) {
+		s.active = nil
+	}
+}
+
+func listenersSame(left, right net.Listener) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	if leftValue.Type() != rightValue.Type() || !leftValue.Type().Comparable() {
+		return false
+	}
+	return leftValue.Interface() == rightValue.Interface()
 }
 
 func combineServerErrors(serveErr, shutdownErr error) error {
