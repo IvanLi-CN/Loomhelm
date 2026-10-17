@@ -12,7 +12,7 @@ _Avoid_: Project workbench when referring to the cross-project entry.
 
 _Avoid_: Labeling one selected project's task list as the global Tasks entry.
 
-**Conversations (对话)**: The global entry for all conversations and their activity, including projectless conversations; a conversation is the user-facing name for a Codex session.
+**Conversations (对话)**: The navigation group listing conversations without a project; a conversation is the user-facing name for a Codex session. Project-associated conversations appear under their project.
 
 _Avoid_: Treating conversations as an additional kind of session or as a host-management surface.
 
