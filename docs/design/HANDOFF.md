@@ -107,7 +107,13 @@ U01–U04 是真实实现任务的范围标识，不是页面标识；以下每�
 
 最新独立 finish review：IMP01（控件重叠）由 10 张捕获及 320/768 宽度无重叠/溢出检查证明 resolved，且无回归；IMP02（Device Lab 项目断开）由正常场景 4 条层级加 1 条依赖、权限场景 3 条层级和 Sidecar 缺失证明 resolved，且无回归。reviewer 返回 scoped `disposition: ship`，仅覆盖这两项修正，不代表 D01 完整 UI 批准；主人已确认上述两张主要布局示例可保留，仍待实际集成输入和后续证据刷新。
 
-补充布局留档：在源提交 `5cbf46b7ce6e4aeb27f7ffd3c5677598aa7e78fb` 上重新捕获并展示了工作台桌面亮色/手机暗色、对话工作区桌面暗色/手机亮色四张图，视口分别为 1440x1000 和 393x852。四张均无 document overflow，手机审批控件实测高度 44px；trim_only 均未改变边界。本批只补充页面呈现，不重复执行既有功能检查或 detector，也不扩张为生产回归。主人针对这四张回答“就先这样吧”，因此按阶段版本保留原样图像于 `design/evidence/layout-workbench-{desktop-light,mobile-dark}.png` 和 `design/evidence/layout-workspace-{desktop-dark,mobile-light}.png`；展示集与接受范围见 [surface-brief](surface-brief.md#provisionally-retained-workbench-and-conversation-layouts)。这不是完整 UI 定稿或实施授权，当前停止继续页面评审。四条目标路径在实际 parent `079d3d85318c365056cd29a238aafdf732581421` 中不存在，比较为 current-only，无 baseline、heatmap 或 two-sided report；原两张已确认示例保持不变。
+补充布局留档：在源提交 `5cbf46b7ce6e4aeb27f7ffd3c5677598aa7e78fb` 上重新捕获并展示了工作台桌面亮色/手机暗色、对话工作区桌面暗色/手机亮色四张图，视口分别为 1440x1000 和 393x852。四张均无 document overflow，手机审批控件实测高度 44px；trim_only 均未改变边界。本批只补充页面呈现，不重复执行既有功能检查或 detector，也不扩张为生产回归。主人针对这四张回答“就先这样吧”，因此按阶段版本保留原样图像于 `design/evidence/layout-workbench-{desktop-light,mobile-dark}.png` 和 `design/evidence/layout-workspace-{desktop-dark,mobile-light}.png`；展示集与接受范围见 [surface-brief](surface-brief.md#provisionally-retained-workbench-and-conversation-layouts)。这不是完整 UI 定稿或实施授权，后续页面评审从该阶段版本继续。四条目标路径在实际 parent `079d3d85318c365056cd29a238aafdf732581421` 中不存在，比较为 current-only，无 baseline、heatmap 或 two-sided report；原两张已确认示例保持不变。
+
+## 任务与对话补充评审
+
+源提交 `3d01ab21ab708466704746f3cc7390fbd1bcbe52` 的静态布局已补充八个画面核对：全局任务列表、全局任务看板、Sidecar Notes 项目对话列表、无项目对话 `ctoday` 各包含桌面 1440x1000 与手机 393x852，并交错使用亮暗主题。八张均无 document overflow；列表保留同一批八项任务，看板保留待办/进行中/阻塞/完成/取消五列，手机横向滚动限定在看板区域。项目对话列表同时保留任务主对话 `c12` 和无任务对话 `ckey`；从列表打开后仍是原 `ckey`，项目属性为 Sidecar Notes、任务属性为未关联任务。无项目 `ctoday` 保留原会话身份和 composer。这些只是合成布局与定向路径核对，没有重新执行既有功能套件、detector 或生产集成验证，也没有修改 UI 源、token 或既有接受资产。
+
+本组准备展示任务列表桌面亮色、任务看板手机亮色、项目对话列表桌面暗色、无项目对话手机暗色四张候选。trim_only 未改变这四张的边界；相对实际 parent `079d3d85318c365056cd29a238aafdf732581421` 的对应目标路径均不存在，因此比较为 current-only，无 baseline、heatmap 或 two-sided report。候选接受范围待主人答复，尚未作为正式证据落盘；它们不改变上一组布局的阶段性保留状态。页面入口仍是 `design/index.html`，对应应用范围可由“任务”、项目“对话”面板和树中的无项目“对话”叶子到达。
 
 ## 后端与公共接口依赖
 
