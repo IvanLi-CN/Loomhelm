@@ -52,6 +52,8 @@ Observed source `006f1d627f38bb38bbd0e72f45edd1a28d21ac36` combines the database
 
 The same source passed first and repeat setup in real linked worktrees using an external Git common directory, preserving existing environment and hook contents without depending on a historical helper. Evidence also covers protected environment paths, two aggregated tool-readiness failures, distinct path-derived Compose projects and validated explicit overrides. Go `1.27.2`, Bun `1.4.3` and sqlc `1.31.1` were observed, with actual setup/dev and tool-manifest bytes matched to the candidate. Earlier harness failures are excluded from the passing observations; unavailable historical raw records were replaced by current-source runs. These observations establish infrastructure and bootstrap behavior, without completing product, blue-green or production acceptance.
 
+Review of documentation-complete candidate `f4af488dc029625d6e28457a7208e23e20120f2d` demonstrated gaps in shutdown ownership and retryability, signed generation bounds, worktree database targets, configured queue routing, pool-specific migration-lock DSNs and selected sqlc invocation. The corrections preserve the existing infrastructure contracts. The earlier passing observations remain historical evidence for their source; changed runtime paths require fresh candidate-bound validation before delivery.
+
 ## References
 
 - [Requirements](SPEC.md)

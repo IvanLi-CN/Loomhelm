@@ -67,7 +67,12 @@ func (w *Worker) Run(ctx context.Context) error {
 		}
 		return err
 	}
-	defer resources.Close()
+	closeOnReturn := true
+	defer func() {
+		if closeOnReturn {
+			resources.Close()
+		}
+	}()
 	// Keep cancellation under Run so readiness is revoked before generation work is stopped.
 	generation, err := platform.NewGenerationController(context.Background(), w.cfg.WorkerGeneration)
 	if err != nil {
@@ -96,6 +101,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	runnerCtx, cancelRunner := context.WithCancel(context.Background())
 	stopStartupCancel := context.AfterFunc(startup, cancelRunner)
 	startErr := resources.Start(runnerCtx, generation, w.lifecycle)
+	// stopRuntime now owns cleanup even if Start partially succeeded. A stop
+	// timeout must not release the pool while the runner still owns it.
+	closeOnReturn = false
 	stopStartupCancel()
 	if startErr == nil {
 		startErr = startup.Err()
@@ -115,7 +123,6 @@ func (w *Worker) Run(ctx context.Context) error {
 	w.logger.Info("worker started", "generation", generation.Current())
 	<-ctx.Done()
 	err = w.stopRuntime(resources, cancelRunner, generation, "context canceled")
-	w.logger.Info("worker stopped", "generation", generation.Current())
 	return err
 }
 
@@ -126,18 +133,42 @@ func (w *Worker) stopRuntime(resources processRuntime, cancelRunner context.Canc
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), w.cfg.ShutdownTimeout)
 	err := resources.Stop(shutdown)
+	if err == nil {
+		err = resources.WaitStopped(shutdown)
+	}
 	cancel()
 	cancelRunner()
-	generation.Stop()
 	if err != nil {
-		// A bounded graceful stop may expire. Cancel the lifetime before waiting
-		// again, so no active River worker retains the pool when it is closed.
+		// Cancel job execution without revoking the generation: interruption at
+		// process shutdown must leave unfinished jobs retryable after restart.
 		forced, forceCancel := context.WithTimeout(context.Background(), w.cfg.ShutdownTimeout)
-		err = errors.Join(err, resources.StopAndCancel(forced))
+		forceErr := resources.StopAndCancel(forced)
+		waitErr := resources.WaitStopped(forced)
 		forceCancel()
+		err = errors.Join(err, forceErr, waitErr)
+		if waitErr != nil {
+			// Keep ownership after the bounded Run call returns an error. Only
+			// the actual stopped signal permits releasing the pool and generation.
+			w.logger.Error("worker shutdown incomplete; runtime retained until runner stops", "error", err)
+			go func() {
+				if waitErr := resources.WaitStopped(context.Background()); waitErr != nil {
+					w.logger.Error("wait for retained worker runtime", "error", waitErr)
+					return
+				}
+				w.closeRuntime(resources, generation)
+			}()
+			return err
+		}
 	}
-	w.lifecycle.Stop()
+	w.closeRuntime(resources, generation)
 	return err
+}
+
+func (w *Worker) closeRuntime(resources processRuntime, generation *platform.GenerationController) {
+	generation.Stop()
+	resources.Close()
+	w.lifecycle.Stop()
+	w.logger.Info("worker stopped", "generation", generation.Current())
 }
 
 func (w *Worker) Lifecycle() platform.LifecycleSnapshot {

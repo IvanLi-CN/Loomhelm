@@ -17,6 +17,7 @@ type processRuntime interface {
 	Start(context.Context, *platform.GenerationController, *platform.Lifecycle) error
 	Stop(context.Context) error
 	StopAndCancel(context.Context) error
+	WaitStopped(context.Context) error
 	Close()
 }
 
@@ -64,5 +65,7 @@ func (r *databaseRuntime) Stop(ctx context.Context) error { return r.runner.Stop
 func (r *databaseRuntime) StopAndCancel(ctx context.Context) error {
 	return r.runner.StopAndCancel(ctx)
 }
+
+func (r *databaseRuntime) WaitStopped(ctx context.Context) error { return r.runner.WaitStopped(ctx) }
 
 func (r *databaseRuntime) Close() { r.db.Close() }

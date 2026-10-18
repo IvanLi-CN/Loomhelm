@@ -18,6 +18,7 @@ type fakeRuntime struct {
 	ping   func(context.Context) error
 	start  func(context.Context, *platform.GenerationController, *platform.Lifecycle) error
 	stop   func(context.Context) error
+	wait   func(context.Context) error
 	closed atomic.Bool
 }
 
@@ -40,7 +41,13 @@ func (r *fakeRuntime) Stop(ctx context.Context) error {
 	return nil
 }
 func (r *fakeRuntime) StopAndCancel(ctx context.Context) error { return r.Stop(ctx) }
-func (r *fakeRuntime) Close()                                  { r.closed.Store(true) }
+func (r *fakeRuntime) WaitStopped(ctx context.Context) error {
+	if r.wait != nil {
+		return r.wait(ctx)
+	}
+	return nil
+}
+func (r *fakeRuntime) Close() { r.closed.Store(true) }
 
 func fakeFactory(r *fakeRuntime) runtimeFactory {
 	return func(context.Context, platform.Config, *slog.Logger) (processRuntime, error) { return r, nil }
@@ -227,7 +234,7 @@ func TestWorkerStartupDeadlineCancelsRunner(t *testing.T) {
 	}
 }
 
-func TestWorkerStopTimeoutCancelsGenerationBeforeForcedStop(t *testing.T) {
+func TestWorkerStopTimeoutKeepsGenerationUntilForcedStopCompletes(t *testing.T) {
 	w, err := newTestWorker(platform.Config{Component: platform.ComponentWorker, Version: "test", ShutdownTimeout: 20 * time.Millisecond, WorkerGeneration: 1}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +257,7 @@ func TestWorkerStopTimeoutCancelsGenerationBeforeForcedStop(t *testing.T) {
 				<-ctx.Done()
 				return ctx.Err()
 			}
-			if generation.Context().Err() == nil {
+			if generation.Context().Err() != nil {
 				wrongOrder.Store(true)
 			}
 			return nil
@@ -277,5 +284,69 @@ func TestWorkerStopTimeoutCancelsGenerationBeforeForcedStop(t *testing.T) {
 	}
 	if attempts.Load() != 2 || wrongOrder.Load() || !r.closed.Load() {
 		t.Fatal("forced stop order or resource cleanup was incorrect")
+	}
+	if generation.Context().Err() == nil {
+		t.Fatal("generation was not stopped after runner cleanup")
+	}
+}
+
+func TestWorkerRetainsRuntimeAfterBothStopDeadlinesUntilStopped(t *testing.T) {
+	w, err := newTestWorker(platform.Config{Component: platform.ComponentWorker, Version: "test", ShutdownTimeout: 20 * time.Millisecond, WorkerGeneration: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, stopped := make(chan struct{}), make(chan struct{})
+	var generation *platform.GenerationController
+	var attempts atomic.Int32
+	r := &fakeRuntime{
+		start: func(_ context.Context, gen *platform.GenerationController, _ *platform.Lifecycle) error {
+			generation = gen
+			close(started)
+			return nil
+		},
+		stop: func(ctx context.Context) error {
+			attempts.Add(1)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+		wait: func(ctx context.Context) error {
+			select {
+			case <-stopped:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	w.openRuntime = fakeFactory(r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Run error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not return its shutdown timeout")
+	}
+	retained := !r.closed.Load() && generation.Context().Err() == nil && w.Lifecycle().State == platform.StateDraining && !w.Lifecycle().Ready
+	close(stopped)
+	deadline := time.Now().Add(time.Second)
+	for w.Lifecycle().State != platform.StateStopped && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !retained {
+		t.Fatal("runtime or generation was released before the runner stopped")
+	}
+	if attempts.Load() != 2 || !r.closed.Load() || generation.Context().Err() == nil || w.Lifecycle().State != platform.StateStopped {
+		t.Fatal("retained runtime was not released after the runner stopped")
 	}
 }

@@ -1,10 +1,59 @@
 package platform
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestWorkerGenerationMatchesDurableSignedRange(t *testing.T) {
+	for _, value := range []uint64{1, math.MaxInt64, math.MaxInt64 + 1, math.MaxUint64} {
+		env := map[string]string{
+			"LOOMHELM_DATABASE_URL":      "postgres://test@localhost/loomhelm",
+			"LOOMHELM_WORKER_GENERATION": strconv.FormatUint(value, 10),
+		}
+		_, err := LoadConfigWithLookup(ComponentWorker, envLookup(env))
+		if (err == nil) != (value <= math.MaxInt64) {
+			t.Fatalf("generation=%d: LoadConfig error = %v", value, err)
+		}
+		cfg := Config{Component: ComponentWorker, Version: "test", ShutdownTimeout: time.Second, DatabaseURL: env["LOOMHELM_DATABASE_URL"], WorkerGeneration: value}
+		if err := cfg.Validate(); (err == nil) != (value <= math.MaxInt64) {
+			t.Fatalf("generation=%d: Validate error = %v", value, err)
+		}
+	}
+}
+
+func TestDevelopmentDatabasePortMustMatchBeforeConnection(t *testing.T) {
+	for _, test := range []struct {
+		name, url, port string
+		valid           bool
+	}{
+		{"deployment without Compose", "postgres://test@db.example.test:5433/loomhelm", "", true},
+		{"matched URL", "postgres://test@127.0.0.1:55441/loomhelm", "55441", true},
+		{"matched keyword DSN", "host=127.0.0.1 port=55442 dbname=loomhelm user=test", "55442", true},
+		{"stale copied URL", "postgres://test@127.0.0.1:55432/loomhelm", "55441", false},
+		{"zero port", "postgres://test@127.0.0.1/loomhelm", "0", false},
+		{"port out of range", "postgres://test@127.0.0.1/loomhelm", "65536", false},
+		{"invalid port", "postgres://test@127.0.0.1/loomhelm", "other", false},
+		{"invalid URL with secret", "postgres://user:secret-dsn@localhost:invalid/db", "55441", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateDevelopmentDatabaseTarget(test.url, test.port); (err == nil) != test.valid || (err != nil && strings.Contains(err.Error(), "secret-dsn")) {
+				t.Fatalf("ValidateDevelopmentDatabaseTarget error = %v", err)
+			}
+			for _, component := range []Component{ComponentServer, ComponentWorker} {
+				_, err := LoadConfigWithLookup(component, envLookup(map[string]string{
+					"LOOMHELM_DATABASE_URL": test.url, "LOOMHELM_POSTGRES_PORT": test.port, "LOOMHELM_DRAIN_TOKEN": "token",
+				}))
+				if (err == nil) != test.valid {
+					t.Fatalf("%s LoadConfig error = %v", component, err)
+				}
+			}
+		})
+	}
+}
 
 func TestLoadConfigValidatesComponentSpecificValues(t *testing.T) {
 	lookup := envLookup(map[string]string{
@@ -61,6 +110,7 @@ func TestDatabaseConfigurationBoundaries(t *testing.T) {
 		"LOOMHELM_CONNECTOR_SERVER_URL": "https://platform.example.test",
 		"LOOMHELM_DATABASE_URL":         "invalid", "LOOMHELM_DATABASE_MAX_CONNS": "invalid",
 		"LOOMHELM_STARTUP_TIMEOUT": "invalid",
+		"LOOMHELM_POSTGRES_PORT":   "invalid",
 	}))
 	if err != nil || connector.DatabaseURL != "" {
 		t.Fatalf("connector consumed database configuration: %v", err)

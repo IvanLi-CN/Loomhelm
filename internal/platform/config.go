@@ -2,6 +2,7 @@ package platform
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -67,6 +68,9 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 			return Config{}, err
 		}
 		config.DatabaseURL = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_DATABASE_URL", ""))
+		if err := ValidateDevelopmentDatabaseTarget(config.DatabaseURL, lookupOrDefault(lookup, "LOOMHELM_POSTGRES_PORT", "")); err != nil {
+			return Config{}, err
+		}
 		config.DatabaseMinConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MIN_CONNS", 0)
 		if err != nil {
 			return Config{}, err
@@ -129,6 +133,9 @@ func (c Config) Validate() error {
 		if c.WorkerGeneration == 0 {
 			return fmt.Errorf("worker generation must be greater than zero")
 		}
+		if c.WorkerGeneration > math.MaxInt64 {
+			return fmt.Errorf("worker generation must not exceed %d", int64(math.MaxInt64))
+		}
 	case ComponentConnector:
 		if err := validateServerURL(c.ConnectorServerURL); err != nil {
 			return fmt.Errorf("invalid connector server URL: %w", err)
@@ -151,6 +158,27 @@ func (c Config) Validate() error {
 		if c.StartupTimeout < 0 {
 			return fmt.Errorf("startup timeout must not be negative")
 		}
+	}
+	return nil
+}
+
+// ValidateDevelopmentDatabaseTarget keeps an explicitly selected development
+// port aligned with the application connection before any database is opened.
+// Deployments that do not use the development Compose port leave it unset.
+func ValidateDevelopmentDatabaseTarget(databaseURL, postgresPort string) error {
+	if postgresPort == "" {
+		return nil
+	}
+	port, err := strconv.ParseUint(strings.TrimSpace(postgresPort), 10, 16)
+	if err != nil || port == 0 {
+		return fmt.Errorf("LOOMHELM_POSTGRES_PORT must be an integer from 1 to 65535")
+	}
+	parsed, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid LOOMHELM_DATABASE_URL")
+	}
+	if parsed.ConnConfig.Port != uint16(port) {
+		return fmt.Errorf("LOOMHELM_DATABASE_URL port must match LOOMHELM_POSTGRES_PORT; update and export both from the same worktree environment")
 	}
 	return nil
 }
@@ -209,6 +237,9 @@ func uint64FromEnv(lookup func(string) (string, bool), key string, fallback uint
 			return 0, fmt.Errorf("invalid %s %q: expected a positive integer", key, raw)
 		}
 		return 0, fmt.Errorf("%s must be greater than zero", key)
+	}
+	if value > math.MaxInt64 {
+		return 0, fmt.Errorf("%s must not exceed %d", key, int64(math.MaxInt64))
 	}
 	return value, nil
 }
