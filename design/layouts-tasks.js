@@ -41,10 +41,12 @@ export function renderTasks({
   scope = "global",
   query = "",
   status = "全部状态",
+  relationsLimited = false,
   icon,
   esc
 } = {}) {
   const visibleTasks = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+  // Callers must provide only authorized tasks and authorized relation endpoints.
   const completeTasks = Array.isArray(allTasks) ? allTasks.filter(Boolean) : visibleTasks;
   const escape = typeof esc === "function" ? esc : localEscape;
   const renderIcon = name => typeof icon === "function" ? icon(name) : "";
@@ -226,7 +228,8 @@ export function renderTasks({
       const parent = nodeById.get(valueText(node.task.parentId));
       if (parent) {
         hierarchyEdges.push(connector(parent, node, "hierarchy"));
-      } else if (!valueText(node.task.parentId)) {
+      }
+      if (!parent || valueText(parent.task.project) !== valueText(node.task.project)) {
         const projectNode = projectByGraphId.get(valueText(node.task.project, "unassigned"));
         if (projectNode) hierarchyEdges.push(connector(projectNode, node, "hierarchy"));
       }
@@ -244,17 +247,22 @@ export function renderTasks({
     const graphNodes = [...nodeById.values()].map(node => {
       const task = node.task;
       const external = !visibleIds.has(taskId(task));
+      const outsideProject = scope !== "global" && valueText(task.project) !== valueText(scope);
+      const outsideLabel = outsideProject ? "外部关联" : external ? "筛选外关联" : "";
       const dependencyCount = relationIds(task.dependsOn).length;
-      const relationText = valueText(task.parentId) ? `上级任务 ${task.parentId}` : "无上级任务";
-      const dependencyText = dependencyCount ? `前置依赖 ${dependencyCount} 项` : "无前置依赖";
-      const label = `${taskId(task)}，${taskTitle(task)}，项目 ${projectName(task.project)}，业务状态 ${taskState(task)}，执行状态 ${taskExecution(task)}，${relationText}，${dependencyText}${external ? "，筛选外的关联任务" : ""}`;
-      return `<button type="button" class="button quiet task-graph-node${external ? " task-graph-node-external" : ""}" data-open-task="${escape(taskId(task))}" style="left:${node.x}px;top:${node.y}px;width:${node.width}px;min-height:${node.height}px" aria-label="${escape(label)}"><span class="task-graph-node-kicker"><span class="task-id">${escape(taskId(task))}</span><span>${escape(taskState(task))}</span></span><strong class="task-graph-node-title">${escape(taskTitle(task))}</strong><span class="task-graph-node-project">${escape(projectName(task.project))}</span><span class="meta">执行：${escape(taskExecution(task))}</span></button>`;
+      const relationText = valueText(task.parentId) ? `上级任务 ${task.parentId}` : relationsLimited ? "未显示上级任务" : "无上级任务";
+      const dependencyText = dependencyCount ? `前置依赖 ${dependencyCount} 项` : relationsLimited ? "未显示前置依赖" : "无前置依赖";
+      const label = `${taskId(task)}，${taskTitle(task)}，项目 ${projectName(task.project)}，业务状态 ${taskState(task)}，执行状态 ${taskExecution(task)}，${relationText}，${dependencyText}${outsideLabel ? `，${outsideLabel}` : ""}`;
+      return `<button type="button" class="button quiet task-graph-node${external ? " task-graph-node-external" : ""}" data-open-task="${escape(taskId(task))}" style="left:${node.x}px;top:${node.y}px;width:${node.width}px;min-height:${node.height}px" aria-label="${escape(label)}"><span class="task-graph-node-kicker"><span class="task-id">${escape(taskId(task))}</span><span>${escape(taskState(task))}</span></span><strong class="task-graph-node-title">${escape(taskTitle(task))}</strong><span class="task-graph-node-project">${escape(projectName(task.project))}${outsideLabel ? ` · ${outsideLabel}` : ""}</span><span class="meta">执行：${escape(taskExecution(task))}</span></button>`;
     }).join("");
 
     const projectMarkup = projectNodes.map(node => `<div class="task-graph-project-node" style="left:${node.x}px;top:${node.y}px;width:${node.width}px;min-height:${node.height}px" role="group" aria-label="项目 ${escape(node.name)}"><span class="meta">项目</span><strong>${escape(node.name)}</strong></div>`).join("");
     const nodeList = graphTasks.map(task => `<li>${openTaskButton(task, "task-graph-list-link", `<span class="task-id">${escape(taskId(task))}</span><strong>${escape(taskTitle(task))}</strong><span class="meta">${escape(projectName(task.project))} · ${escape(taskState(task))} · 执行：${escape(taskExecution(task))}</span>`)}</li>`).join("");
 
-    return `<section class="task-graph-view" aria-label="${escape(scopeName)}任务关系图谱"><div class="task-graph-header"><div class="task-graph-legend" aria-label="关系图例"><span class="task-legend-item"><span class="task-legend-swatch task-legend-hierarchy" aria-hidden="true"></span>项目／父子层级</span><span class="task-legend-item"><span class="task-legend-swatch task-legend-dependency" aria-hidden="true"></span>前置任务 → 后续任务</span></div><div class="task-graph-zoom-controls" role="group" aria-label="图谱缩放"><button type="button" class="button quiet task-zoom-button" data-task-zoom="out" aria-label="缩小图谱">${renderIcon("minus")}</button><button type="button" class="button quiet task-zoom-button" data-task-zoom="in" aria-label="放大图谱">${renderIcon("plus")}</button><button type="button" class="button quiet task-zoom-reset" data-task-zoom="reset">重置</button></div></div><p class="task-sr-only">实线表示项目与父子任务的层级关系；虚线箭头从前置任务指向后续任务。图谱仅用于查看，节点不可拖动。</p><div class="task-graph-viewport" role="region" aria-label="任务关系图谱，可横向和纵向浏览"><div class="task-graph-stage" style="width:${stageWidth}px;height:${stageHeight}px"><svg class="task-graph-connectors" width="${stageWidth}" height="${stageHeight}" viewBox="0 0 ${stageWidth} ${stageHeight}" aria-hidden="true" focusable="false"><defs><marker id="${markerId}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="task-graph-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>${hierarchyEdges.join("")}${dependencyEdges.join("")}</svg>${projectMarkup}${graphNodes}</div></div><nav class="task-graph-node-list" aria-label="图谱任务节点"><h2>节点列表</h2><ol>${nodeList}</ol></nav></section>`;
+    const externalCount = scope === "global" ? 0 : graphTasks.filter(task => valueText(task.project) !== valueText(scope)).length;
+    const filteredCount = graphTasks.filter(task => !visibleIds.has(taskId(task)) && (scope === "global" || valueText(task.project) === valueText(scope))).length;
+    const scopeSummary = `${scope === "global" ? "当前范围" : scopeName} · ${visibleTasks.length} 项任务${externalCount ? ` · 外部关联 ${externalCount} 项` : ""}${filteredCount ? ` · 筛选外关联 ${filteredCount} 项` : ""}`;
+    return `<section class="task-graph-view" aria-label="${escape(scopeName)}任务关系图谱"><p class="task-graph-scope">${escape(scopeSummary)}</p><div class="task-graph-header"><div class="task-graph-legend" aria-label="关系图例"><span class="task-legend-item"><span class="task-legend-swatch task-legend-hierarchy" aria-hidden="true"></span>项目／父子层级</span><span class="task-legend-item"><span class="task-legend-swatch task-legend-dependency" aria-hidden="true"></span>前置任务 → 后续任务</span></div><div class="task-graph-zoom-controls" role="group" aria-label="图谱缩放"><button type="button" class="button quiet task-zoom-button" data-task-zoom="out" aria-label="缩小图谱">${renderIcon("minus")}</button><button type="button" class="button quiet task-zoom-button" data-task-zoom="in" aria-label="放大图谱">${renderIcon("plus")}</button><button type="button" class="button quiet task-zoom-reset" data-task-zoom="reset">重置</button></div></div><p class="task-sr-only">实线表示项目与父子任务的层级关系；虚线箭头从前置任务指向后续任务。图谱仅用于查看，节点不可拖动。</p><div class="task-graph-viewport" role="region" aria-label="任务关系图谱，可横向和纵向浏览"><div class="task-graph-stage" style="width:${stageWidth}px;height:${stageHeight}px"><svg class="task-graph-connectors" width="${stageWidth}" height="${stageHeight}" viewBox="0 0 ${stageWidth} ${stageHeight}" aria-hidden="true" focusable="false"><defs><marker id="${markerId}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="task-graph-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>${hierarchyEdges.join("")}${dependencyEdges.join("")}</svg>${projectMarkup}${graphNodes}</div></div><nav class="task-graph-node-list" aria-label="图谱任务节点"><h2>节点列表</h2><ol>${nodeList}</ol></nav></section>`;
   };
 
   if (view === "board") return renderBoard();
