@@ -15,9 +15,9 @@ function AppShell() {
     <div className="min-h-screen bg-slate-50 text-slate-950">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-6 px-5 py-4 sm:px-8">
-          <Link className="text-sm font-semibold tracking-wide text-slate-950" to="/">
+          <a className="text-sm font-semibold tracking-wide text-slate-950" href="/">
             Loomhelm / web foundation
-          </Link>
+          </a>
           <nav aria-label="Technical routes" className="flex items-center gap-1 text-sm">
             <Link
               activeProps={{ className: "bg-slate-100 text-slate-950" }}
