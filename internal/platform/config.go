@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Component string
@@ -24,6 +26,10 @@ type Config struct {
 	HTTPAddr           string
 	DrainToken         string
 	ShutdownTimeout    time.Duration
+	StartupTimeout     time.Duration
+	DatabaseURL        string
+	DatabaseMinConns   int32
+	DatabaseMaxConns   int32
 	WorkerGeneration   uint64
 	ConnectorServerURL string
 }
@@ -54,6 +60,21 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		Component:       component,
 		Version:         strings.TrimSpace(version),
 		ShutdownTimeout: shutdownTimeout,
+	}
+	if component != ComponentConnector {
+		config.StartupTimeout, err = durationFromEnv(lookup, "LOOMHELM_STARTUP_TIMEOUT", 30*time.Second)
+		if err != nil {
+			return Config{}, err
+		}
+		config.DatabaseURL = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_DATABASE_URL", ""))
+		config.DatabaseMinConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MIN_CONNS", 0)
+		if err != nil {
+			return Config{}, err
+		}
+		config.DatabaseMaxConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MAX_CONNS", 4)
+		if err != nil {
+			return Config{}, err
+		}
 	}
 
 	switch component {
@@ -113,7 +134,42 @@ func (c Config) Validate() error {
 			return fmt.Errorf("invalid connector server URL: %w", err)
 		}
 	}
+	if c.Component != ComponentConnector {
+		if strings.TrimSpace(c.DatabaseURL) == "" {
+			return fmt.Errorf("LOOMHELM_DATABASE_URL must not be empty")
+		}
+		// Parse errors can include credentials from a URL or keyword DSN.
+		if _, err := pgxpool.ParseConfig(c.DatabaseURL); err != nil {
+			return fmt.Errorf("invalid LOOMHELM_DATABASE_URL")
+		}
+		if c.DatabaseMinConns < 0 || c.DatabaseMaxConns < 0 {
+			return fmt.Errorf("database pool sizes must not be negative")
+		}
+		if c.DatabaseMaxConns > 0 && c.DatabaseMinConns > c.DatabaseMaxConns {
+			return fmt.Errorf("database minimum connections must not exceed maximum connections")
+		}
+		if c.StartupTimeout < 0 {
+			return fmt.Errorf("startup timeout must not be negative")
+		}
+	}
 	return nil
+}
+
+// StartupBudget supplies the same default for environment and programmatic callers.
+func (c Config) StartupBudget() time.Duration {
+	if c.StartupTimeout == 0 {
+		return 30 * time.Second
+	}
+	return c.StartupTimeout
+}
+
+func poolSizeFromEnv(lookup func(string) (string, bool), key string, fallback int32) (int32, error) {
+	raw := lookupOrDefault(lookup, key, strconv.FormatInt(int64(fallback), 10))
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%s must be a nonnegative 32-bit integer", key)
+	}
+	return int32(value), nil
 }
 
 func isKnownComponent(component Component) bool {

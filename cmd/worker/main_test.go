@@ -27,6 +27,10 @@ func TestWorkerEntrypointExitsOnSignal(t *testing.T) {
 
 func runWorkerSignalTest(t *testing.T, signal os.Signal) {
 	t.Helper()
+	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("real process integration requires LOOMHELM_DATABASE_URL")
+	}
 	binary := buildWorkerEntrypoint(t)
 	logPath := filepath.Join(t.TempDir(), "worker.log")
 	logFile, err := os.Create(logPath)
@@ -39,6 +43,7 @@ func runWorkerSignalTest(t *testing.T, signal os.Signal) {
 	command.Env = commandEnv(map[string]string{
 		"LOOMHELM_VERSION":           "test",
 		"LOOMHELM_WORKER_GENERATION": "9",
+		"LOOMHELM_DATABASE_URL":      databaseURL,
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -59,6 +64,17 @@ func runWorkerSignalTest(t *testing.T, signal os.Signal) {
 		t.Fatalf("worker exit error = %v", err)
 	}
 	assertLogContains(t, logPath, "worker started", "worker stopped")
+}
+
+func TestWorkerEntrypointRejectsMissingDatabase(t *testing.T) {
+	binary := buildWorkerEntrypoint(t)
+	command := exec.Command(binary)
+	command.Env = commandEnv(nil)
+	output, err := command.CombinedOutput()
+	assertExitCode(t, err, 2)
+	if !strings.Contains(string(output), "LOOMHELM_DATABASE_URL") {
+		t.Fatalf("missing database configuration output = %q", output)
+	}
 }
 
 func TestWorkerEntrypointRejectsInvalidConfiguration(t *testing.T) {

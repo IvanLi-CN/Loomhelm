@@ -42,6 +42,12 @@ The canonical three-image set was refreshed from this repaired source: a 1280x90
 
 Source `724107721164d60b23e7a75f21991ec659a81806` limits Runtime navigation to an exact root-route match, correcting prefix-active behavior on `/status`. Its one-line router change passed targeted TypeScript and browser checks: only Runtime is current on `/`, only Status is current on `/status`, and the brand anchor returns home. Unaffected VM build, service-worker activation/failure and isolated Storybook observations are retained without claiming a new full build. The desktop and mobile page assets were refreshed from actual current-source captures at 1280x861 and 393x852, with trim-only normalization; their exact-path comparisons against the same parent baseline remain current-only. The isolated component asset is unchanged because this router option does not affect its source. These observations and images cover the neutral foundation only.
 
+## Persistence Foundation
+
+The persistence foundation pins pgx v5.11.0, Goose v3.28.0, River v0.49.0 and sqlc v1.31.1. Parent preparation commit `f3f065f5274a718e18c5b04bcf250de47293f44b` records module dependencies and official database-tool release URLs and SHA256 values. Application composition adds required database configuration for Server/Worker, leaving Connector configuration independent. This extends an undeployed engineering skeleton; it does not promise compatibility with an existing production installation.
+
+The platform application migration and River queue migrations use separate histories under a common startup serialization boundary. Platform short-job results are durable infrastructure state, distinct from task business status or a Codex Run. Focused application tests use resource factories to check failure, readiness and shutdown ordering; real PostgreSQL, process restart and complete candidate observations remain separate gates. No migration rollback, cross-process Worker fencing or production release is established by this foundation.
+
 ## References
 
 - [Requirements](SPEC.md)

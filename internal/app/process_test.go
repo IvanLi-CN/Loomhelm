@@ -9,7 +9,7 @@ import (
 )
 
 func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
-	worker, err := NewWorker(platform.Config{
+	worker, err := newTestWorker(platform.Config{
 		Component:        platform.ComponentWorker,
 		Version:          "test",
 		ShutdownTimeout:  time.Second,
@@ -108,7 +108,7 @@ func TestConnectorRejectsSecondRunWithoutStoppingActiveProcess(t *testing.T) {
 }
 
 func TestWorkerRejectsSecondRunWithoutReplacingGeneration(t *testing.T) {
-	worker, err := NewWorker(platform.Config{
+	worker, err := newTestWorker(platform.Config{
 		Component:        platform.ComponentWorker,
 		Version:          "test",
 		ShutdownTimeout:  time.Second,

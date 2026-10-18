@@ -12,6 +12,7 @@ func TestLoadConfigValidatesComponentSpecificValues(t *testing.T) {
 		"LOOMHELM_HTTP_ADDR":        "127.0.0.1:0",
 		"LOOMHELM_DRAIN_TOKEN":      "test-token",
 		"LOOMHELM_SHUTDOWN_TIMEOUT": "250ms",
+		"LOOMHELM_DATABASE_URL":     "postgres://test@localhost/loomhelm",
 	})
 
 	config, err := LoadConfigWithLookup(ComponentServer, lookup)
@@ -20,6 +21,49 @@ func TestLoadConfigValidatesComponentSpecificValues(t *testing.T) {
 	}
 	if config.Version != "test-version" || config.HTTPAddr != "127.0.0.1:0" || config.DrainToken != "test-token" || config.ShutdownTimeout != 250*time.Millisecond {
 		t.Fatalf("unexpected config: %+v", config)
+	}
+}
+
+func TestDatabaseConfigurationBoundaries(t *testing.T) {
+	for _, component := range []Component{ComponentServer, ComponentWorker} {
+		t.Run(string(component), func(t *testing.T) {
+			base := map[string]string{"LOOMHELM_DRAIN_TOKEN": "test-token"}
+			if _, err := LoadConfigWithLookup(component, envLookup(base)); err == nil || !strings.Contains(err.Error(), "LOOMHELM_DATABASE_URL") {
+				t.Fatalf("missing database URL error = %v", err)
+			}
+			base["LOOMHELM_DATABASE_URL"] = "postgres://test@localhost/loomhelm"
+			cfg, err := LoadConfigWithLookup(component, envLookup(base))
+			if err != nil || cfg.DatabaseMaxConns != 4 || cfg.DatabaseMinConns != 0 || cfg.StartupBudget() != 30*time.Second {
+				t.Fatalf("default database configuration error = %v", err)
+			}
+			for _, test := range []struct{ key, value, want string }{
+				{"LOOMHELM_DATABASE_URL", "postgres://user:secret-dsn@localhost:invalid/db", "invalid LOOMHELM_DATABASE_URL"},
+				{"LOOMHELM_DATABASE_MIN_CONNS", "-1", "LOOMHELM_DATABASE_MIN_CONNS"},
+				{"LOOMHELM_DATABASE_MAX_CONNS", "2147483648", "LOOMHELM_DATABASE_MAX_CONNS"},
+				{"LOOMHELM_DATABASE_MIN_CONNS", "5", "minimum connections"},
+				{"LOOMHELM_STARTUP_TIMEOUT", "0s", "LOOMHELM_STARTUP_TIMEOUT"},
+			} {
+				original, exists := base[test.key]
+				base[test.key] = test.value
+				_, err := LoadConfigWithLookup(component, envLookup(base))
+				if err == nil || !strings.Contains(err.Error(), test.want) || strings.Contains(err.Error(), "secret-dsn") {
+					t.Fatalf("%s error = %v", test.key, err)
+				}
+				if exists {
+					base[test.key] = original
+				} else {
+					delete(base, test.key)
+				}
+			}
+		})
+	}
+	connector, err := LoadConfigWithLookup(ComponentConnector, envLookup(map[string]string{
+		"LOOMHELM_CONNECTOR_SERVER_URL": "https://platform.example.test",
+		"LOOMHELM_DATABASE_URL":         "invalid", "LOOMHELM_DATABASE_MAX_CONNS": "invalid",
+		"LOOMHELM_STARTUP_TIMEOUT": "invalid",
+	}))
+	if err != nil || connector.DatabaseURL != "" {
+		t.Fatalf("connector consumed database configuration: %v", err)
 	}
 }
 
