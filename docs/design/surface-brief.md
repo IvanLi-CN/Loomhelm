@@ -1,6 +1,22 @@
 # Loomhelm UI design surfaces
 
-## Current Review: UI Design Language
+## Current Review: Major Layouts and UX
+
+The owner accepted the displayed standalone UI language board and asked to retain the language, desktop/mobile layout examples, style-selection material and UX in subsequent commits. The exact four reviewed board images are now canonical evidence. This acceptance covers the language board, not the complete UI or production implementation.
+
+The next surface is `design/layouts.html`: an Operate-mode synthetic application inside a small Read-mode review strip. It applies the accepted D palette, typography, shapes and authored controls to the workbench, task list/board/graph, project context and conversation workspace. Desktop uses a persistent navigation tree and adjacent information; mobile uses a navigation drawer and task-local panels with the same capabilities. The review strip keeps fixture selection outside product flows. `UX.md` and `HANDOFF.md` capture journeys, responsive decisions, state behavior and integration dependencies. No real backend, PWA installation or existing desktop-session control is claimed.
+
+THESIS: An efficient working desk where attention, full request context and ongoing conversations stay close. OWN-WORLD: The accepted D glass language, with translucent structural chrome and nearly opaque reading planes. FIRST VIEWPORT: A persistent project/conversation tree, intervention list and complete selected request; mobile keeps request details in reading order. FORM: Direct code extension of the accepted language. SIGNATURE: The selected review plane changes without losing queue or conversation context. FINISH: Bounded batched inspection, independent finish review, verdict and synchronized design documentation precede owner review.
+
+The major-layout source includes workbench, global/project task list/board/graph, project conversation lists, all conversations, task-bound and standalone conversation workspaces, creation and fixed binding. The review strip offers paired themes and synthetic state fixtures; `?canvas=1` hides that strip for deterministic application-layout captures. It does not change the application composition. The accepted language board and prior style-selection source are preserved.
+
+The final bounded capture batch covers desktop 1440×1000 and mobile 393×852: workbench and conversation workspace in both themes, task list/board/graph on desktop and mobile, mobile information and navigation. Additional 320/768/1024 width checks found no document overflow. Twenty-five targeted synthetic checks cover preserved mobile draft/branch context, composer bounds, theme changes, independent interruption state, offline control disabling, recovery without sending, stale approvals, approval-versus-execution feedback, view persistence, graph zoom/edge semantics, menu focus return, history-sharing consent, stable conversation identity and taskless project conversation creation. Follow-up checks confirm the All Conversations list includes projectless entries, the synthetic update keeps the draft without sending and System theme responds to both media values. Initial mobile composer and graph SVG dimension defects were corrected in the combined fix batch; task rows were compacted. These checks do not prove real multi-client ordering, permission filtering, execution, installation or update compatibility.
+
+Current layout evidence is temporary until owner review. The selected owner-facing set is workbench desktop light, workspace desktop dark, workbench mobile dark and workspace mobile light; other captured task and mobile-panel states support inspection. Trim-only normalization leaves the selected four viewport bounds unchanged. These exact four candidates have been shown through immutable chat snapshots. Visual evidence status: Storybook覆盖=不适用（standalone page demo）; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=无需裁剪; 聊天回图=已展示; 证据落盘=未落盘; 视觉比较=需确认. Complete UI approval and production implementation remain outside this slice.
+
+The independent finish review retained the page composition and requested four corrections: synchronize the handoff's actual inspection status, distinguish the projectless navigation label from its project property, expose the target project before binding consent and remove an undefined font declaration. The combined correction preserves the accepted language; binding now shows project, task identity and history-sharing scope before consent, with an unavailable picker when no eligible task exists. The same sixteen captures were refreshed, with two additional focused desktop/mobile binding captures. The verdict scored all four findings resolved, reported no fix regression and returned `disposition: ship` for that correction list. The selected four owner-facing images are byte-identical across this correction; their exact intended paths have no baseline at locked base `a506804ae42da75749d62aac901c8864cd1de96c`, so comparison remains current-only without a two-sided report or heatmap. The complete UI still requires owner review.
+
+## Accepted UI Design Language
 
 The owner clarified that the requested deliverable is the UI design language itself. Applying the chosen material to an interactive task/workbench prototype did not satisfy this review. The current review surface is `design/ui-language.html`, a standalone Read-mode visual language board; the task prototype remains structural reference. The selected D material and paired light/dark direction remain binding. Neither the previous page candidates nor the complete UI are approved.
 
@@ -12,7 +28,7 @@ The board was checked at desktop 1440×1000 and mobile 393×852 CSS pixels in bo
 
 The independent reviewer requested two material corrections: lower-opacity dark-theme material glow and a document outline that gives the two foundation specimens equal heading rank under an explicit section heading. The verdict pass scored both findings resolved and returned `disposition: ship` at the language-board scope. All four whole-page and four menu captures were refreshed after that correction; this verdict does not approve the complete product UI.
 
-The four current whole-page candidates cover desktop/mobile and light/dark. Trim-only normalization removed excess horizontal whitespace from desktop captures and preserved mobile bounds. Their exact intended evidence destinations have no baseline at the locked base, so the comparison is current-only, without a two-sided report or heatmap. Visual evidence status: Storybook覆盖=不适用（standalone design board）; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=通过; 聊天回图=待展示; 证据落盘=未落盘; 视觉比较=需确认. Candidates remain outside canonical evidence until the owner reviews the displayed set. Existing accepted navigation and style assets are unchanged.
+The four accepted whole-page images cover desktop/mobile and light/dark. Trim-only normalization removed excess horizontal whitespace from desktop captures and preserved mobile bounds. Their exact evidence destinations have no baseline at the locked base, so the comparison is current-only, without a two-sided report or heatmap. Visual evidence status: Storybook覆盖=不适用（standalone design board）; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=桌面已裁剪／手机无需裁剪; 聊天回图=已展示; 证据落盘=已落盘; 视觉比较=需确认（owner confirmation received for the displayed set）. Exact reviewed bytes are retained as `design/evidence/ui-language-{desktop,mobile}-{light,dark}.png`. Existing accepted navigation and style assets are unchanged.
 
 ## Prototype Background: Scope and Mode
 
@@ -140,3 +156,13 @@ The owner also accepted these D, Glass / Layered, style specimens. They were cap
 ![Accepted glass style, mobile light](../../design/evidence/glass-theme-mobile-light.png)
 
 ![Accepted glass style, mobile dark](../../design/evidence/glass-theme-mobile-dark.png)
+
+The owner accepted the following standalone UI language board as displayed, with all four exact normalized images retained. These images establish material roles, typography, semantic colors and authored component vocabulary at desktop 1440×1000 and mobile 393×852 CSS pixels. They are separate from the subsequent major-layout review.
+
+![Accepted UI language, desktop light](../../design/evidence/ui-language-desktop-light.png)
+
+![Accepted UI language, desktop dark](../../design/evidence/ui-language-desktop-dark.png)
+
+![Accepted UI language, mobile light](../../design/evidence/ui-language-mobile-light.png)
+
+![Accepted UI language, mobile dark](../../design/evidence/ui-language-mobile-dark.png)
