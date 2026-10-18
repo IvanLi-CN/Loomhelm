@@ -138,6 +138,33 @@
     body[data-single] .intro a { display: none; }
     body[data-single] .gallery { display: block; }
     body[data-single] .study-heading a { display: none; }
+    body { --review-ground: #f5f5f4; --review-ink: #222429; --review-muted: #62646a; --review-line: #d9d9d7; background: var(--review-ground); color: var(--review-ink); min-height: 100dvh; }
+    body[data-theme="dark"] { color-scheme: dark; --review-ground: #151923; --review-ink: #f1f3f8; --review-muted: #b0b8c9; --review-line: #3c4353; }
+    .intro p, .intro a, .study-heading a, .study-note, .page-footer { color: var(--review-muted); }
+    .study-note b { color: var(--review-ink); }
+    .page-footer { border-color: var(--review-line); }
+    .theme-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin: 0 0 24px; }
+    .theme-buttons { display: inline-flex; padding: 4px; gap: 4px; border: 1px solid var(--review-line); border-radius: 10px; }
+    .theme-buttons button { border: 0; background: transparent; color: var(--review-muted); padding: 10px 14px; min-height: 44px; border-radius: 6px; font-size: 13px; }
+    body[data-theme="dark"] .theme-buttons button:focus-visible { outline-color: #d1e2ff; }
+    .theme-buttons button[aria-pressed="true"] { background: var(--review-ink); color: var(--review-ground); }
+    .theme-buttons button:hover:not([aria-pressed="true"]) { background: var(--review-line); color: var(--review-ink); }
+    .theme-status { color: var(--review-muted); font-size: 12px; }
+    body[data-theme="light"] .glass { color-scheme: light; --ground: #c9d6e6; --ink: #20314b; --muted: #52637a; --line: #7e8fa747; --accent: #305ac7; --accent-ink: #fff; --selection: #cad6e5; --success: #285f4c; --warning: #895211; }
+    body[data-theme="light"] .glass::before { background: #9db3cf; }
+    body[data-theme="light"] .glass::after { background: #aabace; }
+    body[data-theme="light"] .glass .sample-top { background: #ffffff45; border-color: #ffffff70; }
+    body[data-theme="light"] .glass .sample-body { background: #f6f9ffdb; border-color: #ffffffa6; box-shadow: 0 10px 24px #344e7321; }
+    body[data-theme="light"] .glass .spec-tabs { background: #d9e2ef8c; border-color: #b1bfd14a; }
+    body[data-theme="light"] .glass .spec-tabs button[aria-pressed="true"] { color: #243c60; background: #ffffffb3; box-shadow: inset 0 1px 0 #fff, 0 2px 4px #344e7314; }
+    body[data-theme="light"] .glass .badge { background: #f7ead5; }
+    body[data-theme="light"] .glass .badge.success { background: #ddede7; }
+    body[data-theme="light"] .glass .input-wrap input { background: #edf2f97a; border-color: #9aa8bd; }
+    body[data-theme="light"] .glass .sample-actions button { background: #ffffff80; border-color: #9aa8bd; }
+    body[data-theme="light"] .glass .sample-actions button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+    body[data-theme="light"] .glass .sample-actions button:disabled { color: #5d6f86; background: #dce4ef8f; border-color: transparent; }
+    body[data-theme="light"] .glass .sample-check { border-color: #7184a1; background: #ffffff4d; }
+    body[data-theme="light"] .glass .sample-check.done { background: var(--accent); border-color: var(--accent); }
     @media (max-width: 800px) { .page { padding: 28px 20px; } .gallery { grid-template-columns: minmax(0, 1fr); gap: 32px; } h1 { font-size: 28px; } .intro { display: block; margin-bottom: 24px; } .intro a { margin-top: 10px; } .page-footer { display: block; } .page-footer a { display: inline-flex; margin-top: 12px; } }
     @media (max-width: 440px) { .page, body[data-single] .page { padding: 24px 16px; } .sample-top { padding: 20px; } .sample-body { padding: 0 20px 20px; } .type-sample h3 { font-size: 24px; } .type-glyph { font-size: 32px; } .sample-row { gap: 8px; } .sample-row .row-copy { font-size: 12px; } .sample-actions { gap: 8px; } .sample-actions button { min-height: 44px; padding: 10px 12px; } .input-wrap input { font-size: 16px; height: 44px; } .badge { font-size: 10px; } .glass .sample-body { margin: 12px; padding: 4px 12px 18px; } .study-heading h2 { font-size: 18px; } .specimen { min-height: 600px; } }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }
@@ -146,11 +173,12 @@
 <body>
   <main class="page">
     <header class="intro">
-      <div><h1>选择 UI 风格</h1><p>同一套组件，四种视觉语言。先选外观，再应用到已确认的原型。</p></div>
+      <div><h1 id="pageTitle">半透明材质</h1><p id="pageDescription">已选定 D。切换亮色和暗色，或跟随系统。</p></div>
       <a href="index.html?canvas=1">查看结构原型</a>
     </header>
+    <div class="theme-bar" id="themeBar"><div class="theme-buttons" role="group" aria-label="主题预览"><button type="button" data-theme-choice="system" aria-pressed="true">跟随系统</button><button type="button" data-theme-choice="light" aria-pressed="false">亮色</button><button type="button" data-theme-choice="dark" aria-pressed="false">暗色</button></div><span class="theme-status" id="themeStatus" role="status"></span></div>
     <div id="gallery" class="gallery" aria-label="四种 UI 视觉风格"></div>
-    <footer class="page-footer"><p>这里只比较字形、颜色、边界、圆角、材质与控件状态。示例文字与按钮仅用于展示样式；浅色／深色将在选定风格后成套细化。</p><a href="styles.html">查看全部四种风格</a></footer>
+    <footer class="page-footer"><p>示例文字与按钮仅用于展示样式。亮色和暗色共用同一套控件、信息层级与状态表达；主题选择会在此浏览器记住。</p><a id="comparisonLink" href="styles.html?compare=1">比较其他风格</a></footer>
   </main>
   <script>
     const icons = {
@@ -165,8 +193,38 @@
       { id: "bold", name: "C · 硬边几何", subtitle: "Neo-brutalist", colors: ["#2445cf", "#efdc66", "#f8f5e9", "#202020"], note: "<b>边界和操作一眼可见。</b>粗字重、直角、实色块、硬边投影，状态也带清晰轮廓。辨识度强；长时间使用的视觉存在感较高。" },
       { id: "glass", name: "D · 半透明材质", subtitle: "Glass / Layered", colors: ["#d1e2ff", "#2c3656", "#7299bf", "#f5f7ff"], note: "<b>用半透明面板表达前后关系。</b>磨砂分层、细高光、轻量字重、明亮操作按钮。材质感强；信息区需要足够不透明度保证阅读。" }
     ];
-    const single = new URLSearchParams(location.search).get("style");
+    const parameters = new URLSearchParams(location.search);
+    const single = parameters.has("compare") ? null : (studies.some(study => study.id === parameters.get("style")) ? parameters.get("style") : "glass");
     if (studies.some(study => study.id === single)) document.body.dataset.single = single;
+    if (single !== "glass") {
+      document.getElementById("pageTitle").textContent = "UI 风格对照";
+      document.getElementById("pageDescription").textContent = "已选定 D · 半透明材质。其他视觉语言保留供比较。";
+      document.getElementById("themeBar").hidden = true;
+      document.getElementById("comparisonLink").href = "styles.html";
+      document.getElementById("comparisonLink").textContent = "返回已选风格";
+    }
+    const themeKey = "loomhelm.design.styles.theme";
+    const systemTheme = matchMedia("(prefers-color-scheme: dark)");
+    const themeNames = {system: "跟随系统", light: "亮色", dark: "暗色"};
+    const glassPalettes = {light: ["#305ac7", "#c9d6e6", "#f6f9ff", "#20314b"], dark: ["#d1e2ff", "#2c3656", "#7299bf", "#f5f7ff"]};
+    let savedTheme = "system";
+    try { savedTheme = localStorage.getItem(themeKey) || "system"; } catch {}
+    let themeChoice = parameters.get("theme") || savedTheme;
+    if (!Object.hasOwn(themeNames, themeChoice)) themeChoice = "system";
+    const applyTheme = () => {
+      const actualTheme = themeChoice === "system" ? (systemTheme.matches ? "dark" : "light") : themeChoice;
+      document.body.dataset.theme = actualTheme;
+      document.getElementById("themeStatus").textContent = themeChoice === "system" ? `跟随系统 · 当前${themeNames[actualTheme]}` : `当前${themeNames[actualTheme]}`;
+      document.querySelectorAll("[data-theme-choice]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.themeChoice === themeChoice)));
+      document.querySelectorAll(".glass .palette span").forEach((swatch, index) => { swatch.style.setProperty("--swatch", glassPalettes[actualTheme][index]); swatch.title = glassPalettes[actualTheme][index]; });
+    };
+    document.querySelectorAll("[data-theme-choice]").forEach(button => button.addEventListener("click", () => {
+      themeChoice = button.dataset.themeChoice;
+      try { localStorage.setItem(themeKey, themeChoice); } catch {}
+      applyTheme();
+    }));
+    systemTheme.addEventListener("change", () => { if (themeChoice === "system") applyTheme(); });
+    applyTheme();
     const specimen = (study) => `<section class="specimen ${study.id}" aria-label="${study.name}组件样式">
       <div class="sample-top"><span class="wordmark">Loomhelm</span><div class="palette" aria-label="风格配色">${study.colors.map(color => `<span style="--swatch:${color}" title="${color}"></span>`).join("")}</div></div>
       <div class="sample-body">
@@ -182,6 +240,8 @@
       </div>
     </section>`;
     document.getElementById("gallery").innerHTML = studies.filter(study => !document.body.dataset.single || study.id === single).map(study => `<article class="study" id="${study.id}"><header class="study-heading"><h2>${study.name}</h2><a href="?style=${study.id}">放大查看</a></header>${specimen(study)}<p class="study-note">${study.note}</p></article>`).join("");
+    document.getElementById("gallery").setAttribute("aria-label", single === "glass" ? "半透明材质组件预览" : "UI 视觉风格对照");
+    applyTheme();
     document.querySelectorAll(".spec-tabs button").forEach(button => button.addEventListener("click", () => {
       button.closest(".spec-tabs").querySelectorAll("button").forEach(tab => tab.setAttribute("aria-pressed", String(tab === button)));
     }));

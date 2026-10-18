@@ -48,6 +48,8 @@ Desktop and mobile offer the same capabilities. Layout and interaction adapt to 
 
 The theme follows the operating system by default, with manual light and dark selection and a way to return to the system setting. Each client remembers its own theme choice independently. Both themes retain the same capabilities and information hierarchy.
 
+The owner selected the Glass / Layered UI style from an independent component style sheet, requiring both light and dark variants. Translucent surfaces, frosted layer separation and fine highlights establish the material language; reading areas retain enough opacity and contrast for sustained work. This choice selects the visual language and does not approve the complete UI design.
+
 The owner's concurrent Web/PWA clients share task, session and submitted-operation state in real time. Each client can continue authorized work without a device-specific takeover step. Opening the same session on another device does not itself transfer control or make that device an observer-only client.
 
 Each session has a private unsent conversation draft shared only across the creating user's own authorized clients. Concurrent edits and reconnection conflicts automatically use the last modification, without asking the user to choose between copies. Sending consumes only the content actually sent and preserves subsequent input; synchronization and recovery never send a command. The public contract must define consistent modification ordering, deduplication and recovery.
