@@ -4,7 +4,25 @@
 
 The complete UI design remains one task. Its structural master is `design/index.html`, using Operate mode inside a Read-mode review document. `design/styles.html` is a separate visual style sheet for choosing a UI language before applying it to that prototype. Supporting context and metadata remain under `docs/design/` and are not served with the prototype.
 
-## Confirmed Direction
+## Direction contract
+
+THESIS: A live working desk for one owner: notice an exception, inspect its full context and act without losing the surrounding work. Retain the accepted navigation and workspace structure; the selected material treatment now replaces the neutral prototype presentation.
+
+OWN-WORLD: Owner-pinned D, Glass / Layered. Blue-tinted frosted navigation and chrome surround an almost opaque reading plane. Light uses dark blue ink and blue actions; dark uses pale ink and pale blue actions. Fine highlights, restrained elevation, consistent line icons and compact controls carry the same hierarchy in both themes.
+
+STORY: The owner sees the intervention queue first, reviews one selected operation, explicitly responds and continues its conversation. The task workspace keeps one main conversation, expandable sub-agents, draft and task information together.
+
+FIRST VIEWPORT: A 248px project/conversation tree, slim context bar and a two-part desktop work area: intervention queue plus adjacent request, with recent conversations below. The task replaces that area with conversation and a 292px information rail. Mobile keeps the queue, selected request and recent conversations in reading order, with a navigation drawer and task-local Conversation / Information panels. Approval and send actions remain explicit and findable.
+
+FORM: Extend the already accepted information structure in owner-selected D. The earlier `f8d1abaf` exploration remains historical; its rejected proposal is not a new assignment and no new concept tournament is needed. The standing build preference is code-led in Impeccable configuration.
+
+SIGNATURE: Selecting a queue item replaces only its review plane, preserving the surrounding work; a brief shadow/opacity settling motion expresses the front layer. Reduced motion suppresses the effect. Theme changes preserve current task, draft and reading position.
+
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+
+This iteration produces interactive high-fidelity workbench/task-workspace review surfaces and their key states in the existing master. It does not complete the entire D01 design or authorize product implementation.
+
+## Confirmed Product Direction
 
 The owner has confirmed an efficient global workbench, attention-first hierarchy, in-place approval review, complete mobile capability parity and a task workspace combining one main session with task information. Native supporting sub-agent work is expandable within the main session. The owner's engineering flows remain external context.
 
@@ -14,7 +32,7 @@ The theme follows the operating system by default and supports manual light/dark
 
 ## UI Style Selection
 
-The style sheet compares the same typography specimen, tabs, two list rows, status labels, input and primary/secondary/disabled buttons. Its default view now presents selected D with System / Light / Dark preview controls; the comparison route retains all four visual languages. It contains no product navigation, workspace arrangement or business workflow. The prototype file remains unchanged during this style review.
+The style sheet compares the same typography specimen, tabs, two list rows, status labels, input and primary/secondary/disabled buttons. Its default view presents selected D with System / Light / Dark preview controls; the comparison route retains all four visual languages. It contains no product navigation, workspace arrangement or business workflow. The prototype stayed unchanged during that independent style-selection step; the subsequent high-fidelity iteration applies selected D to the master.
 
 | Style | Visual language | Tradeoff |
 | - | - | - |
@@ -27,11 +45,23 @@ D is the selected visual language. Its light variant uses blue-tinted translucen
 
 The selection does not approve a complete design system or product layout. Detailed product pages, complete states and responsive workspaces still need to be designed in this visual language and reviewed as part of the same D01 task. The existing system/manual theme decision remains unchanged.
 
-Local style lookup uses the minimalism-and-swiss-style, neumorphism, neubrutalism and glassmorphism entries in ui-ux-pro-max. Those entries supply style vocabulary, not product facts or an automatic recommendation. The selected style sheet establishes component vocabulary; the complete product world is not yet built, so no finished global DESIGN.md or complete direction contract is claimed.
+Local style lookup uses the minimalism-and-swiss-style, neumorphism, neubrutalism and glassmorphism entries in ui-ux-pro-max. Those entries supply style vocabulary, not product facts or an automatic recommendation. The selected style sheet establishes component vocabulary. The direction contract above governs the current workbench/task-workspace slice; `DESIGN.md` and `.impeccable/design.json` in this design-context directory record its actual reusable rules without claiming approval of the complete UI.
 
 Browser checks cover identical specimen content and sampled text contrast across both themes at desktop 1440×1100 and mobile 393×852, plus tab selection, button feedback, theme persistence after reload, manual override during system changes, return to System mode, automatic system changes and the comparison route. Overflow was also checked at 1024 CSS pixels. Theme controls and mobile action buttons are at least 44 CSS pixels high. The detector found one duplicated hover-contrast warning; the hovered theme label now uses the foreground token instead of the muted token. These checks concern the standalone sheet only; they do not validate a complete product UI or backend behavior. The owner accepted all four displayed theme specimens; those exact images are now retained below.
 
 Visual evidence status: Storybook覆盖=不适用; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=已裁剪; 聊天回图=已展示; 证据落盘=已落盘; 视觉比较=需确认（owner confirmation received for all four displayed specimens）. The standalone sheet is login-free and uses synthetic content. Accepted structural navigation assets remain authoritative for structure only. The exact theme destination paths have no baseline at locked base a506804ae42da75749d62aac901c8864cd1de96c, so the images are current-only and have no two-sided report or heatmap. Their acceptance does not approve the complete UI.
+
+## High-fidelity Workbench and Task Workspace
+
+The owner confirmed direct interactive-page construction as the standing build preference. The existing master now opens the selected D presentation, with Workbench, Task Workspace and Global Tasks fixtures, desktop/mobile preview, System / Light / Dark themes and deterministic scenario controls. A neutral structural comparison remains available; rejected visual proposals are no longer offered as current choices. The separate accepted style sheet is unchanged.
+
+The workbench presents the intervention queue, complete selected request and recent conversations. The task workspace keeps the main conversation, expandable tool/sub-agent activity, explicit approval and private shared-draft presentation together with task information. Desktop uses the information rail; mobile uses task-local panels and a navigation drawer. Theme changes preserve current context, draft, branch expansion and reading position. Loading, failure/retry, offline, reconnecting, read-only, resolved approval, unknown result and empty fixtures demonstrate intended presentation without performing real commands.
+
+Bounded inspection covered the two pages in light/dark at desktop 1440×1000 and mobile 393×852, with additional overflow checks at 320, 768, 1024 and 1280 CSS pixels. Interaction checks covered approval selection/denial, draft and branch preservation, task/run-state separation, explicit send, interruption pending, mobile panels/navigation, task-view persistence and projectless-conversation history-sharing consent. Sampled text/background pairs met 4.5:1 in both themes; this is not a complete accessibility audit. Inline script syntax, Markdown and whitespace checks passed, and the detector returned no findings.
+
+The independent finish reviewer requested one correction: mobile recent-conversation titles and the All Conversations action needed 44px targets. The correction also covers task-list titles with the same sizing cause. The verdict marked the listed fix resolved, observed no regression in the final eight captures and returned `disposition: ship` for this slice. This verdict does not approve full D01 or production behavior. Scoped design-system documentation extracts the implemented visual rules; no raster UI assets are shipped.
+
+The eight final page candidates are temporary review evidence. Trim-only normalization preserved their viewport bounds. Their exact intended evidence paths have no baseline at the locked base, so visual comparison is current-only, with no two-sided report or heatmap. Visual evidence status: Storybook覆盖=不适用（throwaway design master）; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=无需裁剪; 聊天回图=待展示; 证据落盘=未落盘; 视觉比较=需确认. Accepted navigation/style assets remain unchanged. Canonical page evidence will be retained only after the owner confirms the displayed set.
 
 ## Tool Context
 
@@ -39,7 +69,7 @@ The default root invocation cannot resolve the scoped PRODUCT.md. The existing `
 
 ## Rejected Prototype Treatments
 
-The owner rejected the workbench treatments below because they modified the prototype instead of providing independent UI style choices. They remain in the unchanged prototype file as unapproved background. The selected style is D from the standalone style sheet above; no finished design system or complete UI is approved.
+The owner rejected the workbench treatments below because they modified the prototype instead of providing independent UI style choices. Their legacy CSS remains historical background in the master, but those proposals are no longer current preview choices. The selected style is D from the standalone style sheet above; no complete UI is approved.
 
 The grounded list, ordered by resonance, is an engineering work journal, a code-review split view, a laboratory observation log, an incident-response console, a newsroom assignment ledger, a rail dispatch register and a source-control relationship map. This spans screen conventions, physical records and spatial notation. The reproduced `f8d1abaf` hand retains assigned candidate 4; B represents the top grounded candidate. These exploratory studies use directly rendered HTML, not approved image comps or a selected production build. The owner subsequently required an independent style sheet, served on the same task-owned preview port. It is supporting exploration within D01; the complete design still returns to the existing master.
 
@@ -51,7 +81,7 @@ The grounded list, ordered by resonance, is an engineering work journal, a code-
 
 All six catalog challengers were weighed on audience identification and product clarity. They remain available for owner steering; none is adopted silently. The variable-font specimen loses the operator's familiar task grammar and useful information density; its contribution is decisive type hierarchy. Crouwel's construction grid loses familiarity and makes an irrelevant mechanism prominent; it contributes alignment discipline. Metro tiles lose rapid task comparison and full-request clarity; they contribute unmistakable selection. Orienteering loses the default approval scene and direct request reading; it contributes consistent relationship/state notation for the later graph. Zoo-map lobes lose compact operator conventions and clear request reading; they contribute unambiguous region boundaries. Ticket-wallet coupons lose parallel-work familiarity and imply an unconfirmed sequential journey; they contribute traceable requests, decisions and outcomes. These are declined on both axes, presented as compact exploration notes rather than equal visual promises. A carries the resulting hierarchy, alignment, selection, notation, boundary and traceability standards without borrowing their motifs.
 
-The pending choice among these prototype treatments is withdrawn. The owner selected D using the independent style sheet and accepted its light/dark specimens. Detailed desktop/mobile/state refinement and the final direction contract follow that accepted direction. Navigation and business rules are not being re-interviewed.
+The pending choice among these prototype treatments is withdrawn. The owner selected D using the independent style sheet and accepted its light/dark specimens. The direction contract and current desktop/mobile/state refinement follow that accepted direction. Navigation and business rules are not being re-interviewed.
 
 The controlled page checks cover all three workbench directions at desktop 1440×900 and mobile 393×852, plus desktop dark previews. They check fixture parity, complete approval context, horizontal overflow, mobile navigation, demo request selection/denial, sampled text contrast and the master entry's direction/theme/device/notes/neutral-prototype controls. C's excess queue-to-request gap and B's muted-navigation contrast were corrected. The detector reported no findings. These are limited direction-study checks; they do not validate the complete design, other page themes, product preference persistence, real backend operations or cross-project graph behavior. The three desktop comparison images remain temporary until owner review; no unselected direction images replace accepted navigation assets.
 
