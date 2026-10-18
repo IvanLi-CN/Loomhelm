@@ -2,23 +2,42 @@
 
 ## Scope and Mode
 
-The single owner-facing design entry is `design/index.html`. Its controlled structural prototype uses Operate mode; the surrounding review document uses Read mode. Supporting context and metadata remain under `docs/design/` and are not served with the prototype.
+The complete UI design remains one task. Its structural master is `design/index.html`, using Operate mode inside a Read-mode review document. `design/styles.html` is a separate visual style sheet for choosing a UI language before applying it to that prototype. Supporting context and metadata remain under `docs/design/` and are not served with the prototype.
 
 ## Confirmed Direction
 
 The owner has confirmed an efficient global workbench, attention-first hierarchy, in-place approval review, complete mobile capability parity and a task workspace combining one main session with task information. Native supporting sub-agent work is expandable within the main session. The owner's engineering flows remain external context.
 
-The owner has accepted the navigation hierarchy and its desktop/mobile structural screenshots. The accepted structural prototype uses neutral styling; that acceptance does not select a product visual world or approve the complete design. The owner has directed that overall visual style be settled before further page-level refinement. The master entry now compares unselected visual directions using the same workbench content and retains the neutral prototype separately; detailed desktop/mobile layouts and complete interaction states follow the selected direction.
+The owner has accepted the navigation hierarchy and its desktop/mobile structural screenshots. The accepted structural prototype uses neutral styling; that acceptance does not select a product visual world or approve the complete design. The owner requires independent UI style choices before applying any visual treatment to the prototype. The workbench variants in the master were rejected as insufficiently distinct from the structural prototype; their pending choice is withdrawn. No direction is selected.
 
 The theme follows the operating system by default and supports manual light/dark selection and returning to the system setting. Desktop and mobile remember that preference independently. Both themes must preserve the same information hierarchy, controls and readable state distinctions.
+
+## UI Style Selection
+
+The style sheet compares the same typography specimen, tabs, two list rows, status labels, input and primary/secondary/disabled buttons in four visual languages. It contains no product navigation, workspace arrangement or business workflow. The prototype file remains unchanged during this selection. Each style can be enlarged independently; choosing a style is discussed with the owner and does not silently apply a theme.
+
+| Style | Visual language | Tradeoff |
+| - | - | - |
+| A: Minimal / Flat | Precise text alignment, fine rules, small corners and flat controls | Efficient and restrained, with less distinctive personality |
+| B: Soft / Tactile | Soft neutral layers, rounded controls, recessed inputs and raised buttons | Approachable depth; dense screens need restraint in elevation |
+| C: Neo-brutalist | Strong type, square controls, visible outlines, solid fills and hard shadows | Distinct boundaries; greater visual presence during sustained work |
+| D: Glass / Layered | Translucent panels, frosted separation, fine highlights and light-weight type | Strong material character; reading areas need sufficient opacity |
+
+These are UI style options, not four product layouts or an approved design system. Product content, complete light/dark variants, responsive workspaces and all business states will be designed after the owner chooses or revises the visual language. The existing system/manual theme decision remains unchanged.
+
+Local style lookup uses the minimalism-and-swiss-style, neumorphism, neubrutalism and glassmorphism entries in ui-ux-pro-max. Those entries supply style vocabulary, not product facts or an automatic recommendation. This is a component-language comparison rather than a selected visual-world build, so no new global DESIGN.md or direction contract is claimed.
+
+Browser checks cover identical specimen content, sampled text contrast, tab selection, button feedback, enlarged-style routing and horizontal overflow at 393, 1024 and 1440 CSS pixels. Mobile action buttons are at least 44 CSS pixels high. The detector reports no findings. These checks concern the standalone sheet only; they do not validate a complete UI, product themes or backend behavior. Candidate screenshots remain temporary until owner review.
+
+Visual evidence status: Storybook覆盖=不适用; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=已裁剪（desktop）/无需裁剪（mobile）; 聊天回图=已展示; 证据落盘=未落盘（canonical assets await owner review）; 视觉比较=需确认. The standalone sheet is login-free and uses synthetic content. Desktop and mobile captures are temporary; accepted structural navigation assets remain authoritative for structure only. The exact destination paths have no baseline at locked base a506804ae42da75749d62aac901c8864cd1de96c, so both candidates are current-only and have no two-sided report or heatmap.
 
 ## Tool Context
 
 The default root invocation cannot resolve the scoped PRODUCT.md. Running `concept-seed --scope direction --mode operate` from `docs/design/` succeeded, with seed `f8d1abaf` and assigned grounded candidate 4, an incident-response workbench. Reproducing the same seed retained that assignment for proposal A; it does not override the owner's sequence or constitute a choice. No root PRODUCT.md, DESIGN.md or .impeccable is created.
 
-## Visual Direction Proposals
+## Rejected Prototype Treatments
 
-The owner asked to settle style before continuing page refinement. The reference-product question remains unanswered, so this exploratory round assumes no pinned reference; a later answer can steer or replace these proposals. The review stays in `design/index.html`, with A, B and the standing category-standard alternative using the same mock tasks, attention requests and conversations. Preview switching resets demo state. Light/dark preview controls compare palette behavior; they do not implement or verify product preference persistence. No direction is selected and no finished design system or complete UI is approved.
+The owner rejected the workbench treatments below because they modified the prototype instead of providing independent UI style choices. They remain in the unchanged prototype file as unapproved background, not the active selection. The current choice is the standalone style sheet above. No direction is selected and no finished design system or complete UI is approved.
 
 The grounded list, ordered by resonance, is an engineering work journal, a code-review split view, a laboratory observation log, an incident-response console, a newsroom assignment ledger, a rail dispatch register and a source-control relationship map. This spans screen conventions, physical records and spatial notation. The reproduced `f8d1abaf` hand retains assigned candidate 4; B represents the top grounded candidate. These exploratory studies use directly rendered HTML, not approved image comps or a selected production build. The owner's single master-entry constraint replaces the skill's separate decision server; no second design artifact or port is introduced.
 
@@ -30,7 +49,7 @@ The grounded list, ordered by resonance, is an engineering work journal, a code-
 
 All six catalog challengers were weighed on audience identification and product clarity. They remain available for owner steering; none is adopted silently. The variable-font specimen loses the operator's familiar task grammar and useful information density; its contribution is decisive type hierarchy. Crouwel's construction grid loses familiarity and makes an irrelevant mechanism prominent; it contributes alignment discipline. Metro tiles lose rapid task comparison and full-request clarity; they contribute unmistakable selection. Orienteering loses the default approval scene and direct request reading; it contributes consistent relationship/state notation for the later graph. Zoo-map lobes lose compact operator conventions and clear request reading; they contribute unambiguous region boundaries. Ticket-wallet coupons lose parallel-work familiarity and imply an unconfirmed sequential journey; they contribute traceable requests, decisions and outcomes. These are declined on both axes, presented as compact exploration notes rather than equal visual promises. A carries the resulting hierarchy, alignment, selection, notation, boundary and traceability standards without borrowing their motifs.
 
-The next owner decision selects, revises, combines or rejects the visual direction. Detailed desktop/mobile/light-dark/state refinement and the final direction contract follow that choice. This round does not ask for renewed navigation or business-rule approval.
+The pending choice among these prototype treatments is withdrawn. The owner selects, revises, combines or rejects a visual language using the independent style sheet. Detailed desktop/mobile/light-dark/state refinement and the final direction contract follow that choice. Navigation and business rules are not being re-interviewed.
 
 The controlled page checks cover all three workbench directions at desktop 1440×900 and mobile 393×852, plus desktop dark previews. They check fixture parity, complete approval context, horizontal overflow, mobile navigation, demo request selection/denial, sampled text contrast and the master entry's direction/theme/device/notes/neutral-prototype controls. C's excess queue-to-request gap and B's muted-navigation contrast were corrected. The detector reported no findings. These are limited direction-study checks; they do not validate the complete design, other page themes, product preference persistence, real backend operations or cross-project graph behavior. The three desktop comparison images remain temporary until owner review; no unselected direction images replace accepted navigation assets.
 
