@@ -2,18 +2,37 @@
 
 ## Current Status
 
-The repository contains the F01 Go process-lifecycle skeleton: runnable Server, Worker and Connector entrypoints, configuration validation, local lifecycle state, health/version/drain control for Server and process signal handling. Server startup requires `LOOMHELM_DRAIN_TOKEN`; the product APIs, persistence and deployed environment are not implemented.
+The repository contains the Go process-lifecycle skeleton and the Bun/React frontend foundation. Server, Worker and Connector entrypoints provide configuration validation, local lifecycle state, Server health/version/drain control and process signal handling. Server startup requires `LOOMHELM_DRAIN_TOKEN`. The frontend provides neutral verification routes, shared providers, initial workspace packages, Storybook component states and PWA build/registration wiring. Product APIs, persistence, the deployed environment and approved product UI are not implemented.
 
 ## Implementation Coverage
 
 | Requirements | Implementation | Verification |
 | - | - | - |
 | F01 slice of REQ-LH-007 | Server/Worker/Connector lifecycle skeleton, Server health/version/drain endpoints, loopback-plus-Bearer drain authorization, process-local Worker generation control and signal exits | Go unit, race and shuffled tests; `go vet`; native and `linux/amd64` cross-builds |
-| REQ-LH-001 through REQ-LH-006, REQ-LH-008 through REQ-LH-012 | Product implementation absent; business APIs, persistence, Connector connectivity/authentication and UI are not established by F01 | Product verification not run |
+| F02 foundation supporting REQ-LH-006 | Bun workspaces, React/Vite/TypeScript, Router/Query providers, client/content/protocol package boundaries, neutral routes, Storybook and PWA build/registration wiring | Frozen dependency install, typecheck, Vite/PWA and Storybook builds in a session VM; observed route navigation, manifest/SW responses, narrow-screen overflow and component semantics |
+| REQ-LH-001 through REQ-LH-006, REQ-LH-008 through REQ-LH-012 | Product implementation absent; business APIs, persistence, Connector connectivity/authentication and product UI are not established by these foundations | Product verification not run |
 
 ## Development and Validation
 
 The baseline and F01 skeleton are checked with the topic Spec structural checker, Git whitespace checks, `go test`, `go test -race`, shuffled tests, `go vet`, native builds, `linux/amd64` cross-builds and inspection of Policy package/lock consistency. These checks do not establish product acceptance, durable cross-process fencing or deployment cutover evidence.
+
+The frontend foundation is checked using pinned Bun 1.4.3 with `bun install --frozen-lockfile` and `bun run check`. VM production responses include the generated manifest, service worker and Workbox files; browser checks cover the home/Status routes, brand-link return navigation, route-current semantics, a 393x852 CSS viewport without horizontal overflow, and Default/Compact Storybook states without duplicate IDs. Runtime navigation matches the root route exactly: `/` has only Runtime marked current, and `/status` has only Status marked current. This route-only correction passed targeted TypeScript and browser checks, retaining the unaffected VM build, registration and component observations. The VM browser observations used an insecure HTTP IP origin: successful manifest and service-worker fetches do not establish browser service-worker registration. A separate secure localhost production-preview observation of the repaired source confirmed an activated root-scoped service worker, with no waiting or installing worker. A controlled preview returning HTTP 503 only for `/sw.js` produced the registration-error diagnostic and no registration. PWA installation, controlled updates, offline product behavior and real backend integration require their own product observations.
+
+## Visual Evidence
+
+These neutral engineering surfaces document the frontend foundation. The page images use source `724107721164d60b23e7a75f21991ec659a81806`; the unchanged isolated Storybook component retains its image from source `121100ef6c3ed35edaa90bb6e59d5dd9bd7619a2`. The owner authorized Agent checking and archival in place of manual screenshot confirmation for this foundation only. This exception does not approve product styling, the complete UI design or later product visual changes. The actual source captures were compared with their exact destination paths at parent baseline `079d3d85318c365056cd29a238aafdf732581421`; all three paths are absent there, so the results are current-only, without baseline images or heatmaps. The desktop page uses trim-only normalization, the mobile page retains its 393x852 CSS viewport, and the Storybook component retains source-managed margins with only DOM-geometry tightening. Source and validation references are recorded in [History](HISTORY.md#frontend-foundation-evidence).
+
+### Desktop verification route
+
+![Neutral frontend verification route on desktop](assets/f02-runtime-desktop.png)
+
+### Mobile verification route
+
+![Neutral frontend verification route at a mobile viewport](assets/f02-runtime-mobile.png)
+
+### Storybook component
+
+![VerificationPanel component evidence](assets/f02-verification-panel.png)
 
 ## Rollout and Compatibility
 

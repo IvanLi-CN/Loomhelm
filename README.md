@@ -16,7 +16,9 @@ Loomhelm 是面向个人与小型团队的自部署项目管理与 Agent 工作�
 
 ## Development
 
-工具版本见 [tools/versions.env](tools/versions.env)。统一开发、检查、构建和工作树初始化入口将在工程骨架与开发环境落地时提供；目前不提供占位成功命令。
+工具版本见 [tools/versions.env](tools/versions.env)。前端使用 Bun 1.4.3：在仓库根目录运行 `bun install --frozen-lockfile` 安装依赖，`bun run dev` 启动中性工程验证页，`bun run storybook` 查看基础组件。`bun run typecheck` 检查类型，`bun run build` 构建 Web/PWA，`bun run build:storybook` 构建 Storybook；`bun run check` 顺序执行这三项检查。Agent 的完整构建和运行验证使用会话 Agent VM，本机长驻预览服务先按端口租约约定启动。
+
+前端页面用于验证路由、providers、组件与 PWA 构建接入。业务 API、项目任务界面、Codex 控制和完整 PWA 安装更新体验仍待实现；统一数据库、后端开发和工作树初始化入口在开发环境落地时补齐。工程截图与验证边界见 [实施覆盖](docs/specs/phase1-core/IMPLEMENTATION.md)。
 
 Markdown 工具已提供固定版本入口：首次运行 `python3 tools/markdown.py setup`，检查使用 `python3 tools/markdown.py check`，格式修复使用 `python3 tools/markdown.py fix`。Lefthook 的统一检查配置将在开发环境中接入；当前命令不会自行安装提交钩子。
 
