@@ -107,6 +107,8 @@ U01–U04 是真实实现任务的范围标识，不是页面标识；以下每�
 
 最新独立 finish review：IMP01（控件重叠）由 10 张捕获及 320/768 宽度无重叠/溢出检查证明 resolved，且无回归；IMP02（Device Lab 项目断开）由正常场景 4 条层级加 1 条依赖、权限场景 3 条层级和 Sidecar 缺失证明 resolved，且无回归。reviewer 返回 scoped `disposition: ship`，仅覆盖这两项修正，不代表 D01 完整 UI 批准；主人已确认上述两张主要布局示例可保留，仍待实际集成输入和后续证据刷新。
 
+补充布局留档：在源提交 `5cbf46b7ce6e4aeb27f7ffd3c5677598aa7e78fb` 上重新捕获并展示了工作台桌面亮色/手机暗色、对话工作区桌面暗色/手机亮色四张图，视口分别为 1440x1000 和 393x852。四张均无 document overflow，手机审批控件实测高度 44px；trim_only 均未改变边界。本批只补充页面呈现，不重复执行既有功能检查或 detector，也不扩张为生产回归。主人针对这四张回答“就先这样吧”，因此按阶段版本保留原样图像于 `design/evidence/layout-workbench-{desktop-light,mobile-dark}.png` 和 `design/evidence/layout-workspace-{desktop-dark,mobile-light}.png`；展示集与接受范围见 [surface-brief](surface-brief.md#provisionally-retained-workbench-and-conversation-layouts)。这不是完整 UI 定稿或实施授权，当前停止继续页面评审。四条目标路径在实际 parent `079d3d85318c365056cd29a238aafdf732581421` 中不存在，比较为 current-only，无 baseline、heatmap 或 two-sided report；原两张已确认示例保持不变。
+
 ## 后端与公共接口依赖
 
 | 依赖 | 布局需要它提供的事实 | 当前交接规则 |

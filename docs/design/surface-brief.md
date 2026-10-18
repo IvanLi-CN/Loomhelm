@@ -4,6 +4,8 @@
 
 The owner accepted the displayed standalone UI language board and asked to retain the language, desktop/mobile layout examples, style-selection material and UX in subsequent commits. The exact four reviewed board images are now canonical evidence. This acceptance covers the language board, not the complete UI or production implementation.
 
+The owner has now asked to leave the current version as it stands: “就先这样吧”. This provisionally retains the four displayed workbench/conversation layout examples below and stops further page review for now; it does not finalize the complete UI, complete D01, or authorize production implementation. The separately confirmed cross-project desktop/mobile pair remains unchanged.
+
 The next surface is `design/layouts.html`: an Operate-mode synthetic application inside a small Read-mode review strip. It applies the accepted D palette, typography, shapes and authored controls to the workbench, task list/board/graph, project context and conversation workspace. Desktop uses a persistent navigation tree and adjacent information; mobile uses a navigation drawer and task-local panels with the same capabilities. The review strip keeps fixture selection outside product flows. `UX.md` and `HANDOFF.md` capture journeys, responsive decisions, state behavior and integration dependencies. No real backend, PWA installation or existing desktop-session control is claimed.
 
 Current iteration intent: operate the existing D presentation and extend the existing layouts with the concrete cross-project fixture `DL-08` in Device Lab, parent `LH-30` in Loomhelm and prerequisite `SN-12` in Sidecar Notes, plus the safe unavailable-endpoint fixture; no style reselection is in scope. The incumbent comparison is byte-preserving: the accepted UI-language board, style-selection source, DESIGN/token frontmatter and `.impeccable/design.json` remain unchanged, and this documentation pass does not refresh or rewrite that system. Major layouts and the complete UI remain pending owner review.
@@ -182,3 +184,15 @@ The owner confirmed that only these two normalized major-layout examples may be 
 ![Owner-confirmed cross-project desktop light](../../design/evidence/layout-cross-project-desktop-light.png)
 
 ![Owner-confirmed relations info mobile dark](../../design/evidence/layout-relations-info-mobile-dark.png)
+
+### Provisionally Retained Workbench and Conversation Layouts
+
+The owner replied “就先这样吧” to this displayed four-image set. Retain these exact images as the current stage, with no claim of complete UI approval. They were captured from the login-free, mock-only `layouts.html` at source commit `5cbf46b7ce6e4aeb27f7ffd3c5677598aa7e78fb`, using `page=workbench` and `page=conversation&session=c38`, the shown themes and `canvas=1`. Desktop uses 1440×1000 and mobile uses 393×852 CSS px with DevTools emulation; capture scope is the full application/browser viewport. All four have document overflow 0, and the mobile approval buttons measure 44px high. This presentation-only capture does not rerun or supersede the historical functional checks. Trim-only normalization left every image unchanged. The exact destination paths are absent at parent `079d3d85318c365056cd29a238aafdf732581421`, so comparison is current-only without baseline, heatmap or two-sided report. Visual evidence status: Storybook覆盖=不适用（page-level demo）; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=无需裁剪; 聊天回图=已展示; 证据落盘=已落盘; 视觉比较=需确认（阶段性保留答复已收到，完整 UI 仍未定稿）. No rendered source, accepted style asset or design token changed during this archival step.
+
+![Provisionally retained workbench, desktop light](../../design/evidence/layout-workbench-desktop-light.png)
+
+![Provisionally retained workbench, mobile dark](../../design/evidence/layout-workbench-mobile-dark.png)
+
+![Provisionally retained conversation workspace, desktop dark](../../design/evidence/layout-workspace-desktop-dark.png)
+
+![Provisionally retained conversation workspace, mobile light](../../design/evidence/layout-workspace-mobile-light.png)
