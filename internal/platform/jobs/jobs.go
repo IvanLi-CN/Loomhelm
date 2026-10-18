@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 )
 
 const ShortJobKind = "platform_short_job"
+
+const maxGeneration = uint64(math.MaxInt64)
 
 type Generation interface {
 	Current() uint64
@@ -134,8 +137,8 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 		return fmt.Errorf("job runner requires a ready lifecycle, got %q", snapshot.State)
 	}
 	current := generation.Current()
-	if current == 0 {
-		return errors.New("job generation must be greater than zero")
+	if err := validateGeneration(current); err != nil {
+		return err
 	}
 	if _, ok := generation.ContextFor(current); !ok {
 		return fmt.Errorf("job generation %d is not current", current)
@@ -178,8 +181,8 @@ func (r *Runner) Enqueue(ctx context.Context, args ShortJobArgs) (int64, error) 
 	if ctx == nil {
 		return 0, errors.New("job context must not be nil")
 	}
-	if args.Generation == 0 {
-		return 0, errors.New("job generation must be greater than zero")
+	if err := validateGeneration(args.Generation); err != nil {
+		return 0, err
 	}
 
 	r.mu.Lock()
@@ -188,7 +191,7 @@ func (r *Runner) Enqueue(ctx context.Context, args ShortJobArgs) (int64, error) 
 	if client == nil {
 		return 0, errors.New("job runner is not started")
 	}
-	result, err := client.Insert(ctx, args, nil)
+	result, err := client.Insert(ctx, args, &river.InsertOpts{Queue: r.cfg.Queue})
 	if err != nil {
 		return 0, fmt.Errorf("enqueue short job: %w", err)
 	}
@@ -267,6 +270,16 @@ type ShortJobArgs struct {
 
 func (ShortJobArgs) Kind() string { return ShortJobKind }
 
+func validateGeneration(generation uint64) error {
+	if generation == 0 {
+		return errors.New("job generation must be greater than zero")
+	}
+	if generation > maxGeneration {
+		return fmt.Errorf("job generation must not exceed %d", maxGeneration)
+	}
+	return nil
+}
+
 type shortJobWorker struct {
 	river.WorkerDefaults[ShortJobArgs]
 	queries    *generated.Queries
@@ -274,6 +287,9 @@ type shortJobWorker struct {
 }
 
 func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs]) error {
+	if err := validateGeneration(job.Args.Generation); err != nil {
+		return river.JobCancel(err)
+	}
 	generationCtx, ok := w.generation.ContextFor(job.Args.Generation)
 	if !ok {
 		return river.JobCancel(fmt.Errorf("generation %d is no longer current", job.Args.Generation))
@@ -285,8 +301,11 @@ func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs])
 		cancel()
 	}()
 
-	if err := workCtx.Err(); err != nil {
+	if err := generationCtx.Err(); err != nil {
 		return river.JobCancel(fmt.Errorf("generation %d stopped: %w", job.Args.Generation, err))
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	_, err := w.queries.RecordShortJobResult(workCtx, generated.RecordShortJobResultParams{
 		JobID:      job.ID,

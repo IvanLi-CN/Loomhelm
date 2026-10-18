@@ -42,9 +42,9 @@ func (c Config) Validate() error {
 }
 
 type DB struct {
-	pool    *pgxpool.Pool
-	queries *generated.Queries
-	url     string
+	pool       *pgxpool.Pool
+	queries    *generated.Queries
+	connConfig *pgx.ConnConfig
 }
 
 func Open(ctx context.Context, cfg Config) (*DB, error) {
@@ -65,12 +65,13 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if cfg.MaxConns > 0 {
 		poolConfig.MaxConns = cfg.MaxConns
 	}
+	connConfig := poolConfig.ConnConfig.Copy()
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, errors.New("open database pool")
 	}
-	db := &DB{pool: pool, queries: generated.New(pool), url: strings.TrimSpace(cfg.URL)}
+	db := &DB{pool: pool, queries: generated.New(pool), connConfig: connConfig}
 	if err := db.Ping(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
@@ -138,7 +139,7 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 		return fn(ctx)
 	}
 
-	lockConn, err := pgx.Connect(ctx, db.url)
+	lockConn, err := pgx.ConnectConfig(ctx, db.connConfig.Copy())
 	if err != nil {
 		return errors.New("open database migration lock connection")
 	}

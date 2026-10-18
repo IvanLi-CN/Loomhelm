@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
 )
@@ -26,6 +27,9 @@ func run(ctx context.Context) error {
 	url := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
 	if url == "" {
 		return errors.New("LOOMHELM_DATABASE_URL must be set")
+	}
+	if err := platform.ValidateDevelopmentDatabaseTarget(url, strings.TrimSpace(os.Getenv("LOOMHELM_POSTGRES_PORT"))); err != nil {
+		return err
 	}
 
 	db, err := database.Open(ctx, database.Config{URL: url})

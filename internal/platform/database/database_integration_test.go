@@ -2,6 +2,7 @@ package database_test
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -106,4 +107,42 @@ func TestMigrationLockSerializesConcurrentCallbacksWithSinglePoolConnection(t *t
 	if got := maximum.Load(); got != 1 {
 		t.Fatalf("maximum concurrent migration callbacks = %d, want 1", got)
 	}
+}
+
+func TestMigrationLockAcceptsPoolOnlyURLOptionsWithSinglePoolConnection(t *testing.T) {
+	rawURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
+	if rawURL == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	connectionURL := withPoolMaxConnsOne(t, rawURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, database.Config{URL: connectionURL, MinConns: 1, MaxConns: 1})
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	if err := db.WithMigrationLock(ctx, func(lockCtx context.Context) error {
+		var one int
+		return db.Pool().QueryRow(lockCtx, "SELECT 1").Scan(&one)
+	}); err != nil {
+		t.Fatalf("WithMigrationLock() with pool_max_conns=1 error = %v", err)
+	}
+}
+
+func withPoolMaxConnsOne(t *testing.T, rawURL string) string {
+	t.Helper()
+	if strings.Contains(rawURL, "://") {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatalf("url.Parse() error = %v", err)
+		}
+		query := parsed.Query()
+		query.Set("pool_max_conns", "1")
+		parsed.RawQuery = query.Encode()
+		return parsed.String()
+	}
+	return strings.TrimSpace(rawURL) + " pool_max_conns=1"
 }
