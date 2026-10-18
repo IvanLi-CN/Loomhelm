@@ -155,15 +155,30 @@ The owner accepted the displayed four-image UX set with “可以”: creation d
 
 ## Latest UI-only Audit
 
-After the UX state review, the mobile workspace panel tabs received a minimum 44px width while retaining their 44px height; the current `design/layouts.css` SHA-256 is `561d8ef9b9b3ee0f4ae1db0a4c912cf05d217b801070b86a601b05f5e32131d7`. A cache-disabled, login-free, mock-only `ui_demo` pass covered eight representative desktop/mobile light/dark routes at 1440×1000 and 393×852 CSS px. All document/body overflow checks were 0 except the language board desktop document being 11px narrower than the viewport, with no unlabeled buttons or inputs, duplicate IDs, or mobile visible buttons below 44×44. Fresh captures are review candidates only; no accepted evidence bytes were replaced, and complete UI approval remains open.
+After the UX state review, the mobile workspace panel tabs received a minimum 44px width while retaining their 44px height; the current `design/layouts.css` SHA-256 is `561d8ef9b9b3ee0f4ae1db0a4c912cf05d217b801070b86a601b05f5e32131d7`. A cache-disabled, login-free, mock-only `ui_demo` pass covered eight representative desktop/mobile light/dark routes at 1440×1000 and 393×852 CSS px. All document/body overflow checks were 0 except the language board desktop document being 11px narrower than the viewport, with no unlabeled buttons or inputs, duplicate IDs, or mobile visible buttons below 44×44. The owner confirmed these current captures; they are persisted as the D01 final evidence set without replacing historical evidence bytes.
 
 ## Current F02 Integration Input
 
-The parent thread reports F02 merged into `feat/phase1` at parent SHA `8ee199b67ad0705aa13bd614efad75006337be42`. The available neutral foundation includes Bun 1.4.3 workspaces, React/Vite/TypeScript, TanStack Router/Query, Storybook, and PWA registration wiring, with technical `/` and `/status` routes; its implementation record still says product UI, business APIs, persistence and production PWA behavior are absent. D01 consumes this as the implementation boundary without changing the accepted D language, static layouts or current evidence, so no recapture is required. R02, F05 and RD03/G0 remain integration gates, and complete UI approval remains separate.
+The parent thread reports F02 merged into `feat/phase1` at parent SHA `8ee199b67ad0705aa13bd614efad75006337be42`. The available neutral foundation includes Bun 1.4.3 workspaces, React/Vite/TypeScript, TanStack Router/Query, Storybook, and PWA registration wiring, with technical `/` and `/status` routes; its implementation record still says product UI, business APIs, persistence and production PWA behavior are absent. D01 consumes this as the implementation boundary without changing the accepted D language, static layouts or current evidence, so no recapture is required. R02, F05 and RD03/G0 remain integration gates for later product implementation.
+
+## D01 Completion Record
+
+The owner confirmed the current eight-image desktop/mobile light/dark review set with “确认”. This completes the single D01 UI design task: information architecture, prototype, D Glass / Layered language, responsive layouts, component/state examples, UX rules and implementation handoff are approved. The exact current bytes are persisted below; this approval covers the design package only and does not authorize production UI or business implementation.
+
+| Surface | Evidence | SHA-256 |
+| - | - | - |
+| UI language, desktop light | `design/evidence/d01-final-language-desktop-light.png` | `c01bb4ae71bc5205cb7f3ab484046d75e357c13187f1c7e7ce3d7fb5cf002481` |
+| UI language, mobile dark | `design/evidence/d01-final-language-mobile-dark.png` | `b2e9e03daf86c9928e8fbdc5f7e333c5af292e4f0205e08165d9fbdc6dd7ab2bd` |
+| Workbench, desktop light | `design/evidence/d01-final-workbench-desktop-light.png` | `47922b042323f7123de5216801c260d4ed7eea81764da5853dba03494bf592f9` |
+| Tasks board, mobile dark | `design/evidence/d01-final-tasks-mobile-dark.png` | `bc5063a83ad9ecd65dbf16c62e34a1f64bbc07d2a09e87ec6fa5a80ffffc7496` |
+| Project conversations, desktop dark | `design/evidence/d01-final-project-conversations-desktop-dark.png` | `be2e973ada4f18b4b63a893129897ce262ac941f4dd0d5bbc65eab142a39f793` |
+| Conversation, mobile light | `design/evidence/d01-final-conversation-mobile-light.png` | `3526005809974743e184500c61e0e6e4c823e8d568ec6dbf670b2c4f267b7a84` |
+| Offline draft, mobile dark | `design/evidence/d01-final-offline-mobile-dark.png` | `0468b9c0c0251dc60b84ec8d4b51271bc5458e939eb7492bd8ba1c0d41424389` |
+| Resolved approval, desktop dark | `design/evidence/d01-final-approval-desktop-dark.png` | `55816305d713e990c46ad14ca9da6467c7eb113f6838c25d0fc227c4fcf2b19d` |
 
 ## Open Decisions and Dependencies
 
-The owner selected D, Glass / Layered, and accepted its displayed desktop/mobile light/dark specimens. Detailed page layouts, complete states and responsive workspaces remain subject to review before the complete design is confirmed. The source contract baseline for this iteration is parent commit `079d3d85318c365056cd29a238aafdf732581421`, specifically its PRD and phase-one core SPEC. The main coordinator owns the remaining PRD business-rule decisions; this design task consumes those answers without repeating owner questions. F02, R02, F05 and RD03/G0 actual inputs must supply the framework, real fixtures, public interfaces and recovery/deployment contracts before final page/component/state/API handoff and implementation-task mapping. The current synthetic validation is complete for its declared scope; final integration must add real server/two-endpoint authorization, cross-device/PWA and public-contract evidence, record the latest parent SHA, and leave the historical `a506804ae42da75749d62aac901c8864cd1de96c` comparison baseline explicit.
+The owner selected D, Glass / Layered, and has now confirmed the complete D01 UI design. The source contract baseline for the historical evidence remains parent commit `079d3d85318c365056cd29a238aafdf732581421`; the current F02 integration input is parent `8ee199b67ad0705aa13bd614efad75006337be42`. The main coordinator owns remaining PRD business-rule decisions; D01 consumes those answers without repeating owner questions. R02, F05 and RD03/G0 still provide the real fixtures, public contracts, authorization and recovery/deployment inputs required by later product implementation. The current synthetic validation is complete for its declared scope; production integration must add real server/two-endpoint authorization, cross-device/PWA and public-contract evidence, and leave the historical `a506804ae42da75749d62aac901c8864cd1de96c` comparison baseline explicit.
 
 ## Visual Evidence
 
