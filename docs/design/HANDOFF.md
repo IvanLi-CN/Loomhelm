@@ -133,13 +133,17 @@ U01–U04 是真实实现任务的范围标识，不是页面标识；以下每�
 
 | 依赖 | 布局需要它提供的事实 | 当前交接规则 |
 | - | - | - |
-| F02 | React/Vite/TypeScript 框架、路由、查询/缓存和组件边界 | 可以先用受控 fixture 对齐布局，但不得让 fixture 字段变成业务合同 |
+| F02 | React/Vite/TypeScript 框架、路由、查询/缓存和组件边界 | 已由 parent `8ee199b67ad0705aa13bd614efad75006337be42` 合入 `feat/phase1`；D01 可将其作为实现目标，但不得让 fixture 字段变成业务合同 |
 | R02 | 脱敏真实消息、工具、审批、子代理、未知事件、项目/任务/关系和权限样本 | 没有真实事件的内容只能显示未知回退或空状态，不能虚构详情 |
 | F05 | HTTP、浏览器事件流、MCP、Connector 的实际端点/工具/资源名称、字段、状态、版本和错误语义 | 不在 UX、handoff 或前端中发明 endpoint、tool、resource、event type 或 payload；使用 F05 实际命名 |
 | RD03/G0 | command identity、event position、对账、结果不确定、Connector 状态、更新资源兼容和恢复语义 | UI 只呈现持久事实与实际能力；不得用本地重试替代对账 |
 | 产品协调 | 父提交 `079d3d85318c365056cd29a238aafdf732581421` 的 PRD/SPEC 已确认跨项目层级与前置依赖、任务项目归属、两端授权和关系不泄露边界；自环/循环、关系编辑/删除精确语义与团队权限仍待收敛 | 按已确认语义设计展示与安全回退；当前 fixture 与 30 项检查只证明 presentation，F05 实际合同、服务器授权、跨设备/PWA 输入到位前不宣称集成验证通过 |
 
 规格目前只给出 HTTP 公共边界 `/api/v1` 的命名空间认知；具体 route、method、request/response 字段、MCP 名称和事件结构必须来自 F05，不能由设计或前端猜测。
+
+## 当前 F02 工程输入
+
+父线程已将 F02 前端基础合入 `feat/phase1`，当前 parent SHA 为 `8ee199b67ad0705aa13bd614efad75006337be42`。实际输入包括根 `package.json` 的 Bun 1.4.3 workspace（`web` 与 `packages/*`）、React/Vite/TypeScript、TanStack Router/Query provider、`web/src/app/router.tsx` 的中性 `/` 与 `/status` 路由、`web/.storybook/main.ts` 的 Storybook 配置，以及 `web/src/pwa/PwaRegistration.tsx` 的 PWA 注册接线；F02 自身的实现记录仍明确标注产品 UI、业务 API、持久化和生产 PWA 行为未实现。D01 消费这些事实作为后续实现边界，现有静态设计源和已展示证据不变；这不构成完整 UI 批准，R02、F05 与 RD03/G0 的真实输入门禁仍保留。
 
 ## 待完成的合同与产品验证
 
