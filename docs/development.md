@@ -12,7 +12,7 @@ Run `LOOMHELM_DATABASE_URL=... scripts/db migrate` to apply the embedded Goose a
 
 Run `LOOMHELM_DATABASE_URL=... scripts/db test` for the focused database and job tests. Tests that need PostgreSQL skip when `LOOMHELM_DATABASE_URL` is unset, while configuration and serialization tests remain runnable without services.
 
-The checked-in sqlc configuration is `sqlc.yaml`. After the parent integration adds the aggregate entry, generate code with the pinned sqlc `1.31.1` binary from `tools/database-toolchain.json`; the F03 database entry reads schema from `db/migrations`, reads queries from `internal/platform/database/queries`, and writes Go code to `internal/platform/database/generated` with `sql_package: pgx/v5`.
+The checked-in sqlc configuration is `sqlc.yaml`. Run the pinned sqlc `1.31.1` binary with `sqlc generate` using this configuration; the F03 database entry reads schema from `db/migrations`, reads queries from `internal/platform/database/queries`, and writes Go code to `internal/platform/database/generated` with `sql_package: pgx/v5`.
 
 The backend image is built with `docker build -f build/Dockerfile --build-arg LOOMHELM_COMPONENT=server .`. The image is a build surface for the separate Server, Worker and Connector processes; process composition remains in the application entrypoints.
 
