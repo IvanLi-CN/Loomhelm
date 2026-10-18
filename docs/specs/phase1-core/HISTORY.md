@@ -30,6 +30,12 @@ The owner directly confirmed one task per conversation, fixed bindings without r
 
 The owner explicitly permitted both task parent/child relationships and prerequisite dependencies across project boundaries. Task relationships preserve the endpoint tasks' project ownership and do not widen project permissions. This decision concerns task relationships and does not change the fixed task/Session binding rule. The design discussion also established system-following theme by default, manual light/dark override and independently remembered choices per client, without selecting a storage technology. Neither clarification establishes implementation coverage or complete product/design approval.
 
+## Frontend Foundation Evidence
+
+The frontend foundation is developed in [PR #2](https://github.com/IvanLi-CN/Loomhelm/pull/2). Its source candidate `5f1a273797d73b7ee39e91b68bdd96b75a229d08`, based on `079d3d85318c365056cd29a238aafdf732581421`, passed the pinned dependency install and frontend build/check commands in a session-owned Linux VM. Route, responsive and component observations accompany that run; the HTTP IP origin did not provide browser service-worker registration evidence. A separate localhost production-preview record establishes active registration with equivalent frontend inputs. These results establish the technical foundation rather than full product/PWA acceptance.
+
+The three archived engineering images originate from `be74653dc09b203bf0e7c14cf87aadb89e3b7d68`; comparison against the validated source candidate found no changes in the frontend manifests, lockfile, TypeScript configuration, `web/` or `packages/` inputs. All three destinations were absent from the parent baseline. The owner explicitly exempted only this initial neutral engineering surface from manual screenshot confirmation, retaining Agent checks and archival. Product design and subsequent visual acceptance retain their normal gates.
+
 ## References
 
 - [Requirements](SPEC.md)
