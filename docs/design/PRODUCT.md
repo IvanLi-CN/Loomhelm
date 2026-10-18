@@ -48,8 +48,6 @@ Desktop and mobile offer the same capabilities. Layout and interaction adapt to 
 
 The theme follows the operating system by default, with manual light and dark selection and a way to return to the system setting. Each client remembers its own theme choice independently. Both themes retain the same capabilities and information hierarchy.
 
-The owner selected the Glass / Layered UI style from an independent component style sheet, requiring both light and dark variants. Translucent surfaces, frosted layer separation and fine highlights establish the material language; reading areas retain enough opacity and contrast for sustained work. This choice selects the visual language and does not approve the complete UI design.
-
 The owner's concurrent Web/PWA clients share task, session and submitted-operation state in real time. Each client can continue authorized work without a device-specific takeover step. Opening the same session on another device does not itself transfer control or make that device an observer-only client.
 
 Each session has a private unsent conversation draft shared only across the creating user's own authorized clients. Concurrent edits and reconnection conflicts automatically use the last modification, without asking the user to choose between copies. Sending consumes only the content actually sent and preserves subsequent input; synchronization and recovery never send a command. The public contract must define consistent modification ordering, deduplication and recovery.
@@ -66,9 +64,15 @@ Task business states are To do (待办), In progress (进行中), Blocked (阻�
 
 Autonomous master/project/task Agent orchestration is a future capability. The initial design must represent the verified capabilities of the current product.
 
+## Brand Commitments
+
+The product name is Loomhelm. The owner selected D, Glass / Layered (半透明材质), from an independent UI style sheet and accepted its displayed desktop/mobile light and dark specimens. Future page design must preserve this selected direction and the confirmed system/manual theme behavior. The choice and specimen acceptance do not approve the complete UI design; material details and page-level visual decisions belong to the design surface brief.
+
 ## Evidence on Hand
 
 The product requirements are the product entry point; the core specification, implementation coverage, topic history and ADRs 0001 and 0002 provide engineering constraints and capability evidence. This design context supports those documents. Final handoff must incorporate the actual framework, sanitized content fixtures, public contracts and recovery/deployment inputs when available.
+
+The owner accepted the desktop/mobile navigation images and the four D light/dark style specimens recorded in the [design surface brief](surface-brief.md#visual-evidence). They establish the reviewed navigation and selected style only. All specimens use synthetic content; they do not establish real execution, synchronization or authorization behavior.
 
 ## Product Principles
 
@@ -80,4 +84,4 @@ The product requirements are the product entry point; the core specification, im
 
 ## Open Design Decisions
 
-Navigation hierarchy and its displayed desktop/mobile structural screenshots are accepted. The owner has directed that the overall visual style be settled before further page-level visual refinement. Detailed workbench layout and treatment of other attention items follow that choice. The main coordinator owns the remaining PRD business-rule interview; the design task consumes those answers without repeating the questions. The accepted navigation, list/board/graph task views, standalone conversations, combined task workspace, expandable sub-agent visibility, binding/privacy/draft rules, five task states, cross-project task relationships and theme behavior do not approve the complete design. The prototype remembers task view choices independently for global Tasks and each project on the current client. The integration implementation default is client-local persistence isolated by identity, workspace and global/project scope; it does not add a server preference resource or change another client's view, and it is not an owner-selected storage technology. Mock task relationships demonstrate the graph structure and do not establish backend support or a relationship-editing contract.
+Navigation hierarchy and its displayed desktop/mobile structural screenshots are accepted. D, Glass / Layered, and its displayed light/dark specimens are also accepted. Detailed workbench layout, other attention items, complete page/component states and responsive workspaces remain to be designed and reviewed in that direction. The main coordinator owns the remaining PRD business-rule interview; the design task consumes those answers without repeating the questions. The accepted navigation, list/board/graph task views, standalone conversations, combined task workspace, expandable sub-agent visibility, binding/privacy/draft rules, five task states, cross-project task relationships, theme behavior and style specimens do not approve the complete design. The prototype remembers task view choices independently for global Tasks and each project on the current client. The integration implementation default is client-local persistence isolated by identity, workspace and global/project scope; it does not add a server preference resource or change another client's view, and it is not an owner-selected storage technology. Mock task relationships demonstrate the graph structure and do not establish backend support or a relationship-editing contract.

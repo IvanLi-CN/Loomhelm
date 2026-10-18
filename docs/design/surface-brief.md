@@ -8,7 +8,7 @@ The complete UI design remains one task. Its structural master is `design/index.
 
 The owner has confirmed an efficient global workbench, attention-first hierarchy, in-place approval review, complete mobile capability parity and a task workspace combining one main session with task information. Native supporting sub-agent work is expandable within the main session. The owner's engineering flows remain external context.
 
-The owner has accepted the navigation hierarchy and its desktop/mobile structural screenshots. The accepted structural prototype uses neutral styling; that acceptance does not approve the complete design. The owner requires independent UI style choices before applying any visual treatment to the prototype. The workbench variants in the master were rejected as insufficiently distinct from the structural prototype; their pending choice is withdrawn. The owner selected D, Glass / Layered, from the independent style sheet and explicitly requires both light and dark themes.
+The owner has accepted the navigation hierarchy and its desktop/mobile structural screenshots. The accepted structural prototype uses neutral styling; that acceptance does not approve the complete design. The owner requires independent UI style choices before applying any visual treatment to the prototype. The workbench variants in the master were rejected as insufficiently distinct from the structural prototype; their pending choice is withdrawn. The owner selected D, Glass / Layered, from the independent style sheet, explicitly required both light and dark themes, and accepted the displayed desktop/mobile specimens for both themes.
 
 The theme follows the operating system by default and supports manual light/dark selection and returning to the system setting. Desktop and mobile remember that preference independently. Both themes must preserve the same information hierarchy, controls and readable state distinctions.
 
@@ -29,13 +29,13 @@ The selection does not approve a complete design system or product layout. Detai
 
 Local style lookup uses the minimalism-and-swiss-style, neumorphism, neubrutalism and glassmorphism entries in ui-ux-pro-max. Those entries supply style vocabulary, not product facts or an automatic recommendation. The selected style sheet establishes component vocabulary; the complete product world is not yet built, so no finished global DESIGN.md or complete direction contract is claimed.
 
-Browser checks cover identical specimen content and sampled text contrast across both themes at desktop 1440×1100 and mobile 393×852, plus tab selection, button feedback, theme persistence after reload, manual override during system changes, return to System mode, automatic system changes and the comparison route. Overflow was also checked at 1024 CSS pixels. Theme controls and mobile action buttons are at least 44 CSS pixels high. The detector found one duplicated hover-contrast warning; the hovered theme label now uses the foreground token instead of the muted token. These checks concern the standalone sheet only; they do not validate a complete product UI or backend behavior. Candidate screenshots remain temporary until owner review.
+Browser checks cover identical specimen content and sampled text contrast across both themes at desktop 1440×1100 and mobile 393×852, plus tab selection, button feedback, theme persistence after reload, manual override during system changes, return to System mode, automatic system changes and the comparison route. Overflow was also checked at 1024 CSS pixels. Theme controls and mobile action buttons are at least 44 CSS pixels high. The detector found one duplicated hover-contrast warning; the hovered theme label now uses the foreground token instead of the muted token. These checks concern the standalone sheet only; they do not validate a complete product UI or backend behavior. The owner accepted all four displayed theme specimens; those exact images are now retained below.
 
-Visual evidence status: Storybook覆盖=不适用; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=已裁剪; 聊天回图=已展示; 证据落盘=未落盘（canonical assets await owner review）; 视觉比较=需确认. The standalone sheet is login-free and uses synthetic content. Both themes' desktop and mobile captures are temporary; accepted structural navigation assets remain authoritative for structure only. The exact theme destination paths have no baseline at locked base a506804ae42da75749d62aac901c8864cd1de96c, so the candidates are current-only and have no two-sided report or heatmap.
+Visual evidence status: Storybook覆盖=不适用; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=已裁剪; 聊天回图=已展示; 证据落盘=已落盘; 视觉比较=需确认（owner confirmation received for all four displayed specimens）. The standalone sheet is login-free and uses synthetic content. Accepted structural navigation assets remain authoritative for structure only. The exact theme destination paths have no baseline at locked base a506804ae42da75749d62aac901c8864cd1de96c, so the images are current-only and have no two-sided report or heatmap. Their acceptance does not approve the complete UI.
 
 ## Tool Context
 
-The default root invocation cannot resolve the scoped PRODUCT.md. Running `concept-seed --scope direction --mode operate` from `docs/design/` succeeded, with seed `f8d1abaf` and assigned grounded candidate 4, an incident-response workbench. Reproducing the same seed retained that assignment for proposal A; it does not override the owner's sequence or constitute a choice. No root PRODUCT.md, DESIGN.md or .impeccable is created.
+The default root invocation cannot resolve the scoped PRODUCT.md. The existing `docs/design/PRODUCT.md` remains supporting design context; initialization updates it rather than creating another product authority at the root. Running `concept-seed --scope direction --mode operate` from `docs/design/` succeeded, with seed `f8d1abaf` and assigned grounded candidate 4, an incident-response workbench. Reproducing the same seed retained that assignment for proposal A; it does not override the owner's sequence or constitute a choice. No root PRODUCT.md or DESIGN.md is created. Impeccable initialization configures `design/*.html` as the future live-mode target; CSP detection found no policy requiring a source edit. Configuration does not start the live helper, inject scripts or change the preview pages.
 
 ## Rejected Prototype Treatments
 
@@ -51,7 +51,7 @@ The grounded list, ordered by resonance, is an engineering work journal, a code-
 
 All six catalog challengers were weighed on audience identification and product clarity. They remain available for owner steering; none is adopted silently. The variable-font specimen loses the operator's familiar task grammar and useful information density; its contribution is decisive type hierarchy. Crouwel's construction grid loses familiarity and makes an irrelevant mechanism prominent; it contributes alignment discipline. Metro tiles lose rapid task comparison and full-request clarity; they contribute unmistakable selection. Orienteering loses the default approval scene and direct request reading; it contributes consistent relationship/state notation for the later graph. Zoo-map lobes lose compact operator conventions and clear request reading; they contribute unambiguous region boundaries. Ticket-wallet coupons lose parallel-work familiarity and imply an unconfirmed sequential journey; they contribute traceable requests, decisions and outcomes. These are declined on both axes, presented as compact exploration notes rather than equal visual promises. A carries the resulting hierarchy, alignment, selection, notation, boundary and traceability standards without borrowing their motifs.
 
-The pending choice among these prototype treatments is withdrawn. The owner selected D using the independent style sheet. Detailed desktop/mobile/state refinement and the final direction contract follow review of its light/dark language. Navigation and business rules are not being re-interviewed.
+The pending choice among these prototype treatments is withdrawn. The owner selected D using the independent style sheet and accepted its light/dark specimens. Detailed desktop/mobile/state refinement and the final direction contract follow that accepted direction. Navigation and business rules are not being re-interviewed.
 
 The controlled page checks cover all three workbench directions at desktop 1440×900 and mobile 393×852, plus desktop dark previews. They check fixture parity, complete approval context, horizontal overflow, mobile navigation, demo request selection/denial, sampled text contrast and the master entry's direction/theme/device/notes/neutral-prototype controls. C's excess queue-to-request gap and B's muted-navigation contrast were corrected. The detector reported no findings. These are limited direction-study checks; they do not validate the complete design, other page themes, product preference persistence, real backend operations or cross-project graph behavior. The three desktop comparison images remain temporary until owner review; no unselected direction images replace accepted navigation assets.
 
@@ -77,7 +77,7 @@ All content is labeled demonstration data. Approval, input, conversation creatio
 
 ## Open Decisions and Dependencies
 
-The owner selected D, Glass / Layered. Its light/dark presentation and detailed page layouts remain subject to review before the complete design is confirmed. The main coordinator owns the remaining PRD business-rule interview; this design task consumes those answers without repeating the questions. F02, R02, F05 and RD03/G0 actual inputs must supply the framework, real fixtures, public interfaces and recovery/deployment contracts before final U01–U04 page/component/state/API handoff.
+The owner selected D, Glass / Layered, and accepted its displayed desktop/mobile light/dark specimens. Detailed page layouts, complete states and responsive workspaces remain subject to review before the complete design is confirmed. The main coordinator owns the remaining PRD business-rule interview; this design task consumes those answers without repeating the questions. F02, R02, F05 and RD03/G0 actual inputs must supply the framework, real fixtures, public interfaces and recovery/deployment contracts before final U01–U04 page/component/state/API handoff.
 
 ## Visual Evidence
 
@@ -86,3 +86,13 @@ The owner accepted this structural navigation set: Workbench and Tasks at the to
 ![Accepted desktop navigation](../../design/evidence/project-tree-desktop.png)
 
 ![Accepted mobile navigation](../../design/evidence/project-tree-mobile.png)
+
+The owner also accepted these D, Glass / Layered, style specimens. They were captured from the login-free, synthetic-content `design/styles.html?style=glass&theme=light` and `theme=dark` fixtures at desktop 1440×1100 and mobile 393×852 CSS pixels, then normalized with trim-only cropping. These are the exact four images shown for review, retained without changing their bytes. They establish the selected material direction in both themes; they do not represent complete page designs or product behavior.
+
+![Accepted glass style, desktop light](../../design/evidence/glass-theme-desktop-light.png)
+
+![Accepted glass style, desktop dark](../../design/evidence/glass-theme-desktop-dark.png)
+
+![Accepted glass style, mobile light](../../design/evidence/glass-theme-mobile-light.png)
+
+![Accepted glass style, mobile dark](../../design/evidence/glass-theme-mobile-dark.png)
