@@ -13,4 +13,5 @@ body{height:100dvh;display:flex;flex-direction:column}.review-bar{flex-shrink:0}
 .app-shell>#main{height:100%}[data-canvas=true] .review-bar{display:none}
 .binding-destination{font-size:13px;margin:0 0 16px;overflow-wrap:anywhere}
 @media(max-width:800px){.segmented button{min-height:44px}.app-shell{height:auto}}
+@media(max-width:800px){.mobile-panels button{min-width:44px;padding-left:8px;padding-right:8px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

@@ -125,6 +125,10 @@ U01–U04 是真实实现任务的范围标识，不是页面标识；以下每�
 
 主人对展示的创建对话桌面亮色、关联任务手机亮色、离线草稿手机暗色、已处理审批桌面暗色四张答复“可以”。精确展示版本已由不可变聊天快照复制到 `design/evidence/ux-{create-desktop-light,bind-mobile-light,offline-mobile-dark,approval-desktop-dark}.png`，见 [确认示例](surface-brief.md#owner-confirmed-ux-state-examples)。trim_only 仅从手机关联图移除底部 51px 空白，结果 393x801，其余三张不变。四条目标路径在实际 parent `079d3d85318c365056cd29a238aafdf732581421` 中不存在，比较均为 current-only，无 baseline、heatmap 或 two-sided report；本展示集确认已收到，无需重复询问。接受范围仅为这四个 UX 状态画面，不等于完整 UI 批准；本次归档只保存图片和接受记录，不改变渲染源或重复捕获。
 
+## 最新 UI-only 复核
+
+在 UX 状态评审之后，补齐了移动端任务工作区面板切换按钮的最小触控宽度：`design/layouts.css` 当前 SHA-256 为 `561d8ef9b9b3ee0f4ae1db0a4c912cf05d217b801070b86a601b05f5e32131d7`，按钮保持 44px 高并至少 44px 宽，未改变 D、Glass / Layered 语言或桌面布局。修正后的 login-free、mock-only `ui_demo` 以桌面 1440x1000、手机 393x852 复核 8 条代表性路径；所有路径的 document/body overflow 均为 0（UI language 桌面为文档窄于 viewport 的 -11px，不是溢出），没有无标签按钮/输入或重复 ID，移动端可见按钮均达到 44x44。复核期间仅为绕过浏览器缓存临时禁用 cache，完成后恢复；这些当前捕获是总体验收候选，不覆盖或改写既有 owner-confirmed 证据，完整 UI 批准仍待主人确认。
+
 ## 后端与公共接口依赖
 
 | 依赖 | 布局需要它提供的事实 | 当前交接规则 |
