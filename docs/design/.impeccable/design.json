@@ -72,7 +72,7 @@
         "role": "neutral",
         "displayName": "Light Glass",
         "canonical": "#f2f7ffc2",
-        "purpose": "Light-theme chrome, controls, and composer surfaces.",
+        "purpose": "Light-theme structural glass, controls, fields, and floating menus.",
         "tonalRamp": [
           "oklch(0.15 0.0119 259.8 / 0.761)",
           "oklch(0.25 0.0119 259.8 / 0.761)",
@@ -88,7 +88,7 @@
         "role": "neutral",
         "displayName": "Dark Glass",
         "canonical": "#1b2946c9",
-        "purpose": "Dark-theme chrome, controls, and composer surfaces.",
+        "purpose": "Dark-theme structural glass, controls, fields, and floating menus.",
         "tonalRamp": [
           "oklch(0.15 0.0569 263.6 / 0.788)",
           "oklch(0.25 0.0569 263.6 / 0.788)",
@@ -99,6 +99,30 @@
           "oklch(0.80 0.0569 263.6 / 0.788)",
           "oklch(0.95 0.0569 263.6 / 0.788)"
         ]
+      },
+      "material-glow-start-light": {
+        "role": "neutral",
+        "displayName": "Material Glow Start Light",
+        "canonical": "#8ba7d2b3",
+        "purpose": "Light-theme start of the restrained material-plane background glow."
+      },
+      "material-glow-end-light": {
+        "role": "neutral",
+        "displayName": "Material Glow End Light",
+        "canonical": "#b5c9e2cc",
+        "purpose": "Light-theme end of the restrained material-plane background glow."
+      },
+      "material-glow-start-dark": {
+        "role": "neutral",
+        "displayName": "Material Glow Start Dark",
+        "canonical": "#7b93b633",
+        "purpose": "Dark-theme low-opacity start of the material-plane background glow."
+      },
+      "material-glow-end-dark": {
+        "role": "neutral",
+        "displayName": "Material Glow End Dark",
+        "canonical": "#a6bce02e",
+        "purpose": "Dark-theme low-opacity end of the material-plane background glow."
       },
       "selected-light": {
         "role": "neutral",
@@ -254,8 +278,8 @@
       },
       "muted-light": {
         "role": "neutral",
-        "displayName": "Muted Light",
-        "canonical": "#52637a",
+        "displayName": "Muted Light Board Refinement",
+        "canonical": "#4c5c73",
         "tonalRamp": [
           "oklch(0.15 0.0425 256.1)",
           "oklch(0.25 0.0425 256.1)",
@@ -402,9 +426,9 @@
           "oklch(0.95 0.0000 89.9 / 0.102)"
         ]
       },
-      "warn-light": {
+      "warning-light": {
         "role": "neutral",
-        "displayName": "Warn Light",
+        "displayName": "Warning Light",
         "canonical": "#895211",
         "tonalRamp": [
           "oklch(0.15 0.1039 63.8)",
@@ -417,9 +441,9 @@
           "oklch(0.95 0.1039 63.8)"
         ]
       },
-      "warn-dark": {
+      "warning-dark": {
         "role": "neutral",
-        "displayName": "Warn Dark",
+        "displayName": "Warning Dark",
         "canonical": "#f6d89d",
         "tonalRamp": [
           "oklch(0.15 0.0825 83.9)",
@@ -432,9 +456,9 @@
           "oklch(0.95 0.0825 83.9)"
         ]
       },
-      "warn-bg-light": {
+      "warning-bg-light": {
         "role": "neutral",
-        "displayName": "Warn Bg Light",
+        "displayName": "Warning Background Light",
         "canonical": "#f7ead5",
         "tonalRamp": [
           "oklch(0.15 0.0312 79.9)",
@@ -447,9 +471,9 @@
           "oklch(0.95 0.0312 79.9)"
         ]
       },
-      "warn-bg-dark": {
+      "warning-bg-dark": {
         "role": "neutral",
-        "displayName": "Warn Bg Dark",
+        "displayName": "Warning Background Dark",
         "canonical": "#3b3834",
         "tonalRamp": [
           "oklch(0.15 0.0080 75.3)",
@@ -462,9 +486,9 @@
           "oklch(0.95 0.0080 75.3)"
         ]
       },
-      "active-light": {
+      "success-light": {
         "role": "neutral",
-        "displayName": "Active Light",
+        "displayName": "Success Light",
         "canonical": "#285f4c",
         "tonalRamp": [
           "oklch(0.15 0.0667 168.0)",
@@ -477,9 +501,9 @@
           "oklch(0.95 0.0667 168.0)"
         ]
       },
-      "active-dark": {
+      "success-dark": {
         "role": "neutral",
-        "displayName": "Active Dark",
+        "displayName": "Success Dark",
         "canonical": "#b9e7d3",
         "tonalRamp": [
           "oklch(0.15 0.0549 166.8)",
@@ -492,9 +516,9 @@
           "oklch(0.95 0.0549 166.8)"
         ]
       },
-      "active-bg-light": {
+      "success-bg-light": {
         "role": "neutral",
-        "displayName": "Active Bg Light",
+        "displayName": "Success Background Light",
         "canonical": "#deeee7",
         "tonalRamp": [
           "oklch(0.15 0.0193 167.9)",
@@ -507,9 +531,9 @@
           "oklch(0.95 0.0193 167.9)"
         ]
       },
-      "active-bg-dark": {
+      "success-bg-dark": {
         "role": "neutral",
-        "displayName": "Active Bg Dark",
+        "displayName": "Success Background Dark",
         "canonical": "#253d3c",
         "tonalRamp": [
           "oklch(0.15 0.0299 192.5)",
@@ -521,6 +545,30 @@
           "oklch(0.80 0.0299 192.5)",
           "oklch(0.95 0.0299 192.5)"
         ]
+      },
+      "danger-light": {
+        "role": "state",
+        "displayName": "Danger Light",
+        "canonical": "#a72d41",
+        "purpose": "Light-theme error text and destructive-action emphasis."
+      },
+      "danger-dark": {
+        "role": "state",
+        "displayName": "Danger Dark",
+        "canonical": "#ffb6c4",
+        "purpose": "Dark-theme error text and destructive-action emphasis."
+      },
+      "danger-bg-light": {
+        "role": "state",
+        "displayName": "Danger Background Light",
+        "canonical": "#f8e5e9",
+        "purpose": "Light-theme error and destructive-action background."
+      },
+      "danger-bg-dark": {
+        "role": "state",
+        "displayName": "Danger Background Dark",
+        "canonical": "#462c3d",
+        "purpose": "Dark-theme error and destructive-action background."
       },
       "highlight-light": {
         "role": "neutral",
@@ -552,25 +600,11 @@
           "oklch(0.95 0.0000 89.9 / 0.129)"
         ]
       },
-      "field-border-light": {
+      "control-line": {
         "role": "neutral",
-        "displayName": "Field Border Light",
-        "canonical": "#8195b3",
-        "tonalRamp": [
-          "oklch(0.15 0.0503 258.4)",
-          "oklch(0.25 0.0503 258.4)",
-          "oklch(0.35 0.0503 258.4)",
-          "oklch(0.45 0.0503 258.4)",
-          "oklch(0.55 0.0503 258.4)",
-          "oklch(0.65 0.0503 258.4)",
-          "oklch(0.80 0.0503 258.4)",
-          "oklch(0.95 0.0503 258.4)"
-        ]
-      },
-      "field-border-dark": {
-        "role": "neutral",
-        "displayName": "Field Border Dark",
+        "displayName": "Control Line",
         "canonical": "#7285a5",
+        "purpose": "Shared outline for board fields, selects, checkboxes, and controls.",
         "tonalRamp": [
           "oklch(0.15 0.0536 260.8)",
           "oklch(0.25 0.0536 260.8)",
@@ -601,76 +635,60 @@
     "typographyMeta": {
       "body": {
         "displayName": "System UI Body",
-        "purpose": "Compact readable text across the workbench and task workspace."
+        "purpose": "Compact readable text across the language board and product surfaces."
       },
       "page-title": {
-        "displayName": "Workbench Page Title",
-        "purpose": "The selected glass workbench heading."
+        "displayName": "Language Board Title",
+        "purpose": "The current Read-mode board heading and equivalent top-level surface title."
+      },
+      "section-title": {
+        "displayName": "Section and Material Title",
+        "purpose": "The explicit material-and-typography section heading and semantic material-plane title at 20px."
       },
       "mono": {
-        "displayName": "Tool Detail Mono",
-        "purpose": "Operation previews and preformatted tool-detail content."
+        "displayName": "Code Detail Mono",
+        "purpose": "Reserved for code, operation previews, and preformatted detail; board numeric samples use system text with tabular figures."
       }
     },
     "shadows": [
       {
-        "name": "shell-shadow-light",
-        "value": "0 12px 36px #344e731c",
-        "purpose": "Ambient shadow for the light-theme work area and preview shell."
-      },
-      {
-        "name": "shell-shadow-dark",
-        "value": "0 12px 36px #08112640",
-        "purpose": "Ambient shadow for the dark-theme work area and preview shell."
-      },
-      {
-        "name": "selected-navigation",
-        "value": "inset 0 1px 0 var(--highlight), 0 3px 9px #1b34530c",
-        "purpose": "Fine highlight and minimal lift for the current navigation entry."
+        "name": "material-shadow",
+        "value": "var(--shadow)",
+        "purpose": "Restrained depth for the board's material plane and glass relationship."
       },
       {
         "name": "selected-segment",
         "value": "0 2px 5px #10264514, inset 0 1px 0 var(--highlight)",
-        "purpose": "Active view or task panel inside a tonal segmented control."
+        "purpose": "Active option inside a tonal segmented control or theme switch."
       },
       {
-        "name": "composer-shadow",
-        "value": "0 6px 20px #1026450a",
-        "purpose": "Soft front-layer cue for the shared draft composer."
+        "name": "floating-menu",
+        "value": "var(--shadow), inset 0 1px 0 var(--highlight)",
+        "purpose": "Front-layer cue for a glass select menu or popup."
       }
     ],
     "motion": [
       {
         "name": "control-state",
         "value": "150ms ease-out",
-        "purpose": "Button background and box-shadow state transitions."
+        "purpose": "Button, field, and selected-control state transitions."
       },
       {
-        "name": "request-settle",
-        "value": "240ms cubic-bezier(.16,1,.3,1)",
-        "purpose": "Brief opacity and shadow settling after the selected request plane changes."
+        "name": "menu-enter",
+        "value": "150ms cubic-bezier(.16,1,.3,1)",
+        "purpose": "Brief opacity and blur settling for a floating menu."
       },
       {
         "name": "reduced-motion",
-        "value": "animation: none",
-        "purpose": "Suppress request settling when prefers-reduced-motion is enabled."
+        "value": "animation: none; transition: none",
+        "purpose": "Suppress board animation when prefers-reduced-motion is enabled."
       }
     ],
     "breakpoints": [
       {
-        "name": "wide-compression",
-        "value": "79.99rem",
-        "purpose": "Reduce content inset and triage gap."
-      },
-      {
-        "name": "tablet",
-        "value": "63.99rem",
-        "purpose": "Hide the sidebar and move the work area toward a single-column shell."
-      },
-      {
         "name": "mobile",
-        "value": "47.99rem",
-        "purpose": "Use queue, request, recent reading order and task-local panels."
+        "value": "767px",
+        "purpose": "Stack the board and raise interactive controls to the 44px mobile target."
       }
     ]
   },
@@ -681,7 +699,7 @@
       "refersTo": "button-primary",
       "description": "Explicit approval, send, create, or other committed action.",
       "html": "<button class=\"ds-btn-primary\" type=\"button\">Approve operation</button>",
-      "css": ".ds-btn-primary { min-height: 36px; padding: 7px 12px; border: 1px solid transparent; border-radius: 8px; background: var(--accent, #305ac7); color: var(--accent-ink, #fff); font: inherit; font-weight: 500; transition: background-color 150ms ease-out, box-shadow 150ms ease-out; } .ds-btn-primary:hover:not(:disabled) { filter: brightness(.95); background: var(--accent, #305ac7); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent, #305ac7); outline-offset: 3px; } .ds-btn-primary:disabled { background: var(--soft, #e6edf6); color: var(--muted, #52637a); border-color: var(--line, #899cb64d); opacity: .8; } @media (prefers-color-scheme: dark) { .ds-btn-primary { background: var(--accent, #d1e2ff); color: var(--accent-ink, #182746); } .ds-btn-primary:hover:not(:disabled) { background: var(--accent, #d1e2ff); } .ds-btn-primary:focus-visible { outline-color: var(--accent, #d1e2ff); } .ds-btn-primary:disabled { background: var(--soft, #26324c); color: var(--muted, #c3cce5); border-color: var(--line, #a0b3db38); } } @media (max-width: 47.99rem) { .ds-btn-primary { min-height: 44px; } }"
+      "css": ".ds-btn-primary { min-height: 38px; padding: 8px 14px; border: 1px solid transparent; border-radius: 8px; background: var(--accent, #305ac7); color: var(--accent-ink, #fff); font: inherit; font-weight: 500; transition: background-color 150ms ease-out; } .ds-btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent, #305ac7) 92%, var(--ink, #20314b)); } .ds-btn-primary:active:not(:disabled) { background: color-mix(in srgb, var(--accent, #305ac7) 84%, var(--ink, #20314b)); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent, #305ac7); outline-offset: 3px; } .ds-btn-primary:disabled { background: var(--soft, #e6edf6); color: var(--muted, #4c5c73); } @media (max-width: 767px) { .ds-btn-primary { min-height: 44px; } }"
     },
     {
       "name": "Secondary Action Button",
@@ -689,7 +707,7 @@
       "refersTo": "button-secondary",
       "description": "A non-primary response such as denial or navigation.",
       "html": "<button class=\"ds-btn-secondary\" type=\"button\">Decline</button>",
-      "css": ".ds-btn-secondary { min-height: 36px; padding: 7px 12px; border: 1px solid var(--line, #899cb64d); border-radius: 8px; background: var(--surface, #f6f9fff2); color: var(--ink, #20314b); font: inherit; font-weight: 500; transition: background-color 150ms ease-out, box-shadow 150ms ease-out; } .ds-btn-secondary:hover:not(:disabled) { background: var(--soft, #e6edf6); border-color: var(--muted, #52637a); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--accent, #305ac7); outline-offset: 3px; } .ds-btn-secondary:active:not(:disabled) { background: var(--selected, #d4e0f2); } .ds-btn-secondary:disabled { background: var(--soft, #e6edf6); color: var(--muted, #52637a); opacity: .8; } @media (prefers-color-scheme: dark) { .ds-btn-secondary { border-color: var(--line, #a0b3db38); background: var(--surface, #19243ef2); color: var(--ink, #f5f7ff); } .ds-btn-secondary:hover:not(:disabled) { background: var(--soft, #26324c); border-color: var(--muted, #c3cce5); } .ds-btn-secondary:focus-visible { outline-color: var(--accent, #d1e2ff); } .ds-btn-secondary:active:not(:disabled) { background: var(--selected, #40506d); } .ds-btn-secondary:disabled { background: var(--soft, #26324c); color: var(--muted, #c3cce5); } } @media (max-width: 47.99rem) { .ds-btn-secondary { min-height: 44px; } }"
+      "css": ".ds-btn-secondary { min-height: 38px; padding: 8px 14px; border: 1px solid var(--control-line, #7285a5); border-radius: 8px; background: transparent; color: var(--ink, #20314b); font: inherit; font-weight: 500; transition: background-color 150ms ease-out; } .ds-btn-secondary:hover:not(:disabled) { background: var(--soft, #e6edf6); } .ds-btn-secondary:active:not(:disabled) { background: var(--selected, #d4e0f2); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--accent, #305ac7); outline-offset: 3px; } .ds-btn-secondary:disabled { background: var(--soft, #e6edf6); color: var(--muted, #4c5c73); border-color: transparent; } @media (max-width: 767px) { .ds-btn-secondary { min-height: 44px; } }"
     },
     {
       "name": "Glass Input",
@@ -697,40 +715,41 @@
       "refersTo": "input-glass",
       "description": "Search and selection field with a translucent glass surface.",
       "html": "<input class=\"ds-input-glass\" type=\"search\" placeholder=\"Search conversations\" aria-label=\"Search conversations\">",
-      "css": ".ds-input-glass { width: 100%; min-height: 36px; padding: 9px 10px; border: 1px solid light-dark(#8195b3, #7285a5); border-radius: 8px; background: var(--glass, #f2f7ffc2); color: var(--ink, #20314b); caret-color: var(--accent, #305ac7); font: inherit; } .ds-input-glass::placeholder { color: var(--muted, #52637a); opacity: 1; } .ds-input-glass:hover { border-color: var(--muted, #52637a); } .ds-input-glass:focus-visible { outline: 2px solid var(--accent, #305ac7); outline-offset: 3px; } @media (prefers-color-scheme: dark) { .ds-input-glass { border-color: light-dark(#8195b3, #7285a5); background: var(--glass, #1b2946c9); color: var(--ink, #f5f7ff); caret-color: var(--accent, #d1e2ff); } .ds-input-glass::placeholder { color: var(--muted, #c3cce5); } .ds-input-glass:hover { border-color: var(--muted, #c3cce5); } .ds-input-glass:focus-visible { outline-color: var(--accent, #d1e2ff); } } @media (max-width: 47.99rem) { .ds-input-glass { min-height: 44px; font-size: 16px; } }"
+      "css": ".ds-input-glass { width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid var(--control-line, #7285a5); border-radius: 8px; background: var(--glass, #f2f7ffc2); color: var(--ink, #20314b); caret-color: var(--accent, #305ac7); font: inherit; } .ds-input-glass::placeholder { color: var(--muted, #4c5c73); opacity: 1; } .ds-input-glass:focus-visible { outline: 2px solid var(--accent, #305ac7); outline-offset: 3px; } .ds-input-glass[aria-invalid=\"true\"] { border-color: var(--danger, #a72d41); } input[type=\"search\"] { appearance: none; -webkit-appearance: none; } input[type=\"search\"]::-webkit-search-cancel-button { -webkit-appearance: none; } @media (max-width: 767px) { .ds-input-glass { min-height: 44px; font-size: 16px; } }"
     },
     {
-      "name": "Frosted Navigation",
-      "kind": "nav",
-      "refersTo": "navigation-sidebar",
-      "description": "Global workbench navigation with project and conversation context.",
-      "html": "<nav class=\"ds-nav\" aria-label=\"Workspace\"><div class=\"ds-nav-brand\"><svg class=\"ds-nav-icon\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M4 4v16h16M9 4v11h11M14 4v6h6\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg><span>Loomhelm</span></div><button class=\"ds-nav-item\" aria-current=\"page\"><span>Workbench</span></button><button class=\"ds-nav-item\"><span>Tasks</span></button></nav>",
-      "css": ".ds-nav { width: 248px; min-height: 240px; padding: 24px 14px 12px; border: 0; color: var(--ink, #20314b); background: var(--nav-bg, #e3ecf8a6); box-shadow: inset -1px 0 0 var(--highlight, #ffffffc9); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); } .ds-nav-brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 28px; font: inherit; font-size: 20px; font-weight: 600; } .ds-nav-icon { width: 28px; height: 28px; flex: 0 0 auto; color: var(--accent, #305ac7); } .ds-nav-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; transition: background-color 150ms ease-out, box-shadow 150ms ease-out; } .ds-nav-item:hover:not(:disabled) { background: var(--selected, #d4e0f2); } .ds-nav-item:focus-visible { outline: 2px solid var(--accent, #305ac7); outline-offset: 3px; } .ds-nav-item[aria-current=\"page\"] { background: var(--nav-selected, #ffffffa6); box-shadow: inset 0 1px 0 var(--highlight, #ffffffc9), 0 3px 9px #1b34530c; } @media (prefers-color-scheme: dark) { .ds-nav { color: var(--ink, #f5f7ff); background: var(--nav-bg, #17244099); box-shadow: inset -1px 0 0 var(--highlight, #ffffff21); } .ds-nav-icon { color: var(--accent, #d1e2ff); } .ds-nav-item:hover:not(:disabled) { background: var(--selected, #40506d); } .ds-nav-item:focus-visible { outline-color: var(--accent, #d1e2ff); } .ds-nav-item[aria-current=\"page\"] { background: var(--nav-selected, #ffffff1a); box-shadow: inset 0 1px 0 var(--highlight, #ffffff21), 0 3px 9px #1b34530c; } } @media (max-width: 47.99rem) { .ds-nav-item { min-height: 44px; } }"
+      "name": "Select Trigger and Menu",
+      "kind": "select",
+      "refersTo": "select-trigger",
+      "description": "Authored select trigger and glass listbox menu with explicit keyboard states.",
+      "html": "<button class=\"ds-select-trigger\" type=\"button\" aria-haspopup=\"listbox\" aria-expanded=\"false\" aria-controls=\"ds-select-menu\">Latest updated</button><div class=\"ds-select-menu\" id=\"ds-select-menu\" role=\"listbox\"><button role=\"option\" aria-selected=\"true\" tabindex=\"-1\">Latest updated</button><button role=\"option\" aria-selected=\"false\" tabindex=\"-1\">Name</button></div>",
+      "css": ".ds-select-trigger { width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid var(--control-line, #7285a5); border-radius: 8px; background: var(--glass, #f2f7ffc2); color: var(--ink, #20314b); text-align: left; } .ds-select-trigger[aria-expanded=\"true\"] { outline: 2px solid var(--accent, #305ac7); outline-offset: 2px; } .ds-select-menu { padding: 5px; border-radius: 12px; background: var(--glass, #f2f7ffc2); box-shadow: var(--shadow), inset 0 1px 0 var(--highlight); backdrop-filter: blur(24px); } .ds-select-menu [role=\"option\"] { width: 100%; min-height: 40px; padding: 10px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--ink, #20314b); text-align: left; } .ds-select-menu [role=\"option\"]:hover, .ds-select-menu [role=\"option\"]:focus-visible { background: var(--soft, #e6edf6); outline: none; } .ds-select-menu [aria-selected=\"true\"] { background: var(--selected, #d4e0f2); } @media (max-width: 767px) { .ds-select-trigger, .ds-select-menu [role=\"option\"] { min-height: 44px; } }"
     },
     {
-      "name": "Request Panel",
-      "kind": "card",
-      "refersTo": "request-panel",
-      "description": "Readable context plane for an approval or uncertain result.",
-      "html": "<section class=\"ds-request-panel\" aria-label=\"Approval request\"><h3>Approval requested</h3><dl><dt>Project / task</dt><dd>Loomhelm / TASK-17</dd><dt>Scope</dt><dd>Review the pending operation</dd></dl><pre>operation.preview()</pre></section>",
-      "css": ".ds-request-panel { padding: 24px; border: 0; border-radius: 12px; background: var(--soft, #e6edf6); color: var(--ink, #20314b); box-shadow: inset 0 1px 0 var(--highlight, #ffffffc9); } .ds-request-panel h3 { margin: 0 0 22px; font-size: 18px; font-weight: 600; } .ds-request-panel dl { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 14px 16px; margin: 0; font-size: 13px; line-height: 1.6; } .ds-request-panel dt { color: var(--muted, #52637a); } .ds-request-panel dd { margin: 0; } .ds-request-panel pre { margin: 20px 0 0; padding: 12px; border: 0; border-radius: 8px; background: var(--surface, #f6f9fff2); font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; } @media (prefers-color-scheme: dark) { .ds-request-panel { background: var(--soft, #26324c); color: var(--ink, #f5f7ff); box-shadow: inset 0 1px 0 var(--highlight, #ffffff21); } .ds-request-panel dt { color: var(--muted, #c3cce5); } .ds-request-panel pre { background: var(--surface, #19243ef2); } }"
+      "name": "Selection Controls",
+      "kind": "control",
+      "refersTo": "check-control",
+      "description": "Checkbox and switch controls with stable selected, disabled, and touch states.",
+      "html": "<label class=\"ds-check\"><input type=\"checkbox\" checked>Selected</label><button class=\"ds-switch\" type=\"button\" role=\"switch\" aria-checked=\"true\"><span class=\"ds-switch-track\" aria-hidden=\"true\"></span>Show details</button>",
+      "css": ".ds-check, .ds-switch { min-height: 44px; color: var(--ink, #20314b); } .ds-check { display: inline-flex; align-items: center; gap: 10px; } .ds-check input { appearance: none; -webkit-appearance: none; width: 18px; height: 18px; border: 1px solid var(--control-line, #7285a5); border-radius: 4px; margin: 0; background: var(--surface, #f6f9fff2); display: grid; place-content: center; } .ds-check input:checked { background: var(--accent, #305ac7); border-color: transparent; } .ds-check input::before { content: \"\"; width: 9px; height: 5px; border: solid var(--accent-ink, #fff); border-width: 0 0 1.6px 1.6px; transform: rotate(-45deg) translate(1px, -1px); visibility: hidden; } .ds-check input:checked::before { visibility: visible; } .ds-check input:disabled { opacity: .55; cursor: not-allowed; } .ds-check:has(input:disabled) { color: var(--muted, #4c5c73); cursor: not-allowed; } .ds-switch { display: inline-flex; align-items: center; gap: 10px; padding: 0; border: 0; background: transparent; } .ds-switch-track { width: 34px; height: 20px; border-radius: 10px; background: var(--control-line, #7285a5); position: relative; } .ds-switch-track::before { content: \"\"; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface, #f6f9fff2); transform: translateX(0); transition: transform 150ms ease-out; } .ds-switch[aria-checked=\"true\"] .ds-switch-track { background: var(--accent, #305ac7); } .ds-switch[aria-checked=\"true\"] .ds-switch-track::before { background: var(--accent-ink, #fff); transform: translateX(14px); }"
     },
     {
-      "name": "Attention Label",
-      "kind": "chip",
-      "description": "Non-interactive text label for pending approval or unresolved work.",
-      "html": "<span class=\"ds-attention-chip\">待审批</span>",
-      "css": ".ds-attention-chip { display: inline-block; padding: 3px 8px; border-radius: 5px; background: var(--warn-bg, light-dark(#f7ead5, #3b3834)); color: var(--warn, light-dark(#895211, #f6d89d)); font: 600 11px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; }"
+      "name": "Status Labels and Feedback",
+      "kind": "state",
+      "refersTo": "status-label",
+      "description": "Text-first semantic statuses and empty, loading, and error feedback states.",
+      "html": "<span class=\"ds-status success\"><svg aria-hidden=\"true\"></svg>Saved</span><span class=\"ds-status warning\"><svg aria-hidden=\"true\"></svg>Needs attention</span><span class=\"ds-status error\"><svg aria-hidden=\"true\"></svg>Error</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 4px 8px; border-radius: 5px; background: var(--soft, #e6edf6); color: var(--muted, #4c5c73); font: inherit; font-size: 12px; font-weight: 500; line-height: 1.5; } .ds-status.success { background: var(--success-bg, #deeee7); color: var(--success, #285f4c); } .ds-status.warning { background: var(--warning-bg, #f7ead5); color: var(--warning, #895211); } .ds-status.error { background: var(--danger-bg, #f8e5e9); color: var(--danger, #a72d41); }"
     }
   ],
   "narrative": {
     "northStar": "The Live Working Desk",
-    "overview": "Loomhelm's selected D, Glass / Layered direction treats the workbench as a live working desk: blue-tinted frosted navigation and chrome surround an almost opaque reading plane, while the same hierarchy remains legible in light and dark themes. The implementation is restrained and operational, using fine highlights, compact controls, authored line icons, and explicit states to keep intervention review and conversation work in context.\n\nThis document extracts reusable visual rules from the current D01 workbench and task-workspace review master. The owner selected the Glass / Layered material direction and its light/dark specimens; complete page design remains subject to review. Page composition and prototype behavior belong to the surface brief rather than the reusable visual system.",
+    "overview": "The current D01 language board treats Loomhelm as a live working desk: blue-tinted glass separates structural layers from an almost opaque reading plane, while paired light and dark roles keep the same hierarchy legible. The implementation is restrained and operational, using fine highlights, compact controls, authored line icons, and explicit states.\n\n`design/ui-language.html` is the current Read-mode authority and `design/index.html` redirects to it. The task/workbench prototype remains structural reference only, and the complete UI is not approved. D, Glass / Layered and its paired light/dark direction remain owner-pinned; board palette and interaction refinements are language-board implementation details, not additional owner approvals. The system is authored directly in HTML and CSS.",
     "keyCharacteristics": [
-      "Blue-tinted glass navigation and chrome with a readable, nearly opaque surface.",
+      "Blue-tinted glass structural layers with a readable, nearly opaque surface.",
       "Paired light and dark semantic roles with the same information hierarchy.",
       "Compact controls, authored SVG line icons, and restrained layered depth.",
-      "Clear selection, readable request context, and expandable conversation details."
+      "Clear selection, readable fields, popup menus, and explicit feedback states."
     ],
     "rules": [
       {
@@ -745,23 +764,23 @@
       },
       {
         "name": "The Layered Depth Rule",
-        "body": "Use tonal separation and fine highlights first; reserve ambient shadows for a shell, selected control, settling response, or composer that needs to read as a front layer.",
+        "body": "Use tonal separation, material glow, and fine highlights first; reserve ambient shadows for material planes, selected controls, and floating menus.",
         "section": "elevation"
       }
     ],
     "dos": [
-      "Do keep light and dark roles paired so the same queue, request, conversation, and task states remain readable.",
-      "Do keep the reading surface almost opaque and reserve glass blur for surrounding chrome and the shared composer.",
-      "Do use authored inline SVG line icons and CSS; this slice has no shipping raster UI assets.",
-      "Do keep mobile interactive targets at the observed 44px minimum for buttons, recent titles, and conversation list titles.",
-      "Do suppress the request settling animation when `prefers-reduced-motion: reduce` is active."
+      "Do keep light and dark roles paired so the same content, control, and state distinctions remain readable.",
+      "Do keep the reading surface almost opaque and reserve glass blur for structural layers and floating menus.",
+      "Do use authored inline SVG line icons and CSS; this board has no shipping raster UI assets.",
+      "Do use 38px desktop buttons, 42px inputs/selects, and 44px mobile interactive targets.",
+      "Do suppress animation and transitions when `prefers-reduced-motion: reduce` is active."
     ],
     "donts": [
-      "Don't carry the rejected neutral, journal, standard, or other exploratory direction rules into the selected glass system.",
-      "Don't turn the D01 queue/request/recent arrangement into universal page composition guidance.",
+      "Don't carry rejected neutral, journal, standard, or other exploratory direction rules into the selected glass system.",
+      "Don't turn the prototype's queue, request, or recent-conversation arrangement into universal component guidance.",
       "Don't make reading surfaces fully transparent or use heavy permanent shadows that compete with the work.",
-      "Don't apply heading tracking to conversation prose or compact metadata.",
-      "Don't claim this slice proves the complete UI, backend behavior, synchronization, authorization, or product approval."
+      "Don't apply heading tracking to prose, labels, or metadata that are not heading roles.",
+      "Don't claim this board proves the complete UI, backend behavior, synchronization, authorization, or product approval."
     ]
   }
 }

@@ -1,10 +1,24 @@
-# Loomhelm master design surface
+# Loomhelm UI design surfaces
 
-## Scope and Mode
+## Current Review: UI Design Language
 
-The complete UI design remains one task. Its structural master is `design/index.html`, using Operate mode inside a Read-mode review document. `design/styles.html` is a separate visual style sheet for choosing a UI language before applying it to that prototype. Supporting context and metadata remain under `docs/design/` and are not served with the prototype.
+The owner clarified that the requested deliverable is the UI design language itself. Applying the chosen material to an interactive task/workbench prototype did not satisfy this review. The current review surface is `design/ui-language.html`, a standalone Read-mode visual language board; the task prototype remains structural reference. The selected D material and paired light/dark direction remain binding. Neither the previous page candidates nor the complete UI are approved.
 
-## Direction contract
+The board presents material roles, typography, semantic colors, spacing, shape, authored line icons, buttons, fields, selection controls, dropdown menus, lists and feedback states. Interactive examples demonstrate component states only. They do not introduce product navigation, task workflows or settings placement. A consistent light/dark palette, explicit selection/focus, readable content, usable mobile dimensions and coherent popup styling form the review criteria.
+
+The board extends the accepted visual vocabulary directly in code, following the confirmed build preference. Its first viewport shows material and typography together, followed by a compact component sheet with visible states. Glass distinguishes structural layers and floating menus; content remains substantially opaque. Finish with one batched desktop/mobile/theme inspection, a bounded correction if necessary, independent review and synchronized scoped design documentation. No raster UI assets are required.
+
+The board was checked at desktop 1440×1000 and mobile 393×852 CSS pixels in both themes, with additional overflow checks at 320, 768 and 1024 pixels. The bounded correction darkened light-theme auxiliary text to `#4c5c73` for 4.62:1 contrast on the canvas, normalized native search chrome, corrected palette semantics and restored keyboard traversal when closing the custom dropdown. Sampled text pairs meet 4.5:1; mobile action targets meet 44px. Selection, Escape, forward/backward Tab, field recovery, theme persistence, system-theme changes and preservation of input across theme changes were exercised. These checks cover the synthetic language board, not production behavior or a complete accessibility audit.
+
+The independent reviewer requested two material corrections: lower-opacity dark-theme material glow and a document outline that gives the two foundation specimens equal heading rank under an explicit section heading. The verdict pass scored both findings resolved and returned `disposition: ship` at the language-board scope. All four whole-page and four menu captures were refreshed after that correction; this verdict does not approve the complete product UI.
+
+The four current whole-page candidates cover desktop/mobile and light/dark. Trim-only normalization removed excess horizontal whitespace from desktop captures and preserved mobile bounds. Their exact intended evidence destinations have no baseline at the locked base, so the comparison is current-only, without a two-sided report or heatmap. Visual evidence status: Storybook覆盖=不适用（standalone design board）; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=通过; 聊天回图=待展示; 证据落盘=未落盘; 视觉比较=需确认. Candidates remain outside canonical evidence until the owner reviews the displayed set. Existing accepted navigation and style assets are unchanged.
+
+## Prototype Background: Scope and Mode
+
+The complete UI design remains one task. Its structural reference is `design/index.html?prototype=1`, using Operate mode inside a Read-mode review document. The default `design/index.html` entry now opens the standalone UI language board. `design/styles.html` preserves the earlier style comparison. Supporting context and metadata remain under `docs/design/` and are not served with the preview.
+
+## Prototype Background: Direction Contract
 
 THESIS: A live working desk for one owner: notice an exception, inspect its full context and act without losing the surrounding work. Retain the accepted navigation and workspace structure; the selected material treatment now replaces the neutral prototype presentation.
 
@@ -51,7 +65,7 @@ Browser checks cover identical specimen content and sampled text contrast across
 
 Visual evidence status: Storybook覆盖=不适用; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=已裁剪; 聊天回图=已展示; 证据落盘=已落盘; 视觉比较=需确认（owner confirmation received for all four displayed specimens）. The standalone sheet is login-free and uses synthetic content. Accepted structural navigation assets remain authoritative for structure only. The exact theme destination paths have no baseline at locked base a506804ae42da75749d62aac901c8864cd1de96c, so the images are current-only and have no two-sided report or heatmap. Their acceptance does not approve the complete UI.
 
-## High-fidelity Workbench and Task Workspace
+## Previous Workbench and Task Workspace Candidates
 
 The owner confirmed direct interactive-page construction as the standing build preference. The existing master now opens the selected D presentation, with Workbench, Task Workspace and Global Tasks fixtures, desktop/mobile preview, System / Light / Dark themes and deterministic scenario controls. A neutral structural comparison remains available; rejected visual proposals are no longer offered as current choices. The separate accepted style sheet is unchanged.
 

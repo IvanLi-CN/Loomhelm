@@ -12,7 +12,7 @@ colors:
   line-dark: "#a0b3db38"
   ink-light: "#20314b"
   ink-dark: "#f5f7ff"
-  muted-light: "#52637a"
+  muted-light: "#4c5c73"
   muted-dark: "#c3cce5"
   accent-light: "#305ac7"
   accent-dark: "#d1e2ff"
@@ -22,47 +22,42 @@ colors:
   selected-dark: "#40506d"
   glass-light: "#f2f7ffc2"
   glass-dark: "#1b2946c9"
+  material-glow-start-light: "#8ba7d2b3"
+  material-glow-end-light: "#b5c9e2cc"
+  material-glow-start-dark: "#7b93b633"
+  material-glow-end-dark: "#a6bce02e"
   nav-bg-light: "#e3ecf8a6"
   nav-bg-dark: "#17244099"
   nav-line-light: "#899cb63d"
   nav-line-dark: "#a0b3db38"
   nav-selected-light: "#ffffffa6"
   nav-selected-dark: "#ffffff1a"
-  warn-light: "#895211"
-  warn-dark: "#f6d89d"
-  warn-bg-light: "#f7ead5"
-  warn-bg-dark: "#3b3834"
-  active-light: "#285f4c"
-  active-dark: "#b9e7d3"
-  active-bg-light: "#deeee7"
-  active-bg-dark: "#253d3c"
+  warning-light: "#895211"
+  warning-dark: "#f6d89d"
+  warning-bg-light: "#f7ead5"
+  warning-bg-dark: "#3b3834"
+  success-light: "#285f4c"
+  success-dark: "#b9e7d3"
+  success-bg-light: "#deeee7"
+  success-bg-dark: "#253d3c"
+  danger-light: "#a72d41"
+  danger-dark: "#ffb6c4"
+  danger-bg-light: "#f8e5e9"
+  danger-bg-dark: "#462c3d"
   highlight-light: "#ffffffc9"
   highlight-dark: "#ffffff21"
-  field-border-light: "#8195b3"
-  field-border-dark: "#7285a5"
+  control-line: "#7285a5"
   backdrop: "#15243a55"
 typography:
   body:
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
     fontSize: "14px"
     fontWeight: 400
-    lineHeight: 1.7
-    letterSpacing: "0"
-  mobile-body:
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
-    fontSize: "15px"
-    fontWeight: 400
-    lineHeight: 1.7
+    lineHeight: 1.65
     letterSpacing: "0"
   page-title:
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
-    fontSize: "26px"
-    fontWeight: 600
-    lineHeight: 1.4
-    letterSpacing: "-.03em"
-  task-title:
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
-    fontSize: "21px"
+    fontSize: "27px"
     fontWeight: 600
     lineHeight: 1.4
     letterSpacing: "-.025em"
@@ -79,73 +74,78 @@ typography:
     lineHeight: 1.7
     letterSpacing: "0"
 rounded:
+  tag: "5px"
   control: "8px"
-  selected-row: "10px"
-  panel: "12px"
-  segment: "9px"
-  shell: "16px"
+  overlay: "12px"
+  surface: "16px"
 spacing:
-  control: "8px"
-  inset: "16px"
-  panel: "20px"
-  section: "24px"
-  heading: "28px"
-  content: "32px"
+  xs: "4px"
+  sm: "8px"
+  md: "12px"
+  lg: "16px"
+  xl: "24px"
+  2xl: "32px"
   touch-target: "44px"
 components:
   button-primary:
     backgroundColor: "{colors.accent-light}"
     textColor: "{colors.accent-ink-light}"
     rounded: "{rounded.control}"
-    padding: "7px 12px"
-    height: "36px"
+    padding: "8px 14px"
+    height: "38px"
   button-secondary:
-    backgroundColor: "{colors.surface-light}"
+    backgroundColor: "transparent"
     textColor: "{colors.ink-light}"
     rounded: "{rounded.control}"
-    padding: "7px 12px"
-    height: "36px"
+    padding: "8px 14px"
+    height: "38px"
+  button-quiet:
+    backgroundColor: "transparent"
+    textColor: "{colors.accent-light}"
+    rounded: "{rounded.control}"
+    padding: "8px 14px"
+    height: "38px"
+  button-danger:
+    backgroundColor: "transparent"
+    textColor: "{colors.danger-light}"
+    rounded: "{rounded.control}"
+    padding: "8px 14px"
+    height: "38px"
   input-glass:
     backgroundColor: "{colors.glass-light}"
     textColor: "{colors.ink-light}"
     rounded: "{rounded.control}"
-    padding: "9px 10px"
-  navigation-sidebar:
-    backgroundColor: "{colors.nav-bg-light}"
+    padding: "10px 12px"
+    height: "42px"
+  select-trigger:
+    backgroundColor: "{colors.glass-light}"
     textColor: "{colors.ink-light}"
-    width: "248px"
-    padding: "24px 14px 12px"
-  attention-row-selected:
-    backgroundColor: "{colors.selected-light}"
+    rounded: "{rounded.control}"
+    padding: "10px 12px"
+    height: "42px"
+  select-menu:
+    backgroundColor: "{colors.glass-light}"
     textColor: "{colors.ink-light}"
-    rounded: "{rounded.selected-row}"
-    padding: "16px"
-  request-panel:
-    backgroundColor: "{colors.soft-light}"
-    textColor: "{colors.ink-light}"
-    rounded: "{rounded.panel}"
-    padding: "24px"
+    rounded: "{rounded.overlay}"
+    padding: "5px"
   segmented-control:
     backgroundColor: "{colors.soft-light}"
     textColor: "{colors.ink-light}"
-    rounded: "{rounded.segment}"
+    rounded: "9px"
     padding: "4px"
-  composer:
-    backgroundColor: "{colors.glass-light}"
+  check-control:
+    backgroundColor: "{colors.surface-light}"
     textColor: "{colors.ink-light}"
-    rounded: "{rounded.panel}"
-    padding: "12px 16px"
-  task-info-rail:
+    size: "18px"
+  switch-control:
+    backgroundColor: "{colors.control-line}"
+    textColor: "{colors.ink-light}"
+    size: "34px 20px"
+  status-label:
     backgroundColor: "{colors.soft-light}"
-    textColor: "{colors.ink-light}"
-    width: "292px"
-    padding: "26px 22px"
-  conversation-title:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink-light}"
-    rounded: "{rounded.control}"
-    padding: "0"
-    height: "32px"
+    textColor: "{colors.muted-light}"
+    rounded: "{rounded.tag}"
+    padding: "4px 8px"
 ---
 
 # Design System: Loomhelm
@@ -154,22 +154,22 @@ components:
 
 **Creative North Star: "The Live Working Desk"**
 
-Loomhelm's selected D, Glass / Layered direction treats the workbench as a live working desk: blue-tinted frosted navigation and chrome surround an almost opaque reading plane, while the same hierarchy remains legible in light and dark themes. The implementation is restrained and operational, using fine highlights, compact controls, authored line icons, and explicit states to keep intervention review and conversation work in context.
+The current D01 language board treats the product as a live working desk: blue-tinted glass separates structural layers from an almost opaque reading plane, while paired light and dark roles keep the same hierarchy legible. The implementation is restrained and operational, using fine highlights, compact controls, authored line icons, and explicit states.
 
-This document extracts reusable visual rules from the current D01 workbench and task-workspace review master. The owner selected the Glass / Layered material direction and its light/dark specimens; complete page design remains subject to review. Page composition and prototype behavior belong to the surface brief rather than the reusable visual system.
+`design/ui-language.html` is the current Read-mode authority and `design/index.html` redirects to it. The task/workbench prototype remains structural reference only, and the complete UI is not approved. D, Glass / Layered and its paired light/dark direction remain owner-pinned; board palette and interaction refinements are language-board implementation details, not additional owner approvals. The system is authored directly in HTML and CSS.
 
 **Key Characteristics:**
 
-- Blue-tinted glass navigation and chrome with a readable, nearly opaque surface.
+- Blue-tinted glass structural layers with a readable, nearly opaque surface.
 - Paired light and dark semantic roles with the same information hierarchy.
 - Compact controls, authored SVG line icons, and restrained layered depth.
-- Clear selection, readable request context, and expandable conversation details.
+- Clear selection, readable fields, popup menus, and explicit feedback states.
 
 ## Colors
 
-The palette is a blue-tinted light/dark pair: saturated action blue carries explicit actions, pale dark-theme action blue reverses the contrast, and translucent glass is reserved for chrome and input surfaces.
+The board palette is a blue-tinted light/dark pair: saturated action blue carries explicit actions, pale dark-theme action blue reverses the contrast, and translucent glass is reserved for structural layers, fields, and menus.
 
-The sidecar includes synthesized OKLCH swatch ramps for inspection only. They are not additional application tokens; the frontmatter values remain normative. Its component snippets inherit the master's semantic custom properties, with standalone theme fallbacks.
+The sidecar's synthesized OKLCH swatch ramps are inspection metadata only and are not additional application tokens. Frontmatter values remain normative, while component snippets inherit the board's semantic custom properties with standalone theme fallbacks.
 
 ### Primary
 
@@ -179,15 +179,20 @@ The sidecar includes synthesized OKLCH swatch ramps for inspection only. They ar
 ### Neutral
 
 - **Reading surface** (`colors.surface-light` / `colors.surface-dark`): The almost opaque plane for headers, panels, controls, and readable content.
-- **Soft layer** (`colors.soft-light` / `colors.soft-dark`): Tonal separation for request panels, task information, message blocks, and segmented controls.
-- **Canvas** (`colors.canvas-light` / `colors.canvas-dark`): The blue-tinted background behind the work area.
+- **Soft layer** (`colors.soft-light` / `colors.soft-dark`): Tonal separation for grouped specimens, segmented controls, and inactive states.
+- **Canvas** (`colors.canvas-light` / `colors.canvas-dark`): The blue-tinted field behind the board.
+- **Material glow** (`colors.material-glow-start-light` / `colors.material-glow-end-light`, `colors.material-glow-start-dark` / `colors.material-glow-end-dark`): Theme-specific values for the authored `--material-glow-start` and `--material-glow-end` background glow behind the material plane.
 - **Ink and muted ink** (`colors.ink-light` / `colors.ink-dark`, `colors.muted-light` / `colors.muted-dark`): Primary text and supporting metadata.
 - **Lines and highlights** (`colors.line-light` / `colors.line-dark`, `colors.highlight-light` / `colors.highlight-dark`): Fine boundaries and inset material highlights.
+- **Control line** (`colors.control-line`): The shared `#7285a5` outline for fields and controls in both themes.
+
+The light muted ink is refined to `#4c5c73` on the language board for supporting text and placeholders. This is a board-level palette refinement of the extracted language, not a new owner approval.
 
 ### State
 
-- **Attention** (`colors.warn-light` / `colors.warn-dark`, `colors.warn-bg-light` / `colors.warn-bg-dark`): Pending approval, unresolved results, and other attention states.
-- **Active** (`colors.active-light` / `colors.active-dark`, `colors.active-bg-light` / `colors.active-bg-dark`): Running or positively active state labels and backgrounds.
+- **Success** (`colors.success-light` / `colors.success-dark`, `colors.success-bg-light` / `colors.success-bg-dark`): Completed or positively active state labels and backgrounds.
+- **Warning** (`colors.warning-light` / `colors.warning-dark`, `colors.warning-bg-light` / `colors.warning-bg-dark`): Attention and incomplete states.
+- **Danger** (`colors.danger-light` / `colors.danger-dark`, `colors.danger-bg-light` / `colors.danger-bg-dark`): Error and destructive-action states.
 
 **The Paired Theme Rule.** Keep the same semantic roles, hierarchy, and readable states in both themes; change the material values, not the information architecture.
 
@@ -199,101 +204,100 @@ The sidecar includes synthesized OKLCH swatch ramps for inspection only. They ar
 
 **Label/Mono Font:** Labels use the system stack; code and preformatted content use `ui-monospace, SFMono-Regular, Consolas, monospace`.
 
-**Character:** The type system is compact, quiet, and platform-native so the workbench can scan dense operational context without losing readable prose.
+**Character:** The type system is compact, quiet, and platform-native so a language board and the product surfaces it informs can scan dense operational context without losing readable prose.
 
 ### Hierarchy
 
-- **Body** (400, 14px, 1.7): General workbench and workspace text; the root becomes 15px at the mobile breakpoint.
-- **Page title** (600, 26px, 1.4): The selected glass workbench page heading.
-- **Task title** (600, 21px, 1.4): The desktop task or conversation workspace heading.
-- **Label** (500, 12px, 1.5): Navigation metadata, state labels, and compact controls.
-- **Mono** (400, 12px, 1.7): Operation previews and tool-detail content.
+- **Body** (400, 14px, 1.65): General board and product-surface prose with natural `0` letter spacing.
+- **Page title** (600, 27px, 1.4): The board title and equivalent top-level surface heading.
+- **Section / material title** (600, 20px, 1.45): The explicit material-and-typography section `h2` and the material plane's semantic `h3`, which share one visual title scale.
+- **Specimen title** (600, 28px, 1.45): The large type sample used to show the reading hierarchy.
+- **Label** (500, 12px, 1.5): Field labels, state labels, metadata, and compact controls.
+- **Mono** (400, 12px, 1.7): Reserved for code, operation previews, and preformatted detail; numeric samples use system text with tabular figures.
 
 **The System Text Rule.** Use the system stack for prose and controls, and monospace for operation previews. Apply the recorded heading tracking only to the corresponding heading role.
 
 ## Layout
 
-The selected desktop workbench uses a 248px project/conversation navigation column and a work area with a 56px context bar; the work area sits inside 12px outer margins with a 16px shell radius. Content uses 32px padding and the D01 triage slice uses a maximum 1180px grid with queue and request columns plus a recent-conversation row. The task workspace uses a 292px information rail beside the main conversation.
+The current authority is a bounded Read-mode board: material and type occupy the first viewport, followed by palette, spacing, shapes, and a compact component sheet. The desktop board is centered at a 1328px maximum with 36px vertical / 40px horizontal page padding; it compresses at 1023px and stacks at 767px. These are board layout observations, not product page composition.
 
-At 79.99rem the content inset becomes 26px and the triage gap becomes 24px; at 63.99rem the sidebar is hidden and the work area uses a 10px margin; at 47.99rem the layout becomes a single queue, request, recent reading order, task information becomes a task-local panel, and content uses 24px vertical / 16px horizontal padding. These values describe this D01 slice, not a universal fixed page composition.
+The board records a 38px desktop button, 42px input and select, and 44px mobile control target. Mobile keeps the specimen order, raises text inputs to 16px, and gives inputs and selects 44px targets; select text remains 13px.
 
 ## Elevation & Depth
 
-Depth is a hybrid of translucent tonal layers, backdrop blur, inset highlights, and restrained ambient shadows. The reading plane is almost opaque; blur belongs to navigation, chrome, the composer, dialogs, and the mobile navigation drawer. The selected request plane settles through a brief opacity/shadow response rather than a permanent heavy lift.
+Depth is a hybrid of translucent tonal layers, theme-specific material glow, backdrop blur, inset highlights, and restrained ambient shadows. The reading plane is almost opaque; blur belongs to structural glass and floating menus. Selection is expressed through a surface shift, inset highlight, and small shadow rather than a permanent heavy lift. Light uses `#8ba7d2b3` to `#b5c9e2cc`; dark uses the lower-opacity `#7b93b633` to `#a6bce02e`.
 
 ### Shadow Vocabulary
 
-- **Shell shadow** (`0 12px 36px #344e731c` light; `0 12px 36px #08112640` dark): The outer work area and preview shell.
-- **Navigation selection** (`inset 0 1px 0 var(--highlight), 0 3px 9px #1b34530c`): A current navigation item with a fine top highlight and almost imperceptible lift.
-- **Segment selection** (`0 2px 5px #10264514, inset 0 1px 0 var(--highlight)`): The active view or task panel inside a tonal segmented control.
-- **Composer shadow** (`0 6px 20px #1026450a`): The floating shared-draft composer.
+- **Material shadow** (`var(--shadow)`): The restrained board plane and glass material relationship.
+- **Selected control** (`0 2px 5px #10264514`): The active segmented button or selected theme option.
+- **Floating menu** (`var(--shadow), inset 0 1px 0 var(--highlight)`): A select menu that reads as a front layer.
 
-**The Layered Depth Rule.** Use tonal separation and fine highlights first; reserve ambient shadows for a shell, selected control, settling response, or composer that needs to read as a front layer.
+**The Layered Depth Rule.** Use tonal separation and fine highlights first; reserve ambient shadows for material planes, selected controls, and floating menus.
 
 ## Shapes
 
-The selected glass language uses gentle but compact corners: 8px controls and fields, 9px segmented controls, 10px selected queue rows, graph nodes and user messages, 12px request/composer panels, and 16px work shells and dialogs. Borders are fine and often translucent; selection is reinforced by a surface shift and inset highlight rather than a thick outline. Authored line icons are 18px in controls and 12px for navigation disclosure marks.
+The board uses four reusable radii: 5px for labels and status chips, 8px for buttons, fields, and controls, 12px for floating menus and grouped overlays, and 16px for material and content planes. Borders are fine and often translucent; selection is reinforced by a surface shift and inset highlight rather than a thick outline. Authored line icons are 18px in controls and 14px in status or feedback labels.
 
 ## Components
 
 ### Buttons
 
-- **Shape:** Compact 8px controls with a 36px desktop minimum height and 7px 12px padding.
-- **Primary:** Action blue with theme-matched action ink; used for explicit approval, send, create, and other committed actions.
-- **Hover / Focus:** Primary hover uses a small brightness reduction; general hover shifts to the soft layer; focus uses a 2px outline with 3px offset and the theme focus color.
-- **Secondary / Quiet / Disabled:** Secondary controls use the reading surface and fine line; quiet controls are transparent until hover; disabled controls use the soft layer, muted ink, and reduced opacity.
-
-### Cards / Containers
-
-- **Request panel:** Soft layer, 12px radius, 24px padding, and an inset top highlight for the selected operation context.
-- **Attention row:** Transparent at rest, 10px radius, 16px padding, and a selected soft-blue layer with an inset highlight.
-- **Task information rail:** Soft layer, 292px desktop width, and 26px vertical / 22px horizontal padding.
-- **Shell:** Reading surface, 16px radius, 12px outer margin, and the shell shadow vocabulary above.
+- **Shape:** 8px radius, 38px desktop minimum height, 8px 14px padding, and a 44px mobile minimum.
+- **Primary:** Action blue with theme-matched action ink for explicit committed actions.
+- **Secondary / Quiet / Danger:** Transparent secondary controls use the control line; quiet actions use accent ink without a persistent border; danger uses the danger ink and line.
+- **States:** Hover shifts to the soft layer, active shifts to the selected layer, focus uses a 2px accent outline with 3px offset, disabled uses the soft layer and muted ink, and busy retains the disabled geometry with a spinner.
 
 ### Inputs / Fields
 
-- **Style:** Glass input surface, 8px radius, 9px 10px padding, and the dedicated field border; placeholders use muted ink.
-- **Focus:** The accent/focus color is used for the visible focus outline and caret.
-- **Mobile:** Inputs, selects, and textareas use 16px text at the mobile breakpoint; the shared composer textarea remains transparent inside its glass container.
+- **Style:** Glass input surface, 8px radius, 42px minimum height, 10px 12px padding, and the shared `#7285a5` control line; placeholders use muted ink.
+- **Search:** `type=search` receives the native search appearance and cancel-button reset while retaining the board's caret, placeholder, and focus grammar.
+- **Validation:** Invalid fields use danger line plus a text-and-icon message; the name error message is `aria-live="polite"`.
+- **Mobile:** Inputs and selects use 16px text and a 44px minimum target at the mobile breakpoint.
 
-### Navigation
+### Select Menus
 
-- **Style:** A 248px frosted sidebar uses 22px blur, a fine inset divider, 24px top / 14px side padding, 9px 10px navigation rows, and 18px line icons.
-- **Active:** The current entry uses a translucent selected surface, an inset top highlight, and minimal ambient lift.
-- **Mobile:** The sidebar becomes a 328px maximum-width navigation drawer with a 28px blur and a right-side 16px radius; the work area keeps the same hierarchy.
+- **Trigger:** The select trigger uses the input grammar at 42px desktop / 44px mobile, with an icon, value, chevron, and accent focus outline.
+- **Menu:** The menu is a 12px glass overlay with 5px inset padding; options use text, selected background, and a check icon rather than color alone.
+- **Keyboard:** The authored listbox supports Arrow keys, Home, End, Escape, and Tab; closing by selection, Escape, or Tab restores the trigger's focus context.
 
 ### Segmented Controls
 
-- **Style:** View, project, and task panel switches use a soft 9px container with 4px padding and 4px gaps.
-- **Selected:** The active button uses the reading surface, ink, and the segment shadow; inactive buttons remain transparent.
+- **Style:** A soft 9px container uses 4px padding and 3px gaps; buttons stay transparent at rest and share the compact control grammar.
+- **Selected:** The active button uses the reading surface, ink, and a small selection shadow; inactive buttons remain readable through muted ink.
 
-### Shared Draft Composer
+### Selection Controls
 
-- **Style:** The composer is a 20px inset glass panel with 12px 16px padding, 12px radius, 20px blur, a fine border, and the composer shadow.
-- **Behavior:** The textarea is transparent and the action row is separated by a fine top rule; mobile reduces the outer margin and retains large touch controls.
+- **Checkbox:** An 18px control uses the shared control line, accent fill, and accent ink check; its label wrapper remains a 44px target.
+- **Switch:** A 34px by 20px track uses control line at rest and accent when on; the full switch control remains a 44px target.
+- **Disabled:** Disabled controls reduce contrast and preserve the reason in adjacent text rather than relying on opacity alone.
 
-### Conversation Titles
+### Status and Feedback
 
-- **Target:** Recent conversation title buttons and all conversation list title buttons use a 32px desktop minimum and a 44px mobile target.
+- **Status labels:** Five-pixel labels pair short text with authored line icons; success, warning, danger, and neutral states use text plus a semantic color/background pair.
+- **Content feedback:** Empty, loading, and error states each name the condition and expose the next useful action; loading may use a restrained spinner and reduced-motion fallback.
 
-### Attention Labels
+### Material and Icons
 
-- **Style:** Compact 11px text on the paired attention background, 5px corners and 3px 8px padding. The label names the state; color reinforces it.
+- **Material:** The canvas, frosted structural layer, fine line/highlight, and opaque reading surface are the core D grammar; glass never obscures readable content.
+- **Material heading:** Keep the section heading explicit in the document outline and use a semantic `h3` for the material-plane title while retaining the board's 20px visual title scale.
+- **Icons:** Use authored inline SVG line icons with `currentColor`, `18px` control sizing, and `aria-hidden="true"` when adjacent text names the action.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** keep light and dark roles paired so the same queue, request, conversation, and task states remain readable.
-- **Do** keep the reading surface almost opaque and reserve glass blur for surrounding chrome and the shared composer.
-- **Do** use authored inline SVG line icons and CSS; this slice has no shipping raster UI assets.
-- **Do** keep mobile interactive targets at the observed 44px minimum for buttons, recent titles, and conversation list titles.
-- **Do** suppress the request settling animation when `prefers-reduced-motion: reduce` is active.
+- **Do** keep light and dark roles paired so the same content, control, and state distinctions remain readable.
+- **Do** keep the reading surface almost opaque and reserve glass blur for structural layers and floating menus.
+- **Do** use authored inline SVG line icons and CSS; this board has no shipping raster UI assets.
+- **Do** use 38px desktop buttons, 42px inputs/selects, and 44px mobile interactive targets.
+- **Do** keep error, loading, empty, selected, disabled, busy, and focus states explicit in text, icon, or geometry.
+- **Do** suppress animation and transitions when `prefers-reduced-motion: reduce` is active.
 
 ### Don't:
 
-- **Don't** carry the rejected neutral, journal, standard, or other exploratory direction rules into the selected glass system.
-- **Don't** turn the D01 queue/request/recent arrangement into universal page composition guidance.
+- **Don't** carry rejected neutral, journal, standard, or other exploratory direction rules into the selected glass system.
+- **Don't** turn the prototype's queue, request, or recent-conversation arrangement into universal component guidance.
 - **Don't** make reading surfaces fully transparent or use heavy permanent shadows that compete with the work.
-- **Don't** apply heading tracking to conversation prose or compact metadata.
-- **Don't** claim this slice proves the complete UI, backend behavior, synchronization, authorization, or product approval.
+- **Don't** apply heading tracking to prose, labels, or metadata that are not heading roles.
+- **Don't** claim this board proves the complete UI, backend behavior, synchronization, authorization, or product approval.
