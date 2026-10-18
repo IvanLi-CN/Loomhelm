@@ -26,7 +26,7 @@ Latest independent finish review: IMP01 controls overlap is resolved by the 10-s
 
 Current synthetic validation is complete for its declared scope. The historical 18-screen/25-check records and current 10-screen/30-check records above must remain distinct; neither proves real server authorization, authorization at both relationship endpoints, cross-device synchronization, PWA behavior or production event/command semantics. Final integration still needs those inputs and a fresh evidence record against the latest parent SHA; it must not silently rewrite the historical `a506804ae42da75749d62aac901c8864cd1de96c` comparison baseline.
 
-Supplemental task/conversation presentation review uses source `3d01ab21ab708466704746f3cc7390fbd1bcbe52` without changing rendered code or incumbent tokens. Eight captures cover global task list, global task board, Sidecar project conversations and projectless conversation `ctoday`, each at desktop 1440×1000 and mobile 393×852 with alternating paired themes. All have document overflow 0. The list retains eight task identities, the board retains five business-state columns, the Sidecar list includes both task-bound `c12` and taskless `ckey`, opening `ckey` preserves its identity and project, and `ctoday` retains its independent composer. This is a bounded presentation/path check, not another run of the historical suites or detector. Four candidates are prepared for owner review: task-list desktop light, task-board mobile light, project-conversations desktop dark and projectless-conversation mobile dark. Trim-only leaves their bounds unchanged; exact proposed destinations at parent `079d3d85318c365056cd29a238aafdf732581421` are absent, so comparison is current-only without baseline, heatmap or two-sided report. Their owner acceptance remains pending and no canonical images are persisted from this supplemental set yet. The six previously retained major-layout images remain unchanged.
+Supplemental task/conversation presentation review uses source `3d01ab21ab708466704746f3cc7390fbd1bcbe52` without changing rendered code or incumbent tokens. Eight captures cover global task list, global task board, Sidecar project conversations and projectless conversation `ctoday`, each at desktop 1440×1000 and mobile 393×852 with alternating paired themes. All have document overflow 0. The list retains eight task identities, the board retains five business-state columns, the Sidecar list includes both task-bound `c12` and taskless `ckey`, opening `ckey` preserves its identity and project, and `ctoday` retains its independent composer. This is a bounded presentation/path check, not another run of the historical suites or detector. The owner replied “没问题” to the displayed task-list desktop light, task-board mobile light, project-conversations desktop dark and projectless-conversation mobile dark set. The exact four normalized images are now canonical evidence below; this accepts only these layout examples, not the complete UI. Trim-only leaves their bounds unchanged; exact destinations at parent `079d3d85318c365056cd29a238aafdf732581421` are absent, so comparison is current-only without baseline, heatmap or two-sided report. The six previously retained major-layout images keep their original acceptance scope.
 
 ## Accepted UI Design Language
 
@@ -198,3 +198,15 @@ The owner replied “就先这样吧” to this displayed four-image set. Retain
 ![Provisionally retained conversation workspace, desktop dark](../../design/evidence/layout-workspace-desktop-dark.png)
 
 ![Provisionally retained conversation workspace, mobile light](../../design/evidence/layout-workspace-mobile-light.png)
+
+### Owner-Confirmed Task and Conversation Layouts
+
+The owner accepted this exact four-image set with “没问题”. These are the displayed normalized bytes from the supplemental review at source `3d01ab21ab708466704746f3cc7390fbd1bcbe52`; desktop is 1440×1000 and mobile is 393×852 CSS px. The source is login-free, mock-only `ui_demo`, with DevTools viewport emulation and browser-viewport capture of the entire app. Trim-only left all four unchanged. All exact destination paths are absent at parent `079d3d85318c365056cd29a238aafdf732581421`; there is no readable baseline, heatmap or two-sided report. Visual evidence status: Storybook覆盖=不适用; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=无需裁剪; 聊天回图=已展示并获确认; 证据落盘=已落盘; 视觉比较=需确认（展示集答复已收到，实际 parent 无同路径基线）. This records acceptance of these examples only; complete UI approval and implementation authorization remain separate.
+
+![Owner-confirmed task list, desktop light](../../design/evidence/layout-task-list-desktop-light.png)
+
+![Owner-confirmed task board, mobile light](../../design/evidence/layout-task-board-mobile-light.png)
+
+![Owner-confirmed project conversations, desktop dark](../../design/evidence/layout-project-conversations-desktop-dark.png)
+
+![Owner-confirmed projectless conversation, mobile dark](../../design/evidence/layout-projectless-conversation-mobile-dark.png)
