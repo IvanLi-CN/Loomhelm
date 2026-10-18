@@ -48,6 +48,10 @@ The persistence foundation pins pgx v5.11.0, Goose v3.28.0, River v0.49.0 and sq
 
 The platform application migration and River queue migrations use separate histories under a common startup serialization boundary. Platform short-job results are durable infrastructure state, distinct from task business status or a Codex Run. Focused application tests use resource factories to check failure, readiness and shutdown ordering; real PostgreSQL, process restart and complete candidate observations remain separate gates. No migration rollback, cross-process Worker fencing or production release is established by this foundation.
 
+Observed source `006f1d627f38bb38bbd0e72f45edd1a28d21ac36` combines the database/job adapters, application composition and worktree readiness changes. Its session-owned Linux VM evidence includes Go test/vet, focused race tests, unchanged sqlc output and module tidy, a backend image build, actual PostgreSQL/job round trips, concurrent empty-database Server/Worker startup with a one-connection pool, health loss/recovery and signal drain. The sorted durable result rows matched exactly before and after a PostgreSQL container restart. The built Server image has local content identity `sha256:4313fa67f04dcac20200c157e6e3cb3d08ddb8fb10029d34699914856b9276b4`; this is not a registry publication or a promotion receipt.
+
+The same source passed first and repeat setup in real linked worktrees using an external Git common directory, preserving existing environment and hook contents without depending on a historical helper. Evidence also covers protected environment paths, two aggregated tool-readiness failures, distinct path-derived Compose projects and validated explicit overrides. Go `1.27.2`, Bun `1.4.3` and sqlc `1.31.1` were observed, with actual setup/dev and tool-manifest bytes matched to the candidate. Earlier harness failures are excluded from the passing observations; unavailable historical raw records were replaced by current-source runs. These observations establish infrastructure and bootstrap behavior, without completing product, blue-green or production acceptance.
+
 ## References
 
 - [Requirements](SPEC.md)
