@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_root"
+
+if ! command -v docker >/dev/null 2>&1; then
+	echo "docker is required for the development database" >&2
+	exit 1
+fi
+
+env_file=.env.example
+if [ -f .env.local ]; then
+	env_file=.env.local
+fi
+
+if [ "$#" -eq 0 ]; then
+	set -- up -d
+fi
+
+exec docker compose --project-name loomhelm-dev --env-file "$env_file" -f deploy/dev/compose.yaml "$@"

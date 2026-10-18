@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_root"
+
+if [ ! -f .env.local ]; then
+	cp .env.example .env.local
+	echo "created .env.local from .env.example"
+else
+	echo "keeping existing .env.local"
+fi
+
+if command -v bun >/dev/null 2>&1; then
+	bun install --frozen-lockfile
+else
+	echo "bun is not installed; run bun install --frozen-lockfile after installing the pinned Bun version"
+fi
+
+echo "worktree setup complete"
