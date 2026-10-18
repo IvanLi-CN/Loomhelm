@@ -151,7 +151,7 @@ All content is labeled demonstration data. Approval, input, conversation creatio
 
 The supplemental UX review covers conversation creation, projectless history-sharing confirmation, offline draft editing and a closed approval. Eight mock-only captures pair desktop 1440×1000 with mobile 393×852 CSS px; 25 targeted checks pass, including eight overflow checks and seventeen state/path checks. The static renderer now excludes the closed request from the attention count, presents consistent closed-request labels and pending execution updates, and retains the same conversation history and private draft after task binding. These changes are limited to `design/layouts.js`, whose SHA-256 is `000b35ffcf9179461bd41146a5fceafb2ebae755890faaa4a843ebcb789f04f9`; no design tokens or accepted language/style assets changed. A stale browser module cache was bypassed for the final batch, then its cache setting restored. This does not prove server authorization, real synchronization or command recovery.
 
-Four owner-facing candidates are selected: creation desktop light, binding mobile light, offline mobile dark and closed approval desktop dark. Their intended `design/evidence/ux-*.png` destinations do not exist in actual parent `079d3d85318c365056cd29a238aafdf732581421`, so comparison is current-only without baseline, heatmap or two-sided report. Trim-only leaves three unchanged and removes 51px of bottom whitespace from the mobile binding capture, producing 393×801. Immutable chat snapshots exist; canonical image persistence awaits acceptance of this displayed set. The previous ten layout examples keep their separate accepted/provisionally retained scope, and complete UI approval remains open.
+The owner accepted the displayed four-image UX set with “可以”: creation desktop light, binding mobile light, offline mobile dark and closed approval desktop dark. Their exact normalized bytes are now canonical assets under `design/evidence/ux-*.png`, copied from the immutable chat snapshots. The paths do not exist in actual parent `079d3d85318c365056cd29a238aafdf732581421`, so comparison is current-only without baseline, heatmap or two-sided report; the displayed-set acceptance has been received and does not need repeating. Trim-only leaves three unchanged and removes 51px of bottom whitespace from the mobile binding capture, producing 393×801. The previous ten layout examples keep their separate accepted/provisionally retained scope, and complete UI approval remains open.
 
 ## Open Decisions and Dependencies
 
@@ -216,3 +216,15 @@ The owner accepted this exact four-image set with “没问题”. These are the
 ![Owner-confirmed project conversations, desktop dark](../../design/evidence/layout-project-conversations-desktop-dark.png)
 
 ![Owner-confirmed projectless conversation, mobile dark](../../design/evidence/layout-projectless-conversation-mobile-dark.png)
+
+### Owner-Confirmed UX State Examples
+
+The owner accepted this exact four-image set with “可以”. These are the displayed normalized bytes of source `1c94cad7a1d20cfb49affdeaa280c57736bae35b`, retained without recapturing or changing the UI. The login-free, mock-only `ui_demo` uses DevTools viewport emulation and browser-viewport capture of the entire app: desktop 1440×1000 and mobile 393×852 CSS px. Trim-only leaves three unchanged and trims 51px of bottom whitespace from the mobile binding image to 393×801. The exact destination paths are absent at actual parent `079d3d85318c365056cd29a238aafdf732581421`, so there is no baseline, heatmap or two-sided report. Visual evidence status: Storybook覆盖=不适用; 视觉证据目标源=ui_demo; 视觉证据=存在; 空白裁剪=已裁剪（only mobile binding）; 聊天回图=已展示并获确认; 证据落盘=已落盘; 视觉比较=需确认（displayed-set reply received; parent has no same-path baseline）. This accepts these four state examples only, separately from complete UI approval and product implementation authorization.
+
+![Owner-confirmed conversation creation, desktop light](../../design/evidence/ux-create-desktop-light.png)
+
+![Owner-confirmed task binding, mobile light](../../design/evidence/ux-bind-mobile-light.png)
+
+![Owner-confirmed offline draft, mobile dark](../../design/evidence/ux-offline-mobile-dark.png)
+
+![Owner-confirmed closed approval, desktop dark](../../design/evidence/ux-approval-desktop-dark.png)

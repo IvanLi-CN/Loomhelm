@@ -123,7 +123,7 @@ U01–U04 是真实实现任务的范围标识，不是页面标识；以下每�
 
 最终批次 25 项定向合成检查通过，其中八项是 document overflow 为 0，十七项覆盖项目可选、取消不创建、未确认历史共享不绑定、绑定后会话 ID/历史/草稿保留、离线可编辑且不能发送、恢复不自动发送、已处理审批计数/禁用动作/原对话上下文，以及切回正常场景恢复原 fixture。该批不重跑既有全套检查或 detector，不证明真实同步、服务端授权、命令投递或恢复。
 
-本轮展示候选为创建对话桌面亮色、关联任务手机亮色、离线草稿手机暗色、已处理审批桌面暗色。trim_only 仅从手机关联图移除底部 51px 空白，结果 393x801，其余三张不变。四条候选目标路径 `design/evidence/ux-{create-desktop-light,bind-mobile-light,offline-mobile-dark,approval-desktop-dark}.png` 在实际 parent `079d3d85318c365056cd29a238aafdf732581421` 中不存在，比较均为 current-only，无 baseline、heatmap 或 two-sided report。候选图已生成不可变聊天快照，待主人对本展示集答复后再归档；本批接受范围和完整 UI 确认分别记录。
+主人对展示的创建对话桌面亮色、关联任务手机亮色、离线草稿手机暗色、已处理审批桌面暗色四张答复“可以”。精确展示版本已由不可变聊天快照复制到 `design/evidence/ux-{create-desktop-light,bind-mobile-light,offline-mobile-dark,approval-desktop-dark}.png`，见 [确认示例](surface-brief.md#owner-confirmed-ux-state-examples)。trim_only 仅从手机关联图移除底部 51px 空白，结果 393x801，其余三张不变。四条目标路径在实际 parent `079d3d85318c365056cd29a238aafdf732581421` 中不存在，比较均为 current-only，无 baseline、heatmap 或 two-sided report；本展示集确认已收到，无需重复询问。接受范围仅为这四个 UX 状态画面，不等于完整 UI 批准；本次归档只保存图片和接受记录，不改变渲染源或重复捕获。
 
 ## 后端与公共接口依赖
 
