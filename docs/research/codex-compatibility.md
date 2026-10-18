@@ -34,6 +34,16 @@ External control of the existing desktop session is still not proven. The docume
 
 The current acceptance state is therefore `blocked` for the second path. The blocker is an unavailable verified host attachment point to the same active desktop thread/turn, not a protocol-schema gap. History reads, `thread/read`, `thread/resume`, forks, the app-internal bridge, or another independent app-server are explicitly excluded as substitutes. Do not mark `REQ-LH-002` or `VER-LH-002` passed until the same-instance thread/turn identity is observed across a reusable live control connection and the required approval/interrupt/restart reconciliation scenarios complete.
 
+## Bounded attachment follow-up
+
+The installed desktop CLI `0.163.0-alpha.10.2` exposes `app-server proxy --sock <path>`, `codex --remote unix://PATH|ws://...`, and `codex queue --thread <UUID> --remote <endpoint>`. These are client/transport entry points, not discovery or attachment mechanisms: they require a path-addressable app-server endpoint that is already serving the target session. `queue` only submits a message and does not by itself provide approval, interrupt, event-stream or restart-reconciliation control.
+
+The same CLI exposes `app-server daemon enable-remote-control`, which changes remote-control behavior for future starts and a currently running managed daemon, plus `remote-control pair`, which requires an enrolled managed remote-control server. These operations were not run in this follow-up because they change global/managed state and can require pairing or identity participation; the earlier bounded probe already observed pairing failure with enrollment incomplete.
+
+Read-only inspection of the live desktop process found the embedded app-server command running without a `--listen` endpoint. Its Unix descriptors were anonymous process-owned connections, no path-addressable Unix socket or TCP listener was present, the managed control socket was absent, and both `app-server daemon version` and `app-server proxy --sock /Users/ivan/.codex/app-server-control/app-server-control.sock` failed because the socket did not exist. This exhausts the currently observable local entry points without changing state.
+
+The actionable blocker is therefore specific: the owner must either provide or explicitly authorize a supported path-addressable endpoint owned by the same desktop app-server instance, or authorize the global remote-control enablement, enrollment/pairing and any required desktop restart needed to create one. Even after such authorization, the endpoint must be proven to target the designated thread `thread-bd8358fda03363e67e` and its live turns before the approval, denial, interrupt, event-stream and reconnect scenarios can run. No such endpoint is currently available, so the existing-desktop acceptance remains `blocked`.
+
 ## Evidence handling
 
 Evidence should be generated into a disposable path with `new-session-probe.mjs --evidence <path>` or `control-probe.mjs --evidence <path>`. Do not commit raw app-server transcripts, rollout files, session databases, access tokens, pairing codes, or complete user messages. A valid evidence card must identify the candidate SHA, acceptance contract digest, scenario-set digest, and inspectable redacted evidence locator.

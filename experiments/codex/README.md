@@ -35,7 +35,9 @@ The latest control run passed with the same redacted thread/session reference ac
 | Homebrew CLI | `codex-cli 0.162.1` at `/opt/homebrew/bin/codex` |
 | Desktop embedded CLI | `codex-cli 0.163.0-alpha.10.2` at `CODEX_CLI_PATH` |
 | Managed daemon | `0.163.0` can start a local control socket, but pairing reports that enrollment is incomplete; the temporary probe daemon was stopped and its socket verified absent |
-| Default control socket | `/Users/ivan/.codex/app-server-control/app-server-control.sock` was absent before the temporary daemon start |
+| Default control socket | `/Users/ivan/.codex/app-server-control/app-server-control.sock` was absent before and after the temporary daemon probe; read-only proxy/version checks returned `ENOENT` |
 | Official transports | `stdio://`, Unix socket, and experimental WebSocket are documented for app-server |
 
 The authoritative protocol reference is the [Codex App Server documentation](https://learn.chatgpt.com/docs/app-server); the CLI entry points are in the [Codex CLI reference](https://learn.chatgpt.com/docs/cli/reference). The documentation describes app-server as experimental/development-oriented and does not establish that a desktop application's existing active thread is externally attachable.
+
+The bounded attachment follow-up is recorded in [desktop-attachment-follow-up.md](evidence/desktop-attachment-follow-up.md). It found no path-addressable listener for the live desktop app-server; `proxy --sock` and `daemon version` both failed against the absent managed socket. The only remaining lead requires an owner-authorized endpoint exposure or managed remote-control enablement/enrollment, so the existing-desktop path remains blocked.

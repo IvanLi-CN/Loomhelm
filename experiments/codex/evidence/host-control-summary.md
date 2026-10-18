@@ -18,4 +18,4 @@ The initial app-server process then exited. A restarted app-server resumed the s
 
 The exact reproducible command is `node experiments/codex/control-probe.mjs --workspace /private/tmp/loomhelm-r01-codex-test --evidence /private/tmp/loomhelm-r01-control-evidence.json`. The generated JSON contains only stable truncated SHA-256 references, event names, statuses and command digests; raw IDs, credentials, rollout files and complete message content are not committed.
 
-The existing desktop-session path remains blocked because no path-addressable attachment to the same active desktop thread/turn was available and no owner-designated disposable desktop test session was authorized.
+The existing desktop-session path remains blocked because no path-addressable attachment to the same active desktop thread/turn was available. The owner-designated disposable desktop target and native app-bridge preparation are recorded separately and do not satisfy reusable host Connector control.
