@@ -35,6 +35,68 @@ type Config struct {
 	ConnectorServerURL string
 }
 
+// DatabaseConfig is shared by processes and database-only tools so their
+// environment parsing and development-target checks cannot drift apart.
+type DatabaseConfig struct {
+	URL      string
+	MinConns int32
+	MaxConns int32
+}
+
+func LoadDatabaseConfig() (DatabaseConfig, error) {
+	return LoadDatabaseConfigWithLookup(os.LookupEnv)
+}
+
+func LoadDatabaseConfigWithLookup(lookup func(string) (string, bool)) (DatabaseConfig, error) {
+	config, err := databaseConfigFromLookup(lookup)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	if err := config.Validate(); err != nil {
+		return DatabaseConfig{}, err
+	}
+	return config, nil
+}
+
+func databaseConfigFromLookup(lookup func(string) (string, bool)) (DatabaseConfig, error) {
+	if lookup == nil {
+		return DatabaseConfig{}, fmt.Errorf("configuration lookup must not be nil")
+	}
+	config := DatabaseConfig{
+		URL: strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_DATABASE_URL", "")),
+	}
+	if err := ValidateDevelopmentDatabaseTarget(config.URL, lookupOrDefault(lookup, "LOOMHELM_POSTGRES_PORT", "")); err != nil {
+		return DatabaseConfig{}, err
+	}
+	var err error
+	config.MinConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MIN_CONNS", 0)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	config.MaxConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MAX_CONNS", 4)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	return config, nil
+}
+
+func (c DatabaseConfig) Validate() error {
+	if strings.TrimSpace(c.URL) == "" {
+		return fmt.Errorf("LOOMHELM_DATABASE_URL must not be empty")
+	}
+	// Parse errors may contain credentials from the URL or keyword DSN.
+	if _, err := pgxpool.ParseConfig(c.URL); err != nil {
+		return fmt.Errorf("invalid LOOMHELM_DATABASE_URL")
+	}
+	if c.MinConns < 0 || c.MaxConns < 0 {
+		return fmt.Errorf("database pool sizes must not be negative")
+	}
+	if c.MaxConns > 0 && c.MinConns > c.MaxConns {
+		return fmt.Errorf("database minimum connections must not exceed maximum connections")
+	}
+	return nil
+}
+
 func LoadConfig(component Component) (Config, error) {
 	return LoadConfigWithLookup(component, os.LookupEnv)
 }
@@ -67,18 +129,13 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		if err != nil {
 			return Config{}, err
 		}
-		config.DatabaseURL = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_DATABASE_URL", ""))
-		if err := ValidateDevelopmentDatabaseTarget(config.DatabaseURL, lookupOrDefault(lookup, "LOOMHELM_POSTGRES_PORT", "")); err != nil {
-			return Config{}, err
-		}
-		config.DatabaseMinConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MIN_CONNS", 0)
+		database, err := databaseConfigFromLookup(lookup)
 		if err != nil {
 			return Config{}, err
 		}
-		config.DatabaseMaxConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MAX_CONNS", 4)
-		if err != nil {
-			return Config{}, err
-		}
+		config.DatabaseURL = database.URL
+		config.DatabaseMinConns = database.MinConns
+		config.DatabaseMaxConns = database.MaxConns
 	}
 
 	switch component {
@@ -142,18 +199,9 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.Component != ComponentConnector {
-		if strings.TrimSpace(c.DatabaseURL) == "" {
-			return fmt.Errorf("LOOMHELM_DATABASE_URL must not be empty")
-		}
-		// Parse errors can include credentials from a URL or keyword DSN.
-		if _, err := pgxpool.ParseConfig(c.DatabaseURL); err != nil {
-			return fmt.Errorf("invalid LOOMHELM_DATABASE_URL")
-		}
-		if c.DatabaseMinConns < 0 || c.DatabaseMaxConns < 0 {
-			return fmt.Errorf("database pool sizes must not be negative")
-		}
-		if c.DatabaseMaxConns > 0 && c.DatabaseMinConns > c.DatabaseMaxConns {
-			return fmt.Errorf("database minimum connections must not exceed maximum connections")
+		database := DatabaseConfig{URL: c.DatabaseURL, MinConns: c.DatabaseMinConns, MaxConns: c.DatabaseMaxConns}
+		if err := database.Validate(); err != nil {
+			return err
 		}
 		if c.StartupTimeout < 0 {
 			return fmt.Errorf("startup timeout must not be negative")

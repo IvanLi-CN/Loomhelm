@@ -8,6 +8,74 @@ import (
 	"time"
 )
 
+func TestDatabaseOnlyConfigurationMatchesProcesses(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		env       map[string]string
+		min, max  int32
+		wantError string
+	}{
+		{name: "defaults", min: 0, max: 4},
+		{name: "explicit pool", env: map[string]string{"LOOMHELM_DATABASE_MIN_CONNS": "1", "LOOMHELM_DATABASE_MAX_CONNS": "2"}, min: 1, max: 2},
+		{name: "inherit pool maximum", env: map[string]string{"LOOMHELM_DATABASE_MAX_CONNS": "0"}, min: 0, max: 0},
+		{name: "keyword DSN", env: map[string]string{"LOOMHELM_DATABASE_URL": "host=127.0.0.1 port=55441 dbname=loomhelm user=test"}, min: 0, max: 4},
+		{name: "missing URL", env: map[string]string{"LOOMHELM_DATABASE_URL": "", "LOOMHELM_POSTGRES_PORT": ""}, wantError: "LOOMHELM_DATABASE_URL"},
+		{name: "mismatched target", env: map[string]string{"LOOMHELM_POSTGRES_PORT": "55442"}, wantError: "port must match"},
+		{name: "negative minimum", env: map[string]string{"LOOMHELM_DATABASE_MIN_CONNS": "-1"}, wantError: "LOOMHELM_DATABASE_MIN_CONNS"},
+		{name: "non-numeric maximum", env: map[string]string{"LOOMHELM_DATABASE_MAX_CONNS": "invalid"}, wantError: "LOOMHELM_DATABASE_MAX_CONNS"},
+		{name: "maximum overflow", env: map[string]string{"LOOMHELM_DATABASE_MAX_CONNS": "2147483648"}, wantError: "LOOMHELM_DATABASE_MAX_CONNS"},
+		{name: "minimum exceeds maximum", env: map[string]string{"LOOMHELM_DATABASE_MIN_CONNS": "5"}, wantError: "minimum connections"},
+		{name: "redacted parse error", env: map[string]string{"LOOMHELM_DATABASE_URL": "postgres://user:secret-dsn@localhost:invalid/db"}, wantError: "invalid LOOMHELM_DATABASE_URL"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			env := map[string]string{
+				"LOOMHELM_DATABASE_URL":  "postgres://test@127.0.0.1:55441/loomhelm",
+				"LOOMHELM_POSTGRES_PORT": "55441",
+				"LOOMHELM_DRAIN_TOKEN":   "test-token",
+			}
+			for key, value := range test.env {
+				env[key] = value
+			}
+			database, err := LoadDatabaseConfigWithLookup(envLookup(env))
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) || strings.Contains(err.Error(), "secret-dsn") {
+					t.Fatalf("database-only configuration error = %v, want %q without credentials", err, test.wantError)
+				}
+			} else if err != nil || database.MinConns != test.min || database.MaxConns != test.max {
+				t.Fatalf("database-only limits = (%d, %d), error = %v", database.MinConns, database.MaxConns, err)
+			}
+			for _, component := range []Component{ComponentServer, ComponentWorker} {
+				process, processErr := LoadConfigWithLookup(component, envLookup(env))
+				if test.wantError != "" {
+					if processErr == nil || !strings.Contains(processErr.Error(), test.wantError) || strings.Contains(processErr.Error(), "secret-dsn") {
+						t.Fatalf("%s database configuration error = %v", component, processErr)
+					}
+				} else if processErr != nil || process.DatabaseURL != database.URL || process.DatabaseMinConns != database.MinConns || process.DatabaseMaxConns != database.MaxConns {
+					t.Fatalf("%s database configuration differs from database-only configuration: %v", component, processErr)
+				}
+			}
+		})
+	}
+}
+
+func TestDatabaseOnlyConfigurationIgnoresUnrelatedProcessSettings(t *testing.T) {
+	_, err := LoadDatabaseConfigWithLookup(envLookup(map[string]string{
+		"LOOMHELM_DATABASE_URL":      "postgres://test@localhost/loomhelm",
+		"LOOMHELM_VERSION":           "",
+		"LOOMHELM_HTTP_ADDR":         "invalid",
+		"LOOMHELM_DRAIN_TOKEN":       "",
+		"LOOMHELM_WORKER_GENERATION": "0",
+		"LOOMHELM_STARTUP_TIMEOUT":   "invalid",
+		"LOOMHELM_SHUTDOWN_TIMEOUT":  "invalid",
+	}))
+	if err != nil {
+		t.Fatalf("database-only configuration consumed unrelated process settings: %v", err)
+	}
+	if _, err := LoadDatabaseConfigWithLookup(nil); err == nil {
+		t.Fatal("nil configuration lookup was accepted")
+	}
+}
+
 func TestWorkerGenerationMatchesDurableSignedRange(t *testing.T) {
 	for _, value := range []uint64{1, math.MaxInt64, math.MaxInt64 + 1, math.MaxUint64} {
 		env := map[string]string{
