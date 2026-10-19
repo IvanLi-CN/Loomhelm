@@ -1,0 +1,346 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	cat <<'EOF'
+usage: scripts/build-candidate --source-sha SHA [--output DIR] [--goos GOOS] [--goarch GOARCH]
+
+Build one immutable Loomhelm candidate from the exact clean checkout SHA. The
+output contains the Server, Worker and Connector binaries, Web static assets,
+the candidate manifest and a deterministic candidate archive.
+EOF
+}
+
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "build-candidate: cannot resolve repository root" >&2
+	exit 1
+}
+cd "$repo_root"
+
+source_sha=${LOOMHELM_SOURCE_SHA:-}
+output_dir=""
+goos=${LOOMHELM_GOOS:-linux}
+goarch=${LOOMHELM_GOARCH:-amd64}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--source-sha)
+			[ "$#" -ge 2 ] || { echo "build-candidate: --source-sha needs a value" >&2; exit 2; }
+			source_sha=$2
+			shift 2
+			;;
+		--source-sha=*)
+			source_sha=${1#*=}
+			shift
+			;;
+		--output)
+			[ "$#" -ge 2 ] || { echo "build-candidate: --output needs a value" >&2; exit 2; }
+			output_dir=$2
+			shift 2
+			;;
+		--output=*)
+			output_dir=${1#*=}
+			shift
+			;;
+		--goos)
+			[ "$#" -ge 2 ] || { echo "build-candidate: --goos needs a value" >&2; exit 2; }
+			goos=$2
+			shift 2
+			;;
+		--goos=*)
+			goos=${1#*=}
+			shift
+			;;
+		--goarch)
+			[ "$#" -ge 2 ] || { echo "build-candidate: --goarch needs a value" >&2; exit 2; }
+			goarch=$2
+			shift 2
+			;;
+		--goarch=*)
+			goarch=${1#*=}
+			shift
+			;;
+		--help|-h)
+			usage
+			exit 0
+			;;
+		*)
+			echo "build-candidate: unknown argument: $1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+if [ -z "$source_sha" ]; then
+	echo "build-candidate: --source-sha is required" >&2
+	exit 2
+fi
+
+if ! python3 - "$source_sha" <<'PY'
+import re
+import sys
+
+value = sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value) is None:
+    raise SystemExit("source SHA must be a full lowercase 40- or 64-character Git object id")
+PY
+then
+	echo "build-candidate: invalid source SHA: $source_sha" >&2
+	exit 2
+fi
+
+resolved_source_sha=$(git rev-parse --verify "${source_sha}^{commit}" 2>/dev/null) || {
+	echo "build-candidate: source SHA is not a commit in this checkout: $source_sha" >&2
+	exit 1
+}
+head_sha=$(git rev-parse HEAD)
+if [ "$resolved_source_sha" != "$source_sha" ] || [ "$head_sha" != "$source_sha" ]; then
+	echo "build-candidate: checkout HEAD $head_sha does not match source SHA $source_sha" >&2
+	exit 1
+fi
+
+if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+	echo "build-candidate: checkout must be clean; refusing to build from a dirty source tree" >&2
+	git status --short >&2
+	exit 1
+fi
+
+version_from_env() {
+	key=$1
+	awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' tools/versions.env
+}
+
+expected_go=$(version_from_env GO_VERSION)
+expected_bun=$(version_from_env BUN_VERSION)
+actual_go=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//') || actual_go=""
+actual_bun=$(bun --version 2>/dev/null) || actual_bun=""
+if [ "$actual_go" != "$expected_go" ]; then
+	echo "build-candidate: Go $expected_go is required; found ${actual_go:-unreadable}" >&2
+	exit 1
+fi
+if [ "$actual_bun" != "$expected_bun" ]; then
+	echo "build-candidate: Bun $expected_bun is required; found ${actual_bun:-unreadable}" >&2
+	exit 1
+fi
+
+case "$goos" in
+	[a-z][a-z0-9]*) ;;
+	*) echo "build-candidate: invalid GOOS: $goos" >&2; exit 2 ;;
+esac
+case "$goarch" in
+	[a-z][a-z0-9]*) ;;
+	*) echo "build-candidate: invalid GOARCH: $goarch" >&2; exit 2 ;;
+esac
+
+if [ -z "$output_dir" ]; then
+	output_dir="build/candidates/$source_sha"
+fi
+case "$output_dir" in
+	/*) ;;
+	*) output_dir="$repo_root/$output_dir" ;;
+esac
+output_parent=$(dirname -- "$output_dir")
+mkdir -p "$output_parent"
+output_dir=$(CDPATH='' cd -- "$output_parent" && pwd -P)/$(basename -- "$output_dir")
+case "$output_dir" in
+	"$repo_root"|"$repo_root/"*)
+		case "$output_dir" in
+			"$repo_root/build"|"$repo_root/build/"*) ;;
+			*) echo "build-candidate: output must not replace the repository root" >&2; exit 2 ;;
+			esac
+		;;
+esac
+if [ -e "$output_dir" ]; then
+	echo "build-candidate: refusing to overwrite existing output: $output_dir" >&2
+	exit 1
+fi
+
+stage_dir="${output_dir}.tmp.$$"
+if [ -e "$stage_dir" ]; then
+	echo "build-candidate: temporary output already exists: $stage_dir" >&2
+	exit 1
+fi
+mkdir -p "$stage_dir/bin" "$stage_dir/web"
+
+echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
+GOTOOLCHAIN=local GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+	go mod download
+for component in server worker connector; do
+	GOTOOLCHAIN=local GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+		go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$stage_dir/bin/$component" "./cmd/$component"
+done
+
+echo "build-candidate: building Web static assets with Bun $actual_bun"
+if [ -L "$repo_root/web/dist" ]; then
+	echo "build-candidate: refusing to follow a symlink at web/dist" >&2
+	exit 1
+fi
+bun install --frozen-lockfile
+bun run build
+if [ ! -d "$repo_root/web/dist" ]; then
+	echo "build-candidate: Web build did not produce web/dist" >&2
+	exit 1
+fi
+cp -R "$repo_root/web/dist/." "$stage_dir/web/"
+
+source_tree_sha=$(git rev-parse "${source_sha}^{tree}")
+source_date_epoch=$(git show -s --format=%ct "$source_sha")
+candidate_digest=$(python3 - "$stage_dir" "$repo_root" "$source_sha" "$source_tree_sha" "$source_date_epoch" "$goos" "$goarch" "$actual_go" "$actual_bun" <<'PY'
+from __future__ import annotations
+
+import gzip
+import hashlib
+import io
+import json
+import sys
+import tarfile
+from pathlib import Path
+
+stage, repo, source_sha, source_tree_sha, source_date_epoch, goos, goarch, go_version, bun_version = sys.argv[1:]
+stage_path = Path(stage).resolve()
+repo_path = Path(repo).resolve()
+source_date_epoch_int = int(source_date_epoch)
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_record(path: Path, relative: str) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"candidate artifact is not a regular file: {path}")
+    return {"path": relative, "sha256": sha256_file(path), "size": path.stat().st_size}
+
+
+def directory_records(path: Path) -> tuple[str, list[dict[str, object]]]:
+    records: list[dict[str, object]] = []
+    for child in sorted(path.rglob("*")):
+        if child.is_dir():
+            if child.is_symlink():
+                raise SystemExit(f"candidate artifact contains a directory symlink: {child}")
+            continue
+        relative = child.relative_to(path).as_posix()
+        records.append(file_record(child, relative))
+    encoded = "".join(
+        f"{record['path']}\0{record['sha256']}\0{record['size']}\n" for record in records
+    ).encode("utf-8")
+    return sha256_bytes(encoded), records
+
+
+def canonical_json(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+components: dict[str, dict[str, object]] = {}
+for name in ("server", "worker", "connector"):
+    relative = f"bin/{name}"
+    components[name] = file_record(stage_path / relative, relative)
+web_digest, web_files = directory_records(stage_path / "web")
+artifacts: dict[str, object] = {
+    **components,
+    "web": {"path": "web", "sha256": web_digest, "files": web_files},
+}
+
+inputs = {
+    "build_contract": "candidate-v1",
+    "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
+    "bun_lock_sha256": sha256_file(repo_path / "bun.lock"),
+    "build_script_sha256": sha256_file(repo_path / "scripts/build-candidate"),
+    "go_mod_sha256": sha256_file(repo_path / "go.mod"),
+    "go_sum_sha256": sha256_file(repo_path / "go.sum"),
+    "go_version": f"go{go_version}",
+    "bun_version": bun_version,
+    "web_package_sha256": sha256_file(repo_path / "web/package.json"),
+    "vite_config_sha256": sha256_file(repo_path / "web/vite.config.ts"),
+}
+platform = {"goos": goos, "goarch": goarch, "cgo_enabled": False}
+identity = {
+    "schema_version": 1,
+    "source_sha": source_sha,
+    "source_tree_sha": source_tree_sha,
+    "source_date_epoch": source_date_epoch_int,
+    "platform": platform,
+    "inputs": inputs,
+    "artifacts": artifacts,
+}
+candidate_digest = sha256_bytes(canonical_json(identity))
+manifest = {
+    "schema_version": 1,
+    "candidate": {
+        "digest": candidate_digest,
+        "source_sha": source_sha,
+        "source_tree_sha": source_tree_sha,
+        "source_date_epoch": source_date_epoch_int,
+    },
+    "platform": platform,
+    "inputs": inputs,
+    "artifacts": artifacts,
+}
+manifest_bytes = canonical_json(manifest) + b"\n"
+(stage_path / "candidate-manifest.json").write_bytes(manifest_bytes)
+manifest_digest = sha256_bytes(manifest_bytes)
+(stage_path / "candidate-manifest.json.sha256").write_text(
+    f"{manifest_digest}  candidate-manifest.json\n", encoding="ascii"
+)
+
+
+def archive_members(root: Path) -> list[tuple[str, Path]]:
+    members: dict[str, Path] = {}
+    for name in ("bin", "web", "candidate-manifest.json"):
+        path = root / name
+        if path.is_dir():
+            members[name] = path
+            for child in path.rglob("*"):
+                if child.is_symlink():
+                    raise SystemExit(f"candidate archive contains a symlink: {child}")
+                members[child.relative_to(root).as_posix()] = child
+        else:
+            members[name] = path
+    return [(name, members[name]) for name in sorted(members)]
+
+
+archive_path = stage_path / "candidate.tar.gz"
+with archive_path.open("wb") as raw_archive:
+    with gzip.GzipFile(fileobj=raw_archive, mode="wb", filename="", mtime=0, compresslevel=9) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for name, path in archive_members(stage_path):
+                info = tarfile.TarInfo(name)
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = source_date_epoch_int
+                if path.is_dir():
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    info.size = 0
+                    archive.addfile(info)
+                else:
+                    data = path.read_bytes()
+                    info.type = tarfile.REGTYPE
+                    info.mode = 0o755 if name.startswith("bin/") else 0o644
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+package_digest = sha256_file(archive_path)
+(stage_path / "candidate.tar.gz.sha256").write_text(
+    f"{package_digest}  candidate.tar.gz\n", encoding="ascii"
+)
+
+print(candidate_digest)
+PY
+)
+
+mv "$stage_dir" "$output_dir"
+echo "build-candidate: candidate_digest=$candidate_digest"
+echo "build-candidate: source_sha=$source_sha"
+echo "build-candidate: manifest=$output_dir/candidate-manifest.json"
+echo "build-candidate: package=$output_dir/candidate.tar.gz"

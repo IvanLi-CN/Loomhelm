@@ -1,0 +1,56 @@
+# Candidate Builds
+
+The candidate contract builds Server, Worker, Connector and Web static assets from one exact, clean Git source SHA. The default target is `linux/amd64`; use `--goos` and `--goarch` only when the target platform is part of the candidate identity.
+
+The builder records the source commit and tree SHA, source commit timestamp, target platform, pinned Go and Bun versions, lockfile and build-input digests, every component file digest, the complete Web file list, and a deterministic `candidate.tar.gz`. `candidate-manifest.json.sha256` and `candidate.tar.gz.sha256` protect the manifest and package bytes separately.
+
+The candidate identity is the SHA256 digest of the canonical manifest identity, excluding the manifest's own digest and the package archive digest. This avoids a circular hash while keeping the source SHA, build inputs and output bytes bound to one `candidate_digest`.
+
+## Local Build
+
+Run the builder from a clean checkout whose `HEAD` is the exact source SHA:
+
+```sh
+source_sha=$(git rev-parse HEAD)
+scripts/build-candidate --source-sha "$source_sha" --output /tmp/loomhelm-candidate
+```
+
+The command rejects abbreviated or unknown SHAs, dirty tracked or untracked files, tool versions that differ from `tools/versions.env`, existing output directories, symlinked `web/dist`, and unsupported target names. It never overwrites an existing candidate.
+
+Inspect the identity without parsing build logs:
+
+```sh
+python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"])' /tmp/loomhelm-candidate/candidate-manifest.json
+```
+
+## Reproduction
+
+Build the same source SHA twice and compare the complete manifest and deterministic package digest:
+
+```sh
+scripts/reproduce-candidate --source-sha "$source_sha"
+```
+
+The reproduction command intentionally performs two builds and removes its temporary output after the comparison. A retry of promotion or release must use the already-uploaded candidate artifact instead of invoking this command or `scripts/build-candidate` again.
+
+## Promotion
+
+Promotion verifies all manifest records, the component and Web bytes, both sidecars, and the candidate identity digest before copying. The destination is keyed by `candidate_digest`, so the same candidate is idempotent and a conflicting directory fails closed:
+
+```sh
+scripts/promote-candidate \
+  --manifest /tmp/loomhelm-candidate/candidate-manifest.json \
+  --destination /tmp/loomhelm-preview \
+  --expected-digest "$candidate_digest" \
+  --expected-source-sha "$source_sha"
+```
+
+The promotion script has no Go, Bun, Docker or package-install command. The current implementation publishes an immutable handoff directory; HTTP slot readiness, traffic switching, Worker fencing and production deployment remain separate deployment work.
+
+## Workflow Gates
+
+`Candidate CI` runs on PR and merge-queue candidate events with a per-PR cancellable concurrency group. Its required checks are `Quality Gates` and `Candidate Build`; `Candidate Reproducibility` is informational and repeats the build identity check.
+
+`Branch Preview` uses a non-cancellable per-branch group, builds once, uploads the candidate, and promotes that exact artifact into the `branch-preview` environment. `Release Candidate` uses a non-cancellable environment group and requires the source run id, artifact name, source SHA and candidate digest; it downloads and promotes the existing artifact without rebuilding it.
+
+The checked-in merge/release declaration is [.github/quality-gates.json](../.github/quality-gates.json). GitHub branch protection and environment approval settings remain external execution state and must be aligned with that declaration by the repository owner.

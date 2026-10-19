@@ -1,0 +1,92 @@
+name: Branch Preview
+
+on:
+  push:
+    branches:
+      - feat/phase1
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full source SHA to build and promote
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loomhelm-branch-preview-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+
+jobs:
+  build-preview-candidate:
+    name: Build Preview Candidate
+    outputs:
+      source_sha: ${{ steps.candidate.outputs.source_sha }}
+      candidate_digest: ${{ steps.candidate.outputs.candidate_digest }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the fixed source SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Build candidate once
+        run: scripts/build-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate"
+      - name: Record candidate identity
+        id: candidate
+        run: |
+          manifest="$RUNNER_TEMP/loomhelm-candidate/candidate-manifest.json"
+          candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
+          source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
+          echo "candidate_digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Upload the built candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: loomhelm-branch-preview-${{ github.run_id }}
+          path: ${{ runner.temp }}/loomhelm-candidate
+          if-no-files-found: error
+
+  promote-branch-preview:
+    name: Promote Branch Preview
+    needs: build-preview-candidate
+    runs-on: ubuntu-24.04
+    environment:
+      name: branch-preview
+    steps:
+      - name: Check out the candidate tooling source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-preview-candidate.outputs.source_sha }}
+          fetch-depth: 1
+      - name: Download the built candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: loomhelm-branch-preview-${{ github.run_id }}
+          path: ${{ runner.temp }}/loomhelm-candidate
+      - name: Promote the exact candidate digest
+        run: |
+          manifest=$(find "$RUNNER_TEMP/loomhelm-candidate" -type f -name candidate-manifest.json -print -quit)
+          test -n "$manifest"
+          candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
+          source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
+          scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-branch-preview" --expected-digest "$candidate_digest" --expected-source-sha "$source_sha"
+      - name: Upload the preview handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: loomhelm-branch-preview-promoted-${{ github.run_id }}
+          path: ${{ runner.temp }}/loomhelm-branch-preview
+          if-no-files-found: error

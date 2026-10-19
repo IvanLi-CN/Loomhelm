@@ -1,0 +1,299 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	cat <<'EOF'
+usage: scripts/promote-candidate --manifest FILE --destination DIR [--expected-digest DIGEST] [--expected-source-sha SHA] [--dry-run]
+
+Verify an already-built candidate and promote its files into a directory named
+by candidate digest. This command never invokes Go, Bun, Docker or a build.
+EOF
+}
+
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "promote-candidate: cannot resolve repository root" >&2
+	exit 1
+}
+
+manifest_path=""
+destination_dir=""
+expected_digest=""
+expected_source_sha=""
+dry_run=0
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--manifest)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --manifest needs a value" >&2; exit 2; }
+			manifest_path=$2
+			shift 2
+			;;
+		--manifest=*)
+			manifest_path=${1#*=}
+			shift
+			;;
+		--destination)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --destination needs a value" >&2; exit 2; }
+			destination_dir=$2
+			shift 2
+			;;
+		--destination=*)
+			destination_dir=${1#*=}
+			shift
+			;;
+		--expected-digest)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --expected-digest needs a value" >&2; exit 2; }
+			expected_digest=$2
+			shift 2
+			;;
+		--expected-digest=*)
+			expected_digest=${1#*=}
+			shift
+			;;
+		--expected-source-sha)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --expected-source-sha needs a value" >&2; exit 2; }
+			expected_source_sha=$2
+			shift 2
+			;;
+		--expected-source-sha=*)
+			expected_source_sha=${1#*=}
+			shift
+			;;
+		--dry-run)
+			dry_run=1
+			shift
+			;;
+		--help|-h)
+			usage
+			exit 0
+			;;
+		*)
+			echo "promote-candidate: unknown argument: $1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+if [ -z "$manifest_path" ] || [ -z "$destination_dir" ]; then
+	echo "promote-candidate: --manifest and --destination are required" >&2
+	usage >&2
+	exit 2
+fi
+
+case "$manifest_path" in
+	/*) ;;
+	*) manifest_path="$repo_root/$manifest_path" ;;
+esac
+manifest_parent=$(dirname -- "$manifest_path")
+manifest_path=$(CDPATH='' cd -- "$manifest_parent" && pwd -P)/$(basename -- "$manifest_path")
+case "$destination_dir" in
+	/*) ;;
+	*) destination_dir="$repo_root/$destination_dir" ;;
+esac
+
+python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_source_sha" "$dry_run" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1]).resolve()
+destination = Path(sys.argv[2]).resolve()
+expected_digest = sys.argv[3]
+expected_source_sha = sys.argv[4]
+dry_run = sys.argv[5] == "1"
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"promote-candidate: {message}")
+
+
+def canonical_json(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def sha256_file(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        fail(f"expected a regular file: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def safe_child(root: Path, relative: str) -> Path:
+    if not relative or Path(relative).is_absolute() or "\\" in relative:
+        fail(f"artifact path is not a safe relative path: {relative!r}")
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        fail(f"artifact path escapes candidate root: {relative!r}")
+    return path
+
+
+def file_record(root: Path, record: object, expected_path: str | None = None) -> dict[str, object]:
+    if not isinstance(record, dict):
+        fail("artifact record must be an object")
+    relative = record.get("path")
+    if not isinstance(relative, str) or (expected_path is not None and relative != expected_path):
+        fail(f"unexpected artifact path: {relative!r}")
+    path = safe_child(root, relative)
+    digest = sha256_file(path)
+    size = path.stat().st_size
+    if record.get("sha256") != digest or record.get("size") != size:
+        fail(f"artifact digest or size mismatch: {relative}")
+    return {"path": relative, "sha256": digest, "size": size}
+
+
+def web_records(root: Path, record: object) -> tuple[str, list[dict[str, object]]]:
+    if not isinstance(record, dict) or record.get("path") != "web":
+        fail("web artifact record must point to web")
+    web_root = safe_child(root, "web")
+    if not web_root.is_dir() or web_root.is_symlink():
+        fail("web artifact directory is missing or is a symlink")
+    expected = record.get("files")
+    if not isinstance(expected, list):
+        fail("web artifact files must be a list")
+    records: list[dict[str, object]] = []
+    for item in expected:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            fail("web artifact file record is malformed")
+        relative = item["path"]
+        records.append(file_record(web_root, item, relative))
+    paths = [item["path"] for item in records]
+    if paths != sorted(set(paths)):
+        fail("web artifact file paths must be sorted and unique")
+    actual_files: list[str] = []
+    for child in web_root.rglob("*"):
+        if child.is_symlink():
+            fail(f"web artifact contains a symlink: {child}")
+        if child.is_file():
+            actual_files.append(child.relative_to(web_root).as_posix())
+    if sorted(actual_files) != paths:
+        fail("web artifact file list does not match the candidate directory")
+    encoded = "".join(
+        f"{item['path']}\0{item['sha256']}\0{item['size']}\n" for item in records
+    ).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    if record.get("sha256") != digest:
+        fail("web artifact directory digest mismatch")
+    return digest, records
+
+
+def sidecar_digest(path: Path, expected_name: str) -> str:
+    if not path.is_file() or path.is_symlink():
+        fail(f"digest sidecar is missing: {path}")
+    fields = path.read_text(encoding="ascii").split()
+    if len(fields) != 2 or fields[1] != expected_name:
+        fail(f"digest sidecar is malformed: {path}")
+    return fields[0]
+
+
+def verify_bundle(bundle_root: Path, expected: str | None = None) -> tuple[str, str, dict[str, object]]:
+    manifest_file = bundle_root / "candidate-manifest.json"
+    if manifest_file.is_symlink() or not manifest_file.is_file():
+        fail(f"candidate manifest is missing: {manifest_file}")
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"cannot read candidate manifest: {error}")
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        fail("unsupported candidate manifest")
+    candidate = manifest.get("candidate")
+    platform = manifest.get("platform")
+    inputs = manifest.get("inputs")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(candidate, dict) or not isinstance(platform, dict) or not isinstance(inputs, dict) or not isinstance(artifacts, dict):
+        fail("candidate manifest has an invalid top-level shape")
+    digest = candidate.get("digest")
+    source_sha = candidate.get("source_sha")
+    if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        fail("candidate digest is invalid")
+    if not isinstance(source_sha, str) or len(source_sha) not in (40, 64) or any(char not in "0123456789abcdef" for char in source_sha):
+        fail("candidate source SHA is invalid")
+    if expected and digest != expected:
+        fail(f"candidate digest {digest} does not match expected digest {expected}")
+    if expected_source_sha and source_sha != expected_source_sha:
+        fail(f"candidate source SHA {source_sha} does not match expected source SHA {expected_source_sha}")
+    component_records = {
+        name: file_record(bundle_root, artifacts.get(name), f"bin/{name}")
+        for name in ("server", "worker", "connector")
+    }
+    web_digest, web_file_records = web_records(bundle_root, artifacts.get("web"))
+    normalized_artifacts = {
+        **component_records,
+        "web": {"path": "web", "sha256": web_digest, "files": web_file_records},
+    }
+    identity = {
+        "schema_version": 1,
+        "source_sha": source_sha,
+        "source_tree_sha": candidate.get("source_tree_sha"),
+        "source_date_epoch": candidate.get("source_date_epoch"),
+        "platform": platform,
+        "inputs": inputs,
+        "artifacts": normalized_artifacts,
+    }
+    recomputed = hashlib.sha256(canonical_json(identity)).hexdigest()
+    if recomputed != digest:
+        fail(f"candidate identity digest mismatch: manifest={digest} recomputed={recomputed}")
+    if candidate.get("source_tree_sha") is None or candidate.get("source_date_epoch") is None:
+        fail("candidate source identity is incomplete")
+    manifest_bytes = manifest_file.read_bytes()
+    manifest_digest = sha256_file(manifest_file)
+    if sidecar_digest(bundle_root / "candidate-manifest.json.sha256", "candidate-manifest.json") != manifest_digest:
+        fail("candidate manifest sidecar digest mismatch")
+    package = bundle_root / "candidate.tar.gz"
+    package_digest = sha256_file(package)
+    if sidecar_digest(bundle_root / "candidate.tar.gz.sha256", "candidate.tar.gz") != package_digest:
+        fail("candidate package sidecar digest mismatch")
+    if not manifest_bytes:
+        fail("candidate manifest is empty")
+    return digest, source_sha, manifest
+
+
+if not manifest_path.is_file():
+    fail(f"manifest does not exist: {manifest_path}")
+candidate_root = manifest_path.parent
+digest, source_sha, _manifest = verify_bundle(candidate_root, expected_digest or None)
+destination.mkdir(parents=True, exist_ok=True)
+target = destination / digest
+if target.exists():
+    existing_digest, existing_source_sha, _ = verify_bundle(target, digest)
+    if existing_digest != digest or existing_source_sha != source_sha:
+        fail(f"existing promoted candidate conflicts with {digest}: {target}")
+    print(f"promote-candidate: already-promoted candidate_digest={digest} destination={target}")
+    raise SystemExit(0)
+if dry_run:
+    print(f"promote-candidate: verified candidate_digest={digest} source_sha={source_sha} destination={target} dry_run=true")
+    raise SystemExit(0)
+
+temporary = destination / f".{digest}.tmp-{os.getpid()}"
+if temporary.exists():
+    fail(f"temporary promotion directory already exists: {temporary}")
+temporary.mkdir()
+try:
+    for name in ("server", "worker", "connector"):
+        relative = Path("bin") / name
+        (temporary / relative.parent).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidate_root / relative, temporary / relative)
+    shutil.copytree(candidate_root / "web", temporary / "web")
+    for name in (
+        "candidate-manifest.json",
+        "candidate-manifest.json.sha256",
+        "candidate.tar.gz",
+        "candidate.tar.gz.sha256",
+    ):
+        shutil.copy2(candidate_root / name, temporary / name)
+    os.replace(temporary, target)
+except Exception:
+    shutil.rmtree(temporary, ignore_errors=True)
+    raise
+print(f"promote-candidate: promoted candidate_digest={digest} source_sha={source_sha} destination={target}")
+PY

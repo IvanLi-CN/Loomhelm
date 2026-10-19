@@ -1,0 +1,64 @@
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Completed workflow run that uploaded the immutable candidate
+        required: true
+        type: string
+      artifact_name:
+        description: Exact candidate artifact name from the source run
+        required: true
+        type: string
+      source_sha:
+        description: Full source SHA recorded in the candidate manifest
+        required: true
+        type: string
+      candidate_digest:
+        description: Candidate digest recorded in the candidate manifest
+        required: true
+        type: string
+      environment:
+        description: Release environment protected by repository approvals
+        required: true
+        default: production
+        type: environment
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: loomhelm-release-${{ inputs.environment || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  publish-candidate:
+    name: Publish Candidate
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - name: Check out the release tooling
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Download the immutable candidate
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.source_run_id }}
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/loomhelm-candidate
+          github-token: ${{ github.token }}
+      - name: Publish without rebuilding
+        run: |
+          manifest=$(find "$RUNNER_TEMP/loomhelm-candidate" -type f -name candidate-manifest.json -print -quit)
+          test -n "$manifest"
+          scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-release" --expected-digest "${{ inputs.candidate_digest }}" --expected-source-sha "${{ inputs.source_sha }}"
+      - name: Upload the release handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: loomhelm-release-${{ inputs.candidate_digest }}
+          path: ${{ runner.temp }}/loomhelm-release
+          if-no-files-found: error

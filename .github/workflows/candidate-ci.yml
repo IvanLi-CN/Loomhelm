@@ -1,0 +1,92 @@
+name: Candidate CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loomhelm-pr-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CANDIDATE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+
+jobs:
+  quality-gates:
+    name: Quality Gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+      - name: Validate repository quality gates
+        run: python3 .agents/skills/quality-gates/assets/scripts/check_quality_gates.py --repo-root . --allow-unchecked-branch-protection
+      - name: Check candidate scripts
+        run: sh -n scripts/build-candidate scripts/promote-candidate scripts/reproduce-candidate
+
+  candidate-build:
+    name: Candidate Build
+    needs: quality-gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Build immutable candidate
+        run: scripts/build-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate"
+      - name: Validate and expose candidate identity
+        id: candidate
+        run: |
+          manifest="$RUNNER_TEMP/loomhelm-candidate/candidate-manifest.json"
+          candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
+          source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
+          scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-promotion-check" --expected-digest "$candidate_digest" --expected-source-sha "$source_sha" --dry-run
+          echo "candidate_digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Upload immutable candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: loomhelm-candidate-${{ steps.candidate.outputs.source_sha }}-${{ steps.candidate.outputs.candidate_digest }}
+          path: ${{ runner.temp }}/loomhelm-candidate
+          if-no-files-found: error
+
+  candidate-reproducibility:
+    name: Candidate Reproducibility
+    needs: quality-gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Rebuild and compare candidate identity
+        run: scripts/reproduce-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate-repro"
