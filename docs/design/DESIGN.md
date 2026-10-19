@@ -156,7 +156,7 @@ components:
 
 The current D01 language board treats the product as a live working desk: blue-tinted glass separates structural layers from an almost opaque reading plane, while paired light and dark roles keep the same hierarchy legible. The implementation is restrained and operational, using fine highlights, compact controls, authored line icons, and explicit states.
 
-`design/ui-language.html` is the owner-accepted Read-mode UI language board, and `design/index.html` redirects to it. The current layout source applies the same language to the synthetic workbench, project/conversation surfaces, task list/board/graph and conversation workspace; the final browser batch records its desktop/mobile capture coverage. D, Glass / Layered and its paired light/dark roles define the language-board direction. The complete product UI, production contracts and owner layout confirmation remain separate review gates. The system is authored directly in HTML, CSS and JavaScript.
+`design/ui-language.html` is the owner-accepted Read-mode UI language board, and `design/index.html` opens `design/layouts.html` by default. The current layout source applies the same language to the synthetic workbench, project/conversation surfaces, task list/board/graph and conversation workspace; the final browser batch records its desktop/mobile capture coverage. D, Glass / Layered and its paired light/dark roles define the language-board direction. The D01 design package is approved; complete product UI implementation, production contracts and runtime behavior remain separate engineering gates. The system is authored directly in HTML, CSS and JavaScript.
 
 **Key Characteristics:**
 
