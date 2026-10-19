@@ -168,7 +168,7 @@ The owner confirmed the current eight-image desktop/mobile light/dark review set
 | Surface | Evidence | SHA-256 |
 | - | - | - |
 | UI language, desktop light | `design/evidence/d01-final-language-desktop-light.png` | `c01bb4ae71bc5205cb7f3ab484046d75e357c13187f1c7e7ce3d7fb5cf002481` |
-| UI language, mobile dark | `design/evidence/d01-final-language-mobile-dark.png` | `b2e9e03daf86c9928e8fbdc5f7e333c5af292e4f0205e08165d9fbdc6dd7ab2bd` |
+| UI language, mobile dark | `design/evidence/d01-final-language-mobile-dark.png` | `b2e9e03daf86c992e8fbdc5f7e333c5af292e4f0205e08165d9fbdc6dd7ab2bd` |
 | Workbench, desktop light | `design/evidence/d01-final-workbench-desktop-light.png` | `47922b042323f7123de5216801c260d4ed7eea81764da5853dba03494bf592f9` |
 | Tasks board, mobile dark | `design/evidence/d01-final-tasks-mobile-dark.png` | `bc5063a83ad9ecd65dbf16c62e34a1f64bbc07d2a09e87ec6fa5a80ffffc7496` |
 | Project conversations, desktop dark | `design/evidence/d01-final-project-conversations-desktop-dark.png` | `be2e973ada4f18b4b63a893129897ce262ac941f4dd0d5bbc65eab142a39f793` |
