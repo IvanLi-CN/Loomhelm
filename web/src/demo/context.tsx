@@ -16,11 +16,21 @@ import type {
   ThemeMode
 } from "./types";
 
+export type InspectorMode = "collapsed" | "floating" | "sidebar";
+type ExpandedInspectorMode = Exclude<InspectorMode, "collapsed">;
+
+export interface InspectorPosition {
+  left: number;
+  top: number;
+}
+
 interface DemoContextValue extends DemoBootstrapSnapshot {
   fixtures: DemoFixtures;
   mutations: DemoMutation[];
   notice: string | null;
+  inspectorMode: InspectorMode;
   inspectorOpen: boolean;
+  inspectorPosition: InspectorPosition | null;
   canWrite: boolean;
   isReadOnly: boolean;
   setScene: (scene: DemoScene) => void;
@@ -37,7 +47,9 @@ interface DemoContextValue extends DemoBootstrapSnapshot {
   createConversation: (input: { message: string; projectId?: string }) => string | null;
   recover: () => void;
   reset: () => void;
+  setInspectorMode: (mode: InspectorMode) => void;
   setInspectorOpen: (open: boolean) => void;
+  setInspectorPosition: (position: InspectorPosition | null) => void;
   shareUrl: () => string;
   dismissNotice: () => void;
 }
@@ -46,6 +58,10 @@ const DemoContext = createContext<DemoContextValue | null>(null);
 
 function nowLabel(): string {
   return "刚刚";
+}
+
+function isWideViewport(): boolean {
+  return typeof window === "undefined" || typeof window.matchMedia !== "function" || window.matchMedia("(min-width: 1200px)").matches;
 }
 
 function writeStorage(key: string, value: unknown): void {
@@ -76,7 +92,10 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
   const [fixtures, setFixtures] = useState(runtime.fixtures);
   const [mutations, setMutations] = useState<DemoMutation[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorMode, setInspectorModeState] = useState<InspectorMode>(() => isWideViewport() ? "sidebar" : "collapsed");
+  const [expandedInspectorMode, setExpandedInspectorMode] = useState<ExpandedInspectorMode>(() => isWideViewport() ? "sidebar" : "floating");
+  const [inspectorPosition, setInspectorPositionState] = useState<InspectorPosition | null>(null);
+  const inspectorOpen = inspectorMode !== "collapsed";
 
   const isReadOnly = persona === "viewer" || scene === "readonly" || scene === "approval-expired";
   const canWrite = network === "online" && persona !== "viewer" && scene !== "readonly" && scene !== "error" && scene !== "loading";
@@ -86,6 +105,38 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
     root.dataset.theme = theme === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme;
     root.dataset.demo = "true";
   }, [theme]);
+
+  useEffect(() => {
+    const viewport = window.matchMedia("(min-width: 1200px)");
+    const collapseSidebar = () => {
+      if (!viewport.matches && inspectorMode === "sidebar") setInspectorModeState("collapsed");
+    };
+    viewport.addEventListener("change", collapseSidebar);
+    return () => viewport.removeEventListener("change", collapseSidebar);
+  }, [inspectorMode]);
+
+  const setInspectorMode = (nextMode: InspectorMode) => {
+    if (nextMode === "collapsed") {
+      setInspectorModeState("collapsed");
+      return;
+    }
+
+    setExpandedInspectorMode(nextMode);
+    setInspectorModeState(nextMode === "sidebar" && !isWideViewport() ? "collapsed" : nextMode);
+  };
+
+  const setInspectorOpen = (open: boolean) => {
+    if (!open) {
+      setInspectorModeState("collapsed");
+      return;
+    }
+
+    setInspectorModeState(expandedInspectorMode === "sidebar" && isWideViewport() ? "sidebar" : "floating");
+  };
+
+  const setInspectorPosition = (position: InspectorPosition | null) => {
+    setInspectorPositionState(position);
+  };
 
   const record = (label: string, detail: string) => {
     setMutations((current) => [
@@ -290,7 +341,9 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
     fixtures,
     mutations,
     notice,
+    inspectorMode,
     inspectorOpen,
+    inspectorPosition,
     canWrite,
     isReadOnly,
     setScene,
@@ -307,7 +360,9 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
     createConversation,
     recover,
     reset,
+    setInspectorMode,
     setInspectorOpen,
+    setInspectorPosition,
     shareUrl,
     dismissNotice: () => setNotice(null)
   }), [
@@ -321,7 +376,10 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
     fixtures,
     mutations,
     notice,
+    inspectorMode,
     inspectorOpen,
+    inspectorPosition,
+    expandedInspectorMode,
     canWrite,
     isReadOnly
   ]);

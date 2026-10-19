@@ -12,6 +12,8 @@ import {
 import { useState, type PropsWithChildren } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDemoRuntime, useOptionalDemoRuntime } from "@/demo/context";
 
 import { DemoInspector, DemoNotice, DemoSceneBanner } from "./DemoInspector";
@@ -45,19 +47,19 @@ function ProjectTree({
   return (
     <div className="nav-projects">
       <div className="nav-section-label">项目</div>
-      <button type="button" className="nav-tree-toggle" onClick={() => onToggle("projects")} aria-expanded={expanded.projects}>
+      <Button type="button" variant="ghost" className="nav-tree-toggle" onClick={() => onToggle("projects")} aria-expanded={expanded.projects}>
         {expanded.projects ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
         <span>所有项目</span>
-      </button>
+      </Button>
       {expanded.projects && runtime.fixtures.projects.map((project) => {
         const conversations = runtime.fixtures.conversations.filter((conversation) => conversation.projectId === project.id);
         const key = `project:${project.id}`;
         return (
           <div className="nav-project" key={project.id}>
             <div className="nav-project-row">
-              <button type="button" className="nav-project-toggle" onClick={() => onToggle(key)} aria-expanded={expanded[key]}>
+              <Button type="button" variant="ghost" size="icon" className="nav-project-toggle" onClick={() => onToggle(key)} aria-expanded={expanded[key]}>
                 {expanded[key] ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
-              </button>
+              </Button>
               <Link
                 to="/projects/$projectId"
                 params={{ projectId: project.id }}
@@ -154,7 +156,7 @@ export function ProductShell({ children }: PropsWithChildren) {
   );
 
   return (
-    <div className={`product-shell ${runtime.inspectorOpen ? "has-inspector" : ""}`} data-scene={runtime.scene} data-network={runtime.network}>
+    <div className={`product-shell ${runtime.inspectorOpen ? "has-inspector" : ""}`} data-inspector-mode={runtime.inspectorMode} data-scene={runtime.scene} data-network={runtime.network}>
       <aside className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`}>
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true"><FlaskConical size={21} strokeWidth={1.8} /></span>
@@ -166,31 +168,37 @@ export function ProductShell({ children }: PropsWithChildren) {
           <span><strong>我的工作区</strong><small>个人工作空间</small></span>
         </div>
       </aside>
-      {mobileOpen && <button type="button" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
+      {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
       <div className="product-work-area">
         <header className="product-header">
-          <button type="button" className="icon-button mobile-menu-button" aria-label="打开导航" title="打开导航" onClick={() => setMobileOpen(true)}>
+          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" title="打开导航" onClick={() => setMobileOpen(true)}>
             <Menu size={19} aria-hidden="true" />
-          </button>
+          </Button>
           <div className="breadcrumb"><Breadcrumb pathname={pathname} /></div>
           <div className="header-actions">
             <span className="demo-label"><span className="demo-label-dot" aria-hidden="true" />Demo</span>
-            <label className="theme-select">
-              <span className="sr-only">界面主题</span>
-              <select value={runtime.theme} onChange={(event) => runtime.setTheme(event.target.value as "system" | "light" | "dark")}>
-                <option value="system">系统主题</option>
-                <option value="light">亮色</option>
-                <option value="dark">暗色</option>
-              </select>
-            </label>
-            <Link to="/tasks/new" className="button button-primary header-create" onClick={openCreate}>
-              <Plus size={16} aria-hidden="true" />
-              <span>新建任务</span>
-            </Link>
+            <Select value={runtime.theme} onValueChange={(value) => runtime.setTheme(value as "system" | "light" | "dark")}>
+              <SelectTrigger className="theme-select-trigger" aria-label="界面主题">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="system">系统主题</SelectItem>
+                  <SelectItem value="light">亮色</SelectItem>
+                  <SelectItem value="dark">暗色</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Button asChild variant="default" className="button button-primary header-create" onClick={openCreate}>
+              <Link to="/tasks/new">
+                <Plus size={16} aria-hidden="true" />
+                <span>新建任务</span>
+              </Link>
+            </Button>
           </div>
-          <button type="button" className="icon-button mobile-close-button" aria-label="关闭导航" title="关闭导航" onClick={closeMobile}>
+          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-close-button" aria-label="关闭导航" title="关闭导航" onClick={closeMobile}>
             <X size={19} aria-hidden="true" />
-          </button>
+          </Button>
         </header>
         <DemoSceneBanner />
         <main className="product-content">{children ?? <Outlet />}</main>

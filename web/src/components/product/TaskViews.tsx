@@ -10,6 +10,9 @@ import {
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getProject, useDemoRuntime } from "@/demo/context";
 import { taskStates, type DemoTask, type TaskState, type TaskView } from "@/demo/types";
 
@@ -47,8 +50,9 @@ function TaskViewSwitch({ scope, value }: { scope: string; value: TaskView }) {
   return (
     <div className="view-switch" role="group" aria-label="任务视图">
       {options.map(([option, label, Icon]) => (
-        <button
+        <Button
           type="button"
+          variant="secondary"
           className={`button button-secondary view-switch-button ${value === option ? "is-selected" : ""}`}
           aria-pressed={value === option}
           key={option}
@@ -56,7 +60,7 @@ function TaskViewSwitch({ scope, value }: { scope: string; value: TaskView }) {
         >
           <Icon size={15} aria-hidden="true" />
           <span>{label}</span>
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -166,10 +170,10 @@ function TaskGraph({ tasks }: { tasks: DemoTask[] }) {
           <span><i className="legend-line legend-line-dashed" aria-hidden="true" />前置任务 → 后续任务</span>
         </div>
         <div className="task-graph-controls" role="group" aria-label="图谱缩放">
-          <button type="button" className="icon-button icon-button-subtle" aria-label="缩小图谱" title="缩小图谱" onClick={() => setZoom((value) => Math.max(0.7, Number((value - 0.1).toFixed(1))))}><Minus size={16} aria-hidden="true" /></button>
+          <Button type="button" variant="ghost" size="icon" className="icon-button icon-button-subtle" aria-label="缩小图谱" title="缩小图谱" onClick={() => setZoom((value) => Math.max(0.7, Number((value - 0.1).toFixed(1))))}><Minus size={16} aria-hidden="true" /></Button>
           <span>{Math.round(zoom * 100)}%</span>
-          <button type="button" className="icon-button icon-button-subtle" aria-label="放大图谱" title="放大图谱" onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(1))))}><Plus size={16} aria-hidden="true" /></button>
-          <button type="button" className="button button-secondary" onClick={() => setZoom(1)}>重置</button>
+          <Button type="button" variant="ghost" size="icon" className="icon-button icon-button-subtle" aria-label="放大图谱" title="放大图谱" onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(1))))}><Plus size={16} aria-hidden="true" /></Button>
+          <Button type="button" variant="secondary" className="button button-secondary" onClick={() => setZoom(1)}>重置</Button>
         </div>
       </div>
       <p className="task-graph-summary">当前范围 · {tasks.length} 项任务 · 跨项目关系保留实际项目标签</p>
@@ -223,15 +227,20 @@ export function TaskExplorer({ scope = "global", projectId }: { scope?: string; 
         <label className="search-field">
           <Search size={16} aria-hidden="true" />
           <span className="sr-only">搜索任务</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务、目标或编号" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务、目标或编号" />
         </label>
         <label className="filter-field">
           <SlidersHorizontal size={15} aria-hidden="true" />
           <span className="sr-only">任务状态筛选</span>
-          <select value={filter} onChange={(event) => setFilter(event.target.value as TaskState | "all")}>
-            <option value="all">全部状态</option>
-            {taskStates.map((state) => <option value={state} key={state}>{state}</option>)}
-          </select>
+          <Select value={filter} onValueChange={(value) => setFilter(value as TaskState | "all")}>
+            <SelectTrigger className="task-filter-trigger" aria-label="任务状态筛选"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">全部状态</SelectItem>
+                {taskStates.map((state) => <SelectItem value={state} key={state}>{state}</SelectItem>)}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </label>
         <TaskViewSwitch scope={scope} value={view} />
       </div>

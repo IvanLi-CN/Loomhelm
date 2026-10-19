@@ -1,20 +1,38 @@
 import {
   Check,
-  ChevronDown,
-  ChevronUp,
   Clipboard,
   FlaskConical,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRight,
+  PanelRightClose,
   RotateCcw,
   Settings2,
   Wifi,
   WifiOff,
   X
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 
-import { useDemoRuntime } from "@/demo/context";
+import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger
+} from "@/components/ui/context-menu";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import { useDemoRuntime, type InspectorMode, type InspectorPosition } from "@/demo/context";
 import {
   demoDataModes,
   demoNetworks,
@@ -65,6 +83,90 @@ const themeLabels: Record<ThemeMode, string> = {
   dark: "暗色"
 };
 
+const INSPECTOR_GUTTER = 18;
+const INSPECTOR_TOP_GUTTER = 74;
+const INSPECTOR_SNAP_DISTANCE = 28;
+
+type InspectorSize = Pick<DOMRect, "width" | "height">;
+
+interface InspectorDragState {
+  pointerId: number;
+  offsetX: number;
+  offsetY: number;
+  size: InspectorSize;
+  position: InspectorPosition;
+}
+
+function isCompactInspectorViewport(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
+}
+
+function clampValue(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+function clampInspectorPosition(position: InspectorPosition, size: InspectorSize): InspectorPosition {
+  const maxLeft = Math.max(INSPECTOR_GUTTER, window.innerWidth - size.width - INSPECTOR_GUTTER);
+  const maxTop = Math.max(INSPECTOR_TOP_GUTTER, window.innerHeight - size.height - INSPECTOR_GUTTER);
+  return {
+    left: clampValue(position.left, INSPECTOR_GUTTER, maxLeft),
+    top: clampValue(position.top, INSPECTOR_TOP_GUTTER, maxTop)
+  };
+}
+
+function snapInspectorPosition(position: InspectorPosition, size: InspectorSize): InspectorPosition {
+  const clamped = clampInspectorPosition(position, size);
+  const maxLeft = Math.max(INSPECTOR_GUTTER, window.innerWidth - size.width - INSPECTOR_GUTTER);
+  const maxTop = Math.max(INSPECTOR_TOP_GUTTER, window.innerHeight - size.height - INSPECTOR_GUTTER);
+  const rightGap = window.innerWidth - (clamped.left + size.width);
+  const bottomGap = window.innerHeight - (clamped.top + size.height);
+
+  return {
+    left: clamped.left - INSPECTOR_GUTTER <= INSPECTOR_SNAP_DISTANCE
+      ? INSPECTOR_GUTTER
+      : rightGap - INSPECTOR_GUTTER <= INSPECTOR_SNAP_DISTANCE
+        ? maxLeft
+        : clamped.left,
+    top: clamped.top - INSPECTOR_TOP_GUTTER <= INSPECTOR_SNAP_DISTANCE
+      ? INSPECTOR_TOP_GUTTER
+      : bottomGap - INSPECTOR_GUTTER <= INSPECTOR_SNAP_DISTANCE
+        ? maxTop
+        : clamped.top
+  };
+}
+
+function sameInspectorPosition(first: InspectorPosition, second: InspectorPosition): boolean {
+  return first.left === second.left && first.top === second.top;
+}
+
+function InspectorModeMenu({ children }: { children: ReactElement }) {
+  const runtime = useDemoRuntime();
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="inspector-context-menu">
+        <ContextMenuLabel>面板布局</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuRadioGroup value={runtime.inspectorMode} onValueChange={(value) => runtime.setInspectorMode(value as InspectorMode)}>
+          <ContextMenuRadioItem value="collapsed">
+            <PanelRightClose size={15} aria-hidden="true" />
+            <span>收起</span>
+          </ContextMenuRadioItem>
+          <ContextMenuRadioItem value="floating">
+            <PanelRight size={15} aria-hidden="true" />
+            <span>悬浮</span>
+          </ContextMenuRadioItem>
+          <ContextMenuRadioItem value="sidebar">
+            <PanelLeftOpen size={15} aria-hidden="true" />
+            <span>侧栏</span>
+          </ContextMenuRadioItem>
+        </ContextMenuRadioGroup>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 function Field<T extends string>({
   label,
   value,
@@ -81,13 +183,16 @@ function Field<T extends string>({
   return (
     <label className="inspector-field">
       <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value as T)}>
-        {options.map((option) => (
-          <option value={option} key={option}>
-            {labels[option]}
-          </option>
-        ))}
-      </select>
+      <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
+        <SelectTrigger className="inspector-field-trigger">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {options.map((option) => <SelectItem value={option} key={option}>{labels[option]}</SelectItem>)}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
     </label>
   );
 }
@@ -95,18 +200,135 @@ function Field<T extends string>({
 export function DemoInspector() {
   const runtime = useDemoRuntime();
   const [copied, setCopied] = useState(false);
+  const [isCompactViewport, setIsCompactViewport] = useState(isCompactInspectorViewport);
+  const [isDragging, setIsDragging] = useState(false);
+  const [livePosition, setLivePosition] = useState<InspectorPosition | null>(runtime.inspectorPosition);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<InspectorDragState | null>(null);
 
-  if (!runtime.inspectorOpen) {
+  useEffect(() => {
+    const viewport = window.matchMedia("(max-width: 767px)");
+    const updateViewport = () => setIsCompactViewport(viewport.matches);
+    updateViewport();
+    viewport.addEventListener("change", updateViewport);
+    return () => viewport.removeEventListener("change", updateViewport);
+  }, []);
+
+  useEffect(() => {
+    if (!isDragging) setLivePosition(runtime.inspectorPosition);
+  }, [isDragging, runtime.inspectorPosition]);
+
+  useEffect(() => {
+    if (runtime.inspectorMode !== "floating" || !runtime.inspectorPosition || isCompactViewport) return;
+
+    const keepPositionInViewport = () => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      const next = clampInspectorPosition(runtime.inspectorPosition!, rect);
+      if (!sameInspectorPosition(next, runtime.inspectorPosition!)) runtime.setInspectorPosition(next);
+    };
+
+    keepPositionInViewport();
+    window.addEventListener("resize", keepPositionInViewport);
+    return () => window.removeEventListener("resize", keepPositionInViewport);
+  }, [isCompactViewport, runtime.inspectorMode, runtime.inspectorPosition, runtime.setInspectorPosition]);
+
+  useEffect(() => {
+    if (runtime.inspectorMode === "floating") return;
+    dragRef.current = null;
+    setIsDragging(false);
+  }, [runtime.inspectorMode]);
+
+  const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (runtime.inspectorMode !== "floating" || isCompactViewport || event.button !== 0) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    dragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      size: { width: rect.width, height: rect.height },
+      position: { left: rect.left, top: rect.top }
+    };
+    setLivePosition({ left: rect.left, top: rect.top });
+    setIsDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const moveDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = clampInspectorPosition({
+      left: event.clientX - drag.offsetX,
+      top: event.clientY - drag.offsetY
+    }, drag.size);
+    drag.position = next;
+    setLivePosition(next);
+  };
+
+  const finishDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = snapInspectorPosition(drag.position, drag.size);
+    dragRef.current = null;
+    setLivePosition(next);
+    runtime.setInspectorPosition(next);
+    setIsDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const moveWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (runtime.inspectorMode !== "floating" || isCompactViewport) return;
+    const movement: Record<string, InspectorPosition> = {
+      ArrowLeft: { left: -16, top: 0 },
+      ArrowRight: { left: 16, top: 0 },
+      ArrowUp: { left: 0, top: -16 },
+      ArrowDown: { left: 0, top: 16 }
+    };
+    const delta = movement[event.key];
+    if (!delta) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const current = livePosition ?? runtime.inspectorPosition ?? { left: rect.left, top: rect.top };
+    const step = event.shiftKey ? 4 : 1;
+    const next = clampInspectorPosition({
+      left: current.left + delta.left * step,
+      top: current.top + delta.top * step
+    }, rect);
+    setLivePosition(next);
+    runtime.setInspectorPosition(next);
+    event.preventDefault();
+  };
+
+  const activePosition = isDragging ? livePosition : runtime.inspectorPosition;
+  const floatingPositionStyle = runtime.inspectorMode === "floating" && activePosition && !isCompactViewport
+    ? {
+        left: `${activePosition.left}px`,
+        top: `${activePosition.top}px`,
+        right: "auto",
+        bottom: "auto"
+      }
+    : undefined;
+
+  if (runtime.inspectorMode === "collapsed") {
     return (
-      <button
-        type="button"
-        className="inspector-bubble"
-        aria-label="打开 Demo 控制面板"
-        title="打开 Demo 控制面板"
-        onClick={() => runtime.setInspectorOpen(true)}
-      >
-        <PanelLeftOpen size={18} aria-hidden="true" />
-      </button>
+      <InspectorModeMenu>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="inspector-bubble"
+          aria-label="打开 Demo 控制面板"
+          title="打开 Demo 控制面板；右键选择面板布局"
+          onClick={() => runtime.setInspectorOpen(true)}
+        >
+          <PanelLeftOpen size={18} aria-hidden="true" />
+        </Button>
+      </InspectorModeMenu>
     );
   }
 
@@ -123,9 +345,21 @@ export function DemoInspector() {
   };
 
   return (
-    <aside className="demo-inspector" aria-label="Demo 控制面板">
+    <aside ref={panelRef} className={`demo-inspector${isDragging ? " is-dragging" : ""}`} style={floatingPositionStyle} aria-label="Demo 控制面板">
       <div className="inspector-header">
-        <div className="inspector-title">
+        <div
+          className="inspector-title inspector-drag-handle"
+          role="group"
+          aria-label="拖动 Demo 控制面板"
+          tabIndex={runtime.inspectorMode === "floating" && !isCompactViewport ? 0 : -1}
+          title="拖动 Demo 控制面板；方向键可微调位置"
+          onKeyDown={moveWithKeyboard}
+          onPointerDown={startDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={finishDrag}
+          onPointerCancel={finishDrag}
+          onLostPointerCapture={finishDrag}
+        >
           <span className="inspector-icon" aria-hidden="true">
             <FlaskConical size={16} />
           </span>
@@ -135,24 +369,30 @@ export function DemoInspector() {
           </div>
         </div>
         <div className="inspector-actions">
-          <button
+          <InspectorModeMenu>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="icon-button icon-button-subtle"
+              aria-label="收起 Demo 控制面板"
+              title="左键收起；右键选择面板布局"
+              onClick={() => runtime.setInspectorOpen(false)}
+            >
+              <PanelLeftClose size={16} aria-hidden="true" />
+            </Button>
+          </InspectorModeMenu>
+          <Button
             type="button"
-            className="icon-button icon-button-subtle"
-            aria-label="收起 Demo 控制面板"
-            title="收起 Demo 控制面板"
-            onClick={() => runtime.setInspectorOpen(false)}
-          >
-            <PanelLeftClose size={16} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
+            variant="ghost"
+            size="icon"
             className="icon-button icon-button-subtle"
             aria-label="重置 Demo"
             title="重置 Demo"
             onClick={runtime.reset}
           >
             <RotateCcw size={16} aria-hidden="true" />
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -170,10 +410,10 @@ export function DemoInspector() {
       </div>
 
       <div className="inspector-share">
-        <button type="button" className="button button-secondary inspector-share-button" onClick={copyShareUrl}>
+        <Button type="button" variant="secondary" className="button button-secondary inspector-share-button" onClick={copyShareUrl}>
           {copied ? <Check size={15} aria-hidden="true" /> : <Clipboard size={15} aria-hidden="true" />}
           {copied ? "已复制分享链接" : "复制分享链接"}
-        </button>
+        </Button>
         <p>场景、身份、网络与数据会写入 URL；主题和草稿保持在当前 Demo 存储范围。</p>
       </div>
 
@@ -196,10 +436,10 @@ export function DemoInspector() {
         )}
       </div>
 
-      <button type="button" className="inspector-close" onClick={() => runtime.setInspectorOpen(false)}>
+      <Button type="button" variant="ghost" className="inspector-close" onClick={() => runtime.setInspectorOpen(false)}>
         <X size={14} aria-hidden="true" />
         收起为浮标
-      </button>
+      </Button>
     </aside>
   );
 }
@@ -210,9 +450,9 @@ export function DemoNotice() {
   return (
     <div className="demo-notice" role="status">
       <span>{runtime.notice}</span>
-      <button type="button" className="icon-button icon-button-subtle" aria-label="关闭提示" title="关闭提示" onClick={runtime.dismissNotice}>
+      <Button type="button" variant="ghost" size="icon" className="icon-button icon-button-subtle" aria-label="关闭提示" title="关闭提示" onClick={runtime.dismissNotice}>
         <X size={15} aria-hidden="true" />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -243,9 +483,9 @@ export function DemoSceneBanner() {
         <span>{state.description}</span>
       </div>
       {(runtime.scene === "loading" || runtime.scene === "error" || runtime.scene === "offline" || runtime.scene === "permission-changed") && (
-        <button type="button" className="button button-secondary scene-banner-action" onClick={runtime.recover}>
+        <Button type="button" variant="secondary" className="button button-secondary scene-banner-action" onClick={runtime.recover}>
           {runtime.scene === "loading" ? "重新加载" : "恢复演示"}
-        </button>
+        </Button>
       )}
     </div>
   );

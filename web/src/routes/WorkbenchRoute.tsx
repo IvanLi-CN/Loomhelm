@@ -2,6 +2,7 @@ import { AlertCircle, ArrowUpRight, Check, ChevronRight, Clock3, Inbox, MessageC
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
+import { Button } from "@/components/ui/button";
 import { getConversation, getProject, getTask, useDemoRuntime } from "@/demo/context";
 
 function RequestDetail({ attentionId }: { attentionId: string }) {
@@ -28,9 +29,9 @@ function RequestDetail({ attentionId }: { attentionId: string }) {
       {item.command && <pre className="command-preview"><code>{item.command}</code></pre>}
       {expired ? <div className="inline-state inline-state-warning"><Clock3 size={15} aria-hidden="true" /><span>请求已过期，保留事实但不再提供有效控制入口。</span></div> : resolved ? <div className="inline-state inline-state-success"><Check size={15} aria-hidden="true" /><span>{item.decision === "approve" ? "已模拟批准" : "已模拟拒绝"}；任务业务状态保持独立。</span></div> : null}
       <div className="request-actions">
-        <button type="button" className="button button-primary" disabled={expired || resolved || !runtime.canWrite} onClick={() => runtime.decideAttention(item.id, "approve")}><Check size={15} aria-hidden="true" />批准</button>
-        <button type="button" className="button button-secondary" disabled={expired || resolved || !runtime.canWrite} onClick={() => runtime.decideAttention(item.id, "deny")}><ShieldAlert size={15} aria-hidden="true" />拒绝</button>
-        {conversation && <Link to="/conversations/$conversationId" params={{ conversationId: conversation.id }} className="button button-quiet request-conversation-link"><MessageCircle size={15} aria-hidden="true" />打开完整对话<ArrowUpRight size={14} aria-hidden="true" /></Link>}
+        <Button type="button" variant="default" className="button button-primary" disabled={expired || resolved || !runtime.canWrite} onClick={() => runtime.decideAttention(item.id, "approve")}><Check size={15} aria-hidden="true" />批准</Button>
+        <Button type="button" variant="secondary" className="button button-secondary" disabled={expired || resolved || !runtime.canWrite} onClick={() => runtime.decideAttention(item.id, "deny")}><ShieldAlert size={15} aria-hidden="true" />拒绝</Button>
+        {conversation && <Button asChild variant="ghost" className="button button-quiet request-conversation-link"><Link to="/conversations/$conversationId" params={{ conversationId: conversation.id }}><MessageCircle size={15} aria-hidden="true" />打开完整对话<ArrowUpRight size={14} aria-hidden="true" /></Link></Button>}
       </div>
     </section>
   );
@@ -47,7 +48,7 @@ export function WorkbenchRoute() {
   }
 
   if (runtime.dataMode === "empty" || runtime.scene === "empty") {
-    return <section className="page-section empty-page"><div className="empty-hero"><span className="empty-icon"><Inbox size={24} aria-hidden="true" /></span><span className="eyebrow">WORKBENCH</span><h1>工作台还没有待处理内容</h1><p>切换回完整数据夹具，或先从任务入口建立一项模拟任务。Demo 中的变更只存在于当前内存。</p><div className="empty-actions"><Link to="/tasks" className="button button-primary">查看任务</Link><Link to="/tasks/new" className="button button-secondary">新建模拟任务</Link></div></div></section>;
+    return <section className="page-section empty-page"><div className="empty-hero"><span className="empty-icon"><Inbox size={24} aria-hidden="true" /></span><span className="eyebrow">WORKBENCH</span><h1>工作台还没有待处理内容</h1><p>切换回完整数据夹具，或先从任务入口建立一项模拟任务。Demo 中的变更只存在于当前内存。</p><div className="empty-actions"><Button asChild variant="default" className="button button-primary"><Link to="/tasks">查看任务</Link></Button><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks/new">新建模拟任务</Link></Button></div></div></section>;
   }
 
   const selected = activeItems.find((item) => item.id === selectedId) ?? activeItems[0];
@@ -62,11 +63,11 @@ export function WorkbenchRoute() {
         <section className="queue-panel" aria-label="待介入事项">
           <div className="panel-heading"><div><span className="section-kicker">需要你的决定</span><h2>待介入</h2></div><span className="panel-count">{activeItems.length}</span></div>
           {activeItems.length ? <div className="attention-list">{activeItems.map((item) => (
-            <button type="button" key={item.id} className={`attention-item ${selected?.id === item.id ? "is-selected" : ""}`} aria-pressed={selected?.id === item.id} onClick={() => setSelectedId(item.id)}>
+            <Button type="button" variant="ghost" key={item.id} className={`attention-item ${selected?.id === item.id ? "is-selected" : ""}`} aria-pressed={selected?.id === item.id} onClick={() => setSelectedId(item.id)}>
               <span className={`attention-kind attention-${item.kind === "审批" ? "approval" : item.kind === "需要输入" ? "input" : "result"}`}>{item.kind}</span>
               <span><strong>{item.title}</strong><small>{item.summary}</small></span>
               <ChevronRight size={15} aria-hidden="true" />
-            </button>
+            </Button>
           ))}</div> : <p className="muted-copy">当前没有需要处理的事项。</p>}
         </section>
         <section className="request-panel">
