@@ -157,6 +157,7 @@ Association MUST retain the same Session and the identities and continuity of it
 
 - [Control plane and host execution](../../adr/0001-control-plane-and-host-execution.md)
 - [Immutable candidates and state-compatible blue-green](../../adr/0002-immutable-candidates-and-blue-green.md)
+- [Versioned public protocol and reconciliation boundary](../../adr/0003-public-protocol-and-reconciliation.md)
 
 ## References
 
