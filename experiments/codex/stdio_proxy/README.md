@@ -35,6 +35,8 @@ Run `./experiments/codex/stdio_proxy/scripts/test-once-r01.sh` from the reposito
 
 The retained real-CLI phase is separate from the fixture gate. Run `LOOMHELM_R01_STAGE_DIR=/private/tmp/loomhelm-r01-codex-test/proxy-candidate LOOMHELM_R01_REAL_CLI=/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex ./experiments/codex/stdio_proxy/scripts/stage-r01.sh`, then run `node experiments/codex/stdio_proxy/real-cli-proxy-probe.mjs --stage-manifest /private/tmp/loomhelm-r01-codex-test/proxy-candidate/manifest.env`. The probe keeps the child and workspace in a dedicated mode-0700 path and does not reuse a prior socket or run directory.
 
+The final retained run for the current bundle is recorded in [real-cli-proxy-isolated.md](../evidence/real-cli-proxy-isolated.md); its Desktop integration field remains `not run`.
+
 The scripts print the exact scoped Desktop command by default. Applying either script requires `LOOMHELM_R01_OWNER_CONFIRMED=1`, `LOOMHELM_R01_IDLE_WINDOW_CONFIRMED=1`, and `LOOMHELM_R01_ALLOW_RESTART=1`; the rollback script also refuses to proceed while its exact test socket path exists. Neither script kills processes, changes launchctl, changes global configuration, logs in, pairs a device, or cleans up another app-server.
 
 ## One-time Desktop test steps

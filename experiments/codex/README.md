@@ -48,11 +48,13 @@ The bounded attachment follow-up is recorded in [desktop-attachment-follow-up.md
 
 The isolated Go proxy correctness gate is recorded in [stdio-proxy-prototype.md](evidence/stdio-proxy-prototype.md). It validates the launch-time child and protocol-multiplexing contract against a controlled mock child, but it does not pass the existing-desktop same-instance gate.
 
+The retained real bundled CLI run is recorded in [real-cli-proxy-isolated.md](evidence/real-cli-proxy-isolated.md). It validates the same-child PID/thread/event contract against the exact current CLI in a new isolated app-server process; it does not start, replace or attach to ChatGPT Desktop.
+
 ## Isolated real CLI proxy probe
 
 The retained candidate path is created outside the repository with `stdio_proxy/scripts/stage-r01.sh`; it requires a clean committed worktree and a new stage directory, then records the source SHA, wrapper digest, exact bundled CLI path, CLI digest and version in `manifest.env`. It does not install the wrapper or change Desktop startup.
 
-Capture the four observed startup variables before any Desktop test with `LOOMHELM_R01_BASELINE_ENV_FILE=/private/tmp/loomhelm-r01-codex-test/baseline.env stdio_proxy/scripts/capture-baseline-r01.sh`. The file deliberately contains only `CODEX_CLI_PATH`, `CODEX_APP_SERVER_FORCE_CLI`, `LOOMHELM_STDIO_PROXY_REAL_CLI` and `LOOMHELM_STDIO_PROXY_SOCKET`, each as an observed value or `__UNSET__`, so rollback does not assume that a variable was previously absent.
+Capture the four observed startup variables before any Desktop test with `LOOMHELM_R01_BASELINE_ENV_FILE=/private/tmp/loomhelm-r01-codex-test/baseline.env stdio_proxy/scripts/capture-baseline-r01.sh`. The file deliberately contains only `CODEX_CLI_PATH`, `CODEX_APP_SERVER_FORCE_CLI`, `LOOMHELM_STDIO_PROXY_REAL_CLI` and `LOOMHELM_STDIO_PROXY_SOCKET`, each as an observed value, `__EMPTY__` or `__UNSET__`, so rollback does not assume that a variable was previously absent.
 
 Run `stdio_proxy/real-cli-proxy-probe.mjs --stage-manifest /private/tmp/loomhelm-r01-codex-test/proxy-candidate/manifest.env` only after staging. It starts one retained wrapper and one exact bundled CLI child under a new private workspace, connects Desktop stdin/stdout and one private Unix socket as two logical clients, and writes a redacted evidence JSON into a new disposable run directory. The probe covers initialization ownership, model capability discovery, same-thread event fan-out, real approval accept/decline arbitration, pending approval across bridge disconnect, bridge reconnect reconciliation, `turn/steer`, and `turn/interrupt`; it never launches ChatGPT Desktop.
 

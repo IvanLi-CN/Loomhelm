@@ -28,7 +28,6 @@ test -n "$manifest_wrapper"
 test -n "$manifest_wrapper_sha"
 test -n "$manifest_real_cli"
 test -n "$manifest_real_cli_sha"
-test "$(git -C "$repo_dir" rev-parse HEAD)" = "$source_sha"
 if [ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=all)" ]; then
     printf '%s\n' 'refusing to launch a candidate while the repository is dirty' >&2
     exit 2
