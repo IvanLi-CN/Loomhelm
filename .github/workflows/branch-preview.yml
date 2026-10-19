@@ -98,10 +98,15 @@ jobs:
           candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
           source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
           scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-branch-preview" --expected-digest "$candidate_digest" --expected-source-sha "$source_sha"
+      - name: Package the preview handoff with file modes
+        run: |
+          handoff_dir=$(find "$RUNNER_TEMP/loomhelm-branch-preview" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$handoff_dir"
+          tar --format=posix -czf "$RUNNER_TEMP/loomhelm-branch-preview-handoff.tar.gz" -C "$handoff_dir" .
       - name: Upload the preview handoff
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: loomhelm-branch-preview-promoted-${{ github.run_id }}
-          path: ${{ runner.temp }}/loomhelm-branch-preview
+          path: ${{ runner.temp }}/loomhelm-branch-preview-handoff.tar.gz
           if-no-files-found: error
           retention-days: 90

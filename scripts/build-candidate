@@ -459,20 +459,14 @@ print(candidate_digest)
 PY
 )
 
-validation_destination="$stage_dir.validation"
-scripts/promote-candidate \
-	--manifest "$stage_dir/candidate-manifest.json" \
-	--destination "$validation_destination" \
-	--expected-digest "$candidate_digest" \
-	--expected-source-sha "$source_sha" \
-	--dry-run
-
-python3 - "$stage_dir" "$output_dir" <<'PY'
+python3 - "$stage_dir" "$output_dir" "$repo_root" "$candidate_digest" "$source_sha" <<'PY'
 import ctypes
 import os
+import stat
+import subprocess
 import sys
 
-stage, output = sys.argv[1:]
+stage, output, repo, candidate_digest, source_sha = sys.argv[1:]
 stage_parent, stage_name = os.path.dirname(stage), os.path.basename(stage)
 output_parent, output_name = os.path.dirname(output), os.path.basename(output)
 if stage_parent != output_parent:
@@ -480,6 +474,7 @@ if stage_parent != output_parent:
 
 directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 parent_fd = os.open(output_parent, directory_flags)
+stage_fd = os.open(stage_name, directory_flags, dir_fd=parent_fd)
 
 
 def rename_noreplace(source_name: str, destination_name: str, directory_fd: int) -> None:
@@ -508,11 +503,35 @@ def rename_noreplace(source_name: str, destination_name: str, directory_fd: int)
 
 
 try:
-	rename_noreplace(stage_name, output_name, parent_fd)
+    subprocess.run(
+        [
+            os.path.join(repo, "scripts", "promote-candidate"),
+            "--manifest",
+            os.path.join(stage, "candidate-manifest.json"),
+            "--destination",
+            stage + ".validation",
+            "--expected-digest",
+            candidate_digest,
+            "--expected-source-sha",
+            source_sha,
+            "--dry-run",
+        ],
+        check=True,
+    )
+    stage_metadata = os.fstat(stage_fd)
+    path_metadata = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or path_metadata.st_dev != stage_metadata.st_dev
+        or path_metadata.st_ino != stage_metadata.st_ino
+    ):
+        raise SystemExit("build-candidate: staging directory changed during final validation")
+    rename_noreplace(stage_name, output_name, parent_fd)
 except OSError as error:
     raise SystemExit(f"build-candidate: refusing to replace existing output: {error}")
 finally:
-	os.close(parent_fd)
+    os.close(stage_fd)
+    os.close(parent_fd)
 PY
 echo "build-candidate: candidate_digest=$candidate_digest"
 echo "build-candidate: source_sha=$source_sha"

@@ -137,6 +137,15 @@ def canonical_json(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
+
 def reject_symlink_components(path: Path) -> None:
     absolute = Path(os.path.abspath(path))
     current = Path(absolute.anchor)
@@ -227,6 +236,9 @@ def source_file_digest(source_sha: str, relative: str) -> str:
 def source_contract(source_sha: str) -> tuple[str, int, dict[str, object]]:
     tree_sha = git_bytes("rev-parse", f"{source_sha}^{{tree}}").decode("ascii").strip()
     source_date = int(git_bytes("show", "-s", "--format=%ct", source_sha).decode("ascii").strip())
+    for entry in git_bytes("ls-tree", "-r", "-z", source_sha).split(b"\0"):
+        if entry and entry.split(b"\t", 1)[0].startswith(b"120000 "):
+            fail("trusted source tree contains a symlink")
     versions: dict[str, str] = {}
     for line in git_bytes("show", f"{source_sha}:tools/versions.env").decode("utf-8").splitlines():
         key, separator, value = line.partition("=")
@@ -308,6 +320,7 @@ def open_target_directory(root_fd: int, parts: list[str]) -> int:
             except FileNotFoundError:
                 os.mkdir(part, 0o755, dir_fd=current_fd)
                 next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            os.fchmod(next_fd, 0o755)
             os.close(current_fd)
             current_fd = next_fd
         return current_fd
@@ -440,6 +453,17 @@ def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[
     return digest, records
 
 
+def exact_directory_entries(path: Path, expected: set[str], label: str) -> None:
+    if path.is_symlink() or not path.is_dir():
+        fail(f"{label} is missing or is a symlink")
+    try:
+        actual = {child.name for child in path.iterdir()}
+    except OSError as error:
+        fail(f"cannot inspect {label}: {error}")
+    if actual != expected:
+        fail(f"{label} entries do not match the contract: expected={sorted(expected)} found={sorted(actual)}")
+
+
 def archive_members(root: Path) -> list[tuple[str, Path]]:
     members: dict[str, Path] = {}
     for name in ("bin", "web", "candidate-manifest.json"):
@@ -542,15 +566,28 @@ def verify_bundle(
     reject_symlink_components(bundle_root)
     if bundle_root.is_symlink() or not bundle_root.is_dir():
         fail(f"candidate bundle is not a directory: {bundle_root}")
+    exact_directory_entries(
+        bundle_root,
+        {"bin", "web", "candidate-manifest.json", "candidate-manifest.json.sha256", "candidate.tar.gz", "candidate.tar.gz.sha256"},
+        "candidate bundle",
+    )
     manifest_file = bundle_root / "candidate-manifest.json"
     if manifest_file.is_symlink() or not manifest_file.is_file():
         fail(f"candidate manifest is missing: {manifest_file}")
     try:
-        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        manifest_bytes = manifest_file.read_bytes()
+        manifest = json.loads(
+            manifest_bytes.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         fail(f"cannot read candidate manifest: {error}")
+    except ValueError as error:
+        fail(f"candidate manifest has duplicate fields: {error}")
     if not isinstance(manifest, dict) or type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
         fail("unsupported candidate manifest")
+    if manifest_bytes != canonical_json(manifest) + b"\n":
+        fail("candidate manifest is not canonical")
     if set(manifest) != {"schema_version", "candidate", "platform", "inputs", "artifacts"}:
         fail("candidate manifest has unexpected fields")
     candidate = manifest.get("candidate")
@@ -601,6 +638,7 @@ def verify_bundle(
             fail("candidate promotion script digest does not match the trusted promotion tooling")
         if sha256_file(tool_path) != expected_tool_digest:
             fail("checked-out promotion tooling does not match the expected digest")
+    exact_directory_entries(bundle_root / "bin", {"server", "worker", "connector"}, "candidate binary directory")
     component_records = {
         name: file_record(bundle_root, artifacts.get(name), f"bin/{name}", 0o755, verify_mode)
         for name in ("server", "worker", "connector")
@@ -622,7 +660,6 @@ def verify_bundle(
     recomputed = hashlib.sha256(canonical_json(identity)).hexdigest()
     if recomputed != digest:
         fail(f"candidate identity digest mismatch: manifest={digest} recomputed={recomputed}")
-    manifest_bytes = manifest_file.read_bytes()
     manifest_digest = sha256_file(manifest_file)
     if sidecar_digest(bundle_root / "candidate-manifest.json.sha256", "candidate-manifest.json") != manifest_digest:
         fail("candidate manifest sidecar digest mismatch")
@@ -685,6 +722,8 @@ def acquire_lock() -> int:
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     open_deadline = time.monotonic() + 60
     while True:
+        if time.monotonic() >= open_deadline:
+            fail(f"timed out recovering promotion lock {lock}")
         try:
             descriptor = os.open(lock_name, flags, 0o600, dir_fd=destination_fd)
             break
@@ -811,6 +850,7 @@ try:
     ensure_temporary_stable()
     verify_bundle(temporary, digest, verify_mode=True)
     ensure_temporary_stable()
+    os.fchmod(temporary_fd, 0o755)
     if target_exists():
         fail(f"promoted candidate target appeared during promotion: {target}")
     try:

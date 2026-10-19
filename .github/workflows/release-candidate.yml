@@ -139,10 +139,15 @@ jobs:
           test -n "$manifest"
           promote_script_sha=$(sha256sum scripts/promote-candidate | awk '{print $1}')
           scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-release" --expected-digest "$EXPECTED_DIGEST" --expected-source-sha "$EXPECTED_SOURCE_SHA" --expected-promote-script-sha "$promote_script_sha"
+      - name: Package the release handoff with file modes
+        run: |
+          handoff_dir=$(find "$RUNNER_TEMP/loomhelm-release" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$handoff_dir"
+          tar --format=posix -czf "$RUNNER_TEMP/loomhelm-release-handoff.tar.gz" -C "$handoff_dir" .
       - name: Upload the release handoff
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: loomhelm-release-${{ inputs.candidate_digest }}
-          path: ${{ runner.temp }}/loomhelm-release
+          path: ${{ runner.temp }}/loomhelm-release-handoff.tar.gz
           if-no-files-found: error
           retention-days: 90

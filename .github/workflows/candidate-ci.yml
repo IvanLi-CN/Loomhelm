@@ -27,6 +27,7 @@ jobs:
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Validate repository quality gates
         run: python3 .agents/skills/quality-gates/assets/scripts/check_quality_gates.py --repo-root . --allow-unchecked-branch-protection
       - name: Check candidate scripts
@@ -42,6 +43,7 @@ jobs:
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -76,6 +78,7 @@ jobs:
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
