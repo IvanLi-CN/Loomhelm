@@ -25,6 +25,14 @@ func TestDatabaseOnlyConfigurationMatchesProcesses(t *testing.T) {
 		{name: "non-numeric maximum", env: map[string]string{"LOOMHELM_DATABASE_MAX_CONNS": "invalid"}, wantError: "LOOMHELM_DATABASE_MAX_CONNS"},
 		{name: "maximum overflow", env: map[string]string{"LOOMHELM_DATABASE_MAX_CONNS": "2147483648"}, wantError: "LOOMHELM_DATABASE_MAX_CONNS"},
 		{name: "minimum exceeds maximum", env: map[string]string{"LOOMHELM_DATABASE_MIN_CONNS": "5"}, wantError: "minimum connections"},
+		{name: "environment minimum exceeds URL maximum", env: map[string]string{
+			"LOOMHELM_DATABASE_URL":       "postgres://test@127.0.0.1:55441/loomhelm?pool_max_conns=1",
+			"LOOMHELM_DATABASE_MIN_CONNS": "2",
+			"LOOMHELM_DATABASE_MAX_CONNS": "0",
+		}, wantError: "minimum connections"},
+		{name: "URL minimum exceeds default maximum", env: map[string]string{
+			"LOOMHELM_DATABASE_URL": "postgres://test@127.0.0.1:55441/loomhelm?pool_min_conns=5",
+		}, wantError: "minimum connections"},
 		{name: "redacted parse error", env: map[string]string{"LOOMHELM_DATABASE_URL": "postgres://user:secret-dsn@localhost:invalid/db"}, wantError: "invalid LOOMHELM_DATABASE_URL"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

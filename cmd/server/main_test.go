@@ -173,7 +173,10 @@ func TestServerEntrypointReturnsRuntimeFailure(t *testing.T) {
 	})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 1)
-	if !strings.Contains(string(output), "server exited with error") {
+	outputText := string(output)
+	if !strings.Contains(outputText, "server exited with error") ||
+		!strings.Contains(outputText, "listen on "+listener.Addr().String()) ||
+		!strings.Contains(outputText, "address already in use") {
 		t.Fatalf("runtime failure output = %q", output)
 	}
 }

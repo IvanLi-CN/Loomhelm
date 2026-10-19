@@ -25,20 +25,35 @@ type Config struct {
 	MaxConns int32
 }
 
-func (c Config) Validate() error {
+func (c Config) poolConfig() (*pgxpool.Config, error) {
 	if strings.TrimSpace(c.URL) == "" {
-		return errors.New("database URL must not be empty")
+		return nil, errors.New("database URL must not be empty")
 	}
 	if c.MinConns < 0 {
-		return errors.New("database minimum connections must not be negative")
+		return nil, errors.New("database minimum connections must not be negative")
 	}
 	if c.MaxConns < 0 {
-		return errors.New("database maximum connections must not be negative")
+		return nil, errors.New("database maximum connections must not be negative")
 	}
-	if c.MaxConns > 0 && c.MinConns > c.MaxConns {
-		return errors.New("database minimum connections must not exceed maximum connections")
+	poolConfig, err := pgxpool.ParseConfig(strings.TrimSpace(c.URL))
+	if err != nil {
+		return nil, errors.New("invalid database URL")
 	}
-	return nil
+	if c.MinConns > 0 {
+		poolConfig.MinConns = c.MinConns
+	}
+	if c.MaxConns > 0 {
+		poolConfig.MaxConns = c.MaxConns
+	}
+	if poolConfig.MinConns > poolConfig.MaxConns {
+		return nil, errors.New("database minimum connections must not exceed maximum connections")
+	}
+	return poolConfig, nil
+}
+
+func (c Config) Validate() error {
+	_, err := c.poolConfig()
+	return err
 }
 
 type DB struct {
@@ -55,15 +70,9 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 		return nil, err
 	}
 
-	poolConfig, err := pgxpool.ParseConfig(strings.TrimSpace(cfg.URL))
+	poolConfig, err := cfg.poolConfig()
 	if err != nil {
-		return nil, errors.New("invalid database URL")
-	}
-	if cfg.MinConns > 0 {
-		poolConfig.MinConns = cfg.MinConns
-	}
-	if cfg.MaxConns > 0 {
-		poolConfig.MaxConns = cfg.MaxConns
+		return nil, err
 	}
 	connConfig := poolConfig.ConnConfig.Copy()
 

@@ -85,13 +85,20 @@ func (c DatabaseConfig) Validate() error {
 		return fmt.Errorf("LOOMHELM_DATABASE_URL must not be empty")
 	}
 	// Parse errors may contain credentials from the URL or keyword DSN.
-	if _, err := pgxpool.ParseConfig(c.URL); err != nil {
+	poolConfig, err := pgxpool.ParseConfig(c.URL)
+	if err != nil {
 		return fmt.Errorf("invalid LOOMHELM_DATABASE_URL")
 	}
 	if c.MinConns < 0 || c.MaxConns < 0 {
 		return fmt.Errorf("database pool sizes must not be negative")
 	}
-	if c.MaxConns > 0 && c.MinConns > c.MaxConns {
+	if c.MinConns > 0 {
+		poolConfig.MinConns = c.MinConns
+	}
+	if c.MaxConns > 0 {
+		poolConfig.MaxConns = c.MaxConns
+	}
+	if poolConfig.MinConns > poolConfig.MaxConns {
 		return fmt.Errorf("database minimum connections must not exceed maximum connections")
 	}
 	return nil

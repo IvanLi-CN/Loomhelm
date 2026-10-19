@@ -2,15 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
 )
+
+const migrationTimeout = 30 * time.Second
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -22,12 +26,21 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	return runWithTimeout(ctx, migrationTimeout)
+}
+
+func runWithTimeout(ctx context.Context, timeout time.Duration) error {
+	if ctx == nil {
+		return errors.New("migration context must not be nil")
+	}
 	config, err := platform.LoadDatabaseConfig()
 	if err != nil {
 		return err
 	}
+	migrationCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	db, err := database.Open(ctx, database.Config{
+	db, err := database.Open(migrationCtx, database.Config{
 		URL:      config.URL,
 		MinConns: config.MinConns,
 		MaxConns: config.MaxConns,
@@ -40,10 +53,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return db.WithMigrationLock(ctx, func(migrationCtx context.Context) error {
-		if err := db.Migrate(migrationCtx); err != nil {
+	return db.WithMigrationLock(migrationCtx, func(lockCtx context.Context) error {
+		if err := db.Migrate(lockCtx); err != nil {
 			return err
 		}
-		return runner.Migrate(migrationCtx)
+		return runner.Migrate(lockCtx)
 	})
 }
