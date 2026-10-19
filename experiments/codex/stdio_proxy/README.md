@@ -14,7 +14,7 @@ This is an unsupported experiment and does not pass the R01 same-instance accept
 - `scripts/capture-baseline-r01.sh` records only the four wrapper-related startup variables needed for an exact rollback preview.
 - `real-cli-proxy-probe.mjs` validates the retained wrapper against the exact bundled CLI without starting Desktop.
 - `attach-driver.mjs` connects only to an already running retained Desktop socket and enforces exact process, environment, cwd, thread and callback ownership bindings.
-- `attach-driver-fixture.mjs` tests the attach transport against a disposable mock Unix socket without starting an app-server or Desktop process.
+- `attach-driver-fixture.mjs` exercises the scenario/config/evidence entrypoint and attach transport against disposable clients and a mock Unix socket without starting an app-server or Desktop process.
 - `scripts/launch-r01.sh`, `scripts/verify-r01.sh` and `scripts/rollback-r01.sh` are reviewable, guarded Desktop handoff scripts; none is run by the test suite.
 
 ## Contract
@@ -41,7 +41,7 @@ The final retained run for the current bundle is recorded in [real-cli-proxy-iso
 
 The scripts print the exact scoped Desktop command by default. Applying either script requires `LOOMHELM_R01_OWNER_CONFIRMED=1`, `LOOMHELM_R01_IDLE_WINDOW_CONFIRMED=1`, and `LOOMHELM_R01_ALLOW_RESTART=1`; the rollback script also refuses to proceed while its exact test socket path exists. Neither script kills processes, changes launchctl, changes global configuration, logs in, pairs a device, or cleans up another app-server.
 
-The complete future owner sequence, including baseline provenance, retained hashes, PID binding, manual approval actions, plugin handling, bridge reconnect, and recovery, is [desktop-attach-handoff.md](../evidence/desktop-attach-handoff.md). It is a handoff contract only; no Desktop verdict is implied.
+The complete future owner sequence, including baseline provenance, retained hashes, PID binding, manual approval actions, selected read-only plugin tool binding, bridge reconnect, and recovery, is [desktop-attach-handoff.md](../evidence/desktop-attach-handoff.md). It is a handoff contract only; no Desktop verdict is implied.
 
 ## One-time Desktop test steps
 

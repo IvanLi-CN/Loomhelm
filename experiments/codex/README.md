@@ -50,7 +50,7 @@ The isolated Go proxy correctness gate is recorded in [stdio-proxy-prototype.md]
 
 The retained real bundled CLI run is recorded in [real-cli-proxy-isolated.md](evidence/real-cli-proxy-isolated.md). It validates the same-child PID/thread/event contract against the exact current CLI in a new isolated app-server process; it does not start, replace or attach to ChatGPT Desktop.
 
-The attach-only Desktop handoff is recorded in [desktop-attach-handoff.md](evidence/desktop-attach-handoff.md). It adds a bounded socket attach driver and a disposable mock-socket fixture, but it is only `ready-for-owner-decision`: no Desktop process was changed and no same-desktop verdict exists.
+The attach-only Desktop handoff is recorded in [desktop-attach-handoff.md](evidence/desktop-attach-handoff.md). It adds a bounded socket attach driver and a scenario-level disposable fixture, but it is only `ready-for-owner-decision`: no Desktop process was changed and no same-desktop verdict exists.
 
 ## Isolated real CLI proxy probe
 

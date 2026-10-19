@@ -44,6 +44,7 @@ export class AttachClient {
     this.sequence = 0;
     this.closed = false;
     this.ownerBoundMessages = [];
+    this.ownerBoundRequests = [];
     this.sentMethods = [];
     this.fatalError = null;
 
@@ -119,7 +120,10 @@ export class AttachClient {
     const index = this.messages.push(message) - 1;
     if (message.method && isOwnerBoundMethod(message.method)) {
       this.ownerBoundMessages.push(message.method);
-      this.setFatal(new AttachError("owner_bound_callback_on_bridge", `${message.method} appeared on the bridge`));
+      if (message.id !== undefined) {
+        this.ownerBoundRequests.push(message.method);
+        this.setFatal(new AttachError("owner_bound_callback_on_bridge", `${message.method} appeared as a bridge request`));
+      }
     }
     if (message.id !== undefined) {
       const pending = this.pending.get(String(message.id));
@@ -181,8 +185,12 @@ export function hashRef(kind, value) {
   return `${kind}:${createHash("sha256").update(String(value)).digest("hex").slice(0, 20)}`;
 }
 
-export async function runAttachScenario(args) {
+export async function runAttachScenario(args, overrides = {}) {
   const config = await loadConfig(args);
+  const deps = {
+    inspectProcessIdentity: overrides.inspectProcessIdentity ?? inspectProcessIdentity,
+    connectExistingSocket: overrides.connectExistingSocket ?? connectExistingSocket,
+  };
   const evidence = {
     formatVersion: 1,
     result: "failed",
@@ -205,7 +213,7 @@ export async function runAttachScenario(args) {
   };
   let client = null;
   try {
-    const identity = await inspectProcessIdentity(config);
+    const identity = await deps.inspectProcessIdentity(config);
     record(evidence, "process_identity_verified", {
       desktopPid: hashRef("pid", identity.desktop.pid),
       wrapperPid: hashRef("pid", identity.wrapper.pid),
@@ -213,7 +221,7 @@ export async function runAttachScenario(args) {
       socketMode: identity.socketMode,
       workspaceMode: identity.workspaceMode,
     });
-    client = await connectExistingSocket(config.socket, config.timeoutMs);
+    client = await deps.connectExistingSocket(config.socket, config.timeoutMs, config);
     const model = await client.request("model/list", {});
     assertSuccess(model, "model/list");
     assertModelCapability(model);
@@ -231,10 +239,10 @@ export async function runAttachScenario(args) {
         await validateExistingThread(client, config, threadId, evidence);
       }
       if (config.scenario !== "create-thread") {
-        await runScenario(config, client, threadId, evidence);
+        await runScenario(config, client, threadId, evidence, deps);
       }
     }
-    const finalIdentity = await inspectProcessIdentity(config);
+    const finalIdentity = await deps.inspectProcessIdentity(config);
     if (finalIdentity.child.pid !== identity.child.pid || finalIdentity.wrapper.pid !== identity.wrapper.pid) {
       throw new AttachError("process_identity_changed", "Desktop, wrapper or real CLI identity changed during the scenario");
     }
@@ -247,6 +255,7 @@ export async function runAttachScenario(args) {
     evidence.result = "passed";
   } catch (error) {
     const normalized = normalizeError(error);
+    if (normalized.code.startsWith("plugin_")) evidence.result = "inconclusive";
     evidence.error = { code: normalized.code, message: normalized.code };
     record(evidence, "attach_only_failed", { code: normalized.code });
   } finally {
@@ -292,9 +301,14 @@ async function loadConfig(args) {
   if (scenario !== "preflight" && scenario !== "create-thread" && !args.threadId && !threadFile) {
     throw new AttachError("thread_required", "this scenario requires --thread-id or --thread-file");
   }
-  const threadId = args.threadId ?? (threadFile ? await readThreadId(threadFile, workspace, marker) : null);
-  if (scenario !== "preflight" && scenario !== "create-thread" && !threadId) throw new AttachError("thread_required", "thread identity is missing");
+  if (scenario === "create-thread" && args.threadId) throw new AttachError("thread_id_conflict", "create-thread does not accept an existing thread id");
   if (scenario === "create-thread" && await pathExists(threadFile)) throw new AttachError("thread_file_exists", "refusing to overwrite the dedicated thread file");
+  const threadId = scenario === "create-thread" ? null : args.threadId ?? (threadFile ? await readThreadId(threadFile, workspace, marker) : null);
+  if (scenario !== "preflight" && scenario !== "create-thread" && !threadId) throw new AttachError("thread_required", "thread identity is missing");
+  const pluginServer = args.pluginServer ?? "codex_app";
+  const pluginTool = args.pluginTool ?? null;
+  if (scenario === "plugin-readonly" && pluginServer !== "codex_app") throw new AttachError("plugin_server_invalid", "plugin-readonly is bound to the codex_app server");
+  if (scenario === "plugin-readonly" && (!pluginTool || !/^[A-Za-z0-9_.-]{1,128}$/.test(pluginTool))) throw new AttachError("plugin_tool_required", "plugin-readonly requires the owner-selected read-only catalog tool name");
   await validateManifestFiles(manifestPath, wrapper, realCli, manifest);
   await validatePrivateDirectory(workspace, "workspace");
   if (threadFile) await validatePrivateDirectory(dirname(threadFile), "thread file parent");
@@ -316,6 +330,8 @@ async function loadConfig(args) {
     desktopPid: optionalPid(args.desktopPid, "desktop-pid"),
     wrapperPid: optionalPid(args.wrapperPid, "wrapper-pid"),
     childPid: optionalPid(args.childPid, "child-pid"),
+    pluginServer,
+    pluginTool,
   };
 }
 
@@ -400,7 +416,7 @@ async function validateExistingThread(client, config, threadId, evidence) {
   record(evidence, "exact_thread_validated", { threadRef: hashRef("thread", threadId), workspace: hashRef("workspace", thread.cwd) });
 }
 
-async function runScenario(config, client, threadId, evidence) {
+async function runScenario(config, client, threadId, evidence, deps) {
   if (config.scenario === "send") {
     await runSimpleTurn(config, client, threadId, evidence, `Reply exactly ${config.marker}_SEND_OK and do not use tools.`);
     return;
@@ -414,7 +430,7 @@ async function runScenario(config, client, threadId, evidence) {
     return;
   }
   if (config.scenario === "disconnect-reconcile") {
-    await runDisconnectReconcile(config, client, threadId, evidence);
+    await runDisconnectReconcile(config, client, threadId, evidence, deps);
     return;
   }
   if (config.scenario === "plugin-readonly") {
@@ -427,12 +443,10 @@ async function runScenario(config, client, threadId, evidence) {
 async function runSimpleTurn(config, client, threadId, evidence, text) {
   const mark = client.mark();
   const responsePromise = client.request("turn/start", turnParams(config, threadId, text));
-  const started = await client.waitFor((message) => message.method === "turn/started" && message.params?.turn?.id, mark);
-  const turnId = started.message.params.turn.id;
-  const completed = await client.waitFor((message) => message.method === "turn/completed" && message.params?.turn?.id === turnId, mark);
+  const turnId = await waitForTurnStarted(client, mark, threadId);
+  const completed = await waitForTurnCompleted(client, mark, threadId, turnId);
   const response = await responsePromise;
-  assertSuccess(response, "turn/start");
-  if (response.result?.turn?.id && response.result.turn.id !== turnId) throw new AttachError("turn_identity_mismatch", "turn/start returned a different turn identity");
+  assertTurnResponse(response, threadId, turnId, "turn/start");
   if (completed.message.params.turn.status !== "completed") throw new AttachError("turn_not_completed", "send turn did not complete");
   record(evidence, "send_turn_completed", { threadRef: hashRef("thread", threadId), turnRef: hashRef("turn", turnId), status: completed.message.params.turn.status });
 }
@@ -440,17 +454,18 @@ async function runSimpleTurn(config, client, threadId, evidence, text) {
 async function runApprovalTurn(config, client, threadId, evidence, decision) {
   const command = `/usr/bin/printf ${config.marker}_${decision.toUpperCase()}`;
   const mark = client.mark();
-  const responsePromise = client.request("turn/start", turnParams(config, threadId, `Run exactly this harmless command: ${command}. Do not use any other tool. After it completes, reply exactly ${config.marker}_COMMAND_OK.`));
-  const approval = await client.waitFor((message) => message.method === "item/commandExecution/requestApproval", mark);
-  assertApprovalCommand(approval.message, config.marker, command);
+  const responsePromise = client.request("turn/start", turnParams(config, threadId, `Run exactly this harmless command: ${command}. Test marker ${config.marker}. Do not use any other tool. After it completes, reply exactly ${config.marker}_COMMAND_OK.`));
+  const turnId = await waitForTurnStarted(client, mark, threadId);
+  const approval = await waitForApproval(client, mark, threadId, turnId);
+  assertApprovalCommand(approval.message, command);
+  const approvalItemId = messageContext(approval.message).itemId;
+  if (!approvalItemId) throw new AttachError("approval_item_identity_missing", "approval request did not identify an item");
   printOwnerAction(`Desktop owner must click ${decision} for the exact harmless command approval, then leave this terminal running.`);
   record(evidence, "approval_request_observed", { decisionExpected: decision, command: hashRef("command", command), requestRef: hashRef("request", approval.message.id) });
-  const turnStarted = await client.waitFor((message) => message.method === "turn/started" && message.params?.turn?.id, mark);
-  const turnId = turnStarted.message.params.turn.id;
-  const commandCompleted = await client.waitFor((message) => message.method === "item/completed" && message.params?.item?.type === "commandExecution", mark);
-  const completed = await client.waitFor((message) => message.method === "turn/completed" && message.params?.turn?.id === turnId, mark);
+  const commandCompleted = await waitForItem(client, mark, "item/completed", threadId, turnId, approvalItemId, "commandExecution");
+  const completed = await waitForTurnCompleted(client, mark, threadId, turnId);
   const response = await responsePromise;
-  assertSuccess(response, "turn/start approval");
+  assertTurnResponse(response, threadId, turnId, "turn/start approval");
   const commandStatus = commandCompleted.message.params.item.status;
   const expectedStatus = decision === "accept" ? "completed" : "declined";
   if (commandStatus !== expectedStatus || completed.message.params.turn.status !== "completed") throw new AttachError("approval_result_mismatch", "Desktop approval result did not match the requested owner decision");
@@ -468,50 +483,53 @@ async function runApprovalTurn(config, client, threadId, evidence, decision) {
 async function runSteerInterrupt(config, client, threadId, evidence) {
   const command = "/bin/sleep 30";
   const mark = client.mark();
-  const responsePromise = client.request("turn/start", turnParams(config, threadId, `Run exactly this harmless command: ${command}. Do not use any other tool.`));
-  const approval = await client.waitFor((message) => message.method === "item/commandExecution/requestApproval", mark);
-  assertApprovalCommand(approval.message, config.marker, command);
+  const responsePromise = client.request("turn/start", turnParams(config, threadId, `Run exactly this harmless command: ${command}. Test marker ${config.marker}. Do not use any other tool.`));
+  const turnId = await waitForTurnStarted(client, mark, threadId);
+  const approval = await waitForApproval(client, mark, threadId, turnId);
+  assertApprovalCommand(approval.message, command);
+  const approvalItemId = messageContext(approval.message).itemId;
+  if (!approvalItemId) throw new AttachError("approval_item_identity_missing", "approval request did not identify an item");
   printOwnerAction("Desktop owner must click accept for the exact harmless sleep command; the driver will steer and interrupt only after the command starts.");
-  const started = await client.waitFor((message) => message.method === "turn/started" && message.params?.turn?.id, mark);
-  const turnId = started.message.params.turn.id;
-  await client.waitFor((message) => message.method === "item/started" && message.params?.item?.type === "commandExecution", mark);
+  await waitForItem(client, mark, "item/started", threadId, turnId, approvalItemId, "commandExecution");
   const steer = await client.request("turn/steer", { threadId, expectedTurnId: turnId, input: [{ type: "text", text: `Stop and reply exactly ${config.marker}_STEER_OK.` }] });
-  assertSuccess(steer, "turn/steer");
-  if (steer.result?.turnId && steer.result.turnId !== turnId) throw new AttachError("steer_turn_mismatch", "turn/steer returned a different turn identity");
+  assertTurnControlResponse(steer, threadId, turnId, "turn/steer");
   const interrupt = await client.request("turn/interrupt", { threadId, turnId });
-  assertSuccess(interrupt, "turn/interrupt");
-  const completed = await client.waitFor((message) => message.method === "turn/completed" && message.params?.turn?.id === turnId, mark);
+  assertTurnControlResponse(interrupt, threadId, turnId, "turn/interrupt");
+  const completed = await waitForTurnCompleted(client, mark, threadId, turnId);
   const response = await responsePromise;
   assertSuccess(response, "turn/start steer-interrupt");
   if (completed.message.params.turn.status !== "interrupted") throw new AttachError("interrupt_status_mismatch", "turn did not complete as interrupted");
   record(evidence, "steer_and_interrupt_completed", { turnRef: hashRef("turn", turnId), status: completed.message.params.turn.status, expectedTurnRef: hashRef("turn", turnId) });
 }
 
-async function runDisconnectReconcile(config, firstClient, threadId, evidence) {
+async function runDisconnectReconcile(config, firstClient, threadId, evidence, deps) {
   const command = "/bin/sleep 30";
   const mark = firstClient.mark();
-  const responsePromise = firstClient.request("turn/start", turnParams(config, threadId, `Run exactly this harmless command: ${command}. Do not use any other tool.`));
-  const approval = await firstClient.waitFor((message) => message.method === "item/commandExecution/requestApproval", mark);
-  assertApprovalCommand(approval.message, config.marker, command);
+  const responsePromise = firstClient.request("turn/start", turnParams(config, threadId, `Run exactly this harmless command: ${command}. Test marker ${config.marker}. Do not use any other tool.`));
+  const turnId = await waitForTurnStarted(firstClient, mark, threadId);
+  const approval = await waitForApproval(firstClient, mark, threadId, turnId);
+  assertApprovalCommand(approval.message, command);
+  const approvalItemId = messageContext(approval.message).itemId;
+  if (!approvalItemId) throw new AttachError("approval_item_identity_missing", "approval request did not identify an item");
   printOwnerAction("Leave the Desktop approval pending. The driver will close only its bridge socket, reconnect, then ask you to click decline in Desktop.");
   firstClient.close();
   await sleep(250);
-  const identityAfterDisconnect = await inspectProcessIdentity(config);
-  record(evidence, "bridge_disconnected_without_child_restart", { childPid: hashRef("pid", identityAfterDisconnect.child.pid), threadRef: hashRef("thread", threadId), requestRef: hashRef("request", approval.message.id) });
+  const identityAfterDisconnect = await deps.inspectProcessIdentity(config);
+  record(evidence, "bridge_disconnected_without_child_restart", { childPid: hashRef("pid", identityAfterDisconnect.child.pid), threadRef: hashRef("thread", threadId), turnRef: hashRef("turn", turnId), requestRef: hashRef("request", approval.message.id) });
   await responsePromise.catch(() => undefined);
-  const secondClient = await connectExistingSocket(config.socket, config.timeoutMs);
+  const secondClient = await deps.connectExistingSocket(config.socket, config.timeoutMs, config);
   try {
     const model = await secondClient.request("model/list", {});
     assertSuccess(model, "reconnected model/list");
+    const markAfterReconnect = secondClient.mark();
     const history = await secondClient.request("thread/turns/list", { threadId, limit: 20, itemsView: "summary" });
     assertSuccess(history, "reconnected thread/turns/list");
     record(evidence, "bridge_reconnected_and_reconciled", { threadRef: hashRef("thread", threadId), turnCount: turnList(history).length, childPid: hashRef("pid", identityAfterDisconnect.child.pid) });
     printOwnerAction("Desktop owner must now click decline for the still-pending exact harmless sleep approval.");
-    const markAfterReconnect = secondClient.mark();
-    const item = await secondClient.waitFor((message) => message.method === "item/completed" && message.params?.item?.type === "commandExecution", markAfterReconnect);
-    const completed = await secondClient.waitFor((message) => message.method === "turn/completed" && message.params?.turn?.id, markAfterReconnect);
+    const item = await waitForItem(secondClient, markAfterReconnect, "item/completed", threadId, turnId, approvalItemId, "commandExecution");
+    const completed = await waitForTurnCompleted(secondClient, markAfterReconnect, threadId, turnId);
     if (item.message.params.item.status !== "declined" || completed.message.params.turn.status !== "completed") throw new AttachError("disconnect_reconcile_status", "Desktop did not reconcile the pending approval as declined");
-    const finalIdentity = await inspectProcessIdentity(config);
+    const finalIdentity = await deps.inspectProcessIdentity(config);
     if (finalIdentity.child.pid !== identityAfterDisconnect.child.pid) throw new AttachError("disconnect_child_changed", "child PID changed across bridge disconnect and reconnect");
     record(evidence, "desktop_pending_approval_reconciled_after_reconnect", { commandStatus: item.message.params.item.status, turnStatus: completed.message.params.turn.status, turnRef: hashRef("turn", completed.message.params.turn.id) });
   } finally {
@@ -520,30 +538,42 @@ async function runDisconnectReconcile(config, firstClient, threadId, evidence) {
 }
 
 async function runPluginReadonly(config, client, threadId, evidence) {
-  const prompt = `Use the installed ChatGPT Codex app tool that can read current thread/task metadata. Read only. Verify marker ${config.marker} in the current thread and return the current thread identity. Do not create, update, send, move, schedule, open panels, or invoke filesystem/network tools. If no read-only current-thread tool is available, reply exactly ${config.marker}_PLUGIN_TOOL_UNAVAILABLE.`;
+  const prompt = `Use the installed ChatGPT Codex app tool ${config.pluginTool} on server ${config.pluginServer} to read current thread/task metadata. Read only. Verify marker ${config.marker} in the current thread and return the current thread identity. Do not create, update, send, move, schedule, open panels, or invoke filesystem/network tools. If no read-only current-thread tool is available, reply exactly ${config.marker}_PLUGIN_TOOL_UNAVAILABLE.`;
   printOwnerAction("Desktop owner must manually handle any current-runtime codex_app/MCP callback and approve only the read-only current-thread lookup; the bridge will never answer an owner-bound callback.");
   const mark = client.mark();
   const responsePromise = client.request("turn/start", turnParams(config, threadId, prompt));
-  const completed = await client.waitFor((message) => message.method === "turn/completed" && message.params?.turn?.id, mark);
+  const turnId = await waitForTurnStarted(client, mark, threadId);
+  const completed = await waitForTurnCompleted(client, mark, threadId, turnId);
   const response = await responsePromise;
-  assertSuccess(response, "turn/start plugin-readonly");
+  assertTurnResponse(response, threadId, turnId, "turn/start plugin-readonly");
   if (completed.message.params.turn.status !== "completed") throw new AttachError("plugin_turn_status", "plugin read-only turn did not complete");
-  const messages = client.messages.slice(mark);
-  const mcpItems = messages.filter((message) => ["item/started", "item/completed"].includes(message.method) && message.params?.item?.type === "mcpToolCall");
-  if (client.ownerBoundMessages.length > 0) throw new AttachError("owner_bound_callback_on_bridge", "bridge received an owner-bound MCP callback");
-  if (mcpItems.length === 0 && !messages.some((message) => messageContains(message, `${config.marker}_PLUGIN_TOOL_UNAVAILABLE`))) {
-    throw new AttachError("plugin_tool_unavailable", "no mcpToolCall result or explicit unavailable marker was observed");
+  const messages = client.messages.slice(mark).filter((message) => matchesTurn(message, threadId, turnId));
+  const startedMcpItems = messages.filter((message) => message.method === "item/started" && message.params?.item?.type === "mcpToolCall");
+  const completedMcpItems = messages.filter((message) => message.method === "item/completed" && message.params?.item?.type === "mcpToolCall");
+  if (client.ownerBoundRequests?.length > 0) throw new AttachError("owner_bound_callback_on_bridge", "bridge received an owner-bound MCP request");
+  const exactCompleted = completedMcpItems.filter((message) => message.params.item.server === config.pluginServer && message.params.item.tool === config.pluginTool);
+  const successful = exactCompleted.find((message) => isSuccessfulPluginItem(message.params.item));
+  if (successful) {
+    record(evidence, "plugin_readonly_result", {
+      threadRef: hashRef("thread", threadId),
+      turnRef: hashRef("turn", turnId),
+      itemRef: hashRef("item", messageContext(successful).itemId),
+      server: config.pluginServer,
+      tool: config.pluginTool,
+      status: successful.params.item.status,
+      ownerBoundCallbackOnBridge: false,
+    });
+    return;
   }
-  record(evidence, "plugin_readonly_result", {
-    turnRef: hashRef("turn", completed.message.params.turn.id),
-    mcpItemCount: mcpItems.length,
-    mcpStatuses: mcpItems.map((message) => message.params.item.status ?? null),
-    ownerBoundCallbackOnBridge: false,
-    unavailableMarker: mcpItems.length === 0,
-  });
+  if (exactCompleted.some((message) => message.params.item.status === "failed" || message.params.item.error)) throw new AttachError("plugin_tool_error", "the selected read-only plugin tool completed with an error");
+  if (completedMcpItems.length > 0) throw new AttachError("plugin_tool_unsupported", "an MCP item completed, but not for the selected codex_app read-only tool");
+  if (startedMcpItems.length > 0) throw new AttachError("plugin_tool_incomplete", "the selected plugin tool started without a successful completed item");
+  if (messages.some((message) => messageContains(message, `${config.marker}_PLUGIN_TOOL_UNAVAILABLE`))) throw new AttachError("plugin_tool_unavailable", "Desktop reported that the selected read-only plugin tool is unavailable");
+  throw new AttachError("plugin_tool_unavailable", "no completed structured result for the selected read-only plugin tool was observed");
 }
 
 function turnParams(config, threadId, text) {
+  if (!text.includes(config.marker)) throw new AttachError("prompt_marker_missing", "turn prompt is not bound to the exact test marker");
   return {
     threadId,
     input: [{ type: "text", text }],
@@ -554,9 +584,9 @@ function turnParams(config, threadId, text) {
   };
 }
 
-function assertApprovalCommand(message, marker, command) {
-  const serialized = JSON.stringify(message.params ?? {});
-  if (!serialized.includes(marker) || !serialized.includes(command)) throw new AttachError("approval_command_mismatch", "approval request did not contain the exact harmless command marker");
+function assertApprovalCommand(message, command) {
+  const observedCommand = message.params?.command;
+  if (observedCommand !== command) throw new AttachError("approval_command_mismatch", "approval request did not contain the exact harmless command");
 }
 
 function isOwnerBoundMethod(method) {
@@ -635,6 +665,71 @@ function messageContains(message, token) {
 
 function turnList(message) {
   return message.result?.data ?? message.result?.turns ?? [];
+}
+
+function messageContext(message) {
+  const params = message?.params ?? {};
+  const thread = params.thread ?? {};
+  const turn = params.turn ?? {};
+  const item = params.item ?? {};
+  return {
+    threadId: params.threadId ?? thread.id ?? turn.threadId ?? item.threadId ?? item.turn?.threadId ?? null,
+    turnId: params.turnId ?? turn.id ?? item.turnId ?? item.turn?.id ?? null,
+    itemId: params.itemId ?? item.id ?? null,
+  };
+}
+
+function matchesThread(message, threadId) {
+  return messageContext(message).threadId === threadId;
+}
+
+function matchesTurn(message, threadId, turnId) {
+  const context = messageContext(message);
+  return context.threadId === threadId && context.turnId === turnId;
+}
+
+function matchesItem(message, threadId, turnId, itemId) {
+  const context = messageContext(message);
+  return context.threadId === threadId && context.turnId === turnId && context.itemId === itemId;
+}
+
+async function waitForTurnStarted(client, after, threadId) {
+  const result = await client.waitFor((message) => message.method === "turn/started" && matchesThread(message, threadId) && messageContext(message).turnId, after);
+  const turnId = messageContext(result.message).turnId;
+  if (!turnId) throw new AttachError("turn_identity_missing", "turn/started did not identify an active turn");
+  return turnId;
+}
+
+async function waitForTurnCompleted(client, after, threadId, turnId) {
+  return client.waitFor((message) => message.method === "turn/completed" && matchesTurn(message, threadId, turnId), after);
+}
+
+async function waitForApproval(client, after, threadId, turnId) {
+  return client.waitFor((message) => message.method === "item/commandExecution/requestApproval" && matchesTurn(message, threadId, turnId), after);
+}
+
+async function waitForItem(client, after, method, threadId, turnId, itemId, type) {
+  return client.waitFor((message) => message.method === method && matchesItem(message, threadId, turnId, itemId) && message.params?.item?.type === type, after);
+}
+
+function assertTurnResponse(message, threadId, turnId, operation) {
+  assertSuccess(message, operation);
+  const returnedTurnId = message.result?.turn?.id ?? message.result?.turnId;
+  if (returnedTurnId !== turnId) throw new AttachError("turn_identity_mismatch", `${operation} returned a different turn identity`);
+  const returnedThreadId = message.result?.threadId ?? message.result?.turn?.threadId ?? message.result?.turn?.thread?.id;
+  if (returnedThreadId && returnedThreadId !== threadId) throw new AttachError("turn_thread_mismatch", `${operation} returned a different thread identity`);
+}
+
+function assertTurnControlResponse(message, threadId, turnId, operation) {
+  assertSuccess(message, operation);
+  const returnedTurnId = message.result?.turn?.id ?? message.result?.turnId;
+  if (returnedTurnId && returnedTurnId !== turnId) throw new AttachError("turn_identity_mismatch", `${operation} returned a different turn identity`);
+  const returnedThreadId = message.result?.threadId ?? message.result?.turn?.threadId ?? message.result?.turn?.thread?.id;
+  if (returnedThreadId && returnedThreadId !== threadId) throw new AttachError("turn_thread_mismatch", `${operation} returned a different thread identity`);
+}
+
+function isSuccessfulPluginItem(item) {
+  return item.status === "completed" && !item.error && (Object.hasOwn(item, "result") || Object.hasOwn(item, "output") || Object.hasOwn(item, "content"));
 }
 
 async function writeThreadFile(path, value) {
@@ -747,7 +842,7 @@ export function parseArgs(argv) {
 }
 
 function printUsage() {
-  process.stdout.write(`Attach-only Desktop bridge driver\n\nRequired: --manifest PATH --socket PATH --workspace PATH --marker LOOMHELM_R01_*\nScenarios: preflight, create-thread, send, approval-accept, approval-decline, steer-interrupt, disconnect-reconcile, plugin-readonly\nThread scenarios: --thread-file PATH or --thread-id ID; create-thread requires a new --thread-file\nOptional: --desktop-pid PID --wrapper-pid PID --child-pid PID --evidence PATH --timeout-ms MS\nThe driver only dials an existing private socket; it never starts app-server or sends initialize.\n`);
+  process.stdout.write(`Attach-only Desktop bridge driver\n\nRequired: --manifest PATH --socket PATH --workspace PATH --marker LOOMHELM_R01_*\nScenarios: preflight, create-thread, send, approval-accept, approval-decline, steer-interrupt, disconnect-reconcile, plugin-readonly\nThread scenarios: --thread-file PATH or --thread-id ID; create-thread requires a new --thread-file\nPlugin scenario: --plugin-tool OWNER_SELECTED_READ_ONLY_CODEX_APP_TOOL\nOptional: --desktop-pid PID --wrapper-pid PID --child-pid PID --evidence PATH --timeout-ms MS\nThe driver only dials an existing private socket; it never starts app-server or sends initialize.\n`);
 }
 
 async function main() {
