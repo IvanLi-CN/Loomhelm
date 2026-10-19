@@ -13,6 +13,8 @@ This is an unsupported experiment and does not pass the R01 same-instance accept
 - `scripts/stage-r01.sh` creates a retained, digest-bound candidate and manifest outside the repository; it refuses dirty sources and existing stage paths.
 - `scripts/capture-baseline-r01.sh` records only the four wrapper-related startup variables needed for an exact rollback preview.
 - `real-cli-proxy-probe.mjs` validates the retained wrapper against the exact bundled CLI without starting Desktop.
+- `attach-driver.mjs` connects only to an already running retained Desktop socket and enforces exact process, environment, cwd, thread and callback ownership bindings.
+- `attach-driver-fixture.mjs` tests the attach transport against a disposable mock Unix socket without starting an app-server or Desktop process.
 - `scripts/launch-r01.sh`, `scripts/verify-r01.sh` and `scripts/rollback-r01.sh` are reviewable, guarded Desktop handoff scripts; none is run by the test suite.
 
 ## Contract
@@ -39,10 +41,12 @@ The final retained run for the current bundle is recorded in [real-cli-proxy-iso
 
 The scripts print the exact scoped Desktop command by default. Applying either script requires `LOOMHELM_R01_OWNER_CONFIRMED=1`, `LOOMHELM_R01_IDLE_WINDOW_CONFIRMED=1`, and `LOOMHELM_R01_ALLOW_RESTART=1`; the rollback script also refuses to proceed while its exact test socket path exists. Neither script kills processes, changes launchctl, changes global configuration, logs in, pairs a device, or cleans up another app-server.
 
+The complete future owner sequence, including baseline provenance, retained hashes, PID binding, manual approval actions, plugin handling, bridge reconnect, and recovery, is [desktop-attach-handoff.md](../evidence/desktop-attach-handoff.md). It is a handoff contract only; no Desktop verdict is implied.
+
 ## One-time Desktop test steps
 
 1. Stage a fresh candidate with `scripts/stage-r01.sh`, record its manifest source SHA and both executable digests, and run `real-cli-proxy-probe.mjs` before any Desktop startup change.
-2. Run `scripts/capture-baseline-r01.sh` in the same launch shell and set `LOOMHELM_R01_STAGE_MANIFEST`, `LOOMHELM_R01_BASELINE_ENV_FILE`, `LOOMHELM_R01_SOCKET` to a new short path in a `0700` directory, and `LOOMHELM_R01_DESKTOP_EXECUTABLE` to the exact Desktop executable under test.
+2. Run `scripts/capture-baseline-r01.sh` from a fresh owner-opened external Terminal with `LOOMHELM_R01_BASELINE_PROVENANCE=owner-external-terminal`, and set `LOOMHELM_R01_STAGE_MANIFEST`, `LOOMHELM_R01_BASELINE_ENV_FILE`, `LOOMHELM_R01_SOCKET` to a new short path in a `0700` directory, and `LOOMHELM_R01_DESKTOP_EXECUTABLE` to the exact Desktop executable under test.
 3. Review `scripts/launch-r01.sh --print`, confirm the affected Desktop application is disposable and idle, verify that its exact executable has no existing process, and separately confirm that no other active task or Desktop app-server is in scope.
 4. Only after that owner confirmation, run `scripts/launch-r01.sh --apply` with the manifest wrapper and CLI digests; then run `scripts/verify-r01.sh` to record the exact Desktop -> wrapper -> real CLI process chain and allowlisted environment proofs.
 5. Treat any lost acknowledgement as an unknown side effect and stop the test; do not resend the request. Do not claim R01 unless the exact same child PID and thread/turn identity are observed from both Desktop and bridge.

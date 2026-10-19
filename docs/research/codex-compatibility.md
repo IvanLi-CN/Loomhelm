@@ -100,6 +100,8 @@ The retained real-CLI evidence card is [real-cli-proxy-isolated.md](../../experi
 
 The isolated run used one wrapper/real-CLI child and two logical clients. It passed Desktop-owned initialization, bridge model/capability discovery for `gpt-5.6-luna/max`, same-thread notification identity, approval accept and decline arbitration, pending approval reconciliation after bridge disconnect, same-child bridge reconnect with three-turn history, `turn/steer`, and `turn/interrupt`. It did not start or replace ChatGPT Desktop, execute the launch or rollback apply paths, exercise the Desktop app-tools plugin in a replaced startup, or prove same-desktop acceptance; those remain pending Desktop/plugin evidence.
 
+The next bounded step is prepared in [desktop-attach-handoff.md](../../experiments/codex/evidence/desktop-attach-handoff.md). The attach-only driver dials an already running retained socket, rejects wrong manifest/process/environment/cwd/thread identity, never sends `initialize`, and writes only redacted SHA-bound evidence; its fixture uses a disposable mock socket. This card is `ready-for-owner-decision`, not a Desktop result: the owner must still approve any whole-Desktop restart and manually handle UI approvals, plugin callbacks, thread selection, and recovery.
+
 ## Evidence handling
 
 Evidence should be generated into a disposable path with `new-session-probe.mjs --evidence <path>` or `control-probe.mjs --evidence <path>`. Do not commit raw app-server transcripts, rollout files, session databases, access tokens, pairing codes, or complete user messages. A valid evidence card must identify the candidate SHA, acceptance contract digest, scenario-set digest, and inspectable redacted evidence locator.

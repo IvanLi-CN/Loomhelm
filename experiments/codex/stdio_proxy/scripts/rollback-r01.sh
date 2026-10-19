@@ -17,6 +17,14 @@ baseline_value() {
     awk -F= -v wanted="$key" '$1 == wanted {sub(/^[^=]*=/, ""); print; exit}' "$baseline"
 }
 
+baseline_format=$(baseline_value format_version 2>/dev/null || true)
+[ "$baseline_format" = 1 ] || { printf 'baseline format is missing or unsupported: %s\n' "$baseline_format" >&2; exit 2; }
+baseline_provenance=$(baseline_value provenance 2>/dev/null || true)
+case "$baseline_provenance" in
+    owner-external-terminal|owner-finder-launcher|owner-unknown) ;;
+    *) printf 'baseline provenance is missing or unsupported: %s\n' "$baseline_provenance" >&2; exit 2 ;;
+esac
+
 validate_baseline_value() {
     key=$1
     value=$2
@@ -56,6 +64,7 @@ fi
 
 printf '%s\n' 'scoped rollback command:'
 printf '  baseline_file=%s\n' "$baseline"
+printf '  provenance=%s\n' "$baseline_provenance"
 printf '  CODEX_CLI_PATH=%s\n' "$codex_cli_path"
 printf '  CODEX_APP_SERVER_FORCE_CLI=%s\n' "$force_cli"
 printf '  LOOMHELM_STDIO_PROXY_REAL_CLI=%s\n' "$proxy_real_cli"

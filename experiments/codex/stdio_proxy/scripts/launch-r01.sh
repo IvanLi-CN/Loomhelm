@@ -42,6 +42,13 @@ desktop=${LOOMHELM_R01_DESKTOP_EXECUTABLE:-/Applications/ChatGPT.app/Contents/Ma
 [ "$LOOMHELM_R01_WRAPPER" = "$manifest_wrapper" ]
 [ "$LOOMHELM_R01_REAL_CLI" = "$manifest_real_cli" ]
 test -f "$LOOMHELM_R01_BASELINE_ENV_FILE"
+baseline_format=$(awk -F= '$1 == "format_version" {sub(/^[^=]*=/, ""); print; exit}' "$LOOMHELM_R01_BASELINE_ENV_FILE")
+[ "$baseline_format" = 1 ] || { printf 'baseline format is missing or unsupported: %s\n' "$baseline_format" >&2; exit 2; }
+baseline_provenance=$(awk -F= '$1 == "provenance" {sub(/^[^=]*=/, ""); print; exit}' "$LOOMHELM_R01_BASELINE_ENV_FILE")
+case "$baseline_provenance" in
+    owner-external-terminal|owner-finder-launcher|owner-unknown) ;;
+    *) printf 'baseline provenance is missing or unsupported: %s\n' "$baseline_provenance" >&2; exit 2 ;;
+esac
 test -f "$LOOMHELM_R01_WRAPPER"
 test -f "$LOOMHELM_R01_REAL_CLI"
 test -x "$LOOMHELM_R01_WRAPPER"
@@ -65,6 +72,7 @@ printf '  retained_wrapper=%s\n' "$LOOMHELM_R01_WRAPPER"
 printf '  retained_wrapper_sha256=%s\n' "$manifest_wrapper_sha"
 printf '  pinned_real_cli=%s\n' "$LOOMHELM_R01_REAL_CLI"
 printf '  pinned_real_cli_sha256=%s\n' "$manifest_real_cli_sha"
+printf '  baseline_provenance=%s\n' "$baseline_provenance"
 printf '  socket=%s (parent_mode=%s)\n' "$LOOMHELM_R01_SOCKET" "$(stat -f '%Lp' "$socket_dir")"
 if [ -n "$desktop_pids" ]; then
     printf '  desktop_existing_pids=%s\n' "$desktop_pids"
