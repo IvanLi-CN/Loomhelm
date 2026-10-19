@@ -9,47 +9,54 @@ import { VitePWA } from "vite-plugin-pwa";
 const webRoot = path.dirname(fileURLToPath(import.meta.url));
 const isStorybook = process.env.STORYBOOK === "true";
 
-export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-    ...(isStorybook
-      ? []
-      : [
-          VitePWA({
-            registerType: "prompt",
-            injectRegister: null,
-            includeAssets: ["icons/icon.svg"],
-            manifest: {
-              name: "Loomhelm Web",
-              short_name: "Loomhelm",
-              description: "Loomhelm web runtime verification surface",
-              start_url: "/",
-              scope: "/",
-              display: "standalone",
-              theme_color: "#0f766e",
-              background_color: "#f8fafc",
-              icons: [
-                {
-                  src: "/icons/icon.svg",
-                  sizes: "any",
-                  type: "image/svg+xml",
-                  purpose: "any maskable"
-                }
-              ]
-            },
-            devOptions: {
-              enabled: false
-            }
-          })
-        ])
-  ],
-  resolve: {
-    alias: {
-      "@": path.resolve(webRoot, "src")
+export default defineConfig(({ mode }) => {
+  const isDemo = mode === "demo";
+
+  return {
+    base: isDemo ? "/demo/" : "/",
+    plugins: [
+      react(),
+      tailwindcss(),
+      ...(isStorybook || isDemo
+        ? []
+        : [
+            VitePWA({
+              registerType: "prompt",
+              injectRegister: null,
+              includeAssets: ["icons/icon.svg"],
+              manifest: {
+                name: "Loomhelm Web",
+                short_name: "Loomhelm",
+                description: "Loomhelm web runtime verification surface",
+                start_url: "/",
+                scope: "/",
+                display: "standalone",
+                theme_color: "#0f766e",
+                background_color: "#f8fafc",
+                icons: [
+                  {
+                    src: "/icons/icon.svg",
+                    sizes: "any",
+                    type: "image/svg+xml",
+                    purpose: "any maskable"
+                  }
+                ]
+              },
+              devOptions: {
+                enabled: false
+              }
+            })
+          ])
+    ],
+    resolve: {
+      alias: {
+        "@": path.resolve(webRoot, "src"),
+        ...(isDemo ? { "virtual:pwa-register": path.resolve(webRoot, "src/pwa/noopRegister.ts") } : {})
+      }
+    },
+    build: {
+      outDir: isDemo ? "dist-demo" : "dist",
+      target: "es2022"
     }
-  },
-  build: {
-    target: "es2022"
-  }
+  };
 });
