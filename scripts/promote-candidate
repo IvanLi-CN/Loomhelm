@@ -3,7 +3,7 @@ set -eu
 
 usage() {
 	cat <<'EOF'
-usage: scripts/promote-candidate --manifest FILE --destination DIR [--expected-digest DIGEST] [--expected-source-sha SHA] [--dry-run]
+usage: scripts/promote-candidate --manifest FILE --destination DIR [--expected-digest DIGEST] [--expected-source-sha SHA] [--expected-promote-script-sha DIGEST] [--dry-run]
 
 Verify an already-built candidate and promote its files into a directory named
 by candidate digest. This command never invokes Go, Bun, Docker or a build.
@@ -19,6 +19,7 @@ manifest_path=""
 destination_dir=""
 expected_digest=""
 expected_source_sha=""
+expected_promote_script_sha=""
 dry_run=0
 
 while [ "$#" -gt 0 ]; do
@@ -59,6 +60,15 @@ while [ "$#" -gt 0 ]; do
 			expected_source_sha=${1#*=}
 			shift
 			;;
+		--expected-promote-script-sha)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --expected-promote-script-sha needs a value" >&2; exit 2; }
+			expected_promote_script_sha=$2
+			shift 2
+			;;
+		--expected-promote-script-sha=*)
+			expected_promote_script_sha=${1#*=}
+			shift
+			;;
 		--dry-run)
 			dry_run=1
 			shift
@@ -85,28 +95,32 @@ case "$manifest_path" in
 	/*) ;;
 	*) manifest_path="$repo_root/$manifest_path" ;;
 esac
-manifest_parent=$(dirname -- "$manifest_path")
-manifest_path=$(CDPATH='' cd -- "$manifest_parent" && pwd -P)/$(basename -- "$manifest_path")
 case "$destination_dir" in
 	/*) ;;
 	*) destination_dir="$repo_root/$destination_dir" ;;
 esac
 
-python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_source_sha" "$dry_run" <<'PY'
+python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_source_sha" "$dry_run" "$repo_root/scripts/promote-candidate" "$expected_promote_script_sha" <<'PY'
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
+import tarfile
+import tempfile
+import time
 from pathlib import Path
 
-manifest_path = Path(sys.argv[1]).resolve()
-destination = Path(sys.argv[2]).resolve()
+manifest_path = Path(os.path.abspath(sys.argv[1]))
+destination = Path(os.path.abspath(sys.argv[2]))
 expected_digest = sys.argv[3]
 expected_source_sha = sys.argv[4]
 dry_run = sys.argv[5] == "1"
+tool_path = Path(os.path.abspath(sys.argv[6]))
+expected_tool_digest = sys.argv[7]
 
 
 def fail(message: str) -> None:
@@ -117,20 +131,53 @@ def canonical_json(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def sha256_file(path: Path) -> str:
-    if path.is_symlink() or not path.is_file():
+def reject_symlink_components(path: Path) -> None:
+    if path.is_symlink():
+        fail(f"path is a symlink: {path}")
+
+
+def open_regular(path: Path) -> tuple[int, os.stat_result]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        fail(f"cannot open regular file {path}: {error}")
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
         fail(f"expected a regular file: {path}")
+    return descriptor, metadata
+
+
+def file_observation(path: Path) -> tuple[str, int, int]:
+    descriptor, metadata = open_regular(path)
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    with os.fdopen(descriptor, "rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    return digest.hexdigest(), metadata.st_size, metadata.st_mode & 0o7777
+
+
+def sha256_file(path: Path) -> str:
+    return file_observation(path)[0]
+
+
+def copy_regular(source: Path, target: Path, mode: int) -> None:
+    descriptor, _ = open_regular(source)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with os.fdopen(descriptor, "rb") as source_stream, target.open("wb") as target_stream:
+        shutil.copyfileobj(source_stream, target_stream, length=1024 * 1024)
+    os.chmod(target, mode)
 
 
 def safe_child(root: Path, relative: str) -> Path:
-    if not relative or Path(relative).is_absolute() or "\\" in relative:
+    if not relative or "\\" in relative:
         fail(f"artifact path is not a safe relative path: {relative!r}")
-    path = (root / relative).resolve()
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or relative_path.as_posix() != relative or any(part in ("", ".", "..") for part in relative_path.parts):
+        fail(f"artifact path is not a safe relative path: {relative!r}")
+    path = root / relative_path
+    reject_symlink_components(path)
     try:
         path.relative_to(root)
     except ValueError:
@@ -138,21 +185,40 @@ def safe_child(root: Path, relative: str) -> Path:
     return path
 
 
-def file_record(root: Path, record: object, expected_path: str | None = None) -> dict[str, object]:
+def mode_value(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 0o7777:
+        fail(f"{label} must be a file mode")
+    return value
+
+
+def file_record(
+    root: Path,
+    record: object,
+    expected_path: str | None = None,
+    verify_mode: bool = False,
+) -> dict[str, object]:
     if not isinstance(record, dict):
         fail("artifact record must be an object")
     relative = record.get("path")
     if not isinstance(relative, str) or (expected_path is not None and relative != expected_path):
         fail(f"unexpected artifact path: {relative!r}")
+    expected_sha = record.get("sha256")
+    expected_size = record.get("size")
+    expected_mode = mode_value(record.get("mode"), f"mode for {relative}")
+    if not isinstance(expected_sha, str) or len(expected_sha) != 64 or any(char not in "0123456789abcdef" for char in expected_sha):
+        fail(f"invalid artifact digest: {relative}")
+    if isinstance(expected_size, bool) or not isinstance(expected_size, int) or expected_size < 0:
+        fail(f"invalid artifact size: {relative}")
     path = safe_child(root, relative)
-    digest = sha256_file(path)
-    size = path.stat().st_size
-    if record.get("sha256") != digest or record.get("size") != size:
+    digest, size, actual_mode = file_observation(path)
+    if expected_sha != digest or expected_size != size:
         fail(f"artifact digest or size mismatch: {relative}")
-    return {"path": relative, "sha256": digest, "size": size}
+    if verify_mode and actual_mode != expected_mode:
+        fail(f"artifact mode mismatch: {relative}: expected {expected_mode:o}, found {actual_mode:o}")
+    return {"path": relative, "sha256": digest, "size": size, "mode": expected_mode}
 
 
-def web_records(root: Path, record: object) -> tuple[str, list[dict[str, object]]]:
+def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[str, list[dict[str, object]]]:
     if not isinstance(record, dict) or record.get("path") != "web":
         fail("web artifact record must point to web")
     web_root = safe_child(root, "web")
@@ -166,7 +232,7 @@ def web_records(root: Path, record: object) -> tuple[str, list[dict[str, object]
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             fail("web artifact file record is malformed")
         relative = item["path"]
-        records.append(file_record(web_root, item, relative))
+        records.append(file_record(web_root, item, relative, verify_mode))
     paths = [item["path"] for item in records]
     if paths != sorted(set(paths)):
         fail("web artifact file paths must be sorted and unique")
@@ -174,12 +240,14 @@ def web_records(root: Path, record: object) -> tuple[str, list[dict[str, object]
     for child in web_root.rglob("*"):
         if child.is_symlink():
             fail(f"web artifact contains a symlink: {child}")
+        if not child.is_dir() and not child.is_file():
+            fail(f"web artifact contains a non-file entry: {child}")
         if child.is_file():
             actual_files.append(child.relative_to(web_root).as_posix())
     if sorted(actual_files) != paths:
         fail("web artifact file list does not match the candidate directory")
     encoded = "".join(
-        f"{item['path']}\0{item['sha256']}\0{item['size']}\n" for item in records
+        f"{item['path']}\0{item['sha256']}\0{item['size']}\0{item['mode']}\n" for item in records
     ).encode("utf-8")
     digest = hashlib.sha256(encoded).hexdigest()
     if record.get("sha256") != digest:
@@ -187,22 +255,84 @@ def web_records(root: Path, record: object) -> tuple[str, list[dict[str, object]
     return digest, records
 
 
+def archive_members(root: Path) -> list[tuple[str, Path]]:
+    members: dict[str, Path] = {}
+    for name in ("bin", "web", "candidate-manifest.json"):
+        path = root / name
+        if path.is_dir():
+            if path.is_symlink():
+                fail(f"candidate archive contains a directory symlink: {path}")
+            members[name] = path
+            for child in path.rglob("*"):
+                if child.is_symlink():
+                    fail(f"candidate archive contains a symlink: {child}")
+                if not child.is_dir() and not child.is_file():
+                    fail(f"candidate archive contains a non-file entry: {child}")
+                members[child.relative_to(root).as_posix()] = child
+        else:
+            members[name] = path
+    return [(name, members[name]) for name in sorted(members)]
+
+
+def verify_archive(bundle_root: Path, source_date_epoch: int) -> None:
+    package = bundle_root / "candidate.tar.gz"
+    expected_members = archive_members(bundle_root)
+    expected_names = [name for name, _ in expected_members]
+    try:
+        with tarfile.open(package, mode="r:gz") as archive:
+            members = archive.getmembers()
+            if [member.name for member in members] != expected_names:
+                fail("candidate archive member list does not match the candidate files")
+            for member, (name, path) in zip(members, expected_members):
+                if member.name != name or member.uid != 0 or member.gid != 0 or member.uname or member.gname or member.mtime != source_date_epoch:
+                    fail(f"candidate archive metadata mismatch: {name}")
+                if member.isdir():
+                    if not path.is_dir() or member.mode & 0o7777 != 0o755:
+                        fail(f"candidate archive directory mismatch: {name}")
+                    continue
+                if not member.isfile() or not path.is_file():
+                    fail(f"candidate archive member is not a regular file: {name}")
+                expected_mode = 0o755 if name.startswith("bin/") else 0o644
+                if member.mode & 0o7777 != expected_mode:
+                    fail(f"candidate archive file mode mismatch: {name}")
+                stream = archive.extractfile(member)
+                if stream is None:
+                    fail(f"candidate archive file cannot be read: {name}")
+                digest = hashlib.sha256()
+                size = 0
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    size += len(chunk)
+                expected_digest, expected_size, _ = file_observation(path)
+                if digest.hexdigest() != expected_digest or size != expected_size:
+                    fail(f"candidate archive content mismatch: {name}")
+    except (OSError, tarfile.TarError) as error:
+        fail(f"cannot read candidate archive: {error}")
+
+
 def sidecar_digest(path: Path, expected_name: str) -> str:
     if not path.is_file() or path.is_symlink():
         fail(f"digest sidecar is missing: {path}")
     fields = path.read_text(encoding="ascii").split()
-    if len(fields) != 2 or fields[1] != expected_name:
+    if len(fields) != 2 or fields[1] != expected_name or len(fields[0]) != 64 or any(char not in "0123456789abcdef" for char in fields[0]):
         fail(f"digest sidecar is malformed: {path}")
     return fields[0]
 
 
-def verify_bundle(bundle_root: Path, expected: str | None = None) -> tuple[str, str, dict[str, object]]:
+def verify_bundle(
+    bundle_root: Path,
+    expected: str | None = None,
+    verify_mode: bool = False,
+) -> tuple[str, str, dict[str, object]]:
+    reject_symlink_components(bundle_root)
+    if bundle_root.is_symlink() or not bundle_root.is_dir():
+        fail(f"candidate bundle is not a directory: {bundle_root}")
     manifest_file = bundle_root / "candidate-manifest.json"
     if manifest_file.is_symlink() or not manifest_file.is_file():
         fail(f"candidate manifest is missing: {manifest_file}")
     try:
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         fail(f"cannot read candidate manifest: {error}")
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
         fail("unsupported candidate manifest")
@@ -214,19 +344,32 @@ def verify_bundle(bundle_root: Path, expected: str | None = None) -> tuple[str, 
         fail("candidate manifest has an invalid top-level shape")
     digest = candidate.get("digest")
     source_sha = candidate.get("source_sha")
+    source_tree_sha = candidate.get("source_tree_sha")
+    source_date_epoch = candidate.get("source_date_epoch")
     if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
         fail("candidate digest is invalid")
     if not isinstance(source_sha, str) or len(source_sha) not in (40, 64) or any(char not in "0123456789abcdef" for char in source_sha):
         fail("candidate source SHA is invalid")
+    if not isinstance(source_tree_sha, str) or len(source_tree_sha) not in (40, 64) or any(char not in "0123456789abcdef" for char in source_tree_sha):
+        fail("candidate source tree SHA is invalid")
+    if isinstance(source_date_epoch, bool) or not isinstance(source_date_epoch, int):
+        fail("candidate source date is invalid")
     if expected and digest != expected:
         fail(f"candidate digest {digest} does not match expected digest {expected}")
     if expected_source_sha and source_sha != expected_source_sha:
         fail(f"candidate source SHA {source_sha} does not match expected source SHA {expected_source_sha}")
+    if expected_tool_digest:
+        if len(expected_tool_digest) != 64 or any(char not in "0123456789abcdef" for char in expected_tool_digest):
+            fail("expected promotion script digest is invalid")
+        if inputs.get("promote_script_sha256") != expected_tool_digest:
+            fail("candidate promotion script digest does not match the trusted promotion tooling")
+        if sha256_file(tool_path) != expected_tool_digest:
+            fail("checked-out promotion tooling does not match the expected digest")
     component_records = {
-        name: file_record(bundle_root, artifacts.get(name), f"bin/{name}")
+        name: file_record(bundle_root, artifacts.get(name), f"bin/{name}", verify_mode)
         for name in ("server", "worker", "connector")
     }
-    web_digest, web_file_records = web_records(bundle_root, artifacts.get("web"))
+    web_digest, web_file_records = web_records(bundle_root, artifacts.get("web"), verify_mode)
     normalized_artifacts = {
         **component_records,
         "web": {"path": "web", "sha256": web_digest, "files": web_file_records},
@@ -234,8 +377,8 @@ def verify_bundle(bundle_root: Path, expected: str | None = None) -> tuple[str, 
     identity = {
         "schema_version": 1,
         "source_sha": source_sha,
-        "source_tree_sha": candidate.get("source_tree_sha"),
-        "source_date_epoch": candidate.get("source_date_epoch"),
+        "source_tree_sha": source_tree_sha,
+        "source_date_epoch": source_date_epoch,
         "platform": platform,
         "inputs": inputs,
         "artifacts": normalized_artifacts,
@@ -243,8 +386,6 @@ def verify_bundle(bundle_root: Path, expected: str | None = None) -> tuple[str, 
     recomputed = hashlib.sha256(canonical_json(identity)).hexdigest()
     if recomputed != digest:
         fail(f"candidate identity digest mismatch: manifest={digest} recomputed={recomputed}")
-    if candidate.get("source_tree_sha") is None or candidate.get("source_date_epoch") is None:
-        fail("candidate source identity is incomplete")
     manifest_bytes = manifest_file.read_bytes()
     manifest_digest = sha256_file(manifest_file)
     if sidecar_digest(bundle_root / "candidate-manifest.json.sha256", "candidate-manifest.json") != manifest_digest:
@@ -255,45 +396,109 @@ def verify_bundle(bundle_root: Path, expected: str | None = None) -> tuple[str, 
         fail("candidate package sidecar digest mismatch")
     if not manifest_bytes:
         fail("candidate manifest is empty")
+    verify_archive(bundle_root, source_date_epoch)
     return digest, source_sha, manifest
 
 
-if not manifest_path.is_file():
+reject_symlink_components(manifest_path)
+reject_symlink_components(destination)
+reject_symlink_components(tool_path)
+if not manifest_path.is_file() or manifest_path.is_symlink():
     fail(f"manifest does not exist: {manifest_path}")
 candidate_root = manifest_path.parent
-digest, source_sha, _manifest = verify_bundle(candidate_root, expected_digest or None)
+digest, source_sha, manifest = verify_bundle(candidate_root, expected_digest or None)
 destination.mkdir(parents=True, exist_ok=True)
+if destination.is_symlink() or not destination.is_dir():
+    fail(f"destination is not a regular directory: {destination}")
 target = destination / digest
-if target.exists():
-    existing_digest, existing_source_sha, _ = verify_bundle(target, digest)
+lock = destination / f".{digest}.lock"
+
+
+def finish_existing() -> bool:
+    if target.is_symlink():
+        fail(f"promoted candidate target is a symlink: {target}")
+    if not target.exists():
+        return False
+    if not target.is_dir():
+        fail(f"promoted candidate target is not a directory: {target}")
+    existing_digest, existing_source_sha, _ = verify_bundle(target, digest, verify_mode=True)
     if existing_digest != digest or existing_source_sha != source_sha:
         fail(f"existing promoted candidate conflicts with {digest}: {target}")
     print(f"promote-candidate: already-promoted candidate_digest={digest} destination={target}")
-    raise SystemExit(0)
+    return True
+
+
 if dry_run:
     print(f"promote-candidate: verified candidate_digest={digest} source_sha={source_sha} destination={target} dry_run=true")
     raise SystemExit(0)
 
-temporary = destination / f".{digest}.tmp-{os.getpid()}"
-if temporary.exists():
-    fail(f"temporary promotion directory already exists: {temporary}")
-temporary.mkdir()
+if finish_existing():
+    raise SystemExit(0)
+
+lock_owned = False
+deadline = time.monotonic() + 60
+while not lock_owned:
+    if target.is_symlink():
+        fail(f"promoted candidate target is a symlink: {target}")
+    if target.exists() and finish_existing():
+        raise SystemExit(0)
+    if lock.is_symlink():
+        fail(f"promotion lock is a symlink: {lock}")
+    try:
+        lock.mkdir()
+        lock_owned = True
+    except FileExistsError:
+        if time.monotonic() >= deadline:
+            fail(f"timed out waiting for concurrent promotion: {lock}")
+        time.sleep(0.1)
+
+temporary = None
+owned_target = False
 try:
+    if finish_existing():
+        raise SystemExit(0)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{digest}.tmp-", dir=str(destination)))
+    artifacts = manifest["artifacts"]
     for name in ("server", "worker", "connector"):
-        relative = Path("bin") / name
-        (temporary / relative.parent).mkdir(parents=True, exist_ok=True)
-        shutil.copy2(candidate_root / relative, temporary / relative)
-    shutil.copytree(candidate_root / "web", temporary / "web")
+        record = artifacts[name]
+        source = safe_child(candidate_root, record["path"])
+        target_path = temporary / record["path"]
+        copy_regular(source, target_path, mode_value(record["mode"], f"mode for {record['path']}"))
+    web_record = artifacts["web"]
+    for record in web_record["files"]:
+        source = safe_child(candidate_root / "web", record["path"])
+        target_path = temporary / "web" / record["path"]
+        copy_regular(source, target_path, mode_value(record["mode"], f"mode for {record['path']}"))
     for name in (
         "candidate-manifest.json",
         "candidate-manifest.json.sha256",
         "candidate.tar.gz",
         "candidate.tar.gz.sha256",
     ):
-        shutil.copy2(candidate_root / name, temporary / name)
+        copy_regular(candidate_root / name, temporary / name, 0o644)
+    verify_bundle(temporary, digest, verify_mode=True)
+    if target.exists() or target.is_symlink():
+        fail(f"promoted candidate target appeared during promotion: {target}")
     os.replace(temporary, target)
-except Exception:
-    shutil.rmtree(temporary, ignore_errors=True)
+    temporary = None
+    owned_target = True
+    verify_bundle(target, digest, verify_mode=True)
+except SystemExit:
+    if owned_target and target.exists() and target.is_dir():
+        shutil.rmtree(target, ignore_errors=True)
+
     raise
+except Exception:
+    if owned_target and target.exists() and target.is_dir():
+        shutil.rmtree(target, ignore_errors=True)
+    raise
+finally:
+    if temporary is not None:
+        shutil.rmtree(temporary, ignore_errors=True)
+    if lock_owned:
+        try:
+            lock.rmdir()
+        except FileNotFoundError:
+            pass
 print(f"promote-candidate: promoted candidate_digest={digest} source_sha={source_sha} destination={target}")
 PY

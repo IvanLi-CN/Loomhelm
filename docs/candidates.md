@@ -2,9 +2,9 @@
 
 The candidate contract builds Server, Worker, Connector and Web static assets from one exact, clean Git source SHA. The default target is `linux/amd64`; use `--goos` and `--goarch` only when the target platform is part of the candidate identity.
 
-The builder records the source commit and tree SHA, source commit timestamp, target platform, pinned Go and Bun versions, lockfile and build-input digests, every component file digest, the complete Web file list, and a deterministic `candidate.tar.gz`. `candidate-manifest.json.sha256` and `candidate.tar.gz.sha256` protect the manifest and package bytes separately.
+The builder records the source commit and tree SHA, source commit timestamp, target platform, pinned Go and Bun versions, fixed build environment, lockfile and build-input digests, every component file digest and mode, the complete Web file list, and a deterministic `candidate.tar.gz`. `candidate-manifest.json.sha256` and `candidate.tar.gz.sha256` protect the manifest and package bytes separately.
 
-The candidate identity is the SHA256 digest of the canonical manifest identity, excluding the manifest's own digest and the package archive digest. This avoids a circular hash while keeping the source SHA, build inputs and output bytes bound to one `candidate_digest`.
+The candidate identity is the SHA256 digest of the canonical manifest identity, excluding the manifest's own digest and the package archive digest. This avoids a circular hash while keeping the source SHA, build inputs and output bytes bound to one `candidate_digest`; promotion also validates that the archive members and bytes exactly match the manifest files.
 
 ## Local Build
 
@@ -15,7 +15,7 @@ source_sha=$(git rev-parse HEAD)
 scripts/build-candidate --source-sha "$source_sha" --output /tmp/loomhelm-candidate
 ```
 
-The command rejects abbreviated or unknown SHAs, dirty tracked or untracked files, tool versions that differ from `tools/versions.env`, existing output directories, symlinked `web/dist`, and unsupported target names. It never overwrites an existing candidate.
+The command rejects abbreviated or unknown SHAs, dirty tracked or untracked files, tool versions that differ from `tools/versions.env`, existing output directories, symlinked `web/dist`, and unsupported target names. It builds from a temporary detached worktree for the exact commit, fixes the Web build environment, and never overwrites an existing candidate.
 
 Inspect the identity without parsing build logs:
 
@@ -35,7 +35,7 @@ The reproduction command intentionally performs two builds and removes its tempo
 
 ## Promotion
 
-Promotion verifies all manifest records, the component and Web bytes, both sidecars, and the candidate identity digest before copying. The destination is keyed by `candidate_digest`, so the same candidate is idempotent and a conflicting directory fails closed:
+Promotion verifies all manifest records, executable modes, the component and Web bytes, the deterministic archive structure, both sidecars, and the candidate identity digest before copying. It copies into a temporary directory, re-verifies that copy, restores executable modes after artifact transfer, rejects symlink paths, and serializes same-digest retries with a lock. The destination is keyed by `candidate_digest`, so the same candidate is idempotent and a conflicting directory fails closed:
 
 ```sh
 scripts/promote-candidate \
@@ -49,8 +49,8 @@ The promotion script has no Go, Bun, Docker or package-install command. The curr
 
 ## Workflow Gates
 
-`Candidate CI` runs on PR and merge-queue candidate events with a per-PR cancellable concurrency group. Its required checks are `Quality Gates` and `Candidate Build`; `Candidate Reproducibility` is informational and repeats the build identity check.
+`Candidate CI` runs on PR and merge-queue candidate events with a PR-cancellable but merge-queue-stable concurrency group. Its required checks are `Quality Gates`, `Repository Verification`, and `Candidate Build`; `Candidate Reproducibility` is informational and repeats the build identity check.
 
-`Branch Preview` uses a non-cancellable per-branch group, builds once, uploads the candidate, and promotes that exact artifact into the `branch-preview` environment. `Release Candidate` uses a non-cancellable environment group and requires the source run id, artifact name, source SHA and candidate digest; it downloads and promotes the existing artifact without rebuilding it.
+`Branch Preview` uses a non-cancellable per-branch group, builds once, uploads the candidate, and promotes that exact artifact into the `branch-preview` environment. `Release Candidate` uses a non-cancellable candidate-specific environment group, verifies that the source run is a successful `Candidate CI` run with the matching head SHA and artifact, checks out trusted tooling from `feat/phase1`, and downloads/promotes the existing artifact without rebuilding it. The release workflow is intentionally restricted to that protected branch.
 
 The checked-in merge/release declaration is [.github/quality-gates.json](../.github/quality-gates.json). GitHub branch protection and environment approval settings remain external execution state and must be aligned with that declaration by the repository owner.

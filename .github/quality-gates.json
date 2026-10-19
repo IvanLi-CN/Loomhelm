@@ -14,6 +14,7 @@
   },
   "required_checks": [
     "Quality Gates",
+    "Repository Verification",
     "Candidate Build"
   ],
   "informational_checks": [
@@ -25,6 +26,7 @@
       "workflow": "Candidate CI",
       "jobs": [
         "Quality Gates",
+        "Repository Verification",
         "Candidate Build",
         "Candidate Reproducibility"
       ]

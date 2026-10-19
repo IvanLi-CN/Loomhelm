@@ -59,6 +59,7 @@ jobs:
           name: loomhelm-branch-preview-${{ github.run_id }}
           path: ${{ runner.temp }}/loomhelm-candidate
           if-no-files-found: error
+          retention-days: 90
 
   promote-branch-preview:
     name: Promote Branch Preview
@@ -90,3 +91,4 @@ jobs:
           name: loomhelm-branch-preview-promoted-${{ github.run_id }}
           path: ${{ runner.temp }}/loomhelm-branch-preview
           if-no-files-found: error
+          retention-days: 90

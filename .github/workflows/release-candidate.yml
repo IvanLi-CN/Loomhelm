@@ -30,19 +30,62 @@ permissions:
   contents: read
 
 concurrency:
-  group: loomhelm-release-${{ inputs.environment || 'production' }}
+  group: loomhelm-release-${{ inputs.environment || 'production' }}-${{ inputs.candidate_digest || 'unknown' }}
   cancel-in-progress: false
 
 jobs:
   publish-candidate:
     name: Publish Candidate
+    if: github.ref == 'refs/heads/feat/phase1'
     runs-on: ubuntu-24.04
     environment:
       name: ${{ inputs.environment }}
     steps:
-      - name: Check out the release tooling
+      - name: Verify candidate provenance
+        uses: actions/github-script@v7
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        with:
+          script: |
+            const runId = Number(process.env.SOURCE_RUN_ID);
+            if (!Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed("source_run_id must be a positive workflow run id");
+              return;
+            }
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId
+            });
+            if (run.name !== "Candidate CI" || run.path !== ".github/workflows/candidate-ci.yml") {
+              core.setFailed(`source run is not Candidate CI: ${run.name} ${run.path}`);
+              return;
+            }
+            if (run.status !== "completed" || run.conclusion !== "success") {
+              core.setFailed(`source run is not successful: ${run.status}/${run.conclusion}`);
+              return;
+            }
+            if (run.head_sha !== process.env.SOURCE_SHA) {
+              core.setFailed(`source SHA mismatch: run=${run.head_sha} input=${process.env.SOURCE_SHA}`);
+              return;
+            }
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+              per_page: 100
+            });
+            const artifact = artifacts.find((item) => item.name === process.env.ARTIFACT_NAME);
+            if (!artifact || artifact.expired) {
+              core.setFailed(`candidate artifact is missing or expired: ${process.env.ARTIFACT_NAME}`);
+            }
+
+      - name: Check out trusted release tooling
         uses: actions/checkout@v4
         with:
+          ref: feat/phase1
           fetch-depth: 1
       - name: Download the immutable candidate
         uses: actions/download-artifact@v4
@@ -52,13 +95,18 @@ jobs:
           path: ${{ runner.temp }}/loomhelm-candidate
           github-token: ${{ github.token }}
       - name: Publish without rebuilding
+        env:
+          EXPECTED_DIGEST: ${{ inputs.candidate_digest }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           manifest=$(find "$RUNNER_TEMP/loomhelm-candidate" -type f -name candidate-manifest.json -print -quit)
           test -n "$manifest"
-          scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-release" --expected-digest "${{ inputs.candidate_digest }}" --expected-source-sha "${{ inputs.source_sha }}"
+          promote_script_sha=$(sha256sum scripts/promote-candidate | awk '{print $1}')
+          scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-release" --expected-digest "$EXPECTED_DIGEST" --expected-source-sha "$EXPECTED_SOURCE_SHA" --expected-promote-script-sha "$promote_script_sha"
       - name: Upload the release handoff
         uses: actions/upload-artifact@v4
         with:
           name: loomhelm-release-${{ inputs.candidate_digest }}
           path: ${{ runner.temp }}/loomhelm-release
           if-no-files-found: error
+          retention-days: 90

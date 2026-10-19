@@ -11,10 +11,31 @@ the candidate manifest and a deterministic candidate archive.
 EOF
 }
 
-repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+checkout_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P) || {
 	echo "build-candidate: cannot resolve repository root" >&2
 	exit 1
 }
+repo_root=$checkout_root
+
+stage_dir=""
+build_parent=""
+build_root=""
+cleanup() {
+	status=$?
+	trap - EXIT HUP INT TERM
+	if [ -n "$stage_dir" ] && { [ -e "$stage_dir" ] || [ -L "$stage_dir" ]; }; then
+		rm -rf -- "$stage_dir"
+	fi
+	if [ -n "$build_root" ] && { [ -e "$build_root" ] || [ -L "$build_root" ]; }; then
+		git -C "$checkout_root" worktree remove --force "$build_root" >/dev/null 2>&1 || rm -rf -- "$build_root"
+	fi
+	if [ -n "$build_parent" ] && { [ -e "$build_parent" ] || [ -L "$build_parent" ]; }; then
+		rm -rf -- "$build_parent"
+	fi
+	exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
 cd "$repo_root"
 
 source_sha=${LOOMHELM_SOURCE_SHA:-}
@@ -151,17 +172,21 @@ case "$output_dir" in
 			esac
 		;;
 esac
-if [ -e "$output_dir" ]; then
+if [ -e "$output_dir" ] || [ -L "$output_dir" ]; then
 	echo "build-candidate: refusing to overwrite existing output: $output_dir" >&2
 	exit 1
 fi
 
-stage_dir="${output_dir}.tmp.$$"
-if [ -e "$stage_dir" ]; then
-	echo "build-candidate: temporary output already exists: $stage_dir" >&2
-	exit 1
-fi
+stage_dir=$(mktemp -d "$output_dir.tmp.XXXXXX")
 mkdir -p "$stage_dir/bin" "$stage_dir/web"
+
+build_parent=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-candidate-build.XXXXXX")
+build_root="$build_parent/source"
+git -C "$checkout_root" worktree add --detach "$build_root" "$source_sha" >/dev/null
+repo_root=$build_root
+cd "$repo_root"
+source_tree_sha=$(git rev-parse "${source_sha}^{tree}")
+source_date_epoch=$(git show -s --format=%ct "$source_sha")
 
 echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
 GOTOOLCHAIN=local GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
@@ -176,16 +201,22 @@ if [ -L "$repo_root/web/dist" ]; then
 	echo "build-candidate: refusing to follow a symlink at web/dist" >&2
 	exit 1
 fi
-bun install --frozen-lockfile
-bun run build
+env -u STORYBOOK -u VITE_DEMO bun install --frozen-lockfile
+env STORYBOOK=false VITE_DEMO=false bun run build
 if [ ! -d "$repo_root/web/dist" ]; then
 	echo "build-candidate: Web build did not produce web/dist" >&2
 	exit 1
 fi
 cp -R "$repo_root/web/dist/." "$stage_dir/web/"
 
-source_tree_sha=$(git rev-parse "${source_sha}^{tree}")
-source_date_epoch=$(git show -s --format=%ct "$source_sha")
+final_head_sha=$(git rev-parse HEAD)
+final_tree_sha=$(git rev-parse 'HEAD^{tree}')
+if [ "$final_head_sha" != "$source_sha" ] || [ "$final_tree_sha" != "$source_tree_sha" ] || [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+	echo "build-candidate: isolated source checkout changed during the build" >&2
+	git status --short >&2
+	exit 1
+fi
+
 candidate_digest=$(python3 - "$stage_dir" "$repo_root" "$source_sha" "$source_tree_sha" "$source_date_epoch" "$goos" "$goarch" "$actual_go" "$actual_bun" <<'PY'
 from __future__ import annotations
 
@@ -193,6 +224,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import sys
 import tarfile
 from pathlib import Path
@@ -218,7 +250,12 @@ def sha256_file(path: Path) -> str:
 def file_record(path: Path, relative: str) -> dict[str, object]:
     if path.is_symlink() or not path.is_file():
         raise SystemExit(f"candidate artifact is not a regular file: {path}")
-    return {"path": relative, "sha256": sha256_file(path), "size": path.stat().st_size}
+    return {
+        "path": relative,
+        "sha256": sha256_file(path),
+        "size": path.stat().st_size,
+        "mode": path.stat().st_mode & 0o7777,
+    }
 
 
 def directory_records(path: Path) -> tuple[str, list[dict[str, object]]]:
@@ -228,10 +265,12 @@ def directory_records(path: Path) -> tuple[str, list[dict[str, object]]]:
             if child.is_symlink():
                 raise SystemExit(f"candidate artifact contains a directory symlink: {child}")
             continue
+        if not child.is_file():
+            raise SystemExit(f"candidate artifact is not a regular file or directory: {child}")
         relative = child.relative_to(path).as_posix()
         records.append(file_record(child, relative))
     encoded = "".join(
-        f"{record['path']}\0{record['sha256']}\0{record['size']}\n" for record in records
+        f"{record['path']}\0{record['sha256']}\0{record['size']}\0{record['mode']}\n" for record in records
     ).encode("utf-8")
     return sha256_bytes(encoded), records
 
@@ -243,7 +282,17 @@ def canonical_json(value: object) -> bytes:
 components: dict[str, dict[str, object]] = {}
 for name in ("server", "worker", "connector"):
     relative = f"bin/{name}"
+    os.chmod(stage_path / relative, 0o755)
     components[name] = file_record(stage_path / relative, relative)
+for child in (stage_path / "web").rglob("*"):
+    if child.is_symlink():
+        raise SystemExit(f"candidate Web artifact contains a symlink: {child}")
+    if child.is_dir():
+        os.chmod(child, 0o755)
+    elif child.is_file():
+        os.chmod(child, 0o644)
+    else:
+        raise SystemExit(f"candidate Web artifact contains a non-file entry: {child}")
 web_digest, web_files = directory_records(stage_path / "web")
 artifacts: dict[str, object] = {
     **components,
@@ -253,8 +302,10 @@ artifacts: dict[str, object] = {
 inputs = {
     "build_contract": "candidate-v1",
     "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
+    "build_environment": {"STORYBOOK": "false", "VITE_DEMO": "false"},
     "bun_lock_sha256": sha256_file(repo_path / "bun.lock"),
     "build_script_sha256": sha256_file(repo_path / "scripts/build-candidate"),
+	"promote_script_sha256": sha256_file(repo_path / "scripts/promote-candidate"),
     "go_mod_sha256": sha256_file(repo_path / "go.mod"),
     "go_sum_sha256": sha256_file(repo_path / "go.sum"),
     "go_version": f"go{go_version}",
@@ -325,6 +376,8 @@ with archive_path.open("wb") as raw_archive:
                     info.size = 0
                     archive.addfile(info)
                 else:
+                    if not path.is_file():
+                        raise SystemExit(f"candidate archive member is not a regular file: {path}")
                     data = path.read_bytes()
                     info.type = tarfile.REGTYPE
                     info.mode = 0o755 if name.startswith("bin/") else 0o644

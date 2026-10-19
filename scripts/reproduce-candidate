@@ -51,21 +51,21 @@ fi
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 if [ -z "$output_dir" ]; then
-	output_dir=${TMPDIR:-/tmp}/loomhelm-candidate-repro.$$
+	output_dir=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-candidate-repro.XXXXXX")
 else
 	case "$output_dir" in
 		/*) ;;
 		*) output_dir="$repo_root/$output_dir" ;;
 	esac
-fi
-if [ -e "$output_dir" ]; then
+if [ -e "$output_dir" ] || [ -L "$output_dir" ]; then
 	echo "reproduce-candidate: refusing to overwrite existing output: $output_dir" >&2
 	exit 1
 fi
 mkdir -p "$output_dir"
+fi
 cleanup() {
 	status=$?
-	rm -rf "$output_dir"
+	rm -rf -- "$output_dir"
 	exit "$status"
 }
 trap cleanup EXIT HUP INT TERM
@@ -102,7 +102,11 @@ def sidecar(path: Path, name: str) -> str:
 
 first_package = sidecar(first_path.parent / "candidate.tar.gz.sha256", "candidate.tar.gz")
 second_package = sidecar(second_path.parent / "candidate.tar.gz.sha256", "candidate.tar.gz")
-if first_package != second_package:
+first_package_bytes = (first_path.parent / "candidate.tar.gz").read_bytes()
+second_package_bytes = (second_path.parent / "candidate.tar.gz").read_bytes()
+if hashlib.sha256(first_package_bytes).hexdigest() != first_package or hashlib.sha256(second_package_bytes).hexdigest() != second_package:
+    raise SystemExit("reproduce-candidate: package sidecar does not match package bytes")
+if first_package != second_package or first_package_bytes != second_package_bytes:
     raise SystemExit("reproduce-candidate: deterministic package digests differ")
 if hashlib.sha256(first_path.read_bytes()).hexdigest() != hashlib.sha256(second_path.read_bytes()).hexdigest():
     raise SystemExit("reproduce-candidate: manifest bytes differ")

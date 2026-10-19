@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: loomhelm-pr-candidate-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CANDIDATE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -32,9 +32,43 @@ jobs:
       - name: Check candidate scripts
         run: sh -n scripts/build-candidate scripts/promote-candidate scripts/reproduce-candidate
 
+  repository-verification:
+    name: Repository Verification
+    needs: quality-gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Check generated protocol files
+        run: go run ./cmd/codegen -check
+      - name: Run Go tests
+        run: go test ./...
+      - name: Run Go race tests
+        run: go test -race ./...
+      - name: Run Go vet
+        run: go vet ./...
+      - name: Install Web dependencies
+        run: bun install --frozen-lockfile
+      - name: Check Web types
+        run: bun run typecheck
+      - name: Build Storybook
+        run: bun run build:storybook
+
   candidate-build:
     name: Candidate Build
-    needs: quality-gates
+    needs: [quality-gates, repository-verification]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the candidate source
@@ -68,6 +102,7 @@ jobs:
           name: loomhelm-candidate-${{ steps.candidate.outputs.source_sha }}-${{ steps.candidate.outputs.candidate_digest }}
           path: ${{ runner.temp }}/loomhelm-candidate
           if-no-files-found: error
+          retention-days: 90
 
   candidate-reproducibility:
     name: Candidate Reproducibility
