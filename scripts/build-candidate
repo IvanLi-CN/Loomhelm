@@ -203,11 +203,66 @@ if [ -L "$repo_root/web/dist" ]; then
 fi
 env -u STORYBOOK -u VITE_DEMO bun install --frozen-lockfile
 env STORYBOOK=false VITE_DEMO=false bun run build
-if [ ! -d "$repo_root/web/dist" ]; then
-	echo "build-candidate: Web build did not produce web/dist" >&2
-	exit 1
-fi
-cp -R "$repo_root/web/dist/." "$stage_dir/web/"
+python3 - "$repo_root/web/dist" "$stage_dir/web" <<'PY'
+import os
+import stat
+import sys
+
+source_path, target_path = sys.argv[1:]
+directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+if not getattr(os, "O_DIRECTORY", 0) or not getattr(os, "O_NOFOLLOW", 0):
+    raise SystemExit("build-candidate: secure Web artifact copy is unavailable on this platform")
+
+
+def copy_tree(source_fd: int, target_fd: int, display: str) -> None:
+    for name in sorted(os.listdir(source_fd)):
+        metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        if stat.S_ISLNK(metadata.st_mode):
+            raise SystemExit(f"build-candidate: refusing a symlink in Web output: {display}/{name}")
+        if stat.S_ISDIR(metadata.st_mode):
+            os.mkdir(name, 0o755, dir_fd=target_fd)
+            child_source = os.open(name, directory_flags, dir_fd=source_fd)
+            child_target = os.open(name, directory_flags, dir_fd=target_fd)
+            try:
+                copy_tree(child_source, child_target, f"{display}/{name}")
+            finally:
+                os.close(child_source)
+                os.close(child_target)
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit(f"build-candidate: Web output contains a non-regular entry: {display}/{name}")
+        source_file = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd)
+        target_file = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o644,
+            dir_fd=target_fd,
+        )
+        try:
+            while True:
+                chunk = os.read(source_file, 1024 * 1024)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(target_file, view)
+                    view = view[written:]
+        finally:
+            os.close(source_file)
+            os.close(target_file)
+
+
+try:
+    source_fd = os.open(source_path, directory_flags)
+except OSError as error:
+    raise SystemExit(f"build-candidate: Web build did not produce a safe web/dist directory: {error}")
+target_fd = os.open(target_path, directory_flags)
+try:
+    copy_tree(source_fd, target_fd, source_path)
+finally:
+    os.close(source_fd)
+    os.close(target_fd)
+PY
 
 final_head_sha=$(git rev-parse HEAD)
 final_tree_sha=$(git rev-parse 'HEAD^{tree}')
@@ -393,14 +448,51 @@ PY
 )
 
 python3 - "$stage_dir" "$output_dir" <<'PY'
+import ctypes
 import os
 import sys
 
 stage, output = sys.argv[1:]
+stage_parent, stage_name = os.path.dirname(stage), os.path.basename(stage)
+output_parent, output_name = os.path.dirname(output), os.path.basename(output)
+if stage_parent != output_parent:
+    raise SystemExit("build-candidate: staging directory is not adjacent to output")
+
+directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+parent_fd = os.open(output_parent, directory_flags)
+
+
+def rename_noreplace(source_name: str, destination_name: str, directory_fd: int) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        try:
+            renameat2 = libc.renameat2
+        except AttributeError as error:
+            raise SystemExit(f"build-candidate: no-replace rename is unavailable: {error}")
+        renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(directory_fd, source_name.encode(), directory_fd, destination_name.encode(), 1)
+    elif sys.platform == "darwin":
+        try:
+            renameatx_np = libc.renameatx_np
+        except AttributeError as error:
+            raise SystemExit(f"build-candidate: no-replace rename is unavailable: {error}")
+        renameatx_np.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameatx_np.restype = ctypes.c_int
+        result = renameatx_np(directory_fd, source_name.encode(), directory_fd, destination_name.encode(), 4)
+    else:
+        raise SystemExit(f"build-candidate: no-replace rename is unsupported on {sys.platform}")
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), destination_name)
+
+
 try:
-    os.rename(stage, output)
+	rename_noreplace(stage_name, output_name, parent_fd)
 except OSError as error:
     raise SystemExit(f"build-candidate: refusing to replace existing output: {error}")
+finally:
+	os.close(parent_fd)
 PY
 echo "build-candidate: candidate_digest=$candidate_digest"
 echo "build-candidate: source_sha=$source_sha"

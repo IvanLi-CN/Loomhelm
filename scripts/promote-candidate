@@ -104,6 +104,7 @@ python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_sour
 from __future__ import annotations
 
 import gzip
+import ctypes
 import fcntl
 import hashlib
 import io
@@ -111,7 +112,6 @@ import json
 import os
 import re
 import secrets
-import shutil
 import stat
 import subprocess
 import sys
@@ -180,6 +180,31 @@ def open_directory_chain(path: Path) -> int:
     except Exception:
         os.close(current_fd)
         raise
+
+
+def rename_noreplace(source_name: str, destination_name: str, directory_fd: int) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        try:
+            renameat2 = libc.renameat2
+        except AttributeError as error:
+            fail(f"no-replace rename is unavailable: {error}")
+        renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(directory_fd, source_name.encode(), directory_fd, destination_name.encode(), 1)
+    elif sys.platform == "darwin":
+        try:
+            renameatx_np = libc.renameatx_np
+        except AttributeError as error:
+            fail(f"no-replace rename is unavailable: {error}")
+        renameatx_np.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameatx_np.restype = ctypes.c_int
+        result = renameatx_np(directory_fd, source_name.encode(), directory_fd, destination_name.encode(), 4)
+    else:
+        fail(f"no-replace rename is unsupported on {sys.platform}")
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), destination_name)
 
 
 def git_bytes(*args: str) -> bytes:
@@ -264,12 +289,58 @@ def sha256_file(path: Path) -> str:
     return file_observation(path)[0]
 
 
-def copy_regular(source: Path, target: Path, mode: int) -> None:
+def relative_parts(relative: str) -> list[str]:
+    if not relative or "\\" in relative:
+        fail(f"artifact path is not a safe relative path: {relative!r}")
+    path = Path(relative)
+    if path.is_absolute() or path.as_posix() != relative or any(part in ("", ".", "..") for part in path.parts):
+        fail(f"artifact path is not a safe relative path: {relative!r}")
+    return list(path.parts)
+
+
+def open_target_directory(root_fd: int, parts: list[str]) -> int:
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    current_fd = os.dup(root_fd)
+    try:
+        for part in parts:
+            try:
+                next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                os.mkdir(part, 0o755, dir_fd=current_fd)
+                next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def copy_regular(source: Path, target_root_fd: int, relative: str, mode: int) -> None:
     descriptor, _ = open_regular(source)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with os.fdopen(descriptor, "rb") as source_stream, target.open("wb") as target_stream:
-        shutil.copyfileobj(source_stream, target_stream, length=1024 * 1024)
-    os.chmod(target, mode)
+    parts = relative_parts(relative)
+    parent_fd = open_target_directory(target_root_fd, parts[:-1])
+    target_fd = None
+    try:
+        target_fd = os.open(
+            parts[-1],
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            mode,
+            dir_fd=parent_fd,
+        )
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(target_fd, view)
+                view = view[written:]
+    finally:
+        os.close(descriptor)
+        if target_fd is not None:
+            os.close(target_fd)
+        os.close(parent_fd)
 
 
 def safe_child(root: Path, relative: str) -> Path:
@@ -299,10 +370,13 @@ def file_record(
     root: Path,
     record: object,
     expected_path: str | None = None,
+    expected_mode: int | None = None,
     verify_mode: bool = False,
 ) -> dict[str, object]:
     if not isinstance(record, dict):
         fail("artifact record must be an object")
+    if set(record) != {"path", "sha256", "size", "mode"}:
+        fail("artifact record has unexpected fields")
     relative = record.get("path")
     if not isinstance(relative, str) or (expected_path is not None and relative != expected_path):
         fail(f"unexpected artifact path: {relative!r}")
@@ -311,7 +385,7 @@ def file_record(
     expected_mode = mode_value(
         record.get("mode"),
         f"mode for {relative}",
-        0o755 if relative.startswith("bin/") else 0o644,
+        expected_mode if expected_mode is not None else (0o755 if relative.startswith("bin/") else 0o644),
     )
     if not isinstance(expected_sha, str) or len(expected_sha) != 64 or any(char not in "0123456789abcdef" for char in expected_sha):
         fail(f"invalid artifact digest: {relative}")
@@ -329,6 +403,8 @@ def file_record(
 def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[str, list[dict[str, object]]]:
     if not isinstance(record, dict) or record.get("path") != "web":
         fail("web artifact record must point to web")
+    if set(record) != {"path", "sha256", "files"}:
+        fail("web artifact record has unexpected fields")
     web_root = safe_child(root, "web")
     if not web_root.is_dir() or web_root.is_symlink():
         fail("web artifact directory is missing or is a symlink")
@@ -340,7 +416,7 @@ def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             fail("web artifact file record is malformed")
         relative = item["path"]
-        records.append(file_record(web_root, item, relative, verify_mode))
+        records.append(file_record(web_root, item, relative, 0o644, verify_mode))
     paths = [item["path"] for item in records]
     if paths != sorted(set(paths)):
         fail("web artifact file paths must be sorted and unique")
@@ -474,12 +550,18 @@ def verify_bundle(
         fail(f"cannot read candidate manifest: {error}")
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
         fail("unsupported candidate manifest")
+    if set(manifest) != {"schema_version", "candidate", "platform", "inputs", "artifacts"}:
+        fail("candidate manifest has unexpected fields")
     candidate = manifest.get("candidate")
     platform = manifest.get("platform")
     inputs = manifest.get("inputs")
     artifacts = manifest.get("artifacts")
     if not isinstance(candidate, dict) or not isinstance(platform, dict) or not isinstance(inputs, dict) or not isinstance(artifacts, dict):
         fail("candidate manifest has an invalid top-level shape")
+    if set(candidate) != {"digest", "source_sha", "source_tree_sha", "source_date_epoch"}:
+        fail("candidate identity has unexpected fields")
+    if set(artifacts) != {"server", "worker", "connector", "web"}:
+        fail("candidate artifact set is invalid")
     digest = candidate.get("digest")
     source_sha = candidate.get("source_sha")
     source_tree_sha = candidate.get("source_tree_sha")
@@ -519,7 +601,7 @@ def verify_bundle(
         if sha256_file(tool_path) != expected_tool_digest:
             fail("checked-out promotion tooling does not match the expected digest")
     component_records = {
-        name: file_record(bundle_root, artifacts.get(name), f"bin/{name}", verify_mode)
+        name: file_record(bundle_root, artifacts.get(name), f"bin/{name}", 0o755, verify_mode)
         for name in ("server", "worker", "connector")
     }
     web_digest, web_file_records = web_records(bundle_root, artifacts.get("web"), verify_mode)
@@ -563,11 +645,14 @@ digest, source_sha, manifest = verify_bundle(candidate_root, expected_digest or 
 target = destination / digest
 lock_name = f".{digest}.lock"
 lock = destination / lock_name
+if dry_run:
+    print(f"promote-candidate: verified candidate_digest={digest} source_sha={source_sha} destination={target} dry_run=true")
+    raise SystemExit(0)
 destination_fd = open_directory_chain(destination)
 lock_fd: int | None = None
 temporary: Path | None = None
 temporary_name: str | None = None
-owned_target = False
+temporary_fd: int | None = None
 promoted = False
 
 
@@ -599,6 +684,15 @@ def acquire_lock() -> int:
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(lock_name, flags, 0o600, dir_fd=destination_fd)
+    except IsADirectoryError:
+        try:
+            os.rmdir(lock_name, dir_fd=destination_fd)
+        except OSError as error:
+            fail(f"cannot recover stale promotion lock {lock}: {error}")
+        try:
+            descriptor = os.open(lock_name, flags, 0o600, dir_fd=destination_fd)
+        except OSError as error:
+            fail(f"cannot open promotion lock {lock}: {error}")
     except OSError as error:
         fail(f"cannot open promotion lock {lock}: {error}")
     try:
@@ -619,70 +713,99 @@ def acquire_lock() -> int:
         raise
 
 
-def create_temporary_directory() -> tuple[str, Path]:
+def create_temporary_directory() -> tuple[str, Path, int]:
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     for _ in range(100):
         name = f".{digest}.tmp-{secrets.token_hex(8)}"
         try:
             os.mkdir(name, 0o700, dir_fd=destination_fd)
         except FileExistsError:
             continue
-        return name, destination / name
+        descriptor = os.open(name, directory_flags, dir_fd=destination_fd)
+        return name, destination / name, descriptor
     fail(f"could not allocate a temporary promotion directory under {destination}")
 
 
-try:
-    if dry_run:
-        print(f"promote-candidate: verified candidate_digest={digest} source_sha={source_sha} destination={target} dry_run=true")
-        raise SystemExit(0)
+def ensure_temporary_stable() -> None:
+    if temporary_name is None or temporary_fd is None:
+        fail("promotion temporary directory is not open")
+    try:
+        path_metadata = os.stat(temporary_name, dir_fd=destination_fd, follow_symlinks=False)
+    except OSError as error:
+        fail(f"cannot inspect promotion temporary directory: {error}")
+    descriptor_metadata = os.fstat(temporary_fd)
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or path_metadata.st_dev != descriptor_metadata.st_dev
+        or path_metadata.st_ino != descriptor_metadata.st_ino
+    ):
+        fail("promotion temporary directory changed during verification")
 
+
+def remove_tree_at(parent_fd: int, name: str) -> None:
+    try:
+        metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        os.unlink(name, dir_fd=parent_fd)
+        return
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    child_fd = os.open(name, directory_flags, dir_fd=parent_fd)
+    try:
+        for child in os.listdir(child_fd):
+            remove_tree_at(child_fd, child)
+    finally:
+        os.close(child_fd)
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        pass
+
+
+try:
     if finish_existing():
         raise SystemExit(0)
     lock_fd = acquire_lock()
     if finish_existing():
         raise SystemExit(0)
 
-    temporary_name, temporary = create_temporary_directory()
+    temporary_name, temporary, temporary_fd = create_temporary_directory()
     artifacts = manifest["artifacts"]
     for name in ("server", "worker", "connector"):
         record = artifacts[name]
         source = safe_child(candidate_root, record["path"])
-        target_path = temporary / record["path"]
-        copy_regular(source, target_path, record["mode"])
+        copy_regular(source, temporary_fd, record["path"], record["mode"])
     web_record = artifacts["web"]
     for record in web_record["files"]:
         source = safe_child(candidate_root / "web", record["path"])
-        target_path = temporary / "web" / record["path"]
-        copy_regular(source, target_path, record["mode"])
+        copy_regular(source, temporary_fd, f"web/{record['path']}", record["mode"])
     for name in (
         "candidate-manifest.json",
         "candidate-manifest.json.sha256",
         "candidate.tar.gz",
         "candidate.tar.gz.sha256",
     ):
-        copy_regular(candidate_root / name, temporary / name, 0o644)
+        copy_regular(candidate_root / name, temporary_fd, name, 0o644)
+    ensure_temporary_stable()
     verify_bundle(temporary, digest, verify_mode=True)
+    ensure_temporary_stable()
     if target_exists():
         fail(f"promoted candidate target appeared during promotion: {target}")
     try:
-        os.rename(temporary_name, digest, src_dir_fd=destination_fd, dst_dir_fd=destination_fd)
+        rename_noreplace(temporary_name, digest, destination_fd)
     except OSError as error:
         fail(f"promoted candidate target appeared during promotion: {error}")
     temporary = None
     temporary_name = None
-    owned_target = True
-    verify_bundle(target, digest, verify_mode=True)
+    os.close(temporary_fd)
+    temporary_fd = None
     promoted = True
-except SystemExit:
-    if owned_target and target.exists() and target.is_dir() and not target.is_symlink():
-        shutil.rmtree(target, ignore_errors=True)
-    raise
-except Exception:
-    if owned_target and target.exists() and target.is_dir() and not target.is_symlink():
-        shutil.rmtree(target, ignore_errors=True)
-    raise
 finally:
-    if temporary is not None:
-        shutil.rmtree(temporary, ignore_errors=True)
+    if temporary_name is not None:
+        remove_tree_at(destination_fd, temporary_name)
+    if temporary_fd is not None:
+        os.close(temporary_fd)
     if lock_fd is not None:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)

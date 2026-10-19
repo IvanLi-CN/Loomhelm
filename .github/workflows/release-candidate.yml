@@ -34,15 +34,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-release-ref:
+    name: Validate Release Ref
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the protected parent branch
+        run: |
+          test "$GITHUB_REF" = refs/heads/feat/phase1 || {
+            echo "Release Candidate must run from feat/phase1" >&2
+            exit 1
+          }
+
   publish-candidate:
     name: Publish Candidate
-    if: github.ref == 'refs/heads/feat/phase1'
+    needs: validate-release-ref
     runs-on: ubuntu-24.04
     environment:
       name: ${{ inputs.environment }}
     steps:
       - name: Verify candidate provenance
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
           ARTIFACT_NAME: ${{ inputs.artifact_name }}
@@ -108,12 +119,12 @@ jobs:
             }
 
       - name: Check out trusted release tooling
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: feat/phase1
           fetch-depth: 0
       - name: Download the immutable candidate
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           run-id: ${{ inputs.source_run_id }}
           name: ${{ inputs.artifact_name }}
@@ -129,7 +140,7 @@ jobs:
           promote_script_sha=$(sha256sum scripts/promote-candidate | awk '{print $1}')
           scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-release" --expected-digest "$EXPECTED_DIGEST" --expected-source-sha "$EXPECTED_SOURCE_SHA" --expected-promote-script-sha "$promote_script_sha"
       - name: Upload the release handoff
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: loomhelm-release-${{ inputs.candidate_digest }}
           path: ${{ runner.temp }}/loomhelm-release
