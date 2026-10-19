@@ -104,6 +104,7 @@ python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_sour
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -274,8 +275,38 @@ def archive_members(root: Path) -> list[tuple[str, Path]]:
     return [(name, members[name]) for name in sorted(members)]
 
 
+def deterministic_archive_bytes(root: Path, source_date_epoch: int) -> bytes:
+    raw_archive = io.BytesIO()
+    with gzip.GzipFile(fileobj=raw_archive, mode="wb", filename="", mtime=0, compresslevel=9) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for name, path in archive_members(root):
+                info = tarfile.TarInfo(name)
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = source_date_epoch
+                if path.is_dir():
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    info.size = 0
+                    archive.addfile(info)
+                else:
+                    if not path.is_file():
+                        fail(f"candidate archive member is not a regular file: {path}")
+                    data = path.read_bytes()
+                    info.type = tarfile.REGTYPE
+                    info.mode = 0o755 if name.startswith("bin/") else 0o644
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+    return raw_archive.getvalue()
+
+
 def verify_archive(bundle_root: Path, source_date_epoch: int) -> None:
     package = bundle_root / "candidate.tar.gz"
+    expected_bytes = deterministic_archive_bytes(bundle_root, source_date_epoch)
+    if package.read_bytes() != expected_bytes:
+        fail("candidate archive bytes do not match the deterministic candidate archive")
     expected_members = archive_members(bundle_root)
     expected_names = [name for name, _ in expected_members]
     try:
