@@ -86,7 +86,7 @@ class JsonEndpoint {
     this.output.write(`${JSON.stringify(message)}\n`);
   }
 
-  waitFor(predicate, after, durationMs = 15_000) {
+  waitFor(predicate, after, durationMs = 45_000) {
     for (let index = after; index < this.messages.length; index += 1) {
       if (predicate(this.messages[index])) return Promise.resolve({ message: this.messages[index], index });
     }
