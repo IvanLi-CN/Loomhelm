@@ -103,6 +103,7 @@ esac
 python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_source_sha" "$dry_run" "$repo_root/scripts/promote-candidate" "$expected_promote_script_sha" <<'PY'
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
