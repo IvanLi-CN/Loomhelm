@@ -14,6 +14,8 @@ After exporting the paired development variables, run `scripts/db test` for the 
 
 The checked-in sqlc configuration is `sqlc.yaml`. Run the same verified absolute sqlc `1.31.1` binary used by setup again, for example `/absolute/path/to/sqlc generate`, or export it and run `"$SQLC_BIN" generate`; a one-command assignment such as `SQLC_BIN=/absolute/path/to/sqlc scripts/setup` applies only to setup and does not put the binary on PATH for a later bare `sqlc generate`. The F03 database entry reads schema from `db/migrations`, reads queries from `internal/platform/database/queries`, and writes Go code to `internal/platform/database/generated` with `sql_package: pgx/v5`.
 
+The public REST/MCP and command/event contract is `contracts/loomhelm-v1.json`. Run `scripts/codegen` to regenerate the Go protocol package, TypeScript protocol package and typed REST client; run `scripts/codegen -check` to fail when any generated file differs from the canonical contract. `go generate ./internal/protocol` uses the same generator and contract path.
+
 The backend image is built with `docker build -f build/Dockerfile --build-arg LOOMHELM_COMPONENT=server .`. The image is a build surface for the separate Server, Worker and Connector processes; process composition remains in the application entrypoints.
 
 Markdown checks use `python3 tools/markdown.py check`; the Lefthook configuration runs the staged Markdown formatter without auto-installing hooks or tools.
