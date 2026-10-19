@@ -328,6 +328,7 @@ def copy_regular(source: Path, target_root_fd: int, relative: str, mode: int) ->
             mode,
             dir_fd=parent_fd,
         )
+        os.fchmod(target_fd, mode)
         while True:
             chunk = os.read(descriptor, 1024 * 1024)
             if not chunk:
@@ -548,7 +549,7 @@ def verify_bundle(
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         fail(f"cannot read candidate manifest: {error}")
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+    if not isinstance(manifest, dict) or type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
         fail("unsupported candidate manifest")
     if set(manifest) != {"schema_version", "candidate", "platform", "inputs", "artifacts"}:
         fail("candidate manifest has unexpected fields")
@@ -641,7 +642,7 @@ reject_symlink_components(tool_path)
 if not manifest_path.is_file() or manifest_path.is_symlink():
     fail(f"manifest does not exist: {manifest_path}")
 candidate_root = manifest_path.parent
-digest, source_sha, manifest = verify_bundle(candidate_root, expected_digest or None)
+digest, source_sha, manifest = verify_bundle(candidate_root, expected_digest or None, verify_mode=dry_run)
 target = destination / digest
 lock_name = f".{digest}.lock"
 lock = destination / lock_name
@@ -721,7 +722,14 @@ def create_temporary_directory() -> tuple[str, Path, int]:
             os.mkdir(name, 0o700, dir_fd=destination_fd)
         except FileExistsError:
             continue
-        descriptor = os.open(name, directory_flags, dir_fd=destination_fd)
+        try:
+            descriptor = os.open(name, directory_flags, dir_fd=destination_fd)
+        except BaseException:
+            try:
+                os.rmdir(name, dir_fd=destination_fd)
+            except OSError:
+                pass
+            raise
         return name, destination / name, descriptor
     fail(f"could not allocate a temporary promotion directory under {destination}")
 
@@ -763,10 +771,18 @@ def remove_tree_at(parent_fd: int, name: str) -> None:
         pass
 
 
+def sweep_stale_temporary() -> None:
+    pattern = re.compile(rf"\.{re.escape(digest)}\.tmp-[0-9a-f]{{16}}$")
+    for name in os.listdir(destination_fd):
+        if pattern.fullmatch(name):
+            remove_tree_at(destination_fd, name)
+
+
 try:
     if finish_existing():
         raise SystemExit(0)
     lock_fd = acquire_lock()
+    sweep_stale_temporary()
     if finish_existing():
         raise SystemExit(0)
 

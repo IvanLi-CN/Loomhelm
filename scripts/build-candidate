@@ -187,6 +187,18 @@ repo_root=$build_root
 cd "$repo_root"
 source_tree_sha=$(git rev-parse "${source_sha}^{tree}")
 source_date_epoch=$(git show -s --format=%ct "$source_sha")
+python3 - "$repo_root" <<'PY'
+import os
+import stat
+import sys
+
+root = sys.argv[1]
+for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+    for name in (*directories, *files):
+        path = os.path.join(current, name)
+        if stat.S_ISLNK(os.lstat(path).st_mode):
+            raise SystemExit(f"build-candidate: source tree contains a symlink: {path}")
+PY
 
 echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
 GOTOOLCHAIN=local GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
@@ -446,6 +458,14 @@ package_digest = sha256_file(archive_path)
 print(candidate_digest)
 PY
 )
+
+validation_destination="$stage_dir.validation"
+scripts/promote-candidate \
+	--manifest "$stage_dir/candidate-manifest.json" \
+	--destination "$validation_destination" \
+	--expected-digest "$candidate_digest" \
+	--expected-source-sha "$source_sha" \
+	--dry-run
 
 python3 - "$stage_dir" "$output_dir" <<'PY'
 import ctypes

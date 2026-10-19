@@ -15,7 +15,7 @@ source_sha=$(git rev-parse HEAD)
 scripts/build-candidate --source-sha "$source_sha" --output /tmp/loomhelm-candidate
 ```
 
-The command rejects abbreviated or unknown SHAs, dirty tracked or untracked files, tool versions that differ from `tools/versions.env`, existing output directories, symlinked or non-regular Web output entries, and unsupported target names. It builds from a temporary detached worktree for the exact commit, fixes the Web build environment, and never overwrites an existing candidate.
+The command rejects abbreviated or unknown SHAs, dirty tracked or untracked files, source-tree symlinks, tool versions that differ from `tools/versions.env`, existing output directories, symlinked or non-regular Web output entries, and unsupported target names. It builds from a temporary detached worktree for the exact commit, fixes the Web build environment, re-runs the complete promotion verifier before publication, and never overwrites an existing candidate.
 
 Inspect the identity without parsing build logs:
 
@@ -35,7 +35,7 @@ The reproduction command intentionally performs two builds and removes its tempo
 
 ## Promotion
 
-Promotion verifies the source commit and tree against the trusted checkout, the complete build input/toolchain contract, all manifest records, fixed executable/Web modes, the component and Web bytes, the deterministic archive structure, both sidecars, and the candidate identity digest before copying. It copies into a temporary directory with directory-descriptor-relative operations, re-verifies that copy, rejects symlink components, uses an atomic same-directory no-replace rename, and serializes same-digest retries with an OS lock that is released after process death. The destination is keyed by `candidate_digest`, so the same candidate is idempotent and a conflicting directory fails closed:
+Promotion verifies the source commit and tree against the trusted checkout, the complete build input/toolchain contract, all manifest records, fixed executable/Web modes, the component and Web bytes, the deterministic archive structure, both sidecars, and the candidate identity digest before copying. It copies into a temporary directory with directory-descriptor-relative operations, fixes destination modes independently of umask, re-verifies that copy, rejects symlink components, removes stale same-digest temporary directories after interrupted runs, uses an atomic same-directory no-replace rename, and serializes same-digest retries with an OS lock that is released after process death. The destination is keyed by `candidate_digest`, so the same candidate is idempotent and a conflicting directory fails closed:
 
 ```sh
 scripts/promote-candidate \
