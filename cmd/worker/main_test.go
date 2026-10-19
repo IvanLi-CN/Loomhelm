@@ -5,10 +5,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
 
 func TestWorkerEntrypointExitsOnSignal(t *testing.T) {
@@ -27,10 +30,7 @@ func TestWorkerEntrypointExitsOnSignal(t *testing.T) {
 
 func runWorkerSignalTest(t *testing.T, signal os.Signal) {
 	t.Helper()
-	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if databaseURL == "" {
-		t.Skip("real process integration requires LOOMHELM_DATABASE_URL")
-	}
+	databaseValues := databaseEnvironmentForTest(t)
 	binary := buildWorkerEntrypoint(t)
 	logPath := filepath.Join(t.TempDir(), "worker.log")
 	logFile, err := os.Create(logPath)
@@ -40,11 +40,13 @@ func runWorkerSignalTest(t *testing.T, signal os.Signal) {
 	defer logFile.Close()
 
 	command := exec.Command(binary)
-	command.Env = commandEnv(map[string]string{
+	for key, value := range map[string]string{
 		"LOOMHELM_VERSION":           "test",
 		"LOOMHELM_WORKER_GENERATION": "9",
-		"LOOMHELM_DATABASE_URL":      databaseURL,
-	})
+	} {
+		databaseValues[key] = value
+	}
+	command.Env = commandEnv(databaseValues)
 	command.Stdout = logFile
 	command.Stderr = logFile
 	if err := command.Start(); err != nil {
@@ -80,12 +82,36 @@ func TestWorkerEntrypointRejectsMissingDatabase(t *testing.T) {
 func TestWorkerEntrypointRejectsInvalidConfiguration(t *testing.T) {
 	binary := buildWorkerEntrypoint(t)
 	command := exec.Command(binary)
-	command.Env = commandEnv(map[string]string{"LOOMHELM_WORKER_GENERATION": "0"})
+	command.Env = commandEnv(map[string]string{
+		"LOOMHELM_WORKER_GENERATION": "0",
+		"LOOMHELM_DATABASE_URL":      "postgres://loomhelm:secret@127.0.0.1:55432/loomhelm?sslmode=disable",
+		"LOOMHELM_POSTGRES_PORT":     "55432",
+	})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 2)
 	if !strings.Contains(string(output), "invalid configuration: LOOMHELM_WORKER_GENERATION must be greater than zero") {
 		t.Fatalf("invalid configuration output = %q", output)
 	}
+}
+
+func databaseEnvironmentForTest(t *testing.T) map[string]string {
+	t.Helper()
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+			t.Skip("real process integration requires LOOMHELM_DATABASE_URL")
+		}
+		t.Fatalf("load database configuration: %v", err)
+	}
+	values := map[string]string{
+		"LOOMHELM_DATABASE_URL":       config.URL,
+		"LOOMHELM_DATABASE_MIN_CONNS": strconv.FormatInt(int64(config.MinConns), 10),
+		"LOOMHELM_DATABASE_MAX_CONNS": strconv.FormatInt(int64(config.MaxConns), 10),
+	}
+	if port := strings.TrimSpace(os.Getenv("LOOMHELM_POSTGRES_PORT")); port != "" {
+		values["LOOMHELM_POSTGRES_PORT"] = port
+	}
+	return values
 }
 
 func buildWorkerEntrypoint(t *testing.T) string {

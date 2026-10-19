@@ -21,3 +21,21 @@ func TestRunRejectsMismatchedDevelopmentDatabasePortBeforeConnection(t *testing.
 		t.Fatalf("run() error leaked database credentials: %v", err)
 	}
 }
+
+func TestRunRejectsInvalidPoolConfigurationBeforeConnection(t *testing.T) {
+	t.Setenv("LOOMHELM_DATABASE_URL", "postgres://loomhelm:secret@127.0.0.1:55432/loomhelm?sslmode=disable")
+	t.Setenv("LOOMHELM_POSTGRES_PORT", "55432")
+	t.Setenv("LOOMHELM_DATABASE_MIN_CONNS", "2")
+	t.Setenv("LOOMHELM_DATABASE_MAX_CONNS", "1")
+
+	err := run(context.Background())
+	if err == nil {
+		t.Fatal("run() accepted invalid database pool configuration")
+	}
+	if !strings.Contains(err.Error(), "minimum connections must not exceed maximum connections") {
+		t.Fatalf("run() error = %v, want pool bounds error", err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("run() error leaked database credentials: %v", err)
+	}
+}

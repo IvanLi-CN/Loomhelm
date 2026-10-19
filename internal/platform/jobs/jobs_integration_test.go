@@ -16,15 +16,14 @@ import (
 )
 
 func TestRunnerProcessesShortJobAndPersistsAcrossReopen(t *testing.T) {
-	url := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if url == "" {
-		t.Skip("LOOMHELM_DATABASE_URL is not set")
-	}
+	config := databaseConfigForTest(t)
+	config.MinConns = 1
+	config.MaxConns = 4
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	db, err := database.Open(ctx, database.Config{URL: url, MinConns: 1, MaxConns: 4})
+	db, err := database.Open(ctx, config)
 	if err != nil {
 		t.Fatalf("database.Open() error = %v", err)
 	}
@@ -111,7 +110,7 @@ func TestRunnerProcessesShortJobAndPersistsAcrossReopen(t *testing.T) {
 	lifecycle.Stop()
 	db.Close()
 
-	reopened, err := database.Open(ctx, database.Config{URL: url, MinConns: 1, MaxConns: 4})
+	reopened, err := database.Open(ctx, config)
 	if err != nil {
 		t.Fatalf("database.Open() after worker stop error = %v", err)
 	}
@@ -126,14 +125,13 @@ func TestRunnerProcessesShortJobAndPersistsAcrossReopen(t *testing.T) {
 }
 
 func TestRunnerRetriesInterruptedShortJobAfterSameGenerationRestart(t *testing.T) {
-	url := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if url == "" {
-		t.Skip("LOOMHELM_DATABASE_URL is not set")
-	}
+	config := databaseConfigForTest(t)
+	config.MinConns = 1
+	config.MaxConns = 4
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	db, err := database.Open(ctx, database.Config{URL: url, MinConns: 1, MaxConns: 4})
+	db, err := database.Open(ctx, config)
 	if err != nil {
 		t.Fatalf("database.Open() error = %v", err)
 	}
@@ -240,6 +238,18 @@ func TestRunnerRetriesInterruptedShortJobAfterSameGenerationRestart(t *testing.T
 	if state == "cancelled" {
 		t.Fatalf("River job state = %q, shutdown cancellation must remain retryable", state)
 	}
+}
+
+func databaseConfigForTest(t *testing.T) database.Config {
+	t.Helper()
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+			t.Skip("LOOMHELM_DATABASE_URL is not set")
+		}
+		t.Fatalf("load database configuration: %v", err)
+	}
+	return database.Config{URL: config.URL, MinConns: config.MinConns, MaxConns: config.MaxConns}
 }
 
 func waitForRiverJobState(ctx context.Context, db *database.DB, jobID int64, want string) error {

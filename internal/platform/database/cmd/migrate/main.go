@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -24,15 +22,16 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	url := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if url == "" {
-		return errors.New("LOOMHELM_DATABASE_URL must be set")
-	}
-	if err := platform.ValidateDevelopmentDatabaseTarget(url, strings.TrimSpace(os.Getenv("LOOMHELM_POSTGRES_PORT"))); err != nil {
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
 		return err
 	}
 
-	db, err := database.Open(ctx, database.Config{URL: url})
+	db, err := database.Open(ctx, database.Config{
+		URL:      config.URL,
+		MinConns: config.MinConns,
+		MaxConns: config.MaxConns,
+	})
 	if err != nil {
 		return err
 	}

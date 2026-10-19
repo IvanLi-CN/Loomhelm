@@ -10,20 +10,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database/generated"
 )
 
 func TestDatabaseMigrateAndReopen(t *testing.T) {
-	url := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if url == "" {
-		t.Skip("LOOMHELM_DATABASE_URL is not set")
-	}
+	config := databaseConfigForTest(t)
+	config.MinConns = 1
+	config.MaxConns = 1
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	db, err := database.Open(ctx, database.Config{URL: url, MinConns: 1, MaxConns: 1})
+	db, err := database.Open(ctx, config)
 	if err != nil {
 		t.Fatalf("database.Open() error = %v", err)
 	}
@@ -49,7 +49,7 @@ func TestDatabaseMigrateAndReopen(t *testing.T) {
 	}
 	db.Close()
 
-	reopened, err := database.Open(ctx, database.Config{URL: url, MinConns: 1, MaxConns: 1})
+	reopened, err := database.Open(ctx, config)
 	if err != nil {
 		t.Fatalf("database.Open() after close error = %v", err)
 	}
@@ -64,14 +64,13 @@ func TestDatabaseMigrateAndReopen(t *testing.T) {
 }
 
 func TestMigrationLockSerializesConcurrentCallbacksWithSinglePoolConnection(t *testing.T) {
-	url := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if url == "" {
-		t.Skip("LOOMHELM_DATABASE_URL is not set")
-	}
+	config := databaseConfigForTest(t)
+	config.MinConns = 1
+	config.MaxConns = 1
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	db, err := database.Open(ctx, database.Config{URL: url, MinConns: 1, MaxConns: 1})
+	db, err := database.Open(ctx, config)
 	if err != nil {
 		t.Fatalf("database.Open() error = %v", err)
 	}
@@ -110,15 +109,14 @@ func TestMigrationLockSerializesConcurrentCallbacksWithSinglePoolConnection(t *t
 }
 
 func TestMigrationLockAcceptsPoolOnlyURLOptionsWithSinglePoolConnection(t *testing.T) {
-	rawURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if rawURL == "" {
-		t.Skip("LOOMHELM_DATABASE_URL is not set")
-	}
-	connectionURL := withPoolMaxConnsOne(t, rawURL)
+	config := databaseConfigForTest(t)
+	config.URL = withPoolMaxConnsOne(t, config.URL)
+	config.MinConns = 1
+	config.MaxConns = 1
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	db, err := database.Open(ctx, database.Config{URL: connectionURL, MinConns: 1, MaxConns: 1})
+	db, err := database.Open(ctx, config)
 	if err != nil {
 		t.Fatalf("database.Open() error = %v", err)
 	}
@@ -130,6 +128,18 @@ func TestMigrationLockAcceptsPoolOnlyURLOptionsWithSinglePoolConnection(t *testi
 	}); err != nil {
 		t.Fatalf("WithMigrationLock() with pool_max_conns=1 error = %v", err)
 	}
+}
+
+func databaseConfigForTest(t *testing.T) database.Config {
+	t.Helper()
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+			t.Skip("LOOMHELM_DATABASE_URL is not set")
+		}
+		t.Fatalf("load database configuration: %v", err)
+	}
+	return database.Config{URL: config.URL, MinConns: config.MinConns, MaxConns: config.MaxConns}
 }
 
 func withPoolMaxConnsOne(t *testing.T, rawURL string) string {
