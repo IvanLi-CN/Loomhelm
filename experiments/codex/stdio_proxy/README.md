@@ -10,7 +10,10 @@ This is an unsupported experiment and does not pass the R01 same-instance accept
 - `cmd/stdio-proxy` is the wrapper entrypoint used by the launch scripts.
 - `proxy_test.go` uses a controlled Go test binary as a mock child process.
 - `scripts/test-once-r01.sh` runs the deterministic prototype tests and builds the wrapper.
-- `scripts/launch-r01.sh` and `scripts/rollback-r01.sh` are reviewable, guarded Desktop startup scripts; neither is run by the test suite.
+- `scripts/stage-r01.sh` creates a retained, digest-bound candidate and manifest outside the repository; it refuses dirty sources and existing stage paths.
+- `scripts/capture-baseline-r01.sh` records only the four wrapper-related startup variables needed for an exact rollback preview.
+- `real-cli-proxy-probe.mjs` validates the retained wrapper against the exact bundled CLI without starting Desktop.
+- `scripts/launch-r01.sh`, `scripts/verify-r01.sh` and `scripts/rollback-r01.sh` are reviewable, guarded Desktop handoff scripts; none is run by the test suite.
 
 ## Contract
 
@@ -30,13 +33,15 @@ JSONL is treated as one JSON object per line because that is the app-server stdi
 
 Run `./experiments/codex/stdio_proxy/scripts/test-once-r01.sh` from the repository root, or run `go test -count=1 ./experiments/codex/stdio_proxy/...` directly. The fixture tests cover initialization ownership, colliding original IDs, ordered unknown notifications, concurrent duplicate approvals, owner-bound callbacks, bridge disconnect/reconnect, child exit, signal forwarding, socket permissions, bounded backpressure, partial-write unknown status, argv/environment/cwd preservation, transparent invocation, and recursion rejection.
 
+The retained real-CLI phase is separate from the fixture gate. Run `LOOMHELM_R01_STAGE_DIR=/private/tmp/loomhelm-r01-codex-test/proxy-candidate LOOMHELM_R01_REAL_CLI=/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex ./experiments/codex/stdio_proxy/scripts/stage-r01.sh`, then run `node experiments/codex/stdio_proxy/real-cli-proxy-probe.mjs --stage-manifest /private/tmp/loomhelm-r01-codex-test/proxy-candidate/manifest.env`. The probe keeps the child and workspace in a dedicated mode-0700 path and does not reuse a prior socket or run directory.
+
 The scripts print the exact scoped Desktop command by default. Applying either script requires `LOOMHELM_R01_OWNER_CONFIRMED=1`, `LOOMHELM_R01_IDLE_WINDOW_CONFIRMED=1`, and `LOOMHELM_R01_ALLOW_RESTART=1`; the rollback script also refuses to proceed while its exact test socket path exists. Neither script kills processes, changes launchctl, changes global configuration, logs in, pairs a device, or cleans up another app-server.
 
 ## One-time Desktop test steps
 
-1. Run `scripts/test-once-r01.sh` and record its wrapper SHA256, the repository SHA, and the test output summary.
-2. Set `LOOMHELM_R01_WRAPPER` to that built wrapper, `LOOMHELM_R01_REAL_CLI` to the pinned bundled CLI regular file, `LOOMHELM_R01_SOCKET` to a new short path inside a `0700` user-private directory, and `LOOMHELM_R01_DESKTOP_EXECUTABLE` to the exact Desktop executable under test.
-3. Review `scripts/launch-r01.sh --print`, confirm the affected Desktop application is disposable and idle, and separately confirm that no other active task or Desktop app-server is in scope.
-4. Only after that owner confirmation, run `scripts/launch-r01.sh --apply`; record the wrapper PID, child PID, socket mode, exact thread/turn IDs, streamed ordering, approval arbitration, owner callback behavior, bridge reconnect, and child exit status.
+1. Stage a fresh candidate with `scripts/stage-r01.sh`, record its manifest source SHA and both executable digests, and run `real-cli-proxy-probe.mjs` before any Desktop startup change.
+2. Run `scripts/capture-baseline-r01.sh` in the same launch shell and set `LOOMHELM_R01_STAGE_MANIFEST`, `LOOMHELM_R01_BASELINE_ENV_FILE`, `LOOMHELM_R01_SOCKET` to a new short path in a `0700` directory, and `LOOMHELM_R01_DESKTOP_EXECUTABLE` to the exact Desktop executable under test.
+3. Review `scripts/launch-r01.sh --print`, confirm the affected Desktop application is disposable and idle, verify that its exact executable has no existing process, and separately confirm that no other active task or Desktop app-server is in scope.
+4. Only after that owner confirmation, run `scripts/launch-r01.sh --apply` with the manifest wrapper and CLI digests; then run `scripts/verify-r01.sh` to record the exact Desktop -> wrapper -> real CLI process chain and allowlisted environment proofs.
 5. Treat any lost acknowledgement as an unknown side effect and stop the test; do not resend the request. Do not claim R01 unless the exact same child PID and thread/turn identity are observed from both Desktop and bridge.
-6. End the disposable test session, verify only the exact wrapper socket is absent, review `scripts/rollback-r01.sh --print`, and use `--apply` only with the same owner and idle-window confirmations.
+6. End the disposable test session, verify only the exact wrapper socket is absent, review `scripts/rollback-r01.sh --print`, and use `--apply` only with the same owner and idle-window confirmations so the captured baseline environment is restored.
