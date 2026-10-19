@@ -4,20 +4,20 @@ This card records the isolated retained-candidate probe against the exact bundle
 
 | Field | Recorded value |
 | - | - |
-| Candidate source commit | `c43e9cc5867b29d2b89e21e2415d0f8256815042` |
-| Retained candidate | `/private/tmp/loomhelm-r01-codex-test/proxy-candidate-c43e9cc` |
-| Candidate manifest | `/private/tmp/loomhelm-r01-codex-test/proxy-candidate-c43e9cc/manifest.env` |
-| Wrapper SHA256 | `d4e2785e1cb320b0641255f7ba807c50951c54bc3f5ee47c265b7107e41c1790` |
+| Candidate source commit | `36d4fc371a983ea0921e03091318eecf033d4355` |
+| Retained candidate | `/private/tmp/loomhelm-r01-codex-test/proxy-candidate-36d4fc3` |
+| Candidate manifest | `/private/tmp/loomhelm-r01-codex-test/proxy-candidate-36d4fc3/manifest.env` |
+| Wrapper SHA256 | `6ea84b92f5a208202489b217ecdfd27c087d76684b821b25a17c39c37014ca1e` |
 | Exact bundled CLI | `/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` |
 | Bundled CLI SHA256 | `1afb28c01d7d49e892bd75f11076b10f1451e34e0ee308a95e5ab7f69f9c84fe` |
 | Bundled CLI version | `codex-cli 0.163.0-alpha.10.2` |
-| Probe command | `node experiments/codex/stdio_proxy/real-cli-proxy-probe.mjs --stage-manifest /private/tmp/loomhelm-r01-codex-test/proxy-candidate-c43e9cc/manifest.env` |
-| Redacted evidence JSON | `/private/tmp/loomhelm-r01-codex-test/real-cli-1792382833672-910a5714/evidence.json` |
-| Evidence JSON SHA256 | `71d9b018d3a9db9c5a4783ac237d7c127d663a1800c9acd9b7d3d976f4814938` |
+| Probe command | `node experiments/codex/stdio_proxy/real-cli-proxy-probe.mjs --stage-manifest /private/tmp/loomhelm-r01-codex-test/proxy-candidate-36d4fc3/manifest.env` |
+| Redacted evidence JSON | `/private/tmp/loomhelm-r01-codex-test/real-cli-1792383022010-f414658f/evidence.json` |
+| Evidence JSON SHA256 | `97c73a029a8a74d91b1955fdf7c9f64f38f337d5260a6cf040cf5159a9637a97` |
 | Probe result | `passed` |
-| Wrapper PID / real CLI child PID | `62280 / 62289` |
-| Same thread reference | `thread-5a617140d07b6b48` |
-| Same session reference | `session-5a617140d07b6b48` |
+| Wrapper PID / real CLI child PID | `75336 / 75365` |
+| Same thread reference | `thread-ef0c2ee54cc5348c` |
+| Same session reference | `session-ef0c2ee54cc5348c` |
 | Desktop integration | `not run` |
 | R01 same-desktop acceptance | `not passed` |
 
@@ -25,7 +25,7 @@ The probe used one retained wrapper child and two logical clients: a Desktop-rol
 
 The real CLI scenarios passed: an ordinary approval accepted by Desktop completed the harmless printf command; a second approval declined by the bridge completed with `declined` after a late Desktop response; a pending approval remained recoverable by Desktop after bridge disconnect; bridge reconnect used the same child and thread and reconciled three turns with statuses `inProgress, completed, completed`; `turn/steer` returned the same active turn identity; and `turn/interrupt` completed with `interrupted` on both clients. No identity challenge was observed. The controlled probe ended the candidate process with exit code `130` after the scenarios; the wrapper removed its private socket.
 
-The earlier retained candidate at source `320519d303170bc1134ac494afd55cbe2ff3ef74` was not accepted because its first approval event exceeded the initial 15-second probe wait; it produced no identity challenge or protocol error. The probe wait was widened to 45 seconds, a new candidate was staged, and only the SHA-bound `c43e9cc` run above is evidence.
+The earlier retained candidate at source `320519d303170bc1134ac494afd55cbe2ff3ef74` was not accepted because its first approval event exceeded the initial 15-second probe wait; it produced no identity challenge or protocol error. The probe wait was widened to 45 seconds; candidate `c43e9cc` passed once, then a final source-bound candidate was staged after the evidence documentation commit and rerun. Only the SHA-bound `36d4fc3` run above is the final evidence record.
 
 Fixture proof remains separate in [stdio-proxy-prototype.md](stdio-proxy-prototype.md): it covers proxy mechanics against a controlled child. This card covers the current real bundled CLI in an isolated new app-server process. Neither card proves that the live ChatGPT Desktop app-server can be replaced or externally attached.
 
