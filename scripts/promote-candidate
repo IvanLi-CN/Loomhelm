@@ -104,15 +104,18 @@ python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_sour
 from __future__ import annotations
 
 import gzip
+import fcntl
 import hashlib
 import io
 import json
 import os
+import re
+import secrets
 import shutil
 import stat
+import subprocess
 import sys
 import tarfile
-import tempfile
 import time
 from pathlib import Path
 
@@ -123,6 +126,7 @@ expected_source_sha = sys.argv[4]
 dry_run = sys.argv[5] == "1"
 tool_path = Path(os.path.abspath(sys.argv[6]))
 expected_tool_digest = sys.argv[7]
+trusted_repo_root = tool_path.parent.parent
 
 
 def fail(message: str) -> None:
@@ -134,8 +138,104 @@ def canonical_json(value: object) -> bytes:
 
 
 def reject_symlink_components(path: Path) -> None:
-    if path.is_symlink():
-        fail(f"path is a symlink: {path}")
+    absolute = Path(os.path.abspath(path))
+    current = Path(absolute.anchor)
+    for part in absolute.parts:
+        if part == absolute.anchor:
+            continue
+        current /= part
+        try:
+            metadata = os.lstat(current)
+        except FileNotFoundError:
+            break
+        except OSError as error:
+            fail(f"cannot inspect path component {current}: {error}")
+        if stat.S_ISLNK(metadata.st_mode):
+            fail(f"path contains a symlink component: {current}")
+
+
+def open_directory_chain(path: Path) -> int:
+    reject_symlink_components(path)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    no_follow_flag = getattr(os, "O_NOFOLLOW", 0)
+    if directory_flag == 0 or no_follow_flag == 0:
+        fail("secure directory operations are unavailable on this platform")
+    absolute = Path(os.path.abspath(path))
+    current_fd = os.open(absolute.anchor, os.O_RDONLY | directory_flag | no_follow_flag)
+    try:
+        for part in absolute.parts:
+            if part == absolute.anchor:
+                continue
+            try:
+                next_fd = os.open(part, os.O_RDONLY | directory_flag | no_follow_flag, dir_fd=current_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=current_fd)
+                except FileExistsError:
+                    pass
+                next_fd = os.open(part, os.O_RDONLY | directory_flag | no_follow_flag, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def git_bytes(*args: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(trusted_repo_root), *args],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        fail(f"cannot read trusted source contract from Git: {error}")
+    return result.stdout
+
+
+def source_file_digest(source_sha: str, relative: str) -> str:
+    return hashlib.sha256(git_bytes("show", f"{source_sha}:{relative}")).hexdigest()
+
+
+def source_contract(source_sha: str) -> tuple[str, int, dict[str, object]]:
+    tree_sha = git_bytes("rev-parse", f"{source_sha}^{{tree}}").decode("ascii").strip()
+    source_date = int(git_bytes("show", "-s", "--format=%ct", source_sha).decode("ascii").strip())
+    versions: dict[str, str] = {}
+    for line in git_bytes("show", f"{source_sha}:tools/versions.env").decode("utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in {"GO_VERSION", "BUN_VERSION"}:
+            versions[key] = value
+    if set(versions) != {"GO_VERSION", "BUN_VERSION"}:
+        fail("trusted source tool versions are incomplete")
+    input_digests = {
+        relative.replace("/", "_").replace(".", "_").replace("-", "_"): source_file_digest(source_sha, relative)
+        for relative in (
+            "bun.lock",
+            "go.mod",
+            "go.sum",
+            "scripts/build-candidate",
+            "scripts/promote-candidate",
+            "web/package.json",
+            "web/vite.config.ts",
+        )
+    }
+    expected_inputs = {
+        "build_contract": "candidate-v1",
+        "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
+        "build_environment": {"STORYBOOK": "false", "VITE_DEMO": "false"},
+        "bun_lock_sha256": input_digests["bun_lock"],
+        "build_script_sha256": input_digests["scripts_build_candidate"],
+        "promote_script_sha256": input_digests["scripts_promote_candidate"],
+        "go_mod_sha256": input_digests["go_mod"],
+        "go_sum_sha256": input_digests["go_sum"],
+        "go_version": f"go{versions['GO_VERSION']}",
+        "bun_version": versions["BUN_VERSION"],
+        "web_package_sha256": input_digests["web_package_json"],
+        "vite_config_sha256": input_digests["web_vite_config_ts"],
+    }
+    return tree_sha, source_date, expected_inputs
 
 
 def open_regular(path: Path) -> tuple[int, os.stat_result]:
@@ -187,9 +287,11 @@ def safe_child(root: Path, relative: str) -> Path:
     return path
 
 
-def mode_value(value: object, label: str) -> int:
+def mode_value(value: object, label: str, expected: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 0o7777:
         fail(f"{label} must be a file mode")
+    if value != expected:
+        fail(f"{label} must be {expected:o}, found {value:o}")
     return value
 
 
@@ -206,7 +308,11 @@ def file_record(
         fail(f"unexpected artifact path: {relative!r}")
     expected_sha = record.get("sha256")
     expected_size = record.get("size")
-    expected_mode = mode_value(record.get("mode"), f"mode for {relative}")
+    expected_mode = mode_value(
+        record.get("mode"),
+        f"mode for {relative}",
+        0o755 if relative.startswith("bin/") else 0o644,
+    )
     if not isinstance(expected_sha, str) or len(expected_sha) != 64 or any(char not in "0123456789abcdef" for char in expected_sha):
         fail(f"invalid artifact digest: {relative}")
     if isinstance(expected_size, bool) or not isinstance(expected_size, int) or expected_size < 0:
@@ -386,6 +492,21 @@ def verify_bundle(
         fail("candidate source tree SHA is invalid")
     if isinstance(source_date_epoch, bool) or not isinstance(source_date_epoch, int):
         fail("candidate source date is invalid")
+    if set(platform) != {"goos", "goarch", "cgo_enabled"}:
+        fail("candidate platform contract is invalid")
+    if not isinstance(platform["goos"], str) or re.fullmatch(r"[a-z][a-z0-9]*", platform["goos"]) is None:
+        fail("candidate GOOS is invalid")
+    if not isinstance(platform["goarch"], str) or re.fullmatch(r"[a-z][a-z0-9]*", platform["goarch"]) is None:
+        fail("candidate GOARCH is invalid")
+    if platform["cgo_enabled"] is not False:
+        fail("candidate must be built with CGO disabled")
+    expected_tree_sha, expected_source_date, expected_inputs = source_contract(source_sha)
+    if source_tree_sha != expected_tree_sha:
+        fail(f"candidate source tree SHA does not match Git: manifest={source_tree_sha} git={expected_tree_sha}")
+    if source_date_epoch != expected_source_date:
+        fail(f"candidate source date does not match Git: manifest={source_date_epoch} git={expected_source_date}")
+    if inputs != expected_inputs:
+        fail("candidate build input contract does not match the trusted source")
     if expected and digest != expected:
         fail(f"candidate digest {digest} does not match expected digest {expected}")
     if expected_source_sha and source_sha != expected_source_sha:
@@ -439,20 +560,34 @@ if not manifest_path.is_file() or manifest_path.is_symlink():
     fail(f"manifest does not exist: {manifest_path}")
 candidate_root = manifest_path.parent
 digest, source_sha, manifest = verify_bundle(candidate_root, expected_digest or None)
-destination.mkdir(parents=True, exist_ok=True)
-if destination.is_symlink() or not destination.is_dir():
-    fail(f"destination is not a regular directory: {destination}")
 target = destination / digest
-lock = destination / f".{digest}.lock"
+lock_name = f".{digest}.lock"
+lock = destination / lock_name
+destination_fd = open_directory_chain(destination)
+lock_fd: int | None = None
+temporary: Path | None = None
+temporary_name: str | None = None
+owned_target = False
+promoted = False
+
+
+def target_exists() -> bool:
+    try:
+        metadata = os.stat(digest, dir_fd=destination_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        fail(f"cannot inspect promoted candidate target: {error}")
+    if stat.S_ISLNK(metadata.st_mode):
+        fail(f"promoted candidate target is a symlink: {target}")
+    if not stat.S_ISDIR(metadata.st_mode):
+        fail(f"promoted candidate target is not a directory: {target}")
+    return True
 
 
 def finish_existing() -> bool:
-    if target.is_symlink():
-        fail(f"promoted candidate target is a symlink: {target}")
-    if not target.exists():
+    if not target_exists():
         return False
-    if not target.is_dir():
-        fail(f"promoted candidate target is not a directory: {target}")
     existing_digest, existing_source_sha, _ = verify_bundle(target, digest, verify_mode=True)
     if existing_digest != digest or existing_source_sha != source_sha:
         fail(f"existing promoted candidate conflicts with {digest}: {target}")
@@ -460,47 +595,64 @@ def finish_existing() -> bool:
     return True
 
 
-if dry_run:
-    print(f"promote-candidate: verified candidate_digest={digest} source_sha={source_sha} destination={target} dry_run=true")
-    raise SystemExit(0)
-
-if finish_existing():
-    raise SystemExit(0)
-
-lock_owned = False
-deadline = time.monotonic() + 60
-while not lock_owned:
-    if target.is_symlink():
-        fail(f"promoted candidate target is a symlink: {target}")
-    if target.exists() and finish_existing():
-        raise SystemExit(0)
-    if lock.is_symlink():
-        fail(f"promotion lock is a symlink: {lock}")
+def acquire_lock() -> int:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     try:
-        lock.mkdir()
-        lock_owned = True
-    except FileExistsError:
-        if time.monotonic() >= deadline:
-            fail(f"timed out waiting for concurrent promotion: {lock}")
-        time.sleep(0.1)
+        descriptor = os.open(lock_name, flags, 0o600, dir_fd=destination_fd)
+    except OSError as error:
+        fail(f"cannot open promotion lock {lock}: {error}")
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            fail(f"promotion lock is not a regular file: {lock}")
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return descriptor
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    fail(f"timed out waiting for concurrent promotion: {lock}")
+                time.sleep(0.1)
+    except BaseException:
+        os.close(descriptor)
+        raise
 
-temporary = None
-owned_target = False
+
+def create_temporary_directory() -> tuple[str, Path]:
+    for _ in range(100):
+        name = f".{digest}.tmp-{secrets.token_hex(8)}"
+        try:
+            os.mkdir(name, 0o700, dir_fd=destination_fd)
+        except FileExistsError:
+            continue
+        return name, destination / name
+    fail(f"could not allocate a temporary promotion directory under {destination}")
+
+
 try:
+    if dry_run:
+        print(f"promote-candidate: verified candidate_digest={digest} source_sha={source_sha} destination={target} dry_run=true")
+        raise SystemExit(0)
+
     if finish_existing():
         raise SystemExit(0)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{digest}.tmp-", dir=str(destination)))
+    lock_fd = acquire_lock()
+    if finish_existing():
+        raise SystemExit(0)
+
+    temporary_name, temporary = create_temporary_directory()
     artifacts = manifest["artifacts"]
     for name in ("server", "worker", "connector"):
         record = artifacts[name]
         source = safe_child(candidate_root, record["path"])
         target_path = temporary / record["path"]
-        copy_regular(source, target_path, mode_value(record["mode"], f"mode for {record['path']}"))
+        copy_regular(source, target_path, record["mode"])
     web_record = artifacts["web"]
     for record in web_record["files"]:
         source = safe_child(candidate_root / "web", record["path"])
         target_path = temporary / "web" / record["path"]
-        copy_regular(source, target_path, mode_value(record["mode"], f"mode for {record['path']}"))
+        copy_regular(source, target_path, record["mode"])
     for name in (
         "candidate-manifest.json",
         "candidate-manifest.json.sha256",
@@ -509,28 +661,34 @@ try:
     ):
         copy_regular(candidate_root / name, temporary / name, 0o644)
     verify_bundle(temporary, digest, verify_mode=True)
-    if target.exists() or target.is_symlink():
+    if target_exists():
         fail(f"promoted candidate target appeared during promotion: {target}")
-    os.replace(temporary, target)
+    try:
+        os.rename(temporary_name, digest, src_dir_fd=destination_fd, dst_dir_fd=destination_fd)
+    except OSError as error:
+        fail(f"promoted candidate target appeared during promotion: {error}")
     temporary = None
+    temporary_name = None
     owned_target = True
     verify_bundle(target, digest, verify_mode=True)
+    promoted = True
 except SystemExit:
-    if owned_target and target.exists() and target.is_dir():
+    if owned_target and target.exists() and target.is_dir() and not target.is_symlink():
         shutil.rmtree(target, ignore_errors=True)
-
     raise
 except Exception:
-    if owned_target and target.exists() and target.is_dir():
+    if owned_target and target.exists() and target.is_dir() and not target.is_symlink():
         shutil.rmtree(target, ignore_errors=True)
     raise
 finally:
     if temporary is not None:
         shutil.rmtree(temporary, ignore_errors=True)
-    if lock_owned:
+    if lock_fd is not None:
         try:
-            lock.rmdir()
-        except FileNotFoundError:
-            pass
-print(f"promote-candidate: promoted candidate_digest={digest} source_sha={source_sha} destination={target}")
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+    os.close(destination_fd)
+if promoted:
+    print(f"promote-candidate: promoted candidate_digest={digest} source_sha={source_sha} destination={target}")
 PY

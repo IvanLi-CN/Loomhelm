@@ -47,6 +47,7 @@ jobs:
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
           ARTIFACT_NAME: ${{ inputs.artifact_name }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
         with:
           script: |
             const runId = Number(process.env.SOURCE_RUN_ID);
@@ -63,12 +64,36 @@ jobs:
               core.setFailed(`source run is not Candidate CI: ${run.name} ${run.path}`);
               return;
             }
+            if (run.event !== "workflow_dispatch" || run.head_branch !== "feat/phase1") {
+              core.setFailed(`source run must be a manual Candidate CI run from feat/phase1: ${run.event}/${run.head_branch}`);
+              return;
+            }
+            if (run.head_repository?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              core.setFailed(`source run repository is not trusted: ${run.head_repository?.full_name}`);
+              return;
+            }
             if (run.status !== "completed" || run.conclusion !== "success") {
               core.setFailed(`source run is not successful: ${run.status}/${run.conclusion}`);
               return;
             }
             if (run.head_sha !== process.env.SOURCE_SHA) {
               core.setFailed(`source SHA mismatch: run=${run.head_sha} input=${process.env.SOURCE_SHA}`);
+              return;
+            }
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+              per_page: 100
+            });
+            const candidateBuild = jobs.find((job) => job.name === "Candidate Build");
+            if (!candidateBuild || candidateBuild.status !== "completed" || candidateBuild.conclusion !== "success" || candidateBuild.head_sha !== process.env.SOURCE_SHA) {
+              core.setFailed("source run does not contain a successful Candidate Build job for the requested source SHA");
+              return;
+            }
+            const expectedArtifactName = `loomhelm-candidate-${process.env.SOURCE_SHA}-${process.env.CANDIDATE_DIGEST}`;
+            if (process.env.ARTIFACT_NAME !== expectedArtifactName) {
+              core.setFailed(`candidate artifact name is not bound to the requested identity: ${process.env.ARTIFACT_NAME}`);
               return;
             }
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
@@ -86,7 +111,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: feat/phase1
-          fetch-depth: 1
+          fetch-depth: 0
       - name: Download the immutable candidate
         uses: actions/download-artifact@v4
         with:

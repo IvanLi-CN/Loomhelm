@@ -106,6 +106,7 @@ jobs:
 
   candidate-reproducibility:
     name: Candidate Reproducibility
+    continue-on-error: true
     needs: quality-gates
     runs-on: ubuntu-24.04
     steps:

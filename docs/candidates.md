@@ -35,7 +35,7 @@ The reproduction command intentionally performs two builds and removes its tempo
 
 ## Promotion
 
-Promotion verifies all manifest records, executable modes, the component and Web bytes, the deterministic archive structure, both sidecars, and the candidate identity digest before copying. It copies into a temporary directory, re-verifies that copy, restores executable modes after artifact transfer, rejects symlink paths, and serializes same-digest retries with a lock. The destination is keyed by `candidate_digest`, so the same candidate is idempotent and a conflicting directory fails closed:
+Promotion verifies the source commit and tree against the trusted checkout, the complete build input/toolchain contract, all manifest records, fixed executable/Web modes, the component and Web bytes, the deterministic archive structure, both sidecars, and the candidate identity digest before copying. It copies into a temporary directory, re-verifies that copy, rejects symlink components, uses directory descriptors for the destination and atomic same-directory rename, and serializes same-digest retries with an OS lock that is released after process death. The destination is keyed by `candidate_digest`, so the same candidate is idempotent and a conflicting directory fails closed:
 
 ```sh
 scripts/promote-candidate \
@@ -49,8 +49,8 @@ The promotion script has no Go, Bun, Docker or package-install command. The curr
 
 ## Workflow Gates
 
-`Candidate CI` runs on PR and merge-queue candidate events with a PR-cancellable but merge-queue-stable concurrency group. Its required checks are `Quality Gates`, `Repository Verification`, and `Candidate Build`; `Candidate Reproducibility` is informational and repeats the build identity check.
+`Candidate CI` runs on PR, merge-queue and manual candidate events with a PR-cancellable but merge-queue-stable concurrency group. Its required checks are `Quality Gates`, `Repository Verification`, and `Candidate Build`; `Candidate Reproducibility` is informational, allowed to fail without changing the workflow's success conclusion, and repeats the build identity check.
 
-`Branch Preview` uses a non-cancellable per-branch group, builds once, uploads the candidate, and promotes that exact artifact into the `branch-preview` environment. `Release Candidate` uses a non-cancellable candidate-specific environment group, verifies that the source run is a successful `Candidate CI` run with the matching head SHA and artifact, checks out trusted tooling from `feat/phase1`, and downloads/promotes the existing artifact without rebuilding it. The release workflow is intentionally restricted to that protected branch.
+`Branch Preview` uses a non-cancellable per-branch group, builds once, uploads the candidate, and promotes that exact artifact into the `branch-preview` environment. `Release Candidate` uses a non-cancellable candidate-specific environment group, accepts only a successful manual `Candidate CI` run from the repository's `feat/phase1` branch with a successful `Candidate Build` job, exact source/digest-bound artifact name, matching head SHA, and trusted repository identity, checks out full-history trusted tooling from `feat/phase1`, and downloads/promotes the existing artifact without rebuilding it. The release workflow is intentionally restricted to that protected branch; pull-request, merge-queue and fork runs cannot cross this release boundary.
 
 The checked-in merge/release declaration is [.github/quality-gates.json](../.github/quality-gates.json). GitHub branch protection and environment approval settings remain external execution state and must be aligned with that declaration by the repository owner.

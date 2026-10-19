@@ -392,7 +392,16 @@ print(candidate_digest)
 PY
 )
 
-mv "$stage_dir" "$output_dir"
+python3 - "$stage_dir" "$output_dir" <<'PY'
+import os
+import sys
+
+stage, output = sys.argv[1:]
+try:
+    os.rename(stage, output)
+except OSError as error:
+    raise SystemExit(f"build-candidate: refusing to replace existing output: {error}")
+PY
 echo "build-candidate: candidate_digest=$candidate_digest"
 echo "build-candidate: source_sha=$source_sha"
 echo "build-candidate: manifest=$output_dir/candidate-manifest.json"
