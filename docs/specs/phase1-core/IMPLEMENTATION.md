@@ -43,6 +43,14 @@ These neutral engineering surfaces document the frontend foundation. The page im
 
 ![VerificationPanel component evidence](assets/f02-verification-panel.png)
 
+### U01 product demo navigation
+
+The U01 current-head evidence uses the login-free `ui_demo` at `162516e6b2b306f5711d7288340670bc5ef41122`, with desktop coverage at 1440x900 and narrow-screen coverage at 393x852. The owner confirmed that the selected project row covers the full arrow-to-label row, the project link background is transparent, the text and arrow colors distinguish hierarchy, and the controlled 900x800 and 393x852 checks have no horizontal overflow. Exact-path comparison against base `3f1bf1821f2eafeae072930e8218e7e166527165` returned `current-only` for both new paths because neither existed in that base; these confirmed captures are now canonical U01 evidence.
+
+![U01 project tree selection on desktop](assets/u01-nav-tree-desktop-1440x900.png)
+
+![U01 project tree selection on a narrow viewport](assets/u01-nav-tree-mobile-393x852.png)
+
 ## Rollout and Compatibility
 
 The initial application schema retains platform short-job results; River retains queue state separately. There is no previously deployed application schema or production compatibility claim. Re-entering startup may apply pending migrations but must not reverse them, and a migration failure prevents readiness. Empty-database migration, startup re-entry and persistence after restart have VM observations; a backend image was built and identified by its local content hash. Immutable publication/promotion, supported blue-green compatibility windows and cross-process Worker fencing still require their deployment implementation and observations. The planned release channel is an isolated parent-branch preview; production configuration is not established here.
