@@ -1,0 +1,32 @@
+{
+	admin 0.0.0.0:2019
+	auto_https off
+}
+
+:80 {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy server-__ACTIVE_SLOT__:8080
+	}
+	handle /livez {
+		reverse_proxy server-__ACTIVE_SLOT__:8080
+	}
+	handle /readyz {
+		reverse_proxy server-__ACTIVE_SLOT__:8080
+	}
+	handle /version {
+		reverse_proxy server-__ACTIVE_SLOT__:8080
+	}
+	handle /-/drain {
+		reverse_proxy server-__ACTIVE_SLOT__:8080
+	}
+
+	# The current tree is authoritative. The retained tree keeps old hashed
+	# assets available to clients that still run the previous Web bundle.
+	handle {
+		root * /srv/web
+		try_files {path} /current{path} /retained{path} /current/index.html
+		file_server
+	}
+}

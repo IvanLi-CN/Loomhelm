@@ -16,6 +16,7 @@ import (
 
 type fakeRuntime struct {
 	ping   func(context.Context) error
+	ready  func() bool
 	start  func(context.Context, *platform.GenerationController, *platform.Lifecycle) error
 	stop   func(context.Context) error
 	wait   func(context.Context) error
@@ -27,6 +28,12 @@ func (r *fakeRuntime) Ping(ctx context.Context) error {
 		return r.ping(ctx)
 	}
 	return nil
+}
+func (r *fakeRuntime) Ready() bool {
+	if r.ready != nil {
+		return r.ready()
+	}
+	return true
 }
 func (r *fakeRuntime) Start(ctx context.Context, gen *platform.GenerationController, lifecycle *platform.Lifecycle) error {
 	if r.start != nil {

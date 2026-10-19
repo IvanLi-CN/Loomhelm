@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -443,16 +442,7 @@ func (s *Server) handleDrain(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (s *Server) validDrainToken(request *http.Request) bool {
-	if s.cfg.DrainToken == "" {
-		return false
-	}
-	const bearerPrefix = "Bearer "
-	authorization := request.Header.Get("Authorization")
-	if len(authorization) <= len(bearerPrefix) || authorization[:len(bearerPrefix)] != bearerPrefix {
-		return false
-	}
-	token := authorization[len(bearerPrefix):]
-	return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.DrainToken)) == 1
+	return validDrainToken(s.cfg.DrainToken, request)
 }
 
 func isLoopbackRequest(request *http.Request) bool {

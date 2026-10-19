@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 
@@ -22,11 +23,20 @@ type Worker struct {
 	generation   *platform.GenerationController
 	openRuntime  runtimeFactory
 	runtimeReady atomic.Bool
+	resourceMu   sync.RWMutex
+	resources    processRuntime
+	healthMu     sync.Mutex
+	healthServer *http.Server
+	healthDone   chan error
+	shutdown     chan struct{}
 }
 
 func NewWorker(cfg platform.Config, logger *slog.Logger) (*Worker, error) {
 	if cfg.Component != platform.ComponentWorker {
 		return nil, fmt.Errorf("worker requires component %q, got %q", platform.ComponentWorker, cfg.Component)
+	}
+	if cfg.WorkerLeaseKey == "" {
+		cfg.WorkerLeaseKey = "loomhelm-worker"
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid worker configuration: %w", err)
@@ -39,6 +49,7 @@ func NewWorker(cfg platform.Config, logger *slog.Logger) (*Worker, error) {
 		logger:      logger,
 		lifecycle:   platform.NewLifecycle(),
 		openRuntime: openDatabaseRuntime,
+		shutdown:    make(chan struct{}, 1),
 	}, nil
 }
 
@@ -67,9 +78,17 @@ func (w *Worker) Run(ctx context.Context) error {
 		}
 		return err
 	}
+	w.resourceMu.Lock()
+	w.resources = resources
+	w.resourceMu.Unlock()
 	closeOnReturn := true
 	defer func() {
 		if closeOnReturn {
+			w.resourceMu.Lock()
+			if w.resources == resources {
+				w.resources = nil
+			}
+			w.resourceMu.Unlock()
 			resources.Close()
 		}
 	}()
@@ -117,12 +136,22 @@ func (w *Worker) Run(ctx context.Context) error {
 		}
 		return errors.Join(startErr, stopErr)
 	}
+	if err := w.startHealthServer(); err != nil {
+		w.runMu.Unlock()
+		stopErr := w.stopRuntime(resources, cancelRunner, generation, "health server failed")
+		return errors.Join(err, stopErr)
+	}
 	w.runtimeReady.Store(true)
 	w.runMu.Unlock()
 
 	w.logger.Info("worker started", "generation", generation.Current())
-	<-ctx.Done()
-	err = w.stopRuntime(resources, cancelRunner, generation, "context canceled")
+	stopReason := "context canceled"
+	select {
+	case <-ctx.Done():
+	case <-w.shutdown:
+		stopReason = "HTTP drain request"
+	}
+	err = w.stopRuntime(resources, cancelRunner, generation, stopReason)
 	return err
 }
 
@@ -131,6 +160,7 @@ func (w *Worker) stopRuntime(resources processRuntime, cancelRunner context.Canc
 	if w.lifecycle.BeginDrain(reason) {
 		w.logger.Info("worker entering drain", "reason", reason)
 	}
+	healthErr := w.stopHealthServer()
 	shutdown, cancel := context.WithTimeout(context.Background(), w.cfg.ShutdownTimeout)
 	err := resources.Stop(shutdown)
 	if err == nil {
@@ -157,16 +187,21 @@ func (w *Worker) stopRuntime(resources processRuntime, cancelRunner context.Canc
 				}
 				w.closeRuntime(resources, generation)
 			}()
-			return err
+			return errors.Join(healthErr, err)
 		}
 	}
 	w.closeRuntime(resources, generation)
-	return err
+	return errors.Join(healthErr, err)
 }
 
 func (w *Worker) closeRuntime(resources processRuntime, generation *platform.GenerationController) {
 	generation.Stop()
 	resources.Close()
+	w.resourceMu.Lock()
+	if w.resources == resources {
+		w.resources = nil
+	}
+	w.resourceMu.Unlock()
 	w.lifecycle.Stop()
 	w.logger.Info("worker stopped", "generation", generation.Current())
 }
@@ -174,6 +209,12 @@ func (w *Worker) closeRuntime(resources processRuntime, generation *platform.Gen
 func (w *Worker) Lifecycle() platform.LifecycleSnapshot {
 	snapshot := w.lifecycle.Snapshot()
 	snapshot.Ready = snapshot.Ready && w.runtimeReady.Load()
+	w.resourceMu.RLock()
+	resources := w.resources
+	w.resourceMu.RUnlock()
+	if resources != nil {
+		snapshot.Ready = snapshot.Ready && resources.Ready()
+	}
 	return snapshot
 }
 

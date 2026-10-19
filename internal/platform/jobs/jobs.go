@@ -7,7 +7,9 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -33,10 +35,15 @@ type Lifecycle interface {
 }
 
 type Config struct {
-	Queue           string
-	Schema          string
-	MaxWorkers      int
-	SoftStopTimeout time.Duration
+	Queue                  string
+	Schema                 string
+	MaxWorkers             int
+	SoftStopTimeout        time.Duration
+	LeaseKey               string
+	LeaseHeartbeatInterval time.Duration
+	LeaseHeartbeatTimeout  time.Duration
+	CandidateSourceSHA     string
+	ArtifactDigest         string
 }
 
 func (c Config) withDefaults() Config {
@@ -49,6 +56,15 @@ func (c Config) withDefaults() Config {
 	if c.SoftStopTimeout <= 0 {
 		c.SoftStopTimeout = 10 * time.Second
 	}
+	if c.LeaseKey == "" {
+		c.LeaseKey = "loomhelm-worker:" + c.Queue
+	}
+	if c.LeaseHeartbeatInterval <= 0 {
+		c.LeaseHeartbeatInterval = 2 * time.Second
+	}
+	if c.LeaseHeartbeatTimeout <= 0 {
+		c.LeaseHeartbeatTimeout = c.LeaseHeartbeatInterval
+	}
 	return c
 }
 
@@ -59,6 +75,15 @@ func (c Config) Validate() error {
 	if c.SoftStopTimeout < 0 {
 		return errors.New("job soft stop timeout must not be negative")
 	}
+	if c.LeaseHeartbeatInterval < 0 || c.LeaseHeartbeatTimeout < 0 {
+		return errors.New("worker lease heartbeat durations must not be negative")
+	}
+	if c.LeaseHeartbeatInterval > 0 && c.LeaseHeartbeatTimeout > 0 && c.LeaseHeartbeatTimeout < c.LeaseHeartbeatInterval/2 {
+		return errors.New("worker lease heartbeat timeout is too short for its interval")
+	}
+	if c.LeaseKey != "" && strings.ContainsAny(c.LeaseKey, " \t\r\n") {
+		return errors.New("worker lease key must not contain whitespace")
+	}
 	return nil
 }
 
@@ -67,8 +92,15 @@ type Runner struct {
 	logger *slog.Logger
 	cfg    Config
 
-	mu     sync.Mutex
-	client *river.Client[pgx.Tx]
+	mu            sync.Mutex
+	client        *river.Client[pgx.Tx]
+	lease         *workerLease
+	generation    Generation
+	runCtx        context.Context
+	monitorCancel context.CancelFunc
+	monitorDone   chan struct{}
+	stopping      atomic.Bool
+	ready         atomic.Bool
 }
 
 func NewRunner(db *database.DB, logger *slog.Logger, cfg Config) (*Runner, error) {
@@ -145,15 +177,25 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 	}
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.client != nil {
+	if r.client != nil || r.monitorDone != nil {
+		r.mu.Unlock()
 		return errors.New("job runner already started")
+	}
+	r.mu.Unlock()
+
+	lease, err := newWorkerLease(r.db, r.cfg.LeaseKey, current, r.cfg.CandidateSourceSHA, r.cfg.ArtifactDigest)
+	if err != nil {
+		return err
+	}
+	if err := lease.Acquire(ctx); err != nil {
+		return err
 	}
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &shortJobWorker{
 		queries:    r.db.Queries(),
 		generation: generation,
+		lease:      lease,
 	})
 	client, err := river.NewClient(riverpgxv5.New(r.db.Pool()), &river.Config{
 		Logger:          r.logger,
@@ -170,7 +212,25 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 	if err := client.Start(ctx); err != nil {
 		return fmt.Errorf("start River client: %w", err)
 	}
+	monitorCtx, monitorCancel := context.WithCancel(ctx)
+	r.mu.Lock()
+	if r.client != nil || r.monitorDone != nil {
+		r.mu.Unlock()
+		monitorCancel()
+		_ = client.StopAndCancel(context.Background())
+		return errors.New("job runner already started")
+	}
 	r.client = client
+	r.lease = lease
+	r.generation = generation
+	r.runCtx = ctx
+	r.monitorCancel = monitorCancel
+	r.monitorDone = make(chan struct{})
+	r.stopping.Store(false)
+	r.ready.Store(true)
+	monitorDone := r.monitorDone
+	r.mu.Unlock()
+	go r.monitorLease(monitorCtx, monitorDone)
 	return nil
 }
 
@@ -183,6 +243,18 @@ func (r *Runner) Enqueue(ctx context.Context, args ShortJobArgs) (int64, error) 
 	}
 	if err := validateGeneration(args.Generation); err != nil {
 		return 0, err
+	}
+	r.mu.Lock()
+	lease := r.lease
+	r.mu.Unlock()
+	if lease == nil {
+		return 0, errors.New("job runner lease is not initialized")
+	}
+	if err := lease.Check(ctx); err != nil {
+		return 0, err
+	}
+	if !r.ready.Load() {
+		return 0, errors.New("job runner is not ready for scheduling")
 	}
 
 	r.mu.Lock()
@@ -217,23 +289,30 @@ func (r *Runner) WaitStopped(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("job context must not be nil")
 	}
+	if err := r.waitMonitor(ctx); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	client := r.client
+	lease := r.lease
 	r.mu.Unlock()
-	if client == nil {
-		return nil
-	}
-	select {
-	case <-client.Stopped():
-		r.mu.Lock()
-		if r.client == client {
-			r.client = nil
+	if client != nil {
+		select {
+		case <-client.Stopped():
+			r.mu.Lock()
+			if r.client == client {
+				r.client = nil
+			}
+			r.mu.Unlock()
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		r.mu.Unlock()
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	r.ready.Store(false)
+	if lease == nil {
+		return nil
+	}
+	return lease.Release(ctx)
 }
 
 func (r *Runner) stop(ctx context.Context, cancel bool) error {
@@ -243,11 +322,26 @@ func (r *Runner) stop(ctx context.Context, cancel bool) error {
 	if ctx == nil {
 		return errors.New("job context must not be nil")
 	}
+	r.stopping.Store(true)
+	r.ready.Store(false)
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	monitorCancel := r.monitorCancel
+	r.mu.Unlock()
+	if monitorCancel != nil {
+		monitorCancel()
+	}
+	if err := r.waitMonitor(ctx); err != nil {
+		return err
+	}
+	r.mu.Lock()
 	client := r.client
+	lease := r.lease
+	r.mu.Unlock()
 	if client == nil {
-		return nil
+		if lease == nil {
+			return nil
+		}
+		return lease.Release(ctx)
 	}
 	var err error
 	if cancel {
@@ -259,8 +353,15 @@ func (r *Runner) stop(ctx context.Context, cancel bool) error {
 		// Keep the client for a bounded retry when the caller's context expires.
 		return fmt.Errorf("stop River client: %w", err)
 	}
-	r.client = nil
-	return nil
+	r.mu.Lock()
+	if r.client == client {
+		r.client = nil
+	}
+	r.mu.Unlock()
+	if lease == nil {
+		return nil
+	}
+	return lease.Release(ctx)
 }
 
 type ShortJobArgs struct {
@@ -284,6 +385,7 @@ type shortJobWorker struct {
 	river.WorkerDefaults[ShortJobArgs]
 	queries    *generated.Queries
 	generation Generation
+	lease      *workerLease
 }
 
 func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs]) error {
@@ -307,6 +409,14 @@ func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs])
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if w.lease != nil {
+		if err := w.lease.Check(workCtx); err != nil {
+			if errors.Is(err, ErrWorkerLeaseLost) {
+				return river.JobCancel(err)
+			}
+			return err
+		}
+	}
 	_, err := w.queries.RecordShortJobResult(workCtx, generated.RecordShortJobResultParams{
 		JobID:      job.ID,
 		Generation: int64(job.Args.Generation),
@@ -316,4 +426,139 @@ func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs])
 		return river.JobCancel(fmt.Errorf("generation %d stopped: %w", job.Args.Generation, generationCtx.Err()))
 	}
 	return err
+}
+
+func (r *Runner) Ready() bool {
+	return r != nil && r.ready.Load()
+}
+
+func (r *Runner) monitorLease(ctx context.Context, done chan struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(r.cfg.LeaseHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		r.mu.Lock()
+		lease := r.lease
+		generation := r.generation
+		runCtx := r.runCtx
+		stopping := r.stopping.Load()
+		r.mu.Unlock()
+		if stopping || lease == nil || generation == nil || runCtx == nil {
+			return
+		}
+
+		heartbeatCtx, cancel := context.WithTimeout(context.Background(), r.cfg.LeaseHeartbeatTimeout)
+		err := lease.Renew(heartbeatCtx)
+		cancel()
+		if err == nil {
+			if !r.ready.Load() && !r.stopping.Load() {
+				if err := r.restartClient(runCtx, generation); err == nil {
+					r.ready.Store(true)
+				} else {
+					r.logger.Warn("worker runtime recovery is waiting", "error", err)
+				}
+			}
+			continue
+		}
+
+		r.ready.Store(false)
+		if errors.Is(err, ErrWorkerLeaseLost) {
+			r.logger.Error("worker generation fenced", "generation", generation.Current(), "error", err)
+		} else {
+			r.logger.Warn("worker lease heartbeat failed; scheduling paused", "error", err)
+		}
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), r.cfg.SoftStopTimeout)
+		if stopErr := r.stopClient(stopCtx, true); stopErr != nil {
+			r.logger.Warn("worker River client stop during lease loss failed", "error", stopErr)
+		}
+		stopCancel()
+	}
+}
+
+func (r *Runner) restartClient(ctx context.Context, generation Generation) error {
+	if ctx == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
+	workers := river.NewWorkers()
+	r.mu.Lock()
+	lease := r.lease
+	r.mu.Unlock()
+	river.AddWorker(workers, &shortJobWorker{
+		queries:    r.db.Queries(),
+		generation: generation,
+		lease:      lease,
+	})
+	client, err := river.NewClient(riverpgxv5.New(r.db.Pool()), &river.Config{
+		Logger:          r.logger,
+		Schema:          r.cfg.Schema,
+		SoftStopTimeout: r.cfg.SoftStopTimeout,
+		Queues: map[string]river.QueueConfig{
+			r.cfg.Queue: {MaxWorkers: r.cfg.MaxWorkers},
+		},
+		Workers: workers,
+	})
+	if err != nil {
+		return fmt.Errorf("create River recovery client: %w", err)
+	}
+	if err := client.Start(ctx); err != nil {
+		return fmt.Errorf("start River recovery client: %w", err)
+	}
+	r.mu.Lock()
+	if r.stopping.Load() || r.client != nil {
+		r.mu.Unlock()
+		_ = client.StopAndCancel(context.Background())
+		return nil
+	}
+	r.client = client
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Runner) stopClient(ctx context.Context, cancel bool) error {
+	r.mu.Lock()
+	client := r.client
+	r.mu.Unlock()
+	if client == nil {
+		return nil
+	}
+	var err error
+	if cancel {
+		err = client.StopAndCancel(ctx)
+	} else {
+		err = client.Stop(ctx)
+	}
+	if err != nil {
+		return fmt.Errorf("stop River client: %w", err)
+	}
+	r.mu.Lock()
+	if r.client == client {
+		r.client = nil
+	}
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Runner) waitMonitor(ctx context.Context) error {
+	r.mu.Lock()
+	done := r.monitorDone
+	r.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		r.mu.Lock()
+		r.monitorDone = nil
+		r.monitorCancel = nil
+		r.mu.Unlock()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
