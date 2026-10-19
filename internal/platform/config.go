@@ -2,12 +2,15 @@ package platform
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Component string
@@ -24,8 +27,84 @@ type Config struct {
 	HTTPAddr           string
 	DrainToken         string
 	ShutdownTimeout    time.Duration
+	StartupTimeout     time.Duration
+	DatabaseURL        string
+	DatabaseMinConns   int32
+	DatabaseMaxConns   int32
 	WorkerGeneration   uint64
 	ConnectorServerURL string
+}
+
+// DatabaseConfig is shared by processes and database-only tools so their
+// environment parsing and development-target checks cannot drift apart.
+type DatabaseConfig struct {
+	URL      string
+	MinConns int32
+	MaxConns int32
+}
+
+func LoadDatabaseConfig() (DatabaseConfig, error) {
+	return LoadDatabaseConfigWithLookup(os.LookupEnv)
+}
+
+func LoadDatabaseConfigWithLookup(lookup func(string) (string, bool)) (DatabaseConfig, error) {
+	config, err := databaseConfigFromLookup(lookup)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	if err := config.Validate(); err != nil {
+		return DatabaseConfig{}, err
+	}
+	return config, nil
+}
+
+func databaseConfigFromLookup(lookup func(string) (string, bool)) (DatabaseConfig, error) {
+	if lookup == nil {
+		return DatabaseConfig{}, fmt.Errorf("configuration lookup must not be nil")
+	}
+	config := DatabaseConfig{
+		URL: strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_DATABASE_URL", "")),
+	}
+	if err := ValidateDevelopmentDatabaseTarget(config.URL, lookupOrDefault(lookup, "LOOMHELM_POSTGRES_PORT", "")); err != nil {
+		return DatabaseConfig{}, err
+	}
+	var err error
+	config.MinConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MIN_CONNS", 0)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	config.MaxConns, err = poolSizeFromEnv(lookup, "LOOMHELM_DATABASE_MAX_CONNS", 4)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	return config, nil
+}
+
+func (c DatabaseConfig) Validate() error {
+	if strings.TrimSpace(c.URL) == "" {
+		return fmt.Errorf("LOOMHELM_DATABASE_URL must not be empty")
+	}
+	// Parse errors may contain credentials from the URL or keyword DSN.
+	poolConfig, err := pgxpool.ParseConfig(c.URL)
+	if err != nil {
+		return fmt.Errorf("invalid LOOMHELM_DATABASE_URL")
+	}
+	if c.MinConns < 0 || c.MaxConns < 0 {
+		return fmt.Errorf("database pool sizes must not be negative")
+	}
+	if c.MinConns > 0 {
+		poolConfig.MinConns = c.MinConns
+	}
+	if c.MaxConns > 0 {
+		poolConfig.MaxConns = c.MaxConns
+	}
+	if poolConfig.MinConns < 0 || poolConfig.MaxConns < 0 {
+		return fmt.Errorf("database pool sizes must not be negative")
+	}
+	if poolConfig.MinConns > poolConfig.MaxConns {
+		return fmt.Errorf("database minimum connections must not exceed maximum connections")
+	}
+	return nil
 }
 
 func LoadConfig(component Component) (Config, error) {
@@ -54,6 +133,19 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		Component:       component,
 		Version:         strings.TrimSpace(version),
 		ShutdownTimeout: shutdownTimeout,
+	}
+	if component != ComponentConnector {
+		config.StartupTimeout, err = durationFromEnv(lookup, "LOOMHELM_STARTUP_TIMEOUT", 30*time.Second)
+		if err != nil {
+			return Config{}, err
+		}
+		database, err := databaseConfigFromLookup(lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		config.DatabaseURL = database.URL
+		config.DatabaseMinConns = database.MinConns
+		config.DatabaseMaxConns = database.MaxConns
 	}
 
 	switch component {
@@ -108,12 +200,62 @@ func (c Config) Validate() error {
 		if c.WorkerGeneration == 0 {
 			return fmt.Errorf("worker generation must be greater than zero")
 		}
+		if c.WorkerGeneration > math.MaxInt64 {
+			return fmt.Errorf("worker generation must not exceed %d", int64(math.MaxInt64))
+		}
 	case ComponentConnector:
 		if err := validateServerURL(c.ConnectorServerURL); err != nil {
 			return fmt.Errorf("invalid connector server URL: %w", err)
 		}
 	}
+	if c.Component != ComponentConnector {
+		database := DatabaseConfig{URL: c.DatabaseURL, MinConns: c.DatabaseMinConns, MaxConns: c.DatabaseMaxConns}
+		if err := database.Validate(); err != nil {
+			return err
+		}
+		if c.StartupTimeout < 0 {
+			return fmt.Errorf("startup timeout must not be negative")
+		}
+	}
 	return nil
+}
+
+// ValidateDevelopmentDatabaseTarget keeps an explicitly selected development
+// port aligned with the application connection before any database is opened.
+// Deployments that do not use the development Compose port leave it unset.
+func ValidateDevelopmentDatabaseTarget(databaseURL, postgresPort string) error {
+	if postgresPort == "" {
+		return nil
+	}
+	port, err := strconv.ParseUint(strings.TrimSpace(postgresPort), 10, 16)
+	if err != nil || port == 0 {
+		return fmt.Errorf("LOOMHELM_POSTGRES_PORT must be an integer from 1 to 65535")
+	}
+	parsed, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid LOOMHELM_DATABASE_URL")
+	}
+	if parsed.ConnConfig.Port != uint16(port) {
+		return fmt.Errorf("LOOMHELM_DATABASE_URL port must match LOOMHELM_POSTGRES_PORT; update and export both from the same worktree environment")
+	}
+	return nil
+}
+
+// StartupBudget supplies the same default for environment and programmatic callers.
+func (c Config) StartupBudget() time.Duration {
+	if c.StartupTimeout == 0 {
+		return 30 * time.Second
+	}
+	return c.StartupTimeout
+}
+
+func poolSizeFromEnv(lookup func(string) (string, bool), key string, fallback int32) (int32, error) {
+	raw := lookupOrDefault(lookup, key, strconv.FormatInt(int64(fallback), 10))
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%s must be a nonnegative 32-bit integer", key)
+	}
+	return int32(value), nil
 }
 
 func isKnownComponent(component Component) bool {
@@ -153,6 +295,9 @@ func uint64FromEnv(lookup func(string) (string, bool), key string, fallback uint
 			return 0, fmt.Errorf("invalid %s %q: expected a positive integer", key, raw)
 		}
 		return 0, fmt.Errorf("%s must be greater than zero", key)
+	}
+	if value > math.MaxInt64 {
+		return 0, fmt.Errorf("%s must not exceed %d", key, int64(math.MaxInt64))
 	}
 	return value, nil
 }

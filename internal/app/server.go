@@ -18,12 +18,15 @@ import (
 )
 
 type Server struct {
-	cfg       platform.Config
-	logger    *slog.Logger
-	lifecycle *platform.Lifecycle
-	router    chi.Router
-	shutdown  chan struct{}
-	serveMu   sync.Mutex
+	cfg         platform.Config
+	logger      *slog.Logger
+	lifecycle   *platform.Lifecycle
+	router      chi.Router
+	shutdown    chan struct{}
+	serveMu     sync.Mutex
+	openRuntime runtimeFactory
+	resourceMu  sync.RWMutex
+	resources   processRuntime
 }
 
 type trackedListener struct {
@@ -62,11 +65,12 @@ func NewServer(cfg platform.Config, logger *slog.Logger) (*Server, error) {
 	}
 
 	server := &Server{
-		cfg:       cfg,
-		logger:    logger,
-		lifecycle: platform.NewLifecycle(),
-		router:    chi.NewRouter(),
-		shutdown:  make(chan struct{}, 1),
+		cfg:         cfg,
+		logger:      logger,
+		lifecycle:   platform.NewLifecycle(),
+		router:      chi.NewRouter(),
+		shutdown:    make(chan struct{}, 1),
+		openRuntime: openDatabaseRuntime,
 	}
 	server.registerRoutes()
 	return server, nil
@@ -81,6 +85,21 @@ func (s *Server) Run(ctx context.Context) error {
 		s.serveMu.Unlock()
 		return fmt.Errorf("server lifecycle already started in state %q", snapshot.State)
 	}
+	if ctx.Err() != nil {
+		s.lifecycle.Stop()
+		s.serveMu.Unlock()
+		return nil
+	}
+	resources, err := s.prepareRuntime(ctx)
+	if err != nil {
+		s.serveMu.Unlock()
+		if ctx.Err() != nil {
+			s.lifecycle.Stop()
+			return nil
+		}
+		return err
+	}
+	defer s.closeRuntime(resources)
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.cfg.HTTPAddr)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
@@ -114,6 +133,23 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		// Pre-canceled admission never takes ownership of the listener; the caller retains it.
 		return nil
 	}
+	if snapshot := s.lifecycle.Snapshot(); snapshot.State != platform.StateNew {
+		s.serveMu.Unlock()
+		return fmt.Errorf("server lifecycle already started in state %q", snapshot.State)
+	}
+	resources, err := s.prepareRuntime(ctx)
+	if err != nil {
+		s.serveMu.Unlock()
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	defer s.closeRuntime(resources)
+	if ctx.Err() != nil {
+		s.serveMu.Unlock()
+		return nil
+	}
 	if err := s.lifecycle.Start(); err != nil {
 		s.serveMu.Unlock()
 		// Rejected admission never takes ownership of the listener; the caller retains it.
@@ -121,6 +157,28 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	}
 	s.serveMu.Unlock()
 	return s.serveAdmitted(ctx, listener)
+}
+
+func (s *Server) prepareRuntime(ctx context.Context) (processRuntime, error) {
+	startup, cancel := context.WithTimeout(ctx, s.cfg.StartupBudget())
+	defer cancel()
+	resources, err := s.openRuntime(startup, s.cfg, s.logger)
+	if err != nil {
+		return nil, err
+	}
+	s.resourceMu.Lock()
+	s.resources = resources
+	s.resourceMu.Unlock()
+	return resources, nil
+}
+
+func (s *Server) closeRuntime(resources processRuntime) {
+	s.resourceMu.Lock()
+	if s.resources == resources {
+		s.resources = nil
+	}
+	s.resourceMu.Unlock()
+	resources.Close()
 }
 
 func (s *Server) serveAdmitted(ctx context.Context, listener net.Listener) error {
@@ -276,8 +334,19 @@ func (s *Server) handleLive(writer http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) handleReady(writer http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleReady(writer http.ResponseWriter, request *http.Request) {
 	snapshot := s.lifecycle.Snapshot()
+	if snapshot.Ready {
+		ctx, cancel := context.WithTimeout(request.Context(), time.Second)
+		defer cancel()
+		s.resourceMu.RLock()
+		snapshot.Ready = s.resources != nil && s.resources.Ping(ctx) == nil
+		s.resourceMu.RUnlock()
+		// Drain may have started while the dependency check was in flight.
+		current := s.lifecycle.Snapshot()
+		current.Ready = current.Ready && snapshot.Ready
+		snapshot = current
+	}
 	status := http.StatusOK
 	statusText := "ready"
 	if !snapshot.Ready {

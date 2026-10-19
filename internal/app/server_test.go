@@ -16,7 +16,7 @@ import (
 )
 
 func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -87,7 +87,7 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 }
 
 func TestServerSocketHealthDuringDrain(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -124,7 +124,7 @@ func TestServerSocketHealthDuringDrain(t *testing.T) {
 }
 
 func TestServerReadyEndpointReturnsUnavailableDuringDrain(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -134,6 +134,8 @@ func TestServerReadyEndpointReturnsUnavailableDuringDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
+	// This handler-only test admits a prepared dependency without opening sockets.
+	server.resources = &fakeRuntime{}
 	if err := server.lifecycle.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -163,7 +165,7 @@ func TestServerReadyEndpointReturnsUnavailableDuringDrain(t *testing.T) {
 }
 
 func TestServerRejectsRemoteDrainRequest(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -208,7 +210,7 @@ func TestServerRejectsRemoteDrainRequest(t *testing.T) {
 }
 
 func TestServerRejectsReentrantServeWithoutClosingActiveListener(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -239,7 +241,7 @@ func TestServerRejectsReentrantServeWithoutClosingActiveListener(t *testing.T) {
 }
 
 func TestServerRunRejectsAfterServeAdmission(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -272,7 +274,7 @@ func TestServerRunRejectsAfterServeAdmission(t *testing.T) {
 }
 
 func TestServerPreCanceledServeDoesNotBecomeReady(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -301,7 +303,7 @@ func TestServerPreCanceledServeDoesNotBecomeReady(t *testing.T) {
 }
 
 func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -328,7 +330,7 @@ func TestServerFailureRevokesReadinessAndReturnsServeError(t *testing.T) {
 }
 
 func TestServerPropagatesListenerCloseErrorAfterServeFailure(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -354,7 +356,7 @@ func TestServerPropagatesListenerCloseErrorAfterServeFailure(t *testing.T) {
 }
 
 func TestServerPreservesUnexpectedServerClosedError(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -377,7 +379,7 @@ func TestServerPreservesUnexpectedServerClosedError(t *testing.T) {
 }
 
 func TestServerReturnsErrorAfterReadyListenerFails(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -410,7 +412,7 @@ func TestServerReturnsErrorAfterReadyListenerFails(t *testing.T) {
 }
 
 func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -480,7 +482,7 @@ func TestServerContextCancellationRevokesHealthBeforeStop(t *testing.T) {
 }
 
 func TestServerForceClosesStuckRequestAfterDrainTimeout(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -553,7 +555,7 @@ func TestServerForceClosesStuckRequestAfterDrainTimeout(t *testing.T) {
 }
 
 func TestServerCanceledRunStopsLifecycleBeforeListen(t *testing.T) {
-	server, err := NewServer(platform.Config{
+	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test-version",
 		HTTPAddr:        "127.0.0.1:0",
@@ -577,7 +579,7 @@ func TestServerCanceledRunStopsLifecycleBeforeListen(t *testing.T) {
 }
 
 func TestServerRejectsInvalidConfiguration(t *testing.T) {
-	_, err := NewServer(platform.Config{
+	_, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,
 		Version:         "test",
 		HTTPAddr:        "invalid",

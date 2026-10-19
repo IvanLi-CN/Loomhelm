@@ -9,10 +9,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
 
 func TestServerEntrypointExitsOnSignal(t *testing.T) {
@@ -40,7 +43,7 @@ func runServerSignalTest(t *testing.T, signal os.Signal) {
 	defer logFile.Close()
 
 	command := exec.Command(binary)
-	command.Env = commandEnv(map[string]string{
+	command.Env = commandEnvWithDatabase(t, map[string]string{
 		"LOOMHELM_VERSION":     "test",
 		"LOOMHELM_HTTP_ADDR":   "127.0.0.1:0",
 		"LOOMHELM_DRAIN_TOKEN": "test-token",
@@ -79,7 +82,7 @@ func TestServerEntrypointServesHealthVersionAndDrain(t *testing.T) {
 	defer logFile.Close()
 
 	command := exec.Command(binary)
-	command.Env = commandEnv(map[string]string{
+	command.Env = commandEnvWithDatabase(t, map[string]string{
 		"LOOMHELM_VERSION":     "test",
 		"LOOMHELM_HTTP_ADDR":   "127.0.0.1:0",
 		"LOOMHELM_DRAIN_TOKEN": "test-token",
@@ -143,8 +146,10 @@ func TestServerEntrypointRejectsInvalidConfiguration(t *testing.T) {
 	binary := buildServerEntrypoint(t)
 	command := exec.Command(binary)
 	command.Env = commandEnv(map[string]string{
-		"LOOMHELM_HTTP_ADDR":   "invalid",
-		"LOOMHELM_DRAIN_TOKEN": "test-token",
+		"LOOMHELM_HTTP_ADDR":     "invalid",
+		"LOOMHELM_DRAIN_TOKEN":   "test-token",
+		"LOOMHELM_DATABASE_URL":  "postgres://loomhelm:secret@127.0.0.1:55432/loomhelm?sslmode=disable",
+		"LOOMHELM_POSTGRES_PORT": "55432",
 	})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 2)
@@ -162,14 +167,57 @@ func TestServerEntrypointReturnsRuntimeFailure(t *testing.T) {
 	defer listener.Close()
 
 	command := exec.Command(binary)
-	command.Env = commandEnv(map[string]string{
+	command.Env = commandEnvWithDatabase(t, map[string]string{
 		"LOOMHELM_HTTP_ADDR":   listener.Addr().String(),
 		"LOOMHELM_DRAIN_TOKEN": "test-token",
 	})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 1)
-	if !strings.Contains(string(output), "server exited with error") {
+	outputText := string(output)
+	if !strings.Contains(outputText, "server exited with error") ||
+		!strings.Contains(outputText, "listen on "+listener.Addr().String()) ||
+		!strings.Contains(outputText, "address already in use") {
 		t.Fatalf("runtime failure output = %q", output)
+	}
+}
+
+func databaseEnvironmentForTest(t *testing.T) map[string]string {
+	t.Helper()
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+			t.Skip("real process integration requires LOOMHELM_DATABASE_URL")
+		}
+		t.Fatalf("load database configuration: %v", err)
+	}
+	values := map[string]string{
+		"LOOMHELM_DATABASE_URL":       config.URL,
+		"LOOMHELM_DATABASE_MIN_CONNS": strconv.FormatInt(int64(config.MinConns), 10),
+		"LOOMHELM_DATABASE_MAX_CONNS": strconv.FormatInt(int64(config.MaxConns), 10),
+	}
+	if port := strings.TrimSpace(os.Getenv("LOOMHELM_POSTGRES_PORT")); port != "" {
+		values["LOOMHELM_POSTGRES_PORT"] = port
+	}
+	return values
+}
+
+func commandEnvWithDatabase(t *testing.T, values map[string]string) []string {
+	t.Helper()
+	databaseValues := databaseEnvironmentForTest(t)
+	for key, value := range values {
+		databaseValues[key] = value
+	}
+	return commandEnv(databaseValues)
+}
+
+func TestServerEntrypointRejectsMissingDatabase(t *testing.T) {
+	binary := buildServerEntrypoint(t)
+	command := exec.Command(binary)
+	command.Env = commandEnv(map[string]string{"LOOMHELM_DRAIN_TOKEN": "test-token"})
+	output, err := command.CombinedOutput()
+	assertExitCode(t, err, 2)
+	if !strings.Contains(string(output), "LOOMHELM_DATABASE_URL") {
+		t.Fatalf("missing database configuration output = %q", output)
 	}
 }
 

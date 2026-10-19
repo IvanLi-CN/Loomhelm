@@ -2,18 +2,20 @@ module github.com/IvanLi-CN/Loomhelm
 
 go 1.27.2
 
-require github.com/go-chi/chi/v5 v5.2.3
+require (
+	github.com/go-chi/chi/v5 v5.2.3
+	github.com/jackc/pgx/v5 v5.11.0
+	github.com/pressly/goose/v3 v3.28.0
+	github.com/riverqueue/river v0.49.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.49.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.11.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
-	github.com/pressly/goose/v3 v3.28.0 // indirect
-	github.com/riverqueue/river v0.49.0 // indirect
 	github.com/riverqueue/river/riverdriver v0.49.0 // indirect
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.49.0 // indirect
 	github.com/riverqueue/river/rivershared v0.49.0 // indirect
 	github.com/riverqueue/river/rivertype v0.49.0 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect

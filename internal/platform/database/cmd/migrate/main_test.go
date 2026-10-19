@@ -1,0 +1,55 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestRunRejectsMismatchedDevelopmentDatabasePortBeforeConnection(t *testing.T) {
+	t.Setenv("LOOMHELM_DATABASE_URL", "postgres://loomhelm:secret@127.0.0.1:55432/loomhelm?sslmode=disable")
+	t.Setenv("LOOMHELM_POSTGRES_PORT", "55441")
+
+	err := run(context.Background())
+	if err == nil {
+		t.Fatal("run() accepted mismatched development database port")
+	}
+	if !strings.Contains(err.Error(), "must match LOOMHELM_POSTGRES_PORT") {
+		t.Fatalf("run() error = %v, want port mismatch", err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("run() error leaked database credentials: %v", err)
+	}
+}
+
+func TestRunRejectsInvalidPoolConfigurationBeforeConnection(t *testing.T) {
+	t.Setenv("LOOMHELM_DATABASE_URL", "postgres://loomhelm:secret@127.0.0.1:55432/loomhelm?pool_max_conns=1&sslmode=disable")
+	t.Setenv("LOOMHELM_POSTGRES_PORT", "55432")
+	t.Setenv("LOOMHELM_DATABASE_MIN_CONNS", "2")
+	t.Setenv("LOOMHELM_DATABASE_MAX_CONNS", "0")
+
+	err := run(context.Background())
+	if err == nil {
+		t.Fatal("run() accepted invalid database pool configuration")
+	}
+	if !strings.Contains(err.Error(), "minimum connections must not exceed maximum connections") {
+		t.Fatalf("run() error = %v, want pool bounds error", err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("run() error leaked database credentials: %v", err)
+	}
+}
+
+func TestRunWithTimeoutHonorsMigrationDeadline(t *testing.T) {
+	t.Setenv("LOOMHELM_DATABASE_URL", "postgres://loomhelm:secret@127.0.0.1:55432/loomhelm?sslmode=disable")
+	t.Setenv("LOOMHELM_POSTGRES_PORT", "55432")
+
+	err := runWithTimeout(context.Background(), 0)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runWithTimeout() error = %v, want context deadline exceeded", err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("runWithTimeout() error leaked database credentials: %v", err)
+	}
+}
