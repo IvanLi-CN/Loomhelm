@@ -98,7 +98,7 @@ function Breadcrumb({ pathname }: { pathname: string }) {
   const task = runtime.fixtures.tasks.find((item) => pathname.includes(`/tasks/${item.id}`));
   const conversation = runtime.fixtures.conversations.find((item) => pathname.includes(`/conversations/${item.id}`));
   const project = runtime.fixtures.projects.find((item) => pathname.includes(`/projects/${item.id}`));
-  if (pathname === "/" || pathname === "/demo" || pathname === "/demo/") return <span>工作台</span>;
+  if (pathname === "/") return <span>工作台</span>;
   if (pathname.startsWith("/tasks") && task) return <span>任务 / {task.id}</span>;
   if (pathname.startsWith("/tasks")) return <span>任务 / 全部项目</span>;
   if (pathname.startsWith("/conversations") && conversation) return <span>对话 / {conversation.title}</span>;

@@ -93,6 +93,6 @@ export function demoStorageKey(key: string): string {
   return `${demoStoragePrefix}.${key}`;
 }
 
-export function isDemoPath(pathname = window.location.pathname): boolean {
-  return import.meta.env.MODE === "demo" || pathname === "/demo" || pathname.startsWith("/demo/");
+export function isDemoBuild(): boolean {
+  return import.meta.env.MODE === "demo" || import.meta.env.VITE_DEMO === "true" || import.meta.env.VITE_DEMO === "1";
 }

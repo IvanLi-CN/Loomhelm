@@ -4,7 +4,6 @@ import {
   createRouter
 } from "@tanstack/react-router";
 
-import { isDemoPath } from "@/demo/bootstrap";
 import { useOptionalDemoRuntime } from "@/demo/context";
 import { AppShell } from "@/components/product/ProductShell";
 import { CreateConversationRoute } from "@/routes/CreateConversationRoute";
@@ -91,7 +90,7 @@ const routeTree = rootRoute.addChildren([
 
 export const router = createRouter({
   routeTree,
-  basepath: isDemoPath() ? "/demo" : "/",
+  basepath: "/",
   defaultPreload: "intent"
 });
 

@@ -5,7 +5,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { AppProviders } from "@/app/providers";
 import { router } from "@/app/router";
 import { DemoBootstrapFailure } from "@/components/product/DemoBootstrapFailure";
-import { bootstrapDemo, isDemoPath } from "@/demo/bootstrap";
+import { bootstrapDemo, isDemoBuild } from "@/demo/bootstrap";
 import { DemoProvider } from "@/demo/context";
 import { PwaRegistration } from "@/pwa/PwaRegistration";
 
@@ -18,7 +18,7 @@ if (!rootElement) {
 }
 
 const root = createRoot(rootElement);
-const demoMode = isDemoPath();
+const demoMode = isDemoBuild();
 
 async function start() {
   if (!demoMode) {
