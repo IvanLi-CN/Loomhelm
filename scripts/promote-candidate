@@ -683,19 +683,24 @@ def finish_existing() -> bool:
 
 def acquire_lock() -> int:
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(lock_name, flags, 0o600, dir_fd=destination_fd)
-    except IsADirectoryError:
-        try:
-            os.rmdir(lock_name, dir_fd=destination_fd)
-        except OSError as error:
-            fail(f"cannot recover stale promotion lock {lock}: {error}")
+    open_deadline = time.monotonic() + 60
+    while True:
         try:
             descriptor = os.open(lock_name, flags, 0o600, dir_fd=destination_fd)
+            break
+        except IsADirectoryError:
+            try:
+                os.rmdir(lock_name, dir_fd=destination_fd)
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                fail(f"cannot recover stale promotion lock {lock}: {error}")
+        except FileNotFoundError as error:
+            if time.monotonic() >= open_deadline:
+                fail(f"cannot open promotion lock {lock}: {error}")
+            time.sleep(0.01)
         except OSError as error:
             fail(f"cannot open promotion lock {lock}: {error}")
-    except OSError as error:
-        fail(f"cannot open promotion lock {lock}: {error}")
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
