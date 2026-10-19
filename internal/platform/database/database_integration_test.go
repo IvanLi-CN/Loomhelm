@@ -2,6 +2,7 @@ package database_test
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -13,7 +14,10 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database/generated"
+	"github.com/jackc/pgx/v5"
 )
+
+const testMigrationAdvisoryLockKey int64 = 0x4c6f6f6d68656c6d
 
 func TestDatabaseMigrateAndReopen(t *testing.T) {
 	config := databaseConfigForTest(t)
@@ -130,6 +134,94 @@ func TestMigrationLockAcceptsPoolOnlyURLOptionsWithSinglePoolConnection(t *testi
 	}
 }
 
+func TestMigrationLockPreservesContextErrorDuringConnectionSetup(t *testing.T) {
+	config := databaseConfigForTest(t)
+	config.MinConns = 1
+	config.MaxConns = 1
+
+	db, err := database.Open(context.Background(), config)
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	for _, test := range []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		want error
+	}{
+		{name: "canceled", ctx: canceledContext, want: context.Canceled},
+		{name: "deadline exceeded", ctx: expiredContext, want: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := test.ctx()
+			defer cancel()
+
+			err := db.WithMigrationLock(ctx, func(context.Context) error {
+				t.Fatal("migration callback ran with a terminated context")
+				return nil
+			})
+			if !errors.Is(err, test.want) {
+				t.Fatalf("WithMigrationLock() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestMigrationLockPreservesContextErrorDuringAdvisoryLockWait(t *testing.T) {
+	baseConfig := databaseConfigForTest(t)
+	baseConfig.MinConns = 1
+	baseConfig.MaxConns = 1
+	const applicationName = "loomhelm-migration-lock-waiter-test"
+	config := baseConfig
+	config.URL = withURLQuery(t, config.URL, "application_name", applicationName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, config)
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	holder, err := pgx.Connect(ctx, baseConfig.URL)
+	if err != nil {
+		t.Fatalf("pgx.Connect() lock holder error = %v", err)
+	}
+	defer holder.Close(context.Background())
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", testMigrationAdvisoryLockKey); err != nil {
+		t.Fatalf("acquire test advisory lock error = %v", err)
+	}
+
+	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	defer cancelWaiter()
+	result := make(chan error, 1)
+	go func() {
+		result <- db.WithMigrationLock(waiterCtx, func(context.Context) error {
+			return errors.New("migration callback acquired a held advisory lock")
+		})
+	}()
+
+	monitor, err := pgx.Connect(ctx, baseConfig.URL)
+	if err != nil {
+		t.Fatalf("pgx.Connect() monitor error = %v", err)
+	}
+	defer monitor.Close(context.Background())
+	if err := waitForMigrationLockWaiter(ctx, monitor, applicationName); err != nil {
+		t.Fatalf("wait for advisory lock waiter: %v", err)
+	}
+	cancelWaiter()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WithMigrationLock() error = %v, want context canceled", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("WithMigrationLock() did not return after cancellation: %v", ctx.Err())
+	}
+}
+
 func databaseConfigForTest(t *testing.T) database.Config {
 	t.Helper()
 	config, err := platform.LoadDatabaseConfig()
@@ -143,6 +235,10 @@ func databaseConfigForTest(t *testing.T) database.Config {
 }
 
 func withPoolMaxConnsOne(t *testing.T, rawURL string) string {
+	return withURLQuery(t, rawURL, "pool_max_conns", "1")
+}
+
+func withURLQuery(t *testing.T, rawURL, key, value string) string {
 	t.Helper()
 	if strings.Contains(rawURL, "://") {
 		parsed, err := url.Parse(rawURL)
@@ -150,9 +246,44 @@ func withPoolMaxConnsOne(t *testing.T, rawURL string) string {
 			t.Fatalf("url.Parse() error = %v", err)
 		}
 		query := parsed.Query()
-		query.Set("pool_max_conns", "1")
+		query.Set(key, value)
 		parsed.RawQuery = query.Encode()
 		return parsed.String()
 	}
-	return strings.TrimSpace(rawURL) + " pool_max_conns=1"
+	return strings.TrimSpace(rawURL) + " " + key + "=" + value
+}
+
+func canceledContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx, cancel
+}
+
+func expiredContext() (context.Context, context.CancelFunc) {
+	return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+}
+
+func waitForMigrationLockWaiter(ctx context.Context, monitor *pgx.Conn, applicationName string) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for {
+		var count int
+		err := monitor.QueryRow(waitCtx, `
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE application_name = $1
+			  AND state = 'active'
+			  AND query ILIKE '%pg_advisory_lock%'`, applicationName).Scan(&count)
+		if err == nil && count > 0 {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if err != nil {
+				return err
+			}
+			return waitCtx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }

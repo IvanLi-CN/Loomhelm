@@ -33,6 +33,9 @@ func TestDatabaseOnlyConfigurationMatchesProcesses(t *testing.T) {
 		{name: "URL minimum exceeds default maximum", env: map[string]string{
 			"LOOMHELM_DATABASE_URL": "postgres://test@127.0.0.1:55441/loomhelm?pool_min_conns=5",
 		}, wantError: "minimum connections"},
+		{name: "negative URL minimum", env: map[string]string{
+			"LOOMHELM_DATABASE_URL": "postgres://test@127.0.0.1:55441/loomhelm?pool_min_conns=-1",
+		}, wantError: "pool sizes must not be negative"},
 		{name: "redacted parse error", env: map[string]string{"LOOMHELM_DATABASE_URL": "postgres://user:secret-dsn@localhost:invalid/db"}, wantError: "invalid LOOMHELM_DATABASE_URL"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

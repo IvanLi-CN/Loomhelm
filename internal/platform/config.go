@@ -98,6 +98,9 @@ func (c DatabaseConfig) Validate() error {
 	if c.MaxConns > 0 {
 		poolConfig.MaxConns = c.MaxConns
 	}
+	if poolConfig.MinConns < 0 || poolConfig.MaxConns < 0 {
+		return fmt.Errorf("database pool sizes must not be negative")
+	}
 	if poolConfig.MinConns > poolConfig.MaxConns {
 		return fmt.Errorf("database minimum connections must not exceed maximum connections")
 	}

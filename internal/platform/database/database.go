@@ -45,6 +45,9 @@ func (c Config) poolConfig() (*pgxpool.Config, error) {
 	if c.MaxConns > 0 {
 		poolConfig.MaxConns = c.MaxConns
 	}
+	if poolConfig.MinConns < 0 || poolConfig.MaxConns < 0 {
+		return nil, errors.New("database pool sizes must not be negative")
+	}
 	if poolConfig.MinConns > poolConfig.MaxConns {
 		return nil, errors.New("database minimum connections must not exceed maximum connections")
 	}
@@ -150,6 +153,9 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 
 	lockConn, err := pgx.ConnectConfig(ctx, db.connConfig.Copy())
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("open database migration lock connection: %w", err)
+		}
 		return errors.New("open database migration lock connection")
 	}
 	defer func() {
