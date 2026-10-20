@@ -65,6 +65,10 @@ jobs:
           manifest="$RUNNER_TEMP/loomhelm-candidate/candidate-manifest.json"
           candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
           source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
+          test "$source_sha" = "$CANDIDATE_SOURCE_SHA" || {
+            echo "candidate manifest source SHA does not match the requested source SHA: $source_sha" >&2
+            exit 1
+          }
           echo "candidate_digest=$candidate_digest" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
       - name: Upload the built candidate
@@ -85,7 +89,7 @@ jobs:
       - name: Check out the candidate tooling source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ needs.build-preview-candidate.outputs.source_sha }}
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 1
           persist-credentials: false
       - name: Download the built candidate
@@ -99,6 +103,10 @@ jobs:
           test -n "$manifest"
           candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
           source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
+          test "$source_sha" = "$CANDIDATE_SOURCE_SHA" || {
+            echo "candidate manifest source SHA does not match the requested source SHA: $source_sha" >&2
+            exit 1
+          }
           scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-branch-preview" --expected-digest "$candidate_digest" --expected-source-sha "$source_sha"
       - name: Package the preview handoff with file modes
         run: |
