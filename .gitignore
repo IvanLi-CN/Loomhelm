@@ -11,4 +11,5 @@ node_modules/
 /web/dist/
 /web/storybook-static/
 /build/candidates/
+/.loomhelm-preview/
 *.log

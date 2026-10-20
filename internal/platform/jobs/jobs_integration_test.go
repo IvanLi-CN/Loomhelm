@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -240,6 +241,102 @@ func TestRunnerRetriesInterruptedShortJobAfterSameGenerationRestart(t *testing.T
 	}
 }
 
+func TestRunnerFencesOlderGeneration(t *testing.T) {
+	config := databaseConfigForTest(t)
+	config.MinConns = 1
+	config.MaxConns = 6
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, config)
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	unique := strconv.FormatInt(time.Now().UnixNano(), 10)
+	queueName := "loomhelm-fence-" + unique
+	leaseKey := "loomhelm-fence-" + unique
+	newRunner := func() *jobs.Runner {
+		runner, err := jobs.NewRunner(db, nil, jobs.Config{
+			Queue:                  queueName,
+			LeaseKey:               leaseKey,
+			MaxWorkers:             1,
+			SoftStopTimeout:        2 * time.Second,
+			LeaseHeartbeatInterval: 20 * time.Millisecond,
+			LeaseHeartbeatTimeout:  200 * time.Millisecond,
+			CandidateSourceSHA:     "fence-test",
+			ArtifactDigest:         "sha256:fence-test",
+		})
+		if err != nil {
+			t.Fatalf("jobs.NewRunner() error = %v", err)
+		}
+		return runner
+	}
+	first := newRunner()
+	second := newRunner()
+	if err := db.WithMigrationLock(ctx, func(migrationCtx context.Context) error {
+		if err := db.Migrate(migrationCtx); err != nil {
+			return err
+		}
+		return first.Migrate(migrationCtx)
+	}); err != nil {
+		t.Fatalf("database and River migration error = %v", err)
+	}
+
+	firstLifecycle := platform.NewLifecycle()
+	secondLifecycle := platform.NewLifecycle()
+	if err := firstLifecycle.Start(); err != nil {
+		t.Fatalf("first lifecycle.Start() error = %v", err)
+	}
+	if err := secondLifecycle.Start(); err != nil {
+		t.Fatalf("second lifecycle.Start() error = %v", err)
+	}
+	firstGeneration, err := platform.NewGenerationController(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("first NewGenerationController() error = %v", err)
+	}
+	secondGeneration, err := platform.NewGenerationController(context.Background(), 11)
+	if err != nil {
+		t.Fatalf("second NewGenerationController() error = %v", err)
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := first.StopAndCancel(cleanupCtx); err != nil {
+			t.Logf("first runner cleanup error = %v", err)
+		}
+		if err := second.StopAndCancel(cleanupCtx); err != nil {
+			t.Logf("second runner cleanup error = %v", err)
+		}
+		firstGeneration.Stop()
+		secondGeneration.Stop()
+		firstLifecycle.Stop()
+		secondLifecycle.Stop()
+	}()
+
+	if err := first.Start(ctx, firstGeneration, firstLifecycle); err != nil {
+		t.Fatalf("first Runner.Start() error = %v", err)
+	}
+	if err := second.Start(ctx, secondGeneration, secondLifecycle); err != nil {
+		t.Fatalf("second Runner.Start() error = %v", err)
+	}
+	if err := waitForRunnerNotReady(ctx, first); err != nil {
+		t.Fatalf("wait for fenced runner = %v", err)
+	}
+	if _, err := first.Enqueue(ctx, jobs.ShortJobArgs{Generation: firstGeneration.Current(), Payload: "old"}); !errors.Is(err, jobs.ErrWorkerLeaseLost) {
+		t.Fatalf("fenced Runner.Enqueue() error = %v, want ErrWorkerLeaseLost", err)
+	}
+
+	jobID, err := second.Enqueue(ctx, jobs.ShortJobArgs{Generation: secondGeneration.Current(), Payload: "new"})
+	if err != nil {
+		t.Fatalf("current Runner.Enqueue() error = %v", err)
+	}
+	if err := waitForShortJobResult(ctx, db, jobID, "new"); err != nil {
+		t.Fatalf("wait for current generation result = %v", err)
+	}
+}
+
 func databaseConfigForTest(t *testing.T) database.Config {
 	t.Helper()
 	config, err := platform.LoadDatabaseConfig()
@@ -288,6 +385,19 @@ func waitForShortJobResult(ctx context.Context, db *database.DB, jobID int64, pa
 		case <-ticker.C:
 		}
 	}
+}
+
+func waitForRunnerNotReady(ctx context.Context, runner *jobs.Runner) error {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for runner.Ready() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return nil
 }
 
 type fixedGeneration struct {

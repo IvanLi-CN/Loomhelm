@@ -24,7 +24,10 @@ const (
 type Config struct {
 	Component          Component
 	Version            string
+	CandidateSourceSHA string
+	ArtifactDigest     string
 	HTTPAddr           string
+	WorkerHTTPAddr     string
 	DrainToken         string
 	ShutdownTimeout    time.Duration
 	StartupTimeout     time.Duration
@@ -32,6 +35,7 @@ type Config struct {
 	DatabaseMinConns   int32
 	DatabaseMaxConns   int32
 	WorkerGeneration   uint64
+	WorkerLeaseKey     string
 	ConnectorServerURL string
 }
 
@@ -130,9 +134,11 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 	}
 
 	config := Config{
-		Component:       component,
-		Version:         strings.TrimSpace(version),
-		ShutdownTimeout: shutdownTimeout,
+		Component:          component,
+		Version:            strings.TrimSpace(version),
+		CandidateSourceSHA: strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CANDIDATE_SOURCE_SHA", version)),
+		ArtifactDigest:     strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_DIGEST", "unknown")),
+		ShutdownTimeout:    shutdownTimeout,
 	}
 	if component != ComponentConnector {
 		config.StartupTimeout, err = durationFromEnv(lookup, "LOOMHELM_STARTUP_TIMEOUT", 30*time.Second)
@@ -156,11 +162,19 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 			return Config{}, fmt.Errorf("invalid LOOMHELM_HTTP_ADDR: %w", err)
 		}
 	case ComponentWorker:
+		config.WorkerHTTPAddr = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_WORKER_HTTP_ADDR", ""))
+		config.DrainToken = lookupOrDefault(lookup, "LOOMHELM_DRAIN_TOKEN", "")
+		if config.WorkerHTTPAddr != "" {
+			if err := validateListenAddress(config.WorkerHTTPAddr); err != nil {
+				return Config{}, fmt.Errorf("invalid LOOMHELM_WORKER_HTTP_ADDR: %w", err)
+			}
+		}
 		generation, err := uint64FromEnv(lookup, "LOOMHELM_WORKER_GENERATION", 1)
 		if err != nil {
 			return Config{}, err
 		}
 		config.WorkerGeneration = generation
+		config.WorkerLeaseKey = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"))
 	case ComponentConnector:
 		config.ConnectorServerURL = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_SERVER_URL", ""))
 		if err := validateServerURL(config.ConnectorServerURL); err != nil {
@@ -180,6 +194,12 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Version) == "" {
 		return fmt.Errorf("version must not be empty")
+	}
+	if strings.TrimSpace(c.CandidateSourceSHA) != "" && strings.ContainsAny(c.CandidateSourceSHA, " \t\r\n") {
+		return fmt.Errorf("candidate source SHA must not contain whitespace")
+	}
+	if strings.TrimSpace(c.ArtifactDigest) != "" && strings.ContainsAny(c.ArtifactDigest, " \t\r\n") {
+		return fmt.Errorf("artifact digest must not contain whitespace")
 	}
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("shutdown timeout must be greater than zero")
@@ -202,6 +222,20 @@ func (c Config) Validate() error {
 		}
 		if c.WorkerGeneration > math.MaxInt64 {
 			return fmt.Errorf("worker generation must not exceed %d", int64(math.MaxInt64))
+		}
+		if strings.TrimSpace(c.WorkerHTTPAddr) != "" {
+			if err := validateListenAddress(c.WorkerHTTPAddr); err != nil {
+				return fmt.Errorf("invalid worker HTTP address: %w", err)
+			}
+			if strings.TrimSpace(c.DrainToken) == "" {
+				return fmt.Errorf("drain token must not be empty when worker health is enabled")
+			}
+			if strings.ContainsAny(c.DrainToken, " \t\r\n") {
+				return fmt.Errorf("drain token must not contain whitespace")
+			}
+		}
+		if strings.TrimSpace(c.WorkerLeaseKey) != "" && strings.ContainsAny(c.WorkerLeaseKey, " \t\r\n") {
+			return fmt.Errorf("worker lease key must not contain whitespace")
 		}
 	case ComponentConnector:
 		if err := validateServerURL(c.ConnectorServerURL); err != nil {
@@ -247,6 +281,20 @@ func (c Config) StartupBudget() time.Duration {
 		return 30 * time.Second
 	}
 	return c.StartupTimeout
+}
+
+func (c Config) CandidateSource() string {
+	if source := strings.TrimSpace(c.CandidateSourceSHA); source != "" {
+		return source
+	}
+	return strings.TrimSpace(c.Version)
+}
+
+func (c Config) CandidateArtifactDigest() string {
+	if digest := strings.TrimSpace(c.ArtifactDigest); digest != "" {
+		return digest
+	}
+	return "unknown"
 }
 
 func poolSizeFromEnv(lookup func(string) (string, bool), key string, fallback int32) (int32, error) {

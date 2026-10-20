@@ -14,6 +14,7 @@ import (
 // Tests may replace its factory; production always opens the real database.
 type processRuntime interface {
 	Ping(context.Context) error
+	Ready() bool
 	Start(context.Context, *platform.GenerationController, *platform.Lifecycle) error
 	Stop(context.Context) error
 	StopAndCancel(context.Context) error
@@ -35,7 +36,12 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 	if err != nil {
 		return nil, fmt.Errorf("open persistence: %w", err)
 	}
-	runner, err := jobs.NewRunner(db, logger, jobs.Config{SoftStopTimeout: cfg.ShutdownTimeout})
+	runner, err := jobs.NewRunner(db, logger, jobs.Config{
+		SoftStopTimeout:    cfg.ShutdownTimeout,
+		LeaseKey:           cfg.WorkerLeaseKey,
+		CandidateSourceSHA: cfg.CandidateSource(),
+		ArtifactDigest:     cfg.CandidateArtifactDigest(),
+	})
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize jobs: %w", err)
@@ -55,6 +61,8 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 }
 
 func (r *databaseRuntime) Ping(ctx context.Context) error { return r.db.Ping(ctx) }
+
+func (r *databaseRuntime) Ready() bool { return r.runner.Ready() }
 
 func (r *databaseRuntime) Start(ctx context.Context, generation *platform.GenerationController, lifecycle *platform.Lifecycle) error {
 	return r.runner.Start(ctx, generation, lifecycle)
