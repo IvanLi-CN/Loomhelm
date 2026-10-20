@@ -1,0 +1,168 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+cd "$repo_root"
+
+usage() {
+	cat <<'USAGE'
+usage: scripts/rehearse-blue-green [options]
+
+Run the repeatable G0 branch-preview rehearsal. Runtime mode requires the
+session-owned Agent VM and the four registered preview ports consumed by
+scripts/preview. Control-only mode validates the deterministic state machine
+without Docker and is suitable for local or CI checks.
+
+options:
+  --control-only             Skip Docker/Compose promotion and run contract checks.
+  --evidence-dir DIR         Write the evidence bundle to DIR (required).
+  --bad-manifest FILE        Candidate manifest expected to fail readiness in runtime mode.
+  --candidate-manifest FILE  Healthy candidate manifest for the second promotion.
+  --baseline-manifest FILE   Healthy baseline candidate manifest for the first promotion.
+  -h, --help                 Show this help.
+USAGE
+}
+
+control_only=0
+evidence_dir=
+bad_manifest=
+candidate_manifest=
+baseline_manifest=
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--control-only) control_only=1; shift ;;
+		--evidence-dir) evidence_dir=${2:?--evidence-dir requires a directory}; shift 2 ;;
+		--bad-manifest) bad_manifest=${2:?--bad-manifest requires a file}; shift 2 ;;
+		--candidate-manifest) candidate_manifest=${2:?--candidate-manifest requires a file}; shift 2 ;;
+		--baseline-manifest) baseline_manifest=${2:?--baseline-manifest requires a file}; shift 2 ;;
+		-h|--help) usage; exit 0 ;;
+		*) echo "rehearse-blue-green: unknown option $1" >&2; usage >&2; exit 2 ;;
+	esac
+done
+
+[ -n "$evidence_dir" ] || { echo "rehearse-blue-green: --evidence-dir is required" >&2; exit 2; }
+case "$evidence_dir" in
+	/*) ;;
+	*) echo "rehearse-blue-green: --evidence-dir must be absolute" >&2; exit 2 ;;
+esac
+mkdir -p "$evidence_dir"
+
+source_sha() {
+	if [ -n "${LOOMHELM_REHEARSAL_SOURCE_SHA:-}" ]; then
+		printf '%s\n' "$LOOMHELM_REHEARSAL_SOURCE_SHA"
+	elif git rev-parse HEAD >/dev/null 2>&1; then
+		git rev-parse HEAD
+	else
+		printf '%s\n' unknown
+	fi
+}
+
+run_id=$(date -u +%Y%m%dT%H%M%SZ)
+log_file="$evidence_dir/rehearsal-$run_id.log"
+status_file="$evidence_dir/status-$run_id.json"
+state_dir=${LOOMHELM_PREVIEW_STATE_DIR:-$evidence_dir/preview-state}
+export LOOMHELM_PREVIEW_STATE_DIR="$state_dir"
+
+log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$log_file"; }
+run() {
+	log "run: $*"
+	output=$(mktemp "${TMPDIR:-/tmp}/loomhelm-rehearsal.XXXXXX")
+	if "$@" >"$output" 2>&1; then
+		cat "$output" | tee -a "$log_file"
+		rm -f "$output"
+		return 0
+	fi
+	status=$?
+	cat "$output" | tee -a "$log_file" >&2
+	rm -f "$output"
+	return "$status"
+}
+expect_failure() {
+	log "expect failure: $*"
+	if "$@" >>"$log_file" 2>&1; then
+		echo "rehearse-blue-green: expected command to fail: $*" >&2
+		return 1
+	fi
+}
+
+log "source_sha=$(source_sha)"
+log "mode=$( [ "$control_only" -eq 1 ] && printf control-only || printf runtime )"
+
+run python3 -m unittest discover -s deploy/preview -p '*_test.py'
+run python3 -m py_compile deploy/preview/control.py
+run sh -n scripts/preview
+run sh -n scripts/rehearse-blue-green
+
+if [ "$control_only" -eq 1 ]; then
+	cat >"$status_file" <<EOF2
+{
+  "mode": "control-only",
+  "source_sha": "$(source_sha)",
+  "runtime": "skipped",
+  "checks": ["preview-control-tests", "control-python-compile", "preview-shell-syntax"]
+}
+EOF2
+	log "control-only rehearsal passed; runtime evidence remains required for G0"
+	exit 0
+fi
+
+[ -n "$baseline_manifest" ] || { echo "rehearse-blue-green: --baseline-manifest is required in runtime mode" >&2; exit 2; }
+[ -n "$candidate_manifest" ] || { echo "rehearse-blue-green: --candidate-manifest is required in runtime mode" >&2; exit 2; }
+[ -n "$bad_manifest" ] || { echo "rehearse-blue-green: --bad-manifest is required in runtime mode" >&2; exit 2; }
+for manifest in "$baseline_manifest" "$candidate_manifest" "$bad_manifest"; do
+	[ -f "$manifest" ] || { echo "rehearse-blue-green: manifest does not exist: $manifest" >&2; exit 2; }
+done
+
+run scripts/preview init
+run scripts/preview check "$baseline_manifest"
+run scripts/preview stage "$baseline_manifest"
+run scripts/preview promote
+run curl --fail --silent --show-error "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}/readyz"
+
+active_before=$(python3 deploy/preview/control.py --state-dir "$state_dir" status --field active_slot)
+log "baseline active_slot=$active_before"
+
+# A bad candidate must be rejected while the active generation remains serving.
+expect_failure scripts/preview stage "$bad_manifest"
+active_after_failure=$(python3 deploy/preview/control.py --state-dir "$state_dir" status --field active_slot)
+[ "$active_after_failure" = "$active_before" ] || {
+	echo "rehearse-blue-green: failed candidate changed active slot" >&2
+	exit 1
+}
+run curl --fail --silent --show-error "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}/readyz"
+
+run scripts/preview check "$candidate_manifest"
+run scripts/preview stage "$candidate_manifest"
+run scripts/preview promote
+run curl --fail --silent --show-error "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}/readyz"
+
+retained_key=$(python3 deploy/preview/control.py --state-dir "$state_dir" status --field previous_retained_key)
+[ -n "$retained_key" ] || { echo "rehearse-blue-green: promotion did not retain the previous candidate" >&2; exit 1; }
+log "candidate promoted; retained_key=$retained_key"
+
+# Rollback restages the retained Web and starts a fresh Worker generation.
+run scripts/preview rollback "$retained_key"
+run curl --fail --silent --show-error "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}/readyz"
+
+log "run: final preview status"
+python3 deploy/preview/control.py --state-dir "$state_dir" status >"$status_file" 2>>"$log_file"
+cat "$status_file" | tee -a "$log_file"
+python3 - "$status_file" <<'PY'
+import json
+import sys
+
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state["active_slot"] in {"blue", "green"}
+assert state["previous_slot"] in {"blue", "green"}
+assert state["active_slot"] != state["previous_slot"]
+assert state["retained"], "rollback must preserve retained history"
+generations = [int(record["generation"]) for record in state["slots"].values() if record]
+assert max(generations) >= 3, generations
+events = [entry["event"] for entry in state["history"]]
+for expected in ("stage", "promote", "stage_failed", "stage_retained"):
+    assert expected in events, (expected, events)
+PY
+
+log "runtime rehearsal passed: failed candidate isolation, promotion, drain/restart, Web retention, readiness recovery and compatible rollback"
