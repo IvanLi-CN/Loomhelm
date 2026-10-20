@@ -97,7 +97,16 @@ case "$manifest_path" in
 esac
 case "$destination_dir" in
 	/*) ;;
-	*) destination_dir="$repo_root/$destination_dir" ;;
+	*)
+		echo "promote-candidate: destination must be an absolute path outside the checkout" >&2
+		exit 2
+		;;
+esac
+case "$destination_dir" in
+	"$repo_root"|"$repo_root/"*)
+		echo "promote-candidate: destination must be outside the checkout" >&2
+		exit 2
+		;;
 esac
 
 python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_source_sha" "$dry_run" "$repo_root/scripts/promote-candidate" "$expected_promote_script_sha" <<'PY'
@@ -259,7 +268,7 @@ def source_contract(source_sha: str) -> tuple[str, int, dict[str, object]]:
         )
     }
     expected_inputs = {
-        "build_contract": "candidate-v1",
+        "build_contract": "candidate-v2",
         "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
         "build_environment": {
             "GOAMD64": "v1",
@@ -610,7 +619,7 @@ def verify_bundle(
         fail(f"cannot read candidate manifest: {error}")
     except ValueError as error:
         fail(f"candidate manifest has duplicate fields: {error}")
-    if not isinstance(manifest, dict) or type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
+    if not isinstance(manifest, dict) or type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 2:
         fail("unsupported candidate manifest")
     if manifest_bytes != canonical_json(manifest) + b"\n":
         fail("candidate manifest is not canonical")
@@ -675,7 +684,7 @@ def verify_bundle(
         "web": {"path": "web", "sha256": web_digest, "files": web_file_records},
     }
     identity = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_sha": source_sha,
         "source_tree_sha": source_tree_sha,
         "source_date_epoch": source_date_epoch,

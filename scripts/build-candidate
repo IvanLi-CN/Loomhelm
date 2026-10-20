@@ -161,17 +161,23 @@ case "$output_dir" in
 	/*) ;;
 	*) output_dir="$repo_root/$output_dir" ;;
 esac
-output_parent=$(dirname -- "$output_dir")
-mkdir -p "$output_parent"
-output_dir=$(CDPATH='' cd -- "$output_parent" && pwd -P)/$(basename -- "$output_dir")
+case "$output_dir" in
+	*..*)
+		echo "build-candidate: output path must not contain parent traversal" >&2
+		exit 2
+		;;
+esac
 case "$output_dir" in
 	"$repo_root"|"$repo_root/"*)
 		case "$output_dir" in
 			"$repo_root/build"|"$repo_root/build/"*) ;;
 			*) echo "build-candidate: output must not replace the repository root" >&2; exit 2 ;;
-			esac
+		esac
 		;;
 esac
+output_parent=$(dirname -- "$output_dir")
+mkdir -p "$output_parent"
+output_dir=$(CDPATH='' cd -- "$output_parent" && pwd -P)/$(basename -- "$output_dir")
 if [ -e "$output_dir" ] || [ -L "$output_dir" ]; then
 	echo "build-candidate: refusing to overwrite existing output: $output_dir" >&2
 	exit 1
@@ -201,10 +207,10 @@ for current, directories, files in os.walk(root, topdown=True, followlinks=False
 PY
 
 echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
-GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM= GOEXPERIMENT= GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
 	go mod download
 for component in server worker connector; do
-	GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM= GOEXPERIMENT= GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+	GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
 		go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$stage_dir/bin/$component" "./cmd/$component"
 done
 
@@ -374,7 +380,7 @@ artifacts: dict[str, object] = {
 }
 
 inputs = {
-    "build_contract": "candidate-v1",
+    "build_contract": "candidate-v2",
     "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
     "build_environment": {
         "GOAMD64": "v1",
@@ -403,7 +409,7 @@ inputs = {
 }
 platform = {"goos": goos, "goarch": goarch, "cgo_enabled": False}
 identity = {
-    "schema_version": 1,
+    "schema_version": 2,
     "source_sha": source_sha,
     "source_tree_sha": source_tree_sha,
     "source_date_epoch": source_date_epoch_int,
@@ -413,7 +419,7 @@ identity = {
 }
 candidate_digest = sha256_bytes(canonical_json(identity))
 manifest = {
-    "schema_version": 1,
+    "schema_version": 2,
     "candidate": {
         "digest": candidate_digest,
         "source_sha": source_sha,
@@ -425,11 +431,15 @@ manifest = {
     "artifacts": artifacts,
 }
 manifest_bytes = canonical_json(manifest) + b"\n"
-(stage_path / "candidate-manifest.json").write_bytes(manifest_bytes)
+manifest_path = stage_path / "candidate-manifest.json"
+manifest_path.write_bytes(manifest_bytes)
+os.chmod(manifest_path, 0o644)
 manifest_digest = sha256_bytes(manifest_bytes)
-(stage_path / "candidate-manifest.json.sha256").write_text(
+manifest_sidecar = stage_path / "candidate-manifest.json.sha256"
+manifest_sidecar.write_text(
     f"{manifest_digest}  candidate-manifest.json\n", encoding="ascii"
 )
+os.chmod(manifest_sidecar, 0o644)
 
 
 def archive_members(root: Path) -> list[tuple[str, Path]]:
@@ -471,10 +481,13 @@ with archive_path.open("wb") as raw_archive:
                     info.mode = 0o755 if name.startswith("bin/") else 0o644
                     info.size = len(data)
                     archive.addfile(info, io.BytesIO(data))
+os.chmod(archive_path, 0o644)
 package_digest = sha256_file(archive_path)
-(stage_path / "candidate.tar.gz.sha256").write_text(
+package_sidecar = stage_path / "candidate.tar.gz.sha256"
+package_sidecar.write_text(
     f"{package_digest}  candidate.tar.gz\n", encoding="ascii"
 )
+os.chmod(package_sidecar, 0o644)
 
 print(candidate_digest)
 PY
