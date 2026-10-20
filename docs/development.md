@@ -18,6 +18,8 @@ The public REST/MCP and command/event contract is `contracts/loomhelm-v1.json`. 
 
 The backend image is built with `docker build -f build/Dockerfile --build-arg LOOMHELM_COMPONENT=server .`. The image is a build surface for the separate Server, Worker and Connector processes; process composition remains in the application entrypoints.
 
+The immutable candidate build and promotion contract is documented in [Candidate Builds](candidates.md). Use `scripts/build-candidate --source-sha <full-sha>` to build the Server, Worker, Connector and Web static assets from one clean source SHA, and use `scripts/promote-candidate` to verify and promote an existing artifact by its recorded digest without rebuilding.
+
 Markdown checks use `python3 tools/markdown.py check`; the Lefthook configuration runs the staged Markdown formatter without auto-installing hooks or tools.
 
 The canonical bootstrap entrypoint is `scripts/setup`; it does not depend on historical setup helpers, so a linked worktree from an older revision can recover by running the current repository entrypoint after the files are present. The bootstrap contract is copy-missing and repeatable: it preserves existing environment files and hooks, supports linked worktrees whose `.git` is a gitdir file, and never writes to the shared Git common directory unless an explicit hook installation command is run.

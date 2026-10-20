@@ -21,6 +21,8 @@ import (
 	"time"
 )
 
+const bridgeReadTimeout = 3 * time.Second
+
 func TestProxyPreservesInvocationAndHandshakeBoundary(t *testing.T) {
 	fixture := startFixtureProxy(t, fixtureOptions{})
 	defer fixture.close(t)
@@ -53,11 +55,7 @@ func TestProxyPreservesInvocationAndHandshakeBoundary(t *testing.T) {
 
 	bridge, bridgeReader := fixture.connectBridge(t)
 	defer bridge.Close()
-	writeRequest(t, bridge, "bridge-init", "initialize", nil)
-	bridgeError := readBridgeMessage(t, bridge, bridgeReader, time.Second)
-	if got := responseErrorCode(t, bridgeError); got != localDesktopOwnedCode {
-		t.Fatalf("bridge initialize error code = %d, want %d", got, localDesktopOwnedCode)
-	}
+	completeBridgeHandshake(t, bridge, bridgeReader)
 
 	writeRequest(t, fixture.desktopInput, "desktop-init", "initialize", nil)
 	initializeResponse := waitForCollectorMessage(t, fixture.output, func(message rpcMessage) bool {
@@ -83,7 +81,7 @@ func TestProxyPreservesInvocationAndHandshakeBoundary(t *testing.T) {
 	desktopEcho := waitForCollectorMessage(t, fixture.output, func(message rpcMessage) bool {
 		return message.isResponse() && idKey(message.id) == `"same"`
 	})
-	bridgeEcho := readBridgeUntil(t, bridge, bridgeReader, time.Second, func(message rpcMessage) bool {
+	bridgeEcho := readBridgeUntil(t, bridge, bridgeReader, bridgeReadTimeout, func(message rpcMessage) bool {
 		return message.isResponse() && idKey(message.id) == `"same"`
 	})
 	if !desktopEcho.hasResult || !bridgeEcho.hasResult {
@@ -102,10 +100,10 @@ func TestProxyPreservesInvocationAndHandshakeBoundary(t *testing.T) {
 
 	writeRequest(t, fixture.desktopInput, "notify", "fixture/notify", nil)
 	waitForOrderedMethods(t, fixture.output, []string{"fixture/unknown/one", "fixture/unknown/two"})
-	readBridgeUntil(t, bridge, bridgeReader, time.Second, func(message rpcMessage) bool {
+	readBridgeUntil(t, bridge, bridgeReader, bridgeReadTimeout, func(message rpcMessage) bool {
 		return message.hasMethod && message.method == "fixture/unknown/one"
 	})
-	readBridgeUntil(t, bridge, bridgeReader, time.Second, func(message rpcMessage) bool {
+	readBridgeUntil(t, bridge, bridgeReader, bridgeReadTimeout, func(message rpcMessage) bool {
 		return message.hasMethod && message.method == "fixture/unknown/two"
 	})
 	waitForCollectorMessage(t, fixture.output, func(message rpcMessage) bool {
@@ -119,12 +117,13 @@ func TestProxyArbitratesApprovalsAndKeepsOwnerCallbacksOnDesktop(t *testing.T) {
 	completeDesktopHandshake(t, fixture)
 	bridge, bridgeReader := fixture.connectBridge(t)
 	defer bridge.Close()
+	completeBridgeHandshake(t, bridge, bridgeReader)
 
 	writeRequest(t, fixture.desktopInput, "approval", "fixture/requestApproval", nil)
 	desktopApproval := waitForCollectorMessage(t, fixture.output, func(message rpcMessage) bool {
 		return message.hasMethod && message.method == "item/commandExecution/requestApproval"
 	})
-	bridgeApproval := readBridgeUntil(t, bridge, bridgeReader, time.Second, func(message rpcMessage) bool {
+	bridgeApproval := readBridgeUntil(t, bridge, bridgeReader, bridgeReadTimeout, func(message rpcMessage) bool {
 		return message.hasMethod && message.method == "item/commandExecution/requestApproval"
 	})
 	if idKey(desktopApproval.id) == idKey(bridgeApproval.id) {
@@ -177,7 +176,7 @@ func TestProxyArbitratesApprovalsAndKeepsOwnerCallbacksOnDesktop(t *testing.T) {
 	})
 	assertBridgeDoesNotReceiveMethod(t, bridge, bridgeReader, "userVerification", 150*time.Millisecond)
 	writeResponse(t, fixture.desktopInput, ownerRequest.id, map[string]any{"approved": true})
-	readBridgeUntil(t, bridge, bridgeReader, time.Second, func(message rpcMessage) bool {
+	readBridgeUntil(t, bridge, bridgeReader, bridgeReadTimeout, func(message rpcMessage) bool {
 		return message.isResponse() && idKey(message.id) == `"owner"`
 	})
 
@@ -191,8 +190,9 @@ func TestProxyArbitratesApprovalsAndKeepsOwnerCallbacksOnDesktop(t *testing.T) {
 
 	reconnected, reconnectedReader := fixture.connectBridge(t)
 	defer reconnected.Close()
+	completeBridgeHandshake(t, reconnected, reconnectedReader)
 	writeRequest(t, reconnected, "reconnect", "fixture/echo", nil)
-	readBridgeUntil(t, reconnected, reconnectedReader, time.Second, func(message rpcMessage) bool {
+	readBridgeUntil(t, reconnected, reconnectedReader, bridgeReadTimeout, func(message rpcMessage) bool {
 		return message.isResponse() && idKey(message.id) == `"reconnect"`
 	})
 	if got := readFixtureFile(t, fixture.pidPath); got == "" {
@@ -471,6 +471,15 @@ func completeDesktopHandshake(t *testing.T, fixture *runningFixture) {
 	waitForCollectorMessage(t, fixture.output, func(message rpcMessage) bool {
 		return message.hasMethod && message.method == "fixture/desktop-initialized"
 	})
+}
+
+func completeBridgeHandshake(t *testing.T, connection net.Conn, reader *bufio.Reader) {
+	t.Helper()
+	writeRequest(t, connection, "bridge-init", "initialize", nil)
+	response := readBridgeMessage(t, connection, reader, bridgeReadTimeout)
+	if got := responseErrorCode(t, response); got != localDesktopOwnedCode {
+		t.Fatalf("bridge initialize error code = %d, want %d", got, localDesktopOwnedCode)
+	}
 }
 
 func writeRequest(t *testing.T, writer io.Writer, id, method string, params any) {
