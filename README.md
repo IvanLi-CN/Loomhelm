@@ -24,6 +24,8 @@ Loomhelm 是面向个人与小型团队的自部署项目管理与 Agent 工作�
 
 前端页面用于验证路由、providers、组件与 PWA 构建接入。业务 API、项目任务界面、Codex 控制和完整 PWA 安装更新体验仍待实现。基础持久化仅包含平台短作业及结果，不代表项目、对话或真实 Codex 执行已接通。工程截图与验证边界见 [实施覆盖](docs/specs/phase1-core/IMPLEMENTATION.md)。
 
-Markdown 工具已提供固定版本入口：首次运行 `python3 tools/markdown.py setup`，检查使用 `python3 tools/markdown.py check`，格式修复使用 `python3 tools/markdown.py fix`。Lefthook 配置使用相同的固定工具检查暂存 Markdown；安装提交钩子必须显式选择 `python3 tools/markdown.py setup --install-hooks`，并保留已有钩子配置。
+Markdown 工具已提供固定版本入口：首次运行 `python3 tools/markdown.py setup`，检查使用 `python3 tools/markdown.py check`，格式修复使用 `python3 tools/markdown.py fix`。Lefthook 配置使用相同的固定工具检查暂存 Markdown，并使用锁定版本的 React Doctor 检查暂存 React 文件；安装提交钩子必须显式选择 `python3 tools/markdown.py setup --install-hooks`，并保留已有钩子配置。
+
+统一质量检查入口是 `scripts/checks`：`quality` 检查质量声明、dprint、脚本和部署配置，`generated` 检查 Go/TypeScript 与 sqlc 漂移，`source` 检查 Go 测试/race/shuffle/vet，`database` 检查真实 PostgreSQL 与 River 作业，`web` 检查前端安装、类型和构建，`react` 检查 React Doctor，`all` 汇总所有失败并以非零状态退出。数据库检查要求显式的 `LOOMHELM_DATABASE_URL`，不会把缺少数据库误报为通过。
 
 完整产品需求与一期验收见 [PRD](docs/PRD.md)，已确定的工程合同见 [项目规范](docs/specs/phase1-core/SPEC.md)，工程边界见 [AGENTS.md](AGENTS.md)。PRD 及相关业务规则须经主人明确确认后才能实施功能，产品 UI 还需完整设计确认；工程骨架、基础设施、能力验证和现有设计讨论可以并行。源码目录按职责组织为 `cmd/`、`internal/`、`web/`、`packages/`、`api/`、`protocol/`、`deploy/` 和 `tests/`；各目录在对应实现加入时创建。
