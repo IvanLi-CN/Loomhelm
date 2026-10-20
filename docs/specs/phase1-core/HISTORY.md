@@ -68,6 +68,10 @@ The same source passed first and repeat setup in real linked worktrees using an 
 
 Review of documentation-complete candidate `f4af488dc029625d6e28457a7208e23e20120f2d` demonstrated gaps in shutdown ownership and retryability, signed generation bounds, worktree database targets, configured queue routing, pool-specific migration-lock DSNs and selected sqlc invocation. The corrections preserve the existing infrastructure contracts. The earlier passing observations remain historical evidence for their source; changed runtime paths require fresh candidate-bound validation before delivery.
 
+## Quality Gates
+
+F04 adds a single `scripts/checks` entrypoint for the checked-in quality declaration, dprint Markdown, shell/Python syntax, development/preview Compose configuration, Go source verification, generated Go/TypeScript/sqlc drift, real PostgreSQL/River tests, Web builds and bootstrap. Candidate CI makes Quality Gates, Bootstrap Verification, React Doctor, Repository Verification and Candidate Build required; Candidate Reproducibility remains informational. React Doctor is pinned in the Bun lockfile and `tools/versions.env`, computes its staged or base-to-HEAD React file range fail-closed, explicitly skips an empty range, blocks on error findings and keeps warnings visible.
+
 ## References
 
 - [Requirements](SPEC.md)

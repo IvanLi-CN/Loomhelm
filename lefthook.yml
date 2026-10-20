@@ -12,3 +12,5 @@ pre-commit:
       glob: "**/*.md"
       run: python3 tools/markdown.py staged -- {files}
       stage_fixed: true
+    react-doctor:
+      run: scripts/check-react-doctor --staged

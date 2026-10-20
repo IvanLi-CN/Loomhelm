@@ -30,11 +30,13 @@ jobs:
           persist-credentials: false
       - name: Validate repository quality gates
         run: python3 .agents/skills/quality-gates/assets/scripts/check_quality_gates.py --repo-root . --allow-unchecked-branch-protection
-      - name: Check candidate scripts
-        run: sh -n scripts/build-candidate scripts/promote-candidate scripts/reproduce-candidate
+      - name: Prepare pinned Markdown tools
+        run: python3 tools/markdown.py setup
+      - name: Run quality and deployment checks
+        run: scripts/checks quality
 
-  repository-verification:
-    name: Repository Verification
+  bootstrap-verification:
+    name: Bootstrap Verification
     needs: quality-gates
     runs-on: ubuntu-24.04
     steps:
@@ -53,24 +55,89 @@ jobs:
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: 1.4.3
-      - name: Check generated protocol files
-        run: go run ./cmd/codegen -check
-      - name: Run Go tests
-        run: go test ./...
-      - name: Run Go race tests
-        run: go test -race ./...
-      - name: Run Go vet
-        run: go vet ./...
-      - name: Install Web dependencies
+      - name: Install verified sqlc
+        run: |
+          scripts/install-sqlc "$RUNNER_TEMP/loomhelm-bin"
+          echo "SQLC_BIN=$RUNNER_TEMP/loomhelm-bin/sqlc" >> "$GITHUB_ENV"
+      - name: Run canonical bootstrap
+        run: scripts/checks bootstrap
+
+  react-doctor:
+    name: React Doctor
+    needs: quality-gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.3
+      - name: Install Web tooling
         run: bun install --frozen-lockfile
-      - name: Check Web types
-        run: bun run typecheck
-      - name: Build Storybook
-        run: bun run build:storybook
+      - name: Check changed React files
+        env:
+          REACT_DOCTOR_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+        run: scripts/check-react-doctor
+
+  repository-verification:
+    name: Repository Verification
+    needs: [quality-gates, bootstrap-verification]
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: loomhelm
+          POSTGRES_USER: loomhelm
+          POSTGRES_PASSWORD: loomhelm_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U loomhelm -d loomhelm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      LOOMHELM_DATABASE_URL: postgres://loomhelm:loomhelm_ci_only@127.0.0.1:5432/loomhelm?sslmode=disable
+      LOOMHELM_POSTGRES_PORT: "5432"
+      LOOMHELM_DRAIN_TOKEN: loomhelm-ci-drain-token
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.3
+      - name: Install verified sqlc
+        run: |
+          scripts/install-sqlc "$RUNNER_TEMP/loomhelm-bin"
+          echo "SQLC_BIN=$RUNNER_TEMP/loomhelm-bin/sqlc" >> "$GITHUB_ENV"
+      - name: Check generated state
+        run: scripts/checks generated
+      - name: Check Go source
+        run: scripts/checks source
+      - name: Check real database and jobs
+        run: scripts/checks database
+      - name: Check Web source
+        run: scripts/checks web
 
   candidate-build:
     name: Candidate Build
-    needs: [quality-gates, repository-verification]
+    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the candidate source

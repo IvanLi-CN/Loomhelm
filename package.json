@@ -13,5 +13,8 @@
     "build:storybook": "bun run --filter @loomhelm/web build-storybook",
     "storybook": "bun run --filter @loomhelm/web storybook",
     "typecheck": "bun run --filter @loomhelm/web typecheck"
+  },
+  "devDependencies": {
+    "react-doctor": "0.9.18"
   }
 }

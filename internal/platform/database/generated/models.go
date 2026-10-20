@@ -15,3 +15,12 @@ type PlatformShortJobResult struct {
 	CreatedAt   pgtype.Timestamptz
 	CompletedAt pgtype.Timestamptz
 }
+
+type PlatformWorkerLease struct {
+	LeaseKey           string
+	Generation         int64
+	CandidateSourceSha string
+	ArtifactDigest     string
+	AcquiredAt         pgtype.Timestamptz
+	HeartbeatAt        pgtype.Timestamptz
+}
