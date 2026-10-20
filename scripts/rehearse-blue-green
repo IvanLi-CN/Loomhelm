@@ -70,11 +70,10 @@ run() {
 	log "run: $*"
 	output=$(mktemp "${TMPDIR:-/tmp}/loomhelm-rehearsal.XXXXXX")
 	if "$@" >"$output" 2>&1; then
-		cat "$output" | tee -a "$log_file"
-		rm -f "$output"
-		return 0
+		status=0
+	else
+		status=$?
 	fi
-	status=$?
 	cat "$output" | tee -a "$log_file" >&2
 	rm -f "$output"
 	return "$status"
