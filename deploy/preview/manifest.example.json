@@ -7,7 +7,8 @@
     "worker": "ghcr.io/example/loomhelm-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "web": {
-    "root": "web/dist"
+    "root": "web/dist",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "compatibility": {
     "state_version": 1,

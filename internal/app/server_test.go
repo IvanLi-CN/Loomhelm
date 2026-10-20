@@ -17,11 +17,13 @@ import (
 
 func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 	server, err := newTestServer(platform.Config{
-		Component:       platform.ComponentServer,
-		Version:         "test-version",
-		HTTPAddr:        "127.0.0.1:0",
-		DrainToken:      "test-token",
-		ShutdownTimeout: time.Second,
+		Component:          platform.ComponentServer,
+		Version:            "test-version",
+		CandidateSourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ArtifactDigest:     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		HTTPAddr:           "127.0.0.1:0",
+		DrainToken:         "test-token",
+		ShutdownTimeout:    time.Second,
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -48,7 +50,9 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 		t.Fatalf("unexpected live response: %+v", live)
 	}
 	version := getJSON(t, client, baseURL+"/version")
-	if version["component"] != "server" || version["version"] != "test-version" {
+	if version["component"] != "server" || version["version"] != "test-version" ||
+		version["candidate_source_sha"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
+		version["artifact_digest"] != "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Fatalf("unexpected version response: %+v", version)
 	}
 

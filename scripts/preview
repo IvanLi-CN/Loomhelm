@@ -17,14 +17,22 @@ case "$state_dir" in
 esac
 state_dir=$(CDPATH= cd -- "$(dirname -- "$state_dir")" && pwd -P)/$(basename -- "$state_dir")
 env_file="$state_dir/compose.env"
-compose_project=${LOOMHELM_PREVIEW_PROJECT_NAME:-loomhelm-preview}
+
+require_preview_settings() {
+	: "${LOOMHELM_PREVIEW_PROJECT_NAME:?LOOMHELM_PREVIEW_PROJECT_NAME must be exported for this worktree}"
+	: "${LOOMHELM_PREVIEW_HTTP_PORT:?LOOMHELM_PREVIEW_HTTP_PORT must be exported from a registered port lease}"
+	: "${LOOMHELM_PREVIEW_ADMIN_PORT:?LOOMHELM_PREVIEW_ADMIN_PORT must be exported from a registered port lease}"
+	: "${LOOMHELM_BLUE_SERVER_PORT:?LOOMHELM_BLUE_SERVER_PORT must be exported from a registered port lease}"
+	: "${LOOMHELM_GREEN_SERVER_PORT:?LOOMHELM_GREEN_SERVER_PORT must be exported from a registered port lease}"
+}
 
 control() {
 	python3 "$control" --state-dir "$state_dir" "$@"
 }
 
 compose() {
-	docker compose --project-name "$compose_project" --env-file "$env_file" -f deploy/preview/compose.yaml "$@"
+	require_preview_settings
+	docker compose --project-name "$LOOMHELM_PREVIEW_PROJECT_NAME" --env-file "$env_file" -f deploy/preview/compose.yaml "$@"
 }
 
 load_local_environment() {
@@ -37,33 +45,162 @@ load_local_environment() {
 
 refresh_env() {
 	load_local_environment
+	require_preview_settings
 	mkdir -p "$state_dir"
 	control compose-env --output "$env_file" >/dev/null
 }
 
 server_port() {
 	case "$1" in
-		blue) printf '%s\n' "${LOOMHELM_BLUE_SERVER_PORT:-18081}" ;;
-		green) printf '%s\n' "${LOOMHELM_GREEN_SERVER_PORT:-18082}" ;;
+		blue) printf '%s\n' "${LOOMHELM_BLUE_SERVER_PORT:?LOOMHELM_BLUE_SERVER_PORT is required}" ;;
+		green) printf '%s\n' "${LOOMHELM_GREEN_SERVER_PORT:?LOOMHELM_GREEN_SERVER_PORT is required}" ;;
 		*) echo "preview: invalid slot $1" >&2; return 2 ;;
 	esac
 }
 
-wait_http_ready() {
+identity_field() {
+	control identity --slot "$1" --field "$2"
+}
+
+version_matches() {
+	endpoint=$1
+	expected_source=$2
+	expected_digest=$3
+	response=$(curl --fail --silent --show-error "$endpoint") || return 1
+	printf '%s\n' "$response" | python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+if value.get("version") != sys.argv[1] or value.get("candidate_source_sha") != sys.argv[1] or value.get("artifact_digest") != sys.argv[2]:
+    raise SystemExit(1)
+' "$expected_source" "$expected_digest"
+}
+
+worker_request() {
+	compose exec -T "worker-$1" wget -q -O - "$2"
+}
+
+worker_version_matches() {
+	slot=$1
+	expected_source=$2
+	expected_digest=$3
+	response=$(worker_request "$slot" http://127.0.0.1:8081/version) || return 1
+	printf '%s\n' "$response" | python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+if value.get("version") != sys.argv[1] or value.get("candidate_source_sha") != sys.argv[1] or value.get("artifact_digest") != sys.argv[2]:
+    raise SystemExit(1)
+' "$expected_source" "$expected_digest"
+}
+
+verify_container_image() {
+	service=$1
+	expected=$2
+	container=$(compose ps -q "$service")
+	[ -n "$container" ] || { echo "preview: service $service has no container" >&2; return 1; }
+	configured=$(docker inspect --format '{{.Config.Image}}' "$container")
+	if [ "$configured" != "$expected" ]; then
+		echo "preview: service $service image $configured does not match $expected" >&2
+		return 1
+	fi
+	image_id=$(docker inspect --format '{{.Image}}' "$container")
+	repo_digests=$(docker image inspect --format '{{json .RepoDigests}}' "$image_id")
+	printf '%s\n' "$repo_digests" | python3 -c '
+import json
+import sys
+
+expected = sys.argv[1]
+digests = json.load(sys.stdin)
+if expected not in digests:
+    raise SystemExit(1)
+' "$expected" || {
+		echo "preview: service $service image repository digest does not match $expected" >&2
+		return 1
+	}
+}
+
+verify_candidate_identity() {
+	slot=$1
+	expected_source=$(identity_field "$slot" source_sha)
+	expected_digest=$(identity_field "$slot" artifact_digest)
+	verify_container_image "server-$slot" "$(identity_field "$slot" server_image)"
+	verify_container_image "worker-$slot" "$(identity_field "$slot" worker_image)"
+	control verify-web --slot "$slot" >/dev/null
+	version_matches "http://127.0.0.1:$(server_port "$slot")/version" "$expected_source" "$expected_digest"
+	worker_version_matches "$slot" "$expected_source" "$expected_digest"
+}
+
+wait_server_ready() {
 	slot=$1
 	port=$(server_port "$slot")
 	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-90} ))
 	while [ "$(date +%s)" -lt "$deadline" ]; do
 		if curl --fail --silent --show-error "http://127.0.0.1:$port/readyz" >/dev/null 2>&1 &&
-			curl --fail --silent --show-error "http://127.0.0.1:$port/version" >/dev/null 2>&1; then
-			if docker compose --project-name "$compose_project" --env-file "$env_file" -f deploy/preview/compose.yaml exec -T "worker-$slot" wget -q -O - http://127.0.0.1:8081/readyz 2>/dev/null | grep -q '"ready":true'; then
-				return 0
-			fi
+			version_matches "http://127.0.0.1:$port/version" "$(identity_field "$slot" source_sha)" "$(identity_field "$slot" artifact_digest)"; then
+			return 0
 		fi
 		sleep 2
 	done
-	echo "preview: slot $slot did not become ready" >&2
+	echo "preview: Server slot $slot did not become ready with the declared identity" >&2
 	return 1
+}
+
+wait_worker_ready() {
+	slot=$1
+	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-90} ))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		if worker_request "$slot" http://127.0.0.1:8081/readyz 2>/dev/null | grep -q '"ready":true' &&
+			worker_version_matches "$slot" "$(identity_field "$slot" source_sha)" "$(identity_field "$slot" artifact_digest)"; then
+			return 0
+		fi
+		sleep 2
+	done
+	echo "preview: Worker slot $slot did not become ready with the declared identity" >&2
+	return 1
+}
+
+wait_http_ready() {
+	wait_server_ready "$1" && wait_worker_ready "$1" && verify_candidate_identity "$1"
+}
+
+stage_failure() {
+	slot=$1
+	reason=$2
+	compose stop "server-$slot" "worker-$slot" >/dev/null 2>&1 || true
+	control abort-stage --slot "$slot" --reason "$reason" >/dev/null 2>&1 || true
+	refresh_env >/dev/null 2>&1 || true
+	active_slot=$(control status --field active_slot)
+	if [ -n "$active_slot" ]; then
+		if ! compose up -d --force-recreate "worker-$active_slot" >/dev/null 2>&1 || ! wait_worker_ready "$active_slot"; then
+			echo "preview: failed candidate recovery also failed to restore Worker $active_slot" >&2
+			return 1
+		fi
+	fi
+	echo "preview: candidate slot $slot rejected: $reason" >&2
+	return 1
+}
+
+start_staged_slot() {
+	slot=$1
+	if ! compose up -d --force-recreate "server-$slot" >/dev/null; then
+		stage_failure "$slot" "Server container failed to start"
+		return 1
+	fi
+	if ! verify_container_image "server-$slot" "$(identity_field "$slot" server_image)" || ! wait_server_ready "$slot" || ! control verify-web --slot "$slot" >/dev/null; then
+		stage_failure "$slot" "candidate Server or Web identity/readiness check failed"
+		return 1
+	fi
+	if ! compose up -d --force-recreate "worker-$slot" >/dev/null; then
+		stage_failure "$slot" "Worker container failed to start"
+		return 1
+	fi
+	if ! verify_container_image "worker-$slot" "$(identity_field "$slot" worker_image)" || ! wait_worker_ready "$slot" || ! verify_candidate_identity "$slot"; then
+		stage_failure "$slot" "candidate Worker identity/readiness check failed"
+		return 1
+	fi
 }
 
 drain_slot() {
@@ -100,6 +237,7 @@ promote_slot() {
 		drain_slot "$old_slot"
 		compose stop "server-$old_slot" "worker-$old_slot" >/dev/null
 	fi
+	control verify-web --slot "$slot" >/dev/null
 	printf '%s\n' "$commit_output"
 }
 
@@ -127,11 +265,11 @@ case "$command" in
 	stage)
 		manifest=${2:-}
 		[ -n "$manifest" ] || { usage >&2; exit 2; }
+		refresh_env
 		control stage --manifest "$manifest"
 		refresh_env
 		slot=$(control status --field pending_slot)
-		compose up -d "server-$slot" "worker-$slot"
-		wait_http_ready "$slot"
+		start_staged_slot "$slot"
 		printf 'staged_slot=%s\n' "$slot"
 		;;
 	promote)
@@ -142,11 +280,12 @@ case "$command" in
 		;;
 	rollback)
 		refresh_env
-		slot=$(control status --field previous_slot)
-		[ -n "$slot" ] || { echo "preview: no retained slot is available for rollback" >&2; exit 2; }
-		control stage-existing --slot "$slot"
+		retained_key=${2:-$(control status --field previous_retained_key)}
+		[ -n "$retained_key" ] || { echo "preview: no retained candidate is available for rollback" >&2; exit 2; }
+		control stage-retained --retained-key "$retained_key"
 		refresh_env
-		compose up -d "server-$slot" "worker-$slot"
+		slot=$(control status --field pending_slot)
+		start_staged_slot "$slot"
 		promote_slot "$slot"
 		;;
 	drain)
@@ -165,6 +304,7 @@ case "$command" in
 		compose config >/dev/null
 		;;
 	status)
+		load_local_environment
 		control status
 		if [ -f "$env_file" ]; then
 			compose ps

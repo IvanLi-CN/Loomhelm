@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -22,6 +23,7 @@ SLOTS = ("blue", "green")
 SOURCE_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+RETAINED_KEY_RE = re.compile(r"^[0-9a-f]{40}-[0-9]+$")
 
 
 class ContractError(Exception):
@@ -46,6 +48,10 @@ def caddy_dir(state_dir: Path) -> Path:
 
 def web_dir(state_dir: Path) -> Path:
     return state_dir / "web"
+
+
+def retained_dir(state_dir: Path) -> Path:
+    return web_dir(state_dir) / "retained"
 
 
 def slot_web_dir(state_dir: Path, slot: str) -> Path:
@@ -95,6 +101,13 @@ def load_state(state_dir: Path) -> dict[str, Any]:
         die("preview state previous_slot is invalid")
     if not isinstance(state.get("slots"), dict):
         die("preview state slots must be an object")
+    state.setdefault("pending_slot", None)
+    state.setdefault("previous_retained_key", None)
+    state.setdefault("next_worker_generation", 1)
+    state.setdefault("history", [])
+    state.setdefault("retained", [])
+    if not isinstance(state["retained"], list):
+        die("preview state retained must be an array")
     return state
 
 
@@ -104,8 +117,10 @@ def empty_state() -> dict[str, Any]:
         "active_slot": None,
         "previous_slot": None,
         "pending_slot": None,
+        "previous_retained_key": None,
         "next_worker_generation": 1,
         "slots": {slot: None for slot in SLOTS},
+        "retained": [],
         "history": [],
     }
 
@@ -120,6 +135,26 @@ def record_event(state: dict[str, Any], event: str, **values: Any) -> None:
 def require_slot(slot: str) -> None:
     if slot not in SLOTS:
         die(f"slot must be one of {', '.join(SLOTS)}")
+
+
+def tree_digest(root: Path) -> str:
+    root = root.resolve()
+    if not root.is_dir():
+        die(f"Web asset directory does not exist: {root}")
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            die(f"Web asset directory must not contain symlinks: {path}")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
 
 
 def validate_manifest(path: Path, check_web: bool = True) -> dict[str, Any]:
@@ -144,11 +179,16 @@ def validate_manifest(path: Path, check_web: bool = True) -> dict[str, Any]:
     web = manifest.get("web")
     if not isinstance(web, dict) or not isinstance(web.get("root"), str) or not web["root"].strip():
         die("candidate web.root must name the built Web asset directory")
+    web_digest = web.get("digest")
+    if not isinstance(web_digest, str) or not DIGEST_RE.fullmatch(web_digest):
+        die("candidate web.digest must be sha256:<64 lowercase hexadecimal characters>")
     web_root = Path(web["root"])
     if not web_root.is_absolute():
         web_root = (path.parent / web_root).resolve()
     if check_web and not web_root.is_dir():
         die(f"candidate Web asset directory does not exist: {web_root}")
+    if check_web and tree_digest(web_root) != web_digest:
+        die(f"candidate Web asset digest does not match {web_root}")
 
     compatibility = manifest.get("compatibility")
     if not isinstance(compatibility, dict):
@@ -164,6 +204,7 @@ def validate_manifest(path: Path, check_web: bool = True) -> dict[str, Any]:
     normalized = dict(manifest)
     normalized["web"] = dict(web)
     normalized["web"]["root"] = str(web_root)
+    normalized["web"]["digest"] = web_digest
     normalized["compatibility"] = {
         "state_version": state_version,
         "read_min": read_min,
@@ -207,6 +248,63 @@ def copy_web_assets(state_dir: Path, slot: str, source: Path) -> None:
     shutil.copytree(source, destination)
 
 
+def candidate_key(record: dict[str, Any]) -> str:
+    return f"{record['source_sha']}-{record['generation']}"
+
+
+def archive_candidate(state_dir: Path, state: dict[str, Any], slot: str) -> str:
+    record = state["slots"].get(slot)
+    if not record:
+        die(f"slot {slot} has no candidate to retain")
+    source = slot_web_dir(state_dir, slot)
+    if not source.is_dir():
+        die(f"slot {slot} Web tree is missing: {source}")
+    root = retained_dir(state_dir)
+    if root.is_symlink():
+        root.unlink()
+    root.mkdir(parents=True, exist_ok=True)
+    key = candidate_key(record)
+    destination = root / key
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination)
+    if tree_digest(destination) != record["web"]["digest"]:
+        die(f"retained Web asset digest does not match slot {slot}")
+    archived = copy.deepcopy(record)
+    archived["retained_key"] = key
+    archived["status"] = "retained"
+    archived["retained_at"] = now()
+    state["retained"] = [item for item in state.get("retained", []) if item.get("retained_key") != key]
+    state["retained"].insert(0, archived)
+    for stale in state["retained"][8:]:
+        stale_key = stale.get("retained_key")
+        if isinstance(stale_key, str) and RETAINED_KEY_RE.fullmatch(stale_key):
+            stale_path = root / stale_key
+            if stale_path.exists():
+                shutil.rmtree(stale_path)
+    state["retained"] = state["retained"][:8]
+    return key
+
+
+def retained_record(state: dict[str, Any], key: str) -> dict[str, Any]:
+    if not isinstance(key, str) or not RETAINED_KEY_RE.fullmatch(key):
+        die("retained candidate key is invalid")
+    for record in state.get("retained", []):
+        if record.get("retained_key") == key:
+            return record
+    die(f"retained candidate {key} does not exist")
+
+
+def manifest_from_record(record: dict[str, Any], web_root: Path) -> dict[str, Any]:
+    return {
+        "source_sha": record["source_sha"],
+        "artifact_digest": record["artifact_digest"],
+        "images": record["images"],
+        "web": {"root": str(web_root), "digest": record["web"]["digest"]},
+        "compatibility": record["compatibility"],
+    }
+
+
 def replace_link(path: Path, target: str | None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
@@ -234,7 +332,7 @@ def slot_record(manifest: dict[str, Any], generation: int, status: str) -> dict[
 
 def next_generation(state: dict[str, Any], slot: str) -> int:
     highest = int(state.get("next_worker_generation", 1))
-    for record in state["slots"].values():
+    for record in [*state["slots"].values(), *state.get("retained", [])]:
         if record:
             highest = max(highest, int(record["generation"]) + 1)
     existing = state["slots"].get(slot)
@@ -298,13 +396,7 @@ def command_stage_existing(args: argparse.Namespace) -> None:
     if not record:
         die(f"slot {slot} has no retained candidate")
     current = state["slots"].get(state.get("active_slot")) if state.get("active_slot") else None
-    manifest = {
-        "source_sha": record["source_sha"],
-        "artifact_digest": record["artifact_digest"],
-        "images": record["images"],
-        "web": record["web"],
-        "compatibility": record["compatibility"],
-    }
+    manifest = manifest_from_record(record, slot_web_dir(state_dir, slot))
     if error := compatibility_error(current, manifest):
         die(error)
     generation = next_generation(state, slot)
@@ -316,9 +408,84 @@ def command_stage_existing(args: argparse.Namespace) -> None:
     print(f"generation={generation}")
 
 
-def rendered_caddy(slot: str) -> str:
+def command_stage_retained(args: argparse.Namespace) -> None:
+    state_dir = Path(args.state_dir).resolve()
+    state = load_state(state_dir)
+    slot = args.slot or choose_inactive(state)
     require_slot(slot)
-    return TEMPLATE.read_text(encoding="utf-8").replace("__ACTIVE_SLOT__", slot)
+    if slot == state.get("active_slot"):
+        die(f"cannot stage retained candidate into active slot {slot}")
+    retained = retained_record(state, args.retained_key)
+    source = retained_dir(state_dir) / args.retained_key
+    if not source.is_dir():
+        die(f"retained Web tree is missing: {source}")
+    if tree_digest(source) != retained["web"]["digest"]:
+        die(f"retained Web asset digest does not match {args.retained_key}")
+    current = state["slots"].get(state.get("active_slot")) if state.get("active_slot") else None
+    manifest = manifest_from_record(retained, source)
+    if error := compatibility_error(current, manifest):
+        die(error)
+    generation = next_generation(state, slot)
+    copy_web_assets(state_dir, slot, source)
+    state["slots"][slot] = slot_record(manifest, generation, "staged")
+    state["slots"][slot]["restaged_from"] = args.retained_key
+    state["pending_slot"] = slot
+    record_event(state, "stage_retained", slot=slot, retained_key=args.retained_key, source_sha=retained["source_sha"], artifact_digest=retained["artifact_digest"], generation=generation)
+    write_state(state_dir, state)
+    print(f"slot={slot}")
+    print(f"generation={generation}")
+    print(f"source_sha={retained['source_sha']}")
+
+
+def command_abort_stage(args: argparse.Namespace) -> None:
+    state_dir = Path(args.state_dir).resolve()
+    state = load_state(state_dir)
+    slot = args.slot or state.get("pending_slot")
+    if not slot:
+        die("no pending candidate to abort")
+    require_slot(slot)
+    if slot == state.get("active_slot"):
+        die(f"cannot abort active slot {slot}")
+    candidate = state["slots"].get(slot)
+    if candidate:
+        record_event(state, "stage_failed", slot=slot, source_sha=candidate.get("source_sha"), artifact_digest=candidate.get("artifact_digest"), generation=candidate.get("generation"), reason=args.reason)
+    slot_path = slot_web_dir(state_dir, slot)
+    if slot_path.exists():
+        shutil.rmtree(slot_path)
+    state["slots"][slot] = None
+    if state.get("pending_slot") == slot:
+        state["pending_slot"] = None
+    write_state(state_dir, state)
+    print(f"aborted_slot={slot}")
+
+
+def rendered_caddy(slot: str, retained: list[dict[str, Any]] | None = None) -> str:
+    require_slot(slot)
+    retained = retained or []
+    retained_paths = [
+        f"retained/{record['retained_key']}{{path}}"
+        for record in retained
+        if isinstance(record.get("retained_key"), str)
+    ]
+    if not retained_paths:
+        retained_paths = ["retained{path}"]
+    return (
+        TEMPLATE.read_text(encoding="utf-8")
+        .replace("__ACTIVE_SLOT__", slot)
+        .replace("__RETAINED_PATHS__", " ".join(retained_paths))
+    )
+
+
+def render_retained_records(state: dict[str, Any], slot: str) -> list[dict[str, Any]]:
+    records = list(state.get("retained", []))
+    active_slot = state.get("active_slot")
+    if active_slot and active_slot != slot:
+        active = state["slots"].get(active_slot)
+        if active:
+            provisional = copy.deepcopy(active)
+            provisional["retained_key"] = candidate_key(active)
+            records = [provisional, *records]
+    return records
 
 
 def command_render(args: argparse.Namespace) -> None:
@@ -331,7 +498,7 @@ def command_render(args: argparse.Namespace) -> None:
     if not state["slots"].get(slot):
         die(f"slot {slot} has no candidate")
     output = Path(args.output) if args.output else caddy_dir(state_dir) / "Caddyfile"
-    atomic_write(output.resolve(), rendered_caddy(slot))
+    atomic_write(output.resolve(), rendered_caddy(slot, render_retained_records(state, slot)))
     print(f"caddyfile={output.resolve()}")
 
 
@@ -354,13 +521,15 @@ def command_commit(args: argparse.Namespace) -> None:
     if error := compatibility_error(current, candidate):
         die(error)
 
+    previous_retained_key = None
     if old_slot:
-        replace_link(web_dir(state_dir) / "retained", f"slots/{old_slot}")
+        previous_retained_key = archive_candidate(state_dir, state, old_slot)
         state["slots"][old_slot]["status"] = "retained"
     replace_link(web_dir(state_dir) / "current", f"slots/{slot}")
     candidate["status"] = "active"
     candidate["activated_at"] = now()
     state["previous_slot"] = old_slot
+    state["previous_retained_key"] = previous_retained_key
     state["active_slot"] = slot
     state["pending_slot"] = None
     record_event(state, "promote", slot=slot, previous_slot=old_slot, source_sha=candidate["source_sha"], artifact_digest=candidate["artifact_digest"], generation=candidate["generation"])
@@ -389,10 +558,11 @@ def command_compose_env(args: argparse.Namespace) -> None:
     values: dict[str, str] = {
         "LOOMHELM_PREVIEW_STATE_DIR": str(state_dir),
         "LOOMHELM_PREVIEW_WEB_DIR": str(web_dir(state_dir)),
-        "LOOMHELM_PREVIEW_HTTP_PORT": env_value("LOOMHELM_PREVIEW_HTTP_PORT", "18080"),
-        "LOOMHELM_PREVIEW_ADMIN_PORT": env_value("LOOMHELM_PREVIEW_ADMIN_PORT", "12019"),
-        "LOOMHELM_BLUE_SERVER_PORT": env_value("LOOMHELM_BLUE_SERVER_PORT", "18081"),
-        "LOOMHELM_GREEN_SERVER_PORT": env_value("LOOMHELM_GREEN_SERVER_PORT", "18082"),
+        "LOOMHELM_PREVIEW_PROJECT_NAME": env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True),
+        "LOOMHELM_PREVIEW_HTTP_PORT": env_value("LOOMHELM_PREVIEW_HTTP_PORT", required=True),
+        "LOOMHELM_PREVIEW_ADMIN_PORT": env_value("LOOMHELM_PREVIEW_ADMIN_PORT", required=True),
+        "LOOMHELM_BLUE_SERVER_PORT": env_value("LOOMHELM_BLUE_SERVER_PORT", required=True),
+        "LOOMHELM_GREEN_SERVER_PORT": env_value("LOOMHELM_GREEN_SERVER_PORT", required=True),
         "LOOMHELM_DATABASE_URL": env_value("LOOMHELM_DATABASE_URL", required=True),
         "LOOMHELM_DRAIN_TOKEN": env_value("LOOMHELM_DRAIN_TOKEN", required=True),
         "LOOMHELM_DATABASE_MIN_CONNS": env_value("LOOMHELM_DATABASE_MIN_CONNS", "0"),
@@ -429,6 +599,47 @@ def command_check(args: argparse.Namespace) -> None:
     print(f"artifact_digest={candidate['artifact_digest']}")
 
 
+def command_identity(args: argparse.Namespace) -> None:
+    state = load_state(Path(args.state_dir).resolve())
+    slot = args.slot or state.get("pending_slot") or state.get("active_slot")
+    if not slot:
+        die("no candidate supplied or staged")
+    require_slot(slot)
+    record = state["slots"].get(slot)
+    if not record:
+        die(f"slot {slot} has no candidate")
+    values = {
+        "source_sha": record["source_sha"],
+        "artifact_digest": record["artifact_digest"],
+        "server_image": record["images"]["server"],
+        "worker_image": record["images"]["worker"],
+        "web_digest": record["web"]["digest"],
+        "generation": str(record["generation"]),
+        "slot": slot,
+    }
+    if args.field:
+        print(values.get(args.field, ""))
+        return
+    print(json.dumps(values, sort_keys=True))
+
+
+def command_verify_web(args: argparse.Namespace) -> None:
+    state_dir = Path(args.state_dir).resolve()
+    state = load_state(state_dir)
+    slot = args.slot or state.get("pending_slot") or state.get("active_slot")
+    if not slot:
+        die("no candidate supplied or staged")
+    require_slot(slot)
+    record = state["slots"].get(slot)
+    if not record:
+        die(f"slot {slot} has no candidate")
+    actual = tree_digest(slot_web_dir(state_dir, slot))
+    if actual != record["web"]["digest"]:
+        die(f"slot {slot} Web asset identity mismatch")
+    print(f"slot={slot}")
+    print(f"web_digest={actual}")
+
+
 def command_status(args: argparse.Namespace) -> None:
     state = load_state(Path(args.state_dir).resolve())
     if args.field:
@@ -443,12 +654,14 @@ def command_status(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "stage", "stage-existing", "render", "commit", "compose-env", "check", "status"))
+    parser.add_argument("command", choices=("init", "stage", "stage-existing", "stage-retained", "abort-stage", "render", "commit", "compose-env", "check", "identity", "verify-web", "status"))
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--manifest")
     parser.add_argument("--slot")
     parser.add_argument("--output")
     parser.add_argument("--field")
+    parser.add_argument("--retained-key")
+    parser.add_argument("--reason", default="candidate readiness failed")
     return parser
 
 
@@ -459,10 +672,14 @@ def main() -> int:
             "init": command_init,
             "stage": command_stage,
             "stage-existing": command_stage_existing,
+            "stage-retained": command_stage_retained,
+            "abort-stage": command_abort_stage,
             "render": command_render,
             "commit": command_commit,
             "compose-env": command_compose_env,
             "check": command_check,
+            "identity": command_identity,
+            "verify-web": command_verify_web,
             "status": command_status,
         }[args.command](args)
     except ContractError as exc:

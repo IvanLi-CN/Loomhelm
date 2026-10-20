@@ -310,8 +310,10 @@ type healthResponse struct {
 }
 
 type versionResponse struct {
-	Component string `json:"component"`
-	Version   string `json:"version"`
+	Component          string `json:"component"`
+	Version            string `json:"version"`
+	CandidateSourceSHA string `json:"candidate_source_sha"`
+	ArtifactDigest     string `json:"artifact_digest"`
 }
 
 func (s *Server) handleLive(writer http.ResponseWriter, _ *http.Request) {
@@ -365,8 +367,10 @@ func (s *Server) handleReady(writer http.ResponseWriter, request *http.Request) 
 
 func (s *Server) handleVersion(writer http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(writer, http.StatusOK, versionResponse{
-		Component: string(s.cfg.Component),
-		Version:   s.cfg.Version,
+		Component:          string(s.cfg.Component),
+		Version:            s.cfg.Version,
+		CandidateSourceSHA: s.cfg.CandidateSource(),
+		ArtifactDigest:     s.cfg.CandidateArtifactDigest(),
 	})
 }
 

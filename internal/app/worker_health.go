@@ -118,8 +118,10 @@ func (w *Worker) handleWorkerReady(writer http.ResponseWriter, _ *http.Request) 
 
 func (w *Worker) handleWorkerVersion(writer http.ResponseWriter, _ *http.Request) {
 	w.writeWorkerJSON(writer, http.StatusOK, versionResponse{
-		Component: string(w.cfg.Component),
-		Version:   w.cfg.Version,
+		Component:          string(w.cfg.Component),
+		Version:            w.cfg.Version,
+		CandidateSourceSHA: w.cfg.CandidateSource(),
+		ArtifactDigest:     w.cfg.CandidateArtifactDigest(),
 	})
 }
 

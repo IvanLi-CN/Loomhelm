@@ -99,6 +99,8 @@ type Runner struct {
 	runCtx        context.Context
 	monitorCancel context.CancelFunc
 	monitorDone   chan struct{}
+	startClient   func(context.Context, *river.Client[pgx.Tx]) error
+	afterAcquire  func(*workerLease) error
 	stopping      atomic.Bool
 	ready         atomic.Bool
 }
@@ -113,7 +115,12 @@ func NewRunner(db *database.DB, logger *slog.Logger, cfg Config) (*Runner, error
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Runner{db: db, logger: logger, cfg: cfg.withDefaults()}, nil
+	return &Runner{
+		db:          db,
+		logger:      logger,
+		cfg:         cfg.withDefaults(),
+		startClient: func(ctx context.Context, client *river.Client[pgx.Tx]) error { return client.Start(ctx) },
+	}, nil
 }
 
 func (r *Runner) Migrate(ctx context.Context) error {
@@ -149,7 +156,7 @@ func (r *Runner) migrate(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lifecycle) error {
+func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lifecycle) (startErr error) {
 	if r == nil || r.db == nil {
 		return errors.New("job runner is not initialized")
 	}
@@ -187,9 +194,6 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 	if err != nil {
 		return err
 	}
-	if err := lease.Acquire(ctx); err != nil {
-		return err
-	}
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &shortJobWorker{
@@ -209,15 +213,43 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 	if err != nil {
 		return fmt.Errorf("create River client: %w", err)
 	}
-	if err := client.Start(ctx); err != nil {
-		return fmt.Errorf("start River client: %w", err)
+	startClient := r.startClient
+	if startClient == nil {
+		startClient = func(startContext context.Context, startClient *river.Client[pgx.Tx]) error {
+			return startClient.Start(startContext)
+		}
+	}
+	stopClient := func() error {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), r.cfg.SoftStopTimeout)
+		defer stopCancel()
+		return client.StopAndCancel(stopCtx)
+	}
+	if err := startClient(ctx, client); err != nil {
+		return errors.Join(fmt.Errorf("start River client: %w", err), stopClient())
+	}
+	if err := lease.Acquire(ctx); err != nil {
+		return errors.Join(err, stopClient())
+	}
+	defer func() {
+		if startErr == nil {
+			return
+		}
+		cleanupErr := stopClient()
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), r.cfg.SoftStopTimeout)
+		cleanupErr = errors.Join(cleanupErr, lease.Release(releaseCtx))
+		releaseCancel()
+		startErr = errors.Join(startErr, cleanupErr)
+	}()
+	if r.afterAcquire != nil {
+		if err := r.afterAcquire(lease); err != nil {
+			return err
+		}
 	}
 	monitorCtx, monitorCancel := context.WithCancel(ctx)
 	r.mu.Lock()
 	if r.client != nil || r.monitorDone != nil {
 		r.mu.Unlock()
 		monitorCancel()
-		_ = client.StopAndCancel(context.Background())
 		return errors.New("job runner already started")
 	}
 	r.client = client
@@ -231,6 +263,7 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 	monitorDone := r.monitorDone
 	r.mu.Unlock()
 	go r.monitorLease(monitorCtx, monitorDone)
+	startErr = nil
 	return nil
 }
 

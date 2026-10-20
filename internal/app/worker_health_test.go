@@ -12,11 +12,13 @@ import (
 
 func TestWorkerHealthAndDrainEndpoints(t *testing.T) {
 	worker, err := newTestWorker(platform.Config{
-		Component:        platform.ComponentWorker,
-		Version:          "test",
-		DrainToken:       "test-token",
-		ShutdownTimeout:  time.Second,
-		WorkerGeneration: 1,
+		Component:          platform.ComponentWorker,
+		Version:            "test",
+		CandidateSourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ArtifactDigest:     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		DrainToken:         "test-token",
+		ShutdownTimeout:    time.Second,
+		WorkerGeneration:   1,
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewWorker() error = %v", err)
@@ -40,6 +42,15 @@ func TestWorkerHealthAndDrainEndpoints(t *testing.T) {
 	}
 	if !ready.Ready || ready.Component != "worker" {
 		t.Fatalf("unexpected ready response: %+v", ready)
+	}
+	versionResponse := httptest.NewRecorder()
+	worker.healthRouter().ServeHTTP(versionResponse, httptest.NewRequest(http.MethodGet, "/version", nil))
+	var version map[string]any
+	if err := json.NewDecoder(versionResponse.Body).Decode(&version); err != nil {
+		t.Fatalf("decode version response: %v", err)
+	}
+	if version["candidate_source_sha"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || version["artifact_digest"] != "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("unexpected version identity: %+v", version)
 	}
 
 	for _, authorization := range []string{"", "Bearer wrong-token"} {
