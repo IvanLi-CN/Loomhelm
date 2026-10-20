@@ -55,7 +55,16 @@ if [ -z "$output_dir" ]; then
 else
 	case "$output_dir" in
 		/*) ;;
-		*) output_dir="$repo_root/$output_dir" ;;
+		*)
+			echo "reproduce-candidate: --output must be an absolute path outside the checkout" >&2
+			exit 2
+			;;
+	esac
+	case "$output_dir" in
+		"$repo_root"|"$repo_root/"*)
+			echo "reproduce-candidate: --output must be outside the checkout" >&2
+			exit 2
+			;;
 	esac
 if [ -e "$output_dir" ] || [ -L "$output_dir" ]; then
 	echo "reproduce-candidate: refusing to overwrite existing output: $output_dir" >&2

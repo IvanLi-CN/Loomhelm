@@ -103,6 +103,10 @@ jobs:
           test -n "$manifest"
           candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
           source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
+          test "$candidate_digest" = "${{ needs.build-preview-candidate.outputs.candidate_digest }}" || {
+            echo "candidate manifest digest does not match the build job output: $candidate_digest" >&2
+            exit 1
+          }
           test "$source_sha" = "$CANDIDATE_SOURCE_SHA" || {
             echo "candidate manifest source SHA does not match the requested source SHA: $source_sha" >&2
             exit 1

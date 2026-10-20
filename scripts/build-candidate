@@ -201,10 +201,10 @@ for current, directories, files in os.walk(root, topdown=True, followlinks=False
 PY
 
 echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
-GOTOOLCHAIN=local GOAMD64=v1 GOEXPERIMENT= GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM= GOEXPERIMENT= GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
 	go mod download
 for component in server worker connector; do
-	GOTOOLCHAIN=local GOAMD64=v1 GOEXPERIMENT= GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+	GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM= GOEXPERIMENT= GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
 		go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$stage_dir/bin/$component" "./cmd/$component"
 done
 
@@ -339,6 +339,8 @@ def directory_records(path: Path) -> tuple[str, list[dict[str, object]]]:
             raise SystemExit(f"candidate artifact is not a regular file or directory: {child}")
         relative = child.relative_to(path).as_posix()
         records.append(file_record(child, relative))
+    if not records:
+        raise SystemExit("candidate Web artifact is empty")
     encoded = "".join(
         f"{record['path']}\0{record['sha256']}\0{record['size']}\0{record['mode']}\n" for record in records
     ).encode("utf-8")
@@ -350,6 +352,7 @@ def canonical_json(value: object) -> bytes:
 
 
 components: dict[str, dict[str, object]] = {}
+os.chmod(stage_path / "bin", 0o755)
 for name in ("server", "worker", "connector"):
     relative = f"bin/{name}"
     os.chmod(stage_path / relative, 0o755)
@@ -375,8 +378,16 @@ inputs = {
     "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
     "build_environment": {
         "GOAMD64": "v1",
+        "GOARM": "7",
+        "GOARM64": "v8.0",
+        "GO386": "sse2",
         "GOEXPERIMENT": "",
+        "GOMIPS": "hardfloat",
+        "GOMIPS64": "hardfloat",
         "GOTOOLCHAIN": "local",
+        "GOPPC64": "power8",
+        "GORISCV64": "rva20u64",
+        "GOWASM": "",
         "STORYBOOK": "false",
         "VITE_DEMO": "false",
     },

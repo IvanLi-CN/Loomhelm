@@ -263,8 +263,16 @@ def source_contract(source_sha: str) -> tuple[str, int, dict[str, object]]:
         "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
         "build_environment": {
             "GOAMD64": "v1",
+            "GOARM": "7",
+            "GOARM64": "v8.0",
+            "GO386": "sse2",
             "GOEXPERIMENT": "",
+            "GOMIPS": "hardfloat",
+            "GOMIPS64": "hardfloat",
             "GOTOOLCHAIN": "local",
+            "GOPPC64": "power8",
+            "GORISCV64": "rva20u64",
+            "GOWASM": "",
             "STORYBOOK": "false",
             "VITE_DEMO": "false",
         },
@@ -433,6 +441,8 @@ def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[
     expected = record.get("files")
     if not isinstance(expected, list):
         fail("web artifact files must be a list")
+    if not expected:
+        fail("web artifact is empty")
     records: list[dict[str, object]] = []
     for item in expected:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
