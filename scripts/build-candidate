@@ -300,6 +300,7 @@ stage, repo, source_sha, source_tree_sha, source_date_epoch, goos, goarch, go_ve
 stage_path = Path(stage).resolve()
 repo_path = Path(repo).resolve()
 source_date_epoch_int = int(source_date_epoch)
+os.chmod(stage_path, 0o755)
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -331,6 +332,8 @@ def directory_records(path: Path) -> tuple[str, list[dict[str, object]]]:
         if child.is_dir():
             if child.is_symlink():
                 raise SystemExit(f"candidate artifact contains a directory symlink: {child}")
+            if not any(child.iterdir()):
+                raise SystemExit(f"candidate Web artifact contains an empty directory: {child}")
             continue
         if not child.is_file():
             raise SystemExit(f"candidate artifact is not a regular file or directory: {child}")
@@ -360,6 +363,7 @@ for child in (stage_path / "web").rglob("*"):
         os.chmod(child, 0o644)
     else:
         raise SystemExit(f"candidate Web artifact contains a non-file entry: {child}")
+os.chmod(stage_path / "web", 0o755)
 web_digest, web_files = directory_records(stage_path / "web")
 artifacts: dict[str, object] = {
     **components,

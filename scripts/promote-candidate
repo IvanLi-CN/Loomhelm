@@ -422,6 +422,8 @@ def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[
     web_root = safe_child(root, "web")
     if not web_root.is_dir() or web_root.is_symlink():
         fail("web artifact directory is missing or is a symlink")
+    if verify_mode and web_root.stat().st_mode & 0o7777 != 0o755:
+        fail(f"web artifact directory has an unsafe mode: {web_root.stat().st_mode & 0o7777:o}")
     expected = record.get("files")
     if not isinstance(expected, list):
         fail("web artifact files must be a list")
@@ -438,7 +440,12 @@ def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[
     for child in web_root.rglob("*"):
         if child.is_symlink():
             fail(f"web artifact contains a symlink: {child}")
-        if not child.is_dir() and not child.is_file():
+        if child.is_dir():
+            if not any(child.iterdir()):
+                fail(f"web artifact contains an empty directory: {child}")
+            if verify_mode and child.stat().st_mode & 0o7777 != 0o755:
+                fail(f"web artifact directory has an unsafe mode: {child}")
+        elif not child.is_file():
             fail(f"web artifact contains a non-file entry: {child}")
         if child.is_file():
             actual_files.append(child.relative_to(web_root).as_posix())
@@ -453,9 +460,11 @@ def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[
     return digest, records
 
 
-def exact_directory_entries(path: Path, expected: set[str], label: str) -> None:
+def exact_directory_entries(path: Path, expected: set[str], label: str, verify_mode: bool = False) -> None:
     if path.is_symlink() or not path.is_dir():
         fail(f"{label} is missing or is a symlink")
+    if verify_mode and path.stat().st_mode & 0o7777 != 0o755:
+        fail(f"{label} has an unsafe directory mode: {path.stat().st_mode & 0o7777:o}")
     try:
         actual = {child.name for child in path.iterdir()}
     except OSError as error:
@@ -570,6 +579,7 @@ def verify_bundle(
         bundle_root,
         {"bin", "web", "candidate-manifest.json", "candidate-manifest.json.sha256", "candidate.tar.gz", "candidate.tar.gz.sha256"},
         "candidate bundle",
+        verify_mode,
     )
     manifest_file = bundle_root / "candidate-manifest.json"
     if manifest_file.is_symlink() or not manifest_file.is_file():
@@ -638,7 +648,7 @@ def verify_bundle(
             fail("candidate promotion script digest does not match the trusted promotion tooling")
         if sha256_file(tool_path) != expected_tool_digest:
             fail("checked-out promotion tooling does not match the expected digest")
-    exact_directory_entries(bundle_root / "bin", {"server", "worker", "connector"}, "candidate binary directory")
+    exact_directory_entries(bundle_root / "bin", {"server", "worker", "connector"}, "candidate binary directory", verify_mode)
     component_records = {
         name: file_record(bundle_root, artifacts.get(name), f"bin/{name}", 0o755, verify_mode)
         for name in ("server", "worker", "connector")
@@ -848,9 +858,9 @@ try:
     ):
         copy_regular(candidate_root / name, temporary_fd, name, 0o644)
     ensure_temporary_stable()
+    os.fchmod(temporary_fd, 0o755)
     verify_bundle(temporary, digest, verify_mode=True)
     ensure_temporary_stable()
-    os.fchmod(temporary_fd, 0o755)
     if target_exists():
         fail(f"promoted candidate target appeared during promotion: {target}")
     try:
