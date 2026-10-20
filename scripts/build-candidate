@@ -201,10 +201,10 @@ for current, directories, files in os.walk(root, topdown=True, followlinks=False
 PY
 
 echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
-GOTOOLCHAIN=local GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+GOTOOLCHAIN=local GOAMD64=v1 GOEXPERIMENT= GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
 	go mod download
 for component in server worker connector; do
-	GOTOOLCHAIN=local GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+	GOTOOLCHAIN=local GOAMD64=v1 GOEXPERIMENT= GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
 		go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$stage_dir/bin/$component" "./cmd/$component"
 done
 
@@ -373,7 +373,13 @@ artifacts: dict[str, object] = {
 inputs = {
     "build_contract": "candidate-v1",
     "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
-    "build_environment": {"STORYBOOK": "false", "VITE_DEMO": "false"},
+    "build_environment": {
+        "GOAMD64": "v1",
+        "GOEXPERIMENT": "",
+        "GOTOOLCHAIN": "local",
+        "STORYBOOK": "false",
+        "VITE_DEMO": "false",
+    },
     "bun_lock_sha256": sha256_file(repo_path / "bun.lock"),
     "build_script_sha256": sha256_file(repo_path / "scripts/build-candidate"),
 	"promote_script_sha256": sha256_file(repo_path / "scripts/promote-candidate"),

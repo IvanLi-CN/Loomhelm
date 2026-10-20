@@ -2,7 +2,7 @@
 
 The candidate contract builds Server, Worker, Connector and Web static assets from one exact, clean Git source SHA. The default target is `linux/amd64`; use `--goos` and `--goarch` only when the target platform is part of the candidate identity.
 
-The builder records the source commit and tree SHA, source commit timestamp, target platform, pinned Go and Bun versions, fixed build environment, lockfile and build-input digests, every component file digest and mode, the complete Web file list, and a deterministic `candidate.tar.gz`. `candidate-manifest.json.sha256` and `candidate.tar.gz.sha256` protect the manifest and package bytes separately.
+The builder records the source commit and tree SHA, source commit timestamp, target platform, pinned Go and Bun versions, fixed Go/Web build environment (`GOTOOLCHAIN=local`, `GOAMD64=v1`, empty `GOEXPERIMENT`, `STORYBOOK=false`, and `VITE_DEMO=false`), lockfile and build-input digests, every component file digest and mode, the complete Web file list, and a deterministic `candidate.tar.gz`. `candidate-manifest.json.sha256` and `candidate.tar.gz.sha256` protect the manifest and package bytes separately.
 
 The candidate identity is the SHA256 digest of the canonical manifest identity, excluding the manifest's own digest and the package archive digest. This avoids a circular hash while keeping the source SHA, build inputs and output bytes bound to one `candidate_digest`; promotion also validates that the archive members and bytes exactly match the manifest files.
 

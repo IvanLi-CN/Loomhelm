@@ -261,7 +261,13 @@ def source_contract(source_sha: str) -> tuple[str, int, dict[str, object]]:
     expected_inputs = {
         "build_contract": "candidate-v1",
         "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
-        "build_environment": {"STORYBOOK": "false", "VITE_DEMO": "false"},
+        "build_environment": {
+            "GOAMD64": "v1",
+            "GOEXPERIMENT": "",
+            "GOTOOLCHAIN": "local",
+            "STORYBOOK": "false",
+            "VITE_DEMO": "false",
+        },
         "bun_lock_sha256": input_digests["bun_lock"],
         "build_script_sha256": input_digests["scripts_build_candidate"],
         "promote_script_sha256": input_digests["scripts_promote_candidate"],
