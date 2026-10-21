@@ -98,6 +98,20 @@ UI 视觉不一致通常不是单个按钮的局部样式问题，而是布局�
 
 推荐按以下顺序排查：先比较 DOM 尺寸和 computed style，再确认 CSS 层叠与边框归属，然后在固定主题和视口下检查实际绘制，最后回到页面级覆盖规则。视觉证据应来自可重复的 Storybook 或 login-free demo 表面，并只截取明确的验证目标，避免把浏览器缩放、截图裁剪或无关页面差异误判为组件回归。
 
+### 8. Diagnose by mismatch layer, then fix the shared contract
+
+当反馈是“看起来大 1px”“边缘不齐”或“这个状态比另一个状态更挤”时，先按现象定位不一致发生在哪一层，再修复最接近根因的共享契约。这个方法同样适用于标签、菜单项、分页、卡片、表格控件和工具栏，不只适用于按钮。
+
+| Observation | First check | Likely fix |
+| - | - | - |
+| DOM 外部尺寸相同，但填充控件看起来更大 | 背景是否覆盖透明边框，边框颜色和阴影是否改变了可见边缘 | 统一 `background-clip`、边框占位和表面 token，不修改单个变体的宽高 |
+| 相邻控件的 DOM 尺寸不同 | `box-sizing`、高度来源、line-height、padding 和层叠顺序 | 收敛到共享尺寸 token 与稳定的 `data-size` 契约 |
+| 只有复合控件出现错位或双重边框 | wrapper 与内部输入/触发器各自绘制了哪些属性 | 指定一个 surface owner，内部控件只保留内容布局职责 |
+| 只有 hover、focus、disabled 或 loading 状态异常 | 伪元素、focus ring、阴影和状态层是否改变了布局或可见边界 | 让状态层不参与外部尺寸，补齐状态矩阵并验证键盘路径 |
+| 桌面正常、移动端异常 | 触控命中区、最小宽度、文字折行和横向溢出规则 | 用响应式语义 token 处理例外，不在页面上叠加临时像素偏移 |
+
+推荐的实现闭环是：固定浏览器缩放、主题和视口复现问题；记录外部盒、内容盒和 computed style；确认唯一的 surface owner；在共享 primitive 或 token 层修复；最后重新检查同一组件的变体、状态、主题、组合和移动视口。若只能通过负 margin、额外 `1px` 或页面级 `!important` 让单张截图对齐，应先退回检查组件契约是否缺失。
+
 ## Guardrails / Reuse notes
 
 - `getBoundingClientRect()` 相等只是必要条件，不是视觉一致性的充分条件；还要比较 `background-clip`、边框颜色、阴影、圆角和 focus ring。
