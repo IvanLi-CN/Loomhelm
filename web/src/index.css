@@ -197,6 +197,11 @@ textarea:focus-visible {
   box-shadow: none;
 }
 
+[data-slot="button"][data-variant="default"],
+[data-slot="button"][data-variant="destructive"] {
+  background-clip: padding-box;
+}
+
 [data-slot="button"][data-size="default"],
 [data-slot="button"][data-size="sm"],
 [data-slot="button"][data-size="icon"],
