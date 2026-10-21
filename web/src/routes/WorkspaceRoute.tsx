@@ -8,12 +8,16 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { getConversation, getProject, getTask, useDemoRuntime } from "@/demo/context";
 import { taskStates } from "@/demo/types";
+import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
+import { TaskEditor } from "@/features/tasks/TaskForm";
+import { TaskRelationshipEditor } from "@/features/tasks/TaskRelations";
 
 function WorkspaceHeader({ taskId, conversationId }: { taskId?: string; conversationId?: string }) {
   const runtime = useDemoRuntime();
-  const task = getTask(runtime.fixtures, taskId);
+  const source = useOptionalDemoProjectTaskSource();
+  const task = source ? source.getTask(taskId) : getTask(runtime.fixtures, taskId);
   const conversation = getConversation(runtime.fixtures, conversationId ?? task?.conversationId);
-  const project = getProject(runtime.fixtures, task?.projectId ?? conversation?.projectId);
+  const project = source ? source.getProject(task?.projectId ?? conversation?.projectId) : getProject(runtime.fixtures, task?.projectId ?? conversation?.projectId);
   const title = task?.title ?? conversation?.title ?? "对话工作区";
   const execution = task?.execution ?? conversation?.execution ?? "未开始";
   return (
@@ -33,18 +37,34 @@ function MessageStream({ conversationId }: { conversationId: string | undefined 
 
 function WorkspaceInfo({ taskId, conversationId }: { taskId?: string; conversationId?: string }) {
   const runtime = useDemoRuntime();
-  const task = getTask(runtime.fixtures, taskId);
+  const source = useOptionalDemoProjectTaskSource();
+  const task = source ? source.getTask(taskId) : getTask(runtime.fixtures, taskId);
   const conversation = getConversation(runtime.fixtures, conversationId ?? task?.conversationId);
-  const project = getProject(runtime.fixtures, task?.projectId ?? conversation?.projectId);
+  const project = source ? source.getProject(task?.projectId ?? conversation?.projectId) : getProject(runtime.fixtures, task?.projectId ?? conversation?.projectId);
+  const [statePending, setStatePending] = useState(false);
+  const [stateFeedback, setStateFeedback] = useState<string | null>(null);
+
+  const changeState = async (value: string) => {
+    if (!task) return;
+    setStatePending(true);
+    setStateFeedback(null);
+    if (source) {
+      const result = await source.updateTask(task.id, { state: value as (typeof taskStates)[number] });
+      if (!result.ok) setStateFeedback(result.message);
+    } else {
+      runtime.setTaskState(task.id, value as (typeof taskStates)[number]);
+    }
+    setStatePending(false);
+  };
+
   return (
     <aside className="workspace-info" aria-label="任务信息">
       {task ? <>
-        <section className="info-block"><span className="section-kicker">任务信息</span><h2>目标</h2><p>{task.goal}</p><label className="info-select"><span>任务业务状态</span><Select value={task.state} disabled={!runtime.canWrite} onValueChange={(value) => runtime.setTaskState(task.id, value as (typeof taskStates)[number])}><SelectTrigger className="info-select-trigger" aria-label="任务业务状态"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{taskStates.map((state) => <SelectItem key={state} value={state}>{state}</SelectItem>)}</SelectGroup></SelectContent></Select></label></section>
+        <section className="info-block"><span className="section-kicker">任务信息</span><h2>目标</h2><p>{task.goal}</p><label className="info-select"><span>任务业务状态</span><Select value={task.state} disabled={!runtime.canWrite || statePending} onValueChange={(value) => { void changeState(value); }}><SelectTrigger className="info-select-trigger" aria-label="任务业务状态"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{taskStates.map((state) => <SelectItem key={state} value={state}>{state}</SelectItem>)}</SelectGroup></SelectContent></Select></label>{statePending && <p className="mt-2 text-xs text-[var(--muted)]" role="status">状态保存中…</p>}{stateFeedback && <p className="mt-2 text-xs text-[var(--warning)]" role="alert">{stateFeedback}</p>}</section>
         <section className="info-block"><span className="section-kicker">关联上下文</span><dl className="info-facts"><dt>项目</dt><dd>{project?.name ?? "未归属项目"}</dd><dt>主对话</dt><dd>{conversation ? conversation.title : "尚未开始"}</dd><dt>执行状态</dt><dd>{task.execution}</dd>{task.parentId && <><dt>父任务</dt><dd><Link to="/tasks/$taskId" params={{ taskId: task.parentId }} className="inline-link">{task.parentId}</Link></dd></>}{task.dependsOn.length > 0 && <><dt>前置任务</dt><dd>{task.dependsOn.map((id) => <Link key={id} to="/tasks/$taskId" params={{ taskId: id }} className="relation-chip">{id}</Link>)}</dd></>}</dl></section>
+        {source && <><TaskRelationshipEditor source={source} taskId={task.id} /><TaskEditor source={source} taskId={task.id} /></>}
         <section className="info-block info-note"><Info size={16} aria-hidden="true" /><p>任务业务状态、执行状态、审批与对话草稿分别保留。子代理活动只在真实事件存在时展开。</p></section>
-      </> : <>
-        <section className="info-block"><span className="section-kicker">对话信息</span><h2>{conversation?.title ?? "独立对话"}</h2><dl className="info-facts"><dt>项目</dt><dd>{project?.name ?? "尚未归属项目"}</dd><dt>任务</dt><dd>未关联任务</dd><dt>执行状态</dt><dd>{conversation?.execution ?? "未开始"}</dd></dl><p>这段对话可以先继续讨论；真实绑定和历史共享确认由后续服务合同接入。</p><Button type="button" variant="secondary" className="button button-secondary" disabled>关联任务</Button></section>
-      </>}
+      </> : <section className="info-block"><span className="section-kicker">对话信息</span><h2>{conversation?.title ?? "独立对话"}</h2><dl className="info-facts"><dt>项目</dt><dd>{project?.name ?? "尚未归属项目"}</dd><dt>任务</dt><dd>未关联任务</dd><dt>执行状态</dt><dd>{conversation?.execution ?? "未开始"}</dd></dl><p>这段对话可以先继续讨论；真实绑定和历史共享确认由后续服务合同接入。</p><Button type="button" variant="secondary" className="button button-secondary" disabled>关联任务</Button></section>}
       <section className="info-block"><span className="section-kicker">对话文件</span><Button type="button" variant="ghost" className="file-reference" disabled><FileText size={15} aria-hidden="true" />verification-notes.md</Button><small>文件入口保留在当前对话上下文。</small></section>
     </aside>
   );
@@ -52,7 +72,8 @@ function WorkspaceInfo({ taskId, conversationId }: { taskId?: string; conversati
 
 export function WorkspaceRoute({ taskId, conversationId }: { taskId?: string; conversationId?: string }) {
   const runtime = useDemoRuntime();
-  const task = getTask(runtime.fixtures, taskId);
+  const source = useOptionalDemoProjectTaskSource();
+  const task = source ? source.getTask(taskId) : getTask(runtime.fixtures, taskId);
   const conversation = getConversation(runtime.fixtures, conversationId ?? task?.conversationId);
   const [panel, setPanel] = useState<"chat" | "info">("chat");
   const conversationKey = conversation?.id;
@@ -74,10 +95,7 @@ export function WorkspaceRoute({ taskId, conversationId }: { taskId?: string; co
     <section className="workspace-page">
       <WorkspaceHeader taskId={task?.id} conversationId={conversation?.id} />
       <Tabs value={panel} onValueChange={(value) => setPanel(value as "chat" | "info")} className="workspace-tabs" aria-label="工作区面板"><TabsList className="workspace-tabs-list" variant="line"><TabsTrigger value="chat"><MessageCircle size={15} aria-hidden="true" />对话</TabsTrigger><TabsTrigger value="info"><Info size={15} aria-hidden="true" />{task ? "任务信息" : "对话信息"}</TabsTrigger></TabsList></Tabs>
-      <div className={`workspace-layout workspace-panel-${panel}`}>
-        <section className="chat-panel" aria-label="主对话"><MessageStream conversationId={activeConversationId} /><form className="composer" onSubmit={submit}><label htmlFor="message-draft">对话共享草稿</label><Textarea id="message-draft" value={draft} onChange={(event) => { setDraft(event.target.value); if (activeConversationId) runtime.setDraft(activeConversationId, event.target.value); }} placeholder={composerDisabled ? "当前状态不可发送，但草稿仍可保留" : "继续说明目标或补充上下文…"} disabled={!activeConversationId || runtime.scene === "readonly" || runtime.persona === "viewer"} /><div className="composer-footer"><small>发送需要明确点击；断线恢复不会自动发送。</small><Button type="submit" variant="default" className="button button-primary" disabled={composerDisabled || !draft.trim()}><Send size={15} aria-hidden="true" />发送</Button></div></form></section>
-        <WorkspaceInfo taskId={task?.id} conversationId={activeConversationId} />
-      </div>
+      <div className={`workspace-layout workspace-panel-${panel}`}><section className="chat-panel" aria-label="主对话"><MessageStream conversationId={activeConversationId} /><form className="composer" onSubmit={submit}><label htmlFor="message-draft">对话共享草稿</label><Textarea id="message-draft" value={draft} onChange={(event) => { setDraft(event.target.value); if (activeConversationId) runtime.setDraft(activeConversationId, event.target.value); }} placeholder={composerDisabled ? "当前状态不可发送，但草稿仍可保留" : "继续说明目标或补充上下文…"} disabled={!activeConversationId || runtime.scene === "readonly" || runtime.persona === "viewer"} /><div className="composer-footer"><small>发送需要明确点击；断线恢复不会自动发送。</small><Button type="submit" variant="default" className="button button-primary" disabled={composerDisabled || !draft.trim()}><Send size={15} aria-hidden="true" />发送</Button></div></form></section><WorkspaceInfo taskId={task?.id} conversationId={activeConversationId} /></div>
     </section>
   );
 }
