@@ -344,6 +344,11 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 		return value, nil
 	}
 	turns := extractTurns(result.Result)
+	if ack.RunID == nil {
+		if runID, ok := a.journal.UniqueRunIDAfter(session.SessionID, command.IssuedAt); ok {
+			ack.RunID = &runID
+		}
+	}
 	matched, ambiguous := matchCommandTurn(command, ack, turns)
 	reconciliation := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown}
 	if matched != nil && !ambiguous {

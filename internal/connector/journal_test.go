@@ -135,6 +135,23 @@ func TestJournalReadsOrderedEventsAndRebuildsPendingApproval(t *testing.T) {
 	}
 }
 
+func TestJournalFindsUniqueRunAfterCommandIssuance(t *testing.T) {
+	journal := openTestJournal(t)
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID:  "session-1",
+		RunID:      stringPointer("turn-1"),
+		OccurredAt: "2026-10-21T00:00:01Z",
+		Type:       protocol.EventTypeRunStarted,
+		Source:     protocol.EventSourceAppServer,
+		Payload:    []byte(`{"method":"turn/started"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if runID, ok := journal.UniqueRunIDAfter("session-1", "2026-10-21T00:00:00Z"); !ok || runID != "turn-1" {
+		t.Fatalf("unique run after issuance = %q, %v", runID, ok)
+	}
+}
+
 func TestJournalEnforcesPrivatePermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "journal.jsonl")
 	journal, err := OpenJournal(path)

@@ -321,6 +321,37 @@ func (j *Journal) ReadEvents(query protocol.EventQuery) (protocol.EventPage, err
 	return page, nil
 }
 
+// UniqueRunIDAfter returns a run identity only when exactly one run-start
+// observation for the session follows the command issuance time. It is used
+// during unknown-result reconciliation when app-server history may not yet
+// contain the submitted user message.
+func (j *Journal) UniqueRunIDAfter(sessionID, issuedAt string) (string, bool) {
+	after, err := time.Parse(time.RFC3339Nano, issuedAt)
+	if err != nil {
+		return "", false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	ids := make(map[string]struct{})
+	for _, event := range j.events {
+		if event.SessionID != sessionID || event.Type != protocol.EventTypeRunStarted || event.RunID == nil {
+			continue
+		}
+		occurredAt, parseErr := time.Parse(time.RFC3339Nano, event.OccurredAt)
+		if parseErr != nil || occurredAt.Before(after) {
+			continue
+		}
+		ids[*event.RunID] = struct{}{}
+	}
+	if len(ids) != 1 {
+		return "", false
+	}
+	for id := range ids {
+		return id, true
+	}
+	return "", false
+}
+
 func (j *Journal) RecordSession(sessionID, externalThreadRef, generation string) error {
 	if sessionID == "" || externalThreadRef == "" {
 		return fmt.Errorf("session id and external thread reference are required")
