@@ -43,6 +43,18 @@ type UpdateRequest struct {
 	Description *string `json:"description,omitempty"`
 }
 
+type Member struct {
+	ProjectID string `json:"project_id"`
+	UserID    string `json:"user_id"`
+	Role      Role   `json:"role"`
+	CreatedAt string `json:"created_at"`
+}
+
+type MemberGrantRequest struct {
+	UserID string `json:"user_id"`
+	Role   Role   `json:"role"`
+}
+
 type Authorizer interface {
 	CanReadProject(context.Context, auth.Principal, string) (bool, error)
 	CanWriteProject(context.Context, auth.Principal, string) (bool, error)
@@ -85,10 +97,141 @@ func (s *Service) CanWriteProject(ctx context.Context, principal auth.Principal,
 }
 
 func (s *Service) CanManageProject(ctx context.Context, principal auth.Principal, projectID string) (bool, error) {
+	return s.canManageMembers(ctx, principal, projectID)
+}
+
+func (s *Service) CanManageMembers(ctx context.Context, principal auth.Principal, projectID string) (bool, error) {
+	return s.canManageMembers(ctx, principal, projectID)
+}
+
+func (s *Service) canManageMembers(ctx context.Context, principal auth.Principal, projectID string) (bool, error) {
 	if s == nil || s.pool == nil || principal.UserID == "" || !principal.HasProjectScope(projectID) {
 		return false, nil
 	}
-	return s.hasRole(ctx, principal.UserID, projectID, RoleOwner)
+	var allowed bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM projects
+			WHERE id = $1 AND created_by = $2
+		)
+	`, projectID, principal.UserID).Scan(&allowed)
+	return allowed, err
+}
+
+func (s *Service) GrantMember(ctx context.Context, principal auth.Principal, projectID string, request MemberGrantRequest) (Member, error) {
+	if err := s.requireMemberManager(ctx, principal, projectID); err != nil {
+		return Member{}, err
+	}
+	userID := strings.TrimSpace(request.UserID)
+	if userID == "" {
+		return Member{}, fmt.Errorf("%w: member user_id is required", auth.ErrInvalid)
+	}
+	if userID == principal.UserID {
+		return Member{}, auth.ErrConflict
+	}
+	if request.Role != RoleViewer && request.Role != RoleOperator {
+		return Member{}, fmt.Errorf("%w: member role must be viewer or operator", auth.ErrInvalid)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Member{}, fmt.Errorf("begin member grant: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var userExists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM auth_users WHERE id = $1)`, userID).Scan(&userExists); err != nil {
+		return Member{}, fmt.Errorf("check member user: %w", err)
+	}
+	if !userExists {
+		return Member{}, auth.ErrNotFound
+	}
+	var member Member
+	var createdAt time.Time
+	err = tx.QueryRow(ctx, `
+		INSERT INTO project_members (project_id, user_id, role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role
+		RETURNING project_id, user_id, role, created_at
+	`, projectID, userID, request.Role).Scan(&member.ProjectID, &member.UserID, &member.Role, &createdAt)
+	if err != nil {
+		return Member{}, fmt.Errorf("grant project member: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Member{}, fmt.Errorf("commit member grant: %w", err)
+	}
+	member.CreatedAt = formatTime(createdAt)
+	return member, nil
+}
+
+func (s *Service) RevokeMember(ctx context.Context, principal auth.Principal, projectID, userID string) error {
+	if err := s.requireMemberManager(ctx, principal, projectID); err != nil {
+		return err
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("%w: member user_id is required", auth.ErrInvalid)
+	}
+	if userID == principal.UserID {
+		return auth.ErrConflict
+	}
+	command, err := s.pool.Exec(ctx, `
+		DELETE FROM project_members
+		WHERE project_id = $1 AND user_id = $2
+	`, projectID, userID)
+	if err != nil {
+		return fmt.Errorf("revoke project member: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return auth.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Service) ListMembers(ctx context.Context, principal auth.Principal, projectID string) ([]Member, error) {
+	allowed, err := s.CanReadProject(ctx, principal, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("authorize member list: %w", err)
+	}
+	if !allowed {
+		return nil, auth.ErrNotFound
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, user_id, role, created_at
+		FROM project_members
+		WHERE project_id = $1
+		ORDER BY created_at, user_id
+	`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list project members: %w", err)
+	}
+	defer rows.Close()
+	members := make([]Member, 0)
+	for rows.Next() {
+		var member Member
+		var createdAt time.Time
+		if err := rows.Scan(&member.ProjectID, &member.UserID, &member.Role, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan project member: %w", err)
+		}
+		member.CreatedAt = formatTime(createdAt)
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read project members: %w", err)
+	}
+	return members, nil
+}
+
+func (s *Service) requireMemberManager(ctx context.Context, principal auth.Principal, projectID string) error {
+	if principal.UserID == "" {
+		return auth.ErrUnauthenticated
+	}
+	allowed, err := s.CanManageMembers(ctx, principal, projectID)
+	if err != nil {
+		return fmt.Errorf("authorize project member management: %w", err)
+	}
+	if !allowed {
+		return auth.ErrForbidden
+	}
+	return nil
 }
 
 func (s *Service) hasRole(ctx context.Context, userID, projectID string, roles ...Role) (bool, error) {
