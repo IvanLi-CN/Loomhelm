@@ -42,27 +42,328 @@ type realCLIIdentity struct {
 }
 
 type realC01ScenarioEvidence struct {
-	Name                   string                       `json:"name"`
-	CommandID              string                       `json:"command_id"`
-	RunID                  string                       `json:"run_id,omitempty"`
-	ApprovalRequestID      string                       `json:"approval_request_id,omitempty"`
-	Decision               string                       `json:"decision,omitempty"`
-	ApprovalCommandState   protocol.CommandState        `json:"approval_command_state,omitempty"`
-	ItemStatus             string                       `json:"item_status,omitempty"`
-	ItemCommand            string                       `json:"item_command,omitempty"`
-	OutputMarker           string                       `json:"output_marker,omitempty"`
-	OutputMarkerObserved   bool                         `json:"output_marker_observed,omitempty"`
-	OutputEmpty            bool                         `json:"output_empty,omitempty"`
-	CommandMatchesExpected bool                         `json:"command_matches_expected,omitempty"`
-	TerminalEventType      protocol.EventType           `json:"terminal_event_type,omitempty"`
-	TerminalStatus         string                       `json:"terminal_status,omitempty"`
-	TerminalCursor         string                       `json:"terminal_cursor,omitempty"`
-	UnknownAckState        protocol.CommandState        `json:"unknown_ack_state,omitempty"`
-	ReconciliationState    protocol.ReconciliationState `json:"reconciliation_state,omitempty"`
-	ReconciliationNote     string                       `json:"reconciliation_note,omitempty"`
-	ReconciledRunID        string                       `json:"reconciled_run_id,omitempty"`
-	RecoveryThreadID       string                       `json:"recovery_thread_id,omitempty"`
-	RecoveryEventObserved  bool                         `json:"recovery_event_observed"`
+	Name                      string                       `json:"name"`
+	CommandID                 string                       `json:"command_id"`
+	RunID                     string                       `json:"run_id,omitempty"`
+	ApprovalRequestID         string                       `json:"approval_request_id,omitempty"`
+	Decision                  string                       `json:"decision,omitempty"`
+	ApprovalCommandState      protocol.CommandState        `json:"approval_command_state,omitempty"`
+	ItemStatus                string                       `json:"item_status,omitempty"`
+	ItemCommand               string                       `json:"item_command,omitempty"`
+	OutputMarker              string                       `json:"output_marker,omitempty"`
+	OutputMarkerObserved      bool                         `json:"output_marker_observed,omitempty"`
+	OutputEmpty               bool                         `json:"output_empty,omitempty"`
+	CommandMatchesExpected    bool                         `json:"command_matches_expected,omitempty"`
+	TerminalEventType         protocol.EventType           `json:"terminal_event_type,omitempty"`
+	TerminalStatus            string                       `json:"terminal_status,omitempty"`
+	TerminalCursor            string                       `json:"terminal_cursor,omitempty"`
+	UnknownAckState           protocol.CommandState        `json:"unknown_ack_state,omitempty"`
+	ReconciliationState       protocol.ReconciliationState `json:"reconciliation_state,omitempty"`
+	ReconciliationNote        string                       `json:"reconciliation_note,omitempty"`
+	ReconciledRunID           string                       `json:"reconciled_run_id,omitempty"`
+	RecoveryThreadID          string                       `json:"recovery_thread_id,omitempty"`
+	RecoveryEventObserved     bool                         `json:"recovery_event_observed"`
+	IndependentProcessRestart bool                         `json:"independent_process_restart,omitempty"`
+	ConnectorProcessIDs       []int                        `json:"connector_process_ids,omitempty"`
+}
+
+type realC01ProcessResult struct {
+	Mode                  string                       `json:"mode"`
+	ProcessID             int                          `json:"process_id"`
+	SessionID             string                       `json:"session_id"`
+	ThreadID              string                       `json:"thread_id"`
+	UnknownAckState       protocol.CommandState        `json:"unknown_ack_state,omitempty"`
+	ReconciledRunID       string                       `json:"reconciled_run_id,omitempty"`
+	ReconciliationState   protocol.ReconciliationState `json:"reconciliation_state,omitempty"`
+	ReconciliationNote    string                       `json:"reconciliation_note,omitempty"`
+	FinalAckState         protocol.CommandState        `json:"final_ack_state,omitempty"`
+	RecoveryEventObserved bool                         `json:"recovery_event_observed,omitempty"`
+}
+
+const realC01HelperEnv = "LOOMHELM_REAL_C01_HELPER"
+
+func TestRealC01ProcessHelper(t *testing.T) {
+	mode := os.Getenv(realC01HelperEnv)
+	if mode == "" {
+		return
+	}
+	cli := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_CLI")
+	workspace := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_WORKSPACE")
+	journalPath := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_JOURNAL")
+	sessionID := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_SESSION")
+	threadID := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_THREAD")
+	commandID := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_COMMAND")
+	resultPath := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_RESULT")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	var result realC01ProcessResult
+	var err error
+	switch mode {
+	case "seed":
+		result, err = runRealC01SeedHelper(ctx, cli, workspace, journalPath, sessionID, threadID, commandID)
+	case "recover":
+		result, err = runRealC01RecoveryHelper(ctx, cli, workspace, journalPath, sessionID, threadID, commandID)
+	default:
+		t.Fatalf("unknown C01 helper mode %q", mode)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRealC01ProcessResult(resultPath, result); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func realC01HelperValue(t *testing.T, name string) string {
+	t.Helper()
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		t.Fatalf("%s is required for the C01 helper", name)
+	}
+	return value
+}
+
+func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, commandID string) (realC01ProcessResult, error) {
+	journal, err := OpenJournal(journalPath)
+	if err != nil {
+		return realC01ProcessResult{}, err
+	}
+	session, ok := journal.Session(sessionID)
+	if !ok {
+		_ = journal.Close()
+		return realC01ProcessResult{}, fmt.Errorf("seed helper session %q is not present in the journal", sessionID)
+	}
+	if session.ExternalThreadRef != threadID {
+		_ = journal.Close()
+		return realC01ProcessResult{}, fmt.Errorf("seed helper thread = %q, want %q", session.ExternalThreadRef, threadID)
+	}
+
+	var unknownCancel context.CancelFunc
+	gateway, err := newRealC01HelperGateway(cli, workspace, func(method string) {
+		if method != "turn/start" || unknownCancel == nil {
+			return
+		}
+		cancel := unknownCancel
+		unknownCancel = nil
+		cancel()
+	})
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	adapter, err := NewAdapter(gateway, journal, realC01AdapterConfig(workspace))
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	controller, err := NewController(journal, adapter)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := controller.ensureAdapterSession(ctx, session); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+
+	command := realC01ReconcileCommand(sessionID, commandID)
+	beforeCursor := latestRealEventCursor(journal, sessionID)
+	unknownCtx, cancelUnknown := context.WithCancel(ctx)
+	unknownCancel = cancelUnknown
+	ack, sendErr := adapter.SendCommand(unknownCtx, session, command)
+	if unknownCancel != nil {
+		unknownCancel()
+		unknownCancel = nil
+	}
+	if !errors.Is(sendErr, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
+		_ = journal.Close()
+		return realC01ProcessResult{}, fmt.Errorf("seed helper ACK = %+v, error = %v", ack, sendErr)
+	}
+	result := realC01ProcessResult{
+		Mode:            "seed",
+		ProcessID:       os.Getpid(),
+		SessionID:       sessionID,
+		ThreadID:        threadID,
+		UnknownAckState: ack.State,
+	}
+	if err := waitForRealRunObservation(ctx, journal, sessionID, beforeCursor, 2*time.Second); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	var reconciledRunID string
+	if err := waitForRealCondition(ctx, func() bool {
+		var ok bool
+		reconciledRunID, ok = journal.UniqueRunIDForCommand(sessionID, commandID, command.IssuedAt)
+		return ok
+	}); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	result.ReconciledRunID = reconciledRunID
+	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := gateway.CloseSession(context.Background(), recoveredGatewaySession); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := waitForRealEvent(ctx, journal, sessionID, protocol.EventTypeReconciliationRequired, ""); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := adapter.CloseSession(context.Background(), session); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := journal.Close(); err != nil {
+		return realC01ProcessResult{}, err
+	}
+	return result, nil
+}
+
+func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, commandID string) (realC01ProcessResult, error) {
+	journal, err := OpenJournal(journalPath)
+	if err != nil {
+		return realC01ProcessResult{}, err
+	}
+	session, ok := journal.Session(sessionID)
+	if !ok {
+		_ = journal.Close()
+		return realC01ProcessResult{}, fmt.Errorf("recovery helper session %q is not present in the journal", sessionID)
+	}
+	if session.ExternalThreadRef != threadID {
+		_ = journal.Close()
+		return realC01ProcessResult{}, fmt.Errorf("recovery helper thread = %q, want %q", session.ExternalThreadRef, threadID)
+	}
+	gateway, err := newRealC01HelperGateway(cli, workspace, nil)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	adapter, err := NewAdapter(gateway, journal, realC01AdapterConfig(workspace))
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	controller, err := NewController(journal, adapter)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	reconciliation, err := controller.ReconcileCommand(ctx, commandID)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := waitForRealEvent(ctx, journal, sessionID, protocol.EventTypeReconciliationCompleted, "thread/resume"); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	finalAck, err := journal.LookupCommand(commandID)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	result := realC01ProcessResult{
+		Mode:                  "recover",
+		ProcessID:             os.Getpid(),
+		SessionID:             sessionID,
+		ThreadID:              threadID,
+		ReconciledRunID:       valueOrEmpty(finalAck.RunID),
+		ReconciliationState:   reconciliation.State,
+		ReconciliationNote:    valueOrEmpty(reconciliation.Note),
+		FinalAckState:         finalAck.State,
+		RecoveryEventObserved: true,
+	}
+	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := gateway.CloseSession(context.Background(), recoveredGatewaySession); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := adapter.CloseSession(context.Background(), session); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := journal.Close(); err != nil {
+		return realC01ProcessResult{}, err
+	}
+	return result, nil
+}
+
+func newRealC01HelperGateway(cli, workspace string, afterRequestWrite func(string)) (*Gateway, error) {
+	return NewGateway(GatewayConfig{
+		Process: ProcessTransportConfig{CommandPath: cli, WorkingDir: workspace},
+		TransportFactory: func(factoryCtx context.Context) (RPCTransport, error) {
+			processConfig := ProcessTransportConfig{CommandPath: cli, WorkingDir: workspace, afterRequestWrite: afterRequestWrite}
+			return NewProcessTransport(context.WithoutCancel(factoryCtx), processConfig)
+		},
+	})
+}
+
+func realC01AdapterConfig(workspace string) AdapterConfig {
+	return AdapterConfig{
+		Model:           "gpt-5.6-luna",
+		ReasoningEffort: "max",
+		ApprovalPolicy:  "untrusted",
+		Sandbox:         "workspace-write",
+		WorkingDir:      workspace,
+		ServiceName:     "loomhelm_c01_acceptance",
+	}
+}
+
+func realC01ReconcileCommand(sessionID, commandID string) protocol.Command {
+	return realCommand(commandID, protocol.CommandKindRunSend, sessionID, `{"prompt":"Reply exactly LOOMHELM_C01_RECONCILE_OK. Do not use tools."}`)
+}
+
+func writeRealC01ProcessResult(path string, result realC01ProcessResult) error {
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func runRealC01Helper(t *testing.T, mode, cli, workspace, journalPath, sessionID, threadID, commandID, resultPath string) realC01ProcessResult {
+	t.Helper()
+	command := exec.Command(os.Args[0], "-test.run=^TestRealC01ProcessHelper$", "-test.v")
+	command.Env = append(os.Environ(),
+		realC01HelperEnv+"="+mode,
+		"LOOMHELM_REAL_C01_HELPER_CLI="+cli,
+		"LOOMHELM_REAL_C01_HELPER_WORKSPACE="+workspace,
+		"LOOMHELM_REAL_C01_HELPER_JOURNAL="+journalPath,
+		"LOOMHELM_REAL_C01_HELPER_SESSION="+sessionID,
+		"LOOMHELM_REAL_C01_HELPER_THREAD="+threadID,
+		"LOOMHELM_REAL_C01_HELPER_COMMAND="+commandID,
+		"LOOMHELM_REAL_C01_HELPER_RESULT="+resultPath,
+	)
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		t.Fatalf("C01 %s helper failed: %v\n%s", mode, err, output.String())
+	}
+	data, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatalf("read C01 %s helper result: %v", mode, err)
+	}
+	var result realC01ProcessResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode C01 %s helper result: %v", mode, err)
+	}
+	if result.Mode != mode {
+		t.Fatalf("C01 helper mode = %q, want %q", result.Mode, mode)
+	}
+	return result
 }
 
 func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
@@ -138,7 +439,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		Model:                    "gpt-5.6-luna",
 		Effort:                   "max",
 		Workspace:                workspace,
-		Scenarios:                make([]realC01ScenarioEvidence, 0, 3),
+		Scenarios:                make([]realC01ScenarioEvidence, 0, 4),
 	}
 	writeEvidence := func() error {
 		if evidencePath == "" {
@@ -176,38 +477,11 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = journal.Close() })
 
-	var unknownCancel context.CancelFunc
-	var latestTransport *ProcessTransport
-	gateway, err := NewGateway(GatewayConfig{
-		Process: ProcessTransportConfig{CommandPath: cli, WorkingDir: workspace},
-		TransportFactory: func(factoryCtx context.Context) (RPCTransport, error) {
-			processConfig := ProcessTransportConfig{CommandPath: cli, WorkingDir: workspace}
-			processConfig.afterRequestWrite = func(method string) {
-				if method != "turn/start" || unknownCancel == nil {
-					return
-				}
-				cancel := unknownCancel
-				unknownCancel = nil
-				cancel()
-			}
-			transport, transportErr := NewProcessTransport(context.WithoutCancel(factoryCtx), processConfig)
-			if transportErr == nil {
-				latestTransport = transport
-			}
-			return transport, transportErr
-		},
-	})
+	gateway, err := newRealC01HelperGateway(cli, workspace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapterConfig := AdapterConfig{
-		Model:           acceptance.Model,
-		ReasoningEffort: acceptance.Effort,
-		ApprovalPolicy:  "untrusted",
-		Sandbox:         "workspace-write",
-		WorkingDir:      workspace,
-		ServiceName:     "loomhelm_c01_acceptance",
-	}
+	adapterConfig := realC01AdapterConfig(workspace)
 	var adapter *Adapter
 	adapter, err = NewAdapter(gateway, journal, adapterConfig)
 	if err != nil {
@@ -228,9 +502,12 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	acceptance.ThreadID = activeSession.ExternalThreadRef
 	acceptance.SessionID = activeSession.SessionID
 	currentGatewaySession := gatewaySession
+	parentSessionOpen := true
 	t.Cleanup(func() {
-		_ = adapter.CloseSession(context.Background(), activeSession)
-		_ = gateway.CloseSession(context.Background(), currentGatewaySession)
+		if parentSessionOpen {
+			_ = adapter.CloseSession(context.Background(), activeSession)
+			_ = gateway.CloseSession(context.Background(), currentGatewaySession)
+		}
 	})
 
 	attachCtx, attachCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -402,68 +679,50 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	}
 	acceptance.Scenarios = append(acceptance.Scenarios, interruptEvidence)
 
-	unknownCommand := realCommand("c01-reconcile", protocol.CommandKindRunSend, activeSession.SessionID, `{"prompt":"Reply exactly LOOMHELM_C01_RECONCILE_OK. Do not use tools."}`)
-	beforeRecoveryCursor := latestRealEventCursor(journal, activeSession.SessionID)
-	unknownCtx, cancelUnknown := context.WithCancel(ctx)
-	unknownCancel = cancelUnknown
-	unknownAck, unknownErr := adapter.SendCommand(unknownCtx, activeSession, unknownCommand)
-	if unknownCancel != nil {
-		unknownCancel()
-		unknownCancel = nil
-	}
-	if !errors.Is(unknownErr, protocol.ErrUnknownCommandResult) || unknownAck.State != protocol.CommandStateUnknown {
-		t.Fatalf("reconciliation seed ACK = %+v, error = %v", unknownAck, unknownErr)
-	}
+	unknownCommand := realC01ReconcileCommand(activeSession.SessionID, "c01-reconcile")
 	recoveryEvidence := realC01ScenarioEvidence{
-		Name:            "disconnect_restart_reconcile",
-		CommandID:       unknownCommand.CommandID,
-		UnknownAckState: unknownAck.State,
+		Name:      "disconnect_restart_reconcile",
+		CommandID: unknownCommand.CommandID,
 	}
-	if err := waitForRealRunObservation(ctx, journal, activeSession.SessionID, beforeRecoveryCursor, 2*time.Second); err != nil {
+	if err := adapter.CloseSession(context.Background(), activeSession); err != nil {
 		t.Fatal(err)
 	}
-	var reconciledRunID string
-	if err := waitForRealCondition(ctx, func() bool {
-		var ok bool
-		reconciledRunID, ok = journal.UniqueRunIDForCommand(activeSession.SessionID, unknownCommand.CommandID, unknownCommand.IssuedAt)
-		return ok
-	}); err != nil {
-		t.Fatal(err)
-	}
-	recoveryEvidence.ReconciledRunID = reconciledRunID
-	if latestTransport == nil || latestTransport.stdout == nil {
-		t.Fatal("real C01 transport was not captured")
-	}
-	if err := latestTransport.stdout.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := waitForRealEvent(ctx, journal, activeSession.SessionID, protocol.EventTypeReconciliationRequired, ""); err != nil {
+	if err := gateway.CloseSession(context.Background(), currentGatewaySession); err != nil {
 		t.Fatal(err)
 	}
 	if err := journal.Close(); err != nil {
 		t.Fatal(err)
 	}
+	parentSessionOpen = false
+	seedResult := runRealC01Helper(t, "seed", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-seed-result.json"))
+	if seedResult.ProcessID == os.Getpid() || seedResult.ProcessID == 0 {
+		t.Fatalf("seed helper PID = %d, parent PID = %d", seedResult.ProcessID, os.Getpid())
+	}
+	if seedResult.UnknownAckState != protocol.CommandStateUnknown {
+		t.Fatalf("seed helper ACK state = %q", seedResult.UnknownAckState)
+	}
+	if seedResult.ReconciledRunID == "" {
+		t.Fatal("seed helper did not observe a run identity for the unknown command")
+	}
+	recoveryEvidence.UnknownAckState = seedResult.UnknownAckState
+	recoveryEvidence.ReconciledRunID = seedResult.ReconciledRunID
+	recoveryEvidence.ConnectorProcessIDs = []int{seedResult.ProcessID}
+	recoveryResult := runRealC01Helper(t, "recover", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-recovery-result.json"))
+	if recoveryResult.ProcessID == os.Getpid() || recoveryResult.ProcessID == seedResult.ProcessID || recoveryResult.ProcessID == 0 {
+		t.Fatalf("recovery helper PID = %d, seed helper PID = %d, parent PID = %d", recoveryResult.ProcessID, seedResult.ProcessID, os.Getpid())
+	}
+	recoveryEvidence.ConnectorProcessIDs = append(recoveryEvidence.ConnectorProcessIDs, recoveryResult.ProcessID)
+	recoveryEvidence.IndependentProcessRestart = true
+	if !recoveryResult.RecoveryEventObserved {
+		t.Fatal("recovery helper did not observe the thread/resume completion event")
+	}
+	recoveryEvidence.ReconciliationState = recoveryResult.ReconciliationState
+	recoveryEvidence.ReconciliationNote = recoveryResult.ReconciliationNote
+	recoveryEvidence.RecoveryEventObserved = recoveryResult.RecoveryEventObserved
 	journal, err = OpenJournal(journalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err = NewAdapter(gateway, journal, adapterConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	controller, err := NewController(journal, adapter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reconciliation, err := controller.ReconcileCommand(ctx, unknownCommand.CommandID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recoveredGatewaySession, err := gateway.RecoveredSession(activeSession.ExternalThreadRef)
-	if err != nil {
-		t.Fatal(err)
-	}
-	currentGatewaySession = recoveredGatewaySession
 	recoveredSession, ok := journal.Session(activeSession.SessionID)
 	if !ok {
 		t.Fatal("recovered adapter session was not present in the journal")
@@ -472,19 +731,13 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if recoveredSession.ExternalThreadRef != activeSession.ExternalThreadRef {
 		t.Fatalf("recovered thread = %q, want %q", recoveredSession.ExternalThreadRef, activeSession.ExternalThreadRef)
 	}
-	if err := waitForRealEvent(ctx, journal, activeSession.SessionID, protocol.EventTypeReconciliationCompleted, "thread/resume"); err != nil {
-		t.Fatal(err)
-	}
-	recoveryEvidence.RecoveryEventObserved = true
-	recoveryEvidence.ReconciliationState = reconciliation.State
-	recoveryEvidence.ReconciliationNote = valueOrEmpty(reconciliation.Note)
 	finalAck, err := journal.LookupCommand(unknownCommand.CommandID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recoveryEvidence.ReconciledRunID = valueOrEmpty(finalAck.RunID)
-	if reconciliation.State != protocol.ReconciliationStateConfirmed || (finalAck.State != protocol.CommandStateSucceeded && finalAck.State != protocol.CommandStateFailed) {
-		t.Fatalf("command reconciliation = %+v, final ACK = %+v", reconciliation, finalAck)
+	if recoveryResult.ReconciliationState != protocol.ReconciliationStateConfirmed || (finalAck.State != protocol.CommandStateSucceeded && finalAck.State != protocol.CommandStateFailed) {
+		t.Fatalf("command reconciliation = %+v, final ACK = %+v", recoveryResult, finalAck)
 	}
 	acceptance.Scenarios = append(acceptance.Scenarios, recoveryEvidence)
 	acceptance.EvidenceStatus = "passed"
