@@ -1,6 +1,43 @@
 import { describe, expect, test } from "bun:test";
 import { ApiClientError, LoomhelmApiClient } from "../src/generated";
 
+describe("generated browser authentication transport", () => {
+  test("reads the real session capability without issuing a token request", async () => {
+    const calls = [];
+    const session = { user_id: "user-1", csrf_protection: "same_origin" };
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method });
+        return Response.json(session);
+      },
+    });
+
+    expect(await client.getBrowserSession()).toEqual(session);
+    expect(calls).toEqual([{ path: "/api/v1/auth/session", method: "GET" }]);
+  });
+
+  test("preserves an expired session response and accepts only completed logout", async () => {
+    const error = { code: "unauthorized", message: "Session expired", request_id: "request-auth" };
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url) => url.pathname.endsWith("/session")
+        ? Response.json(error, { status: 401 })
+        : new Response(null, { status: 204 }),
+    });
+
+    try {
+      await client.getBrowserSession();
+      throw new Error("expired session was accepted");
+    } catch (caught) {
+      expect(caught).toBeInstanceOf(ApiClientError);
+      expect(caught.status).toBe(401);
+      expect(caught.body).toEqual(error);
+    }
+    expect(await client.logoutBrowserSession()).toBeUndefined();
+  });
+});
+
 describe("generated project/task transport", () => {
   test("deletion accepts a bodyless 204 and encodes the resource identity", async () => {
     const calls = [];
