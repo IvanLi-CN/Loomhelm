@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	ownerID := "p01_owner_" + suffix
 	outsiderID := "p01_outsider_" + suffix
 	projectIDs := make([]string, 0, 2)
-	taskIDs := make([]string, 0, 3)
+	taskIDs := make([]string, 0, 8)
 	cleanupDomainState(t, &cleanupPool, &projectIDs, &taskIDs, []string{ownerID, outsiderID})
 	seedUser(t, ctx, cleanupPool, ownerID)
 	seedUser(t, ctx, cleanupPool, outsiderID)
@@ -108,6 +109,31 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	if len(listedTasks) != 2 {
 		t.Fatalf("listed project B task count = %d, want 2", len(listedTasks))
 	}
+	cycleA, err := taskService.Create(ctx, owner, tasks.CreateRequest{ProjectID: projectA.ID, Title: "Cycle A"})
+	if err != nil {
+		t.Fatalf("create cycle A task: %v", err)
+	}
+	taskIDs = append(taskIDs, cycleA.ID)
+	cycleB, err := taskService.Create(ctx, owner, tasks.CreateRequest{ProjectID: projectB.ID, Title: "Cycle B"})
+	if err != nil {
+		t.Fatalf("create cycle B task: %v", err)
+	}
+	taskIDs = append(taskIDs, cycleB.ID)
+	cycleC, err := taskService.Create(ctx, owner, tasks.CreateRequest{ProjectID: projectA.ID, Title: "Cycle C"})
+	if err != nil {
+		t.Fatalf("create cycle C task: %v", err)
+	}
+	taskIDs = append(taskIDs, cycleC.ID)
+	reverseLeft, err := taskService.Create(ctx, owner, tasks.CreateRequest{ProjectID: projectA.ID, Title: "Reverse Left"})
+	if err != nil {
+		t.Fatalf("create reverse left task: %v", err)
+	}
+	taskIDs = append(taskIDs, reverseLeft.ID)
+	reverseRight, err := taskService.Create(ctx, owner, tasks.CreateRequest{ProjectID: projectB.ID, Title: "Reverse Right"})
+	if err != nil {
+		t.Fatalf("create reverse right task: %v", err)
+	}
+	taskIDs = append(taskIDs, reverseRight.ID)
 
 	if err := taskService.AddParent(ctx, owner, child.ID, parent.ID); err != nil {
 		t.Fatalf("add parent relationship: %v", err)
@@ -126,6 +152,116 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	}
 	if err := taskService.AddDependency(ctx, owner, parent.ID, child.ID); !errors.Is(err, auth.ErrConflict) {
 		t.Fatalf("dependency cycle error = %v, want conflict", err)
+	}
+	assertExecutionProtection := func(taskID string, wantActive, wantRetained bool) {
+		t.Helper()
+		var active, retained bool
+		if err := cleanupPool.QueryRow(ctx, `
+			SELECT active_execution, retained_history
+			FROM task_execution_refs WHERE task_id = $1
+		`, taskID).Scan(&active, &retained); err != nil {
+			t.Fatalf("read execution protection for %s: %v", taskID, err)
+		}
+		if active != wantActive || retained != wantRetained {
+			t.Fatalf("execution protection for %s = active:%v retained:%v, want active:%v retained:%v", taskID, active, retained, wantActive, wantRetained)
+		}
+	}
+	assertExecutionProtection(parent.ID, false, false)
+	assertExecutionProtection(child.ID, false, false)
+
+	if err := taskService.AddParent(ctx, owner, cycleB.ID, cycleA.ID); err != nil {
+		t.Fatalf("add first three-node parent edge: %v", err)
+	}
+	if err := taskService.AddParent(ctx, owner, cycleC.ID, cycleB.ID); err != nil {
+		t.Fatalf("add second three-node parent edge: %v", err)
+	}
+	if err := taskService.AddParent(ctx, owner, cycleA.ID, cycleC.ID); !errors.Is(err, auth.ErrConflict) {
+		t.Fatalf("three-node parent cycle error = %v, want conflict", err)
+	}
+	if err := taskService.RemoveParent(ctx, owner, cycleC.ID, cycleB.ID); err != nil {
+		t.Fatalf("remove second three-node parent edge: %v", err)
+	}
+	if err := taskService.RemoveParent(ctx, owner, cycleB.ID, cycleA.ID); err != nil {
+		t.Fatalf("remove first three-node parent edge: %v", err)
+	}
+	if err := taskService.AddDependency(ctx, owner, cycleB.ID, cycleA.ID); err != nil {
+		t.Fatalf("add first three-node dependency edge: %v", err)
+	}
+	if err := taskService.AddDependency(ctx, owner, cycleC.ID, cycleB.ID); err != nil {
+		t.Fatalf("add second three-node dependency edge: %v", err)
+	}
+	if err := taskService.AddDependency(ctx, owner, cycleA.ID, cycleC.ID); !errors.Is(err, auth.ErrConflict) {
+		t.Fatalf("three-node dependency cycle error = %v, want conflict", err)
+	}
+	if err := taskService.RemoveDependency(ctx, owner, cycleC.ID, cycleB.ID); err != nil {
+		t.Fatalf("remove second three-node dependency edge: %v", err)
+	}
+	if err := taskService.RemoveDependency(ctx, owner, cycleB.ID, cycleA.ID); err != nil {
+		t.Fatalf("remove first three-node dependency edge: %v", err)
+	}
+
+	concurrentReverse := func(mutate func(string, string) error) []error {
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		go func() {
+			<-start
+			results <- mutate(reverseLeft.ID, reverseRight.ID)
+		}()
+		go func() {
+			<-start
+			results <- mutate(reverseRight.ID, reverseLeft.ID)
+		}()
+		close(start)
+		return []error{<-results, <-results}
+	}
+	assertOneSuccessOneConflict := func(label string, results []error) {
+		t.Helper()
+		successes, conflicts := 0, 0
+		for _, err := range results {
+			switch {
+			case err == nil:
+				successes++
+			case errors.Is(err, auth.ErrConflict):
+				conflicts++
+			default:
+				t.Fatalf("%s concurrent mutation error = %v, want nil or conflict", label, err)
+			}
+		}
+		if successes != 1 || conflicts != 1 {
+			t.Fatalf("%s concurrent mutation results = successes:%d conflicts:%d, want one of each", label, successes, conflicts)
+		}
+	}
+	parentResults := concurrentReverse(func(firstID, secondID string) error {
+		return taskService.AddParent(ctx, owner, firstID, secondID)
+	})
+	assertOneSuccessOneConflict("parent", parentResults)
+	var storedParent, storedChild string
+	if err := cleanupPool.QueryRow(ctx, `
+		SELECT parent_task_id, child_task_id
+		FROM task_parent_links
+		WHERE (parent_task_id = $1 AND child_task_id = $2)
+		   OR (parent_task_id = $2 AND child_task_id = $1)
+	`, reverseLeft.ID, reverseRight.ID).Scan(&storedParent, &storedChild); err != nil {
+		t.Fatalf("read concurrent parent edge: %v", err)
+	}
+	if err := taskService.RemoveParent(ctx, owner, storedChild, storedParent); err != nil {
+		t.Fatalf("remove concurrent parent edge: %v", err)
+	}
+	dependencyResults := concurrentReverse(func(firstID, secondID string) error {
+		return taskService.AddDependency(ctx, owner, firstID, secondID)
+	})
+	assertOneSuccessOneConflict("dependency", dependencyResults)
+	var storedPrerequisite, storedDependent string
+	if err := cleanupPool.QueryRow(ctx, `
+		SELECT prerequisite_task_id, dependent_task_id
+		FROM task_dependency_links
+		WHERE (prerequisite_task_id = $1 AND dependent_task_id = $2)
+		   OR (prerequisite_task_id = $2 AND dependent_task_id = $1)
+	`, reverseLeft.ID, reverseRight.ID).Scan(&storedPrerequisite, &storedDependent); err != nil {
+		t.Fatalf("read concurrent dependency edge: %v", err)
+	}
+	if err := taskService.RemoveDependency(ctx, owner, storedDependent, storedPrerequisite); err != nil {
+		t.Fatalf("remove concurrent dependency edge: %v", err)
 	}
 
 	page, err := taskService.Relationships(ctx, owner, parent.ID)
@@ -281,11 +417,27 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 		t.Fatalf("relationships after reopen = %+v", reopenedPage)
 	}
 
+	beforeRelatedParent, err := reopenedTasks.Get(ctx, owner, parent.ID)
+	if err != nil {
+		t.Fatalf("get related task before rejected delete: %v", err)
+	}
+	beforeRelatedPage, err := reopenedTasks.Relationships(ctx, owner, parent.ID)
+	if err != nil {
+		t.Fatalf("get relationships before rejected delete: %v", err)
+	}
 	if err := reopenedTasks.Delete(ctx, owner, parent.ID); !errors.Is(err, auth.ErrConflict) {
 		t.Fatalf("delete related task error = %v, want conflict", err)
 	}
-	if err := reopenedTasks.SetExecutionProtection(ctx, owner, parent.ID, true, false); err != nil {
-		t.Fatalf("set active execution protection: %v", err)
+	afterRelatedParent, err := reopenedTasks.Get(ctx, owner, parent.ID)
+	if err != nil {
+		t.Fatalf("get related task after rejected delete: %v", err)
+	}
+	afterRelatedPage, err := reopenedTasks.Relationships(ctx, owner, parent.ID)
+	if err != nil {
+		t.Fatalf("get relationships after rejected delete: %v", err)
+	}
+	if !reflect.DeepEqual(beforeRelatedParent, afterRelatedParent) || !reflect.DeepEqual(beforeRelatedPage, afterRelatedPage) {
+		t.Fatalf("rejected related-task delete changed state: before task=%+v page=%+v after task=%+v page=%+v", beforeRelatedParent, beforeRelatedPage, afterRelatedParent, afterRelatedPage)
 	}
 	if err := reopenedTasks.RemoveParent(ctx, owner, child.ID, parent.ID); err != nil {
 		t.Fatalf("remove parent relationship: %v", err)
@@ -293,11 +445,47 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	if err := reopenedTasks.RemoveDependency(ctx, owner, child.ID, parent.ID); err != nil {
 		t.Fatalf("remove dependency relationship: %v", err)
 	}
+	if err := reopenedTasks.SetExecutionProtection(ctx, owner, parent.ID, true, false); err != nil {
+		t.Fatalf("set active execution protection: %v", err)
+	}
+	beforeActiveParent, err := reopenedTasks.Get(ctx, owner, parent.ID)
+	if err != nil {
+		t.Fatalf("get active task before rejected delete: %v", err)
+	}
 	if err := reopenedTasks.Delete(ctx, owner, parent.ID); !errors.Is(err, auth.ErrConflict) {
 		t.Fatalf("delete actively executing task error = %v, want conflict", err)
 	}
+	afterActiveParent, err := reopenedTasks.Get(ctx, owner, parent.ID)
+	if err != nil {
+		t.Fatalf("get active task after rejected delete: %v", err)
+	}
+	if !reflect.DeepEqual(beforeActiveParent, afterActiveParent) {
+		t.Fatalf("rejected active-task delete changed task: before=%+v after=%+v", beforeActiveParent, afterActiveParent)
+	}
+	assertExecutionProtectionAfterReopen(t, ctx, reopened.Pool(), parent.ID, true, false)
 	if err := reopenedTasks.SetExecutionProtection(ctx, owner, parent.ID, false, false); err != nil {
 		t.Fatalf("clear execution protection: %v", err)
+	}
+	if err := reopenedTasks.SetExecutionProtection(ctx, owner, parent.ID, false, true); err != nil {
+		t.Fatalf("set retained history protection: %v", err)
+	}
+	beforeRetainedParent, err := reopenedTasks.Get(ctx, owner, parent.ID)
+	if err != nil {
+		t.Fatalf("get retained task before rejected delete: %v", err)
+	}
+	if err := reopenedTasks.Delete(ctx, owner, parent.ID); !errors.Is(err, auth.ErrConflict) {
+		t.Fatalf("delete task with retained history error = %v, want conflict", err)
+	}
+	afterRetainedParent, err := reopenedTasks.Get(ctx, owner, parent.ID)
+	if err != nil {
+		t.Fatalf("get retained task after rejected delete: %v", err)
+	}
+	if !reflect.DeepEqual(beforeRetainedParent, afterRetainedParent) {
+		t.Fatalf("rejected retained-history delete changed task: before=%+v after=%+v", beforeRetainedParent, afterRetainedParent)
+	}
+	assertExecutionProtectionAfterReopen(t, ctx, reopened.Pool(), parent.ID, false, true)
+	if err := reopenedTasks.SetExecutionProtection(ctx, owner, parent.ID, false, false); err != nil {
+		t.Fatalf("clear retained history protection: %v", err)
 	}
 	if _, err := reopened.Pool().Exec(ctx, `UPDATE tasks SET session_id = 'session-p01' WHERE id = $1`, parent.ID); err != nil {
 		t.Fatalf("set task session id: %v", err)
@@ -311,11 +499,55 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	if err := reopenedTasks.Delete(ctx, owner, parent.ID); err != nil {
 		t.Fatalf("delete unprotected task: %v", err)
 	}
+	for _, extraTask := range []tasks.Task{cycleA, cycleB, cycleC, reverseLeft, reverseRight} {
+		if err := reopenedTasks.Delete(ctx, owner, extraTask.ID); err != nil {
+			t.Fatalf("delete relationship test task %s: %v", extraTask.ID, err)
+		}
+	}
+	projectBBefore, err := reopenedProjects.Get(ctx, owner, projectB.ID)
+	if err != nil {
+		t.Fatalf("get project B before rejected delete: %v", err)
+	}
+	tasksBBefore, _, err := reopenedTasks.List(ctx, owner, projectB.ID, tasks.Cursor{}, 10)
+	if err != nil {
+		t.Fatalf("list project B before rejected delete: %v", err)
+	}
 	if err := reopenedProjects.Delete(ctx, owner, projectB.ID); !errors.Is(err, auth.ErrConflict) {
 		t.Fatalf("delete project with tasks error = %v, want conflict", err)
 	}
+	projectBAfter, err := reopenedProjects.Get(ctx, owner, projectB.ID)
+	if err != nil {
+		t.Fatalf("get project B after rejected delete: %v", err)
+	}
+	tasksBAfter, _, err := reopenedTasks.List(ctx, owner, projectB.ID, tasks.Cursor{}, 10)
+	if err != nil {
+		t.Fatalf("list project B after rejected delete: %v", err)
+	}
+	if !reflect.DeepEqual(projectBBefore, projectBAfter) || !reflect.DeepEqual(tasksBBefore, tasksBAfter) {
+		t.Fatalf("rejected project delete changed state: before project=%+v tasks=%+v after project=%+v tasks=%+v", projectBBefore, tasksBBefore, projectBAfter, tasksBAfter)
+	}
 	if err := reopenedTasks.Delete(ctx, owner, child.ID); err != nil {
 		t.Fatalf("delete child task: %v", err)
+	}
+	if err := reopenedTasks.SetExecutionProtection(ctx, owner, unrelated.ID, true, true); err != nil {
+		t.Fatalf("set cancellation execution protection: %v", err)
+	}
+	cancelledTask, err := reopenedTasks.Update(ctx, owner, unrelated.ID, tasks.UpdateRequest{Status: taskStatus(tasks.StatusCancelled)})
+	if err != nil {
+		t.Fatalf("cancel protected task: %v", err)
+	}
+	if cancelledTask.Status != tasks.StatusCancelled {
+		t.Fatalf("cancelled task status = %q, want %q", cancelledTask.Status, tasks.StatusCancelled)
+	}
+	if _, err := reopenedTasks.Get(ctx, owner, unrelated.ID); err != nil {
+		t.Fatalf("read cancelled task history: %v", err)
+	}
+	assertExecutionProtectionAfterReopen(t, ctx, reopened.Pool(), unrelated.ID, true, true)
+	if err := reopenedTasks.Delete(ctx, owner, unrelated.ID); !errors.Is(err, auth.ErrConflict) {
+		t.Fatalf("delete cancelled task with retained history error = %v, want conflict", err)
+	}
+	if err := reopenedTasks.SetExecutionProtection(ctx, owner, unrelated.ID, false, false); err != nil {
+		t.Fatalf("clear cancelled task protection: %v", err)
 	}
 	if err := reopenedTasks.Delete(ctx, owner, unrelated.ID); err != nil {
 		t.Fatalf("delete unrelated task: %v", err)
@@ -330,6 +562,20 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 
 func taskStatus(status tasks.Status) *tasks.Status {
 	return &status
+}
+
+func assertExecutionProtectionAfterReopen(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID string, wantActive, wantRetained bool) {
+	t.Helper()
+	var active, retained bool
+	if err := pool.QueryRow(ctx, `
+		SELECT active_execution, retained_history
+		FROM task_execution_refs WHERE task_id = $1
+	`, taskID).Scan(&active, &retained); err != nil {
+		t.Fatalf("read execution protection for %s: %v", taskID, err)
+	}
+	if active != wantActive || retained != wantRetained {
+		t.Fatalf("execution protection for %s = active:%v retained:%v, want active:%v retained:%v", taskID, active, retained, wantActive, wantRetained)
+	}
 }
 
 func openDomainDatabase(t *testing.T, ctx context.Context) *database.DB {
