@@ -90,6 +90,10 @@ The platform query package uses query-scoped sqlc model emission. The generator 
 
 The owner completed PRD decision DEC-LH-004 by confirming that both cross-project relationship types reject self-links and cycles within their own graphs, while legal links remain bookkeeping without automatic execution. The owner also confirmed rejection of project/task deletion when active execution or required historical results exist. Task cancellation preserves history and remains distinct from execution interruption. This settles the corresponding product proposals without establishing implementation or authenticated acceptance evidence.
 
+## Membership Transport Contract
+
+The confirmed member-management requirement has explicit list, PUT grant/update and DELETE revoke operations in the canonical catalog, shared Go/TypeScript types and generated Web client. The grant body contains only an assignable role; the project and existing user are addressed by the path. Owner is a readable role without an ownership-transfer operation. The additive transport contract leaves database state unchanged and keeps application authorization and HTTP/runtime verification as separate delivery gates.
+
 ## References
 
 - [Requirements](SPEC.md)

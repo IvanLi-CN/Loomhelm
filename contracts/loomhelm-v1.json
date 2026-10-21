@@ -9,6 +9,14 @@
       "type": "string",
       "enum": ["todo", "in_progress", "blocked", "done", "cancelled"]
     },
+    "ProjectMemberRole": {
+      "type": "string",
+      "enum": ["viewer", "operator", "owner"]
+    },
+    "ProjectMemberGrantRole": {
+      "type": "string",
+      "enum": ["viewer", "operator"]
+    },
     "SessionPath": {
       "type": "string",
       "enum": ["new", "existing_active"]
@@ -91,6 +99,16 @@
         "description": {"type": "string"},
         "created_at": {"type": "string", "format": "date-time"},
         "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ProjectMember": {
+      "type": "object",
+      "required": ["project_id", "user_id", "role", "created_at"],
+      "properties": {
+        "project_id": {"type": "string"},
+        "user_id": {"type": "string"},
+        "role": {"$ref": "#/types/ProjectMemberRole"},
+        "created_at": {"type": "string", "format": "date-time"}
       }
     },
     "Task": {
@@ -251,6 +269,18 @@
       "required": ["project"],
       "properties": {"project": {"$ref": "#/types/Project"}}
     },
+    "ProjectMemberResponse": {
+      "type": "object",
+      "required": ["member"],
+      "properties": {"member": {"$ref": "#/types/ProjectMember"}}
+    },
+    "ProjectMemberListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/ProjectMember"}}
+      }
+    },
     "ProjectListResponse": {
       "type": "object",
       "required": ["items", "has_more"],
@@ -332,6 +362,13 @@
       "properties": {
         "name": {"type": "string"},
         "description": {"type": "string"}
+      }
+    },
+    "GrantProjectMemberRequest": {
+      "type": "object",
+      "required": ["role"],
+      "properties": {
+        "role": {"$ref": "#/types/ProjectMemberGrantRole"}
       }
     },
     "ListProjectsQuery": {
@@ -461,6 +498,36 @@
         "response_status": 204,
         "summary": "Delete a project when authorized and not protected",
         "mcp_tool": {"name": "loomhelm.delete_project", "description": "Delete an authorized project only when preservation rules permit it."}
+      },
+      {
+        "operation_id": "listProjectMembers",
+        "method": "GET",
+        "path": "/projects/{project_id}/members",
+        "path_params": {"project_id": "string"},
+        "response_type": "ProjectMemberListResponse",
+        "response_status": 200,
+        "summary": "List membership grants in an authorized project",
+        "mcp_tool": {"name": "loomhelm.list_project_members", "description": "List project member identities and roles within the caller's project scope."}
+      },
+      {
+        "operation_id": "grantProjectMember",
+        "method": "PUT",
+        "path": "/projects/{project_id}/members/{user_id}",
+        "path_params": {"project_id": "string", "user_id": "string"},
+        "body_type": "GrantProjectMemberRequest",
+        "response_type": "ProjectMemberResponse",
+        "response_status": 200,
+        "summary": "Grant or update read-only or operator access as project creator",
+        "mcp_tool": {"name": "loomhelm.grant_project_member", "description": "Let the project creator grant or update viewer/operator access for an existing user, without transferring ownership."}
+      },
+      {
+        "operation_id": "revokeProjectMember",
+        "method": "DELETE",
+        "path": "/projects/{project_id}/members/{user_id}",
+        "path_params": {"project_id": "string", "user_id": "string"},
+        "response_status": 204,
+        "summary": "Revoke another member's project access as project creator",
+        "mcp_tool": {"name": "loomhelm.revoke_project_member", "description": "Let the project creator revoke another user's membership while retaining the creator's own ownership."}
       },
       {
         "operation_id": "listTasks",

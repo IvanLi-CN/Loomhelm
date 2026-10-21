@@ -83,3 +83,70 @@ describe("generated project/task transport", () => {
     expect(await client.getTaskRelationships({ task_id: "task-1" })).toEqual(page);
   });
 });
+
+describe("generated project membership transport", () => {
+  test("grant encodes both identities and sends only the assignable role", async () => {
+    const calls = [];
+    const member = {
+      project_id: "project/A B?",
+      user_id: "user/A B?",
+      role: "operator",
+      created_at: "2026-10-21T00:00:00Z",
+    };
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method, body: JSON.parse(init.body) });
+        return Response.json({ member });
+      },
+    });
+
+    expect(await client.grantProjectMember({
+      project_id: member.project_id,
+      user_id: member.user_id,
+      body: { role: "operator" },
+    })).toEqual({ member });
+    expect(calls).toEqual([{
+      path: "/api/v1/projects/project%2FA%20B%3F/members/user%2FA%20B%3F",
+      method: "PUT",
+      body: { role: "operator" },
+    }]);
+  });
+
+  test("list returns an explicit collection and revoke requires bodyless completion", async () => {
+    const calls = [];
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method });
+        return init.method === "GET"
+          ? Response.json({ items: [] })
+          : new Response(null, { status: 204 });
+      },
+    });
+
+    expect(await client.listProjectMembers({ project_id: "project/1" })).toEqual({ items: [] });
+    expect(await client.revokeProjectMember({ project_id: "project/1", user_id: "user/2" })).toBeUndefined();
+    expect(calls).toEqual([
+      { path: "/api/v1/projects/project%2F1/members", method: "GET" },
+      { path: "/api/v1/projects/project%2F1/members/user%2F2", method: "DELETE" },
+    ]);
+  });
+
+  test("membership denial preserves the API failure for the caller", async () => {
+    const body = { code: "unauthorized", message: "Project creator required", request_id: "grant-denied" };
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async () => Response.json(body, { status: 403 }),
+    });
+
+    try {
+      await client.grantProjectMember({ project_id: "project-1", user_id: "user-2", body: { role: "viewer" } });
+      throw new Error("grant unexpectedly succeeded");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiClientError);
+      expect(error.status).toBe(403);
+      expect(error.body).toEqual(body);
+    }
+  });
+});
