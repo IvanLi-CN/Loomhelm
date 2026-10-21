@@ -7,9 +7,9 @@
     "version_impact": "minor"
   },
   "durable_state": {
-    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object, its ready-row reclamation marker and the reason for an unavailable publication.",
+    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object, its ready-row reclamation marker and retry deferral, and the reason for an unavailable publication.",
     "staging_recovery": {
-      "ready_row": "A ready row records staging_reclaimed_at only after the exact staging object is removed and the containing directory is synced; repeated bounded recovery skips rows with this marker.",
+      "ready_row": "A ready row records staging_reclaimed_at only after the exact staging object is removed and the containing directory is synced; failed reclamation records a bounded retry deferral, and repeated recovery skips rows with the completed marker.",
       "pre_intent_crash": "A staging object without a committed intent is retained for diagnosis because recovery cannot prove that an active uploader is not still using it; it is not referenced by publication queries or identity coordination."
     },
     "unavailable_reasons": [
@@ -79,7 +79,7 @@
     ],
     "progress_signals": [
       "Goose records migration 00007 before artifact metadata is read or written.",
-      "A successful upload reports the persisted metadata only after a pending intent is committed, final bytes are hashed, synced, linked without overwrite, marked ready and its staging object is durably reclaimed.",
+      "A successful upload reports the persisted metadata only after a pending intent is committed, final bytes are hashed, synced, linked without overwrite, final bytes are revalidated, marked ready and its staging object is durably reclaimed.",
       "Recover processes a bounded pending set under per-identity database coordination and records unavailable state for missing or corrupt bytes; it never invents replacement content.",
       "An explicit identical retry may replace only never-ready staging-missing or staging-corrupt state after reauthorization, exact metadata and byte validation, final absence confirmation and a durable pending repair intent.",
       "Metadata and Open expose only verified ready objects and revalidate the stored file size and SHA-256 before returning metadata or a reader.",

@@ -125,11 +125,8 @@ func NewStore(pool *pgxpool.Pool, cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := prepareDirectory(root, 0o700); err != nil {
+	if err := prepareDirectoryDurable(root, 0o700); err != nil {
 		return nil, fmt.Errorf("prepare artifact storage root: %w", ErrStoreUnavailable)
-	}
-	if err := syncDirectory(filepath.Dir(root)); err != nil {
-		return nil, fmt.Errorf("sync artifact storage parent: %w", ErrStoreUnavailable)
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -231,8 +228,19 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check))
 			return protocol.Artifact{}, unavailableError(ErrIntegrity)
 		}
+		resolved, status, reclaimErr := s.reclaimReadyStaging(ctx, record.Artifact.ID, cleanup)
+		if reclaimErr != nil {
+			return protocol.Artifact{}, reclaimErr
+		}
+		if status == recoveryUnavailable {
+			keepStaging = false
+			return protocol.Artifact{}, unavailableError(ErrIntegrity)
+		}
+		if status != recoveryReady {
+			return protocol.Artifact{}, ErrRecoveryIncomplete
+		}
 		keepStaging = false
-		return record.Artifact, nil
+		return resolved.Artifact, nil
 	case publicationUnavailable:
 		keepStaging = false
 		return protocol.Artifact{}, unavailableError(ErrIntegrity)
@@ -469,6 +477,34 @@ func prepareDirectory(path string, mode os.FileMode) error {
 		return fmt.Errorf("%s is not a real directory", path)
 	}
 	return os.Chmod(path, mode)
+}
+
+func prepareDirectoryDurable(path string, mode os.FileMode) error {
+	missing := make([]string, 0, 2)
+	for current := path; ; current = filepath.Dir(current) {
+		if _, err := os.Lstat(current); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+	if err := prepareDirectory(path, mode); err != nil {
+		return err
+	}
+	for _, directory := range missing {
+		if err := syncDirectory(directory); err != nil {
+			return err
+		}
+	}
+	if len(missing) > 0 {
+		return syncDirectory(filepath.Dir(missing[len(missing)-1]))
+	}
+	return nil
 }
 
 func openStoredFile(path string) (*os.File, error) {

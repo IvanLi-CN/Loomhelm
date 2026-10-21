@@ -327,6 +327,9 @@ func TestStoreRecoveryReclaimsReadyStagingAcrossBoundedBatches(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
 	}
 	first, err := store.Recover(ctx, 1)
@@ -338,6 +341,70 @@ func TestStoreRecoveryReclaimsReadyStagingAcrossBoundedBatches(t *testing.T) {
 		t.Fatalf("second ready cleanup = %#v, err=%v", second, err)
 	}
 	assertNoStagingFiles(t, store.objects)
+}
+
+func TestStoreRecoveryPreservesReadyStagingWhenFinalIsInvalid(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready staging must survive")
+	for index, finalContent := range [][]byte{nil, []byte("corrupt final")} {
+		artifact := testArtifact(uniqueID(fmt.Sprintf("artifact-ready-invalid-%d", index)), nil, content)
+		stagingName := fmt.Sprintf(".upload-invalid-%d-%d", index, time.Now().UnixNano())
+		if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if finalContent != nil {
+			if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), finalContent, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	}
+	report, err := store.Recover(ctx, 2)
+	if err != nil || report.Unavailable != 2 {
+		t.Fatalf("invalid ready recovery = %#v, err=%v", report, err)
+	}
+	entries, err := os.ReadDir(store.objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingCount := 0
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".upload-invalid-") {
+			stagingCount++
+		}
+	}
+	if stagingCount != 2 {
+		t.Fatalf("invalid ready staging count = %d, want 2", stagingCount)
+	}
+}
+
+func TestStorePutReclaimsUnmarkedReadyStaging(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready retry cleanup")
+	artifact := testArtifact(uniqueID("artifact-ready-retry"), nil, content)
+	stagingName := ".upload-ready-retry-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ready retry staging error = %v, want missing", err)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if !reclaimed {
+		t.Fatal("ready retry did not persist staging reclamation")
+	}
 }
 
 func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {

@@ -607,7 +607,7 @@ func (s *Store) commitRepairState(ctx context.Context, updated artifactRecord, c
 func (s *Store) updateUnavailableState(ctx context.Context, tx pgx.Tx, record artifactRecord, state publicationState, stagingName, reason string) (artifactRecord, error) {
 	tag, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
-		SET state = $2, staging_name = $3, unavailable_reason = $4, staging_reclaimed_at = NULL
+		SET state = $2, staging_name = $3, unavailable_reason = $4, staging_reclaimed_at = NULL, staging_reclaim_after = NOW()
 		WHERE id = $1 AND state = 'unavailable' AND unavailable_reason = $5
 	`, record.Artifact.ID, string(state), stagingName, reason, record.UnavailableReason)
 	if err != nil {
@@ -824,15 +824,90 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 	if record.State != publicationReady {
 		return record, stateRecoveryStatus(record.State), nil
 	}
+	finalCheck, err := s.inspectReady(record)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	if finalCheck == fileUnknown {
+		return artifactRecord{}, recoveryPending, fmt.Errorf("inspect ready artifact for reclamation: %w", ErrStoreUnavailable)
+	}
+	if finalCheck != fileValid {
+		reason := finalReason(finalCheck)
+		if _, err := tx.Exec(ctx, `
+			UPDATE conversation_artifacts
+			SET state = 'unavailable', unavailable_reason = $2, staging_reclaim_after = NOW()
+			WHERE id = $1 AND state = 'ready'
+		`, id, reason); err != nil {
+			return artifactRecord{}, recoveryPending, fmt.Errorf("update invalid ready artifact: %w", ErrStoreUnavailable)
+		}
+		updated := record
+		updated.State = publicationUnavailable
+		updated.UnavailableReason = reason
+		if err := s.commit(ctx, tx); err != nil {
+			confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
+			if confirmErr == nil && samePublicationState(confirmed, updated) {
+				return confirmed, recoveryUnavailable, nil
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return artifactRecord{}, recoveryPending, err
+			}
+			return artifactRecord{}, recoveryPending, fmt.Errorf("confirm invalid ready artifact: %w", ErrStoreUnavailable)
+		}
+		confirmed, err := s.confirmRecordWithCleanup(id, cleanup)
+		if err != nil {
+			return artifactRecord{}, recoveryPending, err
+		}
+		if !samePublicationState(confirmed, updated) {
+			return artifactRecord{}, recoveryPending, fmt.Errorf("invalid ready artifact state changed unexpectedly: %w", ErrStoreUnavailable)
+		}
+		return confirmed, recoveryUnavailable, nil
+	}
 	if record.StagingReclaimed {
 		return record, recoveryReady, nil
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_reclaim_after = NOW() + INTERVAL '1 minute'
+		WHERE id = $1 AND state = 'ready' AND staging_reclaimed_at IS NULL
+	`, id); err != nil {
+		return artifactRecord{}, recoveryPending, fmt.Errorf("defer artifact staging reclamation: %w", ErrStoreUnavailable)
+	}
+	if err := s.commit(ctx, tx); err != nil {
+		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
+		if confirmErr != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return artifactRecord{}, recoveryPending, err
+			}
+			return artifactRecord{}, recoveryPending, fmt.Errorf("confirm staging reclamation deferral: %w", ErrStoreUnavailable)
+		}
+		if confirmed.State != publicationReady {
+			return confirmed, stateRecoveryStatus(confirmed.State), nil
+		}
+		if confirmed.StagingReclaimed {
+			return confirmed, recoveryReady, nil
+		}
+	}
+	tx = nil
 	if err := s.removeStaging(record.StagingName); err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
+	tx, err = s.beginIdentityTx(ctx, id, cleanup)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	confirmed, err := readArtifactRecord(ctx, tx, id)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	if confirmed.State != publicationReady {
+		return confirmed, stateRecoveryStatus(confirmed.State), nil
+	}
+	if confirmed.StagingReclaimed {
+		return confirmed, recoveryReady, nil
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
-		SET staging_reclaimed_at = NOW()
+		SET staging_reclaimed_at = NOW(), staging_reclaim_after = NOW()
 		WHERE id = $1 AND state = 'ready' AND staging_reclaimed_at IS NULL
 	`, id); err != nil {
 		return artifactRecord{}, recoveryPending, fmt.Errorf("record artifact staging reclamation: %w", ErrStoreUnavailable)
@@ -847,7 +922,7 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 		}
 		return artifactRecord{}, recoveryPending, fmt.Errorf("confirm artifact staging reclamation: %w", ErrStoreUnavailable)
 	}
-	confirmed, err := s.confirmRecordWithCleanup(id, cleanup)
+	confirmed, err = s.confirmRecordWithCleanup(id, cleanup)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -947,7 +1022,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 func (s *Store) updatePublicationState(ctx context.Context, tx pgx.Tx, record artifactRecord, state publicationState, reason string) (artifactRecord, recoveryStatus, error) {
 	tag, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
-		SET state = $2, unavailable_reason = $3, staging_reclaimed_at = NULL
+		SET state = $2, unavailable_reason = $3, staging_reclaimed_at = NULL, staging_reclaim_after = NOW()
 		WHERE id = $1 AND state = 'pending'
 	`, record.Artifact.ID, string(state), reason)
 	if err != nil {
@@ -967,10 +1042,7 @@ func (s *Store) removeStaging(name string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove artifact staging: %w", ErrStoreUnavailable)
 	}
 	if err := syncDirectory(s.objects); err != nil {
@@ -1037,7 +1109,7 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 	}
 	readyIDs, err := s.listRecoveryIDs(ctx, `
 		SELECT id FROM conversation_artifacts
-		WHERE state = 'ready' AND staging_reclaimed_at IS NULL
+		WHERE state = 'ready' AND staging_reclaimed_at IS NULL AND staging_reclaim_after <= NOW()
 		ORDER BY created_at, id
 		LIMIT $1
 	`, limit)
