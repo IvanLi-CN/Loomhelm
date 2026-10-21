@@ -475,6 +475,25 @@ func (s *Service) Delete(ctx context.Context, principal auth.Principal, projectI
 	if hasTasks {
 		return auth.ErrConflict
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE auth_api_credentials AS credential
+		SET revoked_at = CURRENT_TIMESTAMP
+		WHERE credential.revoked_at IS NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM auth_api_credential_project_scopes AS deleted_scope
+			WHERE deleted_scope.credential_id = credential.id
+			  AND deleted_scope.project_id = $1
+		  )
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM auth_api_credential_project_scopes AS remaining_scope
+			WHERE remaining_scope.credential_id = credential.id
+			  AND remaining_scope.project_id <> $1
+		  )
+	`, projectID); err != nil {
+		return fmt.Errorf("revoke credentials scoped only to deleted project: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM auth_api_credential_project_scopes WHERE project_id = $1`, projectID); err != nil {
 		return fmt.Errorf("remove project credential scopes: %w", err)
 	}

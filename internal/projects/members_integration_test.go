@@ -19,6 +19,69 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestProjectDeleteRevokesOnlyLastScopedCredential(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db := openMembersDatabase(t, ctx)
+	pool := db.Pool()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "p01_scope_delete_user_" + suffix
+	projectIDs := make([]string, 0, 2)
+	defer func() {
+		for _, projectID := range projectIDs {
+			cleanupMembersState(ctx, pool, projectID, nil)
+		}
+		cleanupMembersState(ctx, pool, "", []string{userID})
+		db.Close()
+	}()
+	seedMemberUser(t, ctx, pool, userID)
+
+	projectService := projects.NewService(pool, nil)
+	principal := auth.Principal{UserID: userID}
+	projectA, err := projectService.Create(ctx, principal, projects.CreateRequest{Name: "Scoped delete A"})
+	if err != nil {
+		t.Fatalf("create project A: %v", err)
+	}
+	projectIDs = append(projectIDs, projectA.ID)
+	projectB, err := projectService.Create(ctx, principal, projects.CreateRequest{Name: "Scoped delete B"})
+	if err != nil {
+		t.Fatalf("create project B: %v", err)
+	}
+	projectIDs = append(projectIDs, projectB.ID)
+
+	authService, err := auth.NewService(pool, auth.Config{}, nil)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	credential, err := authService.CreateCredential(ctx, principal, auth.CreateCredentialRequest{
+		Name:       "two-project deletion scope",
+		ProjectIDs: []string{projectA.ID, projectB.ID},
+	})
+	if err != nil {
+		t.Fatalf("create two-project credential: %v", err)
+	}
+	credentialRequest := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	credentialRequest.Header.Set("Authorization", "Bearer "+credential.Token)
+
+	if err := projectService.Delete(ctx, principal, projectA.ID); err != nil {
+		t.Fatalf("delete project A: %v", err)
+	}
+	resolved, err := authService.ResolvePrincipal(ctx, credentialRequest)
+	if err != nil {
+		t.Fatalf("resolve credential after deleting one scoped project: %v", err)
+	}
+	if resolved.HasProjectScope(projectA.ID) || !resolved.HasProjectScope(projectB.ID) {
+		t.Fatalf("remaining credential scope = %+v, want only project B", resolved.ProjectScope)
+	}
+
+	if err := projectService.Delete(ctx, principal, projectB.ID); err != nil {
+		t.Fatalf("delete project B: %v", err)
+	}
+	if _, err := authService.ResolvePrincipal(ctx, credentialRequest); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("credential after deleting its final scoped project error = %v, want unauthenticated", err)
+	}
+}
+
 func TestProjectMemberAuthorizationMatrix(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -173,6 +236,9 @@ func TestProjectMemberAuthorizationMatrix(t *testing.T) {
 	}
 	if err := service.Delete(ctx, creator, project.ID); err != nil {
 		t.Fatalf("delete matrix project: %v", err)
+	}
+	if _, err := authService.ResolvePrincipal(ctx, operatorCredentialRequest); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("credential scoped only to deleted project error = %v, want unauthenticated", err)
 	}
 	projectID = ""
 }
