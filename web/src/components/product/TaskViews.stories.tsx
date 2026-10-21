@@ -67,7 +67,7 @@ function ConsistencyHarness() {
     setTaskView: (_scope, nextView) => setView(nextView)
   });
 
-  return <div className="min-h-screen bg-[var(--canvas)] p-8" data-visual-evidence-surface><div data-visual-evidence-target><div className="mb-4 flex flex-wrap gap-2"><button type="button" onClick={() => setCurrentTasks((current) => current.some((task) => task.id === "STORY-NEW") ? current : [{ id: "STORY-NEW", title: "新增验收任务", goal: "新增任务应在三种视图中保持一致。", projectId: "loomhelm", state: "待办", execution: "未开始", dependsOn: [], updated: "刚刚" }, ...current])}>新增验收任务</button><button type="button" onClick={() => setCurrentTasks((current) => current.map((task) => task.id === "STORY-NEW" ? { ...task, title: "编辑后验收任务", goal: "编辑后的任务应在三种视图中保持一致。" } : task))}>编辑验收任务</button></div><TaskExplorer source={source} renderTaskLink={renderTaskLink} /></div></div>;
+  return <div className="min-h-screen bg-[var(--canvas)] p-10" data-visual-evidence-surface><div data-visual-evidence-target><div className="mb-4 flex flex-wrap gap-2"><button type="button" onClick={() => setCurrentTasks((current) => current.some((task) => task.id === "STORY-NEW") ? current : [{ id: "STORY-NEW", title: "新增验收任务", goal: "新增任务应在三种视图中保持一致。", projectId: "loomhelm", state: "待办", execution: "未开始", dependsOn: [], updated: "刚刚" }, ...current])}>新增验收任务</button><button type="button" onClick={() => setCurrentTasks((current) => current.map((task) => task.id === "STORY-NEW" ? { ...task, title: "编辑后验收任务", goal: "编辑后的任务应在三种视图中保持一致。" } : task))}>编辑验收任务</button></div><TaskExplorer source={source} renderTaskLink={renderTaskLink} /></div></div>;
 }
 
 const meta = {
