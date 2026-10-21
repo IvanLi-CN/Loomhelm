@@ -23,7 +23,7 @@ export interface TaskRecord {
   updated: string;
 }
 
-export type WriteFailureCode = "readonly" | "blocked" | "unsupported" | "invalid";
+export type WriteFailureCode = "unauthenticated" | "csrf" | "readonly" | "blocked" | "unsupported" | "invalid";
 
 export interface WriteFailure {
   ok: false;
@@ -64,7 +64,7 @@ export interface TaskUpdate {
 export interface ProjectTaskSource {
   projects: readonly ProjectRecord[];
   tasks: readonly TaskRecord[];
-  status: "ready" | "loading" | "error" | "permission-changed";
+  status: "ready" | "loading" | "error" | "permission-changed" | "unauthenticated";
   notice?: string;
   canWrite: boolean;
   canManageProjects: boolean;

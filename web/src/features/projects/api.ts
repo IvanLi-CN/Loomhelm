@@ -2,7 +2,7 @@ import {
   createGeneratedApiClient,
   type GeneratedApiClient
 } from "@loomhelm/api-client";
-import type { CreateProjectRequest, Project, Task, TaskRelationshipPage, TaskStatus } from "@loomhelm/protocol";
+import type { CreateProjectRequest, Project, ProjectMember, ProjectMemberRole, Task, TaskRelationshipPage, TaskStatus } from "@loomhelm/protocol";
 
 import type { ProjectRecord, TaskRecord } from "@/features/tasks/types";
 
@@ -18,6 +18,9 @@ export interface PublishedProjectTaskApi {
   getProject: GeneratedApiClient["getProject"];
   updateProject: GeneratedApiClient["updateProject"];
   deleteProject: GeneratedApiClient["deleteProject"];
+  listProjectMembers: GeneratedApiClient["listProjectMembers"];
+  grantProjectMember: GeneratedApiClient["grantProjectMember"];
+  revokeProjectMember: GeneratedApiClient["revokeProjectMember"];
   listTasks: GeneratedApiClient["listTasks"];
   createTask: GeneratedApiClient["createTask"];
   getTask: GeneratedApiClient["getTask"];
@@ -37,6 +40,9 @@ export function createPublishedProjectTaskApi(client: GeneratedApiClient = creat
     getProject: (request) => client.getProject(request),
     updateProject: (request) => client.updateProject(request),
     deleteProject: (request) => client.deleteProject(request),
+    listProjectMembers: (request) => client.listProjectMembers(request),
+    grantProjectMember: (request) => client.grantProjectMember(request),
+    revokeProjectMember: (request) => client.revokeProjectMember(request),
     listTasks: (request) => client.listTasks(request),
     createTask: (request) => client.createTask(request),
     getTask: (request) => client.getTask(request),
@@ -47,6 +53,37 @@ export function createPublishedProjectTaskApi(client: GeneratedApiClient = creat
     removeTaskParent: (request) => client.removeTaskParent(request),
     addTaskDependency: (request) => client.addTaskDependency(request),
     removeTaskDependency: (request) => client.removeTaskDependency(request)
+  };
+}
+
+export interface ProjectMemberPermissions {
+  role: ProjectMemberRole | null;
+  canWrite: boolean;
+  canManageProjects: boolean;
+  isReadOnly: boolean;
+}
+
+export function permissionsForProjectMember(members: readonly ProjectMember[], principalId: string | undefined): ProjectMemberPermissions {
+  const role = principalId ? members.find((member) => member.user_id === principalId)?.role ?? null : null;
+  return {
+    role,
+    canWrite: role === "owner" || role === "operator",
+    canManageProjects: role === "owner",
+    isReadOnly: role !== "owner" && role !== "operator"
+  };
+}
+
+export interface PublishedProjectMembershipApi {
+  listProjectMembers: GeneratedApiClient["listProjectMembers"];
+  grantProjectMember: GeneratedApiClient["grantProjectMember"];
+  revokeProjectMember: GeneratedApiClient["revokeProjectMember"];
+}
+
+export function createPublishedProjectMembershipApi(client: GeneratedApiClient = createGeneratedApiClient()): PublishedProjectMembershipApi {
+  return {
+    listProjectMembers: (request) => client.listProjectMembers(request),
+    grantProjectMember: (request) => client.grantProjectMember(request),
+    revokeProjectMember: (request) => client.revokeProjectMember(request)
   };
 }
 

@@ -2,12 +2,12 @@ import { ArrowLeft, CheckCircle2 } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
-import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
+import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import { TaskForm } from "@/features/tasks/TaskForm";
 
 export function CreateTaskRoute() {
   const navigate = useNavigate();
-  const source = useOptionalDemoProjectTaskSource();
+  const source = useOptionalProjectTaskSource();
 
   if (!source) return <section className="page-section unavailable-page"><span className="eyebrow">TASK CREATION</span><h1>创建入口等待数据源</h1><p>任务表单使用同一套可注入组件，当前路由需要可授权的数据源。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button></section>;
 

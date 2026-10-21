@@ -4,11 +4,11 @@ import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
 import { ProjectForm } from "@/features/projects/ProjectForm";
-import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
+import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import { TaskExplorer } from "@/components/product/TaskViews";
 
 export function TasksRoute() {
-  const source = useOptionalDemoProjectTaskSource();
+  const source = useOptionalProjectTaskSource();
   const [creatingProject, setCreatingProject] = useState(false);
 
   if (!source) return <section className="page-section unavailable-page"><span className="eyebrow">TASKS</span><h1>任务数据源尚未接入</h1><p>页面组件已准备好 production adapter，当前 route 需要可授权的数据源。</p></section>;

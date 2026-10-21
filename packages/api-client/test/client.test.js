@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { ApiClientError, LoomhelmApiClient } from "../src/generated";
+import {
+  ApiClientConfigurationError,
+  ApiClientError,
+  LoomhelmApiClient,
+  createAuthenticatedApiClient,
+} from "../src/index";
 
 describe("generated browser authentication transport", () => {
   test("reads the real session capability without issuing a token request", async () => {
@@ -261,5 +266,67 @@ describe("generated project membership transport", () => {
       expect(error.status).toBe(403);
       expect(error.body).toEqual(body);
     }
+  });
+});
+
+describe("authenticated client transport", () => {
+  test("uses session credentials and injects a fresh CSRF token for mutations", async () => {
+    const calls = [];
+    let token = "csrf-1";
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      csrf: { getToken: () => token },
+      fetch: async (url, init) => {
+        calls.push({
+          path: url.pathname,
+          method: init.method,
+          credentials: init.credentials,
+          csrf: new Headers(init.headers).get("X-CSRF-Token")
+        });
+        return init.method === "DELETE"
+          ? new Response(null, { status: 204 })
+          : Response.json(init.method === "GET" ? { items: [] } : { project: { id: "project-1" } });
+      }
+    });
+
+    await client.listProjects();
+    await client.createProject({ body: { name: "Project" } });
+    token = "csrf-2";
+    await client.deleteProject({ project_id: "project-1" });
+
+    expect(calls).toEqual([
+      { path: "/api/v1/projects", method: "GET", credentials: "include", csrf: null },
+      { path: "/api/v1/projects", method: "POST", credentials: "include", csrf: "csrf-1" },
+      { path: "/api/v1/projects/project-1", method: "DELETE", credentials: "include", csrf: "csrf-2" }
+    ]);
+  });
+
+  test("fails closed before a mutation when CSRF assembly is missing", async () => {
+    let requests = 0;
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async () => {
+        requests += 1;
+        return Response.json({ ok: true });
+      }
+    });
+
+    await expect(client.createProject({ body: { name: "Project" } })).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(requests).toBe(0);
+  });
+
+  test("notifies the auth assembly on 401 without masking the API error", async () => {
+    let unauthorizedStatus;
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      csrf: { getToken: () => "csrf-1" },
+      onUnauthorized: (response) => {
+        unauthorizedStatus = response.status;
+      },
+      fetch: async () => Response.json({ code: "unauthorized", message: "expired", request_id: "request-1" }, { status: 401 })
+    });
+
+    await expect(client.createProject({ body: { name: "Project" } })).rejects.toBeInstanceOf(ApiClientError);
+    expect(unauthorizedStatus).toBe(401);
   });
 });

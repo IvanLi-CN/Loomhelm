@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { taskStates, type TaskState, type TaskView } from "@/demo/types";
-import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
+import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import { taskStateClasses, taskStateLabels, type ProjectTaskSource, type TaskRecord } from "@/features/tasks/types";
 
 export function TaskStateBadge({ state }: { state: TaskState }) {
@@ -111,8 +111,8 @@ export interface TaskExplorerProps {
 }
 
 export function TaskExplorer({ scope = "global", projectId, source: providedSource, renderTaskLink = defaultRenderTaskLink }: TaskExplorerProps) {
-  const demoSource = useOptionalDemoProjectTaskSource();
-  const source = providedSource ?? demoSource;
+  const defaultSource = useOptionalProjectTaskSource();
+  const source = providedSource ?? defaultSource;
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<TaskState | "all">("all");
   const sourceTasks = source?.getTasksForScope(projectId) ?? [];

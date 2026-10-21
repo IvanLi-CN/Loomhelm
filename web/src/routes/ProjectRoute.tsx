@@ -3,19 +3,19 @@ import { useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
-import { getProject as getDemoProject, useDemoRuntime } from "@/demo/context";
+import { getProject as getDemoProject, useOptionalDemoRuntime } from "@/demo/context";
 import { ProjectActions } from "@/features/projects/ProjectForm";
-import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
+import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import { TaskExplorer } from "@/components/product/TaskViews";
 
 export function ProjectRoute() {
   const { projectId } = useParams({ from: "/projects/$projectId" });
-  const runtime = useDemoRuntime();
-  const source = useOptionalDemoProjectTaskSource();
+  const runtime = useOptionalDemoRuntime();
+  const source = useOptionalProjectTaskSource();
   const [panel, setPanel] = useState<"tasks" | "conversations">("tasks");
-  const project = source ? source.getProject(projectId) : getDemoProject(runtime.fixtures, projectId);
-  const conversations = runtime.fixtures.conversations.filter((conversation) => conversation.projectId === projectId);
-  const localTaskCount = source?.tasks.filter((task) => task.projectId === projectId).length ?? runtime.fixtures.tasks.filter((task) => task.projectId === projectId).length;
+  const project = source ? source.getProject(projectId) : runtime ? getDemoProject(runtime.fixtures, projectId) : undefined;
+  const conversations = runtime?.fixtures.conversations.filter((conversation) => conversation.projectId === projectId) ?? [];
+  const localTaskCount = source?.tasks.filter((task) => task.projectId === projectId).length ?? runtime?.fixtures.tasks.filter((task) => task.projectId === projectId).length ?? 0;
 
   if (!project || !source) {
     return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT ACCESS</span><h1>项目当前不可用</h1><p>权限或连接状态发生变化，当前页面 fail-closed，不展示受保护项目的标题、数量或关系轮廓。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/">返回工作台</Link></Button></section>;
