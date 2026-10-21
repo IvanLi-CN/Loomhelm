@@ -86,6 +86,10 @@ The owner confirmed PRD decision DEC-LH-005: project creators manage their proje
 
 The platform query package uses query-scoped sqlc model emission. The generator still parses all application migrations and the drift gate still compares the complete generated output. This keeps domain schema additions from introducing unused exported models into another package without changing persistent state, public protocol or query behavior. Removing the unused platform lease struct leaves the actual durable lease implementation and its schema intact.
 
+## Task Relationship and Deletion Rules
+
+The owner completed PRD decision DEC-LH-004 by confirming that both cross-project relationship types reject self-links and cycles within their own graphs, while legal links remain bookkeeping without automatic execution. The owner also confirmed rejection of project/task deletion when active execution or required historical results exist. Task cancellation preserves history and remains distinct from execution interruption. This settles the corresponding product proposals without establishing implementation or authenticated acceptance evidence.
+
 ## References
 
 - [Requirements](SPEC.md)

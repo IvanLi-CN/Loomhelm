@@ -27,6 +27,8 @@ The topic owns projects, tasks and their relationships, Codex sessions and runs,
 
 The system MUST persist project and task creation, reading, updates and deletion subject to project permissions. It MUST protect active execution and retained results from becoming unowned through deletion. Web, HTTP and MCP MUST share the same application behavior and authorization.
 
+Project or Task deletion MUST be rejected when the resource contains active execution or associated historical execution/files that must be retained. Rejection MUST preserve ownership, relationships and results. A Task MAY be marked Cancelled while its history remains retained; this business-state change MUST NOT itself delete history or replace an explicit execution interrupt.
+
 Task business states MUST be To do, In progress, Blocked, Done and Cancelled, distinct from Run execution, approval and connection states. A completed Run MUST NOT by itself mark a task Done. Public contracts MUST fix the corresponding machine values consistently.
 
 ### REQ-LH-002
@@ -75,7 +77,9 @@ The system MUST preserve original Codex event fields and unknown content types. 
 
 The system MUST persist task hierarchy and prerequisite dependencies as separate relationships and expose them consistently through the shared application services. Both parent/child relationships and prerequisite dependencies MUST support tasks in different projects. Relationship changes MUST preserve each task's project, main Session and execution ownership and enforce authorization at both endpoints. A relationship MUST NOT grant access to an otherwise unauthorized task or project or disclose its protected contents.
 
-The canonical public contract MUST expose project and task create/list/get/update/delete operations and separate task relationship reads and mutations. Relationship reads MUST return distinct parents, children, prerequisites and dependents arrays, including empty arrays when no authorized edges are available; they MUST filter inaccessible endpoints before exposing their identities. A relation MUST NOT change either Task's project ownership or grant access to an otherwise inaccessible endpoint; Task responses MUST NOT embed unfiltered relationship IDs. For dependency mutations, the path's task is the dependent and the named prerequisite is its prerequisite. Successful deletes and relationship mutations MUST return HTTP 204 without a JSON body; their generated Web client methods MUST resolve only after the declared successful response and preserve shared API failures. These transport declarations do not approve undecided role, relationship-validation or deletion-policy proposals in the PRD.
+Each relationship type MUST reject self-links and cycles within its own graph, including cycles spanning projects. Hierarchy and prerequisite graphs MUST be checked separately. Concurrent mutations MUST NOT admit a cycle. Maintaining a legal relationship MUST NOT automatically start an Agent or execution.
+
+The canonical public contract MUST expose project and task create/list/get/update/delete operations and separate task relationship reads and mutations. Relationship reads MUST return distinct parents, children, prerequisites and dependents arrays, including empty arrays when no authorized edges are available; they MUST filter inaccessible endpoints before exposing their identities. A relation MUST NOT change either Task's project ownership or grant access to an otherwise inaccessible endpoint; Task responses MUST NOT embed unfiltered relationship IDs. For dependency mutations, the path's task is the dependent and the named prerequisite is its prerequisite. Successful deletes and relationship mutations MUST return HTTP 204 without a JSON body; their generated Web client methods MUST resolve only after the declared successful response and preserve shared API failures. Declaring a transport success response MUST NOT bypass role checks, relationship validation or deletion protection.
 
 Global Tasks and each project context MUST support list, board and graph views of the same Task identities. Project views MUST express relationships to authorized external tasks with their actual project identified, without presenting those tasks as members of the selected project. The board MUST group by task business state; the graph MUST distinguish project/task/subtask containment from directed prerequisite dependencies. Changing the presentation MUST NOT change task identity, task business state or Run execution state. Each client MUST remember the selected view separately for global Tasks and each project across reloads, with list as the initial default.
 
@@ -95,9 +99,9 @@ Association MUST retain the same Session and the identities and continuity of it
 
 ### VER-LH-001
 
-- Method: real database and authenticated Web/HTTP/MCP CRUD scenarios, all five task business states, execution-state independence, cross-project and deletion conflicts.
+- Method: real database and authenticated Web/HTTP/MCP CRUD scenarios, all five task business states, execution-state independence, cross-project access, protected project/task deletion and cancellation with retained history.
 - covers: `REQ-LH-001`
-- Pass condition: all entry points expose the same persisted result and five task states, Run completion does not silently complete tasks, unauthorized access is rejected and execution ownership is preserved.
+- Pass condition: all entry points expose the same persisted result and five task states, Run completion does not silently complete tasks, unauthorized access is rejected and execution ownership is preserved. Active execution or required historical results block project/task deletion without changing stored ownership, relationships or bytes; marking a Task Cancelled retains that history and does not implicitly interrupt execution.
 
 ### VER-LH-002
 
@@ -143,9 +147,9 @@ Association MUST retain the same Session and the identities and continuity of it
 
 ### VER-LH-009
 
-- Method: authenticated HTTP/MCP round trips for both cross-project parent/child relationships and prerequisite dependencies, database restart, unauthorized-endpoint scenarios and list/board/graph interaction in global and project contexts.
+- Method: authenticated HTTP/MCP round trips for both cross-project parent/child relationships and prerequisite dependencies, self-links, same-project/cross-project cycles and concurrent opposing-edge mutations, database restart, unauthorized-endpoint scenarios and list/board/graph interaction in global and project contexts.
 - covers: `REQ-LH-001`, `REQ-LH-006`, `REQ-LH-010`
-- Pass condition: both cross-project relationship types persist and remain distinct; task project, main Session and execution ownership stay unchanged, endpoint authorization holds and no protected task content leaks through relationships. All views reference the same tasks, external project identities and graph edge types remain distinguishable, and each context's chosen view survives reload without altering task or execution state.
+- Pass condition: both cross-project relationship types persist and remain distinct; self-links and cycles within either graph are rejected even under concurrent mutation, with the two relationship types checked independently and no automatic execution started by legal edges. Task project, main Session and execution ownership stay unchanged, endpoint authorization holds and no protected task content leaks through relationships. All views reference the same tasks, external project identities and graph edge types remain distinguishable, and each context's chosen view survives reload without altering task or execution state.
 
 ### VER-LH-010
 
