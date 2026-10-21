@@ -54,8 +54,8 @@ export async function readAllCursorPages<Item>(
     const page = await readPage(afterCursor);
     items.push(...page.items);
     if (!page.has_more) return items;
-    const nextCursor = page.next_cursor?.trim();
-    if (!nextCursor || seenCursors.has(nextCursor)) {
+    const nextCursor = page.next_cursor;
+    if (!nextCursor || nextCursor.trim().length === 0 || seenCursors.has(nextCursor)) {
       throw new Error(`${resource} pagination did not return a new cursor for the next page.`);
     }
     seenCursors.add(nextCursor);
