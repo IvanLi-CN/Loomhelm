@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
@@ -33,6 +35,9 @@ type adapterSessionState struct {
 	gatewaySession protocol.GatewaySession
 	transport      RPCTransport
 	activeTurns    map[string]string
+	closed         atomic.Bool
+	eventErrMu     sync.Mutex
+	eventErr       error
 }
 
 // Adapter is the host-owned Codex app-server adapter. It translates only the
@@ -87,13 +92,16 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	params := a.threadStartParams(request)
 	response, err := transport.Call(ctx, "thread/start", mustRawJSON(params))
 	if err != nil {
+		_ = transport.Close()
 		return protocol.AdapterSession{}, err
 	}
 	if response.Error != nil {
+		_ = transport.Close()
 		return protocol.AdapterSession{}, rpcResponseError("thread/start", response)
 	}
 	externalThreadRef := threadIDFromResult(response.Result)
 	if externalThreadRef == "" {
+		_ = transport.Close()
 		return protocol.AdapterSession{}, errors.New("thread/start returned no thread id")
 	}
 	session := protocol.AdapterSession{
@@ -106,18 +114,18 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 		transport:      transport,
 		activeTurns:    make(map[string]string),
 	}
+	if err := a.journal.RecordSession(session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
+		_ = transport.Close()
+		return protocol.AdapterSession{}, err
+	}
+	if _, err := a.appendObservedEvent(state, protocol.EventTypeSessionCreated, "thread/start", response.Result, ""); err != nil {
+		_ = transport.Close()
+		return protocol.AdapterSession{}, err
+	}
 	a.mu.Lock()
 	a.sessions[session.SessionID] = state
 	a.mu.Unlock()
 	go a.consume(state)
-	if err := a.journal.RecordSession(session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
-		a.removeSession(session.SessionID)
-		return protocol.AdapterSession{}, err
-	}
-	if _, err := a.appendObservedEvent(state, protocol.EventTypeSessionCreated, "thread/start", response.Result, ""); err != nil {
-		a.removeSession(session.SessionID)
-		return protocol.AdapterSession{}, err
-	}
 	if strings.TrimSpace(request.Prompt) != "" {
 		commandID := session.SessionID + ":initial"
 		payload := mustRawJSON(protocol.SubmitRunRequest{CommandID: commandID, Prompt: request.Prompt})
@@ -157,12 +165,15 @@ func (a *Adapter) RecoverSession(ctx context.Context, gatewaySession protocol.Ga
 		"excludeTurns": true,
 	}))
 	if err != nil {
+		_ = transport.Close()
 		return protocol.AdapterSession{}, err
 	}
 	if response.Error != nil {
+		_ = transport.Close()
 		return protocol.AdapterSession{}, rpcResponseError("thread/resume", response)
 	}
 	if threadIDFromResult(response.Result) != externalThreadRef {
+		_ = transport.Close()
 		return protocol.AdapterSession{}, errors.New("thread/resume returned a different thread id")
 	}
 	return a.bindRecoveredSession(gatewaySession, externalThreadRef, "thread/resume", response.Result, transport)
@@ -191,25 +202,34 @@ func (a *Adapter) BindRecoveredSession(ctx context.Context, gatewaySession proto
 
 func (a *Adapter) bindRecoveredSession(gatewaySession protocol.GatewaySession, externalThreadRef, method string, result json.RawMessage, transport RPCTransport) (protocol.AdapterSession, error) {
 	session := protocol.AdapterSession{SessionID: stableSessionID(externalThreadRef), ExternalThreadRef: externalThreadRef}
-	state := &adapterSessionState{session: session, gatewaySession: gatewaySession, transport: transport, activeTurns: make(map[string]string)}
+	state := &adapterSessionState{session: session, gatewaySession: gatewaySession, transport: transport, activeTurns: a.journal.ActiveTurns(session.SessionID)}
 	a.mu.Lock()
+	previous := a.sessions[session.SessionID]
 	a.sessions[session.SessionID] = state
 	a.mu.Unlock()
-	go a.consume(state)
+	if previous != nil {
+		a.closeState(previous)
+	}
 	if err := a.journal.RecordSession(session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
 		a.removeSession(session.SessionID)
+		_ = transport.Close()
 		return protocol.AdapterSession{}, err
 	}
 	if _, err := a.appendObservedEvent(state, protocol.EventTypeReconciliationCompleted, method, result, ""); err != nil {
 		a.removeSession(session.SessionID)
+		_ = transport.Close()
 		return protocol.AdapterSession{}, err
 	}
+	go a.consume(state)
 	return session, nil
 }
 
 func (a *Adapter) CloseSession(_ context.Context, session protocol.AdapterSession) error {
-	a.removeSession(session.SessionID)
-	return nil
+	state := a.removeSession(session.SessionID)
+	if state == nil {
+		return nil
+	}
+	return state.transport.Close()
 }
 
 func (a *Adapter) SendCommand(ctx context.Context, session protocol.AdapterSession, command protocol.Command) (protocol.CommandAck, error) {
@@ -225,6 +245,9 @@ func (a *Adapter) SendCommand(ctx context.Context, session protocol.AdapterSessi
 	state := a.sessionState(session.SessionID)
 	if state == nil {
 		return protocol.CommandAck{}, fmt.Errorf("adapter session %q is not available", session.SessionID)
+	}
+	if err := state.persistenceError(); err != nil {
+		return protocol.CommandAck{}, fmt.Errorf("adapter event journal is unavailable: %w", err)
 	}
 	ack, deduplicated, err := a.journal.BeginCommand(command)
 	if err != nil {
@@ -266,6 +289,9 @@ func (a *Adapter) Steer(ctx context.Context, session protocol.AdapterSession, co
 	state := a.sessionState(session.SessionID)
 	if state == nil {
 		return protocol.CommandAck{}, fmt.Errorf("adapter session %q is not available", session.SessionID)
+	}
+	if err := state.persistenceError(); err != nil {
+		return protocol.CommandAck{}, fmt.Errorf("adapter event journal is unavailable: %w", err)
 	}
 	ack, deduplicated, err := a.journal.BeginCommand(command)
 	if err != nil {
@@ -315,37 +341,38 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	if err != nil {
 		return protocol.Reconciliation{}, err
 	}
-	if ack.State != protocol.CommandStateUnknown {
-		state := protocol.ReconciliationStateConfirmed
+	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+		reconciliationState := protocol.ReconciliationStateConfirmed
 		if ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
-			state = protocol.ReconciliationStateNotFound
+			reconciliationState = protocol.ReconciliationStateNotFound
 		}
-		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: state, EventCursor: ack.EventCursor}
-		_ = a.journal.RecordReconciliation(value)
+		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: reconciliationState, EventCursor: ack.EventCursor}
+		if err := a.journal.RecordReconciliation(value); err != nil {
+			return value, err
+		}
+		return value, nil
+	}
+	if ack.State == protocol.CommandStateAccepted || ack.State == protocol.CommandStateExecuting {
+		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer("command remains in flight; external outcome has not been observed")}
+		if err := a.journal.RecordReconciliation(value); err != nil {
+			return value, err
+		}
 		return value, nil
 	}
 	state := a.sessionState(session.SessionID)
 	if state == nil {
 		return protocol.Reconciliation{}, fmt.Errorf("adapter session %q is not available", session.SessionID)
 	}
-	result, err := state.transport.Call(ctx, "thread/turns/list", mustRawJSON(map[string]any{
-		"threadId":  session.ExternalThreadRef,
-		"limit":     100,
-		"itemsView": "summary",
-	}))
+	turns, err := a.listTurns(ctx, state)
 	if err != nil {
 		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer(err.Error())}
-		_ = a.journal.RecordReconciliation(value)
+		if recordErr := a.journal.RecordReconciliation(value); recordErr != nil {
+			return value, recordErr
+		}
 		return value, nil
 	}
-	if result.Error != nil {
-		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer(result.Error.Message)}
-		_ = a.journal.RecordReconciliation(value)
-		return value, nil
-	}
-	turns := extractTurns(result.Result)
 	if ack.RunID == nil {
-		if runID, ok := a.journal.UniqueRunIDAfter(session.SessionID, command.IssuedAt); ok {
+		if runID, ok := a.journal.UniqueRunIDForCommand(session.SessionID, command.CommandID, command.IssuedAt); ok {
 			ack.RunID = &runID
 		}
 	}
@@ -361,6 +388,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 			turnID := matched.ID
 			ack.RunID = &turnID
 			ack.State = protocol.CommandStateSucceeded
+			ack.Error = nil
 			if err := a.journal.UpdateCommand(commandID, ack); err != nil {
 				return reconciliation, fmt.Errorf("persist reconciled command %q: %w", commandID, err)
 			}
@@ -430,7 +458,7 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 	if err != nil {
 		return a.rejectCommand(command, ack, err)
 	}
-	requestID := firstRaw(payload, "request_id", "server_request_id", "approval_id", "rpc_id")
+	requestID := firstRaw(payload, "approval_id", "request_id", "server_request_id", "rpc_id")
 	runID := valueOrEmpty(command.RunID)
 	if runID == "" {
 		runID = firstString(payload, "run_id", "turn_id")
@@ -442,27 +470,62 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 		}
 		requestID = pending[0].RequestID
 	}
-	decision := "decline"
+	decision := "deny"
 	if command.Kind == protocol.CommandKindRunApprove {
-		decision = "accept"
+		decision = "approve"
 	}
 	if requested := firstString(payload, "decision"); requested != "" && requested != decision {
 		return a.rejectCommand(command, ack, errors.New("approval decision conflicts with command kind"))
 	}
-	result := mustRawJSON(map[string]string{"decision": decision})
-	if err := state.transport.Respond(ctx, requestID, result); err != nil {
-		return a.finishTransportError(command, ack, err, "approval response")
+	if payloadCommandID := firstString(payload, "command_id"); payloadCommandID != "" && payloadCommandID != command.CommandID {
+		return a.rejectCommand(command, ack, errors.New("approval command id conflicts with envelope command id"))
 	}
-	resolvedPayload := mustRawJSON(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      json.RawMessage(requestID),
-		"method":  "approval/response",
-		"result":  json.RawMessage(result),
-	})
-	if _, err := a.appendObservedEvent(state, protocol.EventTypeApprovalResolved, "approval/response", resolvedPayload, runID); err != nil {
+	revision, ok := firstInt64(payload, "revision")
+	if !ok || revision <= 0 {
+		return a.rejectCommand(command, ack, errors.New("approval revision must be a positive integer"))
+	}
+	pending, alreadyClaimed, err := a.journal.ClaimApproval(state.session.SessionID, requestID, revision, command.CommandID, decision)
+	if err != nil {
+		return a.rejectCommand(command, ack, err)
+	}
+	ack.State = protocol.CommandStateUnknown
+	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "approval response delivery is unresolved", RequestID: command.CommandID}
+	if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
 		return ack, err
 	}
+	if alreadyClaimed {
+		return ack, protocol.ErrUnknownCommandResult
+	}
+	if runID != "" && pending.TurnID != "" && runID != pending.TurnID {
+		_ = a.journal.ReleaseApprovalClaim(state.session.SessionID, requestID, command.CommandID)
+		return a.rejectCommand(command, ack, errors.New("approval run does not match the pending request"))
+	}
+	if runID == "" {
+		runID = pending.TurnID
+	}
+	// Codex app-server uses accept/decline while the public contract uses
+	// approve/deny. Keep that translation at the host boundary.
+	hostDecision := "decline"
+	if decision == "approve" {
+		hostDecision = "accept"
+	}
+	result := mustRawJSON(map[string]string{"decision": hostDecision})
+	if err := state.transport.Respond(ctx, requestID, result); err != nil {
+		if !errors.Is(err, ErrUnknownOutcome) {
+			if releaseErr := a.journal.ReleaseApprovalClaim(state.session.SessionID, requestID, command.CommandID); releaseErr != nil {
+				return ack, fmt.Errorf("release approval claim after response failure: %w", releaseErr)
+			}
+		}
+		return a.finishTransportError(command, ack, err, "approval response")
+	}
+	resolutionCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := waitForApprovalResolution(resolutionCtx, a.journal, state.session.SessionID, requestID); err != nil {
+		unknownErr := fmt.Errorf("%w: approval resolution was not observed: %v", ErrUnknownOutcome, err)
+		return a.finishTransportError(command, ack, unknownErr, "approval response")
+	}
 	ack.State = protocol.CommandStateSucceeded
+	ack.Error = nil
 	ack.Result = append(json.RawMessage(nil), result...)
 	if runID != "" {
 		ack.RunID = &runID
@@ -552,14 +615,23 @@ func (a *Adapter) rejectCommand(command protocol.Command, ack protocol.CommandAc
 
 func (a *Adapter) consume(state *adapterSessionState) {
 	for message := range state.transport.Events() {
-		a.observe(state, message)
+		if err := a.observe(state, message); err != nil {
+			state.setPersistenceError(err)
+			_ = state.transport.Close()
+			return
+		}
 	}
-	_, _ = a.appendObservedEvent(state, protocol.EventTypeReconciliationRequired, "transport/closed", mustRawJSON(map[string]string{"generation": state.gatewaySession.Generation}), "")
+	if state.closed.Load() || !a.isCurrentState(state) {
+		return
+	}
+	if _, err := a.appendObservedEventFromSource(state, protocol.EventTypeReconciliationRequired, protocol.EventSourceHostObservation, "transport/closed", mustRawJSON(map[string]string{"generation": state.gatewaySession.Generation}), ""); err != nil {
+		state.setPersistenceError(err)
+	}
 }
 
-func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) {
+func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error {
 	if message.IsResponse() {
-		return
+		return nil
 	}
 	eventType := eventTypeForMethod(message.Method, message)
 	runID := runIDFromMessage(message)
@@ -567,14 +639,19 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) {
 	if message.Method == "turn/started" && runID != "" {
 		state.activeTurns[runID] = runID
 	}
-	if message.Method == "turn/completed" && runID != "" {
+	if eventType == protocol.EventTypeRunCompleted || eventType == protocol.EventTypeRunFailed || eventType == protocol.EventTypeRunInterrupted {
 		delete(state.activeTurns, runID)
 	}
 	state.mu.Unlock()
-	_, _ = a.appendObservedEvent(state, eventType, message.Method, message.Raw, runID)
+	_, err := a.appendObservedEvent(state, eventType, message.Method, message.Raw, runID)
+	return err
 }
 
 func (a *Adapter) appendObservedEvent(state *adapterSessionState, eventType protocol.EventType, method string, payload json.RawMessage, runID string) (protocol.Event, error) {
+	return a.appendObservedEventFromSource(state, eventType, protocol.EventSourceAppServer, method, payload, runID)
+}
+
+func (a *Adapter) appendObservedEventFromSource(state *adapterSessionState, eventType protocol.EventType, source protocol.EventSource, method string, payload json.RawMessage, runID string) (protocol.Event, error) {
 	if len(payload) == 0 {
 		payload = mustRawJSON(map[string]any{"method": method})
 	}
@@ -593,13 +670,12 @@ func (a *Adapter) appendObservedEvent(state *adapterSessionState, eventType prot
 	event := protocol.Event{
 		SessionID: state.session.SessionID,
 		Type:      eventType,
-		Source:    protocol.EventSourceAppServer,
+		Source:    source,
 		Payload:   append(json.RawMessage(nil), payload...),
 	}
 	if runID != "" {
 		event.RunID = &runID
 	}
-	event.EventID = digestString(state.session.SessionID + "\x00" + method + "\x00" + string(payload))
 	return a.journal.AppendEvent(event)
 }
 
@@ -639,10 +715,49 @@ func (a *Adapter) sessionState(sessionID string) *adapterSessionState {
 	return a.sessions[sessionID]
 }
 
-func (a *Adapter) removeSession(sessionID string) {
+func (a *Adapter) removeSession(sessionID string) *adapterSessionState {
 	a.mu.Lock()
-	delete(a.sessions, sessionID)
+	state := a.sessions[sessionID]
+	if state != nil {
+		state.closed.Store(true)
+		delete(a.sessions, sessionID)
+	}
 	a.mu.Unlock()
+	if state != nil {
+		_ = state.transport.Close()
+	}
+	return state
+}
+
+func (a *Adapter) closeState(state *adapterSessionState) {
+	if state == nil {
+		return
+	}
+	state.closed.Store(true)
+	_ = state.transport.Close()
+}
+
+func (a *Adapter) isCurrentState(state *adapterSessionState) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.sessions[state.session.SessionID] == state
+}
+
+func (s *adapterSessionState) setPersistenceError(err error) {
+	if err == nil {
+		return
+	}
+	s.eventErrMu.Lock()
+	if s.eventErr == nil {
+		s.eventErr = err
+	}
+	s.eventErrMu.Unlock()
+}
+
+func (s *adapterSessionState) persistenceError() error {
+	s.eventErrMu.Lock()
+	defer s.eventErrMu.Unlock()
+	return s.eventErr
 }
 
 func (a *Adapter) activeTurn(state *adapterSessionState, runID string) string {
@@ -718,6 +833,20 @@ func firstRaw(payload map[string]json.RawMessage, names ...string) json.RawMessa
 	return nil
 }
 
+func firstInt64(payload map[string]json.RawMessage, names ...string) (int64, bool) {
+	for _, name := range names {
+		value, ok := payload[name]
+		if !ok {
+			continue
+		}
+		var result int64
+		if json.Unmarshal(value, &result) == nil {
+			return result, true
+		}
+	}
+	return 0, false
+}
+
 func firstBool(payload map[string]json.RawMessage, names ...string) bool {
 	for _, name := range names {
 		var value bool
@@ -735,6 +864,24 @@ func stringOrDefault(payload map[string]json.RawMessage, name, fallback string) 
 	return fallback
 }
 
+func waitForApprovalResolution(ctx context.Context, journal *Journal, sessionID string, requestID json.RawMessage) error {
+	if !journal.IsApprovalPending(sessionID, requestID) {
+		return nil
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if !journal.IsApprovalPending(sessionID, requestID) {
+				return nil
+			}
+		}
+	}
+}
+
 type appServerTurn struct {
 	ID     string          `json:"id"`
 	Status string          `json:"status"`
@@ -742,18 +889,67 @@ type appServerTurn struct {
 	Items  json.RawMessage `json:"items"`
 }
 
-func extractTurns(result json.RawMessage) []appServerTurn {
-	var value struct {
-		Data  []appServerTurn `json:"data"`
-		Turns []appServerTurn `json:"turns"`
+type appServerTurnsPage struct {
+	Data            *[]appServerTurn `json:"data"`
+	Turns           *[]appServerTurn `json:"turns"`
+	NextCursor      *string          `json:"nextCursor"`
+	NextCursorSnake *string          `json:"next_cursor"`
+}
+
+func (a *Adapter) listTurns(ctx context.Context, state *adapterSessionState) ([]appServerTurn, error) {
+	var turns []appServerTurn
+	cursor := ""
+	for pageNumber := 0; pageNumber < 100; pageNumber++ {
+		params := map[string]any{
+			"threadId":  state.session.ExternalThreadRef,
+			"limit":     100,
+			"itemsView": "summary",
+		}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		result, err := state.transport.Call(ctx, "thread/turns/list", mustRawJSON(params))
+		if err != nil {
+			return nil, err
+		}
+		if result.Error != nil {
+			return nil, errors.New(result.Error.Message)
+		}
+		page, ok := parseTurnsPage(result.Result)
+		if !ok {
+			return nil, errors.New("thread/turns/list returned an invalid page")
+		}
+		if page.Data != nil {
+			turns = append(turns, (*page.Data)...)
+		} else {
+			turns = append(turns, (*page.Turns)...)
+		}
+		nextCursor := valueOrEmpty(page.NextCursor)
+		if nextCursor == "" {
+			nextCursor = valueOrEmpty(page.NextCursorSnake)
+		}
+		if nextCursor == "" || nextCursor == cursor {
+			return turns, nil
+		}
+		cursor = nextCursor
 	}
-	if json.Unmarshal(result, &value) != nil {
-		return nil
+	return nil, errors.New("thread/turns/list pagination exceeded the safety limit")
+}
+
+func parseTurnsPage(result json.RawMessage) (appServerTurnsPage, bool) {
+	var value appServerTurnsPage
+	if json.Unmarshal(result, &value) != nil || (value.Data == nil && value.Turns == nil) {
+		return appServerTurnsPage{}, false
 	}
-	if len(value.Data) > 0 {
-		return value.Data
+	if value.Data == nil {
+		empty := make([]appServerTurn, 0)
+		value.Data = &empty
 	}
-	return value.Turns
+	if value.Turns == nil {
+		empty := make([]appServerTurn, 0)
+		value.Turns = &empty
+	}
+	return value, true
 }
 
 func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns []appServerTurn) (*appServerTurn, bool) {
@@ -779,7 +975,7 @@ func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns [
 	}
 	var matches []appServerTurn
 	for _, turn := range turns {
-		if bytes.Contains(turn.Input, []byte(prompt)) || bytes.Contains(turn.Items, []byte(prompt)) {
+		if turnContainsPrompt(turn, prompt) {
 			matches = append(matches, turn)
 		}
 	}
@@ -787,6 +983,43 @@ func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns [
 		return &matches[0], false
 	}
 	return nil, len(matches) > 1
+}
+
+func turnContainsPrompt(turn appServerTurn, prompt string) bool {
+	wanted := strings.TrimSpace(prompt)
+	if wanted == "" {
+		return false
+	}
+	for _, value := range []json.RawMessage{turn.Input, turn.Items} {
+		if len(value) == 0 {
+			continue
+		}
+		var list []struct {
+			Text    string `json:"text"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(value, &list) == nil {
+			for _, item := range list {
+				if strings.TrimSpace(item.Text) == wanted {
+					return true
+				}
+				for _, content := range item.Content {
+					if strings.TrimSpace(content.Text) == wanted {
+						return true
+					}
+				}
+			}
+		}
+		var object struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(value, &object) == nil && strings.TrimSpace(object.Text) == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func turnIDFromResult(result json.RawMessage) string {
@@ -835,6 +1068,8 @@ func eventTypeForMethod(method string, message RPCMessage) protocol.EventType {
 		return protocol.EventTypeItemCompleted
 	case "item/commandExecution/requestApproval":
 		return protocol.EventTypeApprovalRequested
+	case "serverRequest/resolved":
+		return protocol.EventTypeApprovalResolved
 	case "turn/completed":
 		var params struct {
 			Turn struct {

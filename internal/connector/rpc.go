@@ -126,6 +126,7 @@ func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*P
 		config.Stderr = io.Discard
 	}
 	command.Stderr = config.Stderr
+	configureProcessGroup(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("create app-server stdin: %w", err)
@@ -150,6 +151,7 @@ func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*P
 		events:        make(chan RPCMessage, 128),
 		done:          make(chan struct{}),
 		waitDone:      make(chan struct{}),
+		readDone:      make(chan struct{}),
 	}
 	go transport.readLoop()
 	go transport.waitLoop()
@@ -190,12 +192,14 @@ type ProcessTransport struct {
 	events         chan RPCMessage
 	done           chan struct{}
 	closed         sync.Once
+	eventsClosed   sync.Once
 	closeRequested atomic.Bool
 	finish         sync.Once
 	errMu          sync.Mutex
 	err            error
 
 	waitDone chan struct{}
+	readDone chan struct{}
 }
 
 func (p *ProcessTransport) Call(ctx context.Context, method string, params json.RawMessage) (RPCMessage, error) {
@@ -221,14 +225,33 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 		return RPCMessage{}, ErrTransportClosed
 	default:
 	}
-	p.pending[key] = pendingRPC{result: waiter}
+	// Mark the request as sent before writing. Once a frame write has started,
+	// a process exit can no longer prove that the side effect was absent.
+	p.pending[key] = pendingRPC{result: waiter, sent: true}
 	p.pendingMu.Unlock()
 
 	err := p.writeRequest(id, method, params)
 	if err != nil {
 		p.pendingMu.Lock()
-		delete(p.pending, key)
+		request, ok := p.pending[key]
+		if ok {
+			delete(p.pending, key)
+		}
 		p.pendingMu.Unlock()
+		if !ok {
+			select {
+			case result := <-waiter:
+				return result.message, result.err
+			default:
+				return RPCMessage{}, ErrUnknownOutcome
+			}
+		}
+		if request.sent {
+			var writeErr *TransportWriteError
+			if errors.As(err, &writeErr) && writeErr.Unknown {
+				return RPCMessage{}, ErrUnknownOutcome
+			}
+		}
 		return RPCMessage{}, err
 	}
 	p.pendingMu.Lock()
@@ -327,7 +350,9 @@ func (p *ProcessTransport) Close() error {
 			_ = p.stdin.Close()
 		}
 		if p.command != nil && p.command.Process != nil {
-			_ = p.command.Process.Kill()
+			if err := killProcessGroup(p.command); err != nil {
+				_ = p.command.Process.Kill()
+			}
 		}
 		if p.stdout != nil {
 			_ = p.stdout.Close()
@@ -335,6 +360,7 @@ func (p *ProcessTransport) Close() error {
 	})
 	<-p.done
 	<-p.waitDone
+	<-p.readDone
 	p.errMu.Lock()
 	defer p.errMu.Unlock()
 	return p.err
@@ -374,6 +400,10 @@ func (p *ProcessTransport) writeMessage(fields map[string]json.RawMessage) error
 }
 
 func (p *ProcessTransport) readLoop() {
+	defer func() {
+		p.eventsClosed.Do(func() { close(p.events) })
+		close(p.readDone)
+	}()
 	reader := bufio.NewReaderSize(p.stdout, 64*1024)
 	for {
 		frame, err := readJSONLFrame(reader, p.maxFrameBytes)
@@ -437,7 +467,6 @@ func (p *ProcessTransport) finishTransport(err error) {
 				request.result <- rpcResult{err: ErrTransportClosed}
 			}
 		}
-		close(p.events)
 	})
 }
 

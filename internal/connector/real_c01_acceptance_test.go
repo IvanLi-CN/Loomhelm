@@ -19,16 +19,19 @@ import (
 )
 
 type realC01Acceptance struct {
-	CandidateSHA string                    `json:"candidate_sha,omitempty"`
-	CLI          realCLIIdentity           `json:"cli"`
-	Transport    string                    `json:"transport"`
-	Model        string                    `json:"model"`
-	Effort       string                    `json:"effort"`
-	Workspace    string                    `json:"workspace"`
-	ThreadID     string                    `json:"thread_id"`
-	SessionID    string                    `json:"session_id"`
-	Scenarios    []realC01ScenarioEvidence `json:"scenarios"`
-	AttachError  string                    `json:"active_attach_result"`
+	CandidateSHA             string                    `json:"candidate_sha"`
+	AcceptanceContractDigest string                    `json:"acceptance_contract_digest"`
+	ScenarioSetDigest        string                    `json:"scenario_set_digest"`
+	EvidenceStatus           string                    `json:"evidence_status"`
+	CLI                      realCLIIdentity           `json:"cli"`
+	Transport                string                    `json:"transport"`
+	Model                    string                    `json:"model"`
+	Effort                   string                    `json:"effort"`
+	Workspace                string                    `json:"workspace"`
+	ThreadID                 string                    `json:"thread_id"`
+	SessionID                string                    `json:"session_id"`
+	Scenarios                []realC01ScenarioEvidence `json:"scenarios"`
+	AttachError              string                    `json:"active_attach_result"`
 }
 
 type realCLIIdentity struct {
@@ -45,6 +48,10 @@ type realC01ScenarioEvidence struct {
 	Decision              string                       `json:"decision,omitempty"`
 	ApprovalCommandState  protocol.CommandState        `json:"approval_command_state,omitempty"`
 	ItemStatus            string                       `json:"item_status,omitempty"`
+	ItemCommand           string                       `json:"item_command,omitempty"`
+	OutputMarker          string                       `json:"output_marker,omitempty"`
+	OutputMarkerObserved  bool                         `json:"output_marker_observed,omitempty"`
+	OutputEmpty           bool                         `json:"output_empty,omitempty"`
 	TerminalEventType     protocol.EventType           `json:"terminal_event_type,omitempty"`
 	TerminalStatus        string                       `json:"terminal_status,omitempty"`
 	TerminalCursor        string                       `json:"terminal_cursor,omitempty"`
@@ -60,6 +67,20 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	cli := os.Getenv("LOOMHELM_REAL_CODEX_CLI")
 	if cli == "" {
 		t.Skip("set LOOMHELM_REAL_CODEX_CLI to run the disposable C01 host-owned acceptance")
+	}
+	evidencePath := os.Getenv("LOOMHELM_REAL_C01_EVIDENCE")
+	candidateSHA := os.Getenv("LOOMHELM_CANDIDATE_SHA")
+	if evidencePath != "" {
+		if candidateSHA == "" {
+			t.Fatal("LOOMHELM_CANDIDATE_SHA is required when writing C01 evidence")
+		}
+		actualSHA, err := currentCandidateSHA()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actualSHA != candidateSHA {
+			t.Fatalf("candidate SHA = %s, want current HEAD %s", candidateSHA, actualSHA)
+		}
 	}
 
 	workspace := os.Getenv("LOOMHELM_REAL_C01_WORKSPACE")
@@ -78,33 +99,38 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	acceptance := realC01Acceptance{
-		CandidateSHA: os.Getenv("LOOMHELM_CANDIDATE_SHA"),
-		CLI:          identity,
-		Transport:    "host-owned stdio JSONL app-server",
-		Model:        "gpt-5.6-luna",
-		Effort:       "max",
-		Workspace:    workspace,
-		Scenarios:    make([]realC01ScenarioEvidence, 0, 3),
+		CandidateSHA:             candidateSHA,
+		AcceptanceContractDigest: "66684bc0b0b72c626c6a7d5ac9c4d432b467981aaf24c9f9459f052d1fd6cf2e",
+		ScenarioSetDigest:        "f7d31c1e74093b10e288193ee6ef53683731d6cade7a84e3612bc0bd4e544321",
+		EvidenceStatus:           "running",
+		CLI:                      identity,
+		Transport:                "host-owned stdio JSONL app-server",
+		Model:                    "gpt-5.6-luna",
+		Effort:                   "max",
+		Workspace:                workspace,
+		Scenarios:                make([]realC01ScenarioEvidence, 0, 3),
 	}
-	writeEvidence := func() {
-		path := os.Getenv("LOOMHELM_REAL_C01_EVIDENCE")
-		if path == "" {
-			return
+	writeEvidence := func() error {
+		if evidencePath == "" {
+			return nil
 		}
 		data, marshalErr := json.MarshalIndent(acceptance, "", "  ")
 		if marshalErr != nil {
-			t.Logf("marshal C01 evidence: %v", marshalErr)
-			return
+			return fmt.Errorf("marshal C01 evidence: %w", marshalErr)
 		}
-		if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirErr != nil {
-			t.Logf("create C01 evidence directory: %v", mkdirErr)
-			return
+		if mkdirErr := os.MkdirAll(filepath.Dir(evidencePath), 0o700); mkdirErr != nil {
+			return fmt.Errorf("create C01 evidence directory: %w", mkdirErr)
 		}
-		if writeErr := os.WriteFile(path, append(data, '\n'), 0o600); writeErr != nil {
-			t.Logf("write C01 evidence: %v", writeErr)
+		if writeErr := os.WriteFile(evidencePath, append(data, '\n'), 0o600); writeErr != nil {
+			return fmt.Errorf("write C01 evidence: %w", writeErr)
 		}
+		return nil
 	}
-	defer writeEvidence()
+	t.Cleanup(func() {
+		if err := writeEvidence(); err != nil {
+			t.Error(err)
+		}
+	})
 
 	journal, err := OpenJournal(filepath.Join(workspace, "connector.jsonl"))
 	if err != nil {
@@ -167,7 +193,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	approvalEvidence.ApprovalRequestID = string(approval.RequestID)
-	approvalEvidence.Decision = "accept"
+	approvalEvidence.Decision = "approve"
 	approvalDecision := realApprovalCommand("c01-approve-decision", protocol.CommandKindRunApprove, activeSession.SessionID, approval)
 	decisionAck, err := adapter.SendCommand(ctx, activeSession, approvalDecision)
 	if err != nil {
@@ -182,6 +208,13 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	approvalEvidence.ItemStatus = itemStatus(itemEvent)
+	approvalCommandObserved, approvalOutput := itemCommandAndOutput(itemEvent)
+	approvalEvidence.ItemCommand = approvalCommandObserved
+	approvalEvidence.OutputMarker = "LOOMHELM_C01_APPROVED"
+	approvalEvidence.OutputMarkerObserved = strings.Contains(approvalOutput, approvalEvidence.OutputMarker)
+	if !strings.Contains(approvalEvidence.ItemCommand, "/usr/bin/printf") || !approvalEvidence.OutputMarkerObserved {
+		t.Fatalf("accepted command evidence = command %q output %q", approvalEvidence.ItemCommand, approvalOutput)
+	}
 	terminalEvent, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, valueOrEmpty(approvalAck.RunID), protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +239,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	denialEvidence.ApprovalRequestID = string(denialApproval.RequestID)
-	denialEvidence.Decision = "decline"
+	denialEvidence.Decision = "deny"
 	denialDecision := realApprovalCommand("c01-deny-decision", protocol.CommandKindRunDeny, activeSession.SessionID, denialApproval)
 	denialDecisionAck, err := adapter.SendCommand(ctx, activeSession, denialDecision)
 	if err != nil {
@@ -221,6 +254,13 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	denialEvidence.ItemStatus = itemStatus(denialItem)
+	denialCommandObserved, denialOutput := itemCommandAndOutput(denialItem)
+	denialEvidence.ItemCommand = denialCommandObserved
+	denialEvidence.OutputMarker = "LOOMHELM_C01_DENIED"
+	denialEvidence.OutputEmpty = denialOutput == ""
+	if !strings.Contains(denialEvidence.ItemCommand, "/usr/bin/printf") || !denialEvidence.OutputEmpty {
+		t.Fatalf("denied command evidence = command %q output %q", denialEvidence.ItemCommand, denialOutput)
+	}
 	denialTerminal, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, valueOrEmpty(denialAck.RunID), protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed)
 	if err != nil {
 		t.Fatal(err)
@@ -255,8 +295,13 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if interruptDecisionAck.State != protocol.CommandStateSucceeded {
 		t.Fatalf("interrupt approval ACK = %+v", interruptDecisionAck)
 	}
-	if _, err := waitForRealItemStarted(ctx, journal, activeSession.SessionID, valueOrEmpty(interruptAck.RunID)); err != nil {
+	interruptStarted, err := waitForRealItemStarted(ctx, journal, activeSession.SessionID, valueOrEmpty(interruptAck.RunID))
+	if err != nil {
 		t.Fatal(err)
+	}
+	interruptEvidence.ItemCommand, _ = itemCommandAndOutput(interruptStarted)
+	if !strings.Contains(interruptEvidence.ItemCommand, "/bin/sleep 30") {
+		t.Fatalf("interrupt command evidence = %q", interruptEvidence.ItemCommand)
 	}
 	interruptControl := protocol.Command{
 		CommandID: "c01-interrupt-control",
@@ -346,6 +391,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatalf("command reconciliation = %+v, final ACK = %+v", reconciled, finalAck)
 	}
 	acceptance.Scenarios = append(acceptance.Scenarios, recoveryEvidence)
+	acceptance.EvidenceStatus = "passed"
 }
 
 func realCLIIdentityFor(path string) (realCLIIdentity, error) {
@@ -370,12 +416,29 @@ func realCLIIdentityFor(path string) (realCLIIdentity, error) {
 	return realCLIIdentity{Path: absPath, Version: version, SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
+func currentCandidateSHA() (string, error) {
+	output, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("read candidate SHA: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func realCommand(id string, kind protocol.CommandKind, sessionID, payload string) protocol.Command {
 	return protocol.Command{CommandID: id, IssuedAt: now(), Kind: kind, Payload: json.RawMessage(payload), SessionID: sessionID}
 }
 
 func realApprovalCommand(id string, kind protocol.CommandKind, sessionID string, approval PendingApproval) protocol.Command {
-	payload, err := json.Marshal(map[string]json.RawMessage{"request_id": approval.RequestID})
+	decision := "deny"
+	if kind == protocol.CommandKindRunApprove {
+		decision = "approve"
+	}
+	payload, err := json.Marshal(map[string]any{
+		"approval_id": json.RawMessage(approval.RequestID),
+		"command_id":  id,
+		"decision":    decision,
+		"revision":    approval.Revision,
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -410,7 +473,7 @@ func waitForRealItemStarted(ctx context.Context, journal *Journal, sessionID, ru
 
 func waitForRealItemStatus(ctx context.Context, journal *Journal, sessionID, runID, want string) (protocol.Event, error) {
 	return waitForRealEventValue(ctx, journal, sessionID, protocol.EventTypeItemCompleted, runID, func(event protocol.Event) bool {
-		return itemStatus(event) == want
+		return itemType(event) == "commandExecution" && itemStatus(event) == want
 	})
 }
 
@@ -515,6 +578,35 @@ func itemStatus(event protocol.Event) string {
 		return ""
 	}
 	return payload.Params.Item.Status
+}
+
+func itemType(event protocol.Event) string {
+	var payload struct {
+		Params struct {
+			Item struct {
+				Type string `json:"type"`
+			} `json:"item"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(event.Payload, &payload) != nil {
+		return ""
+	}
+	return payload.Params.Item.Type
+}
+
+func itemCommandAndOutput(event protocol.Event) (string, string) {
+	var payload struct {
+		Params struct {
+			Item struct {
+				Command          string `json:"command"`
+				AggregatedOutput string `json:"aggregatedOutput"`
+			} `json:"item"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(event.Payload, &payload) != nil {
+		return "", ""
+	}
+	return payload.Params.Item.Command, payload.Params.Item.AggregatedOutput
 }
 
 func turnStatus(event protocol.Event) string {

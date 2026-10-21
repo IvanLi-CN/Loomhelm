@@ -34,10 +34,11 @@ type gatewaySession struct {
 // Gateway owns independent app-server processes and never discovers or
 // controls the private stdio child owned by ChatGPT Desktop.
 type Gateway struct {
-	mu       sync.Mutex
-	factory  TransportFactory
-	client   ClientInfo
-	sessions map[string]gatewaySession
+	mu          sync.Mutex
+	reconcileMu sync.Mutex
+	factory     TransportFactory
+	client      ClientInfo
+	sessions    map[string]gatewaySession
 }
 
 func NewGateway(config GatewayConfig) (*Gateway, error) {
@@ -98,6 +99,8 @@ func (g *Gateway) ReconcileSession(ctx context.Context, externalThreadRef string
 	if externalThreadRef == "" {
 		return protocol.Reconciliation{}, errors.New("external thread reference must not be empty")
 	}
+	g.reconcileMu.Lock()
+	defer g.reconcileMu.Unlock()
 	transport, err := g.factory(ctx)
 	if err != nil {
 		return protocol.Reconciliation{}, err
@@ -129,9 +132,19 @@ func (g *Gateway) ReconcileSession(ctx context.Context, externalThreadRef string
 		Generation:        newOpaqueID("generation"),
 		Path:              protocol.SessionPathNew,
 	}
+	var previous []RPCTransport
 	g.mu.Lock()
+	for handle, entry := range g.sessions {
+		if entry.session.ExternalThreadRef == externalThreadRef {
+			delete(g.sessions, handle)
+			previous = append(previous, entry.transport)
+		}
+	}
 	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport}
 	g.mu.Unlock()
+	for _, oldTransport := range previous {
+		_ = oldTransport.Close()
+	}
 	return protocol.Reconciliation{CommandID: externalThreadRef, ObservedAt: now(), State: protocol.ReconciliationStateConfirmed}, nil
 }
 

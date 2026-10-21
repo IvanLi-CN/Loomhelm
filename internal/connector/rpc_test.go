@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -63,6 +64,25 @@ func TestProcessTransportWriteErrorClassifiesPartialWrites(t *testing.T) {
 	}
 }
 
+func TestProcessTransportDoesNotCloseEventsWhileReaderIsSending(t *testing.T) {
+	stdout := io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","method":"notice","params":{}}` + "\n"))
+	transport := &ProcessTransport{
+		stdout:        stdout,
+		maxFrameBytes: defaultMaxFrameBytes,
+		pending:       make(map[string]pendingRPC),
+		events:        make(chan RPCMessage),
+		done:          make(chan struct{}),
+		readDone:      make(chan struct{}),
+	}
+	go transport.readLoop()
+	time.Sleep(time.Millisecond)
+	transport.finishTransport(nil)
+	<-transport.readDone
+	if _, ok := <-transport.events; ok {
+		t.Fatal("events channel remained open after reader exit")
+	}
+}
+
 func TestProcessTransportHelper(t *testing.T) {
 	if os.Getenv("LOOMHELM_RPC_HELPER") != "1" {
 		return
@@ -86,6 +106,10 @@ func TestProcessTransportHelper(t *testing.T) {
 		case "delay":
 			time.Sleep(100 * time.Millisecond)
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(message.ID), "result": map[string]any{}})
+		case "burst":
+			for i := 0; i < 256; i++ {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notice", "params": map[string]any{"index": i}})
+			}
 		}
 	}
 	os.Exit(0)

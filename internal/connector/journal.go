@@ -20,8 +20,10 @@ import (
 const journalFormatVersion = 1
 
 var (
-	ErrCommandNotFound = errors.New("command is not present in the journal")
-	ErrJournalCorrupt  = errors.New("journal contains a corrupt record")
+	ErrCommandNotFound  = errors.New("command is not present in the journal")
+	ErrJournalCorrupt   = errors.New("journal contains a corrupt record")
+	ErrApprovalNotFound = errors.New("approval is not pending in the journal")
+	ErrApprovalClaimed  = errors.New("approval is already claimed")
 )
 
 type journalRecord struct {
@@ -35,6 +37,7 @@ type journalRecord struct {
 	Event          *protocol.Event          `json:"event,omitempty"`
 	Session        *journalSession          `json:"session,omitempty"`
 	Reconciliation *protocol.Reconciliation `json:"reconciliation,omitempty"`
+	ApprovalClaim  *approvalClaimRecord     `json:"approval_claim,omitempty"`
 }
 
 type journalSession struct {
@@ -63,6 +66,7 @@ type Journal struct {
 
 	sequenceBySession map[string]int64
 	pendingApprovals  map[string]PendingApproval
+	approvalClaims    map[string]approvalClaimRecord
 }
 
 // PendingApproval is the durable identity needed to answer one app-server
@@ -74,6 +78,16 @@ type PendingApproval struct {
 	ThreadID  string
 	TurnID    string
 	ItemID    string
+	Revision  int64
+}
+
+type approvalClaimRecord struct {
+	SessionID string          `json:"session_id"`
+	RequestID json.RawMessage `json:"request_id"`
+	Revision  int64           `json:"revision"`
+	CommandID string          `json:"command_id"`
+	Decision  string          `json:"decision"`
+	Released  bool            `json:"released,omitempty"`
 }
 
 // OpenJournal opens or creates a mode-0600 append-only journal. A final
@@ -98,6 +112,10 @@ func OpenJournal(path string) (*Journal, error) {
 		file.Close()
 		return nil, fmt.Errorf("secure journal permissions: %w", err)
 	}
+	if err := lockJournalFile(file); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("lock journal ownership: %w", err)
+	}
 
 	journal := &Journal{
 		path:              absPath,
@@ -107,6 +125,7 @@ func OpenJournal(path string) (*Journal, error) {
 		sessions:          make(map[string]journalSession),
 		sequenceBySession: make(map[string]int64),
 		pendingApprovals:  make(map[string]PendingApproval),
+		approvalClaims:    make(map[string]approvalClaimRecord),
 	}
 	if err := journal.load(); err != nil {
 		file.Close()
@@ -131,8 +150,12 @@ func (j *Journal) Close() error {
 	if j.file == nil {
 		return nil
 	}
+	unlockErr := unlockJournalFile(j.file)
 	err := j.file.Close()
 	j.file = nil
+	if unlockErr != nil {
+		return unlockErr
+	}
 	return err
 }
 
@@ -413,6 +436,143 @@ func (j *Journal) PendingApprovals(sessionID, runID string) []PendingApproval {
 	return values
 }
 
+// ClaimApproval durably arbitrates the first response to one pending approval.
+// The claim is written before the transport response so a restart never
+// silently replays an approval whose delivery outcome is unknown.
+func (j *Journal) ClaimApproval(sessionID string, requestID json.RawMessage, revision int64, commandID, decision string) (PendingApproval, bool, error) {
+	if sessionID == "" || len(bytes.TrimSpace(requestID)) == 0 || commandID == "" || decision == "" {
+		return PendingApproval{}, false, errors.New("approval claim identity is incomplete")
+	}
+	key := approvalKey(sessionID, requestID)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	pending, ok := j.pendingApprovals[key]
+	if !ok {
+		return PendingApproval{}, false, ErrApprovalNotFound
+	}
+	if pending.Revision != revision {
+		return PendingApproval{}, false, fmt.Errorf("approval revision %d is stale; current revision is %d", revision, pending.Revision)
+	}
+	if existing, ok := j.approvalClaims[key]; ok {
+		if existing.CommandID != commandID || existing.Decision != decision || existing.Revision != revision {
+			return PendingApproval{}, false, ErrApprovalClaimed
+		}
+		return cloneApproval(pending), true, nil
+	}
+	claim := approvalClaimRecord{
+		SessionID: sessionID,
+		RequestID: append(json.RawMessage(nil), requestID...),
+		Revision:  revision,
+		CommandID: commandID,
+		Decision:  decision,
+	}
+	if err := j.appendLocked(journalRecord{
+		FormatVersion: journalFormatVersion,
+		Type:          "approval_claim",
+		At:            now(),
+		ApprovalClaim: &claim,
+	}); err != nil {
+		return PendingApproval{}, false, err
+	}
+	j.approvalClaims[key] = claim
+	return cloneApproval(pending), false, nil
+}
+
+func (j *Journal) ReleaseApprovalClaim(sessionID string, requestID json.RawMessage, commandID string) error {
+	key := approvalKey(sessionID, requestID)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	claim, ok := j.approvalClaims[key]
+	if !ok {
+		return nil
+	}
+	if claim.CommandID != commandID {
+		return ErrApprovalClaimed
+	}
+	claim.Released = true
+	if err := j.appendLocked(journalRecord{
+		FormatVersion: journalFormatVersion,
+		Type:          "approval_claim",
+		At:            now(),
+		ApprovalClaim: &claim,
+	}); err != nil {
+		return err
+	}
+	delete(j.approvalClaims, key)
+	return nil
+}
+
+func (j *Journal) IsApprovalPending(sessionID string, requestID json.RawMessage) bool {
+	key := approvalKey(sessionID, requestID)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	_, ok := j.pendingApprovals[key]
+	return ok
+}
+
+// ActiveTurns rebuilds control ownership from the durable event stream after a
+// cold recovery. Only turns with a terminal observation remain unselectable.
+func (j *Journal) ActiveTurns(sessionID string) map[string]string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	active := make(map[string]string)
+	for _, event := range j.events {
+		if event.SessionID != sessionID || event.RunID == nil {
+			continue
+		}
+		switch event.Type {
+		case protocol.EventTypeRunStarted:
+			active[*event.RunID] = *event.RunID
+		case protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed, protocol.EventTypeRunInterrupted:
+			delete(active, *event.RunID)
+		}
+	}
+	return active
+}
+
+// UniqueRunIDForCommand refuses to infer a run when another unresolved command
+// could have produced the same observed turn. This keeps unknown reconciliation
+// conservative for concurrent sends.
+func (j *Journal) UniqueRunIDForCommand(sessionID, commandID, issuedAt string) (string, bool) {
+	after, err := time.Parse(time.RFC3339Nano, issuedAt)
+	if err != nil {
+		return "", false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	type candidate struct {
+		id string
+		at time.Time
+	}
+	var candidates []candidate
+	for _, event := range j.events {
+		if event.SessionID != sessionID || event.Type != protocol.EventTypeRunStarted || event.RunID == nil {
+			continue
+		}
+		occurredAt, parseErr := time.Parse(time.RFC3339Nano, event.OccurredAt)
+		if parseErr != nil || occurredAt.Before(after) {
+			continue
+		}
+		candidates = append(candidates, candidate{id: *event.RunID, at: occurredAt})
+	}
+	if len(candidates) != 1 {
+		return "", false
+	}
+	for otherID, entry := range j.commands {
+		if otherID == commandID || entry.command.SessionID != sessionID {
+			continue
+		}
+		if entry.ack.State != protocol.CommandStateUnknown && entry.ack.State != protocol.CommandStateAccepted && entry.ack.State != protocol.CommandStateExecuting {
+			continue
+		}
+		otherIssued, parseErr := time.Parse(time.RFC3339Nano, entry.command.IssuedAt)
+		if parseErr == nil && !otherIssued.After(candidates[0].at) {
+			return "", false
+		}
+	}
+	return candidates[0].id, true
+}
+
 func (j *Journal) load() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -524,6 +684,18 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if record.Reconciliation == nil || record.Reconciliation.CommandID == "" {
 			return fmt.Errorf("%w: incomplete reconciliation record", ErrJournalCorrupt)
 		}
+	case "approval_claim":
+		if record.ApprovalClaim == nil || record.ApprovalClaim.SessionID == "" || len(bytes.TrimSpace(record.ApprovalClaim.RequestID)) == 0 || record.ApprovalClaim.CommandID == "" || record.ApprovalClaim.Revision <= 0 {
+			return fmt.Errorf("%w: incomplete approval claim", ErrJournalCorrupt)
+		}
+		claim := *record.ApprovalClaim
+		claim.RequestID = append(json.RawMessage(nil), claim.RequestID...)
+		key := approvalKey(claim.SessionID, claim.RequestID)
+		if claim.Released {
+			delete(j.approvalClaims, key)
+		} else {
+			j.approvalClaims[key] = claim
+		}
 	default:
 		return fmt.Errorf("%w: unknown record type %q", ErrJournalCorrupt, record.Type)
 	}
@@ -592,9 +764,12 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
 		Params struct {
-			ThreadID string `json:"threadId"`
-			TurnID   string `json:"turnId"`
-			Item     struct {
+			ThreadID  string          `json:"threadId"`
+			TurnID    string          `json:"turnId"`
+			RequestID json.RawMessage `json:"requestId"`
+			Revision  int64           `json:"revision"`
+			ItemID    string          `json:"itemId"`
+			Item      struct {
 				ID     string `json:"id"`
 				Type   string `json:"type"`
 				Status string `json:"status"`
@@ -604,32 +779,55 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 	if err := json.Unmarshal(event.Payload, &message); err != nil {
 		return
 	}
-	key := string(bytes.TrimSpace(message.ID))
-	if key == "" || key == "null" {
+	requestID := message.ID
+	if event.Type == protocol.EventTypeApprovalResolved && len(bytes.TrimSpace(message.Params.RequestID)) > 0 {
+		requestID = message.Params.RequestID
+	}
+	key := approvalKey(event.SessionID, requestID)
+	if event.Type != protocol.EventTypeItemCompleted && key == "" {
 		return
 	}
 	if event.Type == protocol.EventTypeApprovalRequested {
+		itemID := message.Params.Item.ID
+		if itemID == "" {
+			itemID = message.Params.ItemID
+		}
+		revision := message.Params.Revision
+		if revision <= 0 {
+			revision = 1
+		}
 		j.pendingApprovals[key] = PendingApproval{
-			RequestID: append(json.RawMessage(nil), message.ID...),
+			RequestID: append(json.RawMessage(nil), requestID...),
 			SessionID: event.SessionID,
 			RunID:     valueOrEmpty(event.RunID),
 			ThreadID:  message.Params.ThreadID,
 			TurnID:    message.Params.TurnID,
-			ItemID:    message.Params.Item.ID,
+			ItemID:    itemID,
+			Revision:  revision,
 		}
 		return
 	}
 	if event.Type == protocol.EventTypeApprovalResolved {
 		delete(j.pendingApprovals, key)
+		delete(j.approvalClaims, key)
 		return
 	}
 	if event.Type == protocol.EventTypeItemCompleted && message.Params.Item.Status != "" && message.Params.Item.Status != "inProgress" {
 		for requestKey, approval := range j.pendingApprovals {
 			if approval.SessionID == event.SessionID && approval.ItemID != "" && approval.ItemID == message.Params.Item.ID {
 				delete(j.pendingApprovals, requestKey)
+				delete(j.approvalClaims, requestKey)
 			}
 		}
 	}
+}
+
+func approvalKey(sessionID string, requestID json.RawMessage) string {
+	trimmed := bytes.TrimSpace(requestID)
+	if sessionID == "" || len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ""
+	}
+	return sessionID + "\x00" + string(trimmed)
 }
 
 func commandDigest(command protocol.Command) (string, error) {

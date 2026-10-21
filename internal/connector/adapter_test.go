@@ -15,11 +15,12 @@ import (
 type fakeTransport struct {
 	mu sync.Mutex
 
-	calls     []fakeCall
-	responded []fakeResponse
-	responses map[string][]fakeResult
-	events    chan RPCMessage
-	closed    bool
+	calls          []fakeCall
+	responded      []fakeResponse
+	responses      map[string][]fakeResult
+	responseEvents map[string]RPCMessage
+	events         chan RPCMessage
+	closed         bool
 }
 
 type fakeCall struct {
@@ -38,7 +39,7 @@ type fakeResult struct {
 }
 
 func newFakeTransport() *fakeTransport {
-	return &fakeTransport{responses: make(map[string][]fakeResult), events: make(chan RPCMessage, 32)}
+	return &fakeTransport{responses: make(map[string][]fakeResult), responseEvents: make(map[string]RPCMessage), events: make(chan RPCMessage, 32)}
 }
 
 func (f *fakeTransport) Call(_ context.Context, method string, params json.RawMessage) (RPCMessage, error) {
@@ -58,8 +59,12 @@ func (f *fakeTransport) Notify(_ context.Context, _ string, _ json.RawMessage) e
 
 func (f *fakeTransport) Respond(_ context.Context, id json.RawMessage, result json.RawMessage) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.responded = append(f.responded, fakeResponse{id: append(json.RawMessage(nil), id...), result: append(json.RawMessage(nil), result...)})
+	event, ok := f.responseEvents[string(id)]
+	f.mu.Unlock()
+	if ok {
+		f.events <- event
+	}
 	return nil
 }
 
@@ -170,12 +175,13 @@ func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport.events <- rpcEvent(7, "item/commandExecution/requestApproval", `{"threadId":"thread-3","turnId":"turn-3","item":{"id":"item-3","type":"commandExecution"}}`)
+	transport.responseEvents["7"] = rpcEvent(9, "serverRequest/resolved", `{"threadId":"thread-3","turnId":"turn-3","requestId":7,"resolution":"accept"}`)
 	waitForPendingApproval(t, journal, session.SessionID)
 	approve := protocol.Command{
 		CommandID: "approve-3",
 		IssuedAt:  now(),
 		Kind:      protocol.CommandKindRunApprove,
-		Payload:   []byte(`{"request_id":7}`),
+		Payload:   []byte(`{"request_id":7,"decision":"approve","revision":1,"command_id":"approve-3"}`),
 		RunID:     stringPointer("turn-3"),
 		SessionID: session.SessionID,
 	}
@@ -188,6 +194,15 @@ func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	}
 	if len(journal.PendingApprovals(session.SessionID, "turn-3")) != 0 {
 		t.Fatal("approval remained pending after response")
+	}
+	repeated := approve
+	repeated.CommandID = "approve-3-repeat"
+	repeated.Payload = []byte(`{"request_id":7,"decision":"deny","revision":1,"command_id":"approve-3-repeat"}`)
+	if _, err := adapter.SendCommand(context.Background(), session, repeated); err == nil {
+		t.Fatal("repeated approval unexpectedly succeeded")
+	}
+	if len(transport.responded) != 1 {
+		t.Fatalf("repeated approval wrote %d responses, want 1", len(transport.responded))
 	}
 
 	transport.events <- rpcEvent(8, "turn/started", `{"threadId":"thread-3","turn":{"id":"turn-3","status":"inProgress"}}`)
@@ -240,6 +255,81 @@ func TestAdapterBindsGatewayReconciledSessionWithoutSecondResume(t *testing.T) {
 	}
 	if got := countCalls(transport, "thread/resume"); got != 0 {
 		t.Fatalf("thread/resume calls = %d, want 0", got)
+	}
+}
+
+func TestAdapterRebuildsActiveTurnOnColdRecovery(t *testing.T) {
+	transport := newFakeTransport()
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalThreadRef := "thread-active-recovery"
+	sessionID := stableSessionID(externalThreadRef)
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: sessionID,
+		RunID:     stringPointer("turn-active-recovery"),
+		Type:      protocol.EventTypeRunStarted,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"method":"turn/started"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gatewaySession := protocol.GatewaySession{Handle: "gateway-recovered-active", ExternalThreadRef: externalThreadRef, Generation: "generation-recovered-active", Path: protocol.SessionPathNew}
+	session, err := adapter.BindRecoveredSession(context.Background(), gatewaySession, externalThreadRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	state := adapter.sessionState(session.SessionID)
+	if state == nil || adapter.activeTurn(state, "turn-active-recovery") != "turn-active-recovery" {
+		t.Fatalf("recovered active turns = %+v", state)
+	}
+}
+
+func TestAdapterLeavesInFlightCommandUnknownDuringReconciliation(t *testing.T) {
+	transport := newFakeTransport()
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadRef := "thread-in-flight"
+	session, err := adapter.BindRecoveredSession(context.Background(), protocol.GatewaySession{Handle: "gateway-in-flight", ExternalThreadRef: threadRef, Generation: "generation-in-flight", Path: protocol.SessionPathNew}, threadRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	command := testCommand("in-flight", `{"prompt":"still running"}`)
+	command.SessionID = session.SessionID
+	if _, _, err := journal.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack.State = protocol.CommandStateExecuting
+	if err := journal.UpdateCommand(command.CommandID, ack); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	if err != nil || reconciliation.State != protocol.ReconciliationStateUnknown {
+		t.Fatalf("in-flight reconciliation = %+v, error = %v", reconciliation, err)
+	}
+	if got := countCalls(transport, "thread/turns/list"); got != 0 {
+		t.Fatalf("in-flight history calls = %d, want 0", got)
+	}
+}
+
+func TestTurnContainsPromptUsesStructuredExactText(t *testing.T) {
+	turn := appServerTurn{Items: []byte(`[{"type":"userMessage","content":[{"type":"text","text":"run exactly"}]},{"type":"agentMessage","text":"please run exactly now"}]`)}
+	if !turnContainsPrompt(turn, "run exactly") {
+		t.Fatal("structured user prompt was not matched")
+	}
+	if turnContainsPrompt(turn, "exactly") {
+		t.Fatal("substring from an unrelated message was matched")
 	}
 }
 

@@ -135,6 +135,105 @@ func TestJournalReadsOrderedEventsAndRebuildsPendingApproval(t *testing.T) {
 	}
 }
 
+func TestJournalScopesApprovalRequestsBySessionAndRevision(t *testing.T) {
+	journal := openTestJournal(t)
+	for _, sessionID := range []string{"session-a", "session-b"} {
+		if _, err := journal.AppendEvent(protocol.Event{
+			SessionID: sessionID,
+			RunID:     stringPointer("turn-" + sessionID),
+			Type:      protocol.EventTypeApprovalRequested,
+			Source:    protocol.EventSourceAppServer,
+			Payload:   []byte(`{"jsonrpc":"2.0","id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-` + sessionID + `","turnId":"turn-` + sessionID + `","revision":2,"itemId":"item-` + sessionID + `"}}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := journal.PendingApprovals("session-a", ""); len(got) != 1 || got[0].Revision != 2 {
+		t.Fatalf("session-a pending approvals = %+v", got)
+	}
+	if got := journal.PendingApprovals("session-b", ""); len(got) != 1 || got[0].Revision != 2 {
+		t.Fatalf("session-b pending approvals = %+v", got)
+	}
+	if _, _, err := journal.ClaimApproval("session-a", []byte("7"), 2, "approve-a", "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.ClaimApproval("session-b", []byte("7"), 1, "approve-b", "approve"); err == nil {
+		t.Fatal("stale session-b approval revision unexpectedly claimed")
+	}
+	if _, _, err := journal.ClaimApproval("session-b", []byte("7"), 2, "approve-b", "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-a",
+		RunID:     stringPointer("turn-session-a"),
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":7,"resolution":"accept"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if journal.IsApprovalPending("session-a", []byte("7")) {
+		t.Fatal("session-a approval remained pending")
+	}
+	if !journal.IsApprovalPending("session-b", []byte("7")) {
+		t.Fatal("session-b approval was removed by another session")
+	}
+}
+
+func TestJournalPersistsApprovalClaimAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.AppendEvent(protocol.Event{
+		SessionID: "session-claim",
+		RunID:     stringPointer("turn-claim"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":9,"method":"item/commandExecution/requestApproval","params":{"turnId":"turn-claim","revision":1,"itemId":"item-claim"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, already, err := first.ClaimApproval("session-claim", []byte("9"), 1, "command-claim", "approve"); err != nil || already {
+		t.Fatalf("first approval claim = already %v, error %v", already, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if _, _, err := second.ClaimApproval("session-claim", []byte("9"), 1, "retry-command", "approve"); !errors.Is(err, ErrApprovalClaimed) {
+		t.Fatalf("replayed approval claim error = %v, want %v", err, ErrApprovalClaimed)
+	}
+	if _, already, err := second.ClaimApproval("session-claim", []byte("9"), 1, "command-claim", "approve"); err != nil || !already {
+		t.Fatalf("same approval claim = already %v, error %v", already, err)
+	}
+}
+
+func TestJournalDoesNotDeduplicateIdenticalObservedPayloads(t *testing.T) {
+	journal := openTestJournal(t)
+	value := protocol.Event{SessionID: "session-events", Type: protocol.EventTypeMessageDelta, Source: protocol.EventSourceAppServer, Payload: []byte(`{"method":"item/agentMessage/delta","params":{"delta":"same"}}`)}
+	first, err := journal.AppendEvent(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := journal.AppendEvent(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.EventID == second.EventID || first.Cursor == second.Cursor {
+		t.Fatalf("identical observed events collapsed: first=%+v second=%+v", first, second)
+	}
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: "session-events", Limit: 10})
+	if err != nil || len(page.Events) != 2 {
+		t.Fatalf("observed event page = %+v, error = %v", page, err)
+	}
+}
+
 func TestJournalFindsUniqueRunAfterCommandIssuance(t *testing.T) {
 	journal := openTestJournal(t)
 	if _, err := journal.AppendEvent(protocol.Event{
