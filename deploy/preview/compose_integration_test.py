@@ -38,11 +38,29 @@ class ComposeAuthenticationTest(unittest.TestCase):
             control.command_init(Namespace(state_dir=state))
             control.command_compose_env(Namespace(state_dir=state, output=output))
         environment = {key: value for key, value in os.environ.items() if not key.startswith("LOOMHELM_")}
+        # Override only the disposable probe image; auth comes from the generated file.
+        environment["LOOMHELM_BLUE_SERVER_IMAGE"] = "postgres:17-alpine"
+        project = "auth-test-" + directory.name.lower().replace("_", "-")
+        compose = ["docker", "compose", "--project-name", project, "--env-file", str(output), "-f", str(self.root / "deploy/preview/compose.yaml")]
         result = subprocess.run(
-            ["docker", "compose", "--project-name", "auth-compose-test", "--env-file", str(output), "-f", str(self.root / "deploy/preview/compose.yaml"), "config", "--format", "json"],
+            [*compose, "config", "--format", "json"],
             env=environment, capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, "Compose could not parse the synthetic configuration")
+        if "LOOMHELM_OIDC_CLIENT_SECRET" in settings:
+            image = subprocess.run(["docker", "image", "inspect", "postgres:17-alpine"], capture_output=True, text=True, timeout=10)
+            self.assertEqual(image.returncode, 0, "The Agent VM fixture image must already be present")
+            try:
+                # Config output re-escapes dollars for further Compose input.
+                # Verify actual container delivery as well as that serialized model.
+                delivered = subprocess.run(
+                    [*compose, "run", "--rm", "--no-deps", "--entrypoint", "/bin/sh", "server-blue", "-c", 'test "$LOOMHELM_OIDC_CLIENT_SECRET" = "$1"', "fixture", settings["LOOMHELM_OIDC_CLIENT_SECRET"]],
+                    env=environment, capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(delivered.returncode, 0, "Compose did not deliver the literal synthetic credential")
+            finally:
+                cleanup = subprocess.run([*compose, "down", "--remove-orphans"], env=environment, capture_output=True, text=True, timeout=30)
+                self.assertEqual(cleanup.returncode, 0, "Could not clean up this fixture's Compose resources")
         return json.loads(result.stdout)
 
     def test_literal_credentials_reach_both_servers_without_worker_exposure(self) -> None:
@@ -59,7 +77,7 @@ class ComposeAuthenticationTest(unittest.TestCase):
                 for slot in ("blue", "green"):
                     server = services[f"server-{slot}"]["environment"]
                     for key, expected in settings.items():
-                        self.assertEqual(server[key], expected)
+                        self.assertEqual(server[key], expected.replace("$", "$$"))
                     self.assertEqual(server["LOOMHELM_SESSION_COOKIE_SECURE"], "true")
                     worker = services[f"worker-{slot}"]["environment"]
                     self.assertFalse(set(settings).intersection(worker))
