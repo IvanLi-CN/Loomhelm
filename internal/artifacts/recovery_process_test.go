@@ -209,9 +209,7 @@ func TestStoreRecoversAfterProcessCrashBoundaries(t *testing.T) {
 			if metadata.ID != id || metadata.SessionID != expected.SessionID || !sameOptionalID(metadata.RunID, expected.RunID) || !bytes.Equal(readBack, content) {
 				t.Fatalf("recovered publication = %#v/%q", metadata, readBack)
 			}
-			if point != faultAfterReadyCommit {
-				assertNoStagingFiles(t, store.objects)
-			}
+			assertNoStagingFiles(t, store.objects)
 		})
 	}
 }

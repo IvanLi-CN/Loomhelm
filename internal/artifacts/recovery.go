@@ -764,6 +764,9 @@ func (s *Store) reconcileOne(ctx context.Context, id string, cleanup *cleanupDea
 		return artifactRecord{}, recoveryPending, err
 	}
 	if record.State != publicationPending {
+		if record.State == publicationReady {
+			s.removeStaging(record.StagingName)
+		}
 		return record, stateRecoveryStatus(record.State), nil
 	}
 	updated, _, err := s.reconcilePendingTx(ctx, tx, record)
@@ -914,9 +917,10 @@ func (s *Store) removeStaging(name string) {
 	_ = syncDirectory(s.objects)
 }
 
-// Recover reconciles at most limit pending publications. It never removes a
-// staging or final object solely because a previous operation returned an
-// error; unresolved bytes remain recoverable and are reported as failures.
+// Recover reconciles at most limit pending publications and reclaims staging
+// objects recorded on ready rows. It never removes a staging or final object
+// solely because a previous operation returned an error; unresolved bytes
+// remain recoverable and are reported as failures.
 func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) {
 	var report RecoveryReport
 	if s == nil || s.pool == nil {
@@ -938,8 +942,8 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 	defer cleanup.stop()
 	rows, err := s.pool.Query(ctx, `
 		SELECT id FROM conversation_artifacts
-		WHERE state = 'pending'
-		ORDER BY created_at, id
+		WHERE state IN ('pending', 'ready')
+		ORDER BY CASE WHEN state = 'pending' THEN 0 ELSE 1 END, created_at, id
 		LIMIT $1
 	`, limit)
 	if err != nil {
