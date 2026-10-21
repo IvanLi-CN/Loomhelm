@@ -292,6 +292,7 @@ func withListenerCloseError(base, closeErr error) error {
 }
 
 func (s *Server) registerRoutes() {
+	s.router.Mount("/api/v1", http.HandlerFunc(s.handleApplication))
 	s.router.Get("/livez", s.handleLive)
 	s.router.Get("/readyz", s.handleReady)
 	s.router.Get("/version", s.handleVersion)

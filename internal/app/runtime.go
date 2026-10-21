@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
@@ -27,6 +28,7 @@ type runtimeFactory func(context.Context, platform.Config, *slog.Logger) (proces
 type databaseRuntime struct {
 	db     *database.DB
 	runner *jobs.Runner
+	api    http.Handler
 }
 
 func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.Logger) (processRuntime, error) {
@@ -57,8 +59,18 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		db.Close()
 		return nil, fmt.Errorf("prepare persistence: %w", err)
 	}
-	return &databaseRuntime{db: db, runner: runner}, nil
+	runtime := &databaseRuntime{db: db, runner: runner}
+	if cfg.Component == platform.ComponentServer {
+		runtime.api, err = newApplicationHandler(ctx, db.Pool(), cfg.BrowserAuth)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	return runtime, nil
 }
+
+func (r *databaseRuntime) APIHandler() http.Handler { return r.api }
 
 func (r *databaseRuntime) Ping(ctx context.Context) error { return r.db.Ping(ctx) }
 

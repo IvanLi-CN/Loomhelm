@@ -549,7 +549,10 @@ def env_value(name: str, default: str | None = None, required: bool = False) -> 
 def dotenv(value: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9_./:@?=&+,-]*", value):
         return value
-    return "'" + value.replace("'", "'\\''") + "'"
+    # Compose parses quoted dotenv values, not shell quote concatenation.
+    # JSON supplies compatible string escapes; escaped dollars remain literal
+    # through Compose's interpolation instead of expanding deployment variables.
+    return json.dumps(value, ensure_ascii=False).replace("$", "\\$")
 
 
 def command_compose_env(args: argparse.Namespace) -> None:
@@ -568,6 +571,11 @@ def command_compose_env(args: argparse.Namespace) -> None:
         "LOOMHELM_DATABASE_MIN_CONNS": env_value("LOOMHELM_DATABASE_MIN_CONNS", "0"),
         "LOOMHELM_DATABASE_MAX_CONNS": env_value("LOOMHELM_DATABASE_MAX_CONNS", "4"),
         "LOOMHELM_POSTGRES_PORT": env_value("LOOMHELM_POSTGRES_PORT", ""),
+        "LOOMHELM_OIDC_ISSUER_URL": env_value("LOOMHELM_OIDC_ISSUER_URL", ""),
+        "LOOMHELM_OIDC_CLIENT_ID": env_value("LOOMHELM_OIDC_CLIENT_ID", ""),
+        "LOOMHELM_OIDC_CLIENT_SECRET": env_value("LOOMHELM_OIDC_CLIENT_SECRET", ""),
+        "LOOMHELM_OIDC_REDIRECT_URL": env_value("LOOMHELM_OIDC_REDIRECT_URL", ""),
+        "LOOMHELM_SESSION_COOKIE_SECURE": env_value("LOOMHELM_SESSION_COOKIE_SECURE", "true"),
         "LOOMHELM_SHUTDOWN_TIMEOUT": env_value("LOOMHELM_SHUTDOWN_TIMEOUT", "10s"),
         "LOOMHELM_STARTUP_TIMEOUT": env_value("LOOMHELM_STARTUP_TIMEOUT", "30s"),
         "LOOMHELM_WORKER_LEASE_KEY": env_value("LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"),

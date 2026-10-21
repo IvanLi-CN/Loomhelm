@@ -6,6 +6,10 @@ The candidate manifest is the deployment identity. It must contain the exact sou
 
 The state directory is intentionally outside Git by default at `.loomhelm-preview/`; set `LOOMHELM_PREVIEW_STATE_DIR` when the deployment state belongs elsewhere. It contains the slot metadata, Caddy files, compose environment and copied Web trees. Do not commit it or place credentials in the manifest.
 
+To enable browser login, export `LOOMHELM_OIDC_ISSUER_URL`, `LOOMHELM_OIDC_CLIENT_ID`, `LOOMHELM_OIDC_REDIRECT_URL` and, when required by the issuer, `LOOMHELM_OIDC_CLIENT_SECRET` before staging. The controller writes them into its mode-0600 Compose environment file and passes them only to both Server slots; Workers receive no browser identity-provider credentials. The redirect must use the public Web origin and `/api/v1/auth/oidc/callback`. `LOOMHELM_SESSION_COOKIE_SECURE` defaults to `true`; explicitly set `false` only for an isolated plain-HTTP test endpoint. Empty OIDC settings keep login unavailable and do not grant anonymous access. Protect the runtime state directory and do not publish the rendered environment or Compose configuration, which may contain secrets.
+
+`scripts/preview compose-config` validates configuration without printing expanded credentials. Literal quotes, backslashes and dollar signs in environment values are preserved by Compose-compatible encoding. In the session-owned Agent VM, run `LOOMHELM_TEST_COMPOSE=1 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/preview -p '*_test.py'` to exercise the actual Compose parser, literal credential delivery into disposable containers and the script's secret-safe validation entrypoint. The suite uses synthetic credentials, the VM's existing `postgres:17-alpine` image, unique fixture projects and cleanup; it does not start the application or publish service ports.
+
 ## Workflow
 
 ```sh
