@@ -7,11 +7,11 @@
     "version_impact": "minor"
   },
   "durable_state": {
-    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object, its staging recovery retry deadline and ready-row reclamation marker, the bounded cleanup debt for known-unreferenced staging objects, and the reason for an unavailable publication.",
+    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object and its filesystem incarnation, its staging recovery retry deadline and ready-row reclamation marker, the bounded cleanup debt for known-unreferenced staging objects with a filesystem incarnation, and the reason for an unavailable publication.",
     "staging_recovery": {
       "pending_row": "A pending row that encounters a transient recovery failure remains pending but receives a bounded retry deadline, so one failing identity cannot occupy every later recovery batch.",
-      "ready_row": "A ready row records staging_reclaimed_at only after the exact staging object is removed and the containing directory is synced; failed reclamation records a bounded retry deferral, and repeated recovery skips rows with the completed marker.",
-      "unreferenced_cleanup": "A caller-owned staging object whose database outcome is confirmed and whose name is proven absent from active publication rows may be recorded as cleanup debt when removal fails; recovery retries that exact name, while ambiguous or pre-intent staging remains retained and unqueued.",
+      "ready_row": "A ready row records the staging filesystem incarnation and records staging_reclaimed_at only after the matching staging object is removed and the containing directory is synced; a replaced or already-missing incarnation is preserved and the marker is advanced without deleting the replacement, while failed reclamation records a bounded retry deferral.",
+      "unreferenced_cleanup": "A caller-owned staging object whose database outcome is confirmed and whose name is proven absent from active publication rows may be recorded as cleanup debt when removal fails; recovery retries the exact name only when its recorded filesystem incarnation still matches, while a replaced object is preserved and the debt is deferred until an explicit enqueue refreshes the recorded incarnation.",
       "pre_intent_crash": "A staging object without a committed intent is retained for diagnosis because recovery cannot prove that an active uploader is not still using it; it is not referenced by publication queries or identity coordination."
     },
     "unavailable_reasons": [
@@ -64,14 +64,14 @@
     "ddl_structural_changes": [
       {
         "id": "ddl-00007-conversation-artifacts",
-        "description": "Create conversation_artifacts metadata with validated identifiers, associations, immutable content metadata, pending publication intent, ready/unavailable state and session/run lookup indexes.",
+        "description": "Create conversation_artifacts metadata with validated identifiers, associations, immutable content metadata, pending publication intent, ready/unavailable state, staging filesystem incarnations and session/run lookup indexes, including the unique active staging-name lookup used by publication and cleanup coordination.",
         "order": 1,
         "observable": true,
         "pauseable": true
       },
       {
         "id": "ddl-00007-staging-cleanup",
-        "description": "Create bounded retry state for exact staging objects whose database outcome is confirmed and whose publication rows no longer reference them.",
+        "description": "Create bounded retry state for exact staging objects whose database outcome is confirmed and whose publication rows no longer reference them, retaining a filesystem incarnation to prevent name reuse from deleting a newer upload.",
         "order": 2,
         "observable": true,
         "pauseable": true

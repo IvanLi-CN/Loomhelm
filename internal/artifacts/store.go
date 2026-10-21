@@ -227,7 +227,9 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 		}
 		if check != fileValid {
 			keepStaging = false
-			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check))
+			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check)); markErr != nil {
+				return protocol.Artifact{}, markErr
+			}
 			return protocol.Artifact{}, unavailableError(ErrIntegrity)
 		}
 		resolved, status, reclaimErr := s.reclaimReadyStaging(ctx, record.Artifact.ID, cleanup)
@@ -302,6 +304,9 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 	if err != nil {
 		return protocol.Artifact{}, err
 	}
+	if err := s.ensureObjectDirectory(); err != nil {
+		return protocol.Artifact{}, err
+	}
 	check, inspectErr := s.inspectReady(record)
 	if inspectErr != nil {
 		return protocol.Artifact{}, inspectErr
@@ -310,7 +315,9 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 		return protocol.Artifact{}, ErrStoreUnavailable
 	}
 	if check != fileValid {
-		s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check))
+		if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check)); markErr != nil {
+			return protocol.Artifact{}, markErr
+		}
 		return protocol.Artifact{}, unavailableError(ErrIntegrity)
 	}
 	return record.Artifact, nil
@@ -340,11 +347,15 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 	file, err := openStoredFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-missing")
+			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-missing"); markErr != nil {
+				return protocol.Artifact{}, nil, markErr
+			}
 			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
 		}
 		if errors.Is(err, ErrIntegrity) {
-			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch")
+			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
+				return protocol.Artifact{}, nil, markErr
+			}
 			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
 		}
 		return protocol.Artifact{}, nil, err
@@ -352,7 +363,9 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 	if err := verifyFile(file, record.Artifact); err != nil {
 		_ = file.Close()
 		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
-			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch")
+			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
+				return protocol.Artifact{}, nil, markErr
+			}
 			return protocol.Artifact{}, nil, unavailableError(err)
 		}
 		return protocol.Artifact{}, nil, err
@@ -536,6 +549,12 @@ func openStoredFile(path string) (*os.File, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if _, dirErr := os.Lstat(filepath.Dir(path)); dirErr != nil {
+				if errors.Is(dirErr, os.ErrNotExist) {
+					return nil, fmt.Errorf("artifact object directory is unavailable: %w", ErrStoreUnavailable)
+				}
+				return nil, fmt.Errorf("inspect artifact object directory: %w", ErrStoreUnavailable)
+			}
 			return nil, os.ErrNotExist
 		}
 		return nil, fmt.Errorf("inspect stored artifact: %w", ErrStoreUnavailable)

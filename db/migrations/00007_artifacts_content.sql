@@ -11,6 +11,7 @@ CREATE TABLE conversation_artifacts (
     created_at TIMESTAMPTZ NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('pending', 'ready', 'unavailable')),
     staging_name TEXT NOT NULL CHECK (staging_name ~ '^\.upload-[A-Za-z0-9_-]+$'),
+    staging_identity TEXT CHECK (staging_identity IS NULL OR staging_identity ~ '^[0-9]+:[0-9]+$'),
     staging_reclaimed_at TIMESTAMPTZ,
     staging_reclaim_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     unavailable_reason TEXT NOT NULL DEFAULT '' CHECK (length(unavailable_reason) <= 128)
@@ -18,6 +19,7 @@ CREATE TABLE conversation_artifacts (
 
 CREATE TABLE conversation_artifact_staging_cleanup (
     staging_name TEXT PRIMARY KEY CHECK (staging_name ~ '^\.upload-[A-Za-z0-9_-]+$'),
+    staging_identity TEXT CHECK (staging_identity IS NULL OR staging_identity ~ '^[0-9]+:[0-9]+$'),
     retry_after TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -25,6 +27,7 @@ CREATE INDEX conversation_artifacts_session_idx ON conversation_artifacts (sessi
 CREATE INDEX conversation_artifacts_run_idx ON conversation_artifacts (run_id, created_at, id) WHERE run_id IS NOT NULL;
 CREATE INDEX conversation_artifacts_pending_idx ON conversation_artifacts (staging_reclaim_after, created_at, id) WHERE state = 'pending';
 CREATE INDEX conversation_artifacts_ready_staging_idx ON conversation_artifacts (staging_reclaim_after, created_at, id) WHERE state = 'ready' AND staging_reclaimed_at IS NULL;
+CREATE UNIQUE INDEX conversation_artifacts_active_staging_idx ON conversation_artifacts (staging_name) WHERE state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL);
 CREATE INDEX conversation_artifact_staging_cleanup_retry_idx ON conversation_artifact_staging_cleanup (retry_after, staging_name);
 
 -- Session and Run ownership foreign keys are intentionally added by a follow-up

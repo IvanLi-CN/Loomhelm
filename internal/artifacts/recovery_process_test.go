@@ -342,7 +342,8 @@ func TestStoreRepairsMissingStagingAfterProcessInterruption(t *testing.T) {
 	db, store, ctx := openStoreAtRoot(t, root)
 	_ = store
 	artifact := testArtifact(id, nil, content)
-	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
+	oldStagingName := ".upload-repair-crash-old"
+	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, oldStagingName)
 	db.Close()
 	if code, output := runArtifactHelper(t, "crash", faultAfterRepairIntentCommit, root, id, content, ""); code != 91 {
 		t.Fatalf("repair helper exit code = %d, output = %s", code, output)
@@ -350,6 +351,13 @@ func TestStoreRepairsMissingStagingAfterProcessInterruption(t *testing.T) {
 
 	db, store, ctx = openStoreAtRoot(t, root)
 	defer db.Close()
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, oldStagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("repair interruption cleanup debt rows = %d, want 1", queued)
+	}
 	report, err := store.Recover(ctx, MaxRecoveryLimit)
 	if err != nil {
 		t.Fatalf("repair recovery error = %v, report = %#v", err, report)

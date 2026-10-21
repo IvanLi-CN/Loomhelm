@@ -29,16 +29,22 @@ func TestCommittedR02FixturesPreserveBasicAndUnknownContent(t *testing.T) {
 
 	categories := map[Category]int{}
 	for _, path := range paths {
-		source, err := os.Open(path)
+		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		records, parseErr := ParseJSONL(source, DefaultMaxRecordBytes)
-		_ = source.Close()
+		records, parseErr := ParseJSONL(bytes.NewReader(data), DefaultMaxRecordBytes)
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", path, parseErr)
 		}
 		for _, record := range records {
+			encoded, encodeErr := Encode(record)
+			if encodeErr != nil {
+				t.Fatalf("encode %s: %v", path, encodeErr)
+			}
+			if !bytes.Equal(encoded, record.RawJSON) {
+				t.Fatalf("fixture raw JSON changed for %s:\n got %s\nwant %s", path, encoded, record.RawJSON)
+			}
 			categories[record.Category]++
 		}
 	}
@@ -122,6 +128,9 @@ func TestDecodeAndParseRejectMalformedOrOversizedRecords(t *testing.T) {
 			}
 		})
 	}
+	if _, err := Decode([]byte(`{"schema":"loomhelm.codex.fixture/v1","source":"test","stream":"app-server","sequence":1,"payload":{"broken":}}`)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("malformed payload error = %v, want %v", err, ErrInvalid)
+	}
 	if _, err := ParseJSONL(strings.NewReader(strings.Repeat("x", 128)), 32); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized parse error = %v, want %v", err, ErrTooLarge)
 	}
@@ -140,6 +149,9 @@ func TestDecodeAndParseRejectMalformedOrOversizedRecords(t *testing.T) {
 	}
 	if _, err := Encode(Record{Source: "test", Stream: "app-server", Sequence: 1, Payload: payload}); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized encoded record error = %v, want %v", err, ErrTooLarge)
+	}
+	if _, err := Encode(Record{Source: "test", Stream: "app-server", Sequence: 1, Payload: json.RawMessage(`{"broken":}`)}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("malformed encoded payload error = %v, want %v", err, ErrInvalid)
 	}
 }
 

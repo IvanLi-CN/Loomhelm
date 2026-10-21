@@ -329,7 +329,7 @@ func validStream(stream protocol.EventSource) bool {
 
 func isJSONObject(value json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(value)
-	return len(trimmed) > 1 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}'
+	return len(trimmed) > 1 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}' && json.Valid(trimmed)
 }
 
 func rawObject(value json.RawMessage) map[string]json.RawMessage {

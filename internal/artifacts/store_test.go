@@ -380,6 +380,36 @@ func TestStoreRecoveryPreservesReadyStagingWhenFinalIsInvalid(t *testing.T) {
 	}
 }
 
+func TestStoreRecoveryQueuesInvalidReadyStagingCleanup(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready cleanup debt")
+	artifact := testArtifact(uniqueID("artifact-ready-cleanup-debt"), nil, content)
+	stagingName := ".upload-ready-cleanup-debt-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	first, err := store.Recover(ctx, 1)
+	if err != nil || first.Unavailable != 1 {
+		t.Fatalf("ready cleanup debt recovery = %#v, err=%v", first, err)
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("ready cleanup debt rows = %d, want 1", queued)
+	}
+	second, err := store.Recover(ctx, 1)
+	if err != nil || second.Cleaned != 1 {
+		t.Fatalf("ready cleanup debt retry = %#v, err=%v", second, err)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ready cleanup debt staging = %v, want missing", err)
+	}
+}
+
 func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -663,7 +693,7 @@ func TestStoreRetriesKnownUnreferencedStagingCleanupDebt(t *testing.T) {
 	if queued != 1 {
 		t.Fatalf("cleanup debt rows = %d, want 1", queued)
 	}
-	if err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err == nil {
+	if _, err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err == nil {
 		t.Fatal("cleanup unexpectedly succeeded for non-empty staging directory")
 	}
 	var retryAt time.Time
@@ -682,7 +712,7 @@ func TestStoreRetriesKnownUnreferencedStagingCleanupDebt(t *testing.T) {
 	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifact_staging_cleanup SET retry_after = NOW() WHERE staging_name = $1`, stagingName); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
+	if _, err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
@@ -706,7 +736,7 @@ func TestStoreCleanupDebtSkipsActiveStagingReference(t *testing.T) {
 	store.enqueueStagingCleanup(stagingName, cleanup)
 	artifact := testArtifact(uniqueID("artifact-cleanup-active"), nil, content)
 	insertPendingArtifact(t, db.Pool(), ctx, artifact, stagingName)
-	if err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
+	if _, err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); err != nil {
@@ -739,7 +769,7 @@ func TestStoreCleanupDebtRechecksRetryDeadline(t *testing.T) {
 	`, stagingName); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
+	if _, err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(stagingPath); err != nil {
@@ -751,6 +781,114 @@ func TestStoreCleanupDebtRechecksRetryDeadline(t *testing.T) {
 	}
 	if queued != 1 {
 		t.Fatalf("deferred cleanup debt rows = %d, want 1", queued)
+	}
+}
+
+func TestStoreCleanupDebtDoesNotRemoveReusedStaging(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	stagingName := ".upload-cleanup-reused-" + fmt.Sprint(time.Now().UnixNano())
+	stagingPath := filepath.Join(store.objects, stagingName)
+	if err := os.WriteFile(stagingPath, []byte("old staging"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	store.enqueueStagingCleanup(stagingName, cleanup)
+	if err := os.Remove(stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stagingPath, []byte("new staging"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(stagingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "new staging" {
+		t.Fatalf("reused staging content = %q, want new staging", content)
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("reused staging cleanup debt rows = %d, want 1 until the new incarnation is explicitly queued", queued)
+	}
+	store.enqueueStagingCleanup(stagingName, cleanup)
+	if _, err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stagingPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("explicitly requeued staging remains: %v", err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("reused staging cleanup debt after explicit requeue = %d, want 0", queued)
+	}
+}
+
+func TestStoreReadyReclamationPreservesReusedStaging(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready incarnation")
+	artifact := testArtifact(uniqueID("artifact-ready-incarnation"), nil, content)
+	stagingName := ".upload-ready-incarnation-" + fmt.Sprint(time.Now().UnixNano())
+	stagingPath := filepath.Join(store.objects, stagingName)
+	if err := os.WriteFile(stagingPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	identity, err := store.stagingIdentity(stagingName)
+	if err != nil || identity == nil {
+		t.Fatalf("read original staging identity = %v/%v", identity, err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_identity = $2, staging_reclaim_after = NOW()
+		WHERE id = $1
+	`, artifact.ID, identity); err != nil {
+		t.Fatal(err)
+	}
+	replacementPath := stagingPath + "-replacement"
+	if err := os.WriteFile(replacementPath, []byte("replacement staging"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementPath, stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	newIdentity, err := store.stagingIdentity(stagingName)
+	if err != nil || newIdentity == nil || *newIdentity == *identity {
+		t.Fatalf("replacement staging identity = %v, original = %v, err = %v", newIdentity, identity, err)
+	}
+	report, err := store.Recover(ctx, MaxRecoveryLimit)
+	if err != nil || report.Ready != 1 {
+		t.Fatalf("ready incarnation recovery = %#v, err=%v", report, err)
+	}
+	replacement, err := os.ReadFile(stagingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(replacement) != "replacement staging" {
+		t.Fatalf("replacement staging content = %q, want replacement staging", replacement)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if !reclaimed {
+		t.Fatal("ready recovery did not persist reclamation after preserving the replacement")
 	}
 }
 
@@ -1241,6 +1379,67 @@ func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.
 	assertNoStagingFiles(t, store.objects)
 }
 
+func TestStoreMetadataDoesNotMutateWhenObjectDirectoryIsUnavailable(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("object directory outage")
+	artifact := testArtifact(uniqueID("artifact-object-directory-outage"), nil, content)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store.objects, artifact.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.objects); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("missing object directory metadata error = %v, want %v", err, ErrStoreUnavailable)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("missing object directory state = %q, want %q", state, publicationReady)
+	}
+}
+
+func TestStoreRecoveryDoesNotMarkReadyUnavailableWhenObjectDirectoryIsUnavailable(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("recovery object directory outage")
+	artifact := testArtifact(uniqueID("artifact-recovery-object-directory-outage"), nil, content)
+	stagingName := ".upload-recovery-object-directory-outage-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	if err := os.Remove(filepath.Join(store.objects, stagingName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store.objects, artifact.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.objects); err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.Recover(ctx, 1)
+	if !errors.Is(err, ErrRecoveryIncomplete) || report.Failed != 1 {
+		t.Fatalf("object directory outage recovery = %#v, err=%v", report, err)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("object directory outage state = %q, want %q", state, publicationReady)
+	}
+}
+
 func TestStoreOpenMarksNonregularFinalUnavailable(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -1297,12 +1496,34 @@ func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
 	assertNoStagingFiles(t, store.objects)
 
 	corrupt := testArtifact(uniqueID("artifact-repair-corrupt"), nil, content)
+	oldStagingName := ".upload-repair-corrupt-old-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, oldStagingName), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	insertUnavailableArtifact(t, db.Pool(), ctx, corrupt, "staging-corrupt")
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_name = $2 WHERE id = $1`, corrupt.ID, oldStagingName); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Put(ctx, corrupt, readCloser(bytes.NewReader(content))); err != nil {
 		t.Fatalf("staging-corrupt retry error = %v", err)
 	}
 	if _, _, err := store.Open(ctx, corrupt.ID); err != nil {
 		t.Fatalf("staging-corrupt repaired Open error = %v", err)
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, oldStagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("obsolete corrupt staging debt rows = %d, want 1", queued)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	if _, err := store.recoverStagingCleanup(ctx, oldStagingName, cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, oldStagingName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("obsolete corrupt staging file = %v, want missing", err)
 	}
 }
 
