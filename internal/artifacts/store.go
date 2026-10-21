@@ -128,6 +128,9 @@ func NewStore(pool *pgxpool.Pool, cfg Config) (*Store, error) {
 	if err := prepareDirectory(root, 0o700); err != nil {
 		return nil, fmt.Errorf("prepare artifact storage root: %w", ErrStoreUnavailable)
 	}
+	if err := syncDirectory(filepath.Dir(root)); err != nil {
+		return nil, fmt.Errorf("sync artifact storage parent: %w", ErrStoreUnavailable)
+	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve artifact storage root: %w", ErrStoreUnavailable)
@@ -136,6 +139,9 @@ func NewStore(pool *pgxpool.Pool, cfg Config) (*Store, error) {
 	objects := filepath.Join(root, "objects")
 	if err := prepareDirectory(objects, 0o700); err != nil {
 		return nil, fmt.Errorf("prepare artifact object directory: %w", ErrStoreUnavailable)
+	}
+	if err := syncDirectory(root); err != nil {
+		return nil, fmt.Errorf("sync artifact storage root: %w", ErrStoreUnavailable)
 	}
 	authorizer := cfg.Authorizer
 	if authorizer == nil {
@@ -204,7 +210,7 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 	record, err := s.ensurePending(ctx, staged, createdAtProvided, stagingName, cleanup)
 	if err != nil {
 		if errors.Is(err, ErrConflict) {
-			keepStaging = false
+			keepStaging = !s.stagingUnreferenced(ctx, staged.ID, stagingName, cleanup)
 		}
 		return protocol.Artifact{}, err
 	}

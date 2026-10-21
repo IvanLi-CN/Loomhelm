@@ -146,6 +146,9 @@ func TestArtifactProcessHelper(t *testing.T) {
 		os.Exit(0)
 	}
 	artifact := testArtifact(id, nil, content)
+	if runID := os.Getenv("LOOMHELM_ARTIFACT_RUN_ID"); runID != "" {
+		artifact.RunID = &runID
+	}
 	_, err = store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
 	cancel()
 	if err != nil {
@@ -168,7 +171,8 @@ func TestStoreRecoversAfterProcessCrashBoundaries(t *testing.T) {
 			root := t.TempDir()
 			id := uniqueID("artifact-crash")
 			content := []byte("process crash boundary content")
-			if code, output := runArtifactHelper(t, "crash", point, root, id, content); code != 91 {
+			runID := "run-" + id
+			if code, output := runArtifactHelper(t, "crash", point, root, id, content, runID); code != 91 {
 				t.Fatalf("helper exit code = %d, output = %s", code, output)
 			}
 			db, store, ctx := openStoreAtRoot(t, root)
@@ -201,7 +205,8 @@ func TestStoreRecoversAfterProcessCrashBoundaries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if metadata.ID != id || !bytes.Equal(readBack, content) {
+			expected := testArtifact(id, &runID, content)
+			if metadata.ID != id || metadata.SessionID != expected.SessionID || !sameOptionalID(metadata.RunID, expected.RunID) || !bytes.Equal(readBack, content) {
 				t.Fatalf("recovered publication = %#v/%q", metadata, readBack)
 			}
 			if point != faultAfterReadyCommit {
@@ -297,7 +302,7 @@ func TestStoreRepairsMissingStagingAfterProcessInterruption(t *testing.T) {
 	artifact := testArtifact(id, nil, content)
 	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
 	db.Close()
-	if code, output := runArtifactHelper(t, "crash", faultAfterRepairIntentCommit, root, id, content); code != 91 {
+	if code, output := runArtifactHelper(t, "crash", faultAfterRepairIntentCommit, root, id, content, ""); code != 91 {
 		t.Fatalf("repair helper exit code = %d, output = %s", code, output)
 	}
 
@@ -454,9 +459,12 @@ func TestStoreRepairAndRecoveryContendOnIdentityLock(t *testing.T) {
 	assertNoStagingFiles(t, store.objects)
 }
 
-func runArtifactHelper(t *testing.T, mode string, point faultPoint, root, id string, content []byte) (int, string) {
+func runArtifactHelper(t *testing.T, mode string, point faultPoint, root, id string, content []byte, runID string) (int, string) {
 	t.Helper()
 	command := newArtifactHelper(t, mode, point, root, id, content)
+	if runID != "" {
+		command.Env = append(command.Env, "LOOMHELM_ARTIFACT_RUN_ID="+runID)
+	}
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output

@@ -282,6 +282,41 @@ func TestStoreRejectsAssociationAndImmutableMetadataConflicts(t *testing.T) {
 	}
 }
 
+func TestStoreRetainsStagingWhenRecoveryConflictsAfterIntentCommit(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("post-commit conflict")
+	artifact := testArtifact(uniqueID("artifact-post-commit-conflict"), nil, content)
+	conflictingBytes := []byte("conflicting final")
+	var recoveryErr error
+	store.faults = &faultHooks{
+		AfterIntentCommit: func() {
+			finalPath := filepath.Join(store.objects, artifact.ID)
+			if err := os.WriteFile(finalPath, conflictingBytes, 0o600); err != nil {
+				recoveryErr = err
+				return
+			}
+			_, recoveryErr = store.Recover(ctx, MaxRecoveryLimit)
+		},
+	}
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrConflict) {
+		t.Fatalf("post-commit conflict error = %v, want %v", err, ErrConflict)
+	}
+	if recoveryErr != nil {
+		t.Fatalf("conflicting recovery error = %v", recoveryErr)
+	}
+	var stagingName, state string
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_name, state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&stagingName, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationUnavailable) || stagingName == "" {
+		t.Fatalf("post-commit conflict state = %q, staging = %q", state, stagingName)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); err != nil {
+		t.Fatalf("referenced staging object was removed: %v", err)
+	}
+}
+
 func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -439,6 +474,38 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 	report, err := store.Recover(ctx, MaxRecoveryLimit)
 	if err != nil || report.Ready < 1 {
 		t.Fatalf("cancelled intent recovery = %#v, err=%v", report, err)
+	}
+}
+
+func TestStoreCancellationUsesSharedCleanupDeadlineForBlockedIdentityLock(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	id := uniqueID("artifact-cleanup-lock")
+	holder, err := db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx)
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "loomhelm:artifact:"+id); err != nil {
+		t.Fatal(err)
+	}
+
+	parent, cancel := context.WithCancel(ctx)
+	cleanup := newCleanupDeadline(parent)
+	defer cleanup.stop()
+	cancel()
+	cleanupContext, cleanupCancel := cleanup.context()
+	defer cleanupCancel()
+	started := time.Now()
+	tx, err := store.beginIdentityTx(cleanupContext, id, cleanup)
+	if tx != nil {
+		rollbackTx(tx, cleanup)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked cleanup lock error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if elapsed := time.Since(started); elapsed > cleanupTimeout+time.Second {
+		t.Fatalf("blocked cleanup lock elapsed %s, want no more than %s", elapsed, cleanupTimeout+time.Second)
 	}
 }
 

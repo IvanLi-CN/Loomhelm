@@ -292,6 +292,27 @@ func (s *Store) confirmRecordWithCleanup(id string, cleanup *cleanupDeadline) (a
 	return readArtifactRecord(ctx, s.pool, id)
 }
 
+func (s *Store) stagingUnreferenced(parent context.Context, id, stagingName string, cleanup *cleanupDeadline) bool {
+	if s == nil || s.pool == nil || cleanup == nil {
+		return false
+	}
+	ctx, cancel := cleanup.context()
+	defer cancel()
+	tx, err := s.beginIdentityTx(ctx, id, cleanup)
+	if err != nil {
+		return false
+	}
+	defer func() { rollbackTx(tx, cleanup) }()
+	record, err := readArtifactRecord(ctx, tx, id)
+	if errors.Is(err, ErrNotFound) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	return record.StagingName != stagingName
+}
+
 func (s *Store) readAuthorizedReadyRecord(ctx context.Context, id string, operation Operation) (artifactRecord, error) {
 	if s == nil || s.pool == nil {
 		return artifactRecord{}, ErrStoreUnavailable
