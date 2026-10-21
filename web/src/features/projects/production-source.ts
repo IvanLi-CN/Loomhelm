@@ -19,6 +19,7 @@ import { createPublishedProjectTaskApi, mapProject, mapTask } from "./api";
 interface ProductionSourceOptions {
   client?: GeneratedApiClient;
   canWrite: boolean;
+  canManageProjects: boolean;
   isReadOnly?: boolean;
   taskViews?: Record<string, TaskView>;
   setTaskView?: (scope: string, view: TaskView) => void;
@@ -36,8 +37,8 @@ interface DesiredRelations {
   dependsOn?: readonly string[];
 }
 
-function denied<T>(): Promise<WriteResult<T>> {
-  return Promise.resolve({ ok: false, code: "readonly", message: "当前身份或权限为只读，写入动作没有执行。" });
+function denied<T>(message = "当前身份或权限为只读，写入动作没有执行。"): Promise<WriteResult<T>> {
+  return Promise.resolve({ ok: false, code: "readonly", message });
 }
 
 function success<T>(value: T): WriteResult<T> {
@@ -104,7 +105,7 @@ async function syncTaskRelations(
   await queryClient.invalidateQueries({ queryKey: ["loomhelm", "tasks"] });
 }
 
-export function usePublishedProjectTaskSource({ client, canWrite, isReadOnly = !canWrite, taskViews = {}, setTaskView }: ProductionSourceOptions): ProjectTaskSource {
+export function usePublishedProjectTaskSource({ client, canWrite, canManageProjects, isReadOnly = !canWrite, taskViews = {}, setTaskView }: ProductionSourceOptions): ProjectTaskSource {
   const api = useMemo(() => createPublishedProjectTaskApi(client), [client]);
   const queryClient = useQueryClient();
   const projectsQuery = useQuery({
@@ -173,15 +174,15 @@ export function usePublishedProjectTaskSource({ client, canWrite, isReadOnly = !
       return tasks.filter((task) => task.projectId === targetProjectId || related.has(task.id));
     };
 
-    const createProject = (draft: ProjectDraft): Promise<WriteResult<ReturnType<typeof mapProject>>> => canWrite
+    const createProject = (draft: ProjectDraft): Promise<WriteResult<ReturnType<typeof mapProject>>> => canManageProjects
       ? createProjectMutation.mutateAsync(draft).then((response) => success(mapProject(response.project))).catch((error: unknown) => failure("创建项目", error))
-      : denied();
-    const updateProject = (targetProjectId: string, draft: ProjectDraft): Promise<WriteResult<ReturnType<typeof mapProject>>> => canWrite
+      : denied("当前身份或权限不能管理项目或成员，项目写入没有执行。");
+    const updateProject = (targetProjectId: string, draft: ProjectDraft): Promise<WriteResult<ReturnType<typeof mapProject>>> => canManageProjects
       ? updateProjectMutation.mutateAsync({ projectId: targetProjectId, draft }).then((response) => success(mapProject(response.project))).catch((error: unknown) => failure("更新项目", error))
-      : denied();
-    const deleteProject = (targetProjectId: string): Promise<WriteResult<null>> => canWrite
+      : denied("当前身份或权限不能管理项目或成员，项目写入没有执行。");
+    const deleteProject = (targetProjectId: string): Promise<WriteResult<null>> => canManageProjects
       ? deleteProjectMutation.mutateAsync(targetProjectId).then(() => success(null)).catch((error: unknown) => failure("删除项目", error))
-      : denied();
+      : denied("当前身份或权限不能管理项目或成员，项目写入没有执行。");
     const createTask = async (draft: TaskDraft): Promise<WriteResult<TaskRecord>> => {
       if (!canWrite) return denied();
       try {
@@ -240,6 +241,7 @@ export function usePublishedProjectTaskSource({ client, canWrite, isReadOnly = !
       tasks,
       status: projectsQuery.isPending || tasksQuery.isPending ? "loading" : projectsQuery.isError || tasksQuery.isError ? "error" : "ready",
       canWrite,
+      canManageProjects,
       isReadOnly,
       getProject,
       getTask,
@@ -257,5 +259,5 @@ export function usePublishedProjectTaskSource({ client, canWrite, isReadOnly = !
       removeTaskDependency,
       notice: projectsQuery.isError || tasksQuery.isError ? "项目、任务或关系读取失败；页面保持 fail-closed。" : undefined
     } satisfies ProjectTaskSource;
-  }, [api, canWrite, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, getProject, getTask, isReadOnly, projects, projectsQuery.isError, projectsQuery.isPending, queryClient, relationshipsByTaskId, setTaskView, taskViews, tasks, tasksQuery.isError, tasksQuery.isPending, updateProjectMutation, updateTaskMutation]);
+  }, [api, canManageProjects, canWrite, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, getProject, getTask, isReadOnly, projects, projectsQuery.isError, projectsQuery.isPending, queryClient, relationshipsByTaskId, setTaskView, taskViews, tasks, tasksQuery.isError, tasksQuery.isPending, updateProjectMutation, updateTaskMutation]);
 }

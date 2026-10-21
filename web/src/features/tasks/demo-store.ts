@@ -21,6 +21,7 @@ interface DemoTaskStoreSnapshot {
 const emptySnapshot: DemoTaskStoreSnapshot = { projects: [], tasks: [] };
 let snapshot = emptySnapshot;
 let scopeKey = "";
+let seededFixtures: DemoFixtures | null = null;
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -56,11 +57,14 @@ function fromFixtures(fixtures: DemoFixtures): DemoTaskStoreSnapshot {
   };
 }
 
-function ensureSeeded(key: string, fixtures: DemoFixtures): void {
-  if (scopeKey === key && snapshot !== emptySnapshot) return;
+function ensureSeeded(key: string, fixtures: DemoFixtures): boolean {
+  if (scopeKey === key && seededFixtures === fixtures) return false;
+  const next = fromFixtures(fixtures);
   scopeKey = key;
-  snapshot = fromFixtures(fixtures);
-  emit();
+  seededFixtures = fixtures;
+  if (JSON.stringify(snapshot) === JSON.stringify(next)) return false;
+  snapshot = next;
+  return true;
 }
 
 function fail<T>(code: "readonly" | "blocked" | "unsupported" | "invalid", message: string): WriteResult<T> {
@@ -82,6 +86,10 @@ function canWrite(canWriteValue: boolean): WriteResult<never> | null {
   return canWriteValue ? null : fail("readonly", "当前演示身份或连接状态为只读，写入动作没有执行。");
 }
 
+function canManageProject(canManageProjects: boolean): WriteResult<never> | null {
+  return canManageProjects ? null : fail("readonly", "当前身份可以操作任务，但不能管理项目或成员。");
+}
+
 function hasTask(taskId: string): boolean {
   return snapshot.tasks.some((task) => task.id === taskId);
 }
@@ -98,8 +106,8 @@ function wouldCreateCycle(taskId: string, parentId: string | undefined): boolean
   return false;
 }
 
-function createProject(draft: ProjectDraft, writable: boolean): WriteResult<ProjectRecord> {
-  const blocked = canWrite(writable);
+function createProject(draft: ProjectDraft, canManageProjects: boolean): WriteResult<ProjectRecord> {
+  const blocked = canManageProject(canManageProjects);
   if (blocked) return blocked;
   const name = draft.name.trim();
   const summary = draft.summary.trim();
@@ -118,8 +126,8 @@ function createProject(draft: ProjectDraft, writable: boolean): WriteResult<Proj
   return { ok: true, value: project };
 }
 
-function updateProject(projectId: string, draft: ProjectDraft, writable: boolean): WriteResult<ProjectRecord> {
-  const blocked = canWrite(writable);
+function updateProject(projectId: string, draft: ProjectDraft, canManageProjects: boolean): WriteResult<ProjectRecord> {
+  const blocked = canManageProject(canManageProjects);
   if (blocked) return blocked;
   const current = snapshot.projects.find((project) => project.id === projectId);
   const name = draft.name.trim();
@@ -134,8 +142,8 @@ function updateProject(projectId: string, draft: ProjectDraft, writable: boolean
   return { ok: true, value: project };
 }
 
-function deleteProject(projectId: string, writable: boolean): WriteResult<null> {
-  const blocked = canWrite(writable);
+function deleteProject(projectId: string, canManageProjects: boolean): WriteResult<null> {
+  const blocked = canManageProject(canManageProjects);
   if (blocked) return blocked;
   const project = snapshot.projects.find((item) => item.id === projectId);
   if (!project) return fail("invalid", "项目已不存在或不在当前权限范围内。");
@@ -242,11 +250,10 @@ function sourceStatus(scene: string): ProjectTaskSource["status"] {
 export function useOptionalDemoProjectTaskSource(): ProjectTaskSource | null {
   const runtime = useOptionalDemoRuntime();
   const key = runtime ? `${runtime.scene}:${runtime.persona}:${runtime.dataMode}` : "none";
-  if (runtime) ensureSeeded(key, runtime.fixtures);
 
   const current = useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
   useEffect(() => {
-    if (runtime) ensureSeeded(key, runtime.fixtures);
+    if (runtime && ensureSeeded(key, runtime.fixtures)) emit();
   }, [key, runtime]);
 
   return useMemo(() => {
@@ -265,15 +272,16 @@ export function useOptionalDemoProjectTaskSource(): ProjectTaskSource | null {
       status: sourceStatus(runtime.scene),
       notice: runtime.scene === "permission-changed" ? "权限范围已变化；关系只保留当前仍可见的任务。" : undefined,
       canWrite: runtime.canWrite,
+      canManageProjects: runtime.canManageProjects,
       isReadOnly: runtime.isReadOnly,
       getProject,
       getTask,
       getTasksForScope,
       getTaskView: (scope: string) => runtime.taskViews[scope] ?? "list",
       setTaskView: runtime.setTaskView,
-      createProject: async (draft: ProjectDraft) => createProject(draft, runtime.canWrite),
-      updateProject: async (projectId: string, draft: ProjectDraft) => updateProject(projectId, draft, runtime.canWrite),
-      deleteProject: async (projectId: string) => deleteProject(projectId, runtime.canWrite),
+      createProject: async (draft: ProjectDraft) => createProject(draft, runtime.canManageProjects),
+      updateProject: async (projectId: string, draft: ProjectDraft) => updateProject(projectId, draft, runtime.canManageProjects),
+      deleteProject: async (projectId: string) => deleteProject(projectId, runtime.canManageProjects),
       createTask: async (draft: TaskDraft) => createTask(draft, runtime.canWrite),
       updateTask: async (taskId: string, update: TaskUpdate) => updateTask(taskId, update, runtime.canWrite),
       deleteTask: async (taskId: string) => deleteTask(taskId, runtime.canWrite),

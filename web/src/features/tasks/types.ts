@@ -67,6 +67,7 @@ export interface ProjectTaskSource {
   status: "ready" | "loading" | "error" | "permission-changed";
   notice?: string;
   canWrite: boolean;
+  canManageProjects: boolean;
   isReadOnly: boolean;
   getProject: (projectId: string | undefined) => ProjectRecord | undefined;
   getTask: (taskId: string | undefined) => TaskRecord | undefined;

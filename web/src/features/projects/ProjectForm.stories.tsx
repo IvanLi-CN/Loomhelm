@@ -34,7 +34,17 @@ export const Create: Story = {
 
 export const Edit: Story = { args: { source: createStorySource(), mode: "edit", projectId: "loomhelm" }, render: (args) => <StoryFrame><ProjectForm {...args} /></StoryFrame> };
 
-export const ReadOnly: Story = { args: { source: createStorySource({ canWrite: false, isReadOnly: true }), mode: "create" }, render: (args) => <StoryFrame><ProjectForm {...args} /></StoryFrame> };
+export const ReadOnly: Story = { args: { source: createStorySource({ canWrite: false, canManageProjects: false, isReadOnly: true }), mode: "create" }, render: (args) => <StoryFrame><ProjectForm {...args} /></StoryFrame> };
+
+export const OperatorProjectAccess: Story = {
+  args: { source: createStorySource({ canManageProjects: false }), mode: "create" },
+  render: (args) => <StoryFrame><ProjectForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.getByRole("button", { name: "保存项目" })).toBeDisabled();
+    expect(await canvas.findByText("当前身份可以操作任务，但不能管理项目或成员。项目写入动作保持禁用。")).toBeInTheDocument();
+  }
+};
 
 export const ProtectedDelete: Story = {
   args: { source: createStorySource(), mode: "create" },

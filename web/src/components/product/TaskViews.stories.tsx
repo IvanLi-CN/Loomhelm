@@ -1,8 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { CSSProperties, ReactNode } from "react";
+import { useState } from "react";
 import { expect, userEvent, within } from "storybook/test";
 
-import { taskStates, type TaskState } from "@/demo/types";
+import { taskStates, type TaskState, type TaskView } from "@/demo/types";
 import type { ProjectTaskSource, TaskRecord } from "@/features/tasks/types";
 
 import { TaskExplorer, TaskStateBadge } from "./TaskViews";
@@ -30,6 +31,7 @@ function createSource(overrides: Partial<ProjectTaskSource> = {}): ProjectTaskSo
     tasks,
     status: "ready",
     canWrite: true,
+    canManageProjects: true,
     isReadOnly: false,
     getProject: (id) => projects.find((project) => project.id === id),
     getTask: (id) => tasks.find((task) => task.id === id),
@@ -52,6 +54,20 @@ function createSource(overrides: Partial<ProjectTaskSource> = {}): ProjectTaskSo
 
 function renderTaskLink(task: TaskRecord, children: ReactNode, className: string, options?: { style?: CSSProperties }) {
   return <a href={`/tasks/${task.id}`} className={className} style={options?.style}>{children}</a>;
+}
+
+function ConsistencyHarness() {
+  const [view, setView] = useState<TaskView>("list");
+  const [currentTasks, setCurrentTasks] = useState(tasks);
+  const source = createSource({
+    tasks: currentTasks,
+    getTask: (id) => currentTasks.find((task) => task.id === id),
+    getTasksForScope: () => currentTasks,
+    getTaskView: () => view,
+    setTaskView: (_scope, nextView) => setView(nextView)
+  });
+
+  return <div className="min-h-screen bg-[var(--canvas)] p-8"><div className="mb-4 flex flex-wrap gap-2"><button type="button" onClick={() => setCurrentTasks((current) => current.some((task) => task.id === "STORY-NEW") ? current : [{ id: "STORY-NEW", title: "新增验收任务", goal: "新增任务应在三种视图中保持一致。", projectId: "loomhelm", state: "待办", execution: "未开始", dependsOn: [], updated: "刚刚" }, ...current])}>新增验收任务</button><button type="button" onClick={() => setCurrentTasks((current) => current.map((task) => task.id === "STORY-NEW" ? { ...task, title: "编辑后验收任务", goal: "编辑后的任务应在三种视图中保持一致。" } : task))}>编辑验收任务</button></div><TaskExplorer source={source} renderTaskLink={renderTaskLink} /></div>;
 }
 
 const meta = {
@@ -79,6 +95,24 @@ export const ExplorerList: Story = {
     await userEvent.type(search, "STORY-01");
     expect(search).toHaveValue("STORY-01");
     expect(canvas.getByText("待办状态任务")).toBeInTheDocument();
+  }
+};
+
+export const ExplorerConsistency: Story = {
+  render: () => <ConsistencyHarness />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const views = ["看板", "图谱", "列表"];
+    await userEvent.click(canvas.getByRole("button", { name: "新增验收任务" }));
+    for (const view of views) {
+      await userEvent.click(canvas.getByRole("button", { name: view }));
+      expect(canvas.getAllByText("新增验收任务").length).toBeGreaterThan(0);
+    }
+    await userEvent.click(canvas.getByRole("button", { name: "编辑验收任务" }));
+    for (const view of views) {
+      await userEvent.click(canvas.getByRole("button", { name: view }));
+      expect(canvas.getAllByText("编辑后验收任务").length).toBeGreaterThan(0);
+    }
   }
 };
 

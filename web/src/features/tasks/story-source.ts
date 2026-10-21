@@ -16,6 +16,7 @@ export function createStorySource(overrides: Partial<ProjectTaskSource> = {}): P
     tasks: storyTasks,
     status: "ready",
     canWrite: true,
+    canManageProjects: true,
     isReadOnly: false,
     getProject: (id) => storyProjects.find((project) => project.id === id),
     getTask: (id) => storyTasks.find((task) => task.id === id),
