@@ -80,6 +80,22 @@ The U01 current-head evidence uses the login-free `ui_demo` at `162516e6b2b306f5
 
 ![U01 project tree selection on a narrow viewport](assets/u01-nav-tree-mobile-393x852.png)
 
+### Shared control metrics and U02 project tasks
+
+The accepted U02 mock UI evidence preserves `sourceSha=c270356`; the full `renderSourceSha` is `c2703568297cf41e58b7046d8fc8477348bd5c0c`. The shared-control light and dark captures use source-managed margins, while the project-task captures cover the desktop `1440x900` and mobile `393x852` CSS viewports.
+
+The shared UI implementation uses the `38px` compact, `42px` form and `44px` touch metrics, with filled surfaces using `background-clip: padding-box` so a transparent `1px` border does not make the painted control appear larger. These facts cover buttons, inputs, selects, search wrappers and related toolbar surfaces rather than a button-only exception.
+
+This evidence records visual acceptance of the mock UI only; it does not prove real API behavior, permissions, persistence or P01 integration. The current VM pass corresponds only to `942095f`; the new candidate's heavy gates remain to be refreshed during final delivery. U02's real P01 integration responsibility remains open.
+
+![Shared control metrics in the light theme](assets/shared-control-metrics-light.png)
+
+![Shared control metrics in the dark theme](assets/shared-control-metrics-dark.png)
+
+![Project tasks on the desktop viewport](assets/project-tasks-desktop-light.png)
+
+![Project tasks on the mobile viewport](assets/project-tasks-mobile-light.png)
+
 ## Rollout and Compatibility
 
 The initial application schema retains platform short-job results; River retains queue state separately. There is no previously deployed application schema or production compatibility claim. Re-entering startup may apply pending migrations but must not reverse them, and a migration failure prevents readiness. Empty-database migration, startup re-entry and persistence after restart have VM observations; a backend image was built and identified by its local content hash. Immutable candidate publication/promotion and tar-based handoff are implemented; supported blue-green compatibility windows, traffic switching, cross-process Worker fencing and production deployment still require their deployment implementation and observations. The planned release channel is an isolated parent-branch preview; production configuration is not established here.
