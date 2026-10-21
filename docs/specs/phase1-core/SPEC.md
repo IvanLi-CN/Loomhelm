@@ -45,6 +45,8 @@ The system MUST persist command identity and ordered events across connection lo
 
 The system MUST retain original conversation-related files and metadata associated with sessions and, when applicable, tasks, provide authorized query/download and preserve them across process restart and deployment cutover. Available message references MUST retain their conversation context. The system MUST reject out-of-scope conversation or project access and paths outside the authorized source scope. This contract does not require a standalone files page or access to an arbitrary remote filesystem.
 
+File publication MUST persist a recoverable intent before publishing final bytes, expose only verified ready objects and reconcile incomplete publication across process restart. The same authorized artifact identity and immutable content MUST be safe to retry; conflicting content or association MUST NOT overwrite an existing publication. Database timeouts or lost commit responses MUST NOT trigger deletion of confirmed or potentially committed bytes. Publication and reconciliation MUST coordinate across processes sharing the database and file volume. Missing or corrupt objects MUST remain explicitly unavailable rather than being reported ready. Storage recovery belongs to ArtifactStore; real domain authorization and startup/runtime recovery invocation remain mandatory application integration.
+
 ### REQ-LH-006
 
 The product MUST provide a responsive, installable Web/PWA with desktop/mobile capability parity. Top-level global navigation MUST consist of Workbench and Tasks. A separate Conversations group below those entries MUST directly list authorized projectless conversations. There MUST NOT be a separate top-level global Conversations button. The cross-project All Conversations list and creation path MUST remain reachable from Workbench. The workbench MUST prioritize pending decisions and exceptions; approval review MUST expose the full request and relevant context before explicit approve/deny actions. A task MUST open a combined conversation and task-information workspace. Files MUST appear in their conversation context; the product MUST NOT introduce a host-management surface, standalone artifacts navigation/page or task artifacts panel.
@@ -109,9 +111,9 @@ Association MUST retain the same Session and the identities and continuity of it
 
 ### VER-LH-004
 
-- Method: actual generated file byte comparison, permission/path rejection and retrieval after restart and deployment cutover.
+- Method: actual generated file byte comparison, permission/path rejection, separate-process concurrent writers/reconciliation, fault injection and process interruption at staging, intent, publication and readiness boundaries, lost database commit responses, and retrieval after restart and deployment cutover.
 - covers: `REQ-LH-005`, `REQ-LH-008`
-- Pass condition: authorized downloads retain the original bytes and association while revoked or out-of-scope requests fail.
+- Pass condition: authorized downloads retain the original bytes and association while revoked or out-of-scope requests fail. Repeated reconciliation and identical retries converge without duplicate metadata or overwritten bytes; conflicting retries fail, incomplete or corrupt objects remain unavailable, and an ambiguous database outcome never deletes potentially committed bytes. Package recovery evidence does not substitute for authenticated application integration.
 
 ### VER-LH-005
 
@@ -160,6 +162,7 @@ Association MUST retain the same Session and the identities and continuity of it
 - [Control plane and host execution](../../adr/0001-control-plane-and-host-execution.md)
 - [Immutable candidates and state-compatible blue-green](../../adr/0002-immutable-candidates-and-blue-green.md)
 - [Versioned public protocol and reconciliation boundary](../../adr/0003-public-protocol-and-reconciliation.md)
+- [Recoverable conversation file publication](../../adr/0004-recoverable-conversation-file-publication.md)
 
 ## References
 

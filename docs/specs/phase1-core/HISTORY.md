@@ -74,6 +74,10 @@ Review of documentation-complete candidate `f4af488dc029625d6e28457a7208e23e2012
 
 F04 adds a single `scripts/checks` entrypoint for the checked-in quality declaration, dprint Markdown, shell/Python syntax, development/preview Compose configuration, Go source verification, generated Go/TypeScript/sqlc drift, real PostgreSQL/River tests, Web builds and bootstrap. Candidate CI makes Quality Gates, Bootstrap Verification, React Doctor, Repository Verification and Candidate Build required; Candidate Reproducibility remains informational. React Doctor is pinned in the Bun lockfile and `tools/versions.env`, computes its staged or base-to-HEAD React file range fail-closed, explicitly skips an empty range, blocks on error findings and keeps warnings visible.
 
+## Conversation File Durability
+
+Storage review exposed that filesystem publication followed by a database insert has no atomic commit boundary, and compensating deletion after an ambiguous database result can destroy committed bytes. The storage contract therefore requires durable publication intent, ready-only visibility, cross-process coordination and restart reconciliation. This clarifies the existing byte-retention requirement without adding a public wire field or changing ownership permissions. The storage package owns recovery correctness; application composition still owns real authorization, Session/Run ownership and runtime recovery invocation. Neither package verification nor this contract establishes complete authenticated product acceptance.
+
 ## References
 
 - [Requirements](SPEC.md)
