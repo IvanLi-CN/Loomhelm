@@ -8,6 +8,43 @@
   },
   "durable_state": {
     "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object and the reason for an unavailable publication.",
+    "unavailable_reasons": [
+      {
+        "reason": "staging-missing",
+        "meaning": "Never-ready recorded staging bytes are missing.",
+        "identical_retry_repairable": true
+      },
+      {
+        "reason": "staging-corrupt",
+        "meaning": "Never-ready recorded staging bytes fail the retained size or SHA-256 metadata.",
+        "identical_retry_repairable": true
+      },
+      {
+        "reason": "staging-invalid",
+        "meaning": "The recorded staging name is invalid or escaped the private object directory.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "final-conflict",
+        "meaning": "A nonmatching or nonregular final object prevents publication.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "final-verification",
+        "meaning": "The newly linked final object failed post-publication verification.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "final-missing",
+        "meaning": "A previously ready final object is missing.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "final-mismatch",
+        "meaning": "A previously ready final object fails the retained size or SHA-256 metadata.",
+        "identical_retry_repairable": false
+      }
+    ],
     "storage_implementation": "PostgreSQL publication intent managed by the embedded Goose migration and immutable, verified files below a configured dedicated artifact root.",
     "source_compatibility_range": {
       "from_program_version": "Phase-one candidate before migration 00007; no earlier artifact metadata or file-volume state is supported.",

@@ -53,6 +53,8 @@ func TestArtifactProcessHelper(t *testing.T) {
 			faults.AfterIntentCommit = crash
 		case faultAfterRepairIntentCommit:
 			faults.AfterRepairIntentCommit = crash
+		case faultAfterFinalLink:
+			faults.AfterFinalLink = crash
 		case faultAfterFinalPublication:
 			faults.AfterFinalPublication = crash
 		case faultAfterReadyCommit:
@@ -114,7 +116,7 @@ func TestStoreRecoversAfterProcessCrashBoundaries(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
 		t.Skip("LOOMHELM_DATABASE_URL is not set")
 	}
-	points := []faultPoint{faultAfterStage, faultAfterIntentCommit, faultAfterFinalPublication, faultAfterReadyCommit}
+	points := []faultPoint{faultAfterStage, faultAfterIntentCommit, faultAfterFinalLink, faultAfterFinalPublication, faultAfterReadyCommit}
 	for _, point := range points {
 		t.Run(string(point), func(t *testing.T) {
 			root := t.TempDir()

@@ -147,13 +147,13 @@ func ParseJSONLContext(ctx context.Context, source io.ReadCloser, maxRecordBytes
 	if source == nil {
 		return nil, fmt.Errorf("content source must not be nil: %w", ErrInvalid)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	owned := newOwnedReadCloser(source)
 	stopCloseOnCancel := context.AfterFunc(ctx, func() { _ = owned.Close() })
 	defer stopCloseOnCancel()
 	defer owned.Close()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return parseJSONL(ctx, owned, maxRecordBytes)
 }
 

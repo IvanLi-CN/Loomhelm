@@ -179,6 +179,18 @@ func TestContentRuntimeParserClosesBlockedInputOnCancellation(t *testing.T) {
 	}
 }
 
+func TestContentRuntimeParserClosesPreCanceledInput(t *testing.T) {
+	source := newBlockingContentSource()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ParseJSONLContext(ctx, source, DefaultMaxRecordBytes); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-cancelled parser error = %v, want %v", err, context.Canceled)
+	}
+	if got := source.closeCount.Load(); got != 1 {
+		t.Fatalf("pre-cancelled source close count = %d, want 1", got)
+	}
+}
+
 func TestContentRuntimeParserDoesNotLeakReaderErrors(t *testing.T) {
 	secretPath := "/private/fixture/secret.jsonl"
 	source := &errorContentSource{err: errors.New(secretPath)}

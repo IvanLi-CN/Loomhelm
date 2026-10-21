@@ -284,12 +284,113 @@ func TestStoreKeepsDurableStagingWhenDatabaseCommitIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestStoreResolvesLostCommitResponsesFromDurableState(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	store.faults = &faultHooks{
+		CommitResponseLost: func() error { return errors.New("simulated commit response loss") },
+	}
+	content := []byte("lost commit response")
+	artifact := testArtifact(uniqueID("artifact-lost-commit"), nil, content)
+	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ID != artifact.ID {
+		t.Fatalf("stored metadata = %#v", stored)
+	}
+	metadata, reader, err := store.Open(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || metadata.ID != artifact.ID || !bytes.Equal(readBack, content) {
+		t.Fatalf("lost-response publication = %#v/%q, err=%v", metadata, readBack, err)
+	}
+}
+
 func TestStoreRejectsLongContentTypeBeforeStaging(t *testing.T) {
 	content := []byte("content")
 	artifact := testArtifact("artifact-content-type", nil, content)
 	artifact.ContentType = strings.Repeat("a", 256)
 	if _, _, err := validateArtifact(artifact, DefaultMaxBytes); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("long content type error = %v, want %v", err, ErrInvalid)
+	}
+}
+
+func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	firstContext, cancelFirst := context.WithCancel(ctx)
+	defer cancelFirst()
+	intentStarted := make(chan struct{})
+	var intentOnce sync.Once
+	store.faults = &faultHooks{
+		AfterIntentCommit: func() {
+			intentOnce.Do(func() { close(intentStarted) })
+			<-firstContext.Done()
+		},
+	}
+	firstContent := []byte("cancelled after intent")
+	secondContent := []byte("unrelated upload")
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := store.Put(firstContext, testArtifact(uniqueID("artifact-cancel-after-intent"), nil, firstContent), readCloser(bytes.NewReader(firstContent)))
+		firstResult <- err
+	}()
+	select {
+	case <-intentStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first upload did not reach committed intent")
+	}
+	secondResult := make(chan error, 1)
+	secondID := uniqueID("artifact-unrelated")
+	go func() {
+		_, err := store.Put(ctx, testArtifact(secondID, nil, secondContent), readCloser(bytes.NewReader(secondContent)))
+		secondResult <- err
+	}()
+	cancelFirst()
+	select {
+	case err := <-firstResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled after-intent error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled after-intent upload did not return")
+	}
+	select {
+	case err := <-secondResult:
+		if err != nil {
+			t.Fatalf("unrelated upload error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("unrelated upload was stalled by cancelled upload")
+	}
+	store.faults = nil
+	report, err := store.Recover(ctx, 8)
+	if err != nil || report.Ready != 1 {
+		t.Fatalf("cancelled intent recovery = %#v, err=%v", report, err)
+	}
+}
+
+func TestStoreRoundsCreatedAtToDatabasePrecision(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("timestamp precision")
+	artifact := testArtifact(uniqueID("artifact-time"), nil, content)
+	artifact.CreatedAt = "2026-01-02T03:04:05.123456789Z"
+	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expected = "2026-01-02T03:04:05.123457Z"
+	if stored.CreatedAt != expected {
+		t.Fatalf("stored created_at = %q, want %q", stored.CreatedAt, expected)
+	}
+	retried, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
+	if err != nil || retried.CreatedAt != expected {
+		t.Fatalf("timestamp retry = %#v, err=%v", retried, err)
 	}
 }
 
@@ -415,6 +516,15 @@ func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
 		t.Fatalf("repaired publication = %#v/%q, err=%v", metadata, readBack, err)
 	}
 	assertNoStagingFiles(t, store.objects)
+
+	corrupt := testArtifact(uniqueID("artifact-repair-corrupt"), nil, content)
+	insertUnavailableArtifact(t, db.Pool(), ctx, corrupt, "staging-corrupt")
+	if _, err := store.Put(ctx, corrupt, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatalf("staging-corrupt retry error = %v", err)
+	}
+	if _, _, err := store.Open(ctx, corrupt.ID); err != nil {
+		t.Fatalf("staging-corrupt repaired Open error = %v", err)
+	}
 }
 
 func TestStoreRejectsRepairForUnknownReasonOrConflictingFinal(t *testing.T) {

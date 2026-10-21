@@ -237,7 +237,7 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 			return protocol.Artifact{}, err
 		}
 		if status == recoveryUnavailable {
-			keepStaging = false
+			keepStaging = resolved.StagingName == stagingName
 			return protocol.Artifact{}, unavailableError(ErrIntegrity)
 		}
 		if status != recoveryReady {

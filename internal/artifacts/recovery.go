@@ -70,6 +70,7 @@ const (
 	faultAfterStage              faultPoint = "after-stage"
 	faultAfterIntentCommit       faultPoint = "after-intent-commit"
 	faultAfterRepairIntentCommit faultPoint = "after-repair-intent-commit"
+	faultAfterFinalLink          faultPoint = "after-final-link"
 	faultAfterFinalPublication   faultPoint = "after-final-publication"
 	faultAfterReadyCommit        faultPoint = "after-ready-commit"
 )
@@ -81,8 +82,10 @@ type faultHooks struct {
 	AfterStage              func()
 	AfterIntentCommit       func()
 	AfterRepairIntentCommit func()
+	AfterFinalLink          func()
 	AfterFinalPublication   func()
 	AfterReadyCommit        func()
+	CommitResponseLost      func() error
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -102,6 +105,10 @@ func (s *Store) fault(point faultPoint) {
 		if s.faults.AfterRepairIntentCommit != nil {
 			s.faults.AfterRepairIntentCommit()
 		}
+	case faultAfterFinalLink:
+		if s.faults.AfterFinalLink != nil {
+			s.faults.AfterFinalLink()
+		}
 	case faultAfterFinalPublication:
 		if s.faults.AfterFinalPublication != nil {
 			s.faults.AfterFinalPublication()
@@ -111,6 +118,16 @@ func (s *Store) fault(point faultPoint) {
 			s.faults.AfterReadyCommit()
 		}
 	}
+}
+
+func (s *Store) commit(ctx context.Context, tx pgx.Tx) error {
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if s != nil && s.faults != nil && s.faults.CommitResponseLost != nil {
+		return s.faults.CommitResponseLost()
+	}
+	return nil
 }
 
 type cleanupDeadline struct {
@@ -324,7 +341,7 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 	`, candidate.ID, candidate.SessionID, nullableString(candidate.RunID), candidate.Name, string(candidate.Kind), candidate.Size, candidate.Sha256, candidate.ContentType, parseCreatedAt(candidate.CreatedAt), stagingName); err != nil {
 		return artifactRecord{}, fmt.Errorf("persist artifact intent: %w", ErrStoreUnavailable)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		confirmed, confirmErr := s.confirmRecordWithCleanup(candidate.ID, cleanup)
 		if confirmErr == nil && sameArtifactMetadata(candidate, confirmed.Artifact, createdAtProvided) && publicationStateMatchesIntent(confirmed.State) {
 			return confirmed, nil
@@ -402,7 +419,7 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 func (s *Store) commitRepairState(ctx context.Context, updated artifactRecord, createdAtProvided bool, cleanup *cleanupDeadline, tx pgx.Tx, fault bool) (artifactRecord, error) {
 	// Commit first, then resolve the result from durable state so an uncertain
 	// response never compensates by deleting staged or published bytes.
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		confirmed, confirmErr := s.confirmRecordWithCleanup(updated.Artifact.ID, cleanup)
 		if confirmErr == nil && sameArtifactMetadata(updated.Artifact, confirmed.Artifact, createdAtProvided) && publicationStateMatchesIntent(confirmed.State) {
 			return confirmed, nil
@@ -594,7 +611,7 @@ func (s *Store) reconcileOne(ctx context.Context, id string, cleanup *cleanupDea
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
 		if confirmErr == nil && samePublicationState(confirmed, updated) {
 			if confirmed.State == publicationReady {
@@ -649,6 +666,9 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	}
 	switch finalCheck {
 	case fileValid:
+		if err := syncDirectory(s.objects); err != nil {
+			return artifactRecord{}, recoveryPending, fmt.Errorf("sync final artifact directory: %w", ErrStoreUnavailable)
+		}
 		return s.updatePublicationState(ctx, tx, record, publicationReady, "")
 	case fileInvalid:
 		return s.updatePublicationState(ctx, tx, record, publicationUnavailable, "final-conflict")
@@ -683,12 +703,16 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 				return artifactRecord{}, recoveryPending, inspectErr
 			}
 			if finalCheck == fileValid {
+				if err := syncDirectory(s.objects); err != nil {
+					return artifactRecord{}, recoveryPending, fmt.Errorf("sync final artifact directory: %w", ErrStoreUnavailable)
+				}
 				return s.updatePublicationState(ctx, tx, record, publicationReady, "")
 			}
 			return s.updatePublicationState(ctx, tx, record, publicationUnavailable, "final-conflict")
 		}
 		return artifactRecord{}, recoveryPending, fmt.Errorf("publish final artifact: %w", ErrStoreUnavailable)
 	}
+	s.fault(faultAfterFinalLink)
 	if err := syncDirectory(s.objects); err != nil {
 		return artifactRecord{}, recoveryPending, fmt.Errorf("sync final artifact directory: %w", ErrStoreUnavailable)
 	}
@@ -825,7 +849,7 @@ func (s *Store) markReadyObjectUnavailable(parent context.Context, id string, re
 	if _, err := tx.Exec(ctx, `UPDATE conversation_artifacts SET state = 'unavailable', unavailable_reason = $2 WHERE id = $1 AND state = 'ready'`, id, reason); err != nil {
 		return
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		_, _ = s.confirmRecordWithCleanup(id, cleanup)
 		return
 	}
