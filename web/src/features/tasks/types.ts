@@ -1,3 +1,4 @@
+import type { ProjectMemberRole } from "@loomhelm/protocol";
 import type { TaskView } from "@/demo/types";
 import type { ExecutionState, TaskState } from "@/demo/types";
 
@@ -39,6 +40,13 @@ export type WriteResult<T> =
 
 export type MutationResult<T> = Promise<WriteResult<T>>;
 
+export interface ProjectPermissionSnapshot {
+  role: ProjectMemberRole | null;
+  canWrite: boolean;
+  canManageProjects: boolean;
+  isReadOnly: boolean;
+}
+
 export interface ProjectDraft {
   name: string;
   summary: string;
@@ -66,9 +74,8 @@ export interface ProjectTaskSource {
   tasks: readonly TaskRecord[];
   status: "ready" | "loading" | "error" | "permission-changed" | "unauthenticated";
   notice?: string;
-  canWrite: boolean;
-  canManageProjects: boolean;
-  isReadOnly: boolean;
+  canCreateProjects: boolean;
+  getProjectPermissions: (projectId: string | undefined) => ProjectPermissionSnapshot;
   getProject: (projectId: string | undefined) => ProjectRecord | undefined;
   getTask: (taskId: string | undefined) => TaskRecord | undefined;
   getTasksForScope: (projectId?: string) => readonly TaskRecord[];

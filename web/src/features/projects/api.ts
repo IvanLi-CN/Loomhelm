@@ -2,9 +2,9 @@ import {
   createGeneratedApiClient,
   type GeneratedApiClient
 } from "@loomhelm/api-client";
-import type { CreateProjectRequest, Project, ProjectMember, ProjectMemberRole, Task, TaskRelationshipPage, TaskStatus } from "@loomhelm/protocol";
+import type { CreateProjectRequest, Project, ProjectMember, Task, TaskRelationshipPage, TaskStatus } from "@loomhelm/protocol";
 
-import type { ProjectRecord, TaskRecord } from "@/features/tasks/types";
+import type { ProjectPermissionSnapshot, ProjectRecord, TaskRecord } from "@/features/tasks/types";
 
 export const unsupportedProjectTaskOperations = [
   "deletionProtectionDetails"
@@ -56,12 +56,7 @@ export function createPublishedProjectTaskApi(client: GeneratedApiClient = creat
   };
 }
 
-export interface ProjectMemberPermissions {
-  role: ProjectMemberRole | null;
-  canWrite: boolean;
-  canManageProjects: boolean;
-  isReadOnly: boolean;
-}
+export type ProjectMemberPermissions = ProjectPermissionSnapshot;
 
 export function permissionsForProjectMember(members: readonly ProjectMember[], principalId: string | undefined): ProjectMemberPermissions {
   const role = principalId ? members.find((member) => member.user_id === principalId)?.role ?? null : null;

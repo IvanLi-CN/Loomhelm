@@ -30,9 +30,8 @@ function createSource(overrides: Partial<ProjectTaskSource> = {}): ProjectTaskSo
     projects,
     tasks,
     status: "ready",
-    canWrite: true,
-    canManageProjects: true,
-    isReadOnly: false,
+    canCreateProjects: true,
+    getProjectPermissions: () => ({ role: "owner", canWrite: true, canManageProjects: true, isReadOnly: false }),
     getProject: (id) => projects.find((project) => project.id === id),
     getTask: (id) => tasks.find((task) => task.id === id),
     getTasksForScope: (projectId) => projectId ? tasks.filter((task) => task.projectId === projectId || task.id === "STORY-2") : tasks,
@@ -130,6 +129,6 @@ export const Empty: Story = { render: () => <div className="min-h-screen bg-[var
 
 export const Error: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ status: "error" })} renderTaskLink={renderTaskLink} /></div> };
 
-export const ReadOnly: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ canWrite: false, isReadOnly: true, notice: "当前身份为只读，任务与关系写入已禁用。" })} renderTaskLink={renderTaskLink} /></div> };
+export const ReadOnly: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ getProjectPermissions: () => ({ role: "viewer", canWrite: false, canManageProjects: false, isReadOnly: true }), canCreateProjects: false, notice: "当前身份为只读，任务与关系写入已禁用。" })} renderTaskLink={renderTaskLink} /></div> };
 
 export const PermissionChanged: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ status: "permission-changed", notice: "权限范围已变化；不再展示受保护任务。", tasks: tasks.slice(0, 2), getTasksForScope: () => tasks.slice(0, 2) })} renderTaskLink={renderTaskLink} /></div> };

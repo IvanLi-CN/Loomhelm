@@ -5,6 +5,7 @@ import { taskStates, type DemoFixtures, type TaskState, type TaskView } from "@/
 
 import type {
   ProjectDraft,
+  ProjectPermissionSnapshot,
   ProjectRecord,
   ProjectTaskSource,
   TaskDraft,
@@ -266,14 +267,19 @@ export function useOptionalDemoProjectTaskSource(): ProjectTaskSource | null {
       const related = new Set(local.flatMap((task) => [task.parentId, ...task.dependsOn].filter((id): id is string => Boolean(id))));
       return current.tasks.filter((task) => task.projectId === projectId || related.has(task.id));
     };
+    const getProjectPermissions = (_projectId: string | undefined): ProjectPermissionSnapshot => ({
+      role: runtime.persona,
+      canWrite: runtime.canWrite,
+      canManageProjects: runtime.canManageProjects,
+      isReadOnly: runtime.isReadOnly
+    });
     return {
       projects: current.projects,
       tasks: current.tasks,
       status: sourceStatus(runtime.scene),
       notice: runtime.scene === "permission-changed" ? "权限范围已变化；关系只保留当前仍可见的任务。" : undefined,
-      canWrite: runtime.canWrite,
-      canManageProjects: runtime.canManageProjects,
-      isReadOnly: runtime.isReadOnly,
+      canCreateProjects: runtime.canManageProjects,
+      getProjectPermissions,
       getProject,
       getTask,
       getTasksForScope,

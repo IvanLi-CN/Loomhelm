@@ -48,9 +48,8 @@ export function useOptionalProjectTaskSource(): ProjectTaskSource | null {
   const productionSource = usePublishedProjectTaskSource({
     client: assembly?.client,
     enabled: !demoRuntime && authenticated,
-    canWrite: assembly?.permissions.canWrite ?? false,
-    canManageProjects: assembly?.permissions.canManageProjects ?? false,
-    isReadOnly: assembly?.permissions.isReadOnly ?? true,
+    canCreateProjects: assembly?.permissions.canManageProjects ?? false,
+    principalId: assembly?.auth.principalId,
     taskViews,
     setTaskView: (scope, view) => {
       setTaskViews((current) => {

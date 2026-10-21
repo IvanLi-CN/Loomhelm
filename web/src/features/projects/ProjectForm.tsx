@@ -22,9 +22,13 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
   const [summary, setSummary] = useState(project?.summary ?? "");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
-  const projectWriteMessage = source.canWrite
-    ? "当前身份可以操作任务，但不能管理项目或成员。项目写入动作保持禁用。"
-    : "当前身份或连接状态为只读，项目写入动作保持禁用。";
+  const projectPermissions = mode === "edit" ? source.getProjectPermissions(projectId) : undefined;
+  const canManageProject = mode === "create" ? source.canCreateProjects : projectPermissions?.canManageProjects ?? false;
+  const projectWriteMessage = mode === "create"
+    ? "当前身份或连接状态不能创建项目。"
+    : projectPermissions?.canWrite
+      ? "当前身份可以操作任务，但不能管理项目或成员。项目写入动作保持禁用。"
+      : "当前身份或连接状态为只读，项目写入动作保持禁用。";
 
   useEffect(() => {
     setName(project?.name ?? "");
@@ -57,12 +61,12 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
         </div>
         {mode === "edit" && <Pencil size={17} className="text-[var(--accent)]" aria-hidden="true" />}
       </div>
-      <label className="form-field"><span>项目名称</span><Input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} disabled={!source.canManageProjects} autoFocus={mode === "edit"} /></label>
-      <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => setSummary(event.target.value)} disabled={!source.canManageProjects} /></label>
-      {!source.canManageProjects && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>{projectWriteMessage}</div>}
+      <label className="form-field"><span>项目名称</span><Input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} disabled={!canManageProject} autoFocus={mode === "edit"} /></label>
+      <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => setSummary(event.target.value)} disabled={!canManageProject} /></label>
+      {!canManageProject && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>{projectWriteMessage}</div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}
       <div className="form-actions">
-        <Button type="button" className="button button-primary" onClick={submit} disabled={!source.canManageProjects || pending || !name.trim() || !summary.trim()}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存项目"}</Button>
+        <Button type="button" className="button button-primary" onClick={submit} disabled={!canManageProject || pending || !name.trim() || !summary.trim()}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存项目"}</Button>
         {onCancelled && <Button type="button" variant="secondary" className="button button-secondary" onClick={onCancelled}><X size={15} aria-hidden="true" />取消</Button>}
       </div>
     </div>
@@ -79,6 +83,7 @@ export function ProjectActions({ source, projectId }: ProjectActionsProps) {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
   const project = source.getProject(projectId);
+  const canManageProject = source.getProjectPermissions(projectId).canManageProjects;
 
   if (!project) return null;
   if (editing) return <ProjectForm source={source} mode="edit" projectId={projectId} onCancelled={() => setEditing(false)} onSaved={() => setEditing(false)} />;
@@ -93,8 +98,8 @@ export function ProjectActions({ source, projectId }: ProjectActionsProps) {
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button type="button" variant="secondary" className="button button-secondary" onClick={() => setEditing(true)} disabled={!source.canManageProjects}><Pencil size={15} aria-hidden="true" />编辑项目</Button>
-        <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={remove} disabled={!source.canManageProjects || pending}><Trash2 size={15} aria-hidden="true" />删除项目</Button>
+        <Button type="button" variant="secondary" className="button button-secondary" onClick={() => setEditing(true)} disabled={!canManageProject}><Pencil size={15} aria-hidden="true" />编辑项目</Button>
+        <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={remove} disabled={!canManageProject || pending}><Trash2 size={15} aria-hidden="true" />删除项目</Button>
       </div>
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
     </div>
