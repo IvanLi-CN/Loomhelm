@@ -317,6 +317,29 @@ func TestStoreRetainsStagingWhenRecoveryConflictsAfterIntentCommit(t *testing.T)
 	}
 }
 
+func TestStoreRecoveryReclaimsReadyStagingAcrossBoundedBatches(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready staging cleanup")
+	for index := 0; index < 2; index++ {
+		artifact := testArtifact(uniqueID(fmt.Sprintf("artifact-ready-staging-%d", index)), nil, content)
+		stagingName := fmt.Sprintf(".upload-ready-%d-%d", index, time.Now().UnixNano())
+		if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	}
+	first, err := store.Recover(ctx, 1)
+	if err != nil || first.Ready != 1 {
+		t.Fatalf("first ready cleanup = %#v, err=%v", first, err)
+	}
+	second, err := store.Recover(ctx, 1)
+	if err != nil || second.Ready != 1 {
+		t.Fatalf("second ready cleanup = %#v, err=%v", second, err)
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
 func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -843,6 +866,20 @@ func assertNoStagingFiles(t *testing.T, objects string) {
 	}
 }
 
+func assertHasStagingFiles(t *testing.T, objects string) {
+	t.Helper()
+	entries, err := os.ReadDir(objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".upload-") {
+			return
+		}
+	}
+	t.Fatal("no staging file remains")
+}
+
 func insertUnavailableArtifact(t *testing.T, pool *pgxpool.Pool, ctx context.Context, artifact protocol.Artifact, reason string) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
@@ -862,6 +899,18 @@ func insertPendingArtifact(t *testing.T, pool *pgxpool.Pool, ctx context.Context
 			id, session_id, name, kind, size, sha256, content_type, created_at,
 			state, staging_name, unavailable_reason
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'pending', $8, '')
+	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, stagingName); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertReadyArtifact(t *testing.T, pool *pgxpool.Pool, ctx context.Context, artifact protocol.Artifact, stagingName string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO conversation_artifacts (
+			id, session_id, name, kind, size, sha256, content_type, created_at,
+			state, staging_name, unavailable_reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'ready', $8, '')
 	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, stagingName); err != nil {
 		t.Fatal(err)
 	}

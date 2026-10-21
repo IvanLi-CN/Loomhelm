@@ -187,6 +187,7 @@ func TestStoreRecoversAfterProcessCrashBoundaries(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(store.objects, id)); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("staging-only final object error = %v, want missing", err)
 				}
+				assertHasStagingFiles(t, store.objects)
 				return
 			}
 			report, err := store.Recover(ctx, MaxRecoveryLimit)
