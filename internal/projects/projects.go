@@ -79,6 +79,9 @@ func (s *Service) Mount(r chi.Router) {
 		projects.Get("/{project_id}", s.handleGet)
 		projects.Patch("/{project_id}", s.handleUpdate)
 		projects.Delete("/{project_id}", s.handleDelete)
+		projects.Get("/{project_id}/members", s.handleListMembers)
+		projects.Put("/{project_id}/members/{user_id}", s.handleGrantMember)
+		projects.Delete("/{project_id}/members/{user_id}", s.handleRevokeMember)
 	})
 }
 
@@ -629,6 +632,57 @@ func (s *Service) handleDelete(writer http.ResponseWriter, request *http.Request
 	err = s.Delete(request.Context(), principal, chi.URLParam(request, "project_id"))
 	if err != nil {
 		auth.WriteError(writer, request, auth.StatusForError(err), err, "failed to delete project")
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Service) handleListMembers(writer http.ResponseWriter, request *http.Request) {
+	principal, err := principalFor(s, request)
+	if err != nil {
+		auth.WriteError(writer, request, http.StatusUnauthorized, err, "authentication required")
+		return
+	}
+	members, err := s.ListMembers(request.Context(), principal, chi.URLParam(request, "project_id"))
+	if err != nil {
+		auth.WriteError(writer, request, auth.StatusForError(err), err, "failed to list project members")
+		return
+	}
+	auth.WriteJSON(writer, http.StatusOK, map[string][]Member{"items": members})
+}
+
+func (s *Service) handleGrantMember(writer http.ResponseWriter, request *http.Request) {
+	principal, err := principalFor(s, request)
+	if err != nil {
+		auth.WriteError(writer, request, http.StatusUnauthorized, err, "authentication required")
+		return
+	}
+	var body struct {
+		Role Role `json:"role"`
+	}
+	if err := auth.DecodeJSON(request, &body); err != nil {
+		auth.WriteError(writer, request, http.StatusBadRequest, err, "invalid project member request")
+		return
+	}
+	member, err := s.GrantMember(request.Context(), principal, chi.URLParam(request, "project_id"), MemberGrantRequest{
+		UserID: chi.URLParam(request, "user_id"),
+		Role:   body.Role,
+	})
+	if err != nil {
+		auth.WriteError(writer, request, auth.StatusForError(err), err, "failed to grant project member")
+		return
+	}
+	auth.WriteJSON(writer, http.StatusOK, map[string]Member{"member": member})
+}
+
+func (s *Service) handleRevokeMember(writer http.ResponseWriter, request *http.Request) {
+	principal, err := principalFor(s, request)
+	if err != nil {
+		auth.WriteError(writer, request, http.StatusUnauthorized, err, "authentication required")
+		return
+	}
+	if err := s.RevokeMember(request.Context(), principal, chi.URLParam(request, "project_id"), chi.URLParam(request, "user_id")); err != nil {
+		auth.WriteError(writer, request, auth.StatusForError(err), err, "failed to revoke project member")
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
