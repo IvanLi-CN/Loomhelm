@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "migration": {
+    "description": "Introduce the version-one host-local Connector command and event journal.",
+    "release_unit_description": "Phase-one Connector local journal format v1.",
+    "version_impact": "patch"
+  },
+  "durable_state": {
+    "description": "Append-only JSONL records for commands, ACK updates, host-owned session identities, observed app-server events and reconciliation outcomes.",
+    "storage_implementation": "Mode-0600 journal file inside a mode-0700 host-local directory.",
+    "source_compatibility_range": {
+      "from_program_versions": "No earlier Connector journal format exists.",
+      "to_program_version": "Phase-one Connector journal format v1.",
+      "direct_major_skips_supported": false
+    }
+  },
+  "database_migration": {
+    "applicable": false,
+    "ddl_structural_changes": [],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": true,
+    "operation_sequence": [
+      "open-and-scan",
+      "truncate-final-incomplete-record",
+      "mark-inflight-unknown"
+    ],
+    "progress_signals": [
+      "journal open success",
+      "journal record count",
+      "unknown command count",
+      "latest event cursor"
+    ],
+    "pause_points": [
+      "before startup repair",
+      "after final-record truncation",
+      "before explicit command reconciliation"
+    ]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-or-replay-command-state",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "patch": {
+      "required_test_evidence": [
+        "v1 records round-trip through the journal reader",
+        "a torn final write is truncated safely",
+        "accepted and executing commands become unknown after restart",
+        "unknown outcomes require explicit reconciliation and are never replayed"
+      ]
+    },
+    "minor": {
+      "required_test_evidence": [],
+      "note": "No earlier-Minor journal state is supported before v1."
+    },
+    "major": {
+      "required_test_evidence": [],
+      "note": "Direct major skips are rejected by format-version validation."
+    }
+  }
+}
