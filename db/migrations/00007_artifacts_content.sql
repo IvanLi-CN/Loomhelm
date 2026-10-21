@@ -1,0 +1,21 @@
+-- +goose Up
+CREATE TABLE conversation_artifacts (
+    id TEXT PRIMARY KEY CHECK (id ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'),
+    session_id TEXT NOT NULL CHECK (session_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'),
+    run_id TEXT CHECK (run_id IS NULL OR run_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'),
+    name TEXT NOT NULL CHECK (length(name) > 0 AND length(name) <= 1024),
+    kind TEXT NOT NULL CHECK (kind IN ('file', 'diff', 'snapshot')),
+    size BIGINT NOT NULL CHECK (size >= 0),
+    sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    content_type TEXT NOT NULL CHECK (length(content_type) > 0 AND length(content_type) <= 255),
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX conversation_artifacts_session_idx ON conversation_artifacts (session_id, created_at, id);
+CREATE INDEX conversation_artifacts_run_idx ON conversation_artifacts (run_id, created_at, id) WHERE run_id IS NOT NULL;
+
+-- Session and project foreign keys are intentionally added by a follow-up
+-- migration after the P01 business schema is published on the parent branch.
+
+-- +goose Down
+DROP TABLE IF EXISTS conversation_artifacts;
