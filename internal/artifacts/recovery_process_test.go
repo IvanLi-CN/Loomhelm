@@ -51,6 +51,8 @@ func TestArtifactProcessHelper(t *testing.T) {
 			faults.AfterStage = crash
 		case faultAfterIntentCommit:
 			faults.AfterIntentCommit = crash
+		case faultAfterRepairIntentCommit:
+			faults.AfterRepairIntentCommit = crash
 		case faultAfterFinalPublication:
 			faults.AfterFinalPublication = crash
 		case faultAfterReadyCommit:
@@ -61,14 +63,42 @@ func TestArtifactProcessHelper(t *testing.T) {
 			os.Exit(2)
 		}
 	}
+	if mode == "pause-repair" {
+		faults.AfterRepairIntentCommit = func() {
+			signal := os.Getenv("LOOMHELM_ARTIFACT_SIGNAL")
+			release := os.Getenv("LOOMHELM_ARTIFACT_RELEASE")
+			if signal != "" {
+				_ = os.WriteFile(signal, []byte("ready"), 0o600)
+			}
+			deadline := time.Now().Add(20 * time.Second)
+			for {
+				if _, statErr := os.Stat(release); statErr == nil || time.Now().After(deadline) {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
 	store, err := NewStore(db.Pool(), Config{Root: root, Authorizer: allowAllAuthorizer{}, faults: faults})
 	if err != nil {
 		cancel()
 		fmt.Fprintf(os.Stderr, "create helper store: %v\n", err)
 		os.Exit(2)
 	}
+	if mode == "recover" {
+		if signal := os.Getenv("LOOMHELM_ARTIFACT_SIGNAL"); signal != "" {
+			_ = os.WriteFile(signal, []byte("ready"), 0o600)
+		}
+		_, err := store.Recover(ctx, 8)
+		cancel()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "helper Recover: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	artifact := testArtifact(id, nil, content)
-	_, err = store.Put(ctx, artifact, bytes.NewReader(content))
+	_, err = store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
 	cancel()
 	if err != nil {
 		if errors.Is(err, ErrConflict) {
@@ -186,6 +216,96 @@ func TestStoreConcurrentProcessesConvergeAndProtectConflicts(t *testing.T) {
 	}
 }
 
+func TestStoreRepairsMissingStagingAfterProcessInterruption(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	root := t.TempDir()
+	id := uniqueID("artifact-repair-crash")
+	content := []byte("repair crash boundary content")
+	db, store, ctx := openStoreAtRoot(t, root)
+	_ = store
+	artifact := testArtifact(id, nil, content)
+	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
+	db.Close()
+	if code, output := runArtifactHelper(t, "crash", faultAfterRepairIntentCommit, root, id, content); code != 91 {
+		t.Fatalf("repair helper exit code = %d, output = %s", code, output)
+	}
+
+	db, store, ctx = openStoreAtRoot(t, root)
+	defer db.Close()
+	report, err := store.Recover(ctx, 8)
+	if err != nil {
+		t.Fatalf("repair recovery error = %v, report = %#v", err, report)
+	}
+	if report.Scanned != 1 || report.Ready != 1 {
+		t.Fatalf("repair recovery report = %#v", report)
+	}
+	metadata, reader, err := store.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || metadata.ID != id || !bytes.Equal(readBack, content) {
+		t.Fatalf("repaired publication = %#v/%q, err=%v", metadata, readBack, err)
+	}
+}
+
+func TestStoreConcurrentRepairAndRecoveryConverge(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	root := t.TempDir()
+	id := uniqueID("artifact-repair-concurrent")
+	content := []byte("concurrent repair content")
+	db, _, ctx := openStoreAtRoot(t, root)
+	artifact := testArtifact(id, nil, content)
+	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
+	db.Close()
+
+	signal := filepath.Join(root, "repair-started")
+	release := filepath.Join(root, "repair-release")
+	repair := newArtifactHelper(t, "pause-repair", faultAfterRepairIntentCommit, root, id, content)
+	repair.Env = append(repair.Env,
+		"LOOMHELM_ARTIFACT_SIGNAL="+signal,
+		"LOOMHELM_ARTIFACT_RELEASE="+release,
+	)
+	if err := repair.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, signal)
+	recoverySignal := filepath.Join(root, "recovery-started")
+	recovery := newArtifactHelper(t, "recover", "", root, id, content)
+	recovery.Env = append(recovery.Env, "LOOMHELM_ARTIFACT_SIGNAL="+recoverySignal)
+	if err := recovery.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, recoverySignal)
+	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repair.Wait(); err != nil {
+		t.Fatalf("repair helper failed: %v", err)
+	}
+	if err := recovery.Wait(); err != nil {
+		t.Fatalf("recovery helper failed: %v", err)
+	}
+
+	db, store, ctx := openStoreAtRoot(t, root)
+	defer db.Close()
+	metadata, reader, err := store.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || metadata.ID != id || !bytes.Equal(readBack, content) {
+		t.Fatalf("concurrent repair publication = %#v/%q, err=%v", metadata, readBack, err)
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
 func runArtifactHelper(t *testing.T, mode string, point faultPoint, root, id string, content []byte) (int, string) {
 	t.Helper()
 	command := newArtifactHelper(t, mode, point, root, id, content)
@@ -236,4 +356,18 @@ func openStoreAtRoot(t *testing.T, root string) (*database.DB, *Store, context.C
 		t.Fatalf("create integration store: %v", err)
 	}
 	return db, store, ctx
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

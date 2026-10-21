@@ -29,15 +29,16 @@ const (
 )
 
 var (
-	ErrUnauthorized     = errors.New("artifact access denied")
-	ErrInvalid          = errors.New("invalid artifact")
-	ErrNotFound         = errors.New("artifact not found")
-	ErrConflict         = errors.New("artifact already exists")
-	ErrIntegrity        = errors.New("artifact integrity check failed")
-	ErrSizeMismatch     = errors.New("artifact size does not match metadata")
-	ErrHashMismatch     = errors.New("artifact hash does not match metadata")
-	ErrTooLarge         = errors.New("artifact exceeds the configured size limit")
-	ErrStoreUnavailable = errors.New("artifact store is unavailable")
+	ErrUnauthorized        = errors.New("artifact access denied")
+	ErrInvalid             = errors.New("invalid artifact")
+	ErrNotFound            = errors.New("artifact not found")
+	ErrConflict            = errors.New("artifact already exists")
+	ErrIntegrity           = errors.New("artifact integrity check failed")
+	ErrSizeMismatch        = errors.New("artifact size does not match metadata")
+	ErrHashMismatch        = errors.New("artifact hash does not match metadata")
+	ErrTooLarge            = errors.New("artifact exceeds the configured size limit")
+	ErrStoreUnavailable    = errors.New("artifact store is unavailable")
+	ErrInputNotCancellable = errors.New("artifact source does not support cancellation")
 )
 
 // Operation identifies the access being authorized. Authorization is checked
@@ -172,11 +173,24 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 	if err := s.authorize(ctx, OperationPut, normalized); err != nil {
 		return protocol.Artifact{}, err
 	}
+	readSource, ok := source.(io.ReadCloser)
+	if !ok {
+		return protocol.Artifact{}, fmt.Errorf("artifact source must be an io.ReadCloser: %w", ErrInputNotCancellable)
+	}
 	if s.pool == nil {
 		return protocol.Artifact{}, ErrStoreUnavailable
 	}
+	ownedSource := newOwnedReadCloser(readSource)
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	stopCloseOnCancel := context.AfterFunc(ctx, func() {
+		cleanup.start()
+		_ = ownedSource.Close()
+	})
+	defer stopCloseOnCancel()
+	defer ownedSource.Close()
 
-	staged, stagingName, err := s.stage(ctx, normalized, expectedHash, source)
+	staged, stagingName, err := s.stage(ctx, normalized, expectedHash, ownedSource)
 	if err != nil {
 		return protocol.Artifact{}, err
 	}
@@ -187,11 +201,15 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 		}
 	}()
 
-	record, err := s.ensurePending(ctx, staged, createdAtProvided, stagingName)
+	record, err := s.ensurePending(ctx, staged, createdAtProvided, stagingName, cleanup)
 	if err != nil {
+		if errors.Is(err, ErrConflict) {
+			keepStaging = false
+		}
 		return protocol.Artifact{}, err
 	}
 	if !sameArtifactMetadata(staged, record.Artifact, createdAtProvided) {
+		keepStaging = false
 		return protocol.Artifact{}, ErrConflict
 	}
 	switch record.State {
@@ -200,20 +218,26 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 		if inspectErr != nil {
 			return protocol.Artifact{}, inspectErr
 		}
+		if check == fileUnknown {
+			return protocol.Artifact{}, ErrStoreUnavailable
+		}
 		if check != fileValid {
-			s.markReadyObjectUnavailable(record.Artifact.ID, "ready-mismatch")
+			keepStaging = false
+			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check))
 			return protocol.Artifact{}, unavailableError(ErrIntegrity)
 		}
 		keepStaging = false
 		return record.Artifact, nil
 	case publicationUnavailable:
+		keepStaging = false
 		return protocol.Artifact{}, unavailableError(ErrIntegrity)
 	case publicationPending:
-		resolved, status, err := s.reconcileOne(ctx, record.Artifact.ID)
+		resolved, status, err := s.reconcileOne(ctx, record.Artifact.ID, cleanup)
 		if err != nil {
 			return protocol.Artifact{}, err
 		}
 		if status == recoveryUnavailable {
+			keepStaging = false
 			return protocol.Artifact{}, unavailableError(ErrIntegrity)
 		}
 		if status != recoveryReady {
@@ -242,6 +266,17 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 	}
 	if err := s.authorize(ctx, OperationMetadata, record.Artifact); err != nil {
 		return protocol.Artifact{}, err
+	}
+	check, inspectErr := s.inspectReady(record)
+	if inspectErr != nil {
+		return protocol.Artifact{}, inspectErr
+	}
+	if check == fileUnknown {
+		return protocol.Artifact{}, ErrStoreUnavailable
+	}
+	if check != fileValid {
+		s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check))
+		return protocol.Artifact{}, unavailableError(ErrIntegrity)
 	}
 	return record.Artifact, nil
 }
@@ -273,7 +308,7 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 	file, err := openStoredFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			s.markReadyObjectUnavailable(record.Artifact.ID, "final-missing")
+			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-missing")
 			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
 		}
 		return protocol.Artifact{}, nil, err
@@ -281,7 +316,7 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 	if err := verifyFile(file, record.Artifact); err != nil {
 		_ = file.Close()
 		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
-			s.markReadyObjectUnavailable(record.Artifact.ID, "final-mismatch")
+			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch")
 			return protocol.Artifact{}, nil, unavailableError(err)
 		}
 		return protocol.Artifact{}, nil, err
@@ -299,9 +334,12 @@ func (s *Store) authorize(ctx context.Context, operation Operation, artifact pro
 	}
 	if err := s.authorizer.Authorize(ctx, operation, artifact); err != nil {
 		if errors.Is(err, ErrUnauthorized) {
+			return ErrUnauthorized
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
-		return fmt.Errorf("authorize artifact %s: %w", operation, err)
+		return ErrUnauthorized
 	}
 	return nil
 }
@@ -354,7 +392,7 @@ func validateArtifact(artifact protocol.Artifact, maxBytes int64) (protocol.Arti
 		}
 	}
 	if artifact.CreatedAt == "" {
-		artifact.CreatedAt = formatTime(time.Now().UTC())
+		artifact.CreatedAt = formatTime(time.Now())
 	} else {
 		createdAt, err := time.Parse(time.RFC3339Nano, artifact.CreatedAt)
 		if err != nil {
@@ -508,11 +546,19 @@ func nullableString(value *string) any {
 
 func parseCreatedAt(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, value)
-	return parsed
+	return parsed.Round(time.Microsecond)
 }
 
 func formatTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+	return value.UTC().Round(time.Microsecond).Format(time.RFC3339Nano)
+}
+
+func canonicalTime(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	return formatTime(parsed)
 }
 
 func utf8Safe(value string) bool {

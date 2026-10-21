@@ -2,13 +2,19 @@ package content
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCommittedR02FixturesPreserveBasicAndUnknownContent(t *testing.T) {
@@ -122,7 +128,99 @@ func TestDecodeAndParseRejectMalformedOrOversizedRecords(t *testing.T) {
 	if _, err := ParseJSONL(strings.NewReader(`{"schema":"loomhelm.codex.fixture/v1","source":"test","stream":"app-server","sequence":2,"payload":{}}`), 128); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("sequence parse error = %v, want %v", err, ErrInvalid)
 	}
+	if _, err := ParseJSONL(strings.NewReader("{}"), DefaultMaxRecordBytes+1); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversized configured record limit error = %v, want %v", err, ErrInvalid)
+	}
+	if _, err := Decode(bytes.Repeat([]byte("x"), DefaultMaxRecordBytes+1)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized decode error = %v, want %v", err, ErrTooLarge)
+	}
 }
+
+func TestContentBatchLimitsRejectWithoutTruncation(t *testing.T) {
+	blankLine := append(bytes.Repeat([]byte{' '}, DefaultMaxRecordBytes-1), '\n')
+	batch := bytes.Repeat(blankLine, DefaultMaxBatchBytes/(DefaultMaxRecordBytes)+1)
+	if _, err := ParseJSONL(bytes.NewReader(batch), DefaultMaxRecordBytes); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized consumed batch error = %v, want %v", err, ErrTooLarge)
+	}
+
+	var records bytes.Buffer
+	for sequence := 1; sequence <= MaxBatchRecords+1; sequence++ {
+		records.WriteString(contentLine(int64(sequence)))
+	}
+	if _, err := ParseJSONL(bytes.NewReader(records.Bytes()), DefaultMaxRecordBytes); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized record-count batch error = %v, want %v", err, ErrTooLarge)
+	}
+}
+
+func TestContentRuntimeParserClosesBlockedInputOnCancellation(t *testing.T) {
+	source := newBlockingContentSource()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := ParseJSONLContext(ctx, source, DefaultMaxRecordBytes)
+		result <- err
+	}()
+	select {
+	case <-source.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime parser did not start reading")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runtime cancellation error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime parser did not return after cancellation")
+	}
+	if got := source.closeCount.Load(); got != 1 {
+		t.Fatalf("runtime source close count = %d, want 1", got)
+	}
+}
+
+func TestContentRuntimeParserDoesNotLeakReaderErrors(t *testing.T) {
+	secretPath := "/private/fixture/secret.jsonl"
+	source := &errorContentSource{err: errors.New(secretPath)}
+	_, err := ParseJSONLContext(context.Background(), source, DefaultMaxRecordBytes)
+	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), secretPath) {
+		t.Fatalf("reader error = %v, want redacted invalid error", err)
+	}
+}
+
+func contentLine(sequence int64) string {
+	return fmt.Sprintf(`{"schema":"%s","source":"test","stream":"app-server","sequence":%d,"payload":{"method":"item/futureRenderer/v9"}}`, FixtureSchema, sequence) + "\n"
+}
+
+type blockingContentSource struct {
+	started    chan struct{}
+	release    chan struct{}
+	startOnce  sync.Once
+	closeOnce  sync.Once
+	closeCount atomic.Int32
+}
+
+func newBlockingContentSource() *blockingContentSource {
+	return &blockingContentSource{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (s *blockingContentSource) Read([]byte) (int, error) {
+	s.startOnce.Do(func() { close(s.started) })
+	<-s.release
+	return 0, io.EOF
+}
+
+func (s *blockingContentSource) Close() error {
+	s.closeCount.Add(1)
+	s.closeOnce.Do(func() { close(s.release) })
+	return nil
+}
+
+type errorContentSource struct{ err error }
+
+func (s *errorContentSource) Read([]byte) (int, error) { return 0, s.err }
+
+func (s *errorContentSource) Close() error { return nil }
 
 func repositoryRoot(t *testing.T) string {
 	t.Helper()

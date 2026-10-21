@@ -5,11 +5,13 @@ package content
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
@@ -17,6 +19,8 @@ import (
 const (
 	FixtureSchema         = "loomhelm.codex.fixture/v1"
 	DefaultMaxRecordBytes = 4 << 20
+	DefaultMaxBatchBytes  = 64 << 20
+	MaxBatchRecords       = 10_000
 )
 
 var (
@@ -56,6 +60,9 @@ type Record struct {
 func Decode(data []byte) (Record, error) {
 	if len(data) == 0 {
 		return Record{}, fmt.Errorf("content record is empty: %w", ErrInvalid)
+	}
+	if len(data) > DefaultMaxRecordBytes {
+		return Record{}, ErrTooLarge
 	}
 	var envelope struct {
 		Schema   string               `json:"schema"`
@@ -101,6 +108,9 @@ func Encode(record Record) ([]byte, error) {
 	if record.Schema != FixtureSchema || record.Source == "" || !validStream(record.Stream) || record.Sequence < 1 || !isJSONObject(record.Payload) {
 		return nil, fmt.Errorf("content record is incomplete: %w", ErrInvalid)
 	}
+	if len(record.Payload) > DefaultMaxRecordBytes {
+		return nil, ErrTooLarge
+	}
 	value := struct {
 		Schema   string               `json:"schema"`
 		Source   string               `json:"source"`
@@ -112,32 +122,63 @@ func Encode(record Record) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode content record: %w", err)
 	}
+	if len(encoded) > DefaultMaxRecordBytes {
+		return nil, ErrTooLarge
+	}
 	return encoded, nil
 }
 
-// ParseJSONL decodes a bounded JSONL stream and preserves each source line.
-// Sequence numbers are required to be contiguous, matching the R02 parser.
+// ParseJSONL is restricted to finite, nonblocking fixture or in-memory input.
+// Runtime callers must use ParseJSONLContext so cancellation can close the
+// admitted source and unblock its Read.
 func ParseJSONL(source io.Reader, maxRecordBytes int) ([]Record, error) {
 	if source == nil {
 		return nil, fmt.Errorf("content source must not be nil: %w", ErrInvalid)
 	}
-	if maxRecordBytes == 0 {
-		maxRecordBytes = DefaultMaxRecordBytes
+	return parseJSONL(context.Background(), source, maxRecordBytes)
+}
+
+// ParseJSONLContext is the runtime parser. The caller transfers ownership of
+// source; cancellation and return close it exactly once.
+func ParseJSONLContext(ctx context.Context, source io.ReadCloser, maxRecordBytes int) ([]Record, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("content context must not be nil: %w", ErrInvalid)
 	}
-	if maxRecordBytes < 1 {
-		return nil, fmt.Errorf("content size limit must be positive: %w", ErrInvalid)
+	if source == nil {
+		return nil, fmt.Errorf("content source must not be nil: %w", ErrInvalid)
 	}
-	scanner := bufio.NewScanner(source)
-	scanner.Buffer(make([]byte, 1024), maxRecordBytes+1)
-	records := make([]Record, 0)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	owned := newOwnedReadCloser(source)
+	stopCloseOnCancel := context.AfterFunc(ctx, func() { _ = owned.Close() })
+	defer stopCloseOnCancel()
+	defer owned.Close()
+	return parseJSONL(ctx, owned, maxRecordBytes)
+}
+
+func parseJSONL(ctx context.Context, source io.Reader, maxRecordBytes int) ([]Record, error) {
+	maxRecordBytes, err := validateRecordLimit(maxRecordBytes)
+	if err != nil {
+		return nil, err
+	}
+	counted := &countingReader{reader: io.LimitReader(&contextReader{ctx: ctx, reader: source}, DefaultMaxBatchBytes+1)}
+	scanner := bufio.NewScanner(counted)
+	scanner.Buffer(make([]byte, minInt(1024, maxRecordBytes+1)), maxRecordBytes+1)
+	records := make([]Record, 0, minInt(MaxBatchRecords, 64))
 	expectedSequence := int64(1)
 	for scanner.Scan() {
+		if counted.total > DefaultMaxBatchBytes {
+			return nil, ErrTooLarge
+		}
 		rawLine := scanner.Bytes()
-		line := bytes.TrimSpace(rawLine)
-		if len(line) == 0 {
+		if len(bytes.TrimSpace(rawLine)) == 0 {
 			continue
 		}
 		if len(rawLine) > maxRecordBytes {
+			return nil, ErrTooLarge
+		}
+		if len(records) >= MaxBatchRecords {
 			return nil, ErrTooLarge
 		}
 		record, err := Decode(rawLine)
@@ -150,13 +191,82 @@ func ParseJSONL(source io.Reader, maxRecordBytes int) ([]Record, error) {
 		expectedSequence++
 		records = append(records, record)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if counted.total > DefaultMaxBatchBytes {
+		return nil, ErrTooLarge
+	}
 	if err := scanner.Err(); err != nil {
 		if errors.Is(err, bufio.ErrTooLong) {
 			return nil, ErrTooLarge
 		}
-		return nil, fmt.Errorf("read content stream: %w", err)
+		return nil, fmt.Errorf("read content stream: %w", ErrInvalid)
 	}
 	return records, nil
+}
+
+func validateRecordLimit(maxRecordBytes int) (int, error) {
+	if maxRecordBytes == 0 {
+		return DefaultMaxRecordBytes, nil
+	}
+	if maxRecordBytes < 1 || maxRecordBytes > DefaultMaxRecordBytes {
+		return 0, fmt.Errorf("content size limit must be between 1 and %d bytes: %w", DefaultMaxRecordBytes, ErrInvalid)
+	}
+	return maxRecordBytes, nil
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	count, err := r.reader.Read(buffer)
+	if contextErr := r.ctx.Err(); contextErr != nil {
+		return count, contextErr
+	}
+	return count, err
+}
+
+type countingReader struct {
+	reader io.Reader
+	total  int64
+}
+
+func (r *countingReader) Read(buffer []byte) (int, error) {
+	count, err := r.reader.Read(buffer)
+	r.total += int64(count)
+	return count, err
+}
+
+type ownedReadCloser struct {
+	reader io.ReadCloser
+	once   sync.Once
+	err    error
+}
+
+func newOwnedReadCloser(reader io.ReadCloser) *ownedReadCloser {
+	return &ownedReadCloser{reader: reader}
+}
+
+func (r *ownedReadCloser) Read(buffer []byte) (int, error) {
+	return r.reader.Read(buffer)
+}
+
+func (r *ownedReadCloser) Close() error {
+	r.once.Do(func() { r.err = r.reader.Close() })
+	return r.err
 }
 
 func classify(payload json.RawMessage, stream protocol.EventSource) (string, string, Category) {

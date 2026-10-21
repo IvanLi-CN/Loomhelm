@@ -10,13 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/jackc/pgx/v5"
 )
 
-const DefaultRecoveryLimit = 64
+const (
+	DefaultRecoveryLimit = 64
+	MaxRecoveryLimit     = 1024
+	cleanupTimeout       = 5 * time.Second
+)
 
 var (
 	ErrUnavailable        = errors.New("artifact is unavailable")
@@ -62,20 +67,22 @@ type RecoveryReport struct {
 type faultPoint string
 
 const (
-	faultAfterStage            faultPoint = "after-stage"
-	faultAfterIntentCommit     faultPoint = "after-intent-commit"
-	faultAfterFinalPublication faultPoint = "after-final-publication"
-	faultAfterReadyCommit      faultPoint = "after-ready-commit"
+	faultAfterStage              faultPoint = "after-stage"
+	faultAfterIntentCommit       faultPoint = "after-intent-commit"
+	faultAfterRepairIntentCommit faultPoint = "after-repair-intent-commit"
+	faultAfterFinalPublication   faultPoint = "after-final-publication"
+	faultAfterReadyCommit        faultPoint = "after-ready-commit"
 )
 
 // faultHooks is intentionally unexported. Package tests use it to terminate a
 // helper process at durable publication boundaries; production composition
 // cannot configure process-exit behavior through Config.
 type faultHooks struct {
-	AfterStage            func()
-	AfterIntentCommit     func()
-	AfterFinalPublication func()
-	AfterReadyCommit      func()
+	AfterStage              func()
+	AfterIntentCommit       func()
+	AfterRepairIntentCommit func()
+	AfterFinalPublication   func()
+	AfterReadyCommit        func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -91,6 +98,10 @@ func (s *Store) fault(point faultPoint) {
 		if s.faults.AfterIntentCommit != nil {
 			s.faults.AfterIntentCommit()
 		}
+	case faultAfterRepairIntentCommit:
+		if s.faults.AfterRepairIntentCommit != nil {
+			s.faults.AfterRepairIntentCommit()
+		}
 	case faultAfterFinalPublication:
 		if s.faults.AfterFinalPublication != nil {
 			s.faults.AfterFinalPublication()
@@ -102,7 +113,77 @@ func (s *Store) fault(point faultPoint) {
 	}
 }
 
-func (s *Store) beginIdentityTx(ctx context.Context, id string) (pgx.Tx, error) {
+type cleanupDeadline struct {
+	mu       sync.Mutex
+	deadline time.Time
+	stopFunc func() bool
+}
+
+func newCleanupDeadline(ctx context.Context) *cleanupDeadline {
+	deadline := &cleanupDeadline{}
+	deadline.stopFunc = context.AfterFunc(ctx, deadline.start)
+	return deadline
+}
+
+func (d *cleanupDeadline) start() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	if d.deadline.IsZero() {
+		d.deadline = time.Now().Add(cleanupTimeout)
+	}
+	d.mu.Unlock()
+}
+
+func (d *cleanupDeadline) context() (context.Context, context.CancelFunc) {
+	if d == nil {
+		return context.WithTimeout(context.Background(), cleanupTimeout)
+	}
+	d.mu.Lock()
+	deadline := d.deadline
+	if deadline.IsZero() {
+		deadline = time.Now().Add(cleanupTimeout)
+	}
+	d.mu.Unlock()
+	return context.WithDeadline(context.Background(), deadline)
+}
+
+func (d *cleanupDeadline) stop() {
+	if d != nil && d.stopFunc != nil {
+		d.stopFunc()
+	}
+}
+
+type ownedReadCloser struct {
+	reader io.ReadCloser
+	once   sync.Once
+	err    error
+}
+
+func newOwnedReadCloser(reader io.ReadCloser) *ownedReadCloser {
+	return &ownedReadCloser{reader: reader}
+}
+
+func (r *ownedReadCloser) Read(buffer []byte) (int, error) {
+	return r.reader.Read(buffer)
+}
+
+func (r *ownedReadCloser) Close() error {
+	r.once.Do(func() { r.err = r.reader.Close() })
+	return r.err
+}
+
+func rollbackTx(tx pgx.Tx, cleanup *cleanupDeadline) {
+	if tx == nil {
+		return
+	}
+	ctx, cancel := cleanup.context()
+	defer cancel()
+	_ = tx.Rollback(ctx)
+}
+
+func (s *Store) beginIdentityTx(ctx context.Context, id string, cleanup *cleanupDeadline) (pgx.Tx, error) {
 	if s == nil || s.pool == nil {
 		return nil, ErrStoreUnavailable
 	}
@@ -114,7 +195,7 @@ func (s *Store) beginIdentityTx(ctx context.Context, id string) (pgx.Tx, error) 
 		return nil, fmt.Errorf("begin artifact publication: %w", ErrStoreUnavailable)
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "loomhelm:artifact:"+id); err != nil {
-		_ = tx.Rollback(context.Background())
+		rollbackTx(tx, cleanup)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
@@ -172,7 +253,16 @@ func (s *Store) confirmRecord(id string) (artifactRecord, error) {
 	if s == nil || s.pool == nil {
 		return artifactRecord{}, ErrStoreUnavailable
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	return readArtifactRecord(ctx, s.pool, id)
+}
+
+func (s *Store) confirmRecordWithCleanup(id string, cleanup *cleanupDeadline) (artifactRecord, error) {
+	if s == nil || s.pool == nil {
+		return artifactRecord{}, ErrStoreUnavailable
+	}
+	ctx, cancel := cleanup.context()
 	defer cancel()
 	return readArtifactRecord(ctx, s.pool, id)
 }
@@ -203,20 +293,23 @@ func sameArtifactMetadata(candidate, existing protocol.Artifact, createdAtProvid
 	if candidate.ID != existing.ID || candidate.SessionID != existing.SessionID || candidate.Name != existing.Name || candidate.Kind != existing.Kind || candidate.Size != existing.Size || candidate.Sha256 != existing.Sha256 || candidate.ContentType != existing.ContentType || !sameOptionalID(candidate.RunID, existing.RunID) {
 		return false
 	}
-	return !createdAtProvided || candidate.CreatedAt == existing.CreatedAt
+	return !createdAtProvided || canonicalTime(candidate.CreatedAt) == canonicalTime(existing.CreatedAt)
 }
 
-func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, createdAtProvided bool, stagingName string) (artifactRecord, error) {
-	tx, err := s.beginIdentityTx(ctx, candidate.ID)
+func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, createdAtProvided bool, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
+	tx, err := s.beginIdentityTx(ctx, candidate.ID, cleanup)
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { rollbackTx(tx, cleanup) }()
 
 	existing, err := readArtifactRecord(ctx, tx, candidate.ID)
 	if err == nil {
 		if !sameArtifactMetadata(candidate, existing.Artifact, createdAtProvided) {
 			return artifactRecord{}, ErrConflict
+		}
+		if existing.State == publicationUnavailable && repairableUnavailableReason(existing.UnavailableReason) {
+			return s.repairUnavailable(ctx, tx, existing, candidate, createdAtProvided, stagingName, cleanup)
 		}
 		return existing, nil
 	}
@@ -232,8 +325,8 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 		return artifactRecord{}, fmt.Errorf("persist artifact intent: %w", ErrStoreUnavailable)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		confirmed, confirmErr := s.confirmRecord(candidate.ID)
-		if confirmErr == nil && sameArtifactMetadata(candidate, confirmed.Artifact, createdAtProvided) && confirmed.State == publicationPending {
+		confirmed, confirmErr := s.confirmRecordWithCleanup(candidate.ID, cleanup)
+		if confirmErr == nil && sameArtifactMetadata(candidate, confirmed.Artifact, createdAtProvided) && publicationStateMatchesIntent(confirmed.State) {
 			return confirmed, nil
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -242,14 +335,112 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 		return artifactRecord{}, fmt.Errorf("confirm artifact intent: %w", ErrStoreUnavailable)
 	}
 	s.fault(faultAfterIntentCommit)
-	confirmed, err := s.confirmRecord(candidate.ID)
+	confirmed, err := s.confirmRecordWithCleanup(candidate.ID, cleanup)
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	if !sameArtifactMetadata(candidate, confirmed.Artifact, createdAtProvided) || confirmed.State != publicationPending {
+	if !sameArtifactMetadata(candidate, confirmed.Artifact, createdAtProvided) || !publicationStateMatchesIntent(confirmed.State) {
 		return artifactRecord{}, ErrConflict
 	}
 	return confirmed, nil
+}
+
+func repairableUnavailableReason(reason string) bool {
+	return reason == "staging-missing" || reason == "staging-corrupt"
+}
+
+func publicationStateMatchesIntent(state publicationState) bool {
+	return state == publicationPending || state == publicationReady
+}
+
+func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artifactRecord, candidate protocol.Artifact, createdAtProvided bool, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
+	if err := s.authorize(ctx, OperationPut, candidate); err != nil {
+		return artifactRecord{}, err
+	}
+	finalPath, err := s.objectPath(candidate.ID)
+	if err != nil {
+		return artifactRecord{}, err
+	}
+	finalCheck, err := inspectArtifactFile(finalPath, existing.Artifact)
+	if err != nil {
+		return artifactRecord{}, err
+	}
+	switch finalCheck {
+	case fileValid:
+		updated, err := s.updateUnavailableState(ctx, tx, existing, publicationReady, existing.StagingName, "")
+		if err != nil {
+			return artifactRecord{}, err
+		}
+		return s.commitRepairState(ctx, updated, createdAtProvided, cleanup, tx, false)
+	case fileInvalid:
+		return artifactRecord{}, ErrConflict
+	case fileUnknown:
+		return artifactRecord{}, fmt.Errorf("inspect final artifact for repair: %w", ErrStoreUnavailable)
+	}
+
+	stagingPath, err := s.stagingPath(stagingName)
+	if err != nil {
+		return artifactRecord{}, err
+	}
+	stagingCheck, err := inspectArtifactFile(stagingPath, candidate)
+	if err != nil {
+		return artifactRecord{}, err
+	}
+	if stagingCheck != fileValid {
+		return artifactRecord{}, fmt.Errorf("repair staging object is not valid: %w", ErrIntegrity)
+	}
+	updated, err := s.updateUnavailableState(ctx, tx, existing, publicationPending, stagingName, "")
+	if err != nil {
+		return artifactRecord{}, err
+	}
+	if !sameArtifactMetadata(candidate, updated.Artifact, createdAtProvided) {
+		return artifactRecord{}, ErrConflict
+	}
+	return s.commitRepairState(ctx, updated, createdAtProvided, cleanup, tx, true)
+}
+
+func (s *Store) commitRepairState(ctx context.Context, updated artifactRecord, createdAtProvided bool, cleanup *cleanupDeadline, tx pgx.Tx, fault bool) (artifactRecord, error) {
+	// Commit first, then resolve the result from durable state so an uncertain
+	// response never compensates by deleting staged or published bytes.
+	if err := tx.Commit(ctx); err != nil {
+		confirmed, confirmErr := s.confirmRecordWithCleanup(updated.Artifact.ID, cleanup)
+		if confirmErr == nil && sameArtifactMetadata(updated.Artifact, confirmed.Artifact, createdAtProvided) && publicationStateMatchesIntent(confirmed.State) {
+			return confirmed, nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return artifactRecord{}, err
+		}
+		return artifactRecord{}, fmt.Errorf("confirm artifact repair intent: %w", ErrStoreUnavailable)
+	}
+	if fault {
+		s.fault(faultAfterRepairIntentCommit)
+	}
+	confirmed, err := s.confirmRecordWithCleanup(updated.Artifact.ID, cleanup)
+	if err != nil {
+		return artifactRecord{}, err
+	}
+	if !sameArtifactMetadata(updated.Artifact, confirmed.Artifact, createdAtProvided) || !publicationStateMatchesIntent(confirmed.State) {
+		return artifactRecord{}, ErrConflict
+	}
+	return confirmed, nil
+}
+
+func (s *Store) updateUnavailableState(ctx context.Context, tx pgx.Tx, record artifactRecord, state publicationState, stagingName, reason string) (artifactRecord, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET state = $2, staging_name = $3, unavailable_reason = $4
+		WHERE id = $1 AND state = 'unavailable' AND unavailable_reason = $5
+	`, record.Artifact.ID, string(state), stagingName, reason, record.UnavailableReason)
+	if err != nil {
+		return artifactRecord{}, fmt.Errorf("update artifact repair intent: %w", ErrStoreUnavailable)
+	}
+	if tag.RowsAffected() != 1 {
+		return artifactRecord{}, fmt.Errorf("artifact repair row changed unexpectedly: %w", ErrStoreUnavailable)
+	}
+	record.State = state
+	record.StagingName = stagingName
+	record.UnavailableReason = reason
+	return record, nil
 }
 
 func (s *Store) stage(ctx context.Context, artifact protocol.Artifact, expectedHash string, source io.Reader) (protocol.Artifact, string, error) {
@@ -279,7 +470,10 @@ func (s *Store) stage(ctx context.Context, artifact protocol.Artifact, expectedH
 	}
 	size, err := io.Copy(io.MultiWriter(temporary, hasher), io.LimitReader(contextReader{ctx: ctx, reader: source}, limit))
 	if err != nil {
-		return protocol.Artifact{}, "", fmt.Errorf("write artifact bytes: %w", err)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return protocol.Artifact{}, "", contextErr
+		}
+		return protocol.Artifact{}, "", fmt.Errorf("write artifact bytes: %w", ErrStoreUnavailable)
 	}
 	if err := ctx.Err(); err != nil {
 		return protocol.Artifact{}, "", err
@@ -315,6 +509,13 @@ func (s *Store) stage(ctx context.Context, artifact protocol.Artifact, expectedH
 type contextReader struct {
 	ctx    context.Context
 	reader io.Reader
+}
+
+func finalReason(check fileCheck) string {
+	if check == fileMissing {
+		return "final-missing"
+	}
+	return "final-mismatch"
 }
 
 func (r contextReader) Read(buffer []byte) (int, error) {
@@ -369,15 +570,19 @@ const (
 	fileUnknown
 )
 
-func (s *Store) reconcileOne(ctx context.Context, id string) (artifactRecord, recoveryStatus, error) {
+func (s *Store) reconcileOne(ctx context.Context, id string, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
 	if err := s.ensureObjectDirectory(); err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
-	tx, err := s.beginIdentityTx(ctx, id)
+	if cleanup == nil {
+		cleanup = newCleanupDeadline(ctx)
+		defer cleanup.stop()
+	}
+	tx, err := s.beginIdentityTx(ctx, id, cleanup)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { rollbackTx(tx, cleanup) }()
 	record, err := readArtifactRecord(ctx, tx, id)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
@@ -390,8 +595,8 @@ func (s *Store) reconcileOne(ctx context.Context, id string) (artifactRecord, re
 		return artifactRecord{}, recoveryPending, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		confirmed, confirmErr := s.confirmRecord(id)
-		if confirmErr == nil && confirmed.State == updated.State {
+		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
+		if confirmErr == nil && samePublicationState(confirmed, updated) {
 			if confirmed.State == publicationReady {
 				s.removeStaging(confirmed.StagingName)
 			}
@@ -405,17 +610,21 @@ func (s *Store) reconcileOne(ctx context.Context, id string) (artifactRecord, re
 	if updated.State == publicationReady {
 		s.fault(faultAfterReadyCommit)
 	}
-	confirmed, err := s.confirmRecord(id)
+	confirmed, err := s.confirmRecordWithCleanup(id, cleanup)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
-	if confirmed.State != updated.State {
+	if !samePublicationState(confirmed, updated) {
 		return artifactRecord{}, recoveryPending, fmt.Errorf("artifact recovery state changed unexpectedly: %w", ErrStoreUnavailable)
 	}
 	if confirmed.State == publicationReady {
 		s.removeStaging(confirmed.StagingName)
 	}
 	return confirmed, stateRecoveryStatus(confirmed.State), nil
+}
+
+func samePublicationState(left, right artifactRecord) bool {
+	return left.State == right.State && left.UnavailableReason == right.UnavailableReason
 }
 
 func stateRecoveryStatus(state publicationState) recoveryStatus {
@@ -539,6 +748,11 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 	if limit < 1 {
 		return report, fmt.Errorf("artifact recovery limit must be positive: %w", ErrInvalid)
 	}
+	if limit > MaxRecoveryLimit {
+		return report, fmt.Errorf("artifact recovery limit is too large: %w", ErrTooLarge)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
 	rows, err := s.pool.Query(ctx, `
 		SELECT id FROM conversation_artifacts
 		WHERE state = 'pending'
@@ -571,7 +785,7 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 			return report, err
 		}
 		report.Scanned++
-		_, status, err := s.reconcileOne(ctx, id)
+		_, status, err := s.reconcileOne(ctx, id, cleanup)
 		if err != nil {
 			report.Failed++
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -594,14 +808,16 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 	return report, nil
 }
 
-func (s *Store) markReadyObjectUnavailable(id string, reason string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *Store) markReadyObjectUnavailable(parent context.Context, id string, reason string) {
+	cleanup := newCleanupDeadline(parent)
+	defer cleanup.stop()
+	ctx, cancel := cleanup.context()
 	defer cancel()
-	tx, err := s.beginIdentityTx(ctx, id)
+	tx, err := s.beginIdentityTx(ctx, id, cleanup)
 	if err != nil {
 		return
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { rollbackTx(tx, cleanup) }()
 	var state string
 	if err := tx.QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1 FOR UPDATE`, id).Scan(&state); err != nil || state != string(publicationReady) {
 		return
@@ -610,9 +826,10 @@ func (s *Store) markReadyObjectUnavailable(id string, reason string) {
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
+		_, _ = s.confirmRecordWithCleanup(id, cleanup)
 		return
 	}
-	_, _ = s.confirmRecord(id)
+	_, _ = s.confirmRecordWithCleanup(id, cleanup)
 }
 
 func unavailableError(reason error) error {

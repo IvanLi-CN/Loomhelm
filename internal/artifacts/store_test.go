@@ -12,11 +12,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestValidateArtifactRejectsHostPathIdentifiers(t *testing.T) {
@@ -60,6 +63,21 @@ func TestStorePutDeniesBeforeWritingWhenAuthorizationIsMissing(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsUnsupportedInputBeforeStaging(t *testing.T) {
+	root := t.TempDir()
+	objects := filepath.Join(root, "objects")
+	if err := prepareDirectory(objects, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{root: root, objects: objects, maxBytes: DefaultMaxBytes, authorizer: allowAllAuthorizer{}}
+	artifact := testArtifact("artifact-input", nil, []byte("input"))
+	_, err := store.Put(context.Background(), artifact, strings.NewReader("input"))
+	if !errors.Is(err, ErrInputNotCancellable) {
+		t.Fatalf("Put error = %v, want %v", err, ErrInputNotCancellable)
+	}
+	assertNoStagingFiles(t, objects)
+}
+
 func TestOpenStoredFileRejectsSymlink(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "outside.txt")
@@ -82,7 +100,7 @@ func TestStorePutMetadataOpenAndReopen(t *testing.T) {
 	content := []byte{0x00, 0xff, '\n', '<', 's', 'c', 'r', 'i', 'p', 't', '>'}
 	runID := uniqueID("run")
 	artifact := testArtifact(uniqueID("artifact"), &runID, content)
-	stored, err := store.Put(ctx, artifact, bytes.NewReader(content))
+	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,13 +166,13 @@ func TestStoreRejectsMismatchesAndInterruptedUploads(t *testing.T) {
 
 	wrongHash := testArtifact(uniqueID("artifact-hash"), nil, content)
 	wrongHash.Sha256 = strings.Repeat("0", sha256.Size*2)
-	if _, err := store.Put(ctx, wrongHash, bytes.NewReader(content)); !errors.Is(err, ErrHashMismatch) {
+	if _, err := store.Put(ctx, wrongHash, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrHashMismatch) {
 		t.Fatalf("hash mismatch error = %v, want %v", err, ErrHashMismatch)
 	}
 
 	wrongSize := testArtifact(uniqueID("artifact-size"), nil, content)
 	wrongSize.Size++
-	if _, err := store.Put(ctx, wrongSize, bytes.NewReader(content)); !errors.Is(err, ErrSizeMismatch) {
+	if _, err := store.Put(ctx, wrongSize, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrSizeMismatch) {
 		t.Fatalf("size mismatch error = %v, want %v", err, ErrSizeMismatch)
 	}
 
@@ -195,11 +213,11 @@ func TestStoreRetriesImmutableArtifactAndRejectsConflicts(t *testing.T) {
 	defer db.Close()
 	content := []byte("retryable content")
 	artifact := testArtifact(uniqueID("artifact-retry"), nil, content)
-	first, err := store.Put(ctx, artifact, bytes.NewReader(content))
+	first, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.Put(ctx, artifact, bytes.NewReader(content))
+	second, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +225,7 @@ func TestStoreRetriesImmutableArtifactAndRejectsConflicts(t *testing.T) {
 		t.Fatalf("retry metadata = %#v, want %#v", second, first)
 	}
 	conflicting := testArtifact(artifact.ID, nil, []byte("different content"))
-	if _, err := store.Put(ctx, conflicting, bytes.NewReader([]byte("different content"))); !errors.Is(err, ErrConflict) {
+	if _, err := store.Put(ctx, conflicting, readCloser(bytes.NewReader([]byte("different content")))); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflicting retry error = %v, want %v", err, ErrConflict)
 	}
 	opened, reader, err := store.Open(ctx, artifact.ID)
@@ -254,7 +272,7 @@ func TestStoreKeepsDurableStagingWhenDatabaseCommitIsUnavailable(t *testing.T) {
 	content := []byte("preserve this staging")
 	artifact := testArtifact(uniqueID("artifact-db-down"), nil, content)
 	db.Close()
-	if _, err := store.Put(ctx, artifact, bytes.NewReader(content)); err == nil {
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err == nil {
 		t.Fatal("Put succeeded with a closed database")
 	}
 	entries, err := os.ReadDir(store.objects)
@@ -290,7 +308,7 @@ func TestStoreRejectsUnauthorizedMetadataAndOpen(t *testing.T) {
 	defer db.Close()
 	content := []byte("authorized bytes")
 	artifact := testArtifact(uniqueID("artifact-auth"), nil, content)
-	if _, err := store.Put(ctx, artifact, bytes.NewReader(content)); err != nil {
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
 		t.Fatal(err)
 	}
 	denied, err := NewStore(db.Pool(), Config{Root: store.root, Authorizer: DenyAllAuthorizer{}})
@@ -306,6 +324,124 @@ func TestStoreRejectsUnauthorizedMetadataAndOpen(t *testing.T) {
 	if _, err := denied.Put(ctx, testArtifact(uniqueID("artifact-write-denied"), nil, content), bytes.NewReader(content)); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("unauthorized put error = %v, want %v", err, ErrUnauthorized)
 	}
+}
+
+func TestStoreClosesAdmittedSourceExactlyOnce(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("close once")
+	source := &countingReadCloser{Reader: bytes.NewReader(content)}
+	if _, err := store.Put(ctx, testArtifact(uniqueID("artifact-close"), nil, content), source); err != nil {
+		t.Fatal(err)
+	}
+	if got := source.closeCount.Load(); got != 1 {
+		t.Fatalf("source close count = %d, want 1", got)
+	}
+}
+
+func TestStoreCancellationClosesBlockedSourceAndReturns(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	putContext, cancel := context.WithCancel(ctx)
+	source := newBlockingReadCloser()
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.Put(putContext, testArtifact(uniqueID("artifact-blocked"), nil, nil), source)
+		result <- err
+	}()
+	select {
+	case <-source.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked source was not read")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled Put error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled Put did not return after source Close")
+	}
+	if got := source.closeCount.Load(); got != 1 {
+		t.Fatalf("blocked source close count = %d, want 1", got)
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
+func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready bytes")
+	artifact := testArtifact(uniqueID("artifact-ready-loss"), nil, content)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store.objects, artifact.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("missing ready metadata error = %v, want %v", err, ErrUnavailable)
+	}
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("retry after ready loss error = %v, want %v", err, ErrUnavailable)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, artifact.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ready-loss retry recreated final object: %v", err)
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
+func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("repairable bytes")
+	artifact := testArtifact(uniqueID("artifact-repair"), nil, content)
+	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
+	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ID != artifact.ID {
+		t.Fatalf("repaired metadata = %#v", stored)
+	}
+	metadata, reader, err := store.Open(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || metadata.ID != artifact.ID || !bytes.Equal(readBack, content) {
+		t.Fatalf("repaired publication = %#v/%q, err=%v", metadata, readBack, err)
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
+func TestStoreRejectsRepairForUnknownReasonOrConflictingFinal(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("repair rejection")
+	unknown := testArtifact(uniqueID("artifact-repair-unknown"), nil, content)
+	insertUnavailableArtifact(t, db.Pool(), ctx, unknown, "operator-hold")
+	if _, err := store.Put(ctx, unknown, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unknown-reason retry error = %v, want %v", err, ErrUnavailable)
+	}
+
+	conflict := testArtifact(uniqueID("artifact-repair-conflict"), nil, content)
+	insertUnavailableArtifact(t, db.Pool(), ctx, conflict, "staging-missing")
+	finalPath := filepath.Join(store.objects, conflict.ID)
+	conflictingBytes := []byte("different final")
+	if err := os.WriteFile(finalPath, conflictingBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(ctx, conflict, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting-final retry error = %v, want %v", err, ErrConflict)
+	}
+	readBack, err := os.ReadFile(finalPath)
+	if err != nil || !bytes.Equal(readBack, conflictingBytes) {
+		t.Fatalf("conflicting final changed: %q, err=%v", readBack, err)
+	}
+	assertNoStagingFiles(t, store.objects)
 }
 
 type allowAllAuthorizer struct{}
@@ -327,6 +463,44 @@ func (r *failingReader) Read(buffer []byte) (int, error) {
 		return n, nil
 	}
 	return 0, r.err
+}
+
+func (r *failingReader) Close() error { return nil }
+
+func readCloser(reader io.Reader) io.ReadCloser { return io.NopCloser(reader) }
+
+type countingReadCloser struct {
+	io.Reader
+	closeCount atomic.Int32
+}
+
+func (r *countingReadCloser) Close() error {
+	r.closeCount.Add(1)
+	return nil
+}
+
+type blockingReadCloser struct {
+	started    chan struct{}
+	release    chan struct{}
+	startOnce  sync.Once
+	closeOnce  sync.Once
+	closeCount atomic.Int32
+}
+
+func newBlockingReadCloser() *blockingReadCloser {
+	return &blockingReadCloser{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (r *blockingReadCloser) Read([]byte) (int, error) {
+	r.startOnce.Do(func() { close(r.started) })
+	<-r.release
+	return 0, io.EOF
+}
+
+func (r *blockingReadCloser) Close() error {
+	r.closeCount.Add(1)
+	r.closeOnce.Do(func() { close(r.release) })
+	return nil
 }
 
 func testArtifact(id string, runID *string, content []byte) protocol.Artifact {
@@ -353,6 +527,18 @@ func assertNoStagingFiles(t *testing.T, objects string) {
 		if strings.HasPrefix(entry.Name(), ".upload-") {
 			t.Fatalf("staging file remains: %s", entry.Name())
 		}
+	}
+}
+
+func insertUnavailableArtifact(t *testing.T, pool *pgxpool.Pool, ctx context.Context, artifact protocol.Artifact, reason string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO conversation_artifacts (
+			id, session_id, name, kind, size, sha256, content_type, created_at,
+			state, staging_name, unavailable_reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'unavailable', $8, $9)
+	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, ".upload-original", reason); err != nil {
+		t.Fatal(err)
 	}
 }
 
