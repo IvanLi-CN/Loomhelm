@@ -4,6 +4,14 @@ export * from "./generated";
 
 export type GeneratedApiClient = LoomhelmApiClient;
 
+export type BrowserSessionBootstrap = Awaited<ReturnType<LoomhelmApiClient["getBrowserSession"]>>;
+
+export type BrowserProtectionMode = "same_origin";
+
+export interface AuthenticatedApiClient extends GeneratedApiClient {
+  bootstrapBrowserSession: () => Promise<BrowserSessionBootstrap>;
+}
+
 export type ApiClientFactory<TClient = GeneratedApiClient> = () => TClient;
 
 export function createApiClient<TClient>(factory: ApiClientFactory<TClient>): TClient {
@@ -19,10 +27,12 @@ export interface AuthenticatedApiClientOptions {
   headers?: HeadersInit;
   credentials?: RequestCredentials;
   accessToken?: AccessTokenReader;
+  browserProtection?: BrowserProtectionMode;
   csrf?: {
     getToken: CsrfTokenReader;
     headerName?: string;
   };
+  onBrowserSession?: (session: BrowserSessionBootstrap) => void | Promise<void>;
   onUnauthorized?: (response: Response) => void | Promise<void>;
 }
 
@@ -39,9 +49,74 @@ function isMutationMethod(method: string | undefined): boolean {
   return mutationMethods.has((method ?? "GET").toUpperCase());
 }
 
-export function createAuthenticatedApiClient(options: AuthenticatedApiClientOptions = {}): GeneratedApiClient {
+function validateBrowserSession(value: unknown): BrowserSessionBootstrap {
+  if (!value || typeof value !== "object") {
+    throw new ApiClientConfigurationError("browser session bootstrap is not an object");
+  }
+  const session = value as Partial<BrowserSessionBootstrap>;
+  if (typeof session.user_id !== "string" || session.user_id.trim().length === 0) {
+    throw new ApiClientConfigurationError("browser session bootstrap has no valid user_id");
+  }
+  if (session.csrf_protection !== "same_origin") {
+    throw new ApiClientConfigurationError("browser session bootstrap does not declare same_origin protection");
+  }
+  return { user_id: session.user_id, csrf_protection: "same_origin" };
+}
+
+export function createAuthenticatedApiClient(options: AuthenticatedApiClientOptions = {}): AuthenticatedApiClient {
   const fetcher = options.fetch ?? globalThis.fetch;
   if (!fetcher) throw new ApiClientConfigurationError("a fetch implementation is required");
+  const sameOriginProtection = options.browserProtection === "same_origin";
+  if (sameOriginProtection && options.csrf) {
+    throw new ApiClientConfigurationError("same_origin protection cannot be combined with token CSRF transport");
+  }
+
+  let browserSession: BrowserSessionBootstrap | undefined;
+  let bootstrapPromise: Promise<BrowserSessionBootstrap> | undefined;
+
+  const notifyUnauthorized = async (response: Response): Promise<void> => {
+    if (response.status !== 401) return;
+    browserSession = undefined;
+    if (!options.onUnauthorized) return;
+    try {
+      await options.onUnauthorized(response.clone());
+    } catch {
+      // Preserve the generated client's ApiClientError as the request result.
+    }
+  };
+
+  const fetchBrowserSession: typeof globalThis.fetch = async (input, init = {}) => {
+    const headers = new Headers(init.headers);
+    const response = await fetcher(input, {
+      ...init,
+      credentials: options.credentials ?? "include",
+      headers
+    });
+    await notifyUnauthorized(response);
+    return response;
+  };
+
+  const bootstrapClient = sameOriginProtection
+    ? createGeneratedApiClient({ baseUrl: options.baseUrl, fetch: fetchBrowserSession, headers: options.headers })
+    : undefined;
+
+  const bootstrapBrowserSession = async (): Promise<BrowserSessionBootstrap> => {
+    if (!sameOriginProtection || !bootstrapClient) {
+      throw new ApiClientConfigurationError("same_origin browser protection is not configured");
+    }
+    if (browserSession) return browserSession;
+    if (!bootstrapPromise) {
+      bootstrapPromise = (async () => {
+        const session = validateBrowserSession(await bootstrapClient.getBrowserSession());
+        await options.onBrowserSession?.(session);
+        browserSession = session;
+        return session;
+      })().finally(() => {
+        bootstrapPromise = undefined;
+      });
+    }
+    return bootstrapPromise;
+  };
 
   const fetchWithAuthentication: typeof globalThis.fetch = async (input, init = {}) => {
     const headers = new Headers(init.headers);
@@ -49,7 +124,11 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
     const accessToken = await options.accessToken?.();
     if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-    if (isMutationMethod(method)) {
+    if (sameOriginProtection) {
+      if (!browserSession) {
+        throw new ApiClientConfigurationError("same_origin browser session bootstrap is required before an API request");
+      }
+    } else if (isMutationMethod(method)) {
       if (!options.csrf) {
         throw new ApiClientConfigurationError("CSRF transport is not configured for an API mutation");
       }
@@ -66,19 +145,25 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
       headers
     });
 
-    if (response.status === 401 && options.onUnauthorized) {
-      try {
-        await options.onUnauthorized(response.clone());
-      } catch {
-        // Preserve the generated client's ApiClientError as the request result.
-      }
-    }
+    await notifyUnauthorized(response);
     return response;
   };
 
-  return createGeneratedApiClient({
+  const client = createGeneratedApiClient({
     baseUrl: options.baseUrl,
     fetch: fetchWithAuthentication,
     headers: options.headers
   });
+
+  if (sameOriginProtection) {
+    client.getBrowserSession = () => bootstrapBrowserSession();
+  }
+  const logoutBrowserSession = client.logoutBrowserSession.bind(client);
+  client.logoutBrowserSession = async (request) => {
+    const result = await logoutBrowserSession(request);
+    browserSession = undefined;
+    return result;
+  };
+
+  return Object.assign(client, { bootstrapBrowserSession });
 }

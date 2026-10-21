@@ -270,6 +270,100 @@ describe("generated project membership transport", () => {
 });
 
 describe("authenticated client transport", () => {
+  test("requires a real same-origin browser bootstrap before cookie requests", async () => {
+    const calls = [];
+    const session = { user_id: "user-browser", csrf_protection: "same_origin" };
+    let principalId;
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      onBrowserSession: (value) => {
+        principalId = value.user_id;
+      },
+      fetch: async (url, init) => {
+        calls.push({
+          path: url.pathname,
+          method: init.method,
+          credentials: init.credentials,
+          csrf: new Headers(init.headers).get("X-CSRF-Token")
+        });
+        return url.pathname.endsWith("/auth/session")
+          ? Response.json(session)
+          : Response.json({ project: { id: "project-1" } });
+      }
+    });
+
+    await expect(client.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(calls).toEqual([]);
+
+    expect(await client.bootstrapBrowserSession()).toEqual(session);
+    await client.createProject({ body: { name: "Project" } });
+
+    expect(principalId).toBe(session.user_id);
+    expect(calls).toEqual([
+      { path: "/api/v1/auth/session", method: "GET", credentials: "include", csrf: null },
+      { path: "/api/v1/projects", method: "POST", credentials: "include", csrf: null }
+    ]);
+  });
+
+  test("rejects an invalid same-origin declaration and keeps mutations closed", async () => {
+    const calls = [];
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method });
+        return Response.json({ user_id: "user-browser", csrf_protection: "token" });
+      }
+    });
+
+    await expect(client.bootstrapBrowserSession()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    await expect(client.createProject({ body: { name: "Project" } })).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(calls).toEqual([{ path: "/api/v1/auth/session", method: "GET" }]);
+  });
+
+  test("clears the browser bootstrap after a completed logout", async () => {
+    const calls = [];
+    const session = { user_id: "user-browser", csrf_protection: "same_origin" };
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method });
+        return url.pathname.endsWith("/auth/session")
+          ? Response.json(session)
+          : new Response(null, { status: 204 });
+      }
+    });
+
+    await client.bootstrapBrowserSession();
+    await client.logoutBrowserSession();
+    await expect(client.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(calls).toEqual([
+      { path: "/api/v1/auth/session", method: "GET" },
+      { path: "/api/v1/auth/logout", method: "POST" }
+    ]);
+  });
+
+  test("closes the same-origin gate after a 401 response", async () => {
+    let requests = 0;
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url) => {
+        requests += 1;
+        return url.pathname.endsWith("/auth/session")
+          ? Response.json({ user_id: "user-browser", csrf_protection: "same_origin" })
+          : Response.json({ code: "unauthorized" }, { status: 401 });
+      }
+    });
+
+    await client.bootstrapBrowserSession();
+    await expect(client.listProjects()).rejects.toBeInstanceOf(ApiClientError);
+    await expect(client.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(requests).toBe(2);
+  });
+
   test("uses session credentials and injects a fresh CSRF token for mutations", async () => {
     const calls = [];
     let token = "csrf-1";
