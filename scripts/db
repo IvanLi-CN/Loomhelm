@@ -10,7 +10,7 @@ case "$command" in
 		exec go run ./internal/platform/database/cmd/migrate
 		;;
 	test)
-		exec go test -count=1 ./internal/platform/database ./internal/platform/jobs
+		exec go test -count=1 ./internal/platform/database ./internal/platform/jobs ./internal/auth ./internal/projects ./internal/tasks ./internal/app
 		;;
 	*)
 		echo "usage: scripts/db {migrate|test}" >&2

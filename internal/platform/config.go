@@ -37,6 +37,7 @@ type Config struct {
 	WorkerGeneration   uint64
 	WorkerLeaseKey     string
 	ConnectorServerURL string
+	BrowserAuth        BrowserAuthConfig
 }
 
 // DatabaseConfig is shared by processes and database-only tools so their
@@ -158,6 +159,10 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 	case ComponentServer:
 		config.HTTPAddr = lookupOrDefault(lookup, "LOOMHELM_HTTP_ADDR", "127.0.0.1:8080")
 		config.DrainToken = lookupOrDefault(lookup, "LOOMHELM_DRAIN_TOKEN", "")
+		config.BrowserAuth, err = browserAuthFromLookup(lookup)
+		if err != nil {
+			return Config{}, err
+		}
 		if err := validateListenAddress(config.HTTPAddr); err != nil {
 			return Config{}, fmt.Errorf("invalid LOOMHELM_HTTP_ADDR: %w", err)
 		}
@@ -207,6 +212,9 @@ func (c Config) Validate() error {
 
 	switch c.Component {
 	case ComponentServer:
+		if err := c.BrowserAuth.Validate(); err != nil {
+			return err
+		}
 		if err := validateListenAddress(c.HTTPAddr); err != nil {
 			return fmt.Errorf("invalid HTTP address: %w", err)
 		}
