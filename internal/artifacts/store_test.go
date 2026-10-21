@@ -19,6 +19,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -376,6 +377,175 @@ func TestStoreRecoveryPreservesReadyStagingWhenFinalIsInvalid(t *testing.T) {
 	}
 	if stagingCount != 2 {
 		t.Fatalf("invalid ready staging count = %d, want 2", stagingCount)
+	}
+}
+
+func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET state = 'unavailable', unavailable_reason = 'test-isolation'
+		WHERE state = 'pending'
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_reclaimed_at = NOW(), staging_reclaim_after = NOW()
+		WHERE state = 'ready' AND staging_reclaimed_at IS NULL
+	`); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("ready cleanup retry")
+	failed := testArtifact("artifact-reclaim-failed-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
+	failedStaging := ".upload-reclaim-failed-" + fmt.Sprint(time.Now().UnixNano())
+	failedPath := filepath.Join(store.objects, failedStaging)
+	if err := os.Mkdir(failedPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(failedPath, "keep"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, failed.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, db.Pool(), ctx, failed, failedStaging)
+
+	healthy := testArtifact("artifact-reclaim-healthy-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
+	healthyStaging := ".upload-reclaim-healthy-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, healthyStaging), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, healthy.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, db.Pool(), ctx, healthy, healthyStaging)
+
+	first, err := store.Recover(ctx, 1)
+	if !errors.Is(err, ErrRecoveryIncomplete) || first.Failed != 1 || first.Scanned != 1 {
+		t.Fatalf("failed cleanup recovery = %#v, err=%v", first, err)
+	}
+	var retryAt time.Time
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaim_after FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if !retryAt.After(time.Now()) {
+		t.Fatalf("failed cleanup retry_at = %s, want a deferred time", retryAt)
+	}
+
+	second, err := store.Recover(ctx, 1)
+	if err != nil || second.Ready != 1 {
+		t.Fatalf("healthy cleanup recovery = %#v, err=%v", second, err)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, healthyStaging)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("healthy staging error = %v, want missing", err)
+	}
+
+	if err := os.Remove(filepath.Join(failedPath, "keep")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(failedPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_reclaim_after = NOW() WHERE id = $1`, failed.ID); err != nil {
+		t.Fatal(err)
+	}
+	third, err := store.Recover(ctx, 1)
+	if err != nil || third.Ready != 1 {
+		t.Fatalf("retried cleanup recovery = %#v, err=%v", third, err)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if !reclaimed {
+		t.Fatal("failed cleanup was not marked reclaimed after retry")
+	}
+}
+
+func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready cleanup lock")
+	artifact := testArtifact(uniqueID("artifact-reclaim-lock"), nil, content)
+	stagingName := ".upload-reclaim-lock-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+
+	removalStarted := make(chan struct{})
+	contenderAttempted := make(chan struct{})
+	var attemptCount atomic.Int32
+	var removalOnce sync.Once
+	store.faults = &faultHooks{
+		BeforeIdentityLock: func(context.Context, pgx.Tx, string) {
+			if attemptCount.Add(1) == 2 {
+				close(contenderAttempted)
+			}
+		},
+		BeforeReadyStagingRemoval: func() {
+			removalOnce.Do(func() { close(removalStarted) })
+			<-contenderAttempted
+			time.Sleep(100 * time.Millisecond)
+		},
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	reclaimResult := make(chan error, 1)
+	go func() {
+		_, _, err := store.reclaimReadyStaging(ctx, artifact.ID, cleanup)
+		reclaimResult <- err
+	}()
+	select {
+	case <-removalStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ready cleanup did not reach staging removal")
+	}
+	contenderContext, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	contenderResult := make(chan error, 1)
+	go func() {
+		_, _, err := store.reconcileOne(contenderContext, artifact.ID, nil)
+		contenderResult <- err
+	}()
+	select {
+	case err := <-contenderResult:
+		t.Fatalf("contender completed while cleanup held identity lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := <-reclaimResult; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-contenderResult; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewStoreCreatesPrivateNestedRoot(t *testing.T) {
+	db, _, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	root := filepath.Join(t.TempDir(), "missing", "nested", "artifact-root")
+	store, err := NewStore(db.Pool(), Config{Root: root, Authorizer: allowAllAuthorizer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{store.root, store.objects} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("directory %s mode = %o, want 0700", path, info.Mode().Perm())
+		}
+	}
+	content := []byte("nested root")
+	if _, err := store.Put(ctx, testArtifact(uniqueID("artifact-nested-root"), nil, content), readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -817,6 +987,30 @@ func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
 	}
 	if _, _, err := store.Open(ctx, corrupt.ID); err != nil {
 		t.Fatalf("staging-corrupt repaired Open error = %v", err)
+	}
+}
+
+func TestStorePutRepairsMissingPendingStagingInOneAttempt(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("pending staging replacement")
+	artifact := testArtifact(uniqueID("artifact-pending-repair"), nil, content)
+	insertPendingArtifact(t, db.Pool(), ctx, artifact, ".upload-pending-missing")
+	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ID != artifact.ID {
+		t.Fatalf("stored metadata = %#v", stored)
+	}
+	metadata, reader, err := store.Open(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || metadata.ID != artifact.ID || !bytes.Equal(readBack, content) {
+		t.Fatalf("repaired pending publication = %#v/%q, err=%v", metadata, readBack, err)
 	}
 }
 

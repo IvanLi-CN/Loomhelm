@@ -80,15 +80,16 @@ const (
 // helper process at durable publication boundaries; production composition
 // cannot configure process-exit behavior through Config.
 type faultHooks struct {
-	AfterStage              func()
-	AfterIntentCommit       func()
-	AfterRepairIntentCommit func()
-	AfterFinalLink          func()
-	AfterFinalPublication   func()
-	AfterReadyCommit        func()
-	CommitResponseLost      func() error
-	BeforeIdentityLock      func(context.Context, pgx.Tx, string)
-	AfterIdentityLock       func()
+	AfterStage                func()
+	AfterIntentCommit         func()
+	AfterRepairIntentCommit   func()
+	AfterFinalLink            func()
+	AfterFinalPublication     func()
+	AfterReadyCommit          func()
+	CommitResponseLost        func() error
+	BeforeIdentityLock        func(context.Context, pgx.Tx, string)
+	AfterIdentityLock         func()
+	BeforeReadyStagingRemoval func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -824,15 +825,7 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 	if record.State != publicationReady {
 		return record, stateRecoveryStatus(record.State), nil
 	}
-	finalCheck, err := s.inspectReady(record)
-	if err != nil {
-		return artifactRecord{}, recoveryPending, err
-	}
-	if finalCheck == fileUnknown {
-		return artifactRecord{}, recoveryPending, fmt.Errorf("inspect ready artifact for reclamation: %w", ErrStoreUnavailable)
-	}
-	if finalCheck != fileValid {
-		reason := finalReason(finalCheck)
+	commitUnavailable := func(reason string) (artifactRecord, recoveryStatus, error) {
 		if _, err := tx.Exec(ctx, `
 			UPDATE conversation_artifacts
 			SET state = 'unavailable', unavailable_reason = $2, staging_reclaim_after = NOW()
@@ -862,6 +855,16 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 		}
 		return confirmed, recoveryUnavailable, nil
 	}
+	finalCheck, err := s.inspectReady(record)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	if finalCheck == fileUnknown {
+		return artifactRecord{}, recoveryPending, fmt.Errorf("inspect ready artifact for reclamation: %w", ErrStoreUnavailable)
+	}
+	if finalCheck != fileValid {
+		return commitUnavailable(finalReason(finalCheck))
+	}
 	if record.StagingReclaimed {
 		return record, recoveryReady, nil
 	}
@@ -872,13 +875,37 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 	`, id); err != nil {
 		return artifactRecord{}, recoveryPending, fmt.Errorf("defer artifact staging reclamation: %w", ErrStoreUnavailable)
 	}
-	if err := s.commit(ctx, tx); err != nil {
-		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
-		if confirmErr != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return artifactRecord{}, recoveryPending, err
+	// Recheck while the identity lock is still held. The lock must remain held
+	// through deletion and marker publication so another reconciler cannot
+	// transition the row while this process is removing its staging copy.
+	finalCheck, err = s.inspectReady(record)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	if finalCheck == fileUnknown {
+		return artifactRecord{}, recoveryPending, fmt.Errorf("reinspect ready artifact for reclamation: %w", ErrStoreUnavailable)
+	}
+	if finalCheck != fileValid {
+		return commitUnavailable(finalReason(finalCheck))
+	}
+	if s.faults != nil && s.faults.BeforeReadyStagingRemoval != nil {
+		s.faults.BeforeReadyStagingRemoval()
+	}
+	if removeErr := s.removeStaging(record.StagingName); removeErr != nil {
+		commitErr := s.commit(ctx, tx)
+		if commitErr != nil {
+			confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
+			if confirmErr == nil && confirmed.State == publicationReady && !confirmed.StagingReclaimed {
+				return confirmed, recoveryPending, removeErr
+			}
+			if errors.Is(commitErr, context.Canceled) || errors.Is(commitErr, context.DeadlineExceeded) {
+				return artifactRecord{}, recoveryPending, commitErr
 			}
 			return artifactRecord{}, recoveryPending, fmt.Errorf("confirm staging reclamation deferral: %w", ErrStoreUnavailable)
+		}
+		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
+		if confirmErr != nil {
+			return artifactRecord{}, recoveryPending, confirmErr
 		}
 		if confirmed.State != publicationReady {
 			return confirmed, stateRecoveryStatus(confirmed.State), nil
@@ -886,24 +913,7 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 		if confirmed.StagingReclaimed {
 			return confirmed, recoveryReady, nil
 		}
-	}
-	tx = nil
-	if err := s.removeStaging(record.StagingName); err != nil {
-		return artifactRecord{}, recoveryPending, err
-	}
-	tx, err = s.beginIdentityTx(ctx, id, cleanup)
-	if err != nil {
-		return artifactRecord{}, recoveryPending, err
-	}
-	confirmed, err := readArtifactRecord(ctx, tx, id)
-	if err != nil {
-		return artifactRecord{}, recoveryPending, err
-	}
-	if confirmed.State != publicationReady {
-		return confirmed, stateRecoveryStatus(confirmed.State), nil
-	}
-	if confirmed.StagingReclaimed {
-		return confirmed, recoveryReady, nil
+		return confirmed, recoveryPending, removeErr
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
@@ -922,7 +932,7 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 		}
 		return artifactRecord{}, recoveryPending, fmt.Errorf("confirm artifact staging reclamation: %w", ErrStoreUnavailable)
 	}
-	confirmed, err = s.confirmRecordWithCleanup(id, cleanup)
+	confirmed, err := s.confirmRecordWithCleanup(id, cleanup)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}

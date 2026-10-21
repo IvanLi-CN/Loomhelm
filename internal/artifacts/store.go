@@ -249,6 +249,29 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 		if err != nil {
 			return protocol.Artifact{}, err
 		}
+		if status == recoveryUnavailable && repairableUnavailableReason(resolved.UnavailableReason) {
+			// The staged bytes from this Put are already verified. Rebind the
+			// repairable pending identity to them before cleanup can discard them.
+			repaired, repairErr := s.ensurePending(ctx, staged, stagingName, cleanup)
+			if repairErr != nil {
+				return protocol.Artifact{}, repairErr
+			}
+			if !sameArtifactMetadata(staged, repaired.Artifact) {
+				keepStaging = false
+				return protocol.Artifact{}, ErrConflict
+			}
+			switch repaired.State {
+			case publicationPending:
+				resolved, status, err = s.reconcileOne(ctx, repaired.Artifact.ID, cleanup)
+			case publicationReady:
+				resolved, status, err = s.reclaimReadyStaging(ctx, repaired.Artifact.ID, cleanup)
+			default:
+				resolved, status = repaired, recoveryUnavailable
+			}
+			if err != nil {
+				return protocol.Artifact{}, err
+			}
+		}
 		if status == recoveryUnavailable {
 			keepStaging = resolved.StagingName == stagingName
 			return protocol.Artifact{}, unavailableError(ErrIntegrity)

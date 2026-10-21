@@ -143,6 +143,35 @@ func TestDecodeAndParseRejectMalformedOrOversizedRecords(t *testing.T) {
 	}
 }
 
+func TestContentAcceptsExactRecordLimit(t *testing.T) {
+	record := Record{
+		Source:   "test",
+		Stream:   "app-server",
+		Sequence: 1,
+		Payload:  json.RawMessage(`{"blob":""}`),
+	}
+	baseline, err := Encode(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Payload = json.RawMessage(fmt.Sprintf(`{"blob":%q}`, strings.Repeat("x", DefaultMaxRecordBytes-len(baseline))))
+	encoded, err := Encode(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) != DefaultMaxRecordBytes {
+		t.Fatalf("encoded record size = %d, want %d", len(encoded), DefaultMaxRecordBytes)
+	}
+	if _, err := Decode(encoded); err != nil {
+		t.Fatalf("exact-limit Decode error = %v", err)
+	}
+	line := append(append([]byte(nil), encoded...), '\n')
+	parsed, err := ParseJSONL(bytes.NewReader(line), DefaultMaxRecordBytes)
+	if err != nil || len(parsed) != 1 {
+		t.Fatalf("exact-limit ParseJSONL = %d records, err=%v", len(parsed), err)
+	}
+}
+
 func TestContentBatchLimitsRejectWithoutTruncation(t *testing.T) {
 	blankLine := append(bytes.Repeat([]byte{' '}, DefaultMaxRecordBytes-1), '\n')
 	exactBatch := bytes.Repeat(blankLine, DefaultMaxBatchBytes/DefaultMaxRecordBytes)
