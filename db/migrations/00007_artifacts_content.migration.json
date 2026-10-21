@@ -7,13 +7,13 @@
     "version_impact": "minor"
   },
   "durable_state": {
-    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256 and creation time.",
-    "storage_implementation": "PostgreSQL metadata managed by the embedded Goose migration and immutable files below a configured dedicated artifact root.",
+    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state and the exact private staging object.",
+    "storage_implementation": "PostgreSQL publication intent managed by the embedded Goose migration and immutable, verified files below a configured dedicated artifact root.",
     "source_compatibility_range": {
       "from_program_version": "Phase-one candidate before migration 00007; no earlier artifact metadata or file-volume state is supported.",
       "to_program_version": "Phase-one candidate containing migration 00007.",
       "direct_major_skips_supported": false,
-      "earlier_state": "The absent table is treated as an unapplied migration; the candidate is not ready until migration 00007 commits. Session/project foreign keys are deferred until the P01 schema is published."
+      "earlier_state": "The absent table is treated as an unapplied migration; the candidate is not ready until migration 00007 commits. Session/Run ownership foreign keys are deferred until the E01 schema is published."
     }
   },
   "database_migration": {
@@ -21,7 +21,7 @@
     "ddl_structural_changes": [
       {
         "id": "ddl-00007-conversation-artifacts",
-        "description": "Create conversation_artifacts metadata with validated identifiers, associations, immutable content metadata and session/run lookup indexes.",
+        "description": "Create conversation_artifacts metadata with validated identifiers, associations, immutable content metadata, pending publication intent, ready/unavailable state and session/run lookup indexes.",
         "order": 1,
         "observable": true,
         "pauseable": true
@@ -38,27 +38,31 @@
     ],
     "progress_signals": [
       "Goose records migration 00007 before artifact metadata is read or written.",
-      "A successful upload reports the persisted metadata only after the staged file is hashed, synced and linked into the object directory.",
-      "Open verifies the stored file size and SHA-256 before returning a reader."
+      "A successful upload reports the persisted metadata only after a pending intent is committed, final bytes are hashed, synced, linked without overwrite and marked ready.",
+      "Recover processes a bounded pending set under per-identity database coordination and records unavailable state for missing or corrupt bytes.",
+      "Open exposes only ready metadata and verifies the stored file size and SHA-256 before returning a reader."
     ],
     "pause_points": [
       "After the metadata migration commits and before the Server or Connector mounts the artifact service.",
-      "After each staged file has passed size/hash validation and before metadata is committed."
+      "After each staged file has passed size/hash validation and before its pending intent is committed.",
+      "After startup/runtime recovery completes its bounded pass and before file publication/download admission."
     ]
   },
   "recovery": {
     "deployed_migrations_immutable": true,
     "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
-    "faulty_release_recovery": "forward-repair-by-a-new-program-version-and-new-ordered-migration; incomplete staging files remain inaccessible and failed uploads remove their staging file",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version-and-new-ordered-migration; pending intents remain recoverable, ambiguous database outcomes never trigger destructive compensation, and missing/corrupt bytes become explicitly unavailable",
     "backup_restore_role": "separate-disaster-recovery"
   },
   "validation": {
     "minor": {
       "required_test_evidence": [
-        "A permitted Put persists original bytes and metadata, and Metadata/Open remain available after database close and reopen.",
+        "A permitted Put persists original bytes and ready metadata, and Metadata/Open remain available after database close and reopen.",
+        "Process interruption after staging, intent, final publication and readiness, including a lost database commit response, is recovered by a new Store process without deleting potentially committed bytes.",
+        "Separate processes coordinate same-ID publication and reconciliation; identical immutable retries converge, while conflicting association, metadata or content cannot overwrite the ready object.",
         "Size and SHA-256 mismatches, interrupted readers, malformed identifiers, traversal/symlink paths and unauthorized operations are rejected without exposing host paths or partial metadata.",
         "R02 basic and unknown fixture content retains its raw envelope/payload and remains a non-executing classification fallback.",
-        "Migration 00007 is recognized idempotently and is not automatically reversed; P01 session/project foreign keys are added only by a later ordered migration after their schema exists."
+        "Migration 00007 is recognized idempotently and is not automatically reversed; E01 Session/Run ownership foreign keys are added only by a later ordered migration after their schema exists."
       ]
     }
   }

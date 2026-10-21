@@ -8,14 +8,18 @@ CREATE TABLE conversation_artifacts (
     size BIGINT NOT NULL CHECK (size >= 0),
     sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
     content_type TEXT NOT NULL CHECK (length(content_type) > 0 AND length(content_type) <= 255),
-    created_at TIMESTAMPTZ NOT NULL
+    created_at TIMESTAMPTZ NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'ready', 'unavailable')),
+    staging_name TEXT NOT NULL CHECK (staging_name ~ '^\.upload-[A-Za-z0-9_-]+$'),
+    unavailable_reason TEXT NOT NULL DEFAULT '' CHECK (length(unavailable_reason) <= 128)
 );
 
 CREATE INDEX conversation_artifacts_session_idx ON conversation_artifacts (session_id, created_at, id);
 CREATE INDEX conversation_artifacts_run_idx ON conversation_artifacts (run_id, created_at, id) WHERE run_id IS NOT NULL;
+CREATE INDEX conversation_artifacts_pending_idx ON conversation_artifacts (created_at, id) WHERE state = 'pending';
 
--- Session and project foreign keys are intentionally added by a follow-up
--- migration after the P01 business schema is published on the parent branch.
+-- Session and Run ownership foreign keys are intentionally added by a follow-up
+-- migration after the E01 business schema is published on the parent branch.
 
 -- +goose Down
 DROP TABLE IF EXISTS conversation_artifacts;

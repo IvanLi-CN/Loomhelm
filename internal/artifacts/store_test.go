@@ -120,7 +120,14 @@ func TestStorePutMetadataOpenAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopenedMetadata, reader, err := reopened.Open(ctx, artifact.ID)
+	reopenedMetadata, err := reopened.Metadata(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reopenedMetadata, stored) {
+		t.Fatalf("reopened metadata = %#v, want %#v", reopenedMetadata, stored)
+	}
+	reopenedMetadata, reader, err = reopened.Open(ctx, artifact.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +166,122 @@ func TestStoreRejectsMismatchesAndInterruptedUploads(t *testing.T) {
 		if _, err := store.Metadata(ctx, id); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("metadata for rejected %s = %v, want %v", id, err, ErrNotFound)
 		}
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
+func TestStageHonorsCancellationBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	objects := filepath.Join(root, "objects")
+	if err := prepareDirectory(objects, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	objects, err := filepath.EvalSymlinks(objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("cancelled content")
+	store := &Store{objects: objects, maxBytes: DefaultMaxBytes}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := store.stage(ctx, testArtifact("artifact-cancelled", nil, content), "", bytes.NewReader(content)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled stage error = %v, want %v", err, context.Canceled)
+	}
+	assertNoStagingFiles(t, objects)
+}
+
+func TestStoreRetriesImmutableArtifactAndRejectsConflicts(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("retryable content")
+	artifact := testArtifact(uniqueID("artifact-retry"), nil, content)
+	first, err := store.Put(ctx, artifact, bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Put(ctx, artifact, bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("retry metadata = %#v, want %#v", second, first)
+	}
+	conflicting := testArtifact(artifact.ID, nil, []byte("different content"))
+	if _, err := store.Put(ctx, conflicting, bytes.NewReader([]byte("different content"))); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting retry error = %v, want %v", err, ErrConflict)
+	}
+	opened, reader, err := store.Open(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(opened, first) || !bytes.Equal(readBack, content) {
+		t.Fatalf("conflicting retry changed publication: %#v/%q", opened, readBack)
+	}
+}
+
+func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("unavailable content")
+	artifact := testArtifact(uniqueID("artifact-unavailable"), nil, content)
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO conversation_artifacts (
+			id, session_id, name, kind, size, sha256, content_type, created_at,
+			state, staging_name, unavailable_reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'pending', $8, '')
+	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, ".upload-missing"); err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.Recover(ctx, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Scanned != 1 || report.Unavailable != 1 {
+		t.Fatalf("recovery report = %#v", report)
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unavailable metadata error = %v, want %v", err, ErrUnavailable)
+	}
+}
+
+func TestStoreKeepsDurableStagingWhenDatabaseCommitIsUnavailable(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	content := []byte("preserve this staging")
+	artifact := testArtifact(uniqueID("artifact-db-down"), nil, content)
+	db.Close()
+	if _, err := store.Put(ctx, artifact, bytes.NewReader(content)); err == nil {
+		t.Fatal("Put succeeded with a closed database")
+	}
+	entries, err := os.ReadDir(store.objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("durable staging was deleted after an uncertain database operation")
+	}
+}
+
+func TestStoreRejectsLongContentTypeBeforeStaging(t *testing.T) {
+	content := []byte("content")
+	artifact := testArtifact("artifact-content-type", nil, content)
+	artifact.ContentType = strings.Repeat("a", 256)
+	if _, _, err := validateArtifact(artifact, DefaultMaxBytes); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("long content type error = %v, want %v", err, ErrInvalid)
+	}
+}
+
+func TestStoreRedactsFilesystemPaths(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing-objects")
+	store := &Store{root: root, objects: missing, maxBytes: DefaultMaxBytes, authorizer: allowAllAuthorizer{}}
+	err := store.ensureObjectDirectory()
+	if err == nil || strings.Contains(err.Error(), root) {
+		t.Fatalf("filesystem error = %v, must be redacted and non-nil", err)
 	}
 }
 
@@ -217,6 +340,19 @@ func testArtifact(id string, runID *string, content []byte) protocol.Artifact {
 		Size:        int64(len(content)),
 		Sha256:      hex.EncodeToString(digest[:]),
 		ContentType: "application/octet-stream",
+	}
+}
+
+func assertNoStagingFiles(t *testing.T, objects string) {
+	t.Helper()
+	entries, err := os.ReadDir(objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".upload-") {
+			t.Fatalf("staging file remains: %s", entry.Name())
+		}
 	}
 }
 
