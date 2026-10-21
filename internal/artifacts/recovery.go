@@ -86,6 +86,8 @@ type faultHooks struct {
 	AfterFinalPublication   func()
 	AfterReadyCommit        func()
 	CommitResponseLost      func() error
+	BeforeIdentityLock      func()
+	AfterIdentityLock       func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -211,12 +213,18 @@ func (s *Store) beginIdentityTx(ctx context.Context, id string, cleanup *cleanup
 		}
 		return nil, fmt.Errorf("begin artifact publication: %w", ErrStoreUnavailable)
 	}
+	if s.faults != nil && s.faults.BeforeIdentityLock != nil {
+		s.faults.BeforeIdentityLock()
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "loomhelm:artifact:"+id); err != nil {
 		rollbackTx(tx, cleanup)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("lock artifact publication: %w", ErrStoreUnavailable)
+	}
+	if s.faults != nil && s.faults.AfterIdentityLock != nil {
+		s.faults.AfterIdentityLock()
 	}
 	return tx, nil
 }
@@ -284,12 +292,15 @@ func (s *Store) confirmRecordWithCleanup(id string, cleanup *cleanupDeadline) (a
 	return readArtifactRecord(ctx, s.pool, id)
 }
 
-func (s *Store) readReadyRecord(ctx context.Context, id string) (artifactRecord, error) {
+func (s *Store) readAuthorizedReadyRecord(ctx context.Context, id string, operation Operation) (artifactRecord, error) {
 	if s == nil || s.pool == nil {
 		return artifactRecord{}, ErrStoreUnavailable
 	}
 	record, err := readArtifactRecord(ctx, s.pool, id)
 	if err != nil {
+		return artifactRecord{}, err
+	}
+	if err := s.authorize(ctx, operation, record.Artifact); err != nil {
 		return artifactRecord{}, err
 	}
 	if record.State != publicationReady {

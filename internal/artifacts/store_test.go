@@ -422,6 +422,14 @@ func TestStoreRejectsUnauthorizedMetadataAndOpen(t *testing.T) {
 	if _, _, err := denied.Open(ctx, artifact.ID); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("unauthorized open error = %v, want %v", err, ErrUnauthorized)
 	}
+	unavailable := testArtifact(uniqueID("artifact-auth-unavailable"), nil, content)
+	insertUnavailableArtifact(t, db.Pool(), ctx, unavailable, "operator-hold")
+	if _, err := denied.Metadata(ctx, unavailable.ID); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("unauthorized unavailable metadata error = %v, want %v", err, ErrUnauthorized)
+	}
+	if _, _, err := denied.Open(ctx, unavailable.ID); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("unauthorized unavailable open error = %v, want %v", err, ErrUnauthorized)
+	}
 	if _, err := denied.Put(ctx, testArtifact(uniqueID("artifact-write-denied"), nil, content), bytes.NewReader(content)); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("unauthorized put error = %v, want %v", err, ErrUnauthorized)
 	}
@@ -491,6 +499,37 @@ func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.
 		t.Fatalf("ready-loss retry recreated final object: %v", err)
 	}
 	assertNoStagingFiles(t, store.objects)
+}
+
+func TestStoreOpenMarksNonregularFinalUnavailable(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("nonregular final")
+	artifact := testArtifact(uniqueID("artifact-nonregular-final"), nil, content)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	finalPath := filepath.Join(store.objects, artifact.ID)
+	outsidePath := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outsidePath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(finalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsidePath, finalPath); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("nonregular final open error = %v, want %v", err, ErrUnavailable)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationUnavailable) {
+		t.Fatalf("nonregular final state = %q, want %q", state, publicationUnavailable)
+	}
 }
 
 func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
@@ -648,6 +687,18 @@ func insertUnavailableArtifact(t *testing.T, pool *pgxpool.Pool, ctx context.Con
 			state, staging_name, unavailable_reason
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'unavailable', $8, $9)
 	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, ".upload-original", reason); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertPendingArtifact(t *testing.T, pool *pgxpool.Pool, ctx context.Context, artifact protocol.Artifact, stagingName string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO conversation_artifacts (
+			id, session_id, name, kind, size, sha256, content_type, created_at,
+			state, staging_name, unavailable_reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'pending', $8, '')
+	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, stagingName); err != nil {
 		t.Fatal(err)
 	}
 }

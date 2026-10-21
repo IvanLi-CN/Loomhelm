@@ -260,11 +260,8 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 	if err := validateIdentifier(id, "artifact id"); err != nil {
 		return protocol.Artifact{}, err
 	}
-	record, err := s.readReadyRecord(ctx, id)
+	record, err := s.readAuthorizedReadyRecord(ctx, id, OperationMetadata)
 	if err != nil {
-		return protocol.Artifact{}, err
-	}
-	if err := s.authorize(ctx, OperationMetadata, record.Artifact); err != nil {
 		return protocol.Artifact{}, err
 	}
 	check, inspectErr := s.inspectReady(record)
@@ -291,11 +288,8 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 	if err := validateIdentifier(id, "artifact id"); err != nil {
 		return protocol.Artifact{}, nil, err
 	}
-	record, err := s.readReadyRecord(ctx, id)
+	record, err := s.readAuthorizedReadyRecord(ctx, id, OperationOpen)
 	if err != nil {
-		return protocol.Artifact{}, nil, err
-	}
-	if err := s.authorize(ctx, OperationOpen, record.Artifact); err != nil {
 		return protocol.Artifact{}, nil, err
 	}
 	path, err := s.objectPath(record.Artifact.ID)
@@ -309,6 +303,10 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-missing")
+			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
+		}
+		if errors.Is(err, ErrIntegrity) {
+			s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch")
 			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
 		}
 		return protocol.Artifact{}, nil, err
