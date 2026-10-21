@@ -182,39 +182,42 @@ func (s *Service) ResolvePrincipal(ctx context.Context, request *http.Request) (
 func (s *Service) resolveCredential(ctx context.Context, raw string) (Principal, error) {
 	hash := sha256.Sum256([]byte(raw))
 	var principal Principal
-	var credentialID string
-	if err := s.pool.QueryRow(ctx, `
-		SELECT id, user_id
-		FROM auth_api_credentials
-		WHERE token_hash = $1 AND revoked_at IS NULL
-	`, hash[:]).Scan(&credentialID, &principal.UserID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Principal{}, ErrUnauthenticated
-		}
+	rows, err := s.pool.Query(ctx, `
+		SELECT credential.id, credential.user_id, scope.project_id
+		FROM auth_api_credentials AS credential
+		LEFT JOIN auth_api_credential_project_scopes AS scope
+			ON scope.credential_id = credential.id
+		WHERE credential.token_hash = $1 AND credential.revoked_at IS NULL
+		ORDER BY scope.project_id
+	`, hash[:])
+	if err != nil {
 		return Principal{}, fmt.Errorf("resolve API credential: %w", err)
 	}
-	principal.CredentialID = credentialID
-	principal.ProjectScope = make(map[string]struct{})
-	rows, err := s.pool.Query(ctx, `
-		SELECT project_id
-		FROM auth_api_credential_project_scopes
-		WHERE credential_id = $1
-	`, credentialID)
-	if err != nil {
-		return Principal{}, fmt.Errorf("load API credential scope: %w", err)
-	}
 	defer rows.Close()
+	found := false
+	principal.ProjectScope = make(map[string]struct{})
 	for rows.Next() {
-		var projectID string
-		if err := rows.Scan(&projectID); err != nil {
-			return Principal{}, fmt.Errorf("scan API credential scope: %w", err)
+		var credentialID, userID string
+		var projectID *string
+		if err := rows.Scan(&credentialID, &userID, &projectID); err != nil {
+			return Principal{}, fmt.Errorf("scan API credential: %w", err)
 		}
-		principal.ProjectScope[projectID] = struct{}{}
+		if !found {
+			principal.CredentialID = credentialID
+			principal.UserID = userID
+			found = true
+		}
+		if projectID != nil {
+			principal.ProjectScope[*projectID] = struct{}{}
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return Principal{}, fmt.Errorf("read API credential scope: %w", err)
+		return Principal{}, fmt.Errorf("read API credential: %w", err)
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE auth_api_credentials SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1`, credentialID); err != nil {
+	if !found {
+		return Principal{}, ErrUnauthenticated
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE auth_api_credentials SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1`, principal.CredentialID); err != nil {
 		return Principal{}, fmt.Errorf("record API credential use: %w", err)
 	}
 	if len(principal.ProjectScope) == 0 {

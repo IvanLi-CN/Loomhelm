@@ -29,7 +29,12 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 
 	db := openDomainDatabase(t, ctx)
 	cleanupPool := db.Pool()
-	defer db.Close()
+	t.Cleanup(func() {
+		if cleanupPool != nil {
+			cleanupPool.Close()
+			cleanupPool = nil
+		}
+	})
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	ownerID := "p01_owner_" + suffix
@@ -396,7 +401,6 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen database: %v", err)
 	}
-	defer reopened.Close()
 	cleanupPool = reopened.Pool()
 	if err := reopened.Migrate(ctx); err != nil {
 		t.Fatalf("migrate after reopen: %v", err)
@@ -624,14 +628,24 @@ func cleanupDomainState(t *testing.T, pool **pgxpool.Pool, projectIDs *[]string,
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, _ = (*pool).Exec(ctx, `DELETE FROM task_parent_links WHERE parent_task_id = ANY($1::text[]) OR child_task_id = ANY($1::text[])`, *taskIDs)
-		_, _ = (*pool).Exec(ctx, `DELETE FROM task_dependency_links WHERE prerequisite_task_id = ANY($1::text[]) OR dependent_task_id = ANY($1::text[])`, *taskIDs)
-		_, _ = (*pool).Exec(ctx, `DELETE FROM task_execution_refs WHERE task_id = ANY($1::text[])`, *taskIDs)
-		_, _ = (*pool).Exec(ctx, `DELETE FROM tasks WHERE id = ANY($1::text[])`, *taskIDs)
-		_, _ = (*pool).Exec(ctx, `DELETE FROM auth_api_credential_project_scopes WHERE project_id = ANY($1::text[])`, *projectIDs)
-		_, _ = (*pool).Exec(ctx, `DELETE FROM auth_api_credentials WHERE user_id = ANY($1::text[])`, userIDs)
-		_, _ = (*pool).Exec(ctx, `DELETE FROM project_members WHERE project_id = ANY($1::text[]) OR user_id = ANY($2::text[])`, *projectIDs, userIDs)
-		_, _ = (*pool).Exec(ctx, `DELETE FROM projects WHERE id = ANY($1::text[])`, *projectIDs)
-		_, _ = (*pool).Exec(ctx, `DELETE FROM auth_users WHERE id = ANY($1::text[])`, userIDs)
+		statements := []struct {
+			query string
+			args  []any
+		}{
+			{`DELETE FROM task_parent_links WHERE parent_task_id = ANY($1::text[]) OR child_task_id = ANY($1::text[])`, []any{*taskIDs}},
+			{`DELETE FROM task_dependency_links WHERE prerequisite_task_id = ANY($1::text[]) OR dependent_task_id = ANY($1::text[])`, []any{*taskIDs}},
+			{`DELETE FROM task_execution_refs WHERE task_id = ANY($1::text[])`, []any{*taskIDs}},
+			{`DELETE FROM tasks WHERE id = ANY($1::text[])`, []any{*taskIDs}},
+			{`DELETE FROM auth_api_credential_project_scopes WHERE project_id = ANY($1::text[])`, []any{*projectIDs}},
+			{`DELETE FROM auth_api_credentials WHERE user_id = ANY($1::text[])`, []any{userIDs}},
+			{`DELETE FROM project_members WHERE project_id = ANY($1::text[]) OR user_id = ANY($2::text[])`, []any{*projectIDs, userIDs}},
+			{`DELETE FROM projects WHERE id = ANY($1::text[])`, []any{*projectIDs}},
+			{`DELETE FROM auth_users WHERE id = ANY($1::text[])`, []any{userIDs}},
+		}
+		for _, statement := range statements {
+			if _, err := (*pool).Exec(ctx, statement.query, statement.args...); err != nil {
+				t.Errorf("cleanup query %q: %v", statement.query, err)
+			}
+		}
 	})
 }

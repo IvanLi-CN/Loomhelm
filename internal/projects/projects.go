@@ -468,12 +468,44 @@ func (s *Service) Delete(ctx context.Context, principal auth.Principal, projectI
 		return fmt.Errorf("begin project deletion: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var lockedProjectID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&lockedProjectID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return auth.ErrNotFound
+		}
+		return fmt.Errorf("lock project for deletion: %w", err)
+	}
 	var hasTasks bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tasks WHERE project_id = $1)`, projectID).Scan(&hasTasks); err != nil {
 		return fmt.Errorf("check project deletion: %w", err)
 	}
 	if hasTasks {
 		return auth.ErrConflict
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT credential.id
+		FROM auth_api_credentials AS credential
+		WHERE EXISTS (
+			SELECT 1
+			FROM auth_api_credential_project_scopes AS scope
+			WHERE scope.credential_id = credential.id AND scope.project_id = $1
+		)
+		ORDER BY credential.id
+		FOR UPDATE
+	`, projectID)
+	if err != nil {
+		return fmt.Errorf("lock project-scoped credentials: %w", err)
+	}
+	for rows.Next() {
+		var credentialID string
+		if err := rows.Scan(&credentialID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan locked project-scoped credential: %w", err)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read locked project-scoped credentials: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE auth_api_credentials AS credential

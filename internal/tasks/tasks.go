@@ -399,13 +399,31 @@ func (s *Service) SetExecutionProtection(ctx context.Context, principal auth.Pri
 	if !allowed {
 		return auth.ErrNotFound
 	}
-	_, err = s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin task execution protection: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var lockedProjectID string
+	if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1 FOR UPDATE`, taskID).Scan(&lockedProjectID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return auth.ErrNotFound
+		}
+		return fmt.Errorf("lock task for execution protection: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
 		INSERT INTO task_execution_refs (task_id, active_execution, retained_history, updated_at)
 		VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
 		ON CONFLICT (task_id) DO UPDATE SET active_execution = EXCLUDED.active_execution,
 			retained_history = EXCLUDED.retained_history, updated_at = CURRENT_TIMESTAMP
 	`, taskID, active, retained)
-	return err
+	if err != nil {
+		return fmt.Errorf("set task execution protection: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit task execution protection: %w", err)
+	}
+	return nil
 }
 
 func validStatus(status Status) bool {

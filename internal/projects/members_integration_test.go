@@ -82,6 +82,210 @@ func TestProjectDeleteRevokesOnlyLastScopedCredential(t *testing.T) {
 	}
 }
 
+func TestConcurrentProjectDeletionRevokesFinalCredentialScope(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db := openMembersDatabase(t, ctx)
+	pool := db.Pool()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "p01_concurrent_scope_user_" + suffix
+	projectIDs := make([]string, 0, 2)
+	defer func() {
+		for _, projectID := range projectIDs {
+			cleanupMembersState(ctx, pool, projectID, nil)
+		}
+		cleanupMembersState(ctx, pool, "", []string{userID})
+		db.Close()
+	}()
+	seedMemberUser(t, ctx, pool, userID)
+
+	projectService := projects.NewService(pool, nil)
+	principal := auth.Principal{UserID: userID}
+	projectA, err := projectService.Create(ctx, principal, projects.CreateRequest{Name: "Concurrent delete A"})
+	if err != nil {
+		t.Fatalf("create project A: %v", err)
+	}
+	projectIDs = append(projectIDs, projectA.ID)
+	projectB, err := projectService.Create(ctx, principal, projects.CreateRequest{Name: "Concurrent delete B"})
+	if err != nil {
+		t.Fatalf("create project B: %v", err)
+	}
+	projectIDs = append(projectIDs, projectB.ID)
+	authService, err := auth.NewService(pool, auth.Config{}, nil)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	credential, err := authService.CreateCredential(ctx, principal, auth.CreateCredentialRequest{
+		Name:       "concurrent deletion scope",
+		ProjectIDs: []string{projectA.ID, projectB.ID},
+	})
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	lockTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin credential lock: %v", err)
+	}
+	defer lockTx.Rollback(ctx)
+	var lockedCredentialID string
+	if err := lockTx.QueryRow(ctx, `SELECT id FROM auth_api_credentials WHERE id = $1 FOR UPDATE`, credential.ID).Scan(&lockedCredentialID); err != nil {
+		t.Fatalf("lock credential: %v", err)
+	}
+
+	started := make(chan struct{}, 2)
+	results := make(chan error, 2)
+	for _, projectID := range []string{projectA.ID, projectB.ID} {
+		go func(projectID string) {
+			started <- struct{}{}
+			results <- projectService.Delete(ctx, principal, projectID)
+		}(projectID)
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatalf("concurrent deletion did not start: %v", ctx.Err())
+		}
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		var scopeCount int
+		if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM auth_api_credential_project_scopes WHERE credential_id = $1`, credential.ID).Scan(&scopeCount); err != nil {
+			t.Fatalf("count credential scopes while locked: %v", err)
+		}
+		if scopeCount != 2 {
+			t.Fatalf("credential scopes changed before credential lock release: got %d, want 2", scopeCount)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := lockTx.Commit(ctx); err != nil {
+		t.Fatalf("release credential lock: %v", err)
+	}
+	for range 2 {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("concurrent project deletion: %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("concurrent project deletion did not finish: %v", ctx.Err())
+		}
+	}
+
+	var revoked bool
+	if err := pool.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM auth_api_credentials WHERE id = $1`, credential.ID).Scan(&revoked); err != nil {
+		t.Fatalf("read concurrent credential revocation: %v", err)
+	}
+	if !revoked {
+		t.Fatal("concurrent final-scope deletion left credential active")
+	}
+}
+
+func TestProjectDeletionSerializesCredentialIssuance(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db := openMembersDatabase(t, ctx)
+	pool := db.Pool()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "p01_concurrent_issue_user_" + suffix
+	projectID := ""
+	defer func() {
+		cleanupMembersState(ctx, pool, projectID, []string{userID})
+		db.Close()
+	}()
+	seedMemberUser(t, ctx, pool, userID)
+
+	projectService := projects.NewService(pool, nil)
+	principal := auth.Principal{UserID: userID}
+	project, err := projectService.Create(ctx, principal, projects.CreateRequest{Name: "Concurrent issuance"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	projectID = project.ID
+	authService, err := auth.NewService(pool, auth.Config{}, nil)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+
+	lockTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin project lock: %v", err)
+	}
+	defer lockTx.Rollback(ctx)
+	var lockedProjectID string
+	if err := lockTx.QueryRow(ctx, `SELECT id FROM projects WHERE id = $1 FOR UPDATE`, project.ID).Scan(&lockedProjectID); err != nil {
+		t.Fatalf("lock project: %v", err)
+	}
+
+	started := make(chan struct{}, 2)
+	deleteResult := make(chan error, 1)
+	credentialResult := make(chan struct {
+		credential auth.Credential
+		err        error
+	}, 1)
+	go func() {
+		started <- struct{}{}
+		deleteResult <- projectService.Delete(ctx, principal, project.ID)
+	}()
+	go func() {
+		started <- struct{}{}
+		credential, err := authService.CreateCredential(ctx, principal, auth.CreateCredentialRequest{
+			Name:       "credential during deletion",
+			ProjectIDs: []string{project.ID},
+		})
+		credentialResult <- struct {
+			credential auth.Credential
+			err        error
+		}{credential: credential, err: err}
+	}()
+	for range 2 {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatalf("concurrent issuance/deletion did not start: %v", ctx.Err())
+		}
+	}
+	if err := lockTx.Commit(ctx); err != nil {
+		t.Fatalf("release project lock: %v", err)
+	}
+	var deleteErr error
+	select {
+	case deleteErr = <-deleteResult:
+	case <-ctx.Done():
+		t.Fatalf("project deletion did not finish: %v", ctx.Err())
+	}
+	if deleteErr != nil {
+		t.Fatalf("project deletion: %v", deleteErr)
+	}
+	created := <-credentialResult
+	if created.err == nil {
+		var revoked bool
+		if err := pool.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM auth_api_credentials WHERE id = $1`, created.credential.ID).Scan(&revoked); err != nil {
+			t.Fatalf("read issued credential revocation: %v", err)
+		}
+		if !revoked {
+			t.Fatal("credential issued during project deletion remained active")
+		}
+	}
+	var activeUnscoped int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM auth_api_credentials AS credential
+		WHERE credential.user_id = $1 AND credential.revoked_at IS NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM auth_api_credential_project_scopes AS scope
+			WHERE scope.credential_id = credential.id
+		  )
+	`, userID).Scan(&activeUnscoped); err != nil {
+		t.Fatalf("count active unscoped credentials: %v", err)
+	}
+	if activeUnscoped != 0 {
+		t.Fatalf("project deletion left %d active unscoped credential(s)", activeUnscoped)
+	}
+}
+
 func TestProjectMemberAuthorizationMatrix(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
