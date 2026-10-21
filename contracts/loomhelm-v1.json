@@ -14,6 +14,51 @@
         "csrf_protection": {"$ref": "#/types/BrowserCsrfProtection"}
       }
     },
+    "UserCredential": {
+      "type": "object",
+      "required": ["id", "name", "project_ids", "created_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "project_ids": {"type": "array", "items": {"type": "string"}},
+        "created_at": {"type": "string", "format": "date-time"},
+        "last_used_at": {"type": "string", "format": "date-time"},
+        "revoked_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CreatedUserCredential": {
+      "type": "object",
+      "required": ["id", "name", "project_ids", "created_at", "token"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "project_ids": {"type": "array", "items": {"type": "string"}},
+        "created_at": {"type": "string", "format": "date-time"},
+        "token": {"type": "string"}
+      }
+    },
+    "UserCredentialListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/UserCredential"}}
+      }
+    },
+    "CreateUserCredentialRequest": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "project_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "CreateUserCredentialResponse": {
+      "type": "object",
+      "required": ["credential"],
+      "properties": {
+        "credential": {"$ref": "#/types/CreatedUserCredential"}
+      }
+    },
     "JSONValue": {
       "kind": "json-value"
     },
@@ -480,6 +525,33 @@
         "path": "/auth/logout",
         "response_status": 204,
         "summary": "Destroy the current browser session behind same-origin CSRF protection"
+      },
+      {
+        "operation_id": "listUserCredentials",
+        "method": "GET",
+        "path": "/credentials",
+        "response_type": "UserCredentialListResponse",
+        "summary": "List the current user's credential metadata with an unrestricted principal",
+        "mcp_tool": {"name": "loomhelm.list_user_credentials", "description": "List only the current user's credential metadata; project-scoped credentials cannot administer the user's credential inventory."}
+      },
+      {
+        "operation_id": "createUserCredential",
+        "method": "POST",
+        "path": "/credentials",
+        "body_type": "CreateUserCredentialRequest",
+        "response_type": "CreateUserCredentialResponse",
+        "response_status": 201,
+        "summary": "Create a user credential without widening the caller's authority",
+        "mcp_tool": {"name": "loomhelm.create_user_credential", "description": "Issue a credential for the current user and return its secret once. A project-scoped caller must select a nonempty subset of its current authorized scope."}
+      },
+      {
+        "operation_id": "revokeUserCredential",
+        "method": "DELETE",
+        "path": "/credentials/{credential_id}",
+        "path_params": {"credential_id": "string"},
+        "response_status": 204,
+        "summary": "Revoke an owned credential with an unrestricted principal",
+        "mcp_tool": {"name": "loomhelm.revoke_user_credential", "description": "Revoke one of the current user's credentials. Project-scoped credentials cannot revoke the user's other credentials; foreign identities are not disclosed."}
       },
       {
         "operation_id": "listProjects",

@@ -38,6 +38,65 @@ describe("generated browser authentication transport", () => {
   });
 });
 
+describe("generated user credential transport", () => {
+  test("creation preserves the explicit delegated scope and requires HTTP 201", async () => {
+    const calls = [];
+    const body = { name: "Task Agent", project_ids: ["project-1"] };
+    const credential = {
+      id: "credential-1",
+      name: body.name,
+      project_ids: body.project_ids,
+      created_at: "2026-10-22T00:00:00Z",
+      token: "synthetic-test-token",
+    };
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method, body: JSON.parse(init.body) });
+        return Response.json({ credential }, { status: 201 });
+      },
+    });
+
+    expect(await client.createUserCredential({ body })).toEqual({ credential });
+    expect(calls).toEqual([{ path: "/api/v1/credentials", method: "POST", body }]);
+    const unexpected = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async () => Response.json({ credential }),
+    });
+    await expect(unexpected.createUserCredential({ body })).rejects.toThrow("expected 201");
+  });
+
+  test("inventory and revocation preserve empty results, scoped denial and encoded identities", async () => {
+    const calls = [];
+    const denial = { code: "unauthorized", message: "Unrestricted user authority required", request_id: "credential-scope" };
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method });
+        if (init.method === "GET") return Response.json({ items: [] });
+        if (url.pathname.endsWith("/denied")) return Response.json(denial, { status: 403 });
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    expect(await client.listUserCredentials()).toEqual({ items: [] });
+    expect(await client.revokeUserCredential({ credential_id: "credential/A B?" })).toBeUndefined();
+    try {
+      await client.revokeUserCredential({ credential_id: "denied" });
+      throw new Error("scoped denial was accepted");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiClientError);
+      expect(error.status).toBe(403);
+      expect(error.body).toEqual(denial);
+    }
+    expect(calls).toEqual([
+      { path: "/api/v1/credentials", method: "GET" },
+      { path: "/api/v1/credentials/credential%2FA%20B%3F", method: "DELETE" },
+      { path: "/api/v1/credentials/denied", method: "DELETE" },
+    ]);
+  });
+});
+
 describe("generated project/task transport", () => {
   test("deletion accepts a bodyless 204 and encodes the resource identity", async () => {
     const calls = [];
