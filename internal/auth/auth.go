@@ -258,6 +258,33 @@ func (s *Service) CreateCredential(ctx context.Context, principal Principal, req
 		return Credential{}, fmt.Errorf("begin credential transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		SELECT id
+		FROM projects
+		WHERE id = ANY($1::text[])
+		ORDER BY id
+		FOR SHARE
+	`, projectIDs)
+	if err != nil {
+		return Credential{}, fmt.Errorf("lock credential projects: %w", err)
+	}
+	lockedProjects := make(map[string]struct{}, len(projectIDs))
+	for rows.Next() {
+		var projectID string
+		if err := rows.Scan(&projectID); err != nil {
+			rows.Close()
+			return Credential{}, fmt.Errorf("scan locked credential project: %w", err)
+		}
+		lockedProjects[projectID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Credential{}, fmt.Errorf("read locked credential projects: %w", err)
+	}
+	rows.Close()
+	if len(lockedProjects) != len(projectIDs) {
+		return Credential{}, ErrNotFound
+	}
 	for _, projectID := range projectIDs {
 		var allowed bool
 		if err := tx.QueryRow(ctx, `
