@@ -3,10 +3,10 @@ import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
 import { expect, userEvent, within } from "storybook/test";
 
-import { taskStates, type TaskState, type TaskView } from "@/demo/types";
+import { taskStates, type ExecutionState, type TaskState, type TaskView } from "@/demo/types";
 import type { ProjectTaskSource, TaskRecord } from "@/features/tasks/types";
 
-import { TaskExplorer, TaskStateBadge } from "./TaskViews";
+import { ExecutionPill, TaskExplorer, TaskStateBadge } from "./TaskViews";
 
 const projects = [
   { id: "loomhelm", name: "Loomhelm", summary: "产品工作台", updatedAt: "刚刚", conversationCount: 1 },
@@ -82,10 +82,18 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 function BadgeGallery({ states }: { states: readonly TaskState[] }) {
-  return <div className="min-h-screen bg-[var(--canvas)] p-8" data-visual-evidence-surface><div className="mx-auto grid max-w-2xl gap-4 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-8 shadow-[var(--shadow)]" data-visual-evidence-target><div><span className="section-kicker">TASK BUSINESS STATE</span><h1 className="mt-2 text-xl font-semibold">任务状态组件</h1></div><div className="flex flex-wrap gap-3">{states.map((state) => <TaskStateBadge key={state} state={state} />)}</div></div></div>;
+  return <div className="min-h-screen bg-[var(--canvas)] p-10" data-visual-evidence-surface><div className="mx-auto grid max-w-2xl gap-4" data-visual-evidence-target><div><span className="section-kicker">TASK BUSINESS STATE</span><h1 className="mt-2 text-xl font-semibold">任务状态组件</h1></div><div className="flex flex-wrap gap-3">{states.map((state) => <TaskStateBadge key={state} state={state} />)}</div></div></div>;
 }
 
 export const StateGallery: Story = { render: () => <BadgeGallery states={taskStates} /> };
+
+const executionStates: readonly ExecutionState[] = ["未开始", "执行中", "等待审批", "待核对", "已结束", "已拒绝"];
+
+function ExecutionBadgeGallery({ executions }: { executions: readonly ExecutionState[] }) {
+  return <div className="min-h-screen bg-[var(--canvas)] p-10" data-visual-evidence-surface><div className="mx-auto grid max-w-2xl gap-4" data-visual-evidence-target><div><span className="section-kicker">TASK EXECUTION STATE</span><h1 className="mt-2 text-xl font-semibold">执行状态组件</h1></div><div className="flex flex-wrap gap-3">{executions.map((execution) => <ExecutionPill key={execution} execution={execution} />)}</div></div></div>;
+}
+
+export const ExecutionGallery: Story = { render: () => <ExecutionBadgeGallery executions={executionStates} /> };
 
 export const ExplorerList: Story = {
   render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource()} renderTaskLink={renderTaskLink} /></div>,

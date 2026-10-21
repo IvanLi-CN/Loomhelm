@@ -436,10 +436,6 @@ export function DemoInspector() {
         )}
       </div>
 
-      <Button type="button" variant="ghost" className="inspector-close" onClick={() => runtime.setInspectorOpen(false)}>
-        <X size={14} aria-hidden="true" />
-        收起为浮标
-      </Button>
     </aside>
   );
 }

@@ -21,8 +21,8 @@ export function TaskStateBadge({ state }: { state: TaskState }) {
   return <span className={`task-state-badge ${taskStateClasses[state]}`}>{taskStateLabels[state]}</span>;
 }
 
-function ExecutionPill({ execution }: { execution: TaskRecord["execution"] }) {
-  return <span className={`execution-pill execution-${execution}`}>{execution}</span>;
+export function ExecutionPill({ execution, className }: { execution: TaskRecord["execution"]; className?: string }) {
+  return <span className={`execution-pill execution-${execution}${className ? ` ${className}` : ""}`}>{execution}</span>;
 }
 
 interface TaskLinkOptions {

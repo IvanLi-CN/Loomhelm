@@ -11,6 +11,7 @@ import { taskStates } from "@/demo/types";
 import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
 import { TaskEditor } from "@/features/tasks/TaskForm";
 import { TaskRelationshipEditor } from "@/features/tasks/TaskRelations";
+import { TaskStateBadge } from "@/components/product/TaskViews";
 
 function WorkspaceHeader({ taskId, conversationId }: { taskId?: string; conversationId?: string }) {
   const runtime = useDemoRuntime();
@@ -22,7 +23,7 @@ function WorkspaceHeader({ taskId, conversationId }: { taskId?: string; conversa
   const execution = task?.execution ?? conversation?.execution ?? "未开始";
   return (
     <header className="workspace-heading">
-      <div><span className="workspace-context">{project?.name ?? "未归属项目"} {task ? ` / ${task.id}` : " / 对话"}</span><h1>{title}</h1><div className="workspace-meta"><span className={`execution-dot execution-${execution}`}>{execution}</span>{task && <span>任务业务状态：{task.state}</span>}</div></div>
+      <div><span className="workspace-context">{project?.name ?? "未归属项目"} {task ? ` / ${task.id}` : " / 对话"}</span><h1>{title}</h1><div className="workspace-meta"><span className={`execution-pill execution-dot execution-${execution}`}>{execution}</span>{task && <span className="inline-flex items-center gap-1">任务业务状态：<TaskStateBadge state={task.state} /></span>}</div></div>
       {task && execution === "执行中" && <Button type="button" variant="secondary" className="button button-secondary" disabled={!runtime.canWrite}><Pause size={15} aria-hidden="true" />请求中断</Button>}
     </header>
   );

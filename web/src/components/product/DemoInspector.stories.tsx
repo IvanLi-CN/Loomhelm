@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, userEvent, within } from "storybook/test";
 
 import { DemoInspector } from "./DemoInspector";
 import { DemoProvider } from "@/demo/context";
@@ -31,8 +32,8 @@ type Story = StoryObj<typeof meta>;
 
 function StoryFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-slate-100 p-6" data-visual-evidence-surface>
-      <div className="min-h-[36rem] rounded-xl border border-slate-200 bg-white/70 p-8" data-visual-evidence-target>
+    <div className="min-h-screen bg-[var(--canvas)] p-10">
+      <div className="min-h-[36rem]">
         <p className="text-sm text-slate-500">Demo controls are intentionally local to this surface.</p>
         {children}
       </div>
@@ -63,7 +64,11 @@ export const Collapsed: Story = {
     </DemoProvider>
   ),
   play: async ({ canvasElement }) => {
-    const button = canvasElement.querySelector<HTMLButtonElement>("[aria-label='收起 Demo 控制面板']");
-    button?.click();
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "收起 Demo 控制面板" }));
+    expect(canvas.getByRole("button", { name: "打开 Demo 控制面板" })).toBeInTheDocument();
+    expect(canvas.queryByRole("button", { name: "收起为浮标" })).not.toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "打开 Demo 控制面板" }));
+    expect(canvas.getByRole("button", { name: "收起 Demo 控制面板" })).toBeInTheDocument();
   }
 };
