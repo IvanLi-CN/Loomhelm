@@ -28,7 +28,7 @@ func TestGatewayKeepsDesktopAttachUnsupportedAndColdResumeExplicit(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := gateway.StartNewSession(context.Background(), protocol.NewSessionRequest{})
+	session, err := gateway.StartNewSession(context.Background(), protocol.NewSessionRequest{CommandID: "gateway-test-create"})
 	if err != nil {
 		t.Fatal(err)
 	}

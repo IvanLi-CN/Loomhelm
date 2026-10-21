@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,6 +71,7 @@ type realC01ScenarioEvidence struct {
 type realC01ProcessResult struct {
 	Mode                  string                       `json:"mode"`
 	ProcessID             int                          `json:"process_id"`
+	ProcessStartToken     string                       `json:"process_start_token"`
 	SessionID             string                       `json:"session_id"`
 	ThreadID              string                       `json:"thread_id"`
 	UnknownAckState       protocol.CommandState        `json:"unknown_ack_state,omitempty"`
@@ -139,14 +141,16 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		return realC01ProcessResult{}, fmt.Errorf("seed helper thread = %q, want %q", session.ExternalThreadRef, threadID)
 	}
 
-	var unknownCancel context.CancelFunc
+	cancelSignal := make(chan struct{})
+	var cancelSignalOnce sync.Once
+	cancelAfterTurnStart := func() {
+		cancelSignalOnce.Do(func() { close(cancelSignal) })
+	}
 	gateway, err := newRealC01HelperGateway(cli, workspace, func(method string) {
-		if method != "turn/start" || unknownCancel == nil {
+		if method != "turn/start" {
 			return
 		}
-		cancel := unknownCancel
-		unknownCancel = nil
-		cancel()
+		cancelAfterTurnStart()
 	})
 	if err != nil {
 		_ = journal.Close()
@@ -170,22 +174,26 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 	command := realC01ReconcileCommand(sessionID, commandID)
 	beforeCursor := latestRealEventCursor(journal, sessionID)
 	unknownCtx, cancelUnknown := context.WithCancel(ctx)
-	unknownCancel = cancelUnknown
+	go func() {
+		select {
+		case <-cancelSignal:
+			cancelUnknown()
+		case <-unknownCtx.Done():
+		}
+	}()
 	ack, sendErr := adapter.SendCommand(unknownCtx, session, command)
-	if unknownCancel != nil {
-		unknownCancel()
-		unknownCancel = nil
-	}
+	cancelUnknown()
 	if !errors.Is(sendErr, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
 		_ = journal.Close()
 		return realC01ProcessResult{}, fmt.Errorf("seed helper ACK = %+v, error = %v", ack, sendErr)
 	}
 	result := realC01ProcessResult{
-		Mode:            "seed",
-		ProcessID:       os.Getpid(),
-		SessionID:       sessionID,
-		ThreadID:        threadID,
-		UnknownAckState: ack.State,
+		Mode:              "seed",
+		ProcessID:         os.Getpid(),
+		ProcessStartToken: realC01ProcessToken(),
+		SessionID:         sessionID,
+		ThreadID:          threadID,
+		UnknownAckState:   ack.State,
 	}
 	if err := waitForRealRunObservation(ctx, journal, sessionID, beforeCursor, 2*time.Second); err != nil {
 		_ = journal.Close()
@@ -253,12 +261,17 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
+	beforeCursor := latestRealEventCursor(journal, sessionID)
+	if beforeCursor == "" {
+		_ = journal.Close()
+		return realC01ProcessResult{}, errors.New("recovery helper could not establish an event cursor boundary")
+	}
 	reconciliation, err := controller.ReconcileCommand(ctx, commandID)
 	if err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
-	if err := waitForRealEvent(ctx, journal, sessionID, protocol.EventTypeReconciliationCompleted, "thread/resume"); err != nil {
+	if err := waitForRealEventAfter(ctx, journal, sessionID, beforeCursor, protocol.EventTypeReconciliationCompleted, "thread/resume"); err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
@@ -270,6 +283,7 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 	result := realC01ProcessResult{
 		Mode:                  "recover",
 		ProcessID:             os.Getpid(),
+		ProcessStartToken:     realC01ProcessToken(),
 		SessionID:             sessionID,
 		ThreadID:              threadID,
 		ReconciledRunID:       valueOrEmpty(finalAck.RunID),
@@ -322,20 +336,55 @@ func realC01ReconcileCommand(sessionID, commandID string) protocol.Command {
 	return realCommand(commandID, protocol.CommandKindRunSend, sessionID, `{"prompt":"Reply exactly LOOMHELM_C01_RECONCILE_OK. Do not use tools."}`)
 }
 
+func realC01ProcessToken() string {
+	return fmt.Sprintf("%d:%d", os.Getpid(), time.Now().UnixNano())
+}
+
 func writeRealC01ProcessResult(path string, result realC01ProcessResult) error {
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	if _, err := writeAll(file, append(data, '\n')); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
-func runRealC01Helper(t *testing.T, mode, cli, workspace, journalPath, sessionID, threadID, commandID, resultPath string) realC01ProcessResult {
+func TestWriteRealC01ProcessResultRejectsSymlink(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target.json")
+	link := filepath.Join(directory, "result.json")
+	if err := os.WriteFile(target, []byte("sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if err := writeRealC01ProcessResult(link, realC01ProcessResult{Mode: "test"}); err == nil {
+		t.Fatal("C01 result writer accepted a symlink")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "sentinel" {
+		t.Fatalf("C01 result writer modified symlink target: %q", data)
+	}
+}
+
+func runRealC01Helper(ctx context.Context, t *testing.T, mode, cli, workspace, journalPath, sessionID, threadID, commandID, resultPath string) realC01ProcessResult {
 	t.Helper()
-	command := exec.Command(os.Args[0], "-test.run=^TestRealC01ProcessHelper$", "-test.v")
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRealC01ProcessHelper$", "-test.v")
 	command.Env = append(os.Environ(),
 		realC01HelperEnv+"="+mode,
 		"LOOMHELM_REAL_C01_HELPER_CLI="+cli,
@@ -490,11 +539,12 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	gatewaySession, err := gateway.StartNewSession(ctx, protocol.NewSessionRequest{})
+	createRequest := protocol.NewSessionRequest{CommandID: "c01-session-create"}
+	gatewaySession, err := gateway.StartNewSession(ctx, createRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	activeSession, err := adapter.StartSession(ctx, gatewaySession, protocol.NewSessionRequest{})
+	activeSession, err := adapter.StartSession(ctx, gatewaySession, createRequest)
 	if err != nil {
 		_ = gateway.CloseSession(context.Background(), gatewaySession)
 		t.Fatal(err)
@@ -694,9 +744,12 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	parentSessionOpen = false
-	seedResult := runRealC01Helper(t, "seed", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-seed-result.json"))
+	seedResult := runRealC01Helper(ctx, t, "seed", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-seed-result.json"))
 	if seedResult.ProcessID == os.Getpid() || seedResult.ProcessID == 0 {
 		t.Fatalf("seed helper PID = %d, parent PID = %d", seedResult.ProcessID, os.Getpid())
+	}
+	if seedResult.ProcessStartToken == "" {
+		t.Fatal("seed helper did not report a process start token")
 	}
 	if seedResult.UnknownAckState != protocol.CommandStateUnknown {
 		t.Fatalf("seed helper ACK state = %q", seedResult.UnknownAckState)
@@ -707,9 +760,12 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	recoveryEvidence.UnknownAckState = seedResult.UnknownAckState
 	recoveryEvidence.ReconciledRunID = seedResult.ReconciledRunID
 	recoveryEvidence.ConnectorProcessIDs = []int{seedResult.ProcessID}
-	recoveryResult := runRealC01Helper(t, "recover", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-recovery-result.json"))
+	recoveryResult := runRealC01Helper(ctx, t, "recover", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-recovery-result.json"))
 	if recoveryResult.ProcessID == os.Getpid() || recoveryResult.ProcessID == seedResult.ProcessID || recoveryResult.ProcessID == 0 {
 		t.Fatalf("recovery helper PID = %d, seed helper PID = %d, parent PID = %d", recoveryResult.ProcessID, seedResult.ProcessID, os.Getpid())
+	}
+	if recoveryResult.ProcessStartToken == "" || recoveryResult.ProcessStartToken == seedResult.ProcessStartToken {
+		t.Fatalf("recovery helper process token = %q, seed helper process token = %q", recoveryResult.ProcessStartToken, seedResult.ProcessStartToken)
 	}
 	recoveryEvidence.ConnectorProcessIDs = append(recoveryEvidence.ConnectorProcessIDs, recoveryResult.ProcessID)
 	recoveryEvidence.IndependentProcessRestart = true
@@ -735,7 +791,10 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recoveryEvidence.ReconciledRunID = valueOrEmpty(finalAck.RunID)
+	if recoveryResult.ReconciledRunID != seedResult.ReconciledRunID || valueOrEmpty(finalAck.RunID) != seedResult.ReconciledRunID {
+		t.Fatalf("reconciled run identity changed across restart: seed = %q, helper = %q, final ACK = %q", seedResult.ReconciledRunID, recoveryResult.ReconciledRunID, valueOrEmpty(finalAck.RunID))
+	}
+	recoveryEvidence.ReconciledRunID = seedResult.ReconciledRunID
 	if recoveryResult.ReconciliationState != protocol.ReconciliationStateConfirmed || (finalAck.State != protocol.CommandStateSucceeded && finalAck.State != protocol.CommandStateFailed) {
 		t.Fatalf("command reconciliation = %+v, final ACK = %+v", recoveryResult, finalAck)
 	}
@@ -887,7 +946,20 @@ func waitForRealTerminalEvent(ctx context.Context, journal *Journal, sessionID, 
 }
 
 func waitForRealEvent(ctx context.Context, journal *Journal, sessionID string, eventType protocol.EventType, method string) error {
-	_, err := waitForRealEventValue(ctx, journal, sessionID, eventType, "", func(event protocol.Event) bool {
+	_, err := waitForRealEventValueAfter(ctx, journal, sessionID, eventType, "", "", func(event protocol.Event) bool {
+		if method == "" {
+			return true
+		}
+		var payload struct {
+			Method string `json:"method"`
+		}
+		return json.Unmarshal(event.Payload, &payload) == nil && payload.Method == method
+	})
+	return err
+}
+
+func waitForRealEventAfter(ctx context.Context, journal *Journal, sessionID, afterCursor string, eventType protocol.EventType, method string) error {
+	_, err := waitForRealEventValueAfter(ctx, journal, sessionID, eventType, "", afterCursor, func(event protocol.Event) bool {
 		if method == "" {
 			return true
 		}
@@ -900,9 +972,13 @@ func waitForRealEvent(ctx context.Context, journal *Journal, sessionID string, e
 }
 
 func waitForRealEventValue(ctx context.Context, journal *Journal, sessionID string, eventType protocol.EventType, runID string, predicate func(protocol.Event) bool) (protocol.Event, error) {
+	return waitForRealEventValueAfter(ctx, journal, sessionID, eventType, runID, "", predicate)
+}
+
+func waitForRealEventValueAfter(ctx context.Context, journal *Journal, sessionID string, eventType protocol.EventType, runID, afterCursor string, predicate func(protocol.Event) bool) (protocol.Event, error) {
 	var found protocol.Event
 	err := waitForRealCondition(ctx, func() bool {
-		page, err := journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, RunID: runID, Limit: 1000})
+		page, err := journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, RunID: runID, AfterCursor: afterCursor, Limit: 1000})
 		if err != nil {
 			return false
 		}

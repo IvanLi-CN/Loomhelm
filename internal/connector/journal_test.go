@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -75,7 +76,7 @@ func TestJournalPersistsSessionStartIntentAndBlocksDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := protocol.NewSessionRequest{ProjectID: "project-1", TaskID: "task-1", Prompt: "hello"}
+	request := protocol.NewSessionRequest{CommandID: "create-1", ProjectID: "project-1", TaskID: "task-1", Prompt: "hello"}
 	original := protocol.GatewaySession{Handle: "gateway-1", Generation: "generation-1"}
 	intentID, err := first.BeginSessionStart(original, request)
 	if err != nil {
@@ -114,7 +115,7 @@ func TestJournalPersistsSessionStartIntentAndBlocksDuplicate(t *testing.T) {
 
 func TestJournalResolvedSessionStartReturnsSessionUntilInitialPromptSucceeds(t *testing.T) {
 	journal := openTestJournal(t)
-	request := protocol.NewSessionRequest{ProjectID: "project-resolved", Prompt: "resume once"}
+	request := protocol.NewSessionRequest{CommandID: "create-resolved", ProjectID: "project-resolved", Prompt: "resume once"}
 	gatewaySession := protocol.GatewaySession{Handle: "gateway-resolved", Generation: "generation-resolved"}
 	intentID, err := journal.BeginSessionStart(gatewaySession, request)
 	if err != nil {
@@ -125,7 +126,7 @@ func TestJournalResolvedSessionStartReturnsSessionUntilInitialPromptSucceeds(t *
 	if err := journal.ResolveSessionStart(intentID, sessionID, threadID, gatewaySession.Generation); err != nil {
 		t.Fatal(err)
 	}
-	if session, ok := journal.ResolvedSessionStart(request); !ok || session.ExternalThreadRef != threadID {
+	if session, ok, err := journal.ResolvedSessionStart(request); err != nil || !ok || session.ExternalThreadRef != threadID {
 		t.Fatalf("resolved session without an initial command = %+v, found = %v", session, ok)
 	}
 	command := protocol.Command{
@@ -138,7 +139,7 @@ func TestJournalResolvedSessionStartReturnsSessionUntilInitialPromptSucceeds(t *
 	if _, _, err := journal.BeginCommand(command); err != nil {
 		t.Fatal(err)
 	}
-	if session, ok := journal.ResolvedSessionStart(request); !ok || session.ExternalThreadRef != threadID {
+	if session, ok, err := journal.ResolvedSessionStart(request); err != nil || !ok || session.ExternalThreadRef != threadID {
 		t.Fatalf("unfinished initial prompt session = %+v, found = %v", session, ok)
 	}
 	ack, err := journal.LookupCommand(command.CommandID)
@@ -149,8 +150,118 @@ func TestJournalResolvedSessionStartReturnsSessionUntilInitialPromptSucceeds(t *
 	if err := journal.UpdateCommand(command.CommandID, ack); err != nil {
 		t.Fatal(err)
 	}
-	if session, ok := journal.ResolvedSessionStart(request); !ok || session.ExternalThreadRef != threadID {
+	if session, ok, err := journal.ResolvedSessionStart(request); err != nil || !ok || session.ExternalThreadRef != threadID {
 		t.Fatalf("successful initial prompt did not remain eligible for session reuse: %+v, found = %v", session, ok)
+	}
+}
+
+func TestJournalSessionStartUsesExplicitCommandIdentity(t *testing.T) {
+	journal := openTestJournal(t)
+	request := protocol.NewSessionRequest{CommandID: "create-explicit-1", ProjectID: "project-identity", Prompt: "same prompt"}
+	firstIntent, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-identity-1", Generation: "generation-identity-1"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conflict := request
+	conflict.Prompt = "different prompt"
+	if _, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-identity-2", Generation: "generation-identity-2"}, conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("same identity with changed payload error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+
+	distinct := request
+	distinct.CommandID = "create-explicit-2"
+	secondIntent, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-identity-3", Generation: "generation-identity-3"}, distinct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondIntent == firstIntent {
+		t.Fatalf("distinct creation identities reused intent %q", secondIntent)
+	}
+	if err := journal.ResolveSessionStart(firstIntent, stableSessionID("thread-identity-1"), "thread-identity-1", "generation-identity-1"); err != nil {
+		t.Fatal(err)
+	}
+	if session, ok, err := journal.ResolvedSessionStart(request); err != nil || !ok || session.ExternalThreadRef != "thread-identity-1" {
+		t.Fatalf("resolved explicit session = %+v, found = %v, error = %v", session, ok, err)
+	}
+	if intentID, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-identity-4", Generation: "generation-identity-4"}, request); err != nil || intentID != firstIntent {
+		t.Fatalf("same identity did not remain idempotent: intent = %q, error = %v", intentID, err)
+	}
+}
+
+func TestJournalReadsLegacySessionStartsWithoutInferringNewIdentity(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "legacy-journal.jsonl")
+	legacy := []byte("{\"format_version\":1,\"type\":\"session\",\"at\":\"2026-10-21T00:00:00Z\",\"session\":{\"session_id\":\"legacy-session\",\"external_thread_ref\":\"legacy-thread\",\"generation\":\"legacy-generation\",\"updated_at\":\"2026-10-21T00:00:00Z\"},\"session_start\":{\"intent_id\":\"legacy-generation\",\"gateway_handle\":\"legacy-gateway\",\"generation\":\"legacy-generation\",\"request_digest\":\"legacy-digest\",\"state\":\"resolved\",\"external_thread_ref\":\"legacy-thread\",\"updated_at\":\"2026-10-21T00:00:00Z\"}}\n")
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	if session, ok := journal.Session("legacy-session"); !ok || session.ExternalThreadRef != "legacy-thread" {
+		t.Fatalf("legacy session = %+v, found = %v", session, ok)
+	}
+	request := protocol.NewSessionRequest{CommandID: "new-explicit-id", Prompt: "same prompt"}
+	if _, ok, err := journal.ResolvedSessionStart(request); err != nil || ok {
+		t.Fatalf("legacy session was reused for a new identity: found = %v, error = %v", ok, err)
+	}
+	if _, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "new-gateway", Generation: "new-generation"}, request); err != nil {
+		t.Fatalf("legacy intent blocked a new explicit identity: %v", err)
+	}
+}
+
+func TestJournalPreservesLargeJSONNumbersInCommandDigests(t *testing.T) {
+	journal := openTestJournal(t)
+	first := testCommand("large-number", "{\"value\":9007199254740992}")
+	if _, _, err := journal.BeginCommand(first); err != nil {
+		t.Fatal(err)
+	}
+	conflict := first
+	conflict.Payload = []byte("{\"value\":9007199254740993}")
+	if _, _, err := journal.BeginCommand(conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("large-number conflict error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+}
+
+func TestOpenJournalRejectsSymlinkPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on some Windows configurations")
+	}
+	directory := privateTestDir(t)
+	target := filepath.Join(directory, "target.jsonl")
+	link := filepath.Join(directory, "journal.jsonl")
+	if err := os.WriteFile(target, []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if _, err := OpenJournal(link); err == nil {
+		t.Fatal("journal symlink was accepted")
+	}
+}
+
+func TestJournalWritesCurrentFormatAndCommandIdentity(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "journal.jsonl")
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "current-format-id", Prompt: "format"}
+	if _, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "format-gateway", Generation: "format-generation"}, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("\"format_version\":2")) || !bytes.Contains(data, []byte("\"command_id\":\"current-format-id\"")) {
+		t.Fatalf("current journal record did not include v2 identity: %s", data)
 	}
 }
 

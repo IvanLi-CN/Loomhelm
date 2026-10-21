@@ -88,19 +88,28 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	if ctx == nil {
 		return protocol.AdapterSession{}, errors.New("adapter context must not be nil")
 	}
+	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
+		return protocol.AdapterSession{}, err
+	}
 	transport, err := a.provider.TransportFor(ctx, gatewaySession)
 	if err != nil {
 		return protocol.AdapterSession{}, err
 	}
-	if existing, ok := a.journal.ResolvedSessionStart(request); ok {
+	if existing, ok, err := a.journal.ResolvedSessionStart(request); err != nil {
+		_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
+		return protocol.AdapterSession{}, err
+	} else if ok {
 		if state := a.sessionState(existing.SessionID); state != nil && !state.closed.Load() && a.isCurrentState(state) {
+			if err := a.discardUnusedGatewaySession(ctx, gatewaySession, transport, state); err != nil {
+				return state.session, err
+			}
 			return state.session, a.ensureInitialPrompt(ctx, request, state.session)
 		}
 		return a.resumeExistingSession(ctx, gatewaySession, request, transport, existing)
 	}
 	intentID, err := a.journal.BeginSessionStart(gatewaySession, request)
 	if err != nil {
-		_ = transport.Close()
+		_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
 		return protocol.AdapterSession{}, err
 	}
 	params := a.threadStartParams(request)
@@ -129,6 +138,18 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 		}
 	}
 	return session, nil
+}
+
+func (a *Adapter) discardUnusedGatewaySession(ctx context.Context, gatewaySession protocol.GatewaySession, transport RPCTransport, activeState *adapterSessionState) error {
+	if activeState != nil && activeState.gatewaySession.Handle == gatewaySession.Handle {
+		return nil
+	}
+	if closer, ok := a.provider.(interface {
+		CloseSession(context.Context, protocol.GatewaySession) error
+	}); ok {
+		return closer.CloseSession(ctx, gatewaySession)
+	}
+	return transport.Close()
 }
 
 func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, intentID string, response RPCMessage, transport RPCTransport) (protocol.AdapterSession, error) {

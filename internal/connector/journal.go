@@ -18,7 +18,10 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
 
-const journalFormatVersion = 1
+const (
+	legacyJournalFormatVersion = 1
+	journalFormatVersion       = 2
+)
 
 const approvalResolutionCleared = "cleared"
 
@@ -55,6 +58,7 @@ type sessionStartIntent struct {
 	IntentID          string `json:"intent_id"`
 	GatewayHandle     string `json:"gateway_handle"`
 	Generation        string `json:"generation"`
+	CommandID         string `json:"command_id"`
 	RequestDigest     string `json:"request_digest"`
 	State             string `json:"state"`
 	ExternalThreadRef string `json:"external_thread_ref,omitempty"`
@@ -119,10 +123,18 @@ func OpenJournal(path string) (*Journal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve journal path: %w", err)
 	}
-	_, statErr := os.Stat(absPath)
+	fileInfo, statErr := os.Lstat(absPath)
 	fileExisted := statErr == nil
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("stat journal file: %w", statErr)
+	}
+	if fileExisted {
+		if fileInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("journal path must not be a symlink")
+		}
+		if !fileInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("journal path %q is not a regular file", absPath)
+		}
 	}
 	directoryPath := filepath.Dir(absPath)
 	newDirectories, err := missingJournalDirectories(directoryPath)
@@ -143,7 +155,7 @@ func OpenJournal(path string) (*Journal, error) {
 	if err := validateJournalDirectory(directoryPath); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(absPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, err := openJournalFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("open journal: %w", err)
 	}
@@ -480,6 +492,30 @@ func (j *Journal) RecordSession(sessionID, externalThreadRef, generation string)
 	return nil
 }
 
+func validateSessionCreationCommandID(commandID string) error {
+	if strings.TrimSpace(commandID) == "" {
+		return errors.New("session creation command id is required")
+	}
+	return nil
+}
+
+func sessionStartPayloadDigest(request protocol.NewSessionRequest) (string, error) {
+	payload := struct {
+		ProjectID string `json:"project_id"`
+		TaskID    string `json:"task_id"`
+		Prompt    string `json:"prompt"`
+	}{
+		ProjectID: request.ProjectID,
+		TaskID:    request.TaskID,
+		Prompt:    request.Prompt,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return digestString(string(data)), nil
+}
+
 // BeginSessionStart records the child-generation intent before thread/start
 // crosses the app-server side-effect boundary. An unresolved equivalent intent
 // blocks a duplicate start until a caller explicitly reconciles it.
@@ -487,15 +523,18 @@ func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, requ
 	if gatewaySession.Handle == "" || gatewaySession.Generation == "" {
 		return "", errors.New("gateway session handle and generation are required")
 	}
-	requestBytes, err := json.Marshal(request)
+	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
+		return "", err
+	}
+	requestDigest, err := sessionStartPayloadDigest(request)
 	if err != nil {
 		return "", fmt.Errorf("digest session start request: %w", err)
 	}
-	requestDigest := digestString(string(requestBytes))
 	intent := sessionStartIntent{
 		IntentID:      gatewaySession.Generation,
 		GatewayHandle: gatewaySession.Handle,
 		Generation:    gatewaySession.Generation,
+		CommandID:     request.CommandID,
 		RequestDigest: requestDigest,
 		State:         "pending",
 		UpdatedAt:     now(),
@@ -503,7 +542,18 @@ func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, requ
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for _, existing := range j.sessionStarts {
-		if existing.State == "pending" && existing.RequestDigest == requestDigest {
+		// Legacy v1 intents have no caller identity. They remain available for
+		// recovery, but cannot block or satisfy a new explicit creation request.
+		if existing.CommandID == "" || existing.CommandID != request.CommandID {
+			continue
+		}
+		if existing.RequestDigest != requestDigest {
+			return "", protocol.ErrIdempotencyConflict
+		}
+		if existing.State == "resolved" {
+			return existing.IntentID, nil
+		}
+		if existing.State == "pending" {
 			return "", fmt.Errorf("%w: unresolved session start intent exists", ErrUnknownOutcome)
 		}
 	}
@@ -522,17 +572,25 @@ func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, requ
 	return intent.IntentID, nil
 }
 
-func (j *Journal) ResolvedSessionStart(request protocol.NewSessionRequest) (protocol.AdapterSession, bool) {
-	requestBytes, err := json.Marshal(request)
-	if err != nil {
-		return protocol.AdapterSession{}, false
+func (j *Journal) ResolvedSessionStart(request protocol.NewSessionRequest) (protocol.AdapterSession, bool, error) {
+	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
+		return protocol.AdapterSession{}, false, err
 	}
-	requestDigest := digestString(string(requestBytes))
+	requestDigest, err := sessionStartPayloadDigest(request)
+	if err != nil {
+		return protocol.AdapterSession{}, false, fmt.Errorf("digest session start request: %w", err)
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	var selected *sessionStartIntent
 	for _, intent := range j.sessionStarts {
-		if intent.State != "resolved" || intent.RequestDigest != requestDigest || intent.ExternalThreadRef == "" {
+		if intent.CommandID == "" || intent.CommandID != request.CommandID {
+			continue
+		}
+		if intent.RequestDigest != requestDigest {
+			return protocol.AdapterSession{}, false, protocol.ErrIdempotencyConflict
+		}
+		if intent.State != "resolved" || intent.ExternalThreadRef == "" {
 			continue
 		}
 		if selected == nil || intent.UpdatedAt > selected.UpdatedAt {
@@ -541,12 +599,12 @@ func (j *Journal) ResolvedSessionStart(request protocol.NewSessionRequest) (prot
 		}
 	}
 	if selected == nil {
-		return protocol.AdapterSession{}, false
+		return protocol.AdapterSession{}, false, nil
 	}
 	return protocol.AdapterSession{
 		SessionID:         stableSessionID(selected.ExternalThreadRef),
 		ExternalThreadRef: selected.ExternalThreadRef,
-	}, true
+	}, true, nil
 }
 
 // ResolveSessionStart atomically persists the durable session identity with
@@ -903,7 +961,7 @@ func (j *Journal) load() error {
 }
 
 func (j *Journal) applyRecord(record journalRecord) error {
-	if record.FormatVersion != journalFormatVersion {
+	if record.FormatVersion != legacyJournalFormatVersion && record.FormatVersion != journalFormatVersion {
 		return fmt.Errorf("unsupported journal format version %d", record.FormatVersion)
 	}
 	switch record.Type {
@@ -948,7 +1006,7 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		}
 		j.sessions[record.Session.SessionID] = *record.Session
 		if record.SessionStart != nil {
-			if err := validateSessionStartIntent(*record.SessionStart); err != nil {
+			if err := validateSessionStartIntent(*record.SessionStart, record.FormatVersion != legacyJournalFormatVersion); err != nil {
 				return err
 			}
 			j.sessionStarts[record.SessionStart.IntentID] = *record.SessionStart
@@ -957,7 +1015,7 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if record.SessionStart == nil {
 			return fmt.Errorf("%w: incomplete session start intent", ErrJournalCorrupt)
 		}
-		if err := validateSessionStartIntent(*record.SessionStart); err != nil {
+		if err := validateSessionStartIntent(*record.SessionStart, record.FormatVersion != legacyJournalFormatVersion); err != nil {
 			return err
 		}
 		j.sessionStarts[record.SessionStart.IntentID] = *record.SessionStart
@@ -983,9 +1041,12 @@ func (j *Journal) applyRecord(record journalRecord) error {
 	return nil
 }
 
-func validateSessionStartIntent(intent sessionStartIntent) error {
+func validateSessionStartIntent(intent sessionStartIntent, requireCommandID bool) error {
 	if intent.IntentID == "" || intent.GatewayHandle == "" || intent.Generation == "" || intent.RequestDigest == "" {
 		return fmt.Errorf("%w: incomplete session start intent", ErrJournalCorrupt)
+	}
+	if requireCommandID && strings.TrimSpace(intent.CommandID) == "" {
+		return fmt.Errorf("%w: session start intent command id is required", ErrJournalCorrupt)
 	}
 	switch intent.State {
 	case "pending", "resolved", "failed":
@@ -1214,8 +1275,17 @@ func commandDigest(command protocol.Command) (string, error) {
 }
 
 func canonicalJSON(data []byte) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	var value any
-	if err := json.Unmarshal(data, &value); err != nil {
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("JSON payload contains multiple values")
+		}
 		return nil, err
 	}
 	encoded, err := json.Marshal(value)

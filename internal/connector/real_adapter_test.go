@@ -30,11 +30,11 @@ func TestRealCodexAdapterHostOwnedNewSession(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	gatewaySession, err := gateway.StartNewSession(ctx, protocol.NewSessionRequest{})
+	gatewaySession, err := gateway.StartNewSession(ctx, protocol.NewSessionRequest{CommandID: "real-c01-create"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := adapter.StartSession(ctx, gatewaySession, protocol.NewSessionRequest{Prompt: "Reply with exactly LOOMHELM_C01_REAL_OK and do not use tools."})
+	session, err := adapter.StartSession(ctx, gatewaySession, protocol.NewSessionRequest{CommandID: "real-c01-create", Prompt: "Reply with exactly LOOMHELM_C01_REAL_OK and do not use tools."})
 	if err != nil {
 		_ = gateway.CloseSession(context.Background(), gatewaySession)
 		t.Fatal(err)

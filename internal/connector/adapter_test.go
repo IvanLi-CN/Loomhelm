@@ -87,6 +87,114 @@ func (f fakeProvider) TransportFor(context.Context, protocol.GatewaySession) (RP
 	return f.transport, nil
 }
 
+type sessionTransportProvider struct {
+	mu             sync.Mutex
+	transports     map[string]RPCTransport
+	transportCalls int
+	closeCalls     int
+}
+
+func (p *sessionTransportProvider) TransportFor(_ context.Context, session protocol.GatewaySession) (RPCTransport, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.transportCalls++
+	transport, ok := p.transports[session.Handle]
+	if !ok {
+		return nil, fmt.Errorf("transport for %q is not configured", session.Handle)
+	}
+	return transport, nil
+}
+
+func (p *sessionTransportProvider) CloseSession(_ context.Context, session protocol.GatewaySession) error {
+	p.mu.Lock()
+	transport, ok := p.transports[session.Handle]
+	if ok {
+		delete(p.transports, session.Handle)
+	}
+	p.closeCalls++
+	p.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return transport.Close()
+}
+
+func testSessionRequest() protocol.NewSessionRequest {
+	return protocol.NewSessionRequest{CommandID: "test-session-create"}
+}
+
+func TestAdapterRejectsMissingSessionCreationIdentityBeforeTransport(t *testing.T) {
+	transport := newFakeTransport()
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{"missing-id": transport}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "missing-id", Generation: "generation-missing-id"}, protocol.NewSessionRequest{}); err == nil {
+		t.Fatal("empty session creation identity was accepted")
+	}
+	provider.mu.Lock()
+	transportCalls := provider.transportCalls
+	provider.mu.Unlock()
+	if transportCalls != 0 {
+		t.Fatalf("transport calls for missing identity = %d, want 0", transportCalls)
+	}
+}
+
+func TestAdapterClosesFreshTransportWhenReusingResolvedSession(t *testing.T) {
+	firstTransport := newFakeTransport()
+	firstTransport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-reused"}}`)}}}
+	secondTransport := newFakeTransport()
+	thirdTransport := newFakeTransport()
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{
+		"gateway-reuse-1": firstTransport,
+		"gateway-reuse-2": secondTransport,
+		"gateway-reuse-3": thirdTransport,
+	}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "reuse-session", ProjectID: "project-reuse", TaskID: "task-reuse"}
+	first, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-reuse-1", Generation: "generation-reuse-1"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), first)
+	second, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-reuse-2", Generation: "generation-reuse-2"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Fatalf("reused session = %+v, first session = %+v", second, first)
+	}
+	provider.mu.Lock()
+	closeCalls := provider.closeCalls
+	provider.mu.Unlock()
+	if closeCalls != 1 {
+		t.Fatalf("fresh gateway close calls = %d, want 1", closeCalls)
+	}
+	secondTransport.mu.Lock()
+	secondClosed := secondTransport.closed
+	secondTransport.mu.Unlock()
+	if !secondClosed {
+		t.Fatal("fresh transport remained open after session reuse")
+	}
+	conflict := request
+	conflict.Prompt = "changed prompt"
+	if _, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-reuse-3", Generation: "generation-reuse-3"}, conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("same identity changed payload error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+	thirdTransport.mu.Lock()
+	thirdClosed := thirdTransport.closed
+	thirdTransport.mu.Unlock()
+	if !thirdClosed {
+		t.Fatal("conflicting session transport remained open")
+	}
+}
+
 func TestAdapterSendsRunAndDeduplicatesWithoutReplay(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-1"}}`)}}}
@@ -97,7 +205,7 @@ func TestAdapterSendsRunAndDeduplicatesWithoutReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-1", Generation: "generation-1", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-1", Generation: "generation-1", Path: protocol.SessionPathNew}, testSessionRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +264,7 @@ func TestAdapterMarksAckLossUnknownAndReconcileNeverReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-2", Generation: "generation-2", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-2", Generation: "generation-2", Path: protocol.SessionPathNew}, testSessionRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +297,7 @@ func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-3", Generation: "generation-3", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-3", Generation: "generation-3", Path: protocol.SessionPathNew}, testSessionRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +355,7 @@ func TestAdapterKeepsApprovalUnknownForUnrecognizedResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-approval-unknown", Generation: "generation-approval-unknown", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-approval-unknown", Generation: "generation-approval-unknown", Path: protocol.SessionPathNew}, testSessionRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +392,7 @@ func TestAdapterKeepsApprovalUnknownWhenResolutionIsCleared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-approval-cleared", Generation: "generation-approval-cleared", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-approval-cleared", Generation: "generation-approval-cleared", Path: protocol.SessionPathNew}, testSessionRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +525,7 @@ func TestAdapterResumesResolvedSessionAndSendsMissingInitialPrompt(t *testing.T)
 	transport.responses["thread/resume"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-missing-initial"}}`)}}}
 	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"turn":{"id":"turn-missing-initial","status":"inProgress"}}`)}}}
 	journal := openTestJournal(t)
-	request := protocol.NewSessionRequest{ProjectID: "project-missing-initial", Prompt: "resume exactly once"}
+	request := protocol.NewSessionRequest{CommandID: "create-missing-initial", ProjectID: "project-missing-initial", Prompt: "resume exactly once"}
 	gatewaySession := protocol.GatewaySession{Handle: "gateway-missing-initial", Generation: "generation-missing-initial", Path: protocol.SessionPathNew}
 	intentID, err := journal.BeginSessionStart(gatewaySession, request)
 	if err != nil {
@@ -462,7 +570,7 @@ func TestAdapterResolvesUnknownSessionStartFromLateResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	gatewaySession := protocol.GatewaySession{Handle: "gateway-late-start", Generation: "generation-late-start", Path: protocol.SessionPathNew}
-	_, err = adapter.StartSession(context.Background(), gatewaySession, protocol.NewSessionRequest{})
+	_, err = adapter.StartSession(context.Background(), gatewaySession, testSessionRequest())
 	if !errors.Is(err, ErrUnknownOutcome) {
 		t.Fatalf("unknown session start error = %v", err)
 	}
@@ -494,7 +602,7 @@ func TestAdapterMarksUnexpectedTransportCloseForReconciliation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-close", Generation: "generation-close", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-close", Generation: "generation-close", Path: protocol.SessionPathNew}, testSessionRequest())
 	if err != nil {
 		t.Fatal(err)
 	}

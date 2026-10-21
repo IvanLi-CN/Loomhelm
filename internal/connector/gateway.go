@@ -70,6 +70,9 @@ func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessi
 	if ctx == nil {
 		return protocol.GatewaySession{}, errors.New("gateway context must not be nil")
 	}
+	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
+		return protocol.GatewaySession{}, err
+	}
 	transport, err := g.factory(ctx)
 	if err != nil {
 		return protocol.GatewaySession{}, err

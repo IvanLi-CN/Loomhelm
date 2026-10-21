@@ -1,16 +1,22 @@
 {
   "schema_version": 1,
   "migration": {
-    "description": "Introduce the version-one host-local Connector command and event journal.",
-    "release_unit_description": "Phase-one Connector local journal format v1.",
-    "version_impact": "patch"
+    "description": "Upgrade the host-local Connector journal with explicit session-creation identity and a forward-readable format boundary.",
+    "release_unit_description": "Phase-one Connector local journal format v2.",
+    "version_impact": "minor"
   },
   "durable_state": {
     "description": "Append-only JSONL records for commands, ACK updates, host-owned session identities, observed app-server events and reconciliation outcomes.",
     "storage_implementation": "Mode-0600 journal file inside a mode-0700 host-local directory.",
     "source_compatibility_range": {
-      "from_program_versions": "No earlier Connector journal format exists.",
-      "to_program_version": "Phase-one Connector journal format v1.",
+      "from_program_versions": "Phase-one Connector journal format v1.",
+      "to_program_version": "Phase-one Connector journal format v2.",
+      "reader_accepts": [
+        "v1",
+        "v2"
+      ],
+      "writer_emits": "v2",
+      "older_writer_can_read_new_state": false,
       "direct_major_skips_supported": false
     }
   },
@@ -47,16 +53,19 @@
   },
   "validation": {
     "patch": {
+      "required_test_evidence": []
+    },
+    "minor": {
       "required_test_evidence": [
         "v1 records round-trip through the journal reader",
+        "v1 session-start records do not satisfy a new explicit creation identity",
+        "v2 session-start records persist command_id and payload digest",
+        "v2 records are rejected by the v1 reader boundary",
         "a torn final write is truncated safely",
         "accepted and executing commands become unknown after restart",
         "unknown outcomes require explicit reconciliation and are never replayed"
-      ]
-    },
-    "minor": {
-      "required_test_evidence": [],
-      "note": "No earlier-Minor journal state is supported before v1."
+      ],
+      "note": "The candidate reads the immediately preceding v1 journal state; v1 binaries are not supported readers for v2 records."
     },
     "major": {
       "required_test_evidence": [],

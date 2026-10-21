@@ -5,6 +5,7 @@ package connector
 import (
 	"fmt"
 	"os"
+	"syscall"
 )
 
 func secureJournalPath(string) error { return nil }
@@ -19,6 +20,9 @@ func validateJournalDirectory(path string) error {
 	}
 	if info.Mode().Perm() != 0o700 {
 		return fmt.Errorf("journal parent directory %q must have mode 0700, got %04o", path, info.Mode().Perm())
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && uint32(os.Geteuid()) != stat.Uid {
+		return fmt.Errorf("journal parent directory %q is not owned by the current user", path)
 	}
 	return nil
 }
