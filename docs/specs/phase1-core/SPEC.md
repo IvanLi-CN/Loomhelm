@@ -49,6 +49,12 @@ The system MUST retain original conversation-related files and metadata associat
 
 File publication MUST persist a recoverable intent before publishing final bytes, expose only verified ready objects and reconcile incomplete publication across process restart. The same authorized artifact identity and immutable content MUST be safe to retry; conflicting content or association MUST NOT overwrite an existing publication. Database timeouts or lost commit responses MUST NOT trigger deletion of confirmed or potentially committed bytes. Publication and reconciliation MUST coordinate across processes sharing the database and file volume. Missing or corrupt objects MUST remain explicitly unavailable rather than being reported ready. Storage recovery belongs to ArtifactStore; real domain authorization and startup/runtime recovery invocation remain mandatory application integration.
 
+An explicit identical authorized retry MAY repair unavailable state caused solely by missing or corrupt never-ready staging. It MUST verify newly supplied bytes against the retained immutable metadata, confirm that no final object exists under per-identity coordination and durably replace the pending staging intent before publication. Unknown reasons, previously ready publications and conflicting/nonregular final objects MUST NOT use this transition. Background recovery MUST NOT invent replacement content; a concurrent matching ready result MUST be treated as convergence.
+
+Publication input MUST satisfy a close/unblock cancellation contract. ArtifactStore retains its Go method type but MUST reject sources without the required io.ReadCloser capability before staging, take ownership of admitted input and close it exactly once on completion or cancellation. A no-op closer MUST NOT be used to claim cancellability of an arbitrary blocking source. Cancellation cleanup MUST share a five-second total budget, preserve recoverable state and leave no blocked copy goroutine or package-wide input lock.
+
+The configured storage root and its ancestors MUST be protected from untrusted writers, with the private root owned by the Server service identity and mode 0700. The storage volume MUST NOT be an Agent workspace. Input path validation, no-follow final access, integrity and cooperative multi-process publication remain required; isolation from a hostile process already controlling the Server service identity is outside this storage contract. Production storage targets a local Linux filesystem; Windows storage support is not established.
+
 ### REQ-LH-006
 
 The product MUST provide a responsive, installable Web/PWA with desktop/mobile capability parity. Top-level global navigation MUST consist of Workbench and Tasks. A separate Conversations group below those entries MUST directly list authorized projectless conversations. There MUST NOT be a separate top-level global Conversations button. The cross-project All Conversations list and creation path MUST remain reachable from Workbench. The workbench MUST prioritize pending decisions and exceptions; approval review MUST expose the full request and relevant context before explicit approve/deny actions. A task MUST open a combined conversation and task-information workspace. Files MUST appear in their conversation context; the product MUST NOT introduce a host-management surface, standalone artifacts navigation/page or task artifacts panel.
@@ -74,6 +80,10 @@ The public contract MUST provide membership listing at `GET /api/v1/projects/{pr
 ### REQ-LH-009
 
 The system MUST preserve original Codex event fields and unknown content types. Initial presentation MUST provide readable basic messages, code/tool state and an unknown-content fallback without requiring arbitrary interactive plugin hosting.
+
+Content classification MUST remain a lossless, non-executing codec; repository-fixture sanitization MUST NOT silently become runtime redaction. Runtime authorization and presentation safety MUST be enforced at their respective boundaries, and logs/public errors MUST NOT disclose raw envelopes, credentials or private paths. Decode/Encode MUST enforce a 4 MiB record ceiling. JSONL batches MUST enforce at most 64 MiB of consumed input including whitespace/separators and 10,000 records; oversized input MUST return ErrTooLarge rather than successful truncation. Accepted raw bytes and unknown fields MUST remain unchanged.
+
+The legacy ParseJSONL helper MUST be limited to finite nonblocking fixture/in-memory input. Runtime parsing MUST use a context-aware internal adapter with an io.ReadCloser that satisfies the close/unblock contract and the same record/count/byte budgets. Cancellation and validation failures MUST NOT be treated as a successful partial batch.
 
 ### REQ-LH-010
 
@@ -119,9 +129,9 @@ Association MUST retain the same Session and the identities and continuity of it
 
 ### VER-LH-004
 
-- Method: actual generated file byte comparison, permission/path rejection, separate-process concurrent writers/reconciliation, fault injection and process interruption at staging, intent, publication and readiness boundaries, lost database commit responses, and retrieval after restart and deployment cutover.
+- Method: actual generated file byte comparison, permission/path rejection, separate-process concurrent writers/reconciliation, fault injection and process interruption at staging, intent, publication, repair-intent and readiness boundaries, lost database commit responses, blocked-input cancellation, and retrieval after restart and deployment cutover.
 - covers: `REQ-LH-005`, `REQ-LH-008`
-- Pass condition: authorized downloads retain the original bytes and association while revoked or out-of-scope requests fail. Repeated reconciliation and identical retries converge without duplicate metadata or overwritten bytes; conflicting retries fail, incomplete or corrupt objects remain unavailable, and an ambiguous database outcome never deletes potentially committed bytes. Package recovery evidence does not substitute for authenticated application integration.
+- Pass condition: authorized downloads retain the original bytes and association while revoked or out-of-scope requests fail. Repeated reconciliation and identical retries converge without duplicate metadata or overwritten bytes; explicit staging-loss repair obeys its reason, authorization, byte-validation and durable-intent conditions. Conflicting retries fail, incomplete or corrupt objects remain unavailable, and an ambiguous database outcome never deletes potentially committed bytes. Metadata and download revalidate ready bytes; cancellation during a blocked input returns within the five-second cleanup budget without a lingering copy goroutine or stalled unrelated upload. Unknown/previously-ready unavailable states and conflicting final objects are not repaired by this path. Package recovery evidence does not substitute for authenticated application integration.
 
 ### VER-LH-005
 
@@ -143,9 +153,9 @@ Association MUST retain the same Session and the identities and continuity of it
 
 ### VER-LH-008
 
-- Method: sanitized real Codex content fixtures containing known and unknown event shapes.
+- Method: sanitized real Codex content fixtures containing known and unknown event shapes, byte/count/record budget boundaries, blocked runtime-input cancellation and fixture-admission versus runtime-codec checks.
 - covers: `REQ-LH-009`
-- Pass condition: round trips retain original fields and unknown content has a readable fallback.
+- Pass condition: round trips retain original fields and raw bytes, unknown content has a readable non-executing fallback, and fixture-only sanitizer rules do not rewrite authorized runtime payloads. Record/total/count excess and cancellation produce explicit errors without successful truncation or unbounded input accumulation. Real credentials and private data are not introduced into fixtures, logs or public errors.
 
 ### VER-LH-009
 
@@ -170,7 +180,7 @@ Association MUST retain the same Session and the identities and continuity of it
 - [Control plane and host execution](../../adr/0001-control-plane-and-host-execution.md)
 - [Immutable candidates and state-compatible blue-green](../../adr/0002-immutable-candidates-and-blue-green.md)
 - [Versioned public protocol and reconciliation boundary](../../adr/0003-public-protocol-and-reconciliation.md)
-- [Recoverable conversation file publication](../../adr/0004-recoverable-conversation-file-publication.md)
+- [Bounded file publication and content input](../../adr/0005-bounded-file-publication-and-content-input.md)
 
 ## References
 

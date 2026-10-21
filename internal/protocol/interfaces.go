@@ -99,6 +99,12 @@ type ArtifactReader interface {
 
 // ArtifactStore owns original bytes and metadata, but it does not create a
 // product-facing standalone artifact navigation surface.
+// Put admits only an io.ReadCloser whose prompt, concurrent Close unblocks
+// Read. It owns and closes an admitted source exactly once on return or
+// cancellation. A no-op closer is suitable only for finite nonblocking memory
+// input. Implementations reject unsupported sources before staging bytes.
+// Identical authorized retries preserve canonical metadata and may repair lost
+// never-ready staging only under ADR 0005; final objects are never overwritten.
 type ArtifactStore interface {
 	Put(context.Context, Artifact, io.Reader) (Artifact, error)
 	Metadata(context.Context, string) (Artifact, error)

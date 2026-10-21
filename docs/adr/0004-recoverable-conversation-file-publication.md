@@ -1,4 +1,11 @@
+---
+status: superseded
+superseded_by: 0005-bounded-file-publication-and-content-input.md
+---
+
 # ADR 0004: Recoverable conversation file publication
+
+Superseded by [ADR 0005: Bounded file publication and content input](0005-bounded-file-publication-and-content-input.md). The decision below is retained as historical context.
 
 ## Context
 

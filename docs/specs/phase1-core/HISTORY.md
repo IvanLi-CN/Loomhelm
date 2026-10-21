@@ -94,6 +94,10 @@ The owner completed PRD decision DEC-LH-004 by confirming that both cross-projec
 
 The confirmed member-management requirement has explicit list, PUT grant/update and DELETE revoke operations in the canonical catalog, shared Go/TypeScript types and generated Web client. The grant body contains only an assignable role; the project and existing user are addressed by the path. Owner is a readable role without an ownership-transfer operation. The additive transport contract leaves database state unchanged and keeps application authorization and HTTP/runtime verification as separate delivery gates.
 
+## Bounded File and Content Input
+
+Storage review identified ambiguity between identical retries and unavailable state after staging loss, plus a cancellation promise that arbitrary blocking readers could not satisfy. The successor file-publication decision permits only verified, authorized repair of never-ready staging loss, preserves non-overwrite and ambiguous-commit safety, and defines owned close/unblock inputs with bounded cleanup. It records a trusted private service-volume assumption without weakening public path validation or cooperative cross-process publication. The content module remains lossless; fixture sanitization is an admission rule, while runtime parsing receives explicit record/count/byte bounds and cancellation. No public wire fields or permissions change; the new retry transition and tightened internal caller preconditions require implementation and compatibility evidence.
+
 ## References
 
 - [Requirements](SPEC.md)
