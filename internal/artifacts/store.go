@@ -171,7 +171,6 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 	if source == nil {
 		return protocol.Artifact{}, fmt.Errorf("artifact source must not be nil: %w", ErrInvalid)
 	}
-	createdAtProvided := artifact.CreatedAt != ""
 	normalized, expectedHash, err := validateArtifact(artifact, s.maxBytes)
 	if err != nil {
 		return protocol.Artifact{}, err
@@ -207,14 +206,14 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 		}
 	}()
 
-	record, err := s.ensurePending(ctx, staged, createdAtProvided, stagingName, cleanup)
+	record, err := s.ensurePending(ctx, staged, stagingName, cleanup)
 	if err != nil {
 		if errors.Is(err, ErrConflict) {
 			keepStaging = !s.stagingUnreferenced(ctx, staged.ID, stagingName, cleanup)
 		}
 		return protocol.Artifact{}, err
 	}
-	if !sameArtifactMetadata(staged, record.Artifact, createdAtProvided) {
+	if !sameArtifactMetadata(staged, record.Artifact) {
 		keepStaging = false
 		return protocol.Artifact{}, ErrConflict
 	}
@@ -395,9 +394,7 @@ func validateArtifact(artifact protocol.Artifact, maxBytes int64) (protocol.Arti
 			return protocol.Artifact{}, "", fmt.Errorf("artifact sha256 is invalid: %w", ErrInvalid)
 		}
 	}
-	if artifact.CreatedAt == "" {
-		artifact.CreatedAt = formatTime(time.Now())
-	} else {
+	if artifact.CreatedAt != "" {
 		createdAt, err := time.Parse(time.RFC3339Nano, artifact.CreatedAt)
 		if err != nil {
 			return protocol.Artifact{}, "", fmt.Errorf("artifact created_at is invalid: %w", ErrInvalid)
@@ -555,14 +552,6 @@ func parseCreatedAt(value string) time.Time {
 
 func formatTime(value time.Time) string {
 	return value.UTC().Round(time.Microsecond).Format(time.RFC3339Nano)
-}
-
-func canonicalTime(value string) string {
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return value
-	}
-	return formatTime(parsed)
 }
 
 func utf8Safe(value string) bool {

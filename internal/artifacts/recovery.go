@@ -134,12 +134,14 @@ func (s *Store) commit(ctx context.Context, tx pgx.Tx) error {
 
 type cleanupDeadline struct {
 	mu       sync.Mutex
+	parent   context.Context
 	deadline time.Time
+	contexts map[*cleanupContext]struct{}
 	stopFunc func() bool
 }
 
 func newCleanupDeadline(ctx context.Context) *cleanupDeadline {
-	deadline := &cleanupDeadline{}
+	deadline := &cleanupDeadline{parent: ctx, contexts: make(map[*cleanupContext]struct{})}
 	deadline.stopFunc = context.AfterFunc(ctx, deadline.start)
 	return deadline
 }
@@ -152,26 +154,144 @@ func (d *cleanupDeadline) start() {
 	if d.deadline.IsZero() {
 		d.deadline = time.Now().Add(cleanupTimeout)
 	}
+	deadline := d.deadline
+	contexts := make([]*cleanupContext, 0, len(d.contexts))
+	for cleanupContext := range d.contexts {
+		contexts = append(contexts, cleanupContext)
+	}
 	d.mu.Unlock()
+	for _, cleanupContext := range contexts {
+		cleanupContext.extend(deadline)
+	}
 }
 
 func (d *cleanupDeadline) context() (context.Context, context.CancelFunc) {
 	if d == nil {
 		return context.WithTimeout(context.Background(), cleanupTimeout)
 	}
+	if d.parent != nil && d.parent.Err() != nil {
+		d.start()
+	}
 	d.mu.Lock()
 	deadline := d.deadline
 	if deadline.IsZero() {
 		deadline = time.Now().Add(cleanupTimeout)
 	}
+	cleanupContext := newCleanupContext(d, deadline)
+	d.contexts[cleanupContext] = struct{}{}
 	d.mu.Unlock()
-	return context.WithDeadline(context.Background(), deadline)
+	return cleanupContext, cleanupContext.cancel
 }
 
 func (d *cleanupDeadline) stop() {
 	if d != nil && d.stopFunc != nil {
 		d.stopFunc()
 	}
+}
+
+func (d *cleanupDeadline) remove(cleanupContext *cleanupContext) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	delete(d.contexts, cleanupContext)
+	d.mu.Unlock()
+}
+
+// cleanupContext keeps an operation bounded before cancellation and moves its
+// deadline with the shared post-cancellation budget if cancellation starts
+// while the operation is still in flight.
+type cleanupContext struct {
+	owner    *cleanupDeadline
+	parent   context.Context
+	done     chan struct{}
+	mu       sync.Mutex
+	timer    *time.Timer
+	deadline time.Time
+	err      error
+	closed   bool
+}
+
+func newCleanupContext(owner *cleanupDeadline, deadline time.Time) *cleanupContext {
+	cleanupContext := &cleanupContext{
+		owner:    owner,
+		parent:   owner.parent,
+		done:     make(chan struct{}),
+		deadline: deadline,
+	}
+	cleanupContext.timer = time.AfterFunc(time.Until(deadline), cleanupContext.expire)
+	return cleanupContext
+}
+
+func (c *cleanupContext) Deadline() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deadline, true
+}
+
+func (c *cleanupContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cleanupContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *cleanupContext) Value(key any) any {
+	if c.parent == nil {
+		return nil
+	}
+	return c.parent.Value(key)
+}
+
+func (c *cleanupContext) extend(deadline time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || !deadline.After(c.deadline) {
+		return
+	}
+	c.deadline = deadline
+	if c.timer != nil {
+		c.timer.Reset(time.Until(deadline))
+	}
+}
+
+func (c *cleanupContext) expire() {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	if remaining := time.Until(c.deadline); remaining > 0 {
+		if c.timer != nil {
+			c.timer.Reset(remaining)
+		}
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	c.err = context.DeadlineExceeded
+	close(c.done)
+	c.mu.Unlock()
+	c.owner.remove(c)
+}
+
+func (c *cleanupContext) cancel() {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	c.err = context.Canceled
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	close(c.done)
+	c.mu.Unlock()
+	c.owner.remove(c)
 }
 
 type ownedReadCloser struct {
@@ -341,14 +461,17 @@ func (s *Store) inspectReady(record artifactRecord) (fileCheck, error) {
 	return inspectArtifactFile(path, record.Artifact)
 }
 
-func sameArtifactMetadata(candidate, existing protocol.Artifact, createdAtProvided bool) bool {
+func sameArtifactMetadata(candidate, existing protocol.Artifact) bool {
 	if candidate.ID != existing.ID || candidate.SessionID != existing.SessionID || candidate.Name != existing.Name || candidate.Kind != existing.Kind || candidate.Size != existing.Size || candidate.Sha256 != existing.Sha256 || candidate.ContentType != existing.ContentType || !sameOptionalID(candidate.RunID, existing.RunID) {
 		return false
 	}
-	return !createdAtProvided || canonicalTime(candidate.CreatedAt) == canonicalTime(existing.CreatedAt)
+	// CreatedAt is assigned by the server when the identity is first created.
+	// Caller retries must converge on that persisted value regardless of the
+	// request copy they carry.
+	return true
 }
 
-func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, createdAtProvided bool, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
+func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
 	tx, err := s.beginIdentityTx(ctx, candidate.ID, cleanup)
 	if err != nil {
 		return artifactRecord{}, err
@@ -357,17 +480,18 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 
 	existing, err := readArtifactRecord(ctx, tx, candidate.ID)
 	if err == nil {
-		if !sameArtifactMetadata(candidate, existing.Artifact, createdAtProvided) {
+		if !sameArtifactMetadata(candidate, existing.Artifact) {
 			return artifactRecord{}, ErrConflict
 		}
 		if existing.State == publicationUnavailable && repairableUnavailableReason(existing.UnavailableReason) {
-			return s.repairUnavailable(ctx, tx, existing, candidate, createdAtProvided, stagingName, cleanup)
+			return s.repairUnavailable(ctx, tx, existing, candidate, stagingName, cleanup)
 		}
 		return existing, nil
 	}
 	if !errors.Is(err, ErrNotFound) {
 		return artifactRecord{}, err
 	}
+	candidate.CreatedAt = formatTime(time.Now())
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO conversation_artifacts (
 			id, session_id, run_id, name, kind, size, sha256, content_type,
@@ -378,7 +502,7 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 	}
 	if err := s.commit(ctx, tx); err != nil {
 		confirmed, confirmErr := s.confirmRecordWithCleanup(candidate.ID, cleanup)
-		if confirmErr == nil && sameArtifactMetadata(candidate, confirmed.Artifact, createdAtProvided) && publicationStateMatchesIntent(confirmed.State) {
+		if confirmErr == nil && sameArtifactMetadata(candidate, confirmed.Artifact) && publicationStateMatchesIntent(confirmed.State) {
 			return confirmed, nil
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -391,7 +515,7 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	if !sameArtifactMetadata(candidate, confirmed.Artifact, createdAtProvided) || !publicationStateMatchesIntent(confirmed.State) {
+	if !sameArtifactMetadata(candidate, confirmed.Artifact) || !publicationStateMatchesIntent(confirmed.State) {
 		return artifactRecord{}, ErrConflict
 	}
 	return confirmed, nil
@@ -405,7 +529,7 @@ func publicationStateMatchesIntent(state publicationState) bool {
 	return state == publicationPending || state == publicationReady
 }
 
-func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artifactRecord, candidate protocol.Artifact, createdAtProvided bool, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
+func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artifactRecord, candidate protocol.Artifact, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
 	if err := s.authorize(ctx, OperationPut, candidate); err != nil {
 		return artifactRecord{}, err
 	}
@@ -423,7 +547,7 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 		if err != nil {
 			return artifactRecord{}, err
 		}
-		return s.commitRepairState(ctx, updated, createdAtProvided, cleanup, tx, false)
+		return s.commitRepairState(ctx, updated, cleanup, tx, false)
 	case fileInvalid:
 		return artifactRecord{}, ErrConflict
 	case fileUnknown:
@@ -445,18 +569,18 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	if !sameArtifactMetadata(candidate, updated.Artifact, createdAtProvided) {
+	if !sameArtifactMetadata(candidate, updated.Artifact) {
 		return artifactRecord{}, ErrConflict
 	}
-	return s.commitRepairState(ctx, updated, createdAtProvided, cleanup, tx, true)
+	return s.commitRepairState(ctx, updated, cleanup, tx, true)
 }
 
-func (s *Store) commitRepairState(ctx context.Context, updated artifactRecord, createdAtProvided bool, cleanup *cleanupDeadline, tx pgx.Tx, fault bool) (artifactRecord, error) {
+func (s *Store) commitRepairState(ctx context.Context, updated artifactRecord, cleanup *cleanupDeadline, tx pgx.Tx, fault bool) (artifactRecord, error) {
 	// Commit first, then resolve the result from durable state so an uncertain
 	// response never compensates by deleting staged or published bytes.
 	if err := s.commit(ctx, tx); err != nil {
 		confirmed, confirmErr := s.confirmRecordWithCleanup(updated.Artifact.ID, cleanup)
-		if confirmErr == nil && sameArtifactMetadata(updated.Artifact, confirmed.Artifact, createdAtProvided) && publicationStateMatchesIntent(confirmed.State) {
+		if confirmErr == nil && sameArtifactMetadata(updated.Artifact, confirmed.Artifact) && publicationStateMatchesIntent(confirmed.State) {
 			return confirmed, nil
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -471,7 +595,7 @@ func (s *Store) commitRepairState(ctx context.Context, updated artifactRecord, c
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	if !sameArtifactMetadata(updated.Artifact, confirmed.Artifact, createdAtProvided) || !publicationStateMatchesIntent(confirmed.State) {
+	if !sameArtifactMetadata(updated.Artifact, confirmed.Artifact) || !publicationStateMatchesIntent(confirmed.State) {
 		return artifactRecord{}, ErrConflict
 	}
 	return confirmed, nil

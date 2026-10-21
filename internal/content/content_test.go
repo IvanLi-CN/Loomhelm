@@ -134,6 +134,13 @@ func TestDecodeAndParseRejectMalformedOrOversizedRecords(t *testing.T) {
 	if _, err := Decode(bytes.Repeat([]byte("x"), DefaultMaxRecordBytes+1)); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized decode error = %v, want %v", err, ErrTooLarge)
 	}
+	payload := json.RawMessage(fmt.Sprintf(`{"blob":%q}`, strings.Repeat("x", DefaultMaxRecordBytes-64)))
+	if len(payload) >= DefaultMaxRecordBytes {
+		t.Fatalf("test payload = %d bytes, want less than %d", len(payload), DefaultMaxRecordBytes)
+	}
+	if _, err := Encode(Record{Source: "test", Stream: "app-server", Sequence: 1, Payload: payload}); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized encoded record error = %v, want %v", err, ErrTooLarge)
+	}
 }
 
 func TestContentBatchLimitsRejectWithoutTruncation(t *testing.T) {

@@ -509,23 +509,46 @@ func TestStoreCancellationUsesSharedCleanupDeadlineForBlockedIdentityLock(t *tes
 	}
 }
 
+func TestCleanupContextExtendsWhenCancellationStartsAfterAllocation(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cleanup := newCleanupDeadline(parent)
+	defer cleanup.stop()
+	cleanupContext, cleanupCancel := cleanup.context()
+	defer cleanupCancel()
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+	cleanup.start()
+	deadline, ok := cleanupContext.Deadline()
+	if !ok {
+		t.Fatal("cleanup context has no deadline")
+	}
+	if remaining := time.Until(deadline); remaining < cleanupTimeout-100*time.Millisecond {
+		t.Fatalf("cleanup deadline remaining = %s, want at least %s after cancellation", remaining, cleanupTimeout-100*time.Millisecond)
+	}
+}
+
 func TestStoreRoundsCreatedAtToDatabasePrecision(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
 	content := []byte("timestamp precision")
 	artifact := testArtifact(uniqueID("artifact-time"), nil, content)
 	artifact.CreatedAt = "2026-01-02T03:04:05.123456789Z"
+	started := time.Now().UTC().Add(-time.Second)
 	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	const expected = "2026-01-02T03:04:05.123457Z"
-	if stored.CreatedAt != expected {
-		t.Fatalf("stored created_at = %q, want %q", stored.CreatedAt, expected)
+	createdAt, err := time.Parse(time.RFC3339Nano, stored.CreatedAt)
+	if err != nil {
+		t.Fatalf("stored created_at = %q: %v", stored.CreatedAt, err)
+	}
+	if !createdAt.After(started) || createdAt.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("stored created_at = %q, want a server-assigned current timestamp", stored.CreatedAt)
 	}
 	retried, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
-	if err != nil || retried.CreatedAt != expected {
-		t.Fatalf("timestamp retry = %#v, err=%v", retried, err)
+	if err != nil || retried.CreatedAt != stored.CreatedAt {
+		t.Fatalf("timestamp retry = %#v, err=%v; want persisted timestamp %q", retried, err, stored.CreatedAt)
 	}
 }
 
