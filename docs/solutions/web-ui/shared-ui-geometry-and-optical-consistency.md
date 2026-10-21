@@ -10,6 +10,8 @@ tags:
   - component-library
   - storybook
   - visual-evidence
+  - design-handoff
+  - component-states
 status: active
 related_specs: []
 ---
@@ -19,6 +21,8 @@ related_specs: []
 ## Context
 
 UI 视觉不一致通常不是单个按钮的局部样式问题，而是布局盒子、可见表面、内容排版、响应式触控尺寸和组件组合边界没有使用同一份契约。这个 Solution 用于处理按钮、输入框、下拉框、搜索框、筛选条、工具栏和其他共享控件在不同主题、尺寸和视口下的几何与视觉一致性。
+
+这类问题不应被记录成“某个按钮需要减 1px”的局部技巧；只要多个控件共享尺寸、边框、背景或状态语义，同一套设计实现规则就应覆盖它们。
 
 ## Symptoms
 
@@ -59,23 +63,36 @@ UI 视觉不一致通常不是单个按钮的局部样式问题，而是布局�
 | Content geometry | 图标、文字、line-height 和内边距 | 内容不溢出、不改变外部尺寸 |
 | Responsive ergonomics | 触控区域、折行和可用宽度 | 移动视口下至少 `44px` 的交互区域 |
 
-### 2. Map semantic sizes once
+### 2. Turn design handoff into an implementation contract
+
+设计交接至少要同时说明语义变体、外部布局盒、可见表面、交互命中区域、内容排版、所有交互状态和响应式例外；只给一张静态截图或只给一个高度值，无法判断填充、边框、焦点环和禁用态如何共同占据空间。
+
+| Handoff item | Implementation contract | Evidence |
+| - | - | - |
+| Variant and size | `data-variant`、`data-size` 或等价的组件 API | 组件矩阵覆盖所有语义组合 |
+| Geometry | `box-sizing`、固定高度/最小高度、内外间距和对齐基线 | DOM 尺寸与 computed style |
+| Painted surface | 背景裁剪、边框、阴影、圆角和 focus ring 的唯一 owner | 固定主题下的截图或像素比较 |
+| Interaction states | hover、active、focus-visible、disabled、loading 和 permission/error 状态 | 键盘与状态 Storybook 场景 |
+| Composition | wrapper、子控件、图标和文字各自的布局责任 | 搜索框、筛选条、工具栏组合场景 |
+| Responsive behavior | 移动端触控尺寸、折行、隐藏/溢出规则 | 桌面与移动视口证据 |
+
+### 3. Map semantic sizes once
 
 在共享组件中建立稳定的尺寸语义，例如 `default`、`sm`、`icon`、`icon-sm`、`lg` 和 `icon-lg`，再由统一的 `data-size` 或同等语义选择器应用高度、最小高度、宽度、圆角和内边距。移动端的触控尺寸应通过明确的响应式规则映射，而不是在每个页面重新写一套像素值；确有例外时，为导航切换、图标占位等用途命名并记录例外原因。
 
-### 3. Separate the hit box from the visible surface
+### 4. Separate the hit box from the visible surface
 
 需要保持外部尺寸稳定时，让控件保留固定宽高和 `1px` 边框占位；填充变体使用 `background-clip: padding-box`，使背景不覆盖透明边框。不要为了抵消视觉上的 1px 而给填充变体额外加宽或减高，否则会把视觉问题转化为真实的布局不一致。
 
-### 4. Assign one visual owner per surface
+### 5. Assign one visual owner per surface
 
 普通输入框和选择器由自身负责高度、边框、圆角、背景和 focus ring；搜索框、筛选条等复合控件则由 wrapper 负责外框，内部输入控件只负责内容布局，并显式清除重复的边框、阴影和圆角。一个可见表面只保留一个 owner，避免通过负 margin 或页面级偏移掩盖重复绘制。
 
-### 5. Make the cascade intentional
+### 6. Make the cascade intentional
 
 先应用浏览器 reset，再应用共享组件的语义基线，最后才允许页面级布局覆盖。共享 CSS 应优先使用 `data-slot`、`data-size` 和 `data-variant` 等稳定契约选择器；不要依赖偶然的 class 顺序，也不要用 `!important` 把层叠问题藏起来。每次修改基础规则后，检查 `button`、`input`、`select` 以及复合 wrapper 的 computed style，确认实际生效的是预期规则。
 
-### 6. Verify with a state matrix
+### 7. Verify with a state matrix
 
 为共享控件维护一个可重复打开的 Storybook 或其他源代码管理的验证面，至少覆盖浅色和深色主题、紧凑和表单尺寸、填充和未填充变体、输入框和选择器、禁用态和键盘焦点态，以及 `lg` 和 `icon-lg`。页面级验证再覆盖桌面视口和移动视口，并包含长文本、空值、溢出和复合控件组合。
 
@@ -89,6 +106,7 @@ UI 视觉不一致通常不是单个按钮的局部样式问题，而是布局�
 - 所有共享尺寸都应来自 token 和语义变体；页面级微调只能表达真实的布局例外，不能替代组件契约。
 - 移动端优先保证交互区域和文字可用性，再处理紧凑排列；不要为了桌面端对齐而把触控控件压缩到 `44px` 以下。
 - 每个共享组件的视觉修复都应补充对应的状态矩阵或 Storybook 覆盖，并在页面验证中确认主题、视口和组合关系没有回归。
+- 设计交接验收应先确认语义、几何、表面、状态和组合责任，再确认像素结果；否则实现者只能从截图猜测规则，局部修正很容易在其他控件或响应式断点上回归。
 
 ## References
 
