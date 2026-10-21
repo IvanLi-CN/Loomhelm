@@ -178,7 +178,7 @@ export function ProductShell({ children }: PropsWithChildren) {
           <div className="header-actions">
             <span className="demo-label"><span className="demo-label-dot" aria-hidden="true" />Demo</span>
             <Select value={runtime.theme} onValueChange={(value) => runtime.setTheme(value as "system" | "light" | "dark")}>
-              <SelectTrigger className="theme-select-trigger" aria-label="界面主题">
+              <SelectTrigger size="sm" className="theme-select-trigger" aria-label="界面主题">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

@@ -156,3 +156,13 @@ U01–U04 是真实实现任务的范围标识，不是页面标识；以下每�
 ## 交接边界
 
 本文件和 [UX.md](UX.md) 是设计意图与实现交接，不是产品决策记录、公共 API 合同、测试报告或 PRD/SPEC 的替代品。后续只需在不扩大范围的前提下补充真实合同、跨设备/PWA/权限证据和主人布局确认，按届时最新 parent SHA 刷新集成证据，并将未决的关系细节和团队权限交回主协调者。
+
+## Shared control metrics implementation handoff
+
+共享控件尺寸由 `web/src/index.css` 的 control metrics tokens 与 `data-slot`/`data-size` 选择器统一实现：compact 为 38px，用于顶栏、工具栏和桌面按钮；form 为 42px，用于普通单行 Input 与 Select；touch 为 44px，用于手机可操作控件。所有受管控件使用 `border-box`、1px 边框占位、稳定的垂直 padding 与 line-height；图标按钮保持同高正方形，默认图标尺寸为 16px，移动端保持中心对齐和 44px 触控盒。
+
+`Button` 的 default、sm、icon 和 icon-sm 尺寸由共享 data attributes 提供，lg 与 icon-lg 映射 form；手机媒体规则将可操作的 lg/icon-lg 提升为 touch。`SelectTrigger` 的 default/sm 分别映射 form/compact；`Input` 默认映射 form。`theme-select-trigger` 只保留紧凑字号与语义外观，不再承担独立高度微调；ProductShell 顶栏 Select 使用 sm，`header-create` 与同排图标按钮在手机媒体规则中提升为 touch。
+
+Search wrapper 负责唯一的外层边框；桌面使用 compact 高度，手机按 touch token 提升为 44px，其中的 Input/Select 子控件必须使用 `height: 100%`、无边框、无阴影和零垂直 padding，避免共享控件规则与 wrapper 叠加出第二个高度或边框。普通表单不得复用该嵌套例外；Textarea、Badge、任务多行链接、导航行和关系移除按钮保留各自语义尺寸。
+
+`web/src/components/ui/ControlMetrics.stories.tsx` 是共享规则的 Storybook QA surface，覆盖亮/暗主题、compact 工具栏、form 搜索/Select、文字/图标、disabled 与 keyboard focus；后续新增页面控件应优先消费这些 primitive 尺寸，不在页面 CSS 追加同类 px 高度例外。
