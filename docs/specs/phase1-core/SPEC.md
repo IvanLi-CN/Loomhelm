@@ -65,6 +65,8 @@ The deployment system MUST bind candidates to actual source SHA and artifact dig
 
 The configured Connector's enrollment and credentials MUST be authenticated and revocable through deployment administration without introducing a user-facing multi-host resource model. Authorization MUST cover commands, events, drafts, task relationships and original files in both standalone-conversation and project scopes; the absence of a project MUST NOT bypass access control. Unsent drafts MUST remain private to the creating user's authorized clients and MUST NOT become visible to other project members when conversation history is shared. Codex credentials MUST remain on the execution machine. Platform control leases MUST govern platform-issued commands without making one browser or device the owner's sole authorized client. Native desktop actions MUST be observed and reconciled from Codex state.
 
+The project creator MUST manage the project and its member grants. Other human accounts MUST receive either read-only or operator access per project. Read-only access MUST NOT permit task mutation, execution commands or approval responses; operator access MUST permit authorized task mutation, execution commands and approval responses without granting project administration or member management. Agents MUST act through user-authorized API/MCP credentials. Credential authority MUST remain bounded by both the user's current project permissions and the credential's project scope; issuing a derived credential MUST NOT widen that authority, including through an empty or omitted scope. Project membership MUST NOT confer installation administration rights.
+
 ### REQ-LH-009
 
 The system MUST preserve original Codex event fields and unknown content types. Initial presentation MUST provide readable basic messages, code/tool state and an unknown-content fallback without requiring arbitrary interactive plugin hosting.
@@ -129,9 +131,9 @@ Association MUST retain the same Session and the identities and continuity of it
 
 ### VER-LH-007
 
-- Method: deployment-admin enrollment/revocation of the configured Connector and real authentication scenarios, including native desktop actions during platform observation.
+- Method: deployment-admin enrollment/revocation of the configured Connector and real authentication scenarios, including project-creator member grants, read-only/operator action matrices, scope-restricted credential issuance and native desktop actions during platform observation.
 - covers: `REQ-LH-008`
-- Pass condition: revoked credentials cannot issue new commands, project scopes remain enforced and observed native state is reconciled without moving Codex secrets to the platform.
+- Pass condition: revoked credentials cannot issue new commands, project scopes remain enforced and observed native state is reconciled without moving Codex secrets to the platform. Read-only members cannot mutate tasks, execute or approve; operators can perform those actions only within their project authority and cannot manage project/member grants. Derived credentials cannot broaden scope through empty, omitted or additional project selections, and membership changes constrain subsequent credential-backed actions.
 
 ### VER-LH-008
 

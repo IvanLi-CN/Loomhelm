@@ -78,6 +78,10 @@ F04 adds a single `scripts/checks` entrypoint for the checked-in quality declara
 
 Storage review exposed that filesystem publication followed by a database insert has no atomic commit boundary, and compensating deletion after an ambiguous database result can destroy committed bytes. The storage contract therefore requires durable publication intent, ready-only visibility, cross-process coordination and restart reconciliation. This clarifies the existing byte-retention requirement without adding a public wire field or changing ownership permissions. The storage package owns recovery correctness; application composition still owns real authorization, Session/Run ownership and runtime recovery invocation. Neither package verification nor this contract establishes complete authenticated product acceptance.
 
+## Project Member Permissions
+
+The owner confirmed PRD decision DEC-LH-005: project creators manage their projects and member grants, other human accounts receive read-only or operator access, and Agents use user-authorized API/MCP credentials. This settles the role proposal without approving the separate pending relationship-validation or deletion-policy proposals. The engineering contract requires the same role limits across product interfaces and scope-preserving credential delegation; candidate implementation and authenticated verification remain separate integration gates.
+
 ## References
 
 - [Requirements](SPEC.md)
