@@ -734,6 +734,7 @@ type appServerTurn struct {
 	ID     string          `json:"id"`
 	Status string          `json:"status"`
 	Input  json.RawMessage `json:"input"`
+	Items  json.RawMessage `json:"items"`
 }
 
 func extractTurns(result json.RawMessage) []appServerTurn {
@@ -773,7 +774,7 @@ func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns [
 	}
 	var matches []appServerTurn
 	for _, turn := range turns {
-		if bytes.Contains(turn.Input, []byte(prompt)) {
+		if bytes.Contains(turn.Input, []byte(prompt)) || bytes.Contains(turn.Items, []byte(prompt)) {
 			matches = append(matches, turn)
 		}
 	}

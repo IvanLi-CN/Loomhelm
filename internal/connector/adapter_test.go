@@ -126,7 +126,7 @@ func TestAdapterMarksAckLossUnknownAndReconcileNeverReplays(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-2"}}`)}}}
 	transport.responses["turn/start"] = []fakeResult{{err: ErrUnknownOutcome}, {message: RPCMessage{Result: json.RawMessage(`{"turn":{"id":"turn-2","status":"completed"}}`)}}}
-	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-2","status":"completed","input":[{"type":"text","text":"uncertain"}]}]}`)}}}
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-2","status":"completed","items":[{"type":"userMessage","content":[{"type":"text","text":"uncertain"}]}]}]}`)}}}
 	journal := openTestJournal(t)
 	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
 	if err != nil {
