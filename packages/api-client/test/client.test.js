@@ -97,6 +97,23 @@ describe("generated user credential transport", () => {
   });
 });
 
+test("session creation sends the caller's stable intent identity", async () => {
+  const calls = [];
+  const client = new LoomhelmApiClient({
+    baseUrl: "https://loomhelm.example",
+    fetch: async (url, init) => {
+      calls.push({ path: url.pathname, method: init.method, body: JSON.parse(init.body) });
+      return Response.json({ session: { id: "session-1" } });
+    },
+  });
+  const body = { command_id: "create-intent-1", path: "new", prompt: "same work" };
+  await client.createSession({ body });
+  await client.createSession({ body });
+  await client.createSession({ body: { ...body, command_id: "create-intent-2" } });
+  expect(calls.map((call) => call.body.command_id)).toEqual(["create-intent-1", "create-intent-1", "create-intent-2"]);
+  expect(calls.every((call) => call.path === "/api/v1/sessions" && call.method === "POST")).toBe(true);
+});
+
 describe("generated project/task transport", () => {
   test("deletion accepts a bodyless 204 and encodes the resource identity", async () => {
     const calls = [];
