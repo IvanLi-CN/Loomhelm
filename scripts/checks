@@ -18,7 +18,7 @@ Commands:
   generated    Check protocol, sqlc and module generated-state drift.
   source       Run Go tests, race tests and vet.
   database     Run the real PostgreSQL-backed database and job tests.
-  web          Run the frozen Web typecheck and production/Storybook builds.
+  web          Run client transport tests, frozen Web typecheck and production/Storybook builds.
   react        Run the pinned React Doctor changed-file check.
 EOF
 }
@@ -159,6 +159,7 @@ check_database() {
 
 check_web() {
 	run_command "frozen Web dependency install" bun install --frozen-lockfile
+	run_command "generated API client transport tests" bun test packages/api-client/test
 	run_command "Web typecheck" bun run typecheck
 	run_command "Web production build" bun run build
 	run_command "Storybook build" bun run build:storybook

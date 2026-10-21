@@ -265,6 +265,36 @@
       "required": ["task"],
       "properties": {"task": {"$ref": "#/types/Task"}}
     },
+    "TaskContainment": {
+      "type": "object",
+      "required": ["kind", "parent_task_id", "child_task_id", "created_at"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["parent_child"]},
+        "parent_task_id": {"type": "string"},
+        "child_task_id": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "TaskDependency": {
+      "type": "object",
+      "required": ["kind", "prerequisite_task_id", "dependent_task_id", "created_at"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["prerequisite"]},
+        "prerequisite_task_id": {"type": "string"},
+        "dependent_task_id": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "TaskRelationshipPage": {
+      "type": "object",
+      "required": ["parents", "children", "prerequisites", "dependents"],
+      "properties": {
+        "parents": {"type": "array", "items": {"$ref": "#/types/TaskContainment"}},
+        "children": {"type": "array", "items": {"$ref": "#/types/TaskContainment"}},
+        "prerequisites": {"type": "array", "items": {"$ref": "#/types/TaskDependency"}},
+        "dependents": {"type": "array", "items": {"$ref": "#/types/TaskDependency"}}
+      }
+    },
     "TaskListResponse": {
       "type": "object",
       "required": ["items", "has_more"],
@@ -292,6 +322,13 @@
     "CreateProjectRequest": {
       "type": "object",
       "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "description": {"type": "string"}
+      }
+    },
+    "UpdateProjectRequest": {
+      "type": "object",
       "properties": {
         "name": {"type": "string"},
         "description": {"type": "string"}
@@ -398,6 +435,34 @@
         "mcp_tool": {"name": "loomhelm.create_project", "description": "Create a project for authorized work."}
       },
       {
+        "operation_id": "getProject",
+        "method": "GET",
+        "path": "/projects/{project_id}",
+        "path_params": {"project_id": "string"},
+        "response_type": "ProjectResponse",
+        "summary": "Read an authorized project",
+        "mcp_tool": {"name": "loomhelm.get_project", "description": "Read a project visible to the caller."}
+      },
+      {
+        "operation_id": "updateProject",
+        "method": "PATCH",
+        "path": "/projects/{project_id}",
+        "path_params": {"project_id": "string"},
+        "body_type": "UpdateProjectRequest",
+        "response_type": "ProjectResponse",
+        "summary": "Update an authorized project",
+        "mcp_tool": {"name": "loomhelm.update_project", "description": "Update a project within the caller's authorization."}
+      },
+      {
+        "operation_id": "deleteProject",
+        "method": "DELETE",
+        "path": "/projects/{project_id}",
+        "path_params": {"project_id": "string"},
+        "response_status": 204,
+        "summary": "Delete a project when authorized and not protected",
+        "mcp_tool": {"name": "loomhelm.delete_project", "description": "Delete an authorized project only when preservation rules permit it."}
+      },
+      {
         "operation_id": "listTasks",
         "method": "GET",
         "path": "/tasks",
@@ -416,6 +481,15 @@
         "mcp_tool": {"name": "loomhelm.create_task", "description": "Create a task in an authorized project."}
       },
       {
+        "operation_id": "getTask",
+        "method": "GET",
+        "path": "/tasks/{task_id}",
+        "path_params": {"task_id": "string"},
+        "response_type": "TaskResponse",
+        "summary": "Read an authorized task",
+        "mcp_tool": {"name": "loomhelm.get_task", "description": "Read a task visible to the caller."}
+      },
+      {
         "operation_id": "updateTask",
         "method": "PATCH",
         "path": "/tasks/{task_id}",
@@ -424,6 +498,60 @@
         "response_type": "TaskResponse",
         "summary": "Update a task",
         "mcp_tool": {"name": "loomhelm.update_task", "description": "Update an authorized task."}
+      },
+      {
+        "operation_id": "deleteTask",
+        "method": "DELETE",
+        "path": "/tasks/{task_id}",
+        "path_params": {"task_id": "string"},
+        "response_status": 204,
+        "summary": "Delete a task when authorized and not protected",
+        "mcp_tool": {"name": "loomhelm.delete_task", "description": "Delete an authorized task only when preservation rules permit it."}
+      },
+      {
+        "operation_id": "getTaskRelationships",
+        "method": "GET",
+        "path": "/tasks/{task_id}/relationships",
+        "path_params": {"task_id": "string"},
+        "response_type": "TaskRelationshipPage",
+        "summary": "Read task relationships filtered by authorization at both endpoints",
+        "mcp_tool": {"name": "loomhelm.get_task_relationships", "description": "Read authorized containment and prerequisite relationships without disclosing inaccessible endpoints."}
+      },
+      {
+        "operation_id": "addTaskParent",
+        "method": "POST",
+        "path": "/tasks/{task_id}/parents/{parent_task_id}",
+        "path_params": {"task_id": "string", "parent_task_id": "string"},
+        "response_status": 204,
+        "summary": "Add a parent relationship between authorized tasks",
+        "mcp_tool": {"name": "loomhelm.add_task_parent", "description": "Add task containment with authorization at both endpoints, including across projects."}
+      },
+      {
+        "operation_id": "removeTaskParent",
+        "method": "DELETE",
+        "path": "/tasks/{task_id}/parents/{parent_task_id}",
+        "path_params": {"task_id": "string", "parent_task_id": "string"},
+        "response_status": 204,
+        "summary": "Remove a parent relationship between authorized tasks",
+        "mcp_tool": {"name": "loomhelm.remove_task_parent", "description": "Remove task containment without changing task project ownership."}
+      },
+      {
+        "operation_id": "addTaskDependency",
+        "method": "POST",
+        "path": "/tasks/{task_id}/dependencies/{prerequisite_task_id}",
+        "path_params": {"task_id": "string", "prerequisite_task_id": "string"},
+        "response_status": 204,
+        "summary": "Add a prerequisite for the task",
+        "mcp_tool": {"name": "loomhelm.add_task_dependency", "description": "Add an authorized prerequisite; task_id identifies the dependent task."}
+      },
+      {
+        "operation_id": "removeTaskDependency",
+        "method": "DELETE",
+        "path": "/tasks/{task_id}/dependencies/{prerequisite_task_id}",
+        "path_params": {"task_id": "string", "prerequisite_task_id": "string"},
+        "response_status": 204,
+        "summary": "Remove a prerequisite for the task",
+        "mcp_tool": {"name": "loomhelm.remove_task_dependency", "description": "Remove an authorized prerequisite without changing task project ownership."}
       },
       {
         "operation_id": "createSession",
