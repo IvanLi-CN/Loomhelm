@@ -1,0 +1,99 @@
+---
+title: Shared UI geometry and optical consistency
+module: web-ui
+problem_type: visual-consistency
+component: shared-ui
+tags:
+  - design-tokens
+  - css
+  - responsive-ui
+  - component-library
+  - storybook
+  - visual-evidence
+status: active
+related_specs: []
+---
+
+# Shared UI geometry and optical consistency
+
+## Context
+
+UI 视觉不一致通常不是单个按钮的局部样式问题，而是布局盒子、可见表面、内容排版、响应式触控尺寸和组件组合边界没有使用同一份契约。这个 Solution 用于处理按钮、输入框、下拉框、搜索框、筛选条、工具栏和其他共享控件在不同主题、尺寸和视口下的几何与视觉一致性。
+
+## Symptoms
+
+- 具有主题色填充的控件看起来比同尺寸的未填充控件大 1px，即使 `getBoundingClientRect()` 的宽高相同。
+- 输入框、选择器、按钮或搜索容器在同一工具栏中出现上下错位，或 wrapper 与子控件同时绘制边框。
+- `lg`、`icon-lg` 或紧凑尺寸在组件类名中声明了尺寸，但被基础 primitive、全局 reset 或页面级样式覆盖。
+- 桌面端排列正常，移动端却出现小于 44px 的触控区域、文字挤压或横向溢出。
+- 只验证了 DOM 尺寸，却没有验证背景、透明边框、阴影、圆角和 focus ring 的实际绘制结果。
+
+## Root cause
+
+### Layout geometry and painted surface are different contracts
+
+元素的外部布局盒子决定相邻元素如何排列，背景、边框、阴影和圆角决定用户看到的表面。`border-box`、透明边框和 `background-clip` 的组合会让两个外部尺寸相同的控件产生不同的可见边缘；填充色穿过透明边框时，控件会产生视觉上多出 1px 的错觉。
+
+### CSS ownership is ambiguous
+
+全局 `button { border: 0 }`、Tailwind primitive 类、组件变体类和页面覆盖规则如果没有固定顺序，可能会清除用于稳定尺寸的透明边框，或者让同一元素同时拥有两套高度、边框和阴影。复合控件还容易让 wrapper 与内部 `Input` 或 `SelectTrigger` 重复负责边框和圆角。
+
+### Metrics are fragmented across variants and breakpoints
+
+当尺寸散落在 cva、Tailwind 类、传统 CSS 和媒体查询中时，`default`、`sm`、`lg`、图标按钮、表单控件与移动端触控尺寸会逐渐漂移。没有明确的语义映射时，修复一个变体很容易破坏另一个变体。
+
+### Verification covers only one state
+
+单一主题、单一视口或单一状态无法暴露填充色、禁用态、焦点态、长文本、深色主题和移动端触控区域的问题。尺寸相等也不能证明视觉表面相等。
+
+## Resolution
+
+### 1. Define a small shared metric contract
+
+把几何基线集中到设计 token 中，并让所有共享控件使用 `box-sizing: border-box`。建议至少区分紧凑工具栏、普通表单和移动端触控三个层级，例如 `38px`、`42px` 和 `44px`；边框宽度固定为 `1px`，除非设计明确要求其他值。
+
+| Contract layer | Responsibility | Verification target |
+| - | - | - |
+| Layout geometry | 外部宽高、对齐和相邻间距 | `getBoundingClientRect()`、`box-sizing` |
+| Painted surface | 背景、边框、阴影、圆角和 focus ring | `background-clip`、computed styles、截图 |
+| Content geometry | 图标、文字、line-height 和内边距 | 内容不溢出、不改变外部尺寸 |
+| Responsive ergonomics | 触控区域、折行和可用宽度 | 移动视口下至少 `44px` 的交互区域 |
+
+### 2. Map semantic sizes once
+
+在共享组件中建立稳定的尺寸语义，例如 `default`、`sm`、`icon`、`icon-sm`、`lg` 和 `icon-lg`，再由统一的 `data-size` 或同等语义选择器应用高度、最小高度、宽度、圆角和内边距。移动端的触控尺寸应通过明确的响应式规则映射，而不是在每个页面重新写一套像素值；确有例外时，为导航切换、图标占位等用途命名并记录例外原因。
+
+### 3. Separate the hit box from the visible surface
+
+需要保持外部尺寸稳定时，让控件保留固定宽高和 `1px` 边框占位；填充变体使用 `background-clip: padding-box`，使背景不覆盖透明边框。不要为了抵消视觉上的 1px 而给填充变体额外加宽或减高，否则会把视觉问题转化为真实的布局不一致。
+
+### 4. Assign one visual owner per surface
+
+普通输入框和选择器由自身负责高度、边框、圆角、背景和 focus ring；搜索框、筛选条等复合控件则由 wrapper 负责外框，内部输入控件只负责内容布局，并显式清除重复的边框、阴影和圆角。一个可见表面只保留一个 owner，避免通过负 margin 或页面级偏移掩盖重复绘制。
+
+### 5. Make the cascade intentional
+
+先应用浏览器 reset，再应用共享组件的语义基线，最后才允许页面级布局覆盖。共享 CSS 应优先使用 `data-slot`、`data-size` 和 `data-variant` 等稳定契约选择器；不要依赖偶然的 class 顺序，也不要用 `!important` 把层叠问题藏起来。每次修改基础规则后，检查 `button`、`input`、`select` 以及复合 wrapper 的 computed style，确认实际生效的是预期规则。
+
+### 6. Verify with a state matrix
+
+为共享控件维护一个可重复打开的 Storybook 或其他源代码管理的验证面，至少覆盖浅色和深色主题、紧凑和表单尺寸、填充和未填充变体、输入框和选择器、禁用态和键盘焦点态，以及 `lg` 和 `icon-lg`。页面级验证再覆盖桌面视口和移动视口，并包含长文本、空值、溢出和复合控件组合。
+
+推荐按以下顺序排查：先比较 DOM 尺寸和 computed style，再确认 CSS 层叠与边框归属，然后在固定主题和视口下检查实际绘制，最后回到页面级覆盖规则。视觉证据应来自可重复的 Storybook 或 login-free demo 表面，并只截取明确的验证目标，避免把浏览器缩放、截图裁剪或无关页面差异误判为组件回归。
+
+## Guardrails / Reuse notes
+
+- `getBoundingClientRect()` 相等只是必要条件，不是视觉一致性的充分条件；还要比较 `background-clip`、边框颜色、阴影、圆角和 focus ring。
+- 修复“看起来大 1px”时，先检查透明边框是否被背景绘制、边框是否被 reset 清掉，以及 wrapper 和子控件是否重复绘制；不要直接修改某一个变体的宽高。
+- 高度、边框、阴影和圆角应各自只有一个明确 owner；复合控件内部的输入框不能重新拥有外框。
+- 所有共享尺寸都应来自 token 和语义变体；页面级微调只能表达真实的布局例外，不能替代组件契约。
+- 移动端优先保证交互区域和文字可用性，再处理紧凑排列；不要为了桌面端对齐而把触控控件压缩到 `44px` 以下。
+- 每个共享组件的视觉修复都应补充对应的状态矩阵或 Storybook 覆盖，并在页面验证中确认主题、视口和组合关系没有回归。
+
+## References
+
+- [`web/src/index.css`](../../../web/src/index.css) defines shared theme tokens, control metrics, border ownership and background clipping.
+- [`web/src/components/ui/button.tsx`](../../../web/src/components/ui/button.tsx) defines semantic button variants and sizes through `data-*` contracts.
+- [`web/src/components/ui/input.tsx`](../../../web/src/components/ui/input.tsx) and [`web/src/components/ui/select.tsx`](../../../web/src/components/ui/select.tsx) show the ordinary form-control ownership boundary.
+- [`web/src/components/ui/ControlMetrics.stories.tsx`](../../../web/src/components/ui/ControlMetrics.stories.tsx) provides a reusable state matrix for themes, sizes and control combinations.
+- [`docs/design/HANDOFF.md`](../../design/HANDOFF.md) contains the product surface and responsive design context used by the shared UI implementation.
