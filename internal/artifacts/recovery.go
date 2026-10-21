@@ -773,6 +773,14 @@ const (
 )
 
 func (s *Store) reconcileOne(ctx context.Context, id string, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
+	return s.reconcileOneWithRetryPolicy(ctx, id, cleanup, false)
+}
+
+func (s *Store) reconcileOneForRecovery(ctx context.Context, id string, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
+	return s.reconcileOneWithRetryPolicy(ctx, id, cleanup, true)
+}
+
+func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, cleanup *cleanupDeadline, respectRetryAfter bool) (artifactRecord, recoveryStatus, error) {
 	if err := s.ensureObjectDirectory(); err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -788,6 +796,22 @@ func (s *Store) reconcileOne(ctx context.Context, id string, cleanup *cleanupDea
 	record, err := readArtifactRecord(ctx, tx, id)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
+	}
+	if respectRetryAfter {
+		var due bool
+		if err := tx.QueryRow(ctx, `
+			SELECT staging_reclaim_after <= NOW()
+			FROM conversation_artifacts
+			WHERE id = $1
+		`, id).Scan(&due); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return artifactRecord{}, recoveryPending, err
+			}
+			return artifactRecord{}, recoveryPending, fmt.Errorf("check artifact recovery retry: %w", ErrStoreUnavailable)
+		}
+		if !due {
+			return record, recoveryPending, nil
+		}
 	}
 	if record.State != publicationPending {
 		if record.State == publicationReady {
@@ -1290,7 +1314,7 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 			return report, err
 		}
 		report.Scanned++
-		_, status, err := s.reconcileOne(ctx, id, cleanup)
+		_, status, err := s.reconcileOneForRecovery(ctx, id, cleanup)
 		if err != nil {
 			report.Failed++
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

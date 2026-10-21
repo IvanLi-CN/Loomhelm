@@ -506,6 +506,51 @@ func TestStoreRecoveryDefersPendingFailuresForFairness(t *testing.T) {
 	}
 }
 
+func TestStoreRecoveryRechecksPersistedRetryDeadline(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("retry deadline recheck")
+	artifact := testArtifact(uniqueID("artifact-retry-recheck"), nil, content)
+	stagingName := ".upload-retry-recheck-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertPendingArtifactAt(t, db.Pool(), ctx, artifact, stagingName, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_reclaim_after = NOW() WHERE id = $1`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+	var updateErr error
+	store.faults = &faultHooks{
+		BeforeIdentityLock: func(lockCtx context.Context, _ pgx.Tx, id string) {
+			if id != artifact.ID {
+				return
+			}
+			_, updateErr = db.Pool().Exec(lockCtx, `
+				UPDATE conversation_artifacts
+				SET staging_reclaim_after = NOW() + INTERVAL '1 minute'
+				WHERE id = $1
+			`, id)
+		},
+	}
+	_, status, err := store.reconcileOneForRecovery(ctx, artifact.ID, nil)
+	if err != nil {
+		t.Fatalf("stale recovery error = %v", err)
+	}
+	if updateErr != nil {
+		t.Fatalf("persist retry update error = %v", updateErr)
+	}
+	if status != recoveryPending {
+		t.Fatalf("stale recovery status = %q, want pending", status)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationPending) {
+		t.Fatalf("stale recovery state = %q, want pending", state)
+	}
+}
+
 func TestStoreRecoveryDefersReadyFailuresForFairness(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -757,6 +802,10 @@ func TestStoreEnforcesConfiguredMaxBytesAtBothBoundaries(t *testing.T) {
 		t.Fatalf("exact configured limit error = %v", err)
 	}
 	oversized := []byte("123456789")
+	declaredOversizedArtifact := testArtifact(uniqueID("artifact-max-declared-over"), nil, oversized)
+	if _, err := store.Put(ctx, declaredOversizedArtifact, readCloser(bytes.NewReader(oversized))); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("declared over-limit error = %v, want %v", err, ErrTooLarge)
+	}
 	oversizedArtifact := testArtifact(uniqueID("artifact-max-over"), nil, exact)
 	if _, err := store.Put(ctx, oversizedArtifact, readCloser(bytes.NewReader(oversized))); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("over-limit error = %v, want %v", err, ErrTooLarge)

@@ -120,7 +120,7 @@ func TestArtifactProcessHelper(t *testing.T) {
 				}
 			}
 		}
-		_, _, err := store.reconcileOne(ctx, id, nil)
+		_, _, err := store.reconcileOneForRecovery(ctx, id, nil)
 		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "helper Recover: %v\n", err)
