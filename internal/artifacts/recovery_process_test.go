@@ -67,23 +67,7 @@ func TestArtifactProcessHelper(t *testing.T) {
 			os.Exit(2)
 		}
 	}
-	if mode == "pause-repair" {
-		faults.AfterRepairIntentCommit = func() {
-			signal := os.Getenv("LOOMHELM_ARTIFACT_SIGNAL")
-			release := os.Getenv("LOOMHELM_ARTIFACT_RELEASE")
-			if signal != "" {
-				_ = os.WriteFile(signal, []byte("ready"), 0o600)
-			}
-			deadline := time.Now().Add(20 * time.Second)
-			for {
-				if _, statErr := os.Stat(release); statErr == nil || time.Now().After(deadline) {
-					return
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-		}
-	}
-	if mode == "pause-recovery" || mode == "pause-put" {
+	if mode == "pause-repair" || mode == "pause-recovery" || mode == "pause-put" {
 		faults.AfterIdentityLock = func() {
 			signal := os.Getenv("LOOMHELM_ARTIFACT_SIGNAL")
 			release := os.Getenv("LOOMHELM_ARTIFACT_RELEASE")
@@ -125,10 +109,18 @@ func TestArtifactProcessHelper(t *testing.T) {
 		os.Exit(2)
 	}
 	if mode == "recover" {
-		if signal := os.Getenv("LOOMHELM_ARTIFACT_SIGNAL"); signal != "" {
-			_ = os.WriteFile(signal, []byte("ready"), 0o600)
+		faults.BeforeIdentityLock = func(lockCtx context.Context, tx pgx.Tx, _ string) {
+			if signal := os.Getenv("LOOMHELM_ARTIFACT_SIGNAL"); signal != "" {
+				_ = os.WriteFile(signal, []byte("attempt"), 0o600)
+			}
+			if signal := os.Getenv("LOOMHELM_ARTIFACT_PID_SIGNAL"); signal != "" {
+				var pid int32
+				if err := tx.QueryRow(lockCtx, `SELECT pg_backend_pid()`).Scan(&pid); err == nil {
+					_ = os.WriteFile(signal, []byte(strconv.Itoa(int(pid))), 0o600)
+				}
+			}
 		}
-		_, err := store.Recover(ctx, MaxRecoveryLimit)
+		_, _, err := store.reconcileOne(ctx, id, nil)
 		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "helper Recover: %v\n", err)
@@ -399,13 +391,28 @@ func TestStoreConcurrentRepairAndRecoveryConverge(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForFile(t, signal)
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, []byte("release"), 0o600)
+		if repair.Process != nil {
+			_ = repair.Process.Kill()
+		}
+	})
 	recoverySignal := filepath.Join(root, "recovery-started")
+	recoveryPIDSignal := filepath.Join(root, "recovery-pid")
 	recovery := newArtifactHelper(t, "recover", "", root, id, content)
-	recovery.Env = append(recovery.Env, "LOOMHELM_ARTIFACT_SIGNAL="+recoverySignal)
+	recovery.Env = append(recovery.Env, "LOOMHELM_ARTIFACT_SIGNAL="+recoverySignal, "LOOMHELM_ARTIFACT_PID_SIGNAL="+recoveryPIDSignal)
 	if err := recovery.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if recovery.Process != nil {
+			_ = recovery.Process.Kill()
+		}
+	})
 	waitForFile(t, recoverySignal)
+	probeDB, _, probeCtx := openStoreAtRoot(t, root)
+	defer probeDB.Close()
+	waitForBlockedPID(t, probeDB, probeCtx, recoveryPIDSignal)
 	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
 		t.Fatal(err)
 	}

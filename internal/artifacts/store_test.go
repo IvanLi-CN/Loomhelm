@@ -465,7 +465,7 @@ func TestStoreRecoveryDefersPendingFailuresForFairness(t *testing.T) {
 	insertPendingArtifactAt(t, db.Pool(), ctx, failed, ".upload-pending-failed", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
 	cleanup := newCleanupDeadline(ctx)
 	defer cleanup.stop()
-	store.deferPendingRecovery(failed.ID, cleanup)
+	store.deferArtifactRecovery(failed.ID, cleanup)
 
 	healthy := testArtifact("artifact-pending-healthy-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
 	healthyStaging := ".upload-pending-healthy-" + fmt.Sprint(time.Now().UnixNano())
@@ -503,6 +503,53 @@ func TestStoreRecoveryDefersPendingFailuresForFairness(t *testing.T) {
 	second, err := store.Recover(ctx, 1)
 	if err != nil || second.Ready != 1 {
 		t.Fatalf("retried pending recovery = %#v, err=%v", second, err)
+	}
+}
+
+func TestStoreRecoveryDefersReadyFailuresForFairness(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready recovery retry")
+	failed := testArtifact("artifact-ready-failed-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
+	failedStaging := ".upload-ready-failed-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, failedStaging), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, failed.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifactAt(t, db.Pool(), ctx, failed, failedStaging, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	store.deferArtifactRecovery(failed.ID, cleanup)
+
+	healthy := testArtifact("artifact-ready-healthy-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
+	healthyStaging := ".upload-ready-healthy-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, healthyStaging), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, healthy.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifactAt(t, db.Pool(), ctx, healthy, healthyStaging, time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_reclaim_after = TIMESTAMPTZ '2000-01-02'
+		WHERE id = $1
+	`, healthy.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := store.Recover(ctx, 1)
+	if err != nil || first.Ready != 1 {
+		t.Fatalf("healthy ready recovery = %#v, err=%v", first, err)
+	}
+	var retryAt time.Time
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaim_after FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if !retryAt.After(time.Now()) {
+		t.Fatalf("ready retry_at = %s, want a deferred time", retryAt)
 	}
 }
 
@@ -554,6 +601,34 @@ func TestStoreRetriesKnownUnreferencedStagingCleanupDebt(t *testing.T) {
 	}
 	if queued != 0 {
 		t.Fatalf("cleanup debt rows after retry = %d, want 0", queued)
+	}
+}
+
+func TestStoreCleanupDebtSkipsActiveStagingReference(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("active staging reference")
+	stagingName := ".upload-cleanup-active-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	store.enqueueStagingCleanup(stagingName, cleanup)
+	artifact := testArtifact(uniqueID("artifact-cleanup-active"), nil, content)
+	insertPendingArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	if err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); err != nil {
+		t.Fatalf("active staging was removed: %v", err)
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("active cleanup debt rows = %d, want 0", queued)
 	}
 }
 
@@ -682,7 +757,7 @@ func TestStoreEnforcesConfiguredMaxBytesAtBothBoundaries(t *testing.T) {
 		t.Fatalf("exact configured limit error = %v", err)
 	}
 	oversized := []byte("123456789")
-	oversizedArtifact := testArtifact(uniqueID("artifact-max-over"), nil, oversized)
+	oversizedArtifact := testArtifact(uniqueID("artifact-max-over"), nil, exact)
 	if _, err := store.Put(ctx, oversizedArtifact, readCloser(bytes.NewReader(oversized))); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("over-limit error = %v, want %v", err, ErrTooLarge)
 	}
