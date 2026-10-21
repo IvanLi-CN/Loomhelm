@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -89,7 +90,8 @@ func (f fakeProvider) TransportFor(context.Context, protocol.GatewaySession) (RP
 func TestAdapterSendsRunAndDeduplicatesWithoutReplay(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-1"}}`)}}}
-	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"turn":{"id":"turn-1","status":"inProgress","unknownField":{"kept":true}}}`)}}}
+	turnResult := json.RawMessage(`{"turn":{"id":"turn-1","status":"inProgress","unknownField":{"kept":true}}}`)
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{Raw: json.RawMessage(`{"jsonrpc":"2.0","id":2,"result":{"turn":{"id":"turn-1","status":"inProgress","unknownField":{"kept":true}}}}`), Result: turnResult}}}
 	journal := openTestJournal(t)
 	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
 	if err != nil {
@@ -111,6 +113,23 @@ func TestAdapterSendsRunAndDeduplicatesWithoutReplay(t *testing.T) {
 	if !bytesContains(ack.Result, []byte(`"unknownField"`)) {
 		t.Fatalf("run result did not preserve unknown fields: %s", ack.Result)
 	}
+	if ack.EventCursor == nil {
+		t.Fatal("run ACK did not point to the durable response observation")
+	}
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: session.SessionID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawResponseObserved bool
+	for _, event := range page.Events {
+		if event.Type == protocol.EventTypeUnknown && bytesContains(event.Payload, []byte(`"jsonrpc":"2.0"`)) {
+			rawResponseObserved = true
+			break
+		}
+	}
+	if !rawResponseObserved {
+		t.Fatal("durable response observation did not preserve the raw envelope")
+	}
 
 	duplicate, deduplicated, err := journal.BeginCommand(command)
 	if err != nil || !deduplicated || duplicate.State != protocol.CommandStateSucceeded {
@@ -131,7 +150,7 @@ func TestAdapterMarksAckLossUnknownAndReconcileNeverReplays(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-2"}}`)}}}
 	transport.responses["turn/start"] = []fakeResult{{err: ErrUnknownOutcome}, {message: RPCMessage{Result: json.RawMessage(`{"turn":{"id":"turn-2","status":"completed"}}`)}}}
-	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-2","status":"completed","items":[{"type":"userMessage","content":[{"type":"text","text":"uncertain"}]}]}]}`)}}}
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-2","status":"completed","createdAt":"2026-10-21T00:00:01Z","items":[{"type":"userMessage","content":[{"type":"text","text":"uncertain"}]}]}]}`)}}}
 	journal := openTestJournal(t)
 	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
 	if err != nil {
@@ -220,6 +239,141 @@ func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	}
 }
 
+func TestAdapterKeepsApprovalUnknownForUnrecognizedResolution(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-approval-unknown"}}`)}}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-approval-unknown", Generation: "generation-approval-unknown", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	transport.events <- rpcEvent(17, "item/commandExecution/requestApproval", `{"threadId":"thread-approval-unknown","turnId":"turn-3","item":{"id":"item-approval-unknown","type":"commandExecution"}}`)
+	waitForPendingApproval(t, journal, session.SessionID)
+	transport.responseEvents["17"] = rpcEvent(18, "serverRequest/resolved", `{"threadId":"thread-approval-unknown","turnId":"turn-3","requestId":17,"resolution":"unexpected"}`)
+	command := protocol.Command{
+		CommandID: "approval-unknown",
+		IssuedAt:  now(),
+		Kind:      protocol.CommandKindRunApprove,
+		Payload:   json.RawMessage(`{"request_id":17,"decision":"approve","revision":1,"command_id":"approval-unknown"}`),
+		RunID:     stringPointer("turn-3"),
+		SessionID: session.SessionID,
+	}
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
+		t.Fatalf("unknown approval ACK = %+v, error = %v", ack, err)
+	}
+	stored, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != protocol.CommandStateUnknown {
+		t.Fatalf("stored unknown approval ACK = %+v", stored)
+	}
+}
+
+func TestAdapterKeepsApprovalUnknownWhenResolutionIsCleared(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-approval-cleared"}}`)}}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-approval-cleared", Generation: "generation-approval-cleared", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	transport.events <- rpcEvent(27, "item/commandExecution/requestApproval", `{"threadId":"thread-approval-cleared","turnId":"turn-3","item":{"id":"item-approval-cleared","type":"commandExecution"}}`)
+	waitForPendingApproval(t, journal, session.SessionID)
+	transport.responseEvents["27"] = rpcEvent(28, "serverRequest/resolved", `{"threadId":"thread-approval-cleared","turnId":"turn-3","requestId":27}`)
+	command := protocol.Command{
+		CommandID: "approval-cleared",
+		IssuedAt:  now(),
+		Kind:      protocol.CommandKindRunApprove,
+		Payload:   json.RawMessage(`{"request_id":27,"decision":"approve","revision":1,"command_id":"approval-cleared"}`),
+		RunID:     stringPointer("turn-3"),
+		SessionID: session.SessionID,
+	}
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if err != nil || ack.State != protocol.CommandStateSucceeded {
+		t.Fatalf("cleared approval delivery ACK = %+v, error = %v", ack, err)
+	}
+	if result, ok := journal.ApprovalResult(command.CommandID); !ok || result != approvalResolutionCleared {
+		t.Fatalf("cleared approval result = %q, found = %v", result, ok)
+	}
+}
+
+func TestAdapterDoesNotReconcileClearedApprovalAsItemOutcome(t *testing.T) {
+	transport := newFakeTransport()
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.BindRecoveredSession(context.Background(), protocol.GatewaySession{Handle: "gateway-approval-reconcile", ExternalThreadRef: "thread-approval-reconcile", Generation: "generation-approval-reconcile", Path: protocol.SessionPathNew}, "thread-approval-reconcile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	command := protocol.Command{
+		CommandID: "approval-reconcile-cleared",
+		IssuedAt:  now(),
+		Kind:      protocol.CommandKindRunApprove,
+		Payload:   json.RawMessage(`{"request_id":31,"decision":"approve","revision":1,"command_id":"approval-reconcile-cleared"}`),
+		RunID:     stringPointer("turn-approval-reconcile"),
+		SessionID: session.SessionID,
+	}
+	if _, _, err := journal.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack.State = protocol.CommandStateUnknown
+	if err := journal.UpdateCommand(command.CommandID, ack); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: session.SessionID,
+		RunID:     command.RunID,
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":31,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-approval-reconcile","turnId":"turn-approval-reconcile","item":{"id":"item-approval-reconcile","type":"commandExecution"}}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, already, err := journal.ClaimApproval(session.SessionID, json.RawMessage(`31`), 1, command.CommandID, "approve"); err != nil || already {
+		t.Fatalf("approval claim = already %v, error %v", already, err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: session.SessionID,
+		RunID:     command.RunID,
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"threadId":"thread-approval-reconcile","turnId":"turn-approval-reconcile","requestId":31}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	if err != nil || reconciliation.State != protocol.ReconciliationStateUnknown {
+		t.Fatalf("cleared approval reconciliation = %+v, error = %v", reconciliation, err)
+	}
+	stored, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != protocol.CommandStateUnknown {
+		t.Fatalf("cleared approval ACK was finalized: %+v", stored)
+	}
+}
+
 func TestAdapterRejectsUnsupportedAttach(t *testing.T) {
 	journal := openTestJournal(t)
 	adapter, err := NewCodexAdapter(fakeProvider{transport: newFakeTransport()}, journal)
@@ -256,6 +410,112 @@ func TestAdapterBindsGatewayReconciledSessionWithoutSecondResume(t *testing.T) {
 	if got := countCalls(transport, "thread/resume"); got != 0 {
 		t.Fatalf("thread/resume calls = %d, want 0", got)
 	}
+}
+
+func TestAdapterResumesResolvedSessionAndSendsMissingInitialPrompt(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/resume"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-missing-initial"}}`)}}}
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"turn":{"id":"turn-missing-initial","status":"inProgress"}}`)}}}
+	journal := openTestJournal(t)
+	request := protocol.NewSessionRequest{ProjectID: "project-missing-initial", Prompt: "resume exactly once"}
+	gatewaySession := protocol.GatewaySession{Handle: "gateway-missing-initial", Generation: "generation-missing-initial", Path: protocol.SessionPathNew}
+	intentID, err := journal.BeginSessionStart(gatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "thread-missing-initial"
+	if err := journal.ResolveSessionStart(intentID, stableSessionID(threadID), threadID, gatewaySession.Generation); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), gatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	if session.ExternalThreadRef != threadID {
+		t.Fatalf("resumed session = %+v", session)
+	}
+	if got := countCalls(transport, "thread/start"); got != 0 {
+		t.Fatalf("thread/start calls = %d, want 0", got)
+	}
+	if got := countCalls(transport, "thread/resume"); got != 1 {
+		t.Fatalf("thread/resume calls = %d, want 1", got)
+	}
+	if got := countCalls(transport, "turn/start"); got != 1 {
+		t.Fatalf("initial turn/start calls = %d, want 1", got)
+	}
+	if _, err := journal.LookupCommand(session.SessionID + ":initial"); err != nil {
+		t.Fatalf("initial prompt command was not persisted: %v", err)
+	}
+}
+
+func TestAdapterResolvesUnknownSessionStartFromLateResponse(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{err: ErrUnknownOutcome}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewaySession := protocol.GatewaySession{Handle: "gateway-late-start", Generation: "generation-late-start", Path: protocol.SessionPathNew}
+	_, err = adapter.StartSession(context.Background(), gatewaySession, protocol.NewSessionRequest{})
+	if !errors.Is(err, ErrUnknownOutcome) {
+		t.Fatalf("unknown session start error = %v", err)
+	}
+	threadID := "thread-late-start"
+	raw := json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-late-start"}}}`)
+	transport.events <- RPCMessage{Raw: raw, ID: json.RawMessage(`1`), Result: json.RawMessage(`{"thread":{"id":"thread-late-start"}}`), operation: "thread/start"}
+	var session protocol.AdapterSession
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if candidate, ok := journal.Session(stableSessionID(threadID)); ok {
+			session = candidate
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if session.ExternalThreadRef != threadID {
+		t.Fatalf("late session start was not resolved: %+v", session)
+	}
+	if err := adapter.CloseSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdapterMarksUnexpectedTransportCloseForReconciliation(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-close"}}`)}}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-close", Generation: "generation-close", Path: protocol.SessionPathNew}, protocol.NewSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		page, readErr := journal.ReadEvents(protocol.EventQuery{SessionID: session.SessionID, Limit: 100})
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, event := range page.Events {
+			if event.Type == protocol.EventTypeReconciliationRequired {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("unexpected transport close was not recorded as reconciliation required")
 }
 
 func TestAdapterRebuildsActiveTurnOnColdRecovery(t *testing.T) {
@@ -323,6 +583,54 @@ func TestAdapterLeavesInFlightCommandUnknownDuringReconciliation(t *testing.T) {
 	}
 }
 
+func TestAdapterKeepsObservedRunUnknownWhenHistoryIsMissing(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[]}`)}}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadRef := "thread-missing-history"
+	session, err := adapter.BindRecoveredSession(context.Background(), protocol.GatewaySession{Handle: "gateway-missing-history", ExternalThreadRef: threadRef, Generation: "generation-missing-history", Path: protocol.SessionPathNew}, threadRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	command := testCommand("missing-history", `{"prompt":"may have run"}`)
+	command.SessionID = session.SessionID
+	if _, _, err := journal.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack.State = protocol.CommandStateUnknown
+	if err := journal.UpdateCommand(command.CommandID, ack); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: session.SessionID,
+		RunID:     stringPointer("turn-observed-but-missing"),
+		Type:      protocol.EventTypeRunStarted,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"method":"turn/started"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciliation.State != protocol.ReconciliationStateUnknown {
+		t.Fatalf("missing-history reconciliation = %+v, want unknown", reconciliation)
+	}
+	if reconciliation.Note == nil || !strings.Contains(*reconciliation.Note, "remains unknown") {
+		t.Fatalf("missing-history reconciliation note = %v", reconciliation.Note)
+	}
+}
+
 func TestTurnContainsPromptUsesStructuredExactText(t *testing.T) {
 	turn := appServerTurn{Items: []byte(`[{"type":"userMessage","content":[{"type":"text","text":"run exactly"}]},{"type":"agentMessage","text":"please run exactly now"}]`)}
 	if !turnContainsPrompt(turn, "run exactly") {
@@ -330,6 +638,93 @@ func TestTurnContainsPromptUsesStructuredExactText(t *testing.T) {
 	}
 	if turnContainsPrompt(turn, "exactly") {
 		t.Fatal("substring from an unrelated message was matched")
+	}
+}
+
+func TestMatchCommandTurnRechecksPromptForKnownRunID(t *testing.T) {
+	command := testCommand("reconcile-prompt", `{"prompt":"expected prompt"}`)
+	ack := protocol.CommandAck{RunID: stringPointer("turn-1")}
+	turns := []appServerTurn{{ID: "turn-1", Status: "completed", Items: []byte(`[{"type":"userMessage","text":"different prompt"}]`)}}
+	if matched, ambiguous := matchCommandTurn(command, ack, turns); matched != nil || ambiguous {
+		t.Fatalf("mismatched known run = %+v, ambiguous = %v", matched, ambiguous)
+	}
+}
+
+func TestMatchCommandTurnAcceptsKnownRunWithoutSummaryInput(t *testing.T) {
+	command := testCommand("reconcile-summary", `{"prompt":"expected prompt"}`)
+	ack := protocol.CommandAck{RunID: stringPointer("turn-summary")}
+	turn := appServerTurn{ID: "turn-summary", Status: "completed"}
+	if matched, ambiguous := matchCommandTurn(command, ack, []appServerTurn{turn}); matched == nil || ambiguous {
+		t.Fatalf("summary-only known run = %+v, ambiguous = %v", matched, ambiguous)
+	}
+}
+
+func TestMatchCommandTurnRejectsOlderSamePromptWithoutRunID(t *testing.T) {
+	command := testCommand("reconcile-old-prompt", `{"prompt":"same prompt"}`)
+	command.IssuedAt = "2026-10-21T00:00:02Z"
+	turn := appServerTurn{
+		ID:        "turn-old",
+		Status:    "completed",
+		CreatedAt: "2026-10-21T00:00:01Z",
+		Items:     []byte(`[{"type":"userMessage","text":"same prompt"}]`),
+	}
+	if matched, ambiguous := matchCommandTurn(command, protocol.CommandAck{}, []appServerTurn{turn}); matched != nil || ambiguous {
+		t.Fatalf("older same-prompt turn was matched: %+v, ambiguous = %v", matched, ambiguous)
+	}
+}
+
+func TestMatchCommandTurnRechecksStructuredInput(t *testing.T) {
+	command := testCommand("reconcile-input", `{"input":[{"type":"text","text":"expected input"}]}`)
+	ack := protocol.CommandAck{RunID: stringPointer("turn-1")}
+	matching := appServerTurn{ID: "turn-1", Status: "completed", Input: []byte(`[{"type":"text","text":"expected input"}]`)}
+	if matched, _ := matchCommandTurn(command, ack, []appServerTurn{matching}); matched == nil {
+		t.Fatal("matching structured input was rejected")
+	}
+	mismatched := matching
+	mismatched.Input = []byte(`[{"type":"text","text":"different input"}]`)
+	if matched, _ := matchCommandTurn(command, ack, []appServerTurn{mismatched}); matched != nil {
+		t.Fatal("mismatched structured input was accepted")
+	}
+}
+
+func TestParseTurnsPagePreservesTurnsAlias(t *testing.T) {
+	page, ok := parseTurnsPage(json.RawMessage(`{"turns":[{"id":"turn-alias","status":"completed"}]}`))
+	if !ok || page.Data != nil || page.Turns == nil || len(*page.Turns) != 1 || (*page.Turns)[0].ID != "turn-alias" {
+		t.Fatalf("turns alias page = %+v, ok = %v", page, ok)
+	}
+}
+
+func TestAdapterPreservesRawAppServerResponseEnvelope(t *testing.T) {
+	journal := openTestJournal(t)
+	transport := newFakeTransport()
+	adapter, err := NewAdapter(fakeProvider{transport: transport}, journal, AdapterConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &adapterSessionState{
+		session:   protocol.AdapterSession{SessionID: "session-raw"},
+		transport: transport,
+	}
+	raw := json.RawMessage(`{"jsonrpc":"2.0","id":7,"result":{"thread":{"id":"thread-raw"}}}`)
+	event, err := adapter.appendObservedEventFromSource(state, protocol.EventTypeSessionCreated, protocol.EventSourceAppServer, "thread/start", raw, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(event.Payload) != string(raw) {
+		t.Fatalf("observed response payload = %s, want %s", event.Payload, raw)
+	}
+}
+
+func TestCommandCanConfirmFromTurnRequiresCompletedRun(t *testing.T) {
+	command := testCommand("reconcile-status", `{"prompt":"run"}`)
+	if commandCanConfirmFromTurn(command, appServerTurn{ID: "turn-failed", Status: "failed"}) {
+		t.Fatal("failed turn was treated as a successful run command")
+	}
+	if !commandCanConfirmFromTurn(command, appServerTurn{ID: "turn-completed", Status: "completed"}) {
+		t.Fatal("completed turn was not accepted as a successful run command")
+	}
+	if outcome, established := commandOutcomeFromTurn(command, appServerTurn{ID: "turn-failed", Status: "failed"}); !established || outcome != protocol.CommandStateFailed {
+		t.Fatalf("failed turn outcome = %q, established = %v", outcome, established)
 	}
 }
 

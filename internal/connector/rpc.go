@@ -14,13 +14,18 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-const defaultMaxFrameBytes = 4 << 20
+const (
+	defaultMaxFrameBytes = 4 << 20
+	maxEventQueueBytes   = 64 << 20
+)
 
 var (
-	ErrTransportClosed = errors.New("RPC transport is closed")
-	ErrUnknownOutcome  = errors.New("RPC side effect outcome is unknown")
+	ErrTransportClosed    = errors.New("RPC transport is closed")
+	ErrUnknownOutcome     = errors.New("RPC side effect outcome is unknown")
+	ErrEventQueueOverflow = errors.New("RPC event queue exceeded its memory limit")
 )
 
 // RPCError is the JSON-RPC error object returned by app-server.
@@ -33,12 +38,20 @@ type RPCError struct {
 // RPCMessage keeps the complete raw JSON object while exposing the fields
 // needed by the adapter. Unknown app-server fields stay in Raw.
 type RPCMessage struct {
-	Raw    json.RawMessage
-	ID     json.RawMessage
-	Method string
-	Params json.RawMessage
-	Result json.RawMessage
-	Error  *RPCError
+	Raw         json.RawMessage
+	ID          json.RawMessage
+	Method      string
+	Params      json.RawMessage
+	Result      json.RawMessage
+	Error       *RPCError
+	operation   string
+	runID       string
+	observation chan rpcObservation
+}
+
+type rpcObservation struct {
+	eventCursor string
+	err         error
 }
 
 func (m RPCMessage) IsResponse() bool {
@@ -68,15 +81,16 @@ type RPCTransport interface {
 }
 
 // ProcessTransportConfig starts one host-owned app-server child. The caller
-// supplies the exact CLI path and environment; credentials are never read or
-// copied by this package.
+// supplies the exact CLI path. An explicit CommandEnv is passed through as-is;
+// the default environment is a small non-secret allowlist.
 type ProcessTransportConfig struct {
-	CommandPath   string
-	CommandArgs   []string
-	CommandEnv    []string
-	WorkingDir    string
-	Stderr        io.Writer
-	MaxFrameBytes int
+	CommandPath       string
+	CommandArgs       []string
+	CommandEnv        []string
+	WorkingDir        string
+	Stderr            io.Writer
+	MaxFrameBytes     int
+	afterRequestWrite func(string)
 }
 
 // NewProcessTransport starts a JSONL app-server child. The default arguments
@@ -118,6 +132,8 @@ func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*P
 	command := exec.Command(commandPath, args...)
 	if config.CommandEnv != nil {
 		command.Env = append([]string(nil), config.CommandEnv...)
+	} else {
+		command.Env = sanitizedCommandEnv()
 	}
 	if config.WorkingDir != "" {
 		command.Dir = config.WorkingDir
@@ -131,30 +147,44 @@ func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*P
 	if err != nil {
 		return nil, fmt.Errorf("create app-server stdin: %w", err)
 	}
-	stdout, err := command.StdoutPipe()
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		stdin.Close()
 		return nil, fmt.Errorf("create app-server stdout: %w", err)
 	}
+	command.Stdout = stdoutWriter
 	if err := command.Start(); err != nil {
 		stdin.Close()
 		stdout.Close()
+		stdoutWriter.Close()
 		return nil, fmt.Errorf("start app-server: %w", err)
+	}
+	if err := stdoutWriter.Close(); err != nil {
+		stdin.Close()
+		stdout.Close()
+		_ = command.Process.Kill()
+		return nil, fmt.Errorf("close parent app-server stdout: %w", err)
 	}
 
 	transport := &ProcessTransport{
-		command:       command,
-		stdin:         stdin,
-		stdout:        stdout,
-		maxFrameBytes: config.MaxFrameBytes,
-		pending:       make(map[string]pendingRPC),
-		events:        make(chan RPCMessage, 128),
-		done:          make(chan struct{}),
-		waitDone:      make(chan struct{}),
-		readDone:      make(chan struct{}),
+		command:           command,
+		stdin:             stdin,
+		stdout:            stdout,
+		maxFrameBytes:     config.MaxFrameBytes,
+		pending:           make(map[string]pendingRPC),
+		events:            make(chan RPCMessage),
+		done:              make(chan struct{}),
+		waitDone:          make(chan struct{}),
+		readDone:          make(chan struct{}),
+		eventDispatchDone: make(chan struct{}),
+		eventStop:         make(chan struct{}),
+		afterRequestWrite: config.afterRequestWrite,
+		abandoned:         make(map[string]pendingRPC),
 	}
+	transport.eventCond = sync.NewCond(&transport.eventMu)
 	go transport.readLoop()
 	go transport.waitLoop()
+	go transport.dispatchEvents()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -166,8 +196,15 @@ func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*P
 }
 
 type pendingRPC struct {
-	result chan rpcResult
-	sent   bool
+	result        chan rpcResult
+	sent          bool
+	writing       bool
+	method        string
+	runID         string
+	observe       bool
+	observation   chan rpcObservation
+	earlyResponse *RPCMessage
+	abandoned     bool
 }
 
 type rpcResult struct {
@@ -188,15 +225,24 @@ type ProcessTransport struct {
 
 	pendingMu sync.Mutex
 	pending   map[string]pendingRPC
+	abandoned map[string]pendingRPC
 
-	events         chan RPCMessage
-	done           chan struct{}
-	closed         sync.Once
-	eventsClosed   sync.Once
-	closeRequested atomic.Bool
-	finish         sync.Once
-	errMu          sync.Mutex
-	err            error
+	events            chan RPCMessage
+	eventMu           sync.Mutex
+	eventCond         *sync.Cond
+	eventQueue        []RPCMessage
+	eventQueueBytes   int
+	eventDispatchDone chan struct{}
+	eventStop         chan struct{}
+	eventStopOnce     sync.Once
+	afterRequestWrite func(string)
+	done              chan struct{}
+	closed            sync.Once
+	eventsClosed      sync.Once
+	closeRequested    atomic.Bool
+	finish            sync.Once
+	errMu             sync.Mutex
+	err               error
 
 	waitDone chan struct{}
 	readDone chan struct{}
@@ -218,6 +264,8 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 	id := p.nextID()
 	key := string(id)
 	waiter := make(chan rpcResult, 1)
+	observation := make(chan rpcObservation, 1)
+	runID := rpcRequestRunID(method, params)
 	p.pendingMu.Lock()
 	select {
 	case <-p.done:
@@ -225,58 +273,78 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 		return RPCMessage{}, ErrTransportClosed
 	default:
 	}
-	// Mark the request as sent before writing. Once a frame write has started,
-	// a process exit can no longer prove that the side effect was absent.
-	p.pending[key] = pendingRPC{result: waiter, sent: true}
+	if err := ctx.Err(); err != nil {
+		p.pendingMu.Unlock()
+		return RPCMessage{}, err
+	}
+	p.pending[key] = pendingRPC{
+		result:      waiter,
+		writing:     true,
+		method:      method,
+		runID:       runID,
+		observation: observation,
+	}
 	p.pendingMu.Unlock()
 
-	err := p.writeRequest(id, method, params)
+	err := p.writeRequest(ctx, id, method, params)
+	p.pendingMu.Lock()
+	request, exists := p.pending[key]
 	if err != nil {
-		p.pendingMu.Lock()
-		request, ok := p.pending[key]
-		if ok {
+		if exists {
 			delete(p.pending, key)
-		}
-		p.pendingMu.Unlock()
-		if !ok {
-			select {
-			case result := <-waiter:
-				return result.message, result.err
-			default:
-				return RPCMessage{}, ErrUnknownOutcome
+			if request.earlyResponse != nil {
+				earlyResponse := *request.earlyResponse
+				request.earlyResponse = nil
+				p.pendingMu.Unlock()
+				p.deliverResponse(request, earlyResponse)
+				return waitForRPCResult(waiter)
 			}
-		}
-		if request.sent {
 			var writeErr *TransportWriteError
 			if errors.As(err, &writeErr) && writeErr.Unknown {
-				return RPCMessage{}, ErrUnknownOutcome
+				request.abandoned = true
+				p.abandoned[key] = request
 			}
+		}
+		p.pendingMu.Unlock()
+		var writeErr *TransportWriteError
+		if errors.As(err, &writeErr) && writeErr.Unknown {
+			return RPCMessage{}, ErrUnknownOutcome
 		}
 		return RPCMessage{}, err
 	}
-	p.pendingMu.Lock()
-	request, ok := p.pending[key]
-	if ok {
-		request.sent = true
+	if !exists {
+		p.pendingMu.Unlock()
+		return waitForRPCResult(waiter)
+	}
+	request.writing = false
+	request.sent = true
+	earlyResponse := request.earlyResponse
+	request.earlyResponse = nil
+	if earlyResponse != nil {
+		delete(p.pending, key)
+	} else if err := ctx.Err(); err != nil {
+		delete(p.pending, key)
+		request.abandoned = true
+		p.abandoned[key] = request
+	} else {
 		p.pending[key] = request
 	}
 	p.pendingMu.Unlock()
-	if !ok {
-		select {
-		case result := <-waiter:
-			return result.message, result.err
-		default:
-			return RPCMessage{}, ErrUnknownOutcome
-		}
+	if earlyResponse != nil {
+		p.deliverResponse(request, *earlyResponse)
+		return waitForRPCResult(waiter)
 	}
 
 	select {
 	case result := <-waiter:
 		return result.message, result.err
 	case <-ctx.Done():
-		p.pendingMu.Lock()
-		delete(p.pending, key)
-		p.pendingMu.Unlock()
+		select {
+		case result := <-waiter:
+			return result.message, result.err
+		default:
+		}
+		p.abandon(key)
 		return RPCMessage{}, fmt.Errorf("%w: %v", ErrUnknownOutcome, ctx.Err())
 	case <-p.done:
 		select {
@@ -284,15 +352,25 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 			return result.message, result.err
 		default:
 		}
-		p.pendingMu.Lock()
-		request, existed := p.pending[key]
-		delete(p.pending, key)
-		p.pendingMu.Unlock()
-		if existed && request.sent {
-			return RPCMessage{}, ErrUnknownOutcome
-		}
+		p.abandon(key)
 		return RPCMessage{}, ErrUnknownOutcome
 	}
+}
+
+func waitForRPCResult(waiter <-chan rpcResult) (RPCMessage, error) {
+	result := <-waiter
+	return result.message, result.err
+}
+
+func (p *ProcessTransport) abandon(key string) {
+	p.pendingMu.Lock()
+	defer p.pendingMu.Unlock()
+	request, ok := p.pending[key]
+	if !ok {
+		return
+	}
+	delete(p.pending, key)
+	p.abandoned[key] = request
 }
 
 func (p *ProcessTransport) Notify(ctx context.Context, method string, params json.RawMessage) error {
@@ -311,11 +389,11 @@ func (p *ProcessTransport) Notify(ctx context.Context, method string, params jso
 	if !json.Valid(params) {
 		return errors.New("RPC params must be valid JSON")
 	}
-	return p.writeMessage(map[string]json.RawMessage{
+	return p.writeMessageContext(ctx, map[string]json.RawMessage{
 		"jsonrpc": json.RawMessage(`"2.0"`),
 		"method":  json.RawMessage(mustJSON(method)),
 		"params":  append(json.RawMessage(nil), params...),
-	})
+	}, nil)
 }
 
 func (p *ProcessTransport) Respond(ctx context.Context, id json.RawMessage, result json.RawMessage) error {
@@ -334,17 +412,18 @@ func (p *ProcessTransport) Respond(ctx context.Context, id json.RawMessage, resu
 	if !json.Valid(result) {
 		return errors.New("RPC response result must be valid JSON")
 	}
-	return p.writeMessage(map[string]json.RawMessage{
+	return p.writeMessageContext(ctx, map[string]json.RawMessage{
 		"jsonrpc": json.RawMessage(`"2.0"`),
 		"id":      append(json.RawMessage(nil), id...),
 		"result":  append(json.RawMessage(nil), result...),
-	})
+	}, nil)
 }
 
 func (p *ProcessTransport) Events() <-chan RPCMessage { return p.events }
 
 func (p *ProcessTransport) Close() error {
 	p.closeRequested.Store(true)
+	p.stopEventDispatch()
 	p.closed.Do(func() {
 		if p.stdin != nil {
 			_ = p.stdin.Close()
@@ -361,6 +440,9 @@ func (p *ProcessTransport) Close() error {
 	<-p.done
 	<-p.waitDone
 	<-p.readDone
+	if p.eventDispatchDone != nil {
+		<-p.eventDispatchDone
+	}
 	p.errMu.Lock()
 	defer p.errMu.Unlock()
 	return p.err
@@ -370,38 +452,81 @@ func (p *ProcessTransport) nextID() json.RawMessage {
 	return json.RawMessage(fmt.Sprintf("%d", p.id.Add(1)))
 }
 
-func (p *ProcessTransport) writeRequest(id json.RawMessage, method string, params json.RawMessage) error {
-	return p.writeMessage(map[string]json.RawMessage{
+func (p *ProcessTransport) writeRequest(ctx context.Context, id json.RawMessage, method string, params json.RawMessage) error {
+	return p.writeMessageContext(ctx, map[string]json.RawMessage{
 		"jsonrpc": json.RawMessage(`"2.0"`),
 		"id":      append(json.RawMessage(nil), id...),
 		"method":  json.RawMessage(mustJSON(method)),
 		"params":  append(json.RawMessage(nil), params...),
+	}, func() {
+		if p.afterRequestWrite != nil {
+			p.afterRequestWrite(method)
+		}
 	})
 }
 
 func (p *ProcessTransport) writeMessage(fields map[string]json.RawMessage) error {
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
-	select {
-	case <-p.done:
-		return ErrTransportClosed
-	default:
+	return p.writeMessageContext(context.Background(), fields, nil)
+}
+
+func (p *ProcessTransport) writeMessageContext(ctx context.Context, fields map[string]json.RawMessage, afterWrite func()) error {
+	if ctx == nil {
+		return errors.New("RPC write context must not be nil")
 	}
 	data, err := json.Marshal(fields)
 	if err != nil {
 		return fmt.Errorf("encode RPC message: %w", err)
 	}
 	data = append(data, '\n')
-	written, err := writeAll(p.stdin, data)
-	if err != nil {
-		return &TransportWriteError{BytesWritten: written, Err: err, Unknown: written > 0}
+	type writeResult struct {
+		written int
+		err     error
 	}
-	return nil
+	result := make(chan writeResult, 1)
+	go func() {
+		p.writeMu.Lock()
+		select {
+		case <-p.done:
+			p.writeMu.Unlock()
+			result <- writeResult{err: ErrTransportClosed}
+			return
+		default:
+		}
+		written, writeErr := writeAll(p.stdin, data)
+		p.writeMu.Unlock()
+		result <- writeResult{written: written, err: writeErr}
+		if writeErr == nil && afterWrite != nil {
+			afterWrite()
+		}
+	}()
+	select {
+	case value := <-result:
+		if value.err != nil {
+			return &TransportWriteError{BytesWritten: value.written, Err: value.err, Unknown: value.written > 0}
+		}
+		return nil
+	case <-ctx.Done():
+		select {
+		case value := <-result:
+			if value.err != nil {
+				return &TransportWriteError{BytesWritten: value.written, Err: value.err, Unknown: value.written > 0}
+			}
+			return nil
+		default:
+		}
+		// A blocked pipe write cannot be interrupted portably through io.Writer.
+		// Closing the owned transport is the only bounded way to stop it while
+		// preserving the unknown-outcome classification for the caller.
+		go func() { _ = p.Close() }()
+		return &TransportWriteError{Err: ctx.Err(), Unknown: true}
+	}
 }
 
 func (p *ProcessTransport) readLoop() {
 	defer func() {
-		p.eventsClosed.Do(func() { close(p.events) })
+		if p.eventCond == nil {
+			p.eventsClosed.Do(func() { close(p.events) })
+		}
 		close(p.readDone)
 	}()
 	reader := bufio.NewReaderSize(p.stdout, 64*1024)
@@ -412,12 +537,18 @@ func (p *ProcessTransport) readLoop() {
 				p.setError(err)
 			}
 			p.finishTransport(err)
+			if !p.closeRequested.Load() && !errors.Is(err, io.EOF) {
+				go func() { _ = p.Close() }()
+			}
 			return
 		}
 		message, err := parseRPCMessage(frame)
 		if err != nil {
 			p.setError(err)
 			p.finishTransport(err)
+			if !p.closeRequested.Load() {
+				go func() { _ = p.Close() }()
+			}
 			return
 		}
 		if message.IsResponse() {
@@ -425,26 +556,186 @@ func (p *ProcessTransport) readLoop() {
 			p.pendingMu.Lock()
 			request, ok := p.pending[key]
 			if ok {
+				if request.writing {
+					response := message
+					request.earlyResponse = &response
+					p.pending[key] = request
+					p.pendingMu.Unlock()
+					continue
+				}
 				delete(p.pending, key)
+			} else {
+				request, ok = p.abandoned[key]
+				if ok {
+					delete(p.abandoned, key)
+					request.abandoned = true
+				}
 			}
 			p.pendingMu.Unlock()
 			if ok {
-				request.result <- rpcResult{message: message}
+				if request.method != "" {
+					message.operation = request.method
+				}
+				message.runID = request.runID
+				message.observation = request.observation
+				if request.abandoned {
+					if err := p.enqueueEvent(message); err != nil {
+						p.setError(err)
+					}
+					continue
+				}
+				p.deliverResponse(request, message)
 				continue
 			}
 		}
-		select {
-		case p.events <- message:
-		case <-p.done:
+		if err := p.enqueueEvent(message); err != nil {
+			p.setError(err)
+			p.finishTransport(err)
+			go func() { _ = p.Close() }()
 			return
 		}
 	}
+}
+
+func (p *ProcessTransport) deliverResponse(request pendingRPC, message RPCMessage) {
+	if message.operation == "" {
+		message.operation = request.method
+	}
+	message.runID = request.runID
+	message.observation = request.observation
+	if err := p.enqueueEvent(message); err != nil {
+		p.setError(err)
+		p.finishTransport(err)
+		go func() { _ = p.Close() }()
+		request.result <- rpcResult{err: fmt.Errorf("%w: %v", ErrUnknownOutcome, err)}
+		return
+	}
+	request.result <- rpcResult{message: message}
+}
+
+func (p *ProcessTransport) enqueueEvent(message RPCMessage) error {
+	if p.eventCond == nil {
+		select {
+		case p.events <- message:
+			return nil
+		case <-p.done:
+			return ErrTransportClosed
+		}
+	}
+	p.eventMu.Lock()
+	messageBytes := len(message.Raw)
+	if messageBytes <= 0 {
+		messageBytes = 1
+	}
+	if messageBytes > maxEventQueueBytes || p.eventQueueBytes > maxEventQueueBytes-messageBytes {
+		p.eventMu.Unlock()
+		return ErrEventQueueOverflow
+	}
+	p.eventQueue = append(p.eventQueue, message)
+	p.eventQueueBytes += messageBytes
+	p.eventCond.Signal()
+	p.eventMu.Unlock()
+	return nil
+}
+
+func (p *ProcessTransport) dispatchEvents() {
+	if p.eventCond == nil {
+		return
+	}
+	defer close(p.eventDispatchDone)
+	for {
+		p.eventMu.Lock()
+		for len(p.eventQueue) == 0 && !p.closeRequested.Load() && !transportDone(p.done) {
+			p.eventCond.Wait()
+		}
+		if p.closeRequested.Load() {
+			discarded := p.eventQueue
+			p.eventQueue = nil
+			p.eventQueueBytes = 0
+			p.eventMu.Unlock()
+			notifyRPCObservations(discarded, ErrTransportClosed)
+			p.eventsClosed.Do(func() { close(p.events) })
+			return
+		}
+		if len(p.eventQueue) == 0 && transportDone(p.done) {
+			p.eventMu.Unlock()
+			p.eventsClosed.Do(func() { close(p.events) })
+			return
+		}
+		message := p.eventQueue[0]
+		p.eventQueue[0] = RPCMessage{}
+		p.eventQueue = p.eventQueue[1:]
+		messageBytes := len(message.Raw)
+		if messageBytes <= 0 {
+			messageBytes = 1
+		}
+		p.eventQueueBytes -= messageBytes
+		p.eventMu.Unlock()
+		select {
+		case p.events <- message:
+		case <-p.eventStop:
+			p.eventMu.Lock()
+			discarded := append([]RPCMessage{message}, p.eventQueue...)
+			p.eventQueue = nil
+			p.eventQueueBytes = 0
+			p.eventMu.Unlock()
+			notifyRPCObservations(discarded, ErrTransportClosed)
+			p.eventsClosed.Do(func() { close(p.events) })
+			return
+		}
+	}
+}
+
+func transportDone(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *ProcessTransport) stopEventDispatch() {
+	if p.eventCond == nil {
+		return
+	}
+	p.eventStopOnce.Do(func() {
+		close(p.eventStop)
+		p.eventMu.Lock()
+		p.eventCond.Broadcast()
+		p.eventMu.Unlock()
+	})
 }
 
 func (p *ProcessTransport) waitLoop() {
 	err := p.command.Wait()
 	if err != nil && !p.closeRequested.Load() && !errors.Is(err, os.ErrProcessDone) {
 		p.setError(err)
+	}
+	if p.closeRequested.Load() {
+		// A caller-initiated close must unblock a reader that is backpressured
+		// by an abandoned events queue.
+		p.finishTransport(err)
+	} else {
+		// A child can leave descendants holding the inherited stdout pipe open
+		// after the leader exits. Kill the owned process group before waiting for
+		// readLoop so natural process exit cannot strand Close forever.
+		_ = killProcessGroup(p.command)
+		// stdout is an explicitly-owned pipe, so Wait cannot close it before
+		// readLoop has drained the child's final frames.
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-p.readDone:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
+			_ = p.stdout.Close()
+			<-p.readDone
+		}
 	}
 	p.finishTransport(err)
 	close(p.waitDone)
@@ -456,12 +747,18 @@ func (p *ProcessTransport) finishTransport(err error) {
 			p.setError(err)
 		}
 		close(p.done)
+		if p.eventCond != nil {
+			p.eventMu.Lock()
+			p.eventCond.Broadcast()
+			p.eventMu.Unlock()
+		}
 		p.pendingMu.Lock()
 		pending := p.pending
 		p.pending = make(map[string]pendingRPC)
+		p.abandoned = make(map[string]pendingRPC)
 		p.pendingMu.Unlock()
 		for _, request := range pending {
-			if request.sent {
+			if request.sent || request.writing {
 				request.result <- rpcResult{err: ErrUnknownOutcome}
 			} else {
 				request.result <- rpcResult{err: ErrTransportClosed}
@@ -478,6 +775,12 @@ func (p *ProcessTransport) setError(err error) {
 	defer p.errMu.Unlock()
 	if p.err == nil {
 		p.err = err
+	}
+}
+
+func notifyRPCObservations(messages []RPCMessage, err error) {
+	for _, message := range messages {
+		notifyRPCObservation(message.observation, rpcObservation{err: err})
 	}
 }
 
@@ -555,10 +858,47 @@ func parseRPCMessage(frame []byte) (RPCMessage, error) {
 		}
 		message.Error = &rpcError
 	}
+	if message.Error != nil && len(bytes.TrimSpace(message.Result)) > 0 {
+		return RPCMessage{}, errors.New("RPC response must not contain both result and error")
+	}
 	if message.Method == "" && len(message.ID) == 0 {
 		return RPCMessage{}, errors.New("RPC message has neither method nor id")
 	}
 	return message, nil
+}
+
+func rpcRequestRunID(method string, params json.RawMessage) string {
+	if method != "turn/interrupt" && method != "turn/steer" {
+		return ""
+	}
+	var value struct {
+		TurnID         string `json:"turnId"`
+		ExpectedTurnID string `json:"expectedTurnId"`
+	}
+	if json.Unmarshal(params, &value) != nil {
+		return ""
+	}
+	if value.TurnID != "" {
+		return value.TurnID
+	}
+	return value.ExpectedTurnID
+}
+
+func sanitizedCommandEnv() []string {
+	allowed := []string{
+		"HOME", "PATH", "USER", "LOGNAME", "SHELL", "PWD", "TMPDIR", "TMP", "TEMP",
+		"LANG", "TERM", "COLORTERM", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "CODEX_HOME",
+		"USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "SystemRoot",
+		"WINDIR", "ComSpec", "PATHEXT", "OS", "PROCESSOR_ARCHITECTURE",
+	}
+	env := make([]string, 0, len(allowed))
+	for _, name := range allowed {
+		value, ok := os.LookupEnv(name)
+		if ok {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
 }
 
 func mustJSON(value string) string {

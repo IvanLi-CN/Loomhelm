@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 )
 
 const journalFormatVersion = 1
+
+const approvalResolutionCleared = "cleared"
 
 var (
 	ErrCommandNotFound  = errors.New("command is not present in the journal")
@@ -36,6 +39,7 @@ type journalRecord struct {
 	Ack            *protocol.CommandAck     `json:"ack,omitempty"`
 	Event          *protocol.Event          `json:"event,omitempty"`
 	Session        *journalSession          `json:"session,omitempty"`
+	SessionStart   *sessionStartIntent      `json:"session_start,omitempty"`
 	Reconciliation *protocol.Reconciliation `json:"reconciliation,omitempty"`
 	ApprovalClaim  *approvalClaimRecord     `json:"approval_claim,omitempty"`
 }
@@ -44,6 +48,16 @@ type journalSession struct {
 	SessionID         string `json:"session_id"`
 	ExternalThreadRef string `json:"external_thread_ref"`
 	Generation        string `json:"generation"`
+	UpdatedAt         string `json:"updated_at"`
+}
+
+type sessionStartIntent struct {
+	IntentID          string `json:"intent_id"`
+	GatewayHandle     string `json:"gateway_handle"`
+	Generation        string `json:"generation"`
+	RequestDigest     string `json:"request_digest"`
+	State             string `json:"state"`
+	ExternalThreadRef string `json:"external_thread_ref,omitempty"`
 	UpdatedAt         string `json:"updated_at"`
 }
 
@@ -56,17 +70,20 @@ type commandEntry struct {
 type Journal struct {
 	mu sync.Mutex
 
-	path string
-	file *os.File
+	path     string
+	file     *os.File
+	fatalErr error
 
-	commands map[string]commandEntry
-	events   []protocol.Event
-	eventIDs map[string]struct{}
-	sessions map[string]journalSession
+	commands      map[string]commandEntry
+	events        []protocol.Event
+	eventIDs      map[string]struct{}
+	sessions      map[string]journalSession
+	sessionStarts map[string]sessionStartIntent
 
 	sequenceBySession map[string]int64
 	pendingApprovals  map[string]PendingApproval
 	approvalClaims    map[string]approvalClaimRecord
+	approvalResults   map[string]string
 }
 
 // PendingApproval is the durable identity needed to answer one app-server
@@ -79,6 +96,7 @@ type PendingApproval struct {
 	TurnID    string
 	ItemID    string
 	Revision  int64
+	Command   string
 }
 
 type approvalClaimRecord struct {
@@ -101,8 +119,29 @@ func OpenJournal(path string) (*Journal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve journal path: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o700); err != nil {
+	_, statErr := os.Stat(absPath)
+	fileExisted := statErr == nil
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("stat journal file: %w", statErr)
+	}
+	directoryPath := filepath.Dir(absPath)
+	newDirectories, err := missingJournalDirectories(directoryPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(directoryPath, 0o700); err != nil {
 		return nil, fmt.Errorf("create journal directory: %w", err)
+	}
+	for _, directory := range newDirectories {
+		if err := os.Chmod(directory, 0o700); err != nil {
+			return nil, fmt.Errorf("secure journal directory permissions: %w", err)
+		}
+		if err := secureJournalPath(directory); err != nil {
+			return nil, fmt.Errorf("secure journal directory ACL: %w", err)
+		}
+	}
+	if err := validateJournalDirectory(directoryPath); err != nil {
+		return nil, err
 	}
 	file, err := os.OpenFile(absPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
@@ -112,9 +151,27 @@ func OpenJournal(path string) (*Journal, error) {
 		file.Close()
 		return nil, fmt.Errorf("secure journal permissions: %w", err)
 	}
+	if err := secureJournalPath(absPath); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("secure journal ACL: %w", err)
+	}
 	if err := lockJournalFile(file); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("lock journal ownership: %w", err)
+	}
+	if !fileExisted {
+		for _, directory := range newDirectories {
+			if err := syncJournalDirectory(filepath.Dir(directory)); err != nil {
+				_ = unlockJournalFile(file)
+				_ = file.Close()
+				return nil, fmt.Errorf("sync journal directory entry: %w", err)
+			}
+		}
+		if err := syncJournalDirectory(directoryPath); err != nil {
+			_ = unlockJournalFile(file)
+			_ = file.Close()
+			return nil, fmt.Errorf("sync journal directory entry: %w", err)
+		}
 	}
 
 	journal := &Journal{
@@ -123,19 +180,43 @@ func OpenJournal(path string) (*Journal, error) {
 		commands:          make(map[string]commandEntry),
 		eventIDs:          make(map[string]struct{}),
 		sessions:          make(map[string]journalSession),
+		sessionStarts:     make(map[string]sessionStartIntent),
 		sequenceBySession: make(map[string]int64),
 		pendingApprovals:  make(map[string]PendingApproval),
 		approvalClaims:    make(map[string]approvalClaimRecord),
+		approvalResults:   make(map[string]string),
 	}
 	if err := journal.load(); err != nil {
-		file.Close()
+		_ = unlockJournalFile(file)
+		_ = file.Close()
 		return nil, err
 	}
 	if err := journal.markInFlightUnknown(); err != nil {
-		file.Close()
+		_ = unlockJournalFile(file)
+		_ = file.Close()
 		return nil, err
 	}
 	return journal, nil
+}
+
+func missingJournalDirectories(path string) ([]string, error) {
+	var missing []string
+	current := filepath.Clean(path)
+	for {
+		_, err := os.Stat(current)
+		if err == nil {
+			return missing, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("stat journal parent directory: %w", err)
+		}
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil, errors.New("journal parent directory has no existing ancestor")
+		}
+		current = parent
+	}
 }
 
 func (j *Journal) Path() string {
@@ -399,6 +480,151 @@ func (j *Journal) RecordSession(sessionID, externalThreadRef, generation string)
 	return nil
 }
 
+// BeginSessionStart records the child-generation intent before thread/start
+// crosses the app-server side-effect boundary. An unresolved equivalent intent
+// blocks a duplicate start until a caller explicitly reconciles it.
+func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, request protocol.NewSessionRequest) (string, error) {
+	if gatewaySession.Handle == "" || gatewaySession.Generation == "" {
+		return "", errors.New("gateway session handle and generation are required")
+	}
+	requestBytes, err := json.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("digest session start request: %w", err)
+	}
+	requestDigest := digestString(string(requestBytes))
+	intent := sessionStartIntent{
+		IntentID:      gatewaySession.Generation,
+		GatewayHandle: gatewaySession.Handle,
+		Generation:    gatewaySession.Generation,
+		RequestDigest: requestDigest,
+		State:         "pending",
+		UpdatedAt:     now(),
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, existing := range j.sessionStarts {
+		if existing.State == "pending" && existing.RequestDigest == requestDigest {
+			return "", fmt.Errorf("%w: unresolved session start intent exists", ErrUnknownOutcome)
+		}
+	}
+	if existing, ok := j.sessionStarts[intent.IntentID]; ok && existing.State == "pending" {
+		return "", fmt.Errorf("%w: session start intent %q is already pending", ErrUnknownOutcome, intent.IntentID)
+	}
+	if err := j.appendLocked(journalRecord{
+		FormatVersion: journalFormatVersion,
+		Type:          "session_start",
+		At:            intent.UpdatedAt,
+		SessionStart:  &intent,
+	}); err != nil {
+		return "", err
+	}
+	j.sessionStarts[intent.IntentID] = intent
+	return intent.IntentID, nil
+}
+
+func (j *Journal) ResolvedSessionStart(request protocol.NewSessionRequest) (protocol.AdapterSession, bool) {
+	requestBytes, err := json.Marshal(request)
+	if err != nil {
+		return protocol.AdapterSession{}, false
+	}
+	requestDigest := digestString(string(requestBytes))
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var selected *sessionStartIntent
+	for _, intent := range j.sessionStarts {
+		if intent.State != "resolved" || intent.RequestDigest != requestDigest || intent.ExternalThreadRef == "" {
+			continue
+		}
+		if selected == nil || intent.UpdatedAt > selected.UpdatedAt {
+			value := intent
+			selected = &value
+		}
+	}
+	if selected == nil {
+		return protocol.AdapterSession{}, false
+	}
+	return protocol.AdapterSession{
+		SessionID:         stableSessionID(selected.ExternalThreadRef),
+		ExternalThreadRef: selected.ExternalThreadRef,
+	}, true
+}
+
+// ResolveSessionStart atomically persists the durable session identity with
+// the app-server thread identity learned from thread/start.
+func (j *Journal) ResolveSessionStart(intentID, sessionID, externalThreadRef, generation string) error {
+	if intentID == "" || sessionID == "" || externalThreadRef == "" {
+		return errors.New("session start resolution identity is incomplete")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	intent, ok := j.sessionStarts[intentID]
+	if !ok {
+		return fmt.Errorf("session start intent %q is not present", intentID)
+	}
+	if intent.State == "resolved" {
+		if intent.ExternalThreadRef == externalThreadRef {
+			return nil
+		}
+		return fmt.Errorf("session start intent %q was resolved to another thread", intentID)
+	}
+	if intent.State != "pending" {
+		return fmt.Errorf("session start intent %q is not pending", intentID)
+	}
+	if generation == "" {
+		generation = intent.Generation
+	}
+	updatedAt := now()
+	session := journalSession{SessionID: sessionID, ExternalThreadRef: externalThreadRef, Generation: generation, UpdatedAt: updatedAt}
+	resolved := intent
+	resolved.State = "resolved"
+	resolved.ExternalThreadRef = externalThreadRef
+	resolved.UpdatedAt = updatedAt
+	if err := j.appendLocked(journalRecord{
+		FormatVersion: journalFormatVersion,
+		Type:          "session",
+		At:            updatedAt,
+		Session:       &session,
+		SessionStart:  &resolved,
+	}); err != nil {
+		return err
+	}
+	j.sessions[sessionID] = session
+	j.sessionStarts[intentID] = resolved
+	return nil
+}
+
+// FailSessionStart clears a deterministic pre-side-effect failure while
+// preserving unknown transport outcomes as pending intents.
+func (j *Journal) FailSessionStart(intentID string) error {
+	if intentID == "" {
+		return errors.New("session start intent id must not be empty")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	intent, ok := j.sessionStarts[intentID]
+	if !ok {
+		return fmt.Errorf("session start intent %q is not present", intentID)
+	}
+	if intent.State == "failed" {
+		return nil
+	}
+	if intent.State != "pending" {
+		return fmt.Errorf("session start intent %q is not pending", intentID)
+	}
+	intent.State = "failed"
+	intent.UpdatedAt = now()
+	if err := j.appendLocked(journalRecord{
+		FormatVersion: journalFormatVersion,
+		Type:          "session_start",
+		At:            intent.UpdatedAt,
+		SessionStart:  &intent,
+	}); err != nil {
+		return err
+	}
+	j.sessionStarts[intentID] = intent
+	return nil
+}
+
 func (j *Journal) RecordReconciliation(value protocol.Reconciliation) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -510,6 +736,37 @@ func (j *Journal) IsApprovalPending(sessionID string, requestID json.RawMessage)
 	return ok
 }
 
+// FindPendingApproval resolves the public string approval id to the exact raw
+// JSON-RPC request id that must be answered. Numeric and string JSON ids are
+// compared by their textual value so the public boundary remains lossless.
+func (j *Journal) FindPendingApproval(sessionID, runID string, requestID json.RawMessage) (PendingApproval, error) {
+	wanted := approvalIDText(requestID)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var found *PendingApproval
+	for _, approval := range j.pendingApprovals {
+		if approval.SessionID != sessionID || (runID != "" && approval.RunID != runID) || approvalIDText(approval.RequestID) != wanted {
+			continue
+		}
+		if found != nil {
+			return PendingApproval{}, fmt.Errorf("approval id %q is ambiguous", wanted)
+		}
+		value := cloneApproval(approval)
+		found = &value
+	}
+	if found == nil {
+		return PendingApproval{}, ErrApprovalNotFound
+	}
+	return *found, nil
+}
+
+func (j *Journal) ApprovalResult(commandID string) (string, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	result, ok := j.approvalResults[commandID]
+	return result, ok
+}
+
 // ActiveTurns rebuilds control ownership from the durable event stream after a
 // cold recovery. Only turns with a terminal observation remain unselectable.
 func (j *Journal) ActiveTurns(sessionID string) map[string]string {
@@ -562,11 +819,11 @@ func (j *Journal) UniqueRunIDForCommand(sessionID, commandID, issuedAt string) (
 		if otherID == commandID || entry.command.SessionID != sessionID {
 			continue
 		}
-		if entry.ack.State != protocol.CommandStateUnknown && entry.ack.State != protocol.CommandStateAccepted && entry.ack.State != protocol.CommandStateExecuting {
+		otherIssued, parseErr := time.Parse(time.RFC3339Nano, entry.command.IssuedAt)
+		if parseErr != nil || otherIssued.After(candidates[0].at) {
 			continue
 		}
-		otherIssued, parseErr := time.Parse(time.RFC3339Nano, entry.command.IssuedAt)
-		if parseErr == nil && !otherIssued.After(candidates[0].at) {
+		if otherIssued.After(after) || (entry.ack.State != protocol.CommandStateSucceeded && entry.ack.State != protocol.CommandStateFailed && entry.ack.State != protocol.CommandStateRejected) {
 			return "", false
 		}
 	}
@@ -576,9 +833,19 @@ func (j *Journal) UniqueRunIDForCommand(sessionID, commandID, issuedAt string) (
 func (j *Journal) load() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	data, err := os.ReadFile(j.path)
+	info, err := j.file.Stat()
 	if err != nil {
-		return fmt.Errorf("read journal: %w", err)
+		return fmt.Errorf("stat journal: %w", err)
+	}
+	data := make([]byte, info.Size())
+	if len(data) > 0 {
+		read, readErr := j.file.ReadAt(data, 0)
+		if readErr != nil && !(errors.Is(readErr, io.EOF) && read == len(data)) {
+			return fmt.Errorf("read journal: %w", readErr)
+		}
+		if read != len(data) {
+			return fmt.Errorf("read journal: got %d bytes, want %d", read, len(data))
+		}
 	}
 	validEnd := 0
 	needsNewline := false
@@ -680,6 +947,20 @@ func (j *Journal) applyRecord(record journalRecord) error {
 			return fmt.Errorf("%w: incomplete session record", ErrJournalCorrupt)
 		}
 		j.sessions[record.Session.SessionID] = *record.Session
+		if record.SessionStart != nil {
+			if err := validateSessionStartIntent(*record.SessionStart); err != nil {
+				return err
+			}
+			j.sessionStarts[record.SessionStart.IntentID] = *record.SessionStart
+		}
+	case "session_start":
+		if record.SessionStart == nil {
+			return fmt.Errorf("%w: incomplete session start intent", ErrJournalCorrupt)
+		}
+		if err := validateSessionStartIntent(*record.SessionStart); err != nil {
+			return err
+		}
+		j.sessionStarts[record.SessionStart.IntentID] = *record.SessionStart
 	case "reconciliation":
 		if record.Reconciliation == nil || record.Reconciliation.CommandID == "" {
 			return fmt.Errorf("%w: incomplete reconciliation record", ErrJournalCorrupt)
@@ -700,6 +981,18 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		return fmt.Errorf("%w: unknown record type %q", ErrJournalCorrupt, record.Type)
 	}
 	return nil
+}
+
+func validateSessionStartIntent(intent sessionStartIntent) error {
+	if intent.IntentID == "" || intent.GatewayHandle == "" || intent.Generation == "" || intent.RequestDigest == "" {
+		return fmt.Errorf("%w: incomplete session start intent", ErrJournalCorrupt)
+	}
+	switch intent.State {
+	case "pending", "resolved", "failed":
+		return nil
+	default:
+		return fmt.Errorf("%w: unknown session start intent state %q", ErrJournalCorrupt, intent.State)
+	}
 }
 
 func (j *Journal) markInFlightUnknown() error {
@@ -727,33 +1020,43 @@ func (j *Journal) markInFlightUnknown() error {
 }
 
 func (j *Journal) appendLocked(record journalRecord) error {
+	if j.fatalErr != nil {
+		return fmt.Errorf("journal write path is unusable: %w", j.fatalErr)
+	}
 	if j.file == nil {
 		return errors.New("journal is closed")
 	}
 	data, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("encode journal record: %w", err)
+		return j.poisonLocked(fmt.Errorf("encode journal record: %w", err))
 	}
 	data = append(data, '\n')
 	if _, err := j.file.Seek(0, io.SeekEnd); err != nil {
-		return fmt.Errorf("seek journal end: %w", err)
+		return j.poisonLocked(fmt.Errorf("seek journal end: %w", err))
 	}
 	start, err := j.file.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return fmt.Errorf("locate journal end: %w", err)
+		return j.poisonLocked(fmt.Errorf("locate journal end: %w", err))
 	}
 	written, err := writeAll(j.file, data)
 	if err != nil {
 		if truncateErr := j.file.Truncate(start); truncateErr != nil {
-			return fmt.Errorf("write journal record after %d bytes: %w; truncate partial record: %v", written, err, truncateErr)
+			return j.poisonLocked(fmt.Errorf("write journal record after %d bytes: %w; truncate partial record: %v", written, err, truncateErr))
 		}
 		_ = j.file.Sync()
-		return fmt.Errorf("write journal record after %d bytes: %w", written, err)
+		return j.poisonLocked(fmt.Errorf("write journal record after %d bytes: %w", written, err))
 	}
 	if err := j.file.Sync(); err != nil {
-		return fmt.Errorf("sync journal record: %w", err)
+		return j.poisonLocked(fmt.Errorf("sync journal record: %w", err))
 	}
 	return nil
+}
+
+func (j *Journal) poisonLocked(err error) error {
+	if j.fatalErr == nil {
+		j.fatalErr = err
+	}
+	return fmt.Errorf("journal write path is unusable: %w", j.fatalErr)
 }
 
 func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
@@ -764,15 +1067,18 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
 		Params struct {
-			ThreadID  string          `json:"threadId"`
-			TurnID    string          `json:"turnId"`
-			RequestID json.RawMessage `json:"requestId"`
-			Revision  int64           `json:"revision"`
-			ItemID    string          `json:"itemId"`
-			Item      struct {
-				ID     string `json:"id"`
-				Type   string `json:"type"`
-				Status string `json:"status"`
+			ThreadID   string          `json:"threadId"`
+			TurnID     string          `json:"turnId"`
+			RequestID  json.RawMessage `json:"requestId"`
+			Revision   int64           `json:"revision"`
+			Resolution string          `json:"resolution"`
+			Command    string          `json:"command"`
+			ItemID     string          `json:"itemId"`
+			Item       struct {
+				ID      string `json:"id"`
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Command string `json:"command"`
 			} `json:"item"`
 		} `json:"params"`
 	}
@@ -796,6 +1102,10 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		if revision <= 0 {
 			revision = 1
 		}
+		command := message.Params.Command
+		if command == "" {
+			command = message.Params.Item.Command
+		}
 		j.pendingApprovals[key] = PendingApproval{
 			RequestID: append(json.RawMessage(nil), requestID...),
 			SessionID: event.SessionID,
@@ -804,10 +1114,26 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 			TurnID:    message.Params.TurnID,
 			ItemID:    itemID,
 			Revision:  revision,
+			Command:   command,
 		}
 		return
 	}
 	if event.Type == protocol.EventTypeApprovalResolved {
+		rawResolution := strings.TrimSpace(message.Params.Resolution)
+		resolution := normalizeApprovalDecision(rawResolution)
+		if claim, claimed := j.approvalClaims[key]; claimed {
+			if rawResolution == "" {
+				// A request can be cleared without proving which decision was
+				// applied. Record delivery separately and keep the claim until
+				// item/completed supplies the resulting item status.
+				j.approvalResults[claim.CommandID] = approvalResolutionCleared
+				return
+			}
+			if resolution == "" {
+				resolution = "unknown"
+			}
+			j.approvalResults[claim.CommandID] = resolution
+		}
 		delete(j.pendingApprovals, key)
 		delete(j.approvalClaims, key)
 		return
@@ -815,6 +1141,16 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 	if event.Type == protocol.EventTypeItemCompleted && message.Params.Item.Status != "" && message.Params.Item.Status != "inProgress" {
 		for requestKey, approval := range j.pendingApprovals {
 			if approval.SessionID == event.SessionID && approval.ItemID != "" && approval.ItemID == message.Params.Item.ID {
+				if claim, claimed := j.approvalClaims[requestKey]; claimed {
+					resolution := normalizeApprovalDecision(claim.Decision)
+					if strings.EqualFold(message.Params.Item.Status, "declined") {
+						resolution = "decline"
+					}
+					if resolution == "" {
+						resolution = "unknown"
+					}
+					j.approvalResults[claim.CommandID] = resolution
+				}
 				delete(j.pendingApprovals, requestKey)
 				delete(j.approvalClaims, requestKey)
 			}
@@ -828,6 +1164,26 @@ func approvalKey(sessionID string, requestID json.RawMessage) string {
 		return ""
 	}
 	return sessionID + "\x00" + string(trimmed)
+}
+
+func approvalIDText(requestID json.RawMessage) string {
+	trimmed := bytes.TrimSpace(requestID)
+	var value string
+	if json.Unmarshal(trimmed, &value) == nil {
+		return value
+	}
+	return string(trimmed)
+}
+
+func normalizeApprovalDecision(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "approve", "accept":
+		return "accept"
+	case "deny", "decline":
+		return "decline"
+	default:
+		return ""
+	}
 }
 
 func commandDigest(command protocol.Command) (string, error) {

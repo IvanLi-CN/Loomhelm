@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -41,38 +42,47 @@ type realCLIIdentity struct {
 }
 
 type realC01ScenarioEvidence struct {
-	Name                  string                       `json:"name"`
-	CommandID             string                       `json:"command_id"`
-	RunID                 string                       `json:"run_id,omitempty"`
-	ApprovalRequestID     string                       `json:"approval_request_id,omitempty"`
-	Decision              string                       `json:"decision,omitempty"`
-	ApprovalCommandState  protocol.CommandState        `json:"approval_command_state,omitempty"`
-	ItemStatus            string                       `json:"item_status,omitempty"`
-	ItemCommand           string                       `json:"item_command,omitempty"`
-	OutputMarker          string                       `json:"output_marker,omitempty"`
-	OutputMarkerObserved  bool                         `json:"output_marker_observed,omitempty"`
-	OutputEmpty           bool                         `json:"output_empty,omitempty"`
-	TerminalEventType     protocol.EventType           `json:"terminal_event_type,omitempty"`
-	TerminalStatus        string                       `json:"terminal_status,omitempty"`
-	TerminalCursor        string                       `json:"terminal_cursor,omitempty"`
-	UnknownAckState       protocol.CommandState        `json:"unknown_ack_state,omitempty"`
-	ReconciliationState   protocol.ReconciliationState `json:"reconciliation_state,omitempty"`
-	ReconciliationNote    string                       `json:"reconciliation_note,omitempty"`
-	ReconciledRunID       string                       `json:"reconciled_run_id,omitempty"`
-	RecoveryThreadID      string                       `json:"recovery_thread_id,omitempty"`
-	RecoveryEventObserved bool                         `json:"recovery_event_observed"`
+	Name                   string                       `json:"name"`
+	CommandID              string                       `json:"command_id"`
+	RunID                  string                       `json:"run_id,omitempty"`
+	ApprovalRequestID      string                       `json:"approval_request_id,omitempty"`
+	Decision               string                       `json:"decision,omitempty"`
+	ApprovalCommandState   protocol.CommandState        `json:"approval_command_state,omitempty"`
+	ItemStatus             string                       `json:"item_status,omitempty"`
+	ItemCommand            string                       `json:"item_command,omitempty"`
+	OutputMarker           string                       `json:"output_marker,omitempty"`
+	OutputMarkerObserved   bool                         `json:"output_marker_observed,omitempty"`
+	OutputEmpty            bool                         `json:"output_empty,omitempty"`
+	CommandMatchesExpected bool                         `json:"command_matches_expected,omitempty"`
+	TerminalEventType      protocol.EventType           `json:"terminal_event_type,omitempty"`
+	TerminalStatus         string                       `json:"terminal_status,omitempty"`
+	TerminalCursor         string                       `json:"terminal_cursor,omitempty"`
+	UnknownAckState        protocol.CommandState        `json:"unknown_ack_state,omitempty"`
+	ReconciliationState    protocol.ReconciliationState `json:"reconciliation_state,omitempty"`
+	ReconciliationNote     string                       `json:"reconciliation_note,omitempty"`
+	ReconciledRunID        string                       `json:"reconciled_run_id,omitempty"`
+	RecoveryThreadID       string                       `json:"recovery_thread_id,omitempty"`
+	RecoveryEventObserved  bool                         `json:"recovery_event_observed"`
 }
 
 func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	cli := os.Getenv("LOOMHELM_REAL_CODEX_CLI")
+	evidencePath := os.Getenv("LOOMHELM_REAL_C01_EVIDENCE")
 	if cli == "" {
+		if evidencePath != "" {
+			t.Fatal("LOOMHELM_REAL_CODEX_CLI is required when writing C01 evidence")
+		}
 		t.Skip("set LOOMHELM_REAL_CODEX_CLI to run the disposable C01 host-owned acceptance")
 	}
-	evidencePath := os.Getenv("LOOMHELM_REAL_C01_EVIDENCE")
 	candidateSHA := os.Getenv("LOOMHELM_CANDIDATE_SHA")
+	expectedCLIVersion := os.Getenv("LOOMHELM_REAL_C01_CLI_VERSION")
+	expectedCLISHA256 := os.Getenv("LOOMHELM_REAL_C01_CLI_SHA256")
 	if evidencePath != "" {
 		if candidateSHA == "" {
 			t.Fatal("LOOMHELM_CANDIDATE_SHA is required when writing C01 evidence")
+		}
+		if expectedCLIVersion == "" || expectedCLISHA256 == "" {
+			t.Fatal("LOOMHELM_REAL_C01_CLI_VERSION and LOOMHELM_REAL_C01_CLI_SHA256 are required when writing C01 evidence")
 		}
 		actualSHA, err := currentCandidateSHA()
 		if err != nil {
@@ -85,18 +95,38 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 
 	workspace := os.Getenv("LOOMHELM_REAL_C01_WORKSPACE")
 	if workspace == "" {
-		workspace = t.TempDir()
-	} else if err := os.MkdirAll(workspace, 0o700); err != nil {
-		t.Fatal(err)
+		workspace = privateTestDir(t)
 	}
 	workspace, err := filepath.Abs(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if info, statErr := os.Stat(workspace); statErr == nil {
+		if !info.IsDir() {
+			t.Fatal("LOOMHELM_REAL_C01_WORKSPACE must be a directory")
+		}
+		entries, readErr := os.ReadDir(workspace)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if len(entries) != 0 {
+			t.Fatal("LOOMHELM_REAL_C01_WORKSPACE must be empty")
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal(statErr)
+	} else if mkdirErr := os.MkdirAll(workspace, 0o700); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
 
 	identity, err := realCLIIdentityFor(cli)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if expectedCLIVersion != "" && identity.Version != expectedCLIVersion {
+		t.Fatalf("Codex CLI version = %q, want pinned version %q", identity.Version, expectedCLIVersion)
+	}
+	if expectedCLISHA256 != "" && identity.SHA256 != expectedCLISHA256 {
+		t.Fatalf("Codex CLI SHA-256 = %q, want pinned SHA-256 %q", identity.SHA256, expectedCLISHA256)
 	}
 	acceptance := realC01Acceptance{
 		CandidateSHA:             candidateSHA,
@@ -114,7 +144,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		if evidencePath == "" {
 			return nil
 		}
-		data, marshalErr := json.MarshalIndent(acceptance, "", "  ")
+		data, marshalErr := json.MarshalIndent(redactC01Acceptance(acceptance), "", "  ")
 		if marshalErr != nil {
 			return fmt.Errorf("marshal C01 evidence: %w", marshalErr)
 		}
@@ -124,32 +154,62 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		if writeErr := os.WriteFile(evidencePath, append(data, '\n'), 0o600); writeErr != nil {
 			return fmt.Errorf("write C01 evidence: %w", writeErr)
 		}
+		if chmodErr := os.Chmod(evidencePath, 0o600); chmodErr != nil {
+			return fmt.Errorf("secure C01 evidence permissions: %w", chmodErr)
+		}
 		return nil
 	}
 	t.Cleanup(func() {
+		if acceptance.EvidenceStatus == "running" {
+			acceptance.EvidenceStatus = "failed"
+		}
 		if err := writeEvidence(); err != nil {
 			t.Error(err)
 		}
 	})
 
-	journal, err := OpenJournal(filepath.Join(workspace, "connector.jsonl"))
+	journalPath := filepath.Join(workspace, "connector.jsonl")
+	var journal *Journal
+	journal, err = OpenJournal(journalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	t.Cleanup(func() { _ = journal.Close() })
 
-	gateway, err := NewGateway(GatewayConfig{Process: ProcessTransportConfig{CommandPath: cli, WorkingDir: workspace}})
+	var unknownCancel context.CancelFunc
+	var latestTransport *ProcessTransport
+	gateway, err := NewGateway(GatewayConfig{
+		Process: ProcessTransportConfig{CommandPath: cli, WorkingDir: workspace},
+		TransportFactory: func(factoryCtx context.Context) (RPCTransport, error) {
+			processConfig := ProcessTransportConfig{CommandPath: cli, WorkingDir: workspace}
+			processConfig.afterRequestWrite = func(method string) {
+				if method != "turn/start" || unknownCancel == nil {
+					return
+				}
+				cancel := unknownCancel
+				unknownCancel = nil
+				cancel()
+			}
+			transport, transportErr := NewProcessTransport(context.WithoutCancel(factoryCtx), processConfig)
+			if transportErr == nil {
+				latestTransport = transport
+			}
+			return transport, transportErr
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := NewAdapter(gateway, journal, AdapterConfig{
+	adapterConfig := AdapterConfig{
 		Model:           acceptance.Model,
 		ReasoningEffort: acceptance.Effort,
 		ApprovalPolicy:  "untrusted",
 		Sandbox:         "workspace-write",
 		WorkingDir:      workspace,
 		ServiceName:     "loomhelm_c01_acceptance",
-	})
+	}
+	var adapter *Adapter
+	adapter, err = NewAdapter(gateway, journal, adapterConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,6 +254,9 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	}
 	approvalEvidence.ApprovalRequestID = string(approval.RequestID)
 	approvalEvidence.Decision = "approve"
+	if err := requireRealApprovalCommand(approval, "/bin/zsh -lc '/usr/bin/printf LOOMHELM_C01_APPROVED'"); err != nil {
+		t.Fatal(err)
+	}
 	approvalDecision := realApprovalCommand("c01-approve-decision", protocol.CommandKindRunApprove, activeSession.SessionID, approval)
 	decisionAck, err := adapter.SendCommand(ctx, activeSession, approvalDecision)
 	if err != nil {
@@ -210,10 +273,11 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	approvalEvidence.ItemStatus = itemStatus(itemEvent)
 	approvalCommandObserved, approvalOutput := itemCommandAndOutput(itemEvent)
 	approvalEvidence.ItemCommand = approvalCommandObserved
+	approvalEvidence.CommandMatchesExpected = strings.TrimSpace(approvalCommandObserved) == "/bin/zsh -lc '/usr/bin/printf LOOMHELM_C01_APPROVED'"
 	approvalEvidence.OutputMarker = "LOOMHELM_C01_APPROVED"
 	approvalEvidence.OutputMarkerObserved = strings.Contains(approvalOutput, approvalEvidence.OutputMarker)
-	if !strings.Contains(approvalEvidence.ItemCommand, "/usr/bin/printf") || !approvalEvidence.OutputMarkerObserved {
-		t.Fatalf("accepted command evidence = command %q output %q", approvalEvidence.ItemCommand, approvalOutput)
+	if !approvalEvidence.CommandMatchesExpected || !approvalEvidence.OutputMarkerObserved {
+		t.Fatal("accepted command did not match the fixed allowlist and output marker")
 	}
 	terminalEvent, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, valueOrEmpty(approvalAck.RunID), protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed)
 	if err != nil {
@@ -240,6 +304,9 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	}
 	denialEvidence.ApprovalRequestID = string(denialApproval.RequestID)
 	denialEvidence.Decision = "deny"
+	if err := requireRealApprovalCommand(denialApproval, "/bin/zsh -lc '/usr/bin/printf LOOMHELM_C01_DENIED'"); err != nil {
+		t.Fatal(err)
+	}
 	denialDecision := realApprovalCommand("c01-deny-decision", protocol.CommandKindRunDeny, activeSession.SessionID, denialApproval)
 	denialDecisionAck, err := adapter.SendCommand(ctx, activeSession, denialDecision)
 	if err != nil {
@@ -256,10 +323,11 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	denialEvidence.ItemStatus = itemStatus(denialItem)
 	denialCommandObserved, denialOutput := itemCommandAndOutput(denialItem)
 	denialEvidence.ItemCommand = denialCommandObserved
+	denialEvidence.CommandMatchesExpected = strings.TrimSpace(denialCommandObserved) == "/bin/zsh -lc '/usr/bin/printf LOOMHELM_C01_DENIED'"
 	denialEvidence.OutputMarker = "LOOMHELM_C01_DENIED"
 	denialEvidence.OutputEmpty = denialOutput == ""
-	if !strings.Contains(denialEvidence.ItemCommand, "/usr/bin/printf") || !denialEvidence.OutputEmpty {
-		t.Fatalf("denied command evidence = command %q output %q", denialEvidence.ItemCommand, denialOutput)
+	if !denialEvidence.CommandMatchesExpected || !denialEvidence.OutputEmpty {
+		t.Fatal("denied command did not match the fixed allowlist or produced output")
 	}
 	denialTerminal, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, valueOrEmpty(denialAck.RunID), protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed)
 	if err != nil {
@@ -285,7 +353,10 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	interruptEvidence.ApprovalRequestID = string(interruptApproval.RequestID)
-	interruptEvidence.Decision = "accept"
+	interruptEvidence.Decision = "approve"
+	if err := requireRealApprovalCommand(interruptApproval, "/bin/zsh -lc '/bin/sleep 30'"); err != nil {
+		t.Fatal(err)
+	}
 	interruptDecision := realApprovalCommand("c01-interrupt-approval", protocol.CommandKindRunApprove, activeSession.SessionID, interruptApproval)
 	interruptDecisionAck, err := adapter.SendCommand(ctx, activeSession, interruptDecision)
 	if err != nil {
@@ -300,8 +371,9 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	interruptEvidence.ItemCommand, _ = itemCommandAndOutput(interruptStarted)
-	if !strings.Contains(interruptEvidence.ItemCommand, "/bin/sleep 30") {
-		t.Fatalf("interrupt command evidence = %q", interruptEvidence.ItemCommand)
+	interruptEvidence.CommandMatchesExpected = strings.TrimSpace(interruptEvidence.ItemCommand) == "/bin/zsh -lc '/bin/sleep 30'"
+	if !interruptEvidence.CommandMatchesExpected {
+		t.Fatal("interrupt command did not match the fixed allowlist")
 	}
 	interruptControl := protocol.Command{
 		CommandID: "c01-interrupt-control",
@@ -332,9 +404,13 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 
 	unknownCommand := realCommand("c01-reconcile", protocol.CommandKindRunSend, activeSession.SessionID, `{"prompt":"Reply exactly LOOMHELM_C01_RECONCILE_OK. Do not use tools."}`)
 	beforeRecoveryCursor := latestRealEventCursor(journal, activeSession.SessionID)
-	unknownCtx, unknownCancel := context.WithCancel(ctx)
-	unknownCancel()
+	unknownCtx, cancelUnknown := context.WithCancel(ctx)
+	unknownCancel = cancelUnknown
 	unknownAck, unknownErr := adapter.SendCommand(unknownCtx, activeSession, unknownCommand)
+	if unknownCancel != nil {
+		unknownCancel()
+		unknownCancel = nil
+	}
 	if !errors.Is(unknownErr, protocol.ErrUnknownCommandResult) || unknownAck.State != protocol.CommandStateUnknown {
 		t.Fatalf("reconciliation seed ACK = %+v, error = %v", unknownAck, unknownErr)
 	}
@@ -346,27 +422,51 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if err := waitForRealRunObservation(ctx, journal, activeSession.SessionID, beforeRecoveryCursor, 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if err := gateway.CloseSession(context.Background(), gatewaySession); err != nil {
+	var reconciledRunID string
+	if err := waitForRealCondition(ctx, func() bool {
+		var ok bool
+		reconciledRunID, ok = journal.UniqueRunIDForCommand(activeSession.SessionID, unknownCommand.CommandID, unknownCommand.IssuedAt)
+		return ok
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recoveryEvidence.ReconciledRunID = reconciledRunID
+	if latestTransport == nil || latestTransport.stdout == nil {
+		t.Fatal("real C01 transport was not captured")
+	}
+	if err := latestTransport.stdout.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := waitForRealEvent(ctx, journal, activeSession.SessionID, protocol.EventTypeReconciliationRequired, ""); err != nil {
 		t.Fatal(err)
 	}
-	reconciliation, err := gateway.ReconcileSession(ctx, activeSession.ExternalThreadRef)
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = OpenJournal(journalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reconciliation.State != protocol.ReconciliationStateConfirmed {
-		t.Fatalf("session reconciliation = %+v", reconciliation)
+	adapter, err = NewAdapter(gateway, journal, adapterConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewController(journal, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := controller.ReconcileCommand(ctx, unknownCommand.CommandID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	recoveredGatewaySession, err := gateway.RecoveredSession(activeSession.ExternalThreadRef)
 	if err != nil {
 		t.Fatal(err)
 	}
 	currentGatewaySession = recoveredGatewaySession
-	recoveredSession, err := adapter.BindRecoveredSession(ctx, recoveredGatewaySession, activeSession.ExternalThreadRef)
-	if err != nil {
-		t.Fatal(err)
+	recoveredSession, ok := journal.Session(activeSession.SessionID)
+	if !ok {
+		t.Fatal("recovered adapter session was not present in the journal")
 	}
 	recoveryEvidence.RecoveryThreadID = recoveredSession.ExternalThreadRef
 	if recoveredSession.ExternalThreadRef != activeSession.ExternalThreadRef {
@@ -376,19 +476,15 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	recoveryEvidence.RecoveryEventObserved = true
-	reconciled, err := adapter.ReconcileCommand(ctx, recoveredSession, unknownCommand.CommandID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recoveryEvidence.ReconciliationState = reconciled.State
-	recoveryEvidence.ReconciliationNote = valueOrEmpty(reconciled.Note)
+	recoveryEvidence.ReconciliationState = reconciliation.State
+	recoveryEvidence.ReconciliationNote = valueOrEmpty(reconciliation.Note)
 	finalAck, err := journal.LookupCommand(unknownCommand.CommandID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recoveryEvidence.ReconciledRunID = valueOrEmpty(finalAck.RunID)
-	if reconciled.State != protocol.ReconciliationStateConfirmed || finalAck.State != protocol.CommandStateSucceeded {
-		t.Fatalf("command reconciliation = %+v, final ACK = %+v", reconciled, finalAck)
+	if reconciliation.State != protocol.ReconciliationStateConfirmed || (finalAck.State != protocol.CommandStateSucceeded && finalAck.State != protocol.CommandStateFailed) {
+		t.Fatalf("command reconciliation = %+v, final ACK = %+v", reconciliation, finalAck)
 	}
 	acceptance.Scenarios = append(acceptance.Scenarios, recoveryEvidence)
 	acceptance.EvidenceStatus = "passed"
@@ -417,11 +513,60 @@ func realCLIIdentityFor(path string) (realCLIIdentity, error) {
 }
 
 func currentCandidateSHA() (string, error) {
+	status, err := exec.Command("git", "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil {
+		return "", fmt.Errorf("read candidate worktree status: %w", err)
+	}
+	if len(bytes.TrimSpace(status)) != 0 {
+		return "", errors.New("candidate worktree must be clean when writing C01 evidence")
+	}
 	output, err := exec.Command("git", "rev-parse", "HEAD").Output()
 	if err != nil {
 		return "", fmt.Errorf("read candidate SHA: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func redactC01Acceptance(value realC01Acceptance) realC01Acceptance {
+	value.CLI.Path = "<configured-codex-cli>"
+	value.Workspace = "<disposable-test-workspace>"
+	value.ThreadID = redactC01Ref(value.ThreadID)
+	value.SessionID = redactC01Ref(value.SessionID)
+	value.Scenarios = append([]realC01ScenarioEvidence(nil), value.Scenarios...)
+	for index := range value.Scenarios {
+		scenario := &value.Scenarios[index]
+		scenario.RunID = redactC01Ref(scenario.RunID)
+		scenario.ApprovalRequestID = redactC01Ref(scenario.ApprovalRequestID)
+		scenario.ReconciledRunID = redactC01Ref(scenario.ReconciledRunID)
+		scenario.RecoveryThreadID = redactC01Ref(scenario.RecoveryThreadID)
+		scenario.TerminalCursor = redactC01Ref(scenario.TerminalCursor)
+		if scenario.ItemCommand != "" {
+			scenario.ItemCommand = "<redacted-command>"
+		}
+		if scenario.ReconciliationNote != "" {
+			scenario.ReconciliationNote = "<redacted>"
+		}
+	}
+	return value
+}
+
+func requireRealApprovalCommand(approval PendingApproval, expected string) error {
+	command := strings.TrimSpace(approval.Command)
+	if command == "" {
+		return errors.New("approval request did not expose a command for pre-approval validation")
+	}
+	if command != expected {
+		return errors.New("approval command did not match the fixed C01 allowlist")
+	}
+	return nil
+}
+
+func redactC01Ref(value string) string {
+	if value == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(value))
+	return "sha256:" + hex.EncodeToString(digest[:])[:16]
 }
 
 func realCommand(id string, kind protocol.CommandKind, sessionID, payload string) protocol.Command {

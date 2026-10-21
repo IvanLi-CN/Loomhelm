@@ -14,7 +14,7 @@ func TestRealCodexAdapterHostOwnedNewSession(t *testing.T) {
 	if cli == "" {
 		t.Skip("set LOOMHELM_REAL_CODEX_CLI to run the disposable host-owned app-server check")
 	}
-	workspace := t.TempDir()
+	workspace := privateTestDir(t)
 	journal, err := OpenJournal(workspace + "/connector.jsonl")
 	if err != nil {
 		t.Fatal(err)

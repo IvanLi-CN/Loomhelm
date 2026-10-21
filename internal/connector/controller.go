@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
@@ -53,7 +54,43 @@ func (c *Controller) ReconcileCommand(ctx context.Context, commandID string) (pr
 	if !ok {
 		return protocol.Reconciliation{}, errors.New("command session is not present in the journal")
 	}
+	if err := c.ensureAdapterSession(ctx, session); err != nil {
+		return protocol.Reconciliation{}, err
+	}
 	return c.adapter.ReconcileCommand(ctx, session, commandID)
+}
+
+func (c *Controller) ensureAdapterSession(ctx context.Context, session protocol.AdapterSession) error {
+	c.adapter.recoveryMu.Lock()
+	defer c.adapter.recoveryMu.Unlock()
+	state := c.adapter.sessionState(session.SessionID)
+	if state != nil && !state.closed.Load() && c.adapter.isCurrentState(state) {
+		return nil
+	}
+	gateway, ok := c.adapter.provider.(*Gateway)
+	if !ok {
+		return fmt.Errorf("adapter session %q is not available after restart", session.SessionID)
+	}
+	if session.ExternalThreadRef == "" {
+		return fmt.Errorf("adapter session %q has no recoverable thread identity", session.SessionID)
+	}
+	reconciliation, err := gateway.ReconcileSession(ctx, session.ExternalThreadRef)
+	if err != nil {
+		return err
+	}
+	if reconciliation.State != protocol.ReconciliationStateConfirmed {
+		return fmt.Errorf("adapter session %q recovery remains unknown", session.SessionID)
+	}
+	recoveredGatewaySession, err := gateway.RecoveredSession(session.ExternalThreadRef)
+	if err != nil {
+		return err
+	}
+	transport, err := c.adapter.provider.TransportFor(ctx, recoveredGatewaySession)
+	if err != nil {
+		return err
+	}
+	_, err = c.adapter.bindRecoveredSessionLocked(recoveredGatewaySession, session.ExternalThreadRef, "thread/resume", c.adapter.recoveredSessionResult(session.ExternalThreadRef), transport)
+	return err
 }
 
 var _ protocol.RunController = (*Controller)(nil)

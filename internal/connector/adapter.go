@@ -31,10 +31,12 @@ type AdapterConfig struct {
 
 type adapterSessionState struct {
 	mu             sync.Mutex
+	operationMu    sync.Mutex
 	session        protocol.AdapterSession
 	gatewaySession protocol.GatewaySession
 	transport      RPCTransport
 	activeTurns    map[string]string
+	eventMu        sync.Mutex
 	closed         atomic.Bool
 	eventErrMu     sync.Mutex
 	eventErr       error
@@ -48,8 +50,9 @@ type Adapter struct {
 	journal  *Journal
 	config   AdapterConfig
 
-	mu       sync.Mutex
-	sessions map[string]*adapterSessionState
+	mu         sync.Mutex
+	recoveryMu sync.Mutex
+	sessions   map[string]*adapterSessionState
 }
 
 func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConfig) (*Adapter, error) {
@@ -89,20 +92,50 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	if err != nil {
 		return protocol.AdapterSession{}, err
 	}
-	params := a.threadStartParams(request)
-	response, err := transport.Call(ctx, "thread/start", mustRawJSON(params))
+	if existing, ok := a.journal.ResolvedSessionStart(request); ok {
+		if state := a.sessionState(existing.SessionID); state != nil && !state.closed.Load() && a.isCurrentState(state) {
+			return state.session, a.ensureInitialPrompt(ctx, request, state.session)
+		}
+		return a.resumeExistingSession(ctx, gatewaySession, request, transport, existing)
+	}
+	intentID, err := a.journal.BeginSessionStart(gatewaySession, request)
 	if err != nil {
 		_ = transport.Close()
 		return protocol.AdapterSession{}, err
 	}
+	params := a.threadStartParams(request)
+	response, err := transport.Call(ctx, "thread/start", mustRawJSON(params))
+	if err != nil {
+		if !errors.Is(err, ErrUnknownOutcome) {
+			_ = a.journal.FailSessionStart(intentID)
+			_ = transport.Close()
+		} else {
+			go a.watchUnknownSessionStart(gatewaySession, intentID, transport)
+		}
+		return protocol.AdapterSession{}, err
+	}
 	if response.Error != nil {
+		_ = a.journal.FailSessionStart(intentID)
 		_ = transport.Close()
 		return protocol.AdapterSession{}, rpcResponseError("thread/start", response)
 	}
+	session, err := a.bindStartedSession(gatewaySession, intentID, response, transport)
+	if err != nil {
+		return protocol.AdapterSession{}, err
+	}
+	if strings.TrimSpace(request.Prompt) != "" {
+		if _, err := a.SendCommand(ctx, session, initialPromptCommand(session, request)); err != nil {
+			return session, err
+		}
+	}
+	return session, nil
+}
+
+func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, intentID string, response RPCMessage, transport RPCTransport) (protocol.AdapterSession, error) {
 	externalThreadRef := threadIDFromResult(response.Result)
 	if externalThreadRef == "" {
 		_ = transport.Close()
-		return protocol.AdapterSession{}, errors.New("thread/start returned no thread id")
+		return protocol.AdapterSession{}, fmt.Errorf("%w: thread/start returned no thread id", ErrUnknownOutcome)
 	}
 	session := protocol.AdapterSession{
 		SessionID:         stableSessionID(externalThreadRef),
@@ -114,11 +147,19 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 		transport:      transport,
 		activeTurns:    make(map[string]string),
 	}
-	if err := a.journal.RecordSession(session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
+	if err := a.journal.ResolveSessionStart(intentID, session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
 		_ = transport.Close()
 		return protocol.AdapterSession{}, err
 	}
-	if _, err := a.appendObservedEvent(state, protocol.EventTypeSessionCreated, "thread/start", response.Result, ""); err != nil {
+	if binder, ok := a.provider.(interface {
+		SetExternalThreadRef(protocol.GatewaySession, string) error
+	}); ok {
+		if err := binder.SetExternalThreadRef(gatewaySession, externalThreadRef); err != nil {
+			_ = transport.Close()
+			return protocol.AdapterSession{}, err
+		}
+	}
+	if _, err := a.appendObservedEvent(state, protocol.EventTypeSessionCreated, "thread/start", response.Raw, ""); err != nil {
 		_ = transport.Close()
 		return protocol.AdapterSession{}, err
 	}
@@ -126,21 +167,84 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	a.sessions[session.SessionID] = state
 	a.mu.Unlock()
 	go a.consume(state)
-	if strings.TrimSpace(request.Prompt) != "" {
-		commandID := session.SessionID + ":initial"
-		payload := mustRawJSON(protocol.SubmitRunRequest{CommandID: commandID, Prompt: request.Prompt})
-		command := protocol.Command{
-			CommandID: commandID,
-			IssuedAt:  now(),
-			Kind:      protocol.CommandKindRunSend,
-			Payload:   payload,
-			SessionID: session.SessionID,
-		}
-		if _, err := a.SendCommand(ctx, session, command); err != nil {
-			return protocol.AdapterSession{}, err
-		}
-	}
 	return session, nil
+}
+
+func (a *Adapter) watchUnknownSessionStart(gatewaySession protocol.GatewaySession, intentID string, transport RPCTransport) {
+	for message := range transport.Events() {
+		if !message.IsResponse() || message.operation != "thread/start" {
+			continue
+		}
+		if message.Error != nil {
+			_ = a.journal.FailSessionStart(intentID)
+			_ = transport.Close()
+			return
+		}
+		if _, err := a.bindStartedSession(gatewaySession, intentID, message, transport); err != nil {
+			return
+		}
+		return
+	}
+}
+
+func (a *Adapter) resumeExistingSession(ctx context.Context, gatewaySession protocol.GatewaySession, request protocol.NewSessionRequest, transport RPCTransport, existing protocol.AdapterSession) (protocol.AdapterSession, error) {
+	response, err := transport.Call(ctx, "thread/resume", mustRawJSON(map[string]any{
+		"threadId":     existing.ExternalThreadRef,
+		"excludeTurns": true,
+	}))
+	if err != nil {
+		_ = transport.Close()
+		return existing, err
+	}
+	if response.Error != nil {
+		_ = transport.Close()
+		return existing, rpcResponseError("thread/resume", response)
+	}
+	if threadIDFromResult(response.Result) != existing.ExternalThreadRef {
+		_ = transport.Close()
+		return existing, errors.New("thread/resume returned a different thread id")
+	}
+	session, err := a.bindRecoveredSession(gatewaySession, existing.ExternalThreadRef, "thread/resume", response.Raw, transport)
+	if err != nil {
+		return existing, err
+	}
+	if strings.TrimSpace(request.Prompt) == "" {
+		return session, nil
+	}
+	return session, a.ensureInitialPrompt(ctx, request, session)
+}
+
+func (a *Adapter) ensureInitialPrompt(ctx context.Context, request protocol.NewSessionRequest, session protocol.AdapterSession) error {
+	if strings.TrimSpace(request.Prompt) == "" {
+		return nil
+	}
+	initialAck, lookupErr := a.journal.LookupCommand(session.SessionID + ":initial")
+	if errors.Is(lookupErr, ErrCommandNotFound) {
+		_, err := a.SendCommand(ctx, session, initialPromptCommand(session, request))
+		return err
+	}
+	if lookupErr != nil {
+		return lookupErr
+	}
+	switch initialAck.State {
+	case protocol.CommandStateUnknown, protocol.CommandStateAccepted, protocol.CommandStateExecuting:
+		return protocol.ErrUnknownCommandResult
+	case protocol.CommandStateFailed, protocol.CommandStateRejected:
+		return errors.New("initial prompt outcome is already failed")
+	default:
+		return nil
+	}
+}
+
+func initialPromptCommand(session protocol.AdapterSession, request protocol.NewSessionRequest) protocol.Command {
+	commandID := session.SessionID + ":initial"
+	return protocol.Command{
+		CommandID: commandID,
+		IssuedAt:  now(),
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   mustRawJSON(protocol.SubmitRunRequest{CommandID: commandID, Prompt: request.Prompt}),
+		SessionID: session.SessionID,
+	}
 }
 
 func (a *Adapter) AttachSession(context.Context, protocol.GatewaySession, protocol.ExistingSessionRequest) (protocol.AdapterSession, error) {
@@ -176,7 +280,7 @@ func (a *Adapter) RecoverSession(ctx context.Context, gatewaySession protocol.Ga
 		_ = transport.Close()
 		return protocol.AdapterSession{}, errors.New("thread/resume returned a different thread id")
 	}
-	return a.bindRecoveredSession(gatewaySession, externalThreadRef, "thread/resume", response.Result, transport)
+	return a.bindRecoveredSession(gatewaySession, externalThreadRef, "thread/resume", response.Raw, transport)
 }
 
 // BindRecoveredSession registers a session after Gateway.ReconcileSession has
@@ -195,41 +299,76 @@ func (a *Adapter) BindRecoveredSession(ctx context.Context, gatewaySession proto
 	if err != nil {
 		return protocol.AdapterSession{}, err
 	}
-	return a.bindRecoveredSession(gatewaySession, externalThreadRef, "thread/resume", mustRawJSON(map[string]any{
-		"thread": map[string]string{"id": externalThreadRef},
-	}), transport)
+	return a.bindRecoveredSession(gatewaySession, externalThreadRef, "thread/resume", a.recoveredSessionResult(externalThreadRef), transport)
+}
+
+func (a *Adapter) recoveredSessionResult(externalThreadRef string) json.RawMessage {
+	if provider, ok := a.provider.(interface {
+		RecoveredSessionResult(string) (json.RawMessage, error)
+	}); ok {
+		if result, err := provider.RecoveredSessionResult(externalThreadRef); err == nil && len(result) > 0 {
+			return result
+		}
+	}
+	return mustRawJSON(map[string]any{"thread": map[string]string{"id": externalThreadRef}})
 }
 
 func (a *Adapter) bindRecoveredSession(gatewaySession protocol.GatewaySession, externalThreadRef, method string, result json.RawMessage, transport RPCTransport) (protocol.AdapterSession, error) {
+	a.recoveryMu.Lock()
+	defer a.recoveryMu.Unlock()
+	return a.bindRecoveredSessionLocked(gatewaySession, externalThreadRef, method, result, transport)
+}
+
+func (a *Adapter) bindRecoveredSessionLocked(gatewaySession protocol.GatewaySession, externalThreadRef, method string, result json.RawMessage, transport RPCTransport) (protocol.AdapterSession, error) {
 	session := protocol.AdapterSession{SessionID: stableSessionID(externalThreadRef), ExternalThreadRef: externalThreadRef}
 	state := &adapterSessionState{session: session, gatewaySession: gatewaySession, transport: transport, activeTurns: a.journal.ActiveTurns(session.SessionID)}
+	if binder, ok := a.provider.(interface {
+		SetExternalThreadRef(protocol.GatewaySession, string) error
+	}); ok {
+		if err := binder.SetExternalThreadRef(gatewaySession, externalThreadRef); err != nil {
+			_ = transport.Close()
+			return protocol.AdapterSession{}, err
+		}
+	}
 	a.mu.Lock()
 	previous := a.sessions[session.SessionID]
-	a.sessions[session.SessionID] = state
+	if previous != nil {
+		delete(a.sessions, session.SessionID)
+	}
 	a.mu.Unlock()
 	if previous != nil {
-		a.closeState(previous)
+		_ = a.closeState(previous)
 	}
 	if err := a.journal.RecordSession(session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
-		a.removeSession(session.SessionID)
-		_ = transport.Close()
+		_ = a.closeState(state)
 		return protocol.AdapterSession{}, err
 	}
-	if _, err := a.appendObservedEvent(state, protocol.EventTypeReconciliationCompleted, method, result, ""); err != nil {
-		a.removeSession(session.SessionID)
-		_ = transport.Close()
+	source := protocol.EventSourceHostObservation
+	var envelope struct {
+		JSONRPC string `json:"jsonrpc"`
+	}
+	if json.Unmarshal(result, &envelope) == nil && envelope.JSONRPC != "" {
+		source = protocol.EventSourceAppServer
+	}
+	if _, err := a.appendObservedEventFromSource(state, protocol.EventTypeReconciliationCompleted, source, method, result, ""); err != nil {
+		_ = a.closeState(state)
 		return protocol.AdapterSession{}, err
 	}
+	a.mu.Lock()
+	a.sessions[session.SessionID] = state
+	a.mu.Unlock()
 	go a.consume(state)
 	return session, nil
 }
 
 func (a *Adapter) CloseSession(_ context.Context, session protocol.AdapterSession) error {
+	a.recoveryMu.Lock()
+	defer a.recoveryMu.Unlock()
 	state := a.removeSession(session.SessionID)
 	if state == nil {
 		return nil
 	}
-	return state.transport.Close()
+	return a.closeState(state)
 }
 
 func (a *Adapter) SendCommand(ctx context.Context, session protocol.AdapterSession, command protocol.Command) (protocol.CommandAck, error) {
@@ -245,6 +384,11 @@ func (a *Adapter) SendCommand(ctx context.Context, session protocol.AdapterSessi
 	state := a.sessionState(session.SessionID)
 	if state == nil {
 		return protocol.CommandAck{}, fmt.Errorf("adapter session %q is not available", session.SessionID)
+	}
+	state.operationMu.Lock()
+	defer state.operationMu.Unlock()
+	if !a.isCurrentState(state) || state.closed.Load() {
+		return protocol.CommandAck{}, fmt.Errorf("adapter session %q generation is no longer active", session.SessionID)
 	}
 	if err := state.persistenceError(); err != nil {
 		return protocol.CommandAck{}, fmt.Errorf("adapter event journal is unavailable: %w", err)
@@ -289,6 +433,11 @@ func (a *Adapter) Steer(ctx context.Context, session protocol.AdapterSession, co
 	state := a.sessionState(session.SessionID)
 	if state == nil {
 		return protocol.CommandAck{}, fmt.Errorf("adapter session %q is not available", session.SessionID)
+	}
+	state.operationMu.Lock()
+	defer state.operationMu.Unlock()
+	if !a.isCurrentState(state) || state.closed.Load() {
+		return protocol.CommandAck{}, fmt.Errorf("adapter session %q generation is no longer active", session.SessionID)
 	}
 	if err := state.persistenceError(); err != nil {
 		return protocol.CommandAck{}, fmt.Errorf("adapter event journal is unavailable: %w", err)
@@ -341,6 +490,9 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	if err != nil {
 		return protocol.Reconciliation{}, err
 	}
+	if command.SessionID != session.SessionID {
+		return protocol.Reconciliation{}, fmt.Errorf("command %q belongs to adapter session %q, not %q", commandID, command.SessionID, session.SessionID)
+	}
 	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
 		reconciliationState := protocol.ReconciliationStateConfirmed
 		if ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
@@ -363,41 +515,91 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	if state == nil {
 		return protocol.Reconciliation{}, fmt.Errorf("adapter session %q is not available", session.SessionID)
 	}
+	state.operationMu.Lock()
+	defer state.operationMu.Unlock()
+	if !a.isCurrentState(state) || state.closed.Load() {
+		return protocol.Reconciliation{}, fmt.Errorf("adapter session %q generation is no longer active", session.SessionID)
+	}
+	if command.Kind == protocol.CommandKindRunApprove || command.Kind == protocol.CommandKindRunDeny {
+		observedDecision, ok := a.journal.ApprovalResult(commandID)
+		reconciliation := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown}
+		expectedDecision := "decline"
+		if command.Kind == protocol.CommandKindRunApprove {
+			expectedDecision = "accept"
+		}
+		if !ok {
+			reconciliation.Note = stringPointer("approval resolution has not been observed")
+		} else if observedDecision == approvalResolutionCleared {
+			reconciliation.Note = stringPointer("approval response was cleared; item outcome remains pending")
+		} else if observedDecision == expectedDecision {
+			reconciliation.State = protocol.ReconciliationStateConfirmed
+			ack.State = protocol.CommandStateSucceeded
+			ack.Error = nil
+			if err := a.journal.UpdateCommand(commandID, ack); err != nil {
+				return reconciliation, err
+			}
+		} else if observedDecision != "unknown" {
+			reconciliation.State = protocol.ReconciliationStateNotFound
+			reconciliation.Note = stringPointer(fmt.Sprintf("approval resolved as %q", observedDecision))
+			ack.State = protocol.CommandStateFailed
+			ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: valueOrEmpty(reconciliation.Note), RequestID: commandID}
+			if err := a.journal.UpdateCommand(commandID, ack); err != nil {
+				return reconciliation, err
+			}
+		}
+		if err := a.journal.RecordReconciliation(reconciliation); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
+	}
 	turns, err := a.listTurns(ctx, state)
 	if err != nil {
-		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer(err.Error())}
+		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer("turn history could not be read; command remains unknown")}
 		if recordErr := a.journal.RecordReconciliation(value); recordErr != nil {
 			return value, recordErr
 		}
 		return value, nil
 	}
+	runObserved := ack.RunID != nil
 	if ack.RunID == nil {
 		if runID, ok := a.journal.UniqueRunIDForCommand(session.SessionID, command.CommandID, command.IssuedAt); ok {
 			ack.RunID = &runID
+			runObserved = true
 		}
 	}
 	matched, ambiguous := matchCommandTurn(command, ack, turns)
 	reconciliation := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown}
 	if matched != nil && !ambiguous {
-		reconciliation.State = protocol.ReconciliationStateConfirmed
-		if matched.ID != "" {
-			cursor := a.journalLastCursor(session.SessionID, matched.ID)
-			if cursor != "" {
-				reconciliation.EventCursor = &cursor
-			}
-			turnID := matched.ID
-			ack.RunID = &turnID
-			ack.State = protocol.CommandStateSucceeded
-			ack.Error = nil
-			if err := a.journal.UpdateCommand(commandID, ack); err != nil {
-				return reconciliation, fmt.Errorf("persist reconciled command %q: %w", commandID, err)
+		outcome, established := commandOutcomeFromTurn(command, *matched)
+		if !established {
+			reconciliation.Note = stringPointer("turn history does not prove this command outcome; command remains unknown and is not replayed")
+		} else {
+			reconciliation.State = protocol.ReconciliationStateConfirmed
+			if matched.ID != "" {
+				cursor := a.journalLastCursor(session.SessionID, matched.ID)
+				if cursor != "" {
+					reconciliation.EventCursor = &cursor
+				}
+				turnID := matched.ID
+				ack.RunID = &turnID
+				ack.State = outcome
+				ack.Error = nil
+				if outcome == protocol.CommandStateFailed {
+					ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server turn ended unsuccessfully", RequestID: commandID}
+				}
+				if err := a.journal.UpdateCommand(commandID, ack); err != nil {
+					return reconciliation, fmt.Errorf("persist reconciled command %q: %w", commandID, err)
+				}
 			}
 		}
 	} else if matched == nil && !ambiguous {
-		reconciliation.State = protocol.ReconciliationStateNotFound
-		reconciliation.Note = stringPointer("no unique matching turn was observed; command is not replayed")
+		if runObserved {
+			reconciliation.Note = stringPointer("a run was observed but its durable turn outcome is unavailable; command remains unknown and is not replayed")
+		} else {
+			reconciliation.Note = stringPointer("turn history does not prove that this command was not executed; command remains unknown and is not replayed")
+		}
 	} else {
-		reconciliation.Note = stringPointer("multiple turns could match; command remains unknown and is not replayed")
+		reconciliation.Note = stringPointer("turn history does not prove this command outcome; command remains unknown and is not replayed")
 	}
 	if err := a.journal.RecordReconciliation(reconciliation); err != nil {
 		return reconciliation, err
@@ -470,6 +672,11 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 		}
 		requestID = pending[0].RequestID
 	}
+	canonicalApproval, err := a.journal.FindPendingApproval(state.session.SessionID, runID, requestID)
+	if err != nil {
+		return a.rejectCommand(command, ack, err)
+	}
+	requestID = canonicalApproval.RequestID
 	decision := "deny"
 	if command.Kind == protocol.CommandKindRunApprove {
 		decision = "approve"
@@ -496,8 +703,16 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 	if alreadyClaimed {
 		return ack, protocol.ErrUnknownCommandResult
 	}
-	if runID != "" && pending.TurnID != "" && runID != pending.TurnID {
-		_ = a.journal.ReleaseApprovalClaim(state.session.SessionID, requestID, command.CommandID)
+	if runID != "" && pending.RunID == "" {
+		if err := a.journal.ReleaseApprovalClaim(state.session.SessionID, requestID, command.CommandID); err != nil {
+			return ack, fmt.Errorf("release approval claim: %w", err)
+		}
+		return a.rejectCommand(command, ack, errors.New("approval request has no durable run identity"))
+	}
+	if runID != "" && pending.RunID != runID {
+		if err := a.journal.ReleaseApprovalClaim(state.session.SessionID, requestID, command.CommandID); err != nil {
+			return ack, fmt.Errorf("release approval claim: %w", err)
+		}
 		return a.rejectCommand(command, ack, errors.New("approval run does not match the pending request"))
 	}
 	if runID == "" {
@@ -520,9 +735,37 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 	}
 	resolutionCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := waitForApprovalResolution(resolutionCtx, a.journal, state.session.SessionID, requestID); err != nil {
+	observedDecision, err := waitForApprovalResolution(resolutionCtx, a.journal, state.session.SessionID, requestID, command.CommandID)
+	if err != nil {
 		unknownErr := fmt.Errorf("%w: approval resolution was not observed: %v", ErrUnknownOutcome, err)
 		return a.finishTransportError(command, ack, unknownErr, "approval response")
+	}
+	if observedDecision == "unknown" || observedDecision == approvalResolutionCleared {
+		// A live serverRequest/resolved event without a resolution confirms that
+		// app-server accepted the response, while item execution remains a
+		// separate observation used by cold reconciliation.
+		if observedDecision == approvalResolutionCleared {
+			ack.State = protocol.CommandStateSucceeded
+			ack.Error = nil
+			ack.Result = append(json.RawMessage(nil), result...)
+			if runID != "" {
+				ack.RunID = &runID
+			}
+			if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
+				return ack, err
+			}
+			return ack, nil
+		}
+		unknownErr := fmt.Errorf("%w: app-server approval resolution is unknown", ErrUnknownOutcome)
+		return a.finishTransportError(command, ack, unknownErr, "approval response")
+	}
+	if observedDecision != hostDecision {
+		ack.State = protocol.CommandStateFailed
+		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: fmt.Sprintf("approval resolved as %q, requested %q", observedDecision, hostDecision), RequestID: command.CommandID}
+		if updateErr := a.journal.UpdateCommand(command.CommandID, ack); updateErr != nil {
+			return ack, updateErr
+		}
+		return ack, fmt.Errorf("approval resolved as %q, requested %q", observedDecision, hostDecision)
 	}
 	ack.State = protocol.CommandStateSucceeded
 	ack.Error = nil
@@ -558,17 +801,39 @@ func (a *Adapter) interruptRun(ctx context.Context, state *adapterSessionState, 
 	return a.finishRPCCommand(ctx, state, command, ack, response, callErr, turnID, "turn/interrupt")
 }
 
-func (a *Adapter) finishRPCCommand(_ context.Context, _ *adapterSessionState, command protocol.Command, ack protocol.CommandAck, response RPCMessage, callErr error, runID, operation string) (protocol.CommandAck, error) {
+func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionState, command protocol.Command, ack protocol.CommandAck, response RPCMessage, callErr error, runID, operation string) (protocol.CommandAck, error) {
 	if callErr != nil {
 		return a.finishTransportError(command, ack, callErr, operation)
 	}
+	if response.observation != nil {
+		cursor, err := waitForRPCObservation(response.observation)
+		if err != nil {
+			unknownErr := fmt.Errorf("%w: persist %s response observation: %v", ErrUnknownOutcome, operation, err)
+			return a.finishTransportError(command, ack, unknownErr, operation)
+		}
+		if cursor != "" {
+			ack.EventCursor = &cursor
+		}
+	} else if event, err := a.appendRPCResponseEvent(state, operation, response, runID); err != nil {
+		return ack, fmt.Errorf("persist %s response observation: %w", operation, err)
+	} else if event.Cursor != "" {
+		ack.EventCursor = &event.Cursor
+	}
 	if response.Error != nil {
 		ack.State = protocol.CommandStateFailed
-		ack.Error = rpcAPIError(response.Error)
+		ack.Error = rpcAPIError(response.Error, command.CommandID)
 		if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
 			return ack, fmt.Errorf("persist %s failure: %w", operation, err)
 		}
 		return ack, rpcResponseError(operation, response)
+	}
+	if len(bytes.TrimSpace(response.Result)) == 0 {
+		unknownErr := fmt.Errorf("%w: app-server %s returned an incomplete response", ErrUnknownOutcome, operation)
+		return a.finishTransportError(command, ack, unknownErr, operation)
+	}
+	if operation == "turn/start" && turnIDFromResult(response.Result) == "" {
+		unknownErr := fmt.Errorf("%w: app-server turn/start returned no turn identity", ErrUnknownOutcome)
+		return a.finishTransportError(command, ack, unknownErr, operation)
 	}
 	ack.State = protocol.CommandStateSucceeded
 	ack.Result = append(json.RawMessage(nil), response.Result...)
@@ -587,17 +852,32 @@ func (a *Adapter) finishRPCCommand(_ context.Context, _ *adapterSessionState, co
 	return ack, nil
 }
 
+func (a *Adapter) appendRPCResponseEvent(state *adapterSessionState, operation string, response RPCMessage, runID string) (protocol.Event, error) {
+	if state == nil || len(response.Raw) == 0 {
+		return protocol.Event{}, nil
+	}
+	return a.appendObservedEvent(state, protocol.EventTypeUnknown, operation, response.Raw, runID)
+}
+
+func waitForRPCObservation(observation <-chan rpcObservation) (string, error) {
+	if observation == nil {
+		return "", nil
+	}
+	value := <-observation
+	return value.eventCursor, value.err
+}
+
 func (a *Adapter) finishTransportError(command protocol.Command, ack protocol.CommandAck, err error, operation string) (protocol.CommandAck, error) {
 	if errors.Is(err, ErrUnknownOutcome) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		ack.State = protocol.CommandStateUnknown
-		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: err.Error(), RequestID: command.CommandID}
+		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "command outcome is unknown", RequestID: command.CommandID}
 		if persistErr := a.journal.UpdateCommand(command.CommandID, ack); persistErr != nil {
 			return ack, fmt.Errorf("persist unknown %s result: %w", operation, persistErr)
 		}
 		return ack, protocol.ErrUnknownCommandResult
 	}
 	ack.State = protocol.CommandStateFailed
-	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: err.Error(), RequestID: command.CommandID}
+	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server operation failed", RequestID: command.CommandID}
 	if persistErr := a.journal.UpdateCommand(command.CommandID, ack); persistErr != nil {
 		return ack, fmt.Errorf("persist failed %s result: %w", operation, persistErr)
 	}
@@ -617,6 +897,7 @@ func (a *Adapter) consume(state *adapterSessionState) {
 	for message := range state.transport.Events() {
 		if err := a.observe(state, message); err != nil {
 			state.setPersistenceError(err)
+			state.closed.Store(true)
 			_ = state.transport.Close()
 			return
 		}
@@ -624,6 +905,12 @@ func (a *Adapter) consume(state *adapterSessionState) {
 	if state.closed.Load() || !a.isCurrentState(state) {
 		return
 	}
+	state.eventMu.Lock()
+	defer state.eventMu.Unlock()
+	if state.closed.Load() || !a.isCurrentState(state) {
+		return
+	}
+	state.closed.Store(true)
 	if _, err := a.appendObservedEventFromSource(state, protocol.EventTypeReconciliationRequired, protocol.EventSourceHostObservation, "transport/closed", mustRawJSON(map[string]string{"generation": state.gatewaySession.Generation}), ""); err != nil {
 		state.setPersistenceError(err)
 	}
@@ -631,6 +918,31 @@ func (a *Adapter) consume(state *adapterSessionState) {
 
 func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error {
 	if message.IsResponse() {
+		if !journaledResponseOperation(message.operation) {
+			notifyRPCObservation(message.observation, rpcObservation{})
+			return nil
+		}
+		state.eventMu.Lock()
+		defer state.eventMu.Unlock()
+		if state.closed.Load() || !a.isCurrentState(state) {
+			notifyRPCObservation(message.observation, rpcObservation{err: ErrUnknownOutcome})
+			return nil
+		}
+		runID := message.runID
+		if runID == "" {
+			runID = turnIDFromResult(message.Result)
+		}
+		event, err := a.appendObservedEvent(state, protocol.EventTypeUnknown, message.operation, message.Raw, runID)
+		if err != nil {
+			notifyRPCObservation(message.observation, rpcObservation{err: err})
+			return err
+		}
+		notifyRPCObservation(message.observation, rpcObservation{eventCursor: event.Cursor})
+		return nil
+	}
+	state.eventMu.Lock()
+	defer state.eventMu.Unlock()
+	if state.closed.Load() || !a.isCurrentState(state) {
 		return nil
 	}
 	eventType := eventTypeForMethod(message.Method, message)
@@ -643,8 +955,30 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error 
 		delete(state.activeTurns, runID)
 	}
 	state.mu.Unlock()
+	if state.closed.Load() || !a.isCurrentState(state) {
+		return nil
+	}
 	_, err := a.appendObservedEvent(state, eventType, message.Method, message.Raw, runID)
 	return err
+}
+
+func journaledResponseOperation(operation string) bool {
+	switch operation {
+	case "turn/start", "turn/steer", "turn/interrupt":
+		return true
+	default:
+		return false
+	}
+}
+
+func notifyRPCObservation(observation chan rpcObservation, value rpcObservation) {
+	if observation == nil {
+		return
+	}
+	select {
+	case observation <- value:
+	default:
+	}
 }
 
 func (a *Adapter) appendObservedEvent(state *adapterSessionState, eventType protocol.EventType, method string, payload json.RawMessage, runID string) (protocol.Event, error) {
@@ -658,7 +992,7 @@ func (a *Adapter) appendObservedEventFromSource(state *adapterSessionState, even
 	if !json.Valid(payload) {
 		payload = mustRawJSON(map[string]any{"method": method, "raw": string(payload)})
 	}
-	if method != "" {
+	if source == protocol.EventSourceHostObservation && method != "" {
 		var object map[string]json.RawMessage
 		if json.Unmarshal(payload, &object) == nil {
 			if _, ok := object["method"]; !ok {
@@ -719,22 +1053,23 @@ func (a *Adapter) removeSession(sessionID string) *adapterSessionState {
 	a.mu.Lock()
 	state := a.sessions[sessionID]
 	if state != nil {
-		state.closed.Store(true)
 		delete(a.sessions, sessionID)
 	}
 	a.mu.Unlock()
-	if state != nil {
-		_ = state.transport.Close()
-	}
 	return state
 }
 
-func (a *Adapter) closeState(state *adapterSessionState) {
+func (a *Adapter) closeState(state *adapterSessionState) error {
 	if state == nil {
-		return
+		return nil
 	}
 	state.closed.Store(true)
-	_ = state.transport.Close()
+	closeErr := state.transport.Close()
+	state.eventMu.Lock()
+	state.eventMu.Unlock()
+	state.operationMu.Lock()
+	state.operationMu.Unlock()
+	return closeErr
 }
 
 func (a *Adapter) isCurrentState(state *adapterSessionState) bool {
@@ -864,29 +1199,43 @@ func stringOrDefault(payload map[string]json.RawMessage, name, fallback string) 
 	return fallback
 }
 
-func waitForApprovalResolution(ctx context.Context, journal *Journal, sessionID string, requestID json.RawMessage) error {
+func waitForApprovalResolution(ctx context.Context, journal *Journal, sessionID string, requestID json.RawMessage, commandID string) (string, error) {
+	if result, ok := journal.ApprovalResult(commandID); ok {
+		return result, nil
+	}
 	if !journal.IsApprovalPending(sessionID, requestID) {
-		return nil
+		if result, ok := journal.ApprovalResult(commandID); ok {
+			return result, nil
+		}
+		return "", errors.New("approval result is not durable")
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		case <-ticker.C:
+			if result, ok := journal.ApprovalResult(commandID); ok {
+				return result, nil
+			}
 			if !journal.IsApprovalPending(sessionID, requestID) {
-				return nil
+				if result, ok := journal.ApprovalResult(commandID); ok {
+					return result, nil
+				}
+				return "", errors.New("approval result is not durable")
 			}
 		}
 	}
 }
 
 type appServerTurn struct {
-	ID     string          `json:"id"`
-	Status string          `json:"status"`
-	Input  json.RawMessage `json:"input"`
-	Items  json.RawMessage `json:"items"`
+	ID             string          `json:"id"`
+	Status         string          `json:"status"`
+	CreatedAt      string          `json:"createdAt"`
+	CreatedAtSnake string          `json:"created_at"`
+	Input          json.RawMessage `json:"input"`
+	Items          json.RawMessage `json:"items"`
 }
 
 type appServerTurnsPage struct {
@@ -921,15 +1270,18 @@ func (a *Adapter) listTurns(ctx context.Context, state *adapterSessionState) ([]
 		}
 		if page.Data != nil {
 			turns = append(turns, (*page.Data)...)
-		} else {
+		} else if page.Turns != nil {
 			turns = append(turns, (*page.Turns)...)
 		}
 		nextCursor := valueOrEmpty(page.NextCursor)
 		if nextCursor == "" {
 			nextCursor = valueOrEmpty(page.NextCursorSnake)
 		}
-		if nextCursor == "" || nextCursor == cursor {
+		if nextCursor == "" {
 			return turns, nil
+		}
+		if nextCursor == cursor {
+			return nil, errors.New("thread/turns/list returned a repeated pagination cursor")
 		}
 		cursor = nextCursor
 	}
@@ -940,14 +1292,6 @@ func parseTurnsPage(result json.RawMessage) (appServerTurnsPage, bool) {
 	var value appServerTurnsPage
 	if json.Unmarshal(result, &value) != nil || (value.Data == nil && value.Turns == nil) {
 		return appServerTurnsPage{}, false
-	}
-	if value.Data == nil {
-		empty := make([]appServerTurn, 0)
-		value.Data = &empty
-	}
-	if value.Turns == nil {
-		empty := make([]appServerTurn, 0)
-		value.Turns = &empty
 	}
 	return value, true
 }
@@ -960,22 +1304,20 @@ func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns [
 	if requestedID != "" {
 		for index := range turns {
 			if turns[index].ID == requestedID {
+				if command.Kind == protocol.CommandKindRunSend && turnProvidesCommandEvidence(turns[index]) && !commandMatchesTurn(command, turns[index]) {
+					return nil, false
+				}
 				return &turns[index], false
 			}
 		}
 		return nil, false
 	}
-	payload, err := decodeCommandPayload(command.Payload)
-	if err != nil {
-		return nil, false
-	}
-	prompt := firstString(payload, "prompt", "text")
-	if prompt == "" {
+	if command.Kind != protocol.CommandKindRunSend {
 		return nil, false
 	}
 	var matches []appServerTurn
 	for _, turn := range turns {
-		if turnContainsPrompt(turn, prompt) {
+		if turnAfterCommand(command, turn) && commandMatchesTurn(command, turn) {
 			matches = append(matches, turn)
 		}
 	}
@@ -983,6 +1325,105 @@ func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns [
 		return &matches[0], false
 	}
 	return nil, len(matches) > 1
+}
+
+func turnAfterCommand(command protocol.Command, turn appServerTurn) bool {
+	issuedAt, err := time.Parse(time.RFC3339Nano, command.IssuedAt)
+	if err != nil {
+		return false
+	}
+	createdAt := turn.CreatedAt
+	if createdAt == "" {
+		createdAt = turn.CreatedAtSnake
+	}
+	if createdAt == "" {
+		return false
+	}
+	turnAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	return err == nil && !turnAt.Before(issuedAt)
+}
+
+func turnProvidesCommandEvidence(turn appServerTurn) bool {
+	input := bytes.TrimSpace(turn.Input)
+	if len(input) > 0 && !bytes.Equal(input, []byte("[]")) && !bytes.Equal(input, []byte("null")) {
+		return true
+	}
+	var items []struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(turn.Items, &items) != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.Type == "userMessage" {
+			return true
+		}
+	}
+	return false
+}
+
+func commandCanConfirmFromTurn(command protocol.Command, turn appServerTurn) bool {
+	outcome, established := commandOutcomeFromTurn(command, turn)
+	return established && outcome == protocol.CommandStateSucceeded
+}
+
+func commandOutcomeFromTurn(command protocol.Command, turn appServerTurn) (protocol.CommandState, bool) {
+	switch command.Kind {
+	case protocol.CommandKindRunInterrupt:
+		if strings.EqualFold(turn.Status, "interrupted") {
+			return protocol.CommandStateSucceeded, true
+		}
+		if strings.EqualFold(turn.Status, "failed") || strings.EqualFold(turn.Status, "error") {
+			return protocol.CommandStateFailed, true
+		}
+		return "", false
+	case protocol.CommandKindRunSend:
+		payload, err := decodeCommandPayload(command.Payload)
+		if err == nil && (firstBool(payload, "steer", "turn_steer") || firstString(payload, "expected_turn_id", "turn_id") != "") {
+			return "", false
+		}
+		if turn.ID == "" {
+			return "", false
+		}
+		switch strings.ToLower(turn.Status) {
+		case "completed":
+			return protocol.CommandStateSucceeded, true
+		case "failed", "error", "interrupted":
+			return protocol.CommandStateFailed, true
+		default:
+			return "", false
+		}
+	default:
+		return "", false
+	}
+}
+
+func commandMatchesTurn(command protocol.Command, turn appServerTurn) bool {
+	payload, err := decodeCommandPayload(command.Payload)
+	if err != nil {
+		return false
+	}
+	if prompt := firstString(payload, "prompt", "text"); prompt != "" {
+		return turnContainsPrompt(turn, prompt)
+	}
+	input := payload["input"]
+	if len(bytes.TrimSpace(input)) == 0 {
+		return false
+	}
+	wanted, err := canonicalJSON(input)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range []json.RawMessage{turn.Input} {
+		if len(bytes.TrimSpace(candidate)) == 0 {
+			continue
+		}
+		actual, actualErr := canonicalJSON(candidate)
+		if actualErr == nil && bytes.Equal(actual, wanted) {
+			return true
+		}
+	}
+	return false
 }
 
 func turnContainsPrompt(turn appServerTurn, prompt string) bool {
@@ -1068,6 +1509,8 @@ func eventTypeForMethod(method string, message RPCMessage) protocol.EventType {
 		return protocol.EventTypeItemCompleted
 	case "item/commandExecution/requestApproval":
 		return protocol.EventTypeApprovalRequested
+	case "item/fileChange/requestApproval":
+		return protocol.EventTypeApprovalRequested
 	case "serverRequest/resolved":
 		return protocol.EventTypeApprovalResolved
 	case "turn/completed":
@@ -1082,8 +1525,10 @@ func eventTypeForMethod(method string, message RPCMessage) protocol.EventType {
 			return protocol.EventTypeRunInterrupted
 		case "failed", "error":
 			return protocol.EventTypeRunFailed
-		default:
+		case "completed":
 			return protocol.EventTypeRunCompleted
+		default:
+			return protocol.EventTypeUnknown
 		}
 	case "turn/failed":
 		return protocol.EventTypeRunFailed
@@ -1096,10 +1541,10 @@ func rpcResponseError(operation string, response RPCMessage) error {
 	if response.Error == nil {
 		return fmt.Errorf("app-server %s returned no result", operation)
 	}
-	return fmt.Errorf("app-server %s failed (%d): %s", operation, response.Error.Code, response.Error.Message)
+	return fmt.Errorf("app-server %s failed with code %d", operation, response.Error.Code)
 }
 
-func rpcAPIError(value *RPCError) *protocol.ApiError {
+func rpcAPIError(value *RPCError, requestID string) *protocol.ApiError {
 	if value == nil {
 		return nil
 	}
@@ -1107,7 +1552,11 @@ func rpcAPIError(value *RPCError) *protocol.ApiError {
 	if value.Code == -32600 || value.Code == -32602 {
 		code = protocol.ErrorCodeInvalidRequest
 	}
-	return &protocol.ApiError{Code: code, Message: value.Message, RequestID: fmt.Sprintf("rpc-%d", value.Code), Details: append(json.RawMessage(nil), value.Data...)}
+	message := "app-server request failed"
+	if code == protocol.ErrorCodeInvalidRequest {
+		message = "app-server rejected the request"
+	}
+	return &protocol.ApiError{Code: code, Message: message, RequestID: requestID}
 }
 
 func stableSessionID(externalThreadRef string) string {

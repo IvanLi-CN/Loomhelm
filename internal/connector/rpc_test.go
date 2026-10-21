@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -54,6 +55,88 @@ func TestProcessTransportTimeoutIsUnknownOutcome(t *testing.T) {
 	_ = transport.Close()
 }
 
+func TestProcessTransportPreCanceledCallDoesNotWrite(t *testing.T) {
+	var writes atomic.Int32
+	transport, err := NewProcessTransport(context.Background(), ProcessTransportConfig{
+		CommandPath:       os.Args[0],
+		CommandArgs:       []string{"-test.run=TestProcessTransportHelper", "--", "echo"},
+		CommandEnv:        append(os.Environ(), "LOOMHELM_RPC_HELPER=1"),
+		afterRequestWrite: func(string) { writes.Add(1) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = transport.Call(ctx, "echo", json.RawMessage(`{"input":"must not be sent"}`))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled call error = %v, want context canceled", err)
+	}
+	if writes.Load() != 0 {
+		t.Fatalf("pre-canceled call wrote %d requests, want 0", writes.Load())
+	}
+	_ = transport.Close()
+}
+
+func TestProcessTransportCancelsAfterWriteWithoutLosingResponseObservation(t *testing.T) {
+	transport, err := NewProcessTransport(context.Background(), ProcessTransportConfig{
+		CommandPath: os.Args[0],
+		CommandArgs: []string{"-test.run=TestProcessTransportHelper", "--", "burst-response"},
+		CommandEnv:  append(os.Environ(), "LOOMHELM_RPC_HELPER=1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	transport.afterRequestWrite = func(method string) {
+		if method == "burst-response" {
+			cancel()
+		}
+	}
+	_, err = transport.Call(ctx, "burst-response", json.RawMessage(`{}`))
+	if !errors.Is(err, ErrUnknownOutcome) {
+		t.Fatalf("after-write cancellation error = %v, want unknown outcome", err)
+	}
+	foundResponse := false
+	deadline := time.After(2 * time.Second)
+	for !foundResponse {
+		select {
+		case message, ok := <-transport.Events():
+			if !ok {
+				t.Fatal("transport closed before the late response was observed")
+			}
+			if message.IsResponse() {
+				foundResponse = true
+				if string(message.Result) != `{"ok":true}` {
+					t.Fatalf("late response = %s, want {\"ok\":true}", message.Result)
+				}
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the late response observation")
+		}
+	}
+	_ = transport.Close()
+}
+
+func TestProcessTransportHandlesResponseAfterLargeNotificationBurst(t *testing.T) {
+	transport, err := NewProcessTransport(context.Background(), ProcessTransportConfig{
+		CommandPath: os.Args[0],
+		CommandArgs: []string{"-test.run=TestProcessTransportHelper", "--", "burst-response"},
+		CommandEnv:  append(os.Environ(), "LOOMHELM_RPC_HELPER=1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := transport.Call(context.Background(), "burst-response", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(response.Result) != `{"ok":true}` {
+		t.Fatalf("burst response = %s, want {\"ok\":true}", response.Result)
+	}
+	_ = transport.Close()
+}
+
 func TestProcessTransportWriteErrorClassifiesPartialWrites(t *testing.T) {
 	partial := &partialWriter{limit: 3}
 	transport := &ProcessTransport{stdin: nopWriteCloser{Writer: partial}, done: make(chan struct{}), pending: make(map[string]pendingRPC)}
@@ -80,6 +163,74 @@ func TestProcessTransportDoesNotCloseEventsWhileReaderIsSending(t *testing.T) {
 	<-transport.readDone
 	if _, ok := <-transport.events; ok {
 		t.Fatal("events channel remained open after reader exit")
+	}
+}
+
+func TestProcessTransportDrainsStdoutBeforeChildExit(t *testing.T) {
+	transport, err := NewProcessTransport(context.Background(), ProcessTransportConfig{
+		CommandPath: os.Args[0],
+		CommandArgs: []string{"-test.run=TestProcessTransportHelper", "--", "burst-exit"},
+		CommandEnv:  append(os.Environ(), "LOOMHELM_RPC_HELPER=1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transport.Notify(context.Background(), "burst-exit", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for range transport.Events() {
+		count++
+	}
+	if count != 256 {
+		t.Fatalf("child exit event count = %d, want 256", count)
+	}
+	if err := transport.Close(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessTransportCloseUnblocksFullEventQueue(t *testing.T) {
+	transport, err := NewProcessTransport(context.Background(), ProcessTransportConfig{
+		CommandPath: os.Args[0],
+		CommandArgs: []string{"-test.run=TestProcessTransportHelper", "--", "burst"},
+		CommandEnv:  append(os.Environ(), "LOOMHELM_RPC_HELPER=1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transport.Notify(context.Background(), "burst", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	closed := make(chan error, 1)
+	go func() { closed <- transport.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil && !errors.Is(err, os.ErrProcessDone) {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("transport close remained blocked by a full event queue")
+	}
+}
+
+func TestProcessTransportRejectsAmbiguousRPCResponse(t *testing.T) {
+	if _, err := parseRPCMessage([]byte(`{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":-1,"message":"ambiguous"}}`)); err == nil {
+		t.Fatal("RPC response containing both result and error was accepted")
+	}
+}
+
+func TestSanitizedCommandEnvExcludesSecrets(t *testing.T) {
+	t.Setenv("LOOMHELM_RPC_SECRET", "must-not-cross-boundary")
+	t.Setenv("HOME", "/tmp/loomhelm-home")
+	env := sanitizedCommandEnv()
+	joined := strings.Join(env, "\n")
+	if strings.Contains(joined, "LOOMHELM_RPC_SECRET") || strings.Contains(joined, "must-not-cross-boundary") {
+		t.Fatalf("sanitized command environment leaked secret: %q", joined)
+	}
+	if !strings.Contains(joined, "HOME=/tmp/loomhelm-home") {
+		t.Fatalf("sanitized command environment omitted safe HOME: %q", joined)
 	}
 }
 
@@ -110,6 +261,16 @@ func TestProcessTransportHelper(t *testing.T) {
 			for i := 0; i < 256; i++ {
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notice", "params": map[string]any{"index": i}})
 			}
+		case "burst-response":
+			for i := 0; i < 256; i++ {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notice", "params": map[string]any{"index": i}})
+			}
+			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(message.ID), "result": map[string]any{"ok": true}})
+		case "burst-exit":
+			for i := 0; i < 256; i++ {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notice", "params": map[string]any{"index": i}})
+			}
+			os.Exit(0)
 		}
 	}
 	os.Exit(0)

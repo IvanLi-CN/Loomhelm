@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -37,7 +38,7 @@ func TestJournalDeduplicatesCommandsAndRejectsConflictingPayloads(t *testing.T) 
 }
 
 func TestJournalTurnsInflightCommandUnknownAfterRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	path := filepath.Join(privateTestDir(t), "journal.jsonl")
 	first, err := OpenJournal(path)
 	if err != nil {
 		t.Fatal(err)
@@ -68,8 +69,93 @@ func TestJournalTurnsInflightCommandUnknownAfterRestart(t *testing.T) {
 	}
 }
 
+func TestJournalPersistsSessionStartIntentAndBlocksDuplicate(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "journal.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{ProjectID: "project-1", TaskID: "task-1", Prompt: "hello"}
+	original := protocol.GatewaySession{Handle: "gateway-1", Generation: "generation-1"}
+	intentID, err := first.BeginSessionStart(original, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-2", Generation: "generation-2"}, request); !errors.Is(err, ErrUnknownOutcome) {
+		t.Fatalf("duplicate session start error = %v, want %v", err, ErrUnknownOutcome)
+	}
+	if err := second.ResolveSessionStart(intentID, "session-1", "thread-1", original.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if session, ok := second.Session("session-1"); !ok || session.ExternalThreadRef != "thread-1" {
+		t.Fatalf("resolved session = %+v, found = %v", session, ok)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	third, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	if _, err := third.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-3", Generation: "generation-3"}, request); err != nil {
+		t.Fatalf("resolved session start remained blocked: %v", err)
+	}
+}
+
+func TestJournalResolvedSessionStartReturnsSessionUntilInitialPromptSucceeds(t *testing.T) {
+	journal := openTestJournal(t)
+	request := protocol.NewSessionRequest{ProjectID: "project-resolved", Prompt: "resume once"}
+	gatewaySession := protocol.GatewaySession{Handle: "gateway-resolved", Generation: "generation-resolved"}
+	intentID, err := journal.BeginSessionStart(gatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "thread-resolved"
+	sessionID := stableSessionID(threadID)
+	if err := journal.ResolveSessionStart(intentID, sessionID, threadID, gatewaySession.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if session, ok := journal.ResolvedSessionStart(request); !ok || session.ExternalThreadRef != threadID {
+		t.Fatalf("resolved session without an initial command = %+v, found = %v", session, ok)
+	}
+	command := protocol.Command{
+		CommandID: sessionID + ":initial",
+		IssuedAt:  "2026-10-21T00:00:00Z",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   []byte(`{"prompt":"resume once"}`),
+		SessionID: sessionID,
+	}
+	if _, _, err := journal.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	if session, ok := journal.ResolvedSessionStart(request); !ok || session.ExternalThreadRef != threadID {
+		t.Fatalf("unfinished initial prompt session = %+v, found = %v", session, ok)
+	}
+	ack, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack.State = protocol.CommandStateSucceeded
+	if err := journal.UpdateCommand(command.CommandID, ack); err != nil {
+		t.Fatal(err)
+	}
+	if session, ok := journal.ResolvedSessionStart(request); !ok || session.ExternalThreadRef != threadID {
+		t.Fatalf("successful initial prompt did not remain eligible for session reuse: %+v, found = %v", session, ok)
+	}
+}
+
 func TestJournalDiscardsInterruptedFinalRecord(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	path := filepath.Join(privateTestDir(t), "journal.jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +189,7 @@ func TestJournalReadsOrderedEventsAndRebuildsPendingApproval(t *testing.T) {
 		RunID:     stringPointer("turn-1"),
 		Type:      protocol.EventTypeApprovalRequested,
 		Source:    protocol.EventSourceAppServer,
-		Payload:   []byte(`{"jsonrpc":"2.0","id":42,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"commandExecution"}}}`),
+		Payload:   []byte(`{"jsonrpc":"2.0","id":42,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","command":"/usr/bin/printf APPROVED","item":{"id":"item-1","type":"commandExecution"}}}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +202,7 @@ func TestJournalReadsOrderedEventsAndRebuildsPendingApproval(t *testing.T) {
 		t.Fatalf("event page = %+v, want cursor %q", page, event.Cursor)
 	}
 	pending := journal.PendingApprovals("session-1", "turn-1")
-	if len(pending) != 1 || string(pending[0].RequestID) != "42" {
+	if len(pending) != 1 || string(pending[0].RequestID) != "42" || pending[0].Command != "/usr/bin/printf APPROVED" {
 		t.Fatalf("pending approvals = %+v", pending)
 	}
 
@@ -180,8 +266,79 @@ func TestJournalScopesApprovalRequestsBySessionAndRevision(t *testing.T) {
 	}
 }
 
+func TestJournalKeepsUnknownApprovalResolutionUnknown(t *testing.T) {
+	journal := openTestJournal(t)
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-resolution",
+		RunID:     stringPointer("turn-resolution"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":11,"method":"item/commandExecution/requestApproval","params":{"turnId":"turn-resolution","revision":1,"itemId":"item-resolution"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.ClaimApproval("session-resolution", []byte("11"), 1, "command-resolution", "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-resolution",
+		RunID:     stringPointer("turn-resolution"),
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":11,"resolution":"unexpected"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := journal.ApprovalResult("command-resolution"); !ok || got != "unknown" {
+		t.Fatalf("approval result = %q, found = %v, want unknown", got, ok)
+	}
+}
+
+func TestJournalWaitsForItemStatusWhenApprovalResolutionIsEmpty(t *testing.T) {
+	journal := openTestJournal(t)
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-empty-resolution",
+		RunID:     stringPointer("turn-empty-resolution"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":12,"method":"item/commandExecution/requestApproval","params":{"turnId":"turn-empty-resolution","revision":1,"itemId":"item-empty-resolution"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.ClaimApproval("session-empty-resolution", []byte("12"), 1, "command-empty-resolution", "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-empty-resolution",
+		RunID:     stringPointer("turn-empty-resolution"),
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":12}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingApprovals("session-empty-resolution", "turn-empty-resolution")) != 1 {
+		t.Fatal("empty approval resolution removed the pending claim before item status")
+	}
+	if result, ok := journal.ApprovalResult("command-empty-resolution"); !ok || result != approvalResolutionCleared {
+		t.Fatalf("empty approval resolution marker = %q, found = %v", result, ok)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-empty-resolution",
+		RunID:     stringPointer("turn-empty-resolution"),
+		Type:      protocol.EventTypeItemCompleted,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item-empty-resolution","status":"completed"}}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, ok := journal.ApprovalResult("command-empty-resolution"); !ok || result != "accept" {
+		t.Fatalf("item completion approval result = %q, found = %v", result, ok)
+	}
+}
+
 func TestJournalPersistsApprovalClaimAcrossRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	path := filepath.Join(privateTestDir(t), "journal.jsonl")
 	first, err := OpenJournal(path)
 	if err != nil {
 		t.Fatal(err)
@@ -251,8 +408,43 @@ func TestJournalFindsUniqueRunAfterCommandIssuance(t *testing.T) {
 	}
 }
 
+func TestJournalDoesNotAttributeLaterCommandRunToEarlierUnknownCommand(t *testing.T) {
+	journal := openTestJournal(t)
+	first := testCommand("command-first", `{"prompt":"same"}`)
+	if _, _, err := journal.BeginCommand(first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.CommandID = "command-second"
+	second.IssuedAt = "2026-10-21T00:00:01Z"
+	if _, _, err := journal.BeginCommand(second); err != nil {
+		t.Fatal(err)
+	}
+	secondAck, err := journal.LookupCommand(second.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondAck.State = protocol.CommandStateSucceeded
+	if err := journal.UpdateCommand(second.CommandID, secondAck); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID:  first.SessionID,
+		RunID:      stringPointer("turn-second"),
+		OccurredAt: "2026-10-21T00:00:02Z",
+		Type:       protocol.EventTypeRunStarted,
+		Source:     protocol.EventSourceAppServer,
+		Payload:    []byte(`{"method":"turn/started"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if runID, ok := journal.UniqueRunIDForCommand(first.SessionID, first.CommandID, first.IssuedAt); ok || runID != "" {
+		t.Fatalf("later command run was attributed to earlier unknown command: %q, %v", runID, ok)
+	}
+}
+
 func TestJournalEnforcesPrivatePermissions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "journal.jsonl")
+	path := filepath.Join(privateTestDir(t), "nested", "deeper", "journal.jsonl")
 	journal, err := OpenJournal(path)
 	if err != nil {
 		t.Fatal(err)
@@ -266,19 +458,32 @@ func TestJournalEnforcesPrivatePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fileInfo.Mode().Perm() != 0o600 || directoryInfo.Mode().Perm() != 0o700 {
-		t.Fatalf("journal permissions = file %o, directory %o", fileInfo.Mode().Perm(), directoryInfo.Mode().Perm())
+	parentInfo, err := os.Stat(filepath.Dir(filepath.Dir(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && (fileInfo.Mode().Perm() != 0o600 || directoryInfo.Mode().Perm() != 0o700 || parentInfo.Mode().Perm() != 0o700) {
+		t.Fatalf("journal permissions = file %o, directory %o, parent %o", fileInfo.Mode().Perm(), directoryInfo.Mode().Perm(), parentInfo.Mode().Perm())
 	}
 }
 
 func openTestJournal(t *testing.T) *Journal {
 	t.Helper()
-	journal, err := OpenJournal(filepath.Join(t.TempDir(), "journal.jsonl"))
+	journal, err := OpenJournal(filepath.Join(privateTestDir(t), "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = journal.Close() })
 	return journal
+}
+
+func privateTestDir(t *testing.T) string {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return directory
 }
 
 func testCommand(id, payload string) protocol.Command {

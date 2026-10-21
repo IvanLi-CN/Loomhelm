@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -27,8 +28,9 @@ type GatewayConfig struct {
 }
 
 type gatewaySession struct {
-	session   protocol.GatewaySession
-	transport RPCTransport
+	session        protocol.GatewaySession
+	transport      RPCTransport
+	resumeResponse json.RawMessage
 }
 
 // Gateway owns independent app-server processes and never discovers or
@@ -56,7 +58,9 @@ func NewGateway(config GatewayConfig) (*Gateway, error) {
 	if factory == nil {
 		processConfig := config.Process
 		factory = func(ctx context.Context) (RPCTransport, error) {
-			return NewProcessTransport(ctx, processConfig)
+			// The request context bounds initialize/thread-resume calls; it must
+			// not own the lifetime of the host-owned session process.
+			return NewProcessTransport(context.WithoutCancel(ctx), processConfig)
 		}
 	}
 	return &Gateway{factory: factory, client: client, sessions: make(map[string]gatewaySession)}, nil
@@ -83,6 +87,27 @@ func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessi
 	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport}
 	g.mu.Unlock()
 	return session, nil
+}
+
+// SetExternalThreadRef binds the app-server thread identity to the gateway
+// generation that created it. This lets a later cold resume fence and close
+// the superseded transport instead of leaving two generations alive.
+func (g *Gateway) SetExternalThreadRef(session protocol.GatewaySession, externalThreadRef string) error {
+	if session.Handle == "" || externalThreadRef == "" {
+		return errors.New("gateway session handle and external thread reference are required")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	entry, ok := g.sessions[session.Handle]
+	if !ok {
+		return fmt.Errorf("gateway session %q is not available", session.Handle)
+	}
+	if entry.session.ExternalThreadRef != "" && entry.session.ExternalThreadRef != externalThreadRef {
+		return fmt.Errorf("gateway session %q is already bound to another thread", session.Handle)
+	}
+	entry.session.ExternalThreadRef = externalThreadRef
+	g.sessions[session.Handle] = entry
+	return nil
 }
 
 func (g *Gateway) AttachActiveSession(context.Context, protocol.ExistingSessionRequest) (protocol.GatewaySession, error) {
@@ -115,11 +140,11 @@ func (g *Gateway) ReconcileSession(ctx context.Context, externalThreadRef string
 	}))
 	if err != nil {
 		_ = transport.Close()
-		return protocol.Reconciliation{CommandID: externalThreadRef, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer(err.Error())}, nil
+		return protocol.Reconciliation{CommandID: externalThreadRef, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer("thread/resume outcome is unknown")}, nil
 	}
 	if result.Error != nil {
 		_ = transport.Close()
-		return protocol.Reconciliation{CommandID: externalThreadRef, ObservedAt: now(), State: protocol.ReconciliationStateNotFound, Note: stringPointer(result.Error.Message)}, nil
+		return protocol.Reconciliation{CommandID: externalThreadRef, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer("thread/resume was rejected by app-server")}, nil
 	}
 	threadID := threadIDFromResult(result.Result)
 	if threadID != externalThreadRef {
@@ -140,7 +165,7 @@ func (g *Gateway) ReconcileSession(ctx context.Context, externalThreadRef string
 			previous = append(previous, entry.transport)
 		}
 	}
-	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport}
+	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport, resumeResponse: append(json.RawMessage(nil), result.Raw...)}
 	g.mu.Unlock()
 	for _, oldTransport := range previous {
 		_ = oldTransport.Close()
@@ -159,6 +184,17 @@ func (g *Gateway) RecoveredSession(externalThreadRef string) (protocol.GatewaySe
 	return protocol.GatewaySession{}, fmt.Errorf("recovered session %q is not available", externalThreadRef)
 }
 
+func (g *Gateway) RecoveredSessionResult(externalThreadRef string) (json.RawMessage, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, entry := range g.sessions {
+		if entry.session.ExternalThreadRef == externalThreadRef {
+			return append(json.RawMessage(nil), entry.resumeResponse...), nil
+		}
+	}
+	return nil, fmt.Errorf("recovered session %q is not available", externalThreadRef)
+}
+
 func (g *Gateway) TransportFor(_ context.Context, session protocol.GatewaySession) (RPCTransport, error) {
 	if session.Handle == "" {
 		return nil, errors.New("gateway session handle must not be empty")
@@ -173,6 +209,8 @@ func (g *Gateway) TransportFor(_ context.Context, session protocol.GatewaySessio
 }
 
 func (g *Gateway) CloseSession(_ context.Context, session protocol.GatewaySession) error {
+	g.reconcileMu.Lock()
+	defer g.reconcileMu.Unlock()
 	g.mu.Lock()
 	entry, ok := g.sessions[session.Handle]
 	if ok {
@@ -198,7 +236,7 @@ func (g *Gateway) initialize(ctx context.Context, transport RPCTransport) error 
 		return err
 	}
 	if response.Error != nil {
-		return fmt.Errorf("app-server initialize failed (%d): %s", response.Error.Code, response.Error.Message)
+		return fmt.Errorf("app-server initialize failed with code %d", response.Error.Code)
 	}
 	if len(response.Result) == 0 {
 		return errors.New("app-server initialize returned no result")
@@ -227,8 +265,10 @@ func mustRawJSON(value any) json.RawMessage {
 }
 
 func newOpaqueID(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UTC().UnixNano(), opaqueIDCounter.Add(1))
 }
+
+var opaqueIDCounter atomic.Uint64
 
 var _ protocol.HostGateway = (*Gateway)(nil)
 var _ io.Closer = (*ProcessTransport)(nil)
