@@ -21,6 +21,13 @@ export interface ProductionApiAssembly {
   };
 }
 
+export interface ProductionApiAssemblyOptions {
+  auth: ProductionApiAssembly["auth"];
+  permissions: ProductionApiAssembly["permissions"];
+  client?: GeneratedApiClient;
+  clientOptions?: WebApiClientOptions;
+}
+
 export interface WebApiClientOptions {
   baseUrl?: string;
   fetch?: AuthenticatedApiClientOptions["fetch"];
@@ -52,4 +59,10 @@ export function createWebApiClient(options: WebApiClientOptions = {}): Generated
   });
 }
 
-export const generatedApiClient: GeneratedApiClient | null = null;
+export function createProductionApiAssembly({ auth, permissions, client, clientOptions }: ProductionApiAssemblyOptions): ProductionApiAssembly {
+  return {
+    client: client ?? createWebApiClient(clientOptions),
+    auth,
+    permissions
+  };
+}
