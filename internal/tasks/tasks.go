@@ -84,18 +84,18 @@ func NewService(pool *pgxpool.Pool, principal auth.PrincipalResolver, authorize 
 }
 
 func (s *Service) Mount(r chi.Router) {
-	r.Route("/tasks", func(tasks chi.Router) {
-		tasks.Get("/", s.handleList)
-		tasks.Post("/", s.handleCreate)
-		tasks.Get("/{task_id}", s.handleGet)
-		tasks.Patch("/{task_id}", s.handleUpdate)
-		tasks.Delete("/{task_id}", s.handleDelete)
-		tasks.Get("/{task_id}/relationships", s.handleRelationships)
-		tasks.Post("/{task_id}/parents/{parent_task_id}", s.handleAddParent)
-		tasks.Delete("/{task_id}/parents/{parent_task_id}", s.handleRemoveParent)
-		tasks.Post("/{task_id}/dependencies/{prerequisite_task_id}", s.handleAddDependency)
-		tasks.Delete("/{task_id}/dependencies/{prerequisite_task_id}", s.handleRemoveDependency)
-	})
+	for _, path := range []string{"/tasks", "/tasks/"} {
+		r.Get(path, s.handleList)
+		r.Post(path, s.handleCreate)
+	}
+	r.Get("/tasks/{task_id}", s.handleGet)
+	r.Patch("/tasks/{task_id}", s.handleUpdate)
+	r.Delete("/tasks/{task_id}", s.handleDelete)
+	r.Get("/tasks/{task_id}/relationships", s.handleRelationships)
+	r.Post("/tasks/{task_id}/parents/{parent_task_id}", s.handleAddParent)
+	r.Delete("/tasks/{task_id}/parents/{parent_task_id}", s.handleRemoveParent)
+	r.Post("/tasks/{task_id}/dependencies/{prerequisite_task_id}", s.handleAddDependency)
+	r.Delete("/tasks/{task_id}/dependencies/{prerequisite_task_id}", s.handleRemoveDependency)
 }
 
 func (s *Service) Create(ctx context.Context, principal auth.Principal, request CreateRequest) (Task, error) {
@@ -209,6 +209,7 @@ func (s *Service) List(ctx context.Context, principal auth.Principal, projectID 
 	defer rows.Close()
 	tasks := make([]Task, 0, limit)
 	var next *Cursor
+	var last Cursor
 	for rows.Next() {
 		var task Task
 		var createdAt, updatedAt time.Time
@@ -218,11 +219,11 @@ func (s *Service) List(ctx context.Context, principal auth.Principal, projectID 
 		task.CreatedAt = formatTime(createdAt)
 		task.UpdatedAt = formatTime(updatedAt)
 		if len(tasks) == limit {
-			cursor := Cursor{CreatedAt: createdAt, ID: task.ID}
-			next = &cursor
+			next = &last
 			break
 		}
 		tasks = append(tasks, task)
+		last = Cursor{CreatedAt: createdAt, ID: task.ID}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("read tasks: %w", err)
@@ -299,14 +300,33 @@ func (s *Service) Update(ctx context.Context, principal auth.Principal, taskID s
 			return Task{}, fmt.Errorf("%w: unsupported task status", auth.ErrInvalid)
 		}
 	}
+	setClauses := make([]string, 0, 3)
+	args := []any{taskID}
+	if request.Title != nil {
+		args = append(args, title)
+		setClauses = append(setClauses, fmt.Sprintf("title = $%d", len(args)))
+	}
+	if request.Goal != nil {
+		args = append(args, goal)
+		setClauses = append(setClauses, fmt.Sprintf("goal = $%d", len(args)))
+	}
+	if request.Status != nil {
+		args = append(args, status)
+		setClauses = append(setClauses, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if len(setClauses) == 0 {
+		return current, nil
+	}
+	setClauses = append(setClauses, "updated_at = CURRENT_TIMESTAMP")
 	var task Task
 	var createdAt, updatedAt time.Time
-	err = s.pool.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 		UPDATE tasks
-		SET title = $2, goal = $3, status = $4, updated_at = CURRENT_TIMESTAMP
+		SET %s
 		WHERE id = $1
 		RETURNING id, project_id, title, goal, status, session_id, created_at, updated_at
-	`, taskID, title, goal, status).Scan(&task.ID, &task.ProjectID, &task.Title, &task.Goal, &task.Status, &task.SessionID, &createdAt, &updatedAt)
+	`, strings.Join(setClauses, ", "))
+	err = s.pool.QueryRow(ctx, query, args...).Scan(&task.ID, &task.ProjectID, &task.Title, &task.Goal, &task.Status, &task.SessionID, &createdAt, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, auth.ErrNotFound
 	}
@@ -476,8 +496,8 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 		auth.WriteError(writer, request, http.StatusUnauthorized, err, "authentication required")
 		return
 	}
-	var body CreateRequest
-	if err := auth.DecodeJSON(request, &body); err != nil {
+	body, err := decodeCreateRequest(request)
+	if err != nil {
 		auth.WriteError(writer, request, http.StatusBadRequest, err, "invalid task request")
 		return
 	}
@@ -487,6 +507,22 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	auth.WriteJSON(writer, http.StatusCreated, map[string]Task{"task": task})
+}
+
+func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
+	var body struct {
+		ProjectID string  `json:"project_id"`
+		Title     string  `json:"title"`
+		Goal      *string `json:"goal"`
+		Status    *Status `json:"status,omitempty"`
+	}
+	if err := auth.DecodeJSON(request, &body); err != nil {
+		return CreateRequest{}, err
+	}
+	if body.Goal == nil {
+		return CreateRequest{}, fmt.Errorf("%w: goal is required", auth.ErrInvalid)
+	}
+	return CreateRequest{ProjectID: body.ProjectID, Title: body.Title, Goal: *body.Goal, Status: body.Status}, nil
 }
 
 func (s *Service) handleGet(writer http.ResponseWriter, request *http.Request) {

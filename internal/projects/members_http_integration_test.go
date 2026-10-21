@@ -34,7 +34,7 @@ func TestProjectMemberHTTPAuthorization(t *testing.T) {
 	var sessionToken string
 	var creatorID string
 	defer func() {
-		cleanupMemberHTTPState(ctx, pool, projectIDs, taskIDs, sessionToken, []string{creatorID, viewerID, operatorID, outsiderID})
+		cleanupMemberHTTPState(t, ctx, pool, projectIDs, taskIDs, sessionToken, []string{creatorID, viewerID, operatorID, outsiderID})
 		db.Close()
 	}()
 	seedMemberUser(t, ctx, pool, viewerID)
@@ -69,6 +69,9 @@ func TestProjectMemberHTTPAuthorization(t *testing.T) {
 	sessionToken = sessionCookie.Value
 	if provider.exchangeCalls != 1 || provider.exchangeCode != "creator-code" || provider.exchangeNonce == "" {
 		t.Fatalf("OIDC exchange = calls:%d code:%q nonce:%q", provider.exchangeCalls, provider.exchangeCode, provider.exchangeNonce)
+	}
+	if provider.exchangeNonce != provider.authorizationNonce {
+		t.Fatalf("OIDC nonce mismatch: authorization=%q exchange=%q", provider.authorizationNonce, provider.exchangeNonce)
 	}
 	creatorResponse := serveMemberHTTP(handler, http.MethodGet, "/auth/me", "", "", sessionCookie)
 	requireMemberHTTPStatus(t, creatorResponse, http.StatusOK)
@@ -254,13 +257,15 @@ func TestProjectMemberHTTPAuthorization(t *testing.T) {
 }
 
 type memberHTTPProvider struct {
-	identity      auth.Identity
-	exchangeCode  string
-	exchangeNonce string
-	exchangeCalls int
+	identity           auth.Identity
+	authorizationNonce string
+	exchangeCode       string
+	exchangeNonce      string
+	exchangeCalls      int
 }
 
 func (p *memberHTTPProvider) AuthorizationURL(state, nonce string) (string, error) {
+	p.authorizationNonce = nonce
 	values := url.Values{}
 	values.Set("state", state)
 	values.Set("nonce", nonce)
@@ -271,7 +276,7 @@ func (p *memberHTTPProvider) Exchange(_ context.Context, code, nonce string) (au
 	p.exchangeCalls++
 	p.exchangeCode = code
 	p.exchangeNonce = nonce
-	if code != "creator-code" || nonce == "" {
+	if code != "creator-code" || nonce == "" || nonce != p.authorizationNonce {
 		return auth.Identity{}, errors.New("unexpected test OIDC exchange")
 	}
 	return p.identity, nil
@@ -356,26 +361,56 @@ func decodeMemberHTTPJSON(t *testing.T, response *httptest.ResponseRecorder, des
 	}
 }
 
-func cleanupMemberHTTPState(ctx context.Context, pool *pgxpool.Pool, projectIDs, taskIDs []string, sessionToken string, userIDs []string) {
+func cleanupMemberHTTPState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectIDs, taskIDs []string, sessionToken string, userIDs []string) {
+	t.Helper()
 	if pool == nil {
 		return
 	}
 	if sessionToken != "" {
-		_, _ = pool.Exec(ctx, `DELETE FROM auth_sessions WHERE token = $1`, sessionToken)
+		if _, err := pool.Exec(ctx, `DELETE FROM auth_sessions WHERE token = $1`, sessionToken); err != nil {
+			t.Errorf("cleanup session: %v", err)
+		}
 	}
 	if len(taskIDs) > 0 {
-		_, _ = pool.Exec(ctx, `DELETE FROM task_parent_links WHERE parent_task_id = ANY($1::text[]) OR child_task_id = ANY($1::text[])`, taskIDs)
-		_, _ = pool.Exec(ctx, `DELETE FROM task_dependency_links WHERE prerequisite_task_id = ANY($1::text[]) OR dependent_task_id = ANY($1::text[])`, taskIDs)
-		_, _ = pool.Exec(ctx, `DELETE FROM task_execution_refs WHERE task_id = ANY($1::text[])`, taskIDs)
-		_, _ = pool.Exec(ctx, `DELETE FROM tasks WHERE id = ANY($1::text[])`, taskIDs)
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{`DELETE FROM task_parent_links WHERE parent_task_id = ANY($1::text[]) OR child_task_id = ANY($1::text[])`, []any{taskIDs}},
+			{`DELETE FROM task_dependency_links WHERE prerequisite_task_id = ANY($1::text[]) OR dependent_task_id = ANY($1::text[])`, []any{taskIDs}},
+			{`DELETE FROM task_execution_refs WHERE task_id = ANY($1::text[])`, []any{taskIDs}},
+			{`DELETE FROM tasks WHERE id = ANY($1::text[])`, []any{taskIDs}},
+		} {
+			if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+				t.Errorf("cleanup query %q: %v", statement.query, err)
+			}
+		}
 	}
 	if len(projectIDs) > 0 {
-		_, _ = pool.Exec(ctx, `DELETE FROM auth_api_credential_project_scopes WHERE project_id = ANY($1::text[])`, projectIDs)
-		_, _ = pool.Exec(ctx, `DELETE FROM project_members WHERE project_id = ANY($1::text[])`, projectIDs)
-		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = ANY($1::text[])`, projectIDs)
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{`DELETE FROM auth_api_credential_project_scopes WHERE project_id = ANY($1::text[])`, []any{projectIDs}},
+			{`DELETE FROM project_members WHERE project_id = ANY($1::text[])`, []any{projectIDs}},
+			{`DELETE FROM projects WHERE id = ANY($1::text[])`, []any{projectIDs}},
+		} {
+			if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+				t.Errorf("cleanup query %q: %v", statement.query, err)
+			}
+		}
 	}
 	if len(userIDs) > 0 {
-		_, _ = pool.Exec(ctx, `DELETE FROM auth_api_credentials WHERE user_id = ANY($1::text[])`, userIDs)
-		_, _ = pool.Exec(ctx, `DELETE FROM auth_users WHERE id = ANY($1::text[])`, userIDs)
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{`DELETE FROM auth_api_credentials WHERE user_id = ANY($1::text[])`, []any{userIDs}},
+			{`DELETE FROM auth_users WHERE id = ANY($1::text[])`, []any{userIDs}},
+		} {
+			if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+				t.Errorf("cleanup query %q: %v", statement.query, err)
+			}
+		}
 	}
 }

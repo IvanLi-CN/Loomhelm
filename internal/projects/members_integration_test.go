@@ -29,9 +29,9 @@ func TestProjectDeleteRevokesOnlyLastScopedCredential(t *testing.T) {
 	projectIDs := make([]string, 0, 2)
 	defer func() {
 		for _, projectID := range projectIDs {
-			cleanupMembersState(ctx, pool, projectID, nil)
+			cleanupMembersState(t, ctx, pool, projectID, nil)
 		}
-		cleanupMembersState(ctx, pool, "", []string{userID})
+		cleanupMembersState(t, ctx, pool, "", []string{userID})
 		db.Close()
 	}()
 	seedMemberUser(t, ctx, pool, userID)
@@ -92,9 +92,9 @@ func TestConcurrentProjectDeletionRevokesFinalCredentialScope(t *testing.T) {
 	projectIDs := make([]string, 0, 2)
 	defer func() {
 		for _, projectID := range projectIDs {
-			cleanupMembersState(ctx, pool, projectID, nil)
+			cleanupMembersState(t, ctx, pool, projectID, nil)
 		}
-		cleanupMembersState(ctx, pool, "", []string{userID})
+		cleanupMembersState(t, ctx, pool, "", []string{userID})
 		db.Close()
 	}()
 	seedMemberUser(t, ctx, pool, userID)
@@ -192,7 +192,7 @@ func TestProjectDeletionSerializesCredentialIssuance(t *testing.T) {
 	userID := "p01_concurrent_issue_user_" + suffix
 	projectID := ""
 	defer func() {
-		cleanupMembersState(ctx, pool, projectID, []string{userID})
+		cleanupMembersState(t, ctx, pool, projectID, []string{userID})
 		db.Close()
 	}()
 	seedMemberUser(t, ctx, pool, userID)
@@ -268,6 +268,8 @@ func TestProjectDeletionSerializesCredentialIssuance(t *testing.T) {
 		if !revoked {
 			t.Fatal("credential issued during project deletion remained active")
 		}
+	} else if !errors.Is(created.err, auth.ErrForbidden) && !errors.Is(created.err, auth.ErrNotFound) {
+		t.Fatalf("credential issuance during project deletion error = %v, want nil, forbidden, or not found", created.err)
 	}
 	var activeUnscoped int
 	if err := pool.QueryRow(ctx, `
@@ -297,7 +299,7 @@ func TestProjectMemberAuthorizationMatrix(t *testing.T) {
 	operatorID := "p01_member_operator_" + suffix
 	projectID := ""
 	defer func() {
-		cleanupMembersState(ctx, pool, projectID, []string{creatorID, viewerID, operatorID})
+		cleanupMembersState(t, ctx, pool, projectID, []string{creatorID, viewerID, operatorID})
 		db.Close()
 	}()
 	seedMemberUser(t, ctx, pool, creatorID)
@@ -480,19 +482,38 @@ func seedMemberUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userI
 	}
 }
 
-func cleanupMembersState(ctx context.Context, pool *pgxpool.Pool, projectID string, userIDs []string) {
+func cleanupMembersState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID string, userIDs []string) {
+	t.Helper()
 	if pool == nil {
 		return
 	}
 	if projectID != "" {
-		_, _ = pool.Exec(ctx, `DELETE FROM task_execution_refs WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)`, projectID)
-		_, _ = pool.Exec(ctx, `DELETE FROM tasks WHERE project_id = $1`, projectID)
-		_, _ = pool.Exec(ctx, `DELETE FROM auth_api_credential_project_scopes WHERE project_id = $1`, projectID)
-		_, _ = pool.Exec(ctx, `DELETE FROM project_members WHERE project_id = $1`, projectID)
-		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{`DELETE FROM task_execution_refs WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)`, []any{projectID}},
+			{`DELETE FROM tasks WHERE project_id = $1`, []any{projectID}},
+			{`DELETE FROM auth_api_credential_project_scopes WHERE project_id = $1`, []any{projectID}},
+			{`DELETE FROM project_members WHERE project_id = $1`, []any{projectID}},
+			{`DELETE FROM projects WHERE id = $1`, []any{projectID}},
+		} {
+			if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+				t.Errorf("cleanup query %q: %v", statement.query, err)
+			}
+		}
 	}
-	_, _ = pool.Exec(ctx, `DELETE FROM auth_api_credentials WHERE user_id = ANY($1::text[])`, userIDs)
-	_, _ = pool.Exec(ctx, `DELETE FROM auth_users WHERE id = ANY($1::text[])`, userIDs)
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`DELETE FROM auth_api_credentials WHERE user_id = ANY($1::text[])`, []any{userIDs}},
+		{`DELETE FROM auth_users WHERE id = ANY($1::text[])`, []any{userIDs}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Errorf("cleanup query %q: %v", statement.query, err)
+		}
+	}
 }
 
 func stringPointer(value string) *string { return &value }

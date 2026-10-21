@@ -93,7 +93,7 @@ type User struct {
 type Credential struct {
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
-	ProjectIDs []string `json:"project_ids,omitempty"`
+	ProjectIDs []string `json:"project_ids"`
 	CreatedAt  string   `json:"created_at"`
 	LastUsedAt *string  `json:"last_used_at,omitempty"`
 	RevokedAt  *string  `json:"revoked_at,omitempty"`
@@ -151,11 +151,11 @@ func (s *Service) Mount(r chi.Router) {
 }
 
 func (s *Service) MountAPI(r chi.Router) {
-	r.Route("/credentials", func(credentials chi.Router) {
-		credentials.Get("/", s.handleListCredentials)
-		credentials.Post("/", s.handleCreateCredential)
-		credentials.Delete("/{credential_id}", s.handleRevokeCredential)
-	})
+	for _, path := range []string{"/credentials", "/credentials/"} {
+		r.Get(path, s.handleListCredentials)
+		r.Post(path, s.handleCreateCredential)
+	}
+	r.Delete("/credentials/{credential_id}", s.handleRevokeCredential)
 }
 
 func (s *Service) ResolvePrincipal(ctx context.Context, request *http.Request) (Principal, error) {
@@ -298,6 +298,9 @@ func (s *Service) ListCredentials(ctx context.Context, principal Principal) ([]C
 	if principal.UserID == "" {
 		return nil, ErrUnauthenticated
 	}
+	if len(principal.ProjectScope) > 0 {
+		return nil, ErrForbidden
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, created_at, last_used_at, revoked_at
 		FROM auth_api_credentials
@@ -308,7 +311,7 @@ func (s *Service) ListCredentials(ctx context.Context, principal Principal) ([]C
 		return nil, fmt.Errorf("list API credentials: %w", err)
 	}
 	defer rows.Close()
-	var credentials []Credential
+	credentials := make([]Credential, 0)
 	for rows.Next() {
 		var credential Credential
 		var createdAt time.Time
@@ -340,7 +343,7 @@ func (s *Service) credentialScopes(ctx context.Context, credentialID string) ([]
 		return nil, fmt.Errorf("list API credential scopes: %w", err)
 	}
 	defer rows.Close()
-	var result []string
+	result := make([]string, 0)
 	for rows.Next() {
 		var projectID string
 		if err := rows.Scan(&projectID); err != nil {
@@ -357,6 +360,9 @@ func (s *Service) credentialScopes(ctx context.Context, credentialID string) ([]
 func (s *Service) RevokeCredential(ctx context.Context, principal Principal, credentialID string) error {
 	if principal.UserID == "" {
 		return ErrUnauthenticated
+	}
+	if len(principal.ProjectScope) > 0 {
+		return ErrForbidden
 	}
 	command, err := s.pool.Exec(ctx, `
 		UPDATE auth_api_credentials
@@ -521,7 +527,7 @@ func (s *Service) handleListCredentials(writer http.ResponseWriter, request *htt
 	}
 	credentials, err := s.ListCredentials(request.Context(), principal)
 	if err != nil {
-		writeError(writer, request, http.StatusInternalServerError, err, "failed to list credentials")
+		writeError(writer, request, statusForError(err), err, "failed to list credentials")
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string][]Credential{"items": credentials})

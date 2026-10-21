@@ -206,6 +206,14 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	}
 
 	concurrentReverse := func(mutate func(string, string) error) []error {
+		lockTx, err := cleanupPool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin relationship barrier: %v", err)
+		}
+		if _, err := lockTx.Exec(ctx, `SELECT pg_advisory_lock($1)`, int64(0x4c6f6f6d7461736b)); err != nil {
+			lockTx.Rollback(ctx)
+			t.Fatalf("acquire relationship barrier: %v", err)
+		}
 		start := make(chan struct{})
 		results := make(chan error, 2)
 		go func() {
@@ -217,6 +225,36 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 			results <- mutate(reverseRight.ID, reverseLeft.ID)
 		}()
 		close(start)
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			var waiters int
+			if err := cleanupPool.QueryRow(ctx, `
+				SELECT COUNT(*)
+				FROM pg_stat_activity
+				WHERE wait_event_type = 'Lock'
+				  AND query LIKE '%pg_advisory_xact_lock%'
+			`).Scan(&waiters); err != nil {
+				lockTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, int64(0x4c6f6f6d7461736b))
+				lockTx.Rollback(ctx)
+				t.Fatalf("observe relationship barrier: %v", err)
+			}
+			if waiters == 2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				lockTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, int64(0x4c6f6f6d7461736b))
+				lockTx.Rollback(ctx)
+				t.Fatalf("relationship mutations did not both wait on advisory lock; observed %d", waiters)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if _, err := lockTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, int64(0x4c6f6f6d7461736b)); err != nil {
+			lockTx.Rollback(ctx)
+			t.Fatalf("release relationship barrier: %v", err)
+		}
+		if err := lockTx.Commit(ctx); err != nil {
+			t.Fatalf("commit relationship barrier: %v", err)
+		}
 		return []error{<-results, <-results}
 	}
 	assertOneSuccessOneConflict := func(label string, results []error) {

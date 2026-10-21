@@ -73,16 +73,16 @@ func NewService(pool *pgxpool.Pool, principal auth.PrincipalResolver) *Service {
 }
 
 func (s *Service) Mount(r chi.Router) {
-	r.Route("/projects", func(projects chi.Router) {
-		projects.Get("/", s.handleList)
-		projects.Post("/", s.handleCreate)
-		projects.Get("/{project_id}", s.handleGet)
-		projects.Patch("/{project_id}", s.handleUpdate)
-		projects.Delete("/{project_id}", s.handleDelete)
-		projects.Get("/{project_id}/members", s.handleListMembers)
-		projects.Put("/{project_id}/members/{user_id}", s.handleGrantMember)
-		projects.Delete("/{project_id}/members/{user_id}", s.handleRevokeMember)
-	})
+	for _, path := range []string{"/projects", "/projects/"} {
+		r.Get(path, s.handleList)
+		r.Post(path, s.handleCreate)
+	}
+	r.Get("/projects/{project_id}", s.handleGet)
+	r.Patch("/projects/{project_id}", s.handleUpdate)
+	r.Delete("/projects/{project_id}", s.handleDelete)
+	r.Get("/projects/{project_id}/members", s.handleListMembers)
+	r.Put("/projects/{project_id}/members/{user_id}", s.handleGrantMember)
+	r.Delete("/projects/{project_id}/members/{user_id}", s.handleRevokeMember)
 }
 
 func (s *Service) CanReadProject(ctx context.Context, principal auth.Principal, projectID string) (bool, error) {
@@ -366,6 +366,7 @@ func (s *Service) List(ctx context.Context, principal auth.Principal, after Curs
 	defer rows.Close()
 	projects := make([]Project, 0, limit)
 	var next *Cursor
+	var last Cursor
 	for rows.Next() {
 		var project Project
 		var createdAt, updatedAt time.Time
@@ -375,11 +376,11 @@ func (s *Service) List(ctx context.Context, principal auth.Principal, after Curs
 		project.CreatedAt = formatTime(createdAt)
 		project.UpdatedAt = formatTime(updatedAt)
 		if len(projects) == limit {
-			cursor := Cursor{CreatedAt: createdAt, ID: project.ID}
-			next = &cursor
+			next = &last
 			break
 		}
 		projects = append(projects, project)
+		last = Cursor{CreatedAt: createdAt, ID: project.ID}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("read projects: %w", err)

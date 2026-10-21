@@ -22,13 +22,30 @@ func TestPostgresSessionStoreSurvivesDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("database.Open() error = %v", err)
 	}
+	defer db.Close()
+	userID := "p01_session_" + strings.ReplaceAll(time.Now().UTC().Format("20060102T150405.000000000Z07:00"), ":", "")
 	if err := db.Migrate(ctx); err != nil {
-		db.Close()
 		t.Fatalf("database.Migrate() error = %v", err)
 	}
-	defer db.Close()
-
-	userID := "p01_session_" + strings.ReplaceAll(time.Now().UTC().Format("20060102T150405.000000000Z07:00"), ":", "")
+	var sessionToken string
+	t.Cleanup(func() {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupDB, cleanupErr := database.Open(cleanupContext, config)
+		if cleanupErr != nil {
+			t.Errorf("open auth cleanup database: %v", cleanupErr)
+			return
+		}
+		defer cleanupDB.Close()
+		if sessionToken != "" {
+			if _, cleanupErr := cleanupDB.Pool().Exec(cleanupContext, `DELETE FROM auth_sessions WHERE token = $1`, sessionToken); cleanupErr != nil {
+				t.Errorf("delete test session: %v", cleanupErr)
+			}
+		}
+		if _, cleanupErr := cleanupDB.Pool().Exec(cleanupContext, `DELETE FROM auth_users WHERE id = $1`, userID); cleanupErr != nil {
+			t.Errorf("delete test user: %v", cleanupErr)
+		}
+	})
 	if _, err := db.Pool().Exec(ctx, `
 		INSERT INTO auth_users (id, issuer, subject)
 		VALUES ($1, 'integration-session', $1)
@@ -56,7 +73,7 @@ func TestPostgresSessionStoreSurvivesDatabaseReopen(t *testing.T) {
 	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || cookies[0].Value == "" || !cookies[0].HttpOnly {
 		t.Fatalf("session cookie = %+v", cookies)
 	}
-	sessionToken := cookies[0].Value
+	sessionToken = cookies[0].Value
 
 	db.Close()
 	reopened, err := database.Open(ctx, config)
@@ -89,12 +106,6 @@ func TestPostgresSessionStoreSurvivesDatabaseReopen(t *testing.T) {
 	getHandler.ServeHTTP(getResponse, getRequest)
 	if getResponse.Code != http.StatusNoContent || getResponse.Header().Get("X-Test-User-ID") != userID {
 		t.Fatalf("session after reopen status = %d, user = %q", getResponse.Code, getResponse.Header().Get("X-Test-User-ID"))
-	}
-	if _, err := reopened.Pool().Exec(ctx, `DELETE FROM auth_sessions WHERE token = $1`, sessionToken); err != nil {
-		t.Fatalf("delete test session: %v", err)
-	}
-	if _, err := reopened.Pool().Exec(ctx, `DELETE FROM auth_users WHERE id = $1`, userID); err != nil {
-		t.Fatalf("delete test user: %v", err)
 	}
 }
 
