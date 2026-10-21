@@ -551,6 +551,50 @@ func TestStoreRecoveryRechecksPersistedRetryDeadline(t *testing.T) {
 	}
 }
 
+func TestStoreRecoveryRechecksReadyRetryDeadline(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready retry deadline recheck")
+	artifact := testArtifact(uniqueID("artifact-ready-retry-recheck"), nil, content)
+	stagingName := ".upload-ready-retry-recheck-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifactAt(t, db.Pool(), ctx, artifact, stagingName, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_reclaim_after = NOW() WHERE id = $1`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+	var updateErr error
+	store.faults = &faultHooks{
+		BeforeIdentityLock: func(lockCtx context.Context, _ pgx.Tx, id string) {
+			if id != artifact.ID {
+				return
+			}
+			_, updateErr = db.Pool().Exec(lockCtx, `
+				UPDATE conversation_artifacts
+				SET staging_reclaim_after = NOW() + INTERVAL '1 minute'
+				WHERE id = $1
+			`, id)
+		},
+	}
+	_, status, err := store.reclaimReadyStagingForRecovery(ctx, artifact.ID, nil)
+	if err != nil {
+		t.Fatalf("stale ready recovery error = %v", err)
+	}
+	if updateErr != nil {
+		t.Fatalf("persist ready retry update error = %v", updateErr)
+	}
+	if status != recoveryPending {
+		t.Fatalf("stale ready recovery status = %q, want pending", status)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); err != nil {
+		t.Fatalf("stale ready recovery removed staging: %v", err)
+	}
+}
+
 func TestStoreRecoveryDefersReadyFailuresForFairness(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -674,6 +718,39 @@ func TestStoreCleanupDebtSkipsActiveStagingReference(t *testing.T) {
 	}
 	if queued != 0 {
 		t.Fatalf("active cleanup debt rows = %d, want 0", queued)
+	}
+}
+
+func TestStoreCleanupDebtRechecksRetryDeadline(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	stagingName := ".upload-cleanup-retry-recheck-" + fmt.Sprint(time.Now().UnixNano())
+	stagingPath := filepath.Join(store.objects, stagingName)
+	if err := os.WriteFile(stagingPath, []byte("retry later"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	store.enqueueStagingCleanup(stagingName, cleanup)
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifact_staging_cleanup
+		SET retry_after = NOW() + INTERVAL '1 minute'
+		WHERE staging_name = $1
+	`, stagingName); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stagingPath); err != nil {
+		t.Fatalf("deferred cleanup removed staging: %v", err)
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("deferred cleanup debt rows = %d, want 1", queued)
 	}
 }
 

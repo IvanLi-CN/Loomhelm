@@ -813,6 +813,10 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 			return record, recoveryPending, nil
 		}
 	}
+	reclaimReady := s.reclaimReadyStaging
+	if respectRetryAfter {
+		reclaimReady = s.reclaimReadyStagingForRecovery
+	}
 	if record.State != publicationPending {
 		if record.State == publicationReady {
 			if record.StagingReclaimed {
@@ -820,7 +824,7 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 			}
 			rollbackTx(tx, cleanup)
 			tx = nil
-			return s.reclaimReadyStaging(ctx, id, cleanup)
+			return reclaimReady(ctx, id, cleanup)
 		}
 		return record, stateRecoveryStatus(record.State), nil
 	}
@@ -832,7 +836,7 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
 		if confirmErr == nil && samePublicationState(confirmed, updated) {
 			if confirmed.State == publicationReady {
-				return s.reclaimReadyStaging(ctx, id, cleanup)
+				return reclaimReady(ctx, id, cleanup)
 			}
 			return confirmed, stateRecoveryStatus(confirmed.State), nil
 		}
@@ -852,12 +856,20 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 		return artifactRecord{}, recoveryPending, fmt.Errorf("artifact recovery state changed unexpectedly: %w", ErrStoreUnavailable)
 	}
 	if confirmed.State == publicationReady {
-		return s.reclaimReadyStaging(ctx, id, cleanup)
+		return reclaimReady(ctx, id, cleanup)
 	}
 	return confirmed, stateRecoveryStatus(confirmed.State), nil
 }
 
 func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
+	return s.reclaimReadyStagingWithRetryPolicy(ctx, id, cleanup, false)
+}
+
+func (s *Store) reclaimReadyStagingForRecovery(ctx context.Context, id string, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
+	return s.reclaimReadyStagingWithRetryPolicy(ctx, id, cleanup, true)
+}
+
+func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id string, cleanup *cleanupDeadline, respectRetryAfter bool) (artifactRecord, recoveryStatus, error) {
 	tx, err := s.beginIdentityTx(ctx, id, cleanup)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
@@ -869,6 +881,25 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 	}
 	if record.State != publicationReady {
 		return record, stateRecoveryStatus(record.State), nil
+	}
+	if record.StagingReclaimed {
+		return record, recoveryReady, nil
+	}
+	if respectRetryAfter {
+		var due bool
+		if err := tx.QueryRow(ctx, `
+			SELECT staging_reclaim_after <= NOW()
+			FROM conversation_artifacts
+			WHERE id = $1
+		`, id).Scan(&due); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return artifactRecord{}, recoveryPending, err
+			}
+			return artifactRecord{}, recoveryPending, fmt.Errorf("check ready artifact retry: %w", ErrStoreUnavailable)
+		}
+		if !due {
+			return record, recoveryPending, nil
+		}
 	}
 	commitUnavailable := func(reason string) (artifactRecord, recoveryStatus, error) {
 		if _, err := tx.Exec(ctx, `
@@ -909,9 +940,6 @@ func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cle
 	}
 	if finalCheck != fileValid {
 		return commitUnavailable(finalReason(finalCheck))
-	}
-	if record.StagingReclaimed {
-		return record, recoveryReady, nil
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
@@ -1153,6 +1181,22 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 	defer func() { rollbackTx(tx, cleanup) }()
 	if err := lockStagingName(ctx, tx, name); err != nil {
 		return err
+	}
+	var due bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM conversation_artifact_staging_cleanup
+			WHERE staging_name = $1 AND retry_after <= NOW()
+		)
+	`, name).Scan(&due); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("check staging cleanup retry: %w", ErrStoreUnavailable)
+	}
+	if !due {
+		return nil
 	}
 	var active bool
 	if err := tx.QueryRow(ctx, `
