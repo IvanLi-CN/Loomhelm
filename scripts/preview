@@ -312,7 +312,7 @@ case "$command" in
 		;;
 	compose-config)
 		refresh_env
-		compose config
+		compose config --quiet
 		;;
 	""|help|-h|--help)
 		usage

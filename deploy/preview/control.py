@@ -549,7 +549,10 @@ def env_value(name: str, default: str | None = None, required: bool = False) -> 
 def dotenv(value: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9_./:@?=&+,-]*", value):
         return value
-    return "'" + value.replace("'", "'\\''") + "'"
+    # Compose parses quoted dotenv values, not shell quote concatenation.
+    # JSON supplies compatible string escapes; escaped dollars remain literal
+    # through Compose's interpolation instead of expanding deployment variables.
+    return json.dumps(value, ensure_ascii=False).replace("$", "\\$")
 
 
 def command_compose_env(args: argparse.Namespace) -> None:
