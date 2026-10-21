@@ -62,6 +62,7 @@ type RecoveryReport struct {
 	Ready       int
 	Unavailable int
 	Pending     int
+	Cleaned     int
 	Failed      int
 }
 
@@ -1061,6 +1062,64 @@ func (s *Store) removeStaging(name string) error {
 	return nil
 }
 
+func (s *Store) enqueueStagingCleanup(name string, cleanup *cleanupDeadline) {
+	if s == nil || s.pool == nil || cleanup == nil {
+		return
+	}
+	if _, err := s.stagingPath(name); err != nil {
+		return
+	}
+	ctx, cancel := cleanup.context()
+	defer cancel()
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO conversation_artifact_staging_cleanup (staging_name, retry_after)
+		SELECT $1, NOW()
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM conversation_artifacts
+			WHERE staging_name = $1
+			  AND (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL))
+		)
+		ON CONFLICT (staging_name) DO UPDATE SET retry_after = NOW()
+	`, name)
+}
+
+func (s *Store) deferStagingCleanup(name string, cleanup *cleanupDeadline) {
+	if s == nil || s.pool == nil || cleanup == nil {
+		return
+	}
+	ctx, cancel := cleanup.context()
+	defer cancel()
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE conversation_artifact_staging_cleanup
+		SET retry_after = NOW() + INTERVAL '1 minute'
+		WHERE staging_name = $1
+	`, name)
+}
+
+func (s *Store) deleteStagingCleanup(name string, cleanup *cleanupDeadline) error {
+	if s == nil || s.pool == nil || cleanup == nil {
+		return ErrStoreUnavailable
+	}
+	ctx, cancel := cleanup.context()
+	defer cancel()
+	if _, err := s.pool.Exec(ctx, `DELETE FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, name); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("delete staging cleanup debt: %w", ErrStoreUnavailable)
+	}
+	return nil
+}
+
+func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup *cleanupDeadline) error {
+	if err := s.removeStaging(name); err != nil {
+		s.deferStagingCleanup(name, cleanup)
+		return err
+	}
+	return s.deleteStagingCleanup(name, cleanup)
+}
+
 func (s *Store) listRecoveryIDs(ctx context.Context, query string, limit int) ([]string, error) {
 	rows, err := s.pool.Query(ctx, query, limit)
 	if err != nil {
@@ -1084,8 +1143,33 @@ func (s *Store) listRecoveryIDs(ctx context.Context, query string, limit int) ([
 	return ids, nil
 }
 
-// Recover reconciles at most limit pending publications and at most limit
-// ready-row staging reclamations. It never removes an unreferenced staging
+func (s *Store) deferPendingRecovery(id string, cleanup *cleanupDeadline) {
+	if s == nil || s.pool == nil || cleanup == nil {
+		return
+	}
+	ctx, cancel := cleanup.context()
+	defer cancel()
+	tx, err := s.beginIdentityTx(ctx, id, cleanup)
+	if err != nil {
+		return
+	}
+	defer func() { rollbackTx(tx, cleanup) }()
+	var state string
+	if err := tx.QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1 FOR UPDATE`, id).Scan(&state); err != nil || state != string(publicationPending) {
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_reclaim_after = NOW() + INTERVAL '1 minute'
+		WHERE id = $1 AND state = 'pending'
+	`, id); err != nil {
+		return
+	}
+	_ = s.commit(ctx, tx)
+}
+
+// Recover reconciles at most limit pending publications, ready-row staging
+// reclamations and known-unreferenced staging cleanup tasks. It never removes an unreferenced staging
 // object from the pre-intent crash window because recovery cannot prove that
 // an active uploader is not still using it; those bytes remain diagnosable and
 // do not participate in publication coordination.
@@ -1110,8 +1194,8 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 	defer cleanup.stop()
 	pendingIDs, err := s.listRecoveryIDs(ctx, `
 		SELECT id FROM conversation_artifacts
-		WHERE state = 'pending'
-		ORDER BY created_at, id
+		WHERE state = 'pending' AND staging_reclaim_after <= NOW()
+		ORDER BY staging_reclaim_after, created_at, id
 		LIMIT $1
 	`, limit)
 	if err != nil {
@@ -1121,6 +1205,15 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 		SELECT id FROM conversation_artifacts
 		WHERE state = 'ready' AND staging_reclaimed_at IS NULL AND staging_reclaim_after <= NOW()
 		ORDER BY created_at, id
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return report, err
+	}
+	cleanupNames, err := s.listRecoveryIDs(ctx, `
+		SELECT staging_name FROM conversation_artifact_staging_cleanup
+		WHERE retry_after <= NOW()
+		ORDER BY retry_after, staging_name
 		LIMIT $1
 	`, limit)
 	if err != nil {
@@ -1139,6 +1232,7 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return report, err
 			}
+			s.deferPendingRecovery(id, cleanup)
 			continue
 		}
 		switch status {
@@ -1149,6 +1243,20 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 		default:
 			report.Pending++
 		}
+	}
+	for _, name := range cleanupNames {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
+		report.Scanned++
+		if err := s.recoverStagingCleanup(ctx, name, cleanup); err != nil {
+			report.Failed++
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return report, err
+			}
+			continue
+		}
+		report.Cleaned++
 	}
 	if report.Failed > 0 {
 		return report, ErrRecoveryIncomplete

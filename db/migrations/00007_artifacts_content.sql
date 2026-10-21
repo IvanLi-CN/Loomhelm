@@ -16,13 +16,20 @@ CREATE TABLE conversation_artifacts (
     unavailable_reason TEXT NOT NULL DEFAULT '' CHECK (length(unavailable_reason) <= 128)
 );
 
+CREATE TABLE conversation_artifact_staging_cleanup (
+    staging_name TEXT PRIMARY KEY CHECK (staging_name ~ '^\.upload-[A-Za-z0-9_-]+$'),
+    retry_after TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX conversation_artifacts_session_idx ON conversation_artifacts (session_id, created_at, id);
 CREATE INDEX conversation_artifacts_run_idx ON conversation_artifacts (run_id, created_at, id) WHERE run_id IS NOT NULL;
-CREATE INDEX conversation_artifacts_pending_idx ON conversation_artifacts (created_at, id) WHERE state = 'pending';
+CREATE INDEX conversation_artifacts_pending_idx ON conversation_artifacts (staging_reclaim_after, created_at, id) WHERE state = 'pending';
 CREATE INDEX conversation_artifacts_ready_staging_idx ON conversation_artifacts (staging_reclaim_after, created_at, id) WHERE state = 'ready' AND staging_reclaimed_at IS NULL;
+CREATE INDEX conversation_artifact_staging_cleanup_retry_idx ON conversation_artifact_staging_cleanup (retry_after, staging_name);
 
 -- Session and Run ownership foreign keys are intentionally added by a follow-up
 -- migration after the E01 business schema is published on the parent branch.
 
 -- +goose Down
+DROP TABLE IF EXISTS conversation_artifact_staging_cleanup;
 DROP TABLE IF EXISTS conversation_artifacts;

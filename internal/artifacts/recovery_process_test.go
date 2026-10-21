@@ -289,6 +289,57 @@ func TestStoreConcurrentProcessesConvergeAndProtectConflicts(t *testing.T) {
 	}
 }
 
+func TestStoreConcurrentProcessesRejectDifferentContentForOneID(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	root := t.TempDir()
+	id := uniqueID("artifact-concurrent-conflict")
+	winnerContent := []byte("first concurrent content")
+	conflictContent := []byte("second concurrent content")
+	holderSignal := filepath.Join(root, "conflict-writer-locked")
+	holderRelease := filepath.Join(root, "conflict-writer-release")
+	t.Cleanup(func() { _ = os.WriteFile(holderRelease, []byte("release"), 0o600) })
+	holder := newArtifactHelper(t, "pause-put", "", root, id, winnerContent)
+	holder.Env = append(holder.Env, "LOOMHELM_ARTIFACT_SIGNAL="+holderSignal, "LOOMHELM_ARTIFACT_RELEASE="+holderRelease)
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, holderSignal, "locked")
+
+	contenderSignal := filepath.Join(root, "conflict-writer-attempt")
+	contender := newArtifactHelper(t, "put-attempt", "", root, id, conflictContent)
+	contender.Env = append(contender.Env, "LOOMHELM_ARTIFACT_SIGNAL="+contenderSignal)
+	if err := contender.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, contenderSignal, "attempt")
+	if err := os.WriteFile(holderRelease, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Wait(); err != nil {
+		t.Fatalf("winning writer failed: %v", err)
+	}
+	if err := contender.Wait(); err == nil {
+		t.Fatal("conflicting writer unexpectedly succeeded")
+	} else if exitError, ok := err.(*exec.ExitError); !ok || exitError.ExitCode() != 42 {
+		t.Fatalf("conflicting writer error = %v", err)
+	}
+
+	db, store, ctx := openStoreAtRoot(t, root)
+	defer db.Close()
+	metadata, reader, err := store.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || metadata.ID != id || !bytes.Equal(readBack, winnerContent) {
+		t.Fatalf("concurrent conflict publication = %#v/%q, err=%v", metadata, readBack, err)
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
 func TestStoreRepairsMissingStagingAfterProcessInterruption(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
 		t.Skip("LOOMHELM_DATABASE_URL is not set")

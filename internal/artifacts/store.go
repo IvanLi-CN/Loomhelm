@@ -199,7 +199,9 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 	keepStaging := true
 	defer func() {
 		if !keepStaging {
-			s.removeStaging(stagingName)
+			if err := s.removeStaging(stagingName); err != nil {
+				s.enqueueStagingCleanup(stagingName, cleanup)
+			}
 		}
 	}()
 
