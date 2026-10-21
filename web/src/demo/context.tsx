@@ -165,7 +165,7 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
     setPersonaState(next);
     updateDemoQuery({ d_persona: next });
     refreshFixtures(next, dataMode, scene);
-    setNotice(`已切换演示身份：${next === "owner" ? "工作区主人" : next === "reviewer" ? "项目审阅者" : "只读访客"}。`);
+    setNotice(`已切换演示身份：${next === "owner" ? "工作区主人" : next === "operator" ? "项目操作员" : "只读访客"}。`);
   };
 
   const setNetwork = (next: DemoNetwork) => {

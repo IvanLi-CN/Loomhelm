@@ -61,7 +61,7 @@ const sceneLabels: Record<DemoScene, string> = {
 
 const personaLabels: Record<DemoPersona, string> = {
   owner: "工作区主人",
-  reviewer: "项目审阅者",
+  operator: "项目操作员",
   viewer: "只读访客"
 };
 
