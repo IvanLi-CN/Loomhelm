@@ -86,7 +86,7 @@ type faultHooks struct {
 	AfterFinalPublication   func()
 	AfterReadyCommit        func()
 	CommitResponseLost      func() error
-	BeforeIdentityLock      func()
+	BeforeIdentityLock      func(context.Context, pgx.Tx, string)
 	AfterIdentityLock       func()
 }
 
@@ -214,7 +214,7 @@ func (s *Store) beginIdentityTx(ctx context.Context, id string, cleanup *cleanup
 		return nil, fmt.Errorf("begin artifact publication: %w", ErrStoreUnavailable)
 	}
 	if s.faults != nil && s.faults.BeforeIdentityLock != nil {
-		s.faults.BeforeIdentityLock()
+		s.faults.BeforeIdentityLock(ctx, tx, id)
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "loomhelm:artifact:"+id); err != nil {
 		rollbackTx(tx, cleanup)
@@ -301,7 +301,10 @@ func (s *Store) readAuthorizedReadyRecord(ctx context.Context, id string, operat
 		return artifactRecord{}, err
 	}
 	if err := s.authorize(ctx, operation, record.Artifact); err != nil {
-		return artifactRecord{}, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return artifactRecord{}, err
+		}
+		return artifactRecord{}, ErrNotFound
 	}
 	if record.State != publicationReady {
 		return artifactRecord{}, unavailableError(ErrIntegrity)

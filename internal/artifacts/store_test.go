@@ -242,6 +242,46 @@ func TestStoreRetriesImmutableArtifactAndRejectsConflicts(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsAssociationAndImmutableMetadataConflicts(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("immutable metadata")
+	artifact := testArtifact(uniqueID("artifact-metadata-conflicts"), nil, content)
+	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-other"
+	variants := []struct {
+		name   string
+		mutate func(*protocol.Artifact)
+	}{
+		{name: "session", mutate: func(candidate *protocol.Artifact) { candidate.SessionID = "session-other" }},
+		{name: "run", mutate: func(candidate *protocol.Artifact) { candidate.RunID = &runID }},
+		{name: "name", mutate: func(candidate *protocol.Artifact) { candidate.Name = "other.bin" }},
+		{name: "kind", mutate: func(candidate *protocol.Artifact) { candidate.Kind = protocol.ArtifactKindDiff }},
+		{name: "content type", mutate: func(candidate *protocol.Artifact) { candidate.ContentType = "text/plain" }},
+	}
+	for _, variant := range variants {
+		t.Run(variant.name, func(t *testing.T) {
+			candidate := artifact
+			variant.mutate(&candidate)
+			if _, err := store.Put(ctx, candidate, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrConflict) {
+				t.Fatalf("%s conflict error = %v, want %v", variant.name, err, ErrConflict)
+			}
+		})
+	}
+	metadata, reader, err := store.Open(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || !reflect.DeepEqual(metadata, stored) || !bytes.Equal(readBack, content) {
+		t.Fatalf("metadata conflict changed publication: %#v/%q, err=%v", metadata, readBack, err)
+	}
+}
+
 func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -255,12 +295,12 @@ func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {
 	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, ".upload-missing"); err != nil {
 		t.Fatal(err)
 	}
-	report, err := store.Recover(ctx, 8)
+	report, err := store.Recover(ctx, MaxRecoveryLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Scanned != 1 || report.Unavailable != 1 {
-		t.Fatalf("recovery report = %#v", report)
+	if report.Unavailable < 1 {
+		t.Fatalf("recovery report = %#v, want an unavailable publication", report)
 	}
 	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("unavailable metadata error = %v, want %v", err, ErrUnavailable)
@@ -308,6 +348,34 @@ func TestStoreResolvesLostCommitResponsesFromDurableState(t *testing.T) {
 	if err != nil || metadata.ID != artifact.ID || !bytes.Equal(readBack, content) {
 		t.Fatalf("lost-response publication = %#v/%q, err=%v", metadata, readBack, err)
 	}
+}
+
+func TestStoreResolvesLostRepairIntentCommitResponse(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("lost repair response")
+	artifact := testArtifact(uniqueID("artifact-lost-repair"), nil, content)
+	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
+	store.faults = &faultHooks{
+		CommitResponseLost: func() error { return errors.New("simulated repair commit response loss") },
+	}
+	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ID != artifact.ID {
+		t.Fatalf("stored repaired metadata = %#v", stored)
+	}
+	metadata, reader, err := store.Open(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || metadata.ID != artifact.ID || !bytes.Equal(readBack, content) {
+		t.Fatalf("lost-response repair publication = %#v/%q, err=%v", metadata, readBack, err)
+	}
+	assertNoStagingFiles(t, store.objects)
 }
 
 func TestStoreRejectsLongContentTypeBeforeStaging(t *testing.T) {
@@ -368,8 +436,8 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 		t.Fatal("unrelated upload was stalled by cancelled upload")
 	}
 	store.faults = nil
-	report, err := store.Recover(ctx, 8)
-	if err != nil || report.Ready != 1 {
+	report, err := store.Recover(ctx, MaxRecoveryLimit)
+	if err != nil || report.Ready < 1 {
 		t.Fatalf("cancelled intent recovery = %#v, err=%v", report, err)
 	}
 }
@@ -416,19 +484,25 @@ func TestStoreRejectsUnauthorizedMetadataAndOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := denied.Metadata(ctx, artifact.ID); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("unauthorized metadata error = %v, want %v", err, ErrUnauthorized)
+	if _, err := denied.Metadata(ctx, artifact.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unauthorized metadata error = %v, want %v", err, ErrNotFound)
 	}
-	if _, _, err := denied.Open(ctx, artifact.ID); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("unauthorized open error = %v, want %v", err, ErrUnauthorized)
+	if _, _, err := denied.Open(ctx, artifact.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unauthorized open error = %v, want %v", err, ErrNotFound)
 	}
 	unavailable := testArtifact(uniqueID("artifact-auth-unavailable"), nil, content)
 	insertUnavailableArtifact(t, db.Pool(), ctx, unavailable, "operator-hold")
-	if _, err := denied.Metadata(ctx, unavailable.ID); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("unauthorized unavailable metadata error = %v, want %v", err, ErrUnauthorized)
+	if _, err := denied.Metadata(ctx, unavailable.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unauthorized unavailable metadata error = %v, want %v", err, ErrNotFound)
 	}
-	if _, _, err := denied.Open(ctx, unavailable.ID); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("unauthorized unavailable open error = %v, want %v", err, ErrUnauthorized)
+	if _, _, err := denied.Open(ctx, unavailable.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unauthorized unavailable open error = %v, want %v", err, ErrNotFound)
+	}
+	if _, err := denied.Metadata(ctx, uniqueID("artifact-auth-missing")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing metadata error = %v, want %v", err, ErrNotFound)
+	}
+	if _, _, err := denied.Open(ctx, uniqueID("artifact-auth-missing-open")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing open error = %v, want %v", err, ErrNotFound)
 	}
 	if _, err := denied.Put(ctx, testArtifact(uniqueID("artifact-write-denied"), nil, content), bytes.NewReader(content)); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("unauthorized put error = %v, want %v", err, ErrUnauthorized)

@@ -138,12 +138,24 @@ func TestDecodeAndParseRejectMalformedOrOversizedRecords(t *testing.T) {
 
 func TestContentBatchLimitsRejectWithoutTruncation(t *testing.T) {
 	blankLine := append(bytes.Repeat([]byte{' '}, DefaultMaxRecordBytes-1), '\n')
+	exactBatch := bytes.Repeat(blankLine, DefaultMaxBatchBytes/DefaultMaxRecordBytes)
+	if records, err := ParseJSONL(bytes.NewReader(exactBatch), DefaultMaxRecordBytes); err != nil || len(records) != 0 {
+		t.Fatalf("exact consumed batch boundary = %d records, err=%v", len(records), err)
+	}
 	batch := bytes.Repeat(blankLine, DefaultMaxBatchBytes/(DefaultMaxRecordBytes)+1)
 	if _, err := ParseJSONL(bytes.NewReader(batch), DefaultMaxRecordBytes); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized consumed batch error = %v, want %v", err, ErrTooLarge)
 	}
 
 	var records bytes.Buffer
+	for sequence := 1; sequence <= MaxBatchRecords; sequence++ {
+		records.WriteString(contentLine(int64(sequence)))
+	}
+	parsed, err := ParseJSONL(bytes.NewReader(records.Bytes()), DefaultMaxRecordBytes)
+	if err != nil || len(parsed) != MaxBatchRecords {
+		t.Fatalf("exact record-count boundary = %d records, err=%v", len(parsed), err)
+	}
+	records.Reset()
 	for sequence := 1; sequence <= MaxBatchRecords+1; sequence++ {
 		records.WriteString(contentLine(int64(sequence)))
 	}
