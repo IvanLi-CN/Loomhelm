@@ -82,6 +82,10 @@ Storage review exposed that filesystem publication followed by a database insert
 
 The owner confirmed PRD decision DEC-LH-005: project creators manage their projects and member grants, other human accounts receive read-only or operator access, and Agents use user-authorized API/MCP credentials. This settles the role proposal without approving the separate pending relationship-validation or deletion-policy proposals. The engineering contract requires the same role limits across product interfaces and scope-preserving credential delegation; candidate implementation and authenticated verification remain separate integration gates.
 
+## Storage Code Generation
+
+The platform query package uses query-scoped sqlc model emission. The generator still parses all application migrations and the drift gate still compares the complete generated output. This keeps domain schema additions from introducing unused exported models into another package without changing persistent state, public protocol or query behavior. Removing the unused platform lease struct leaves the actual durable lease implementation and its schema intact.
+
 ## References
 
 - [Requirements](SPEC.md)
