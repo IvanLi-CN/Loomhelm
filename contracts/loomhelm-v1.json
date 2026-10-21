@@ -2,6 +2,18 @@
   "schema": "loomhelm.public-contract/v1",
   "version": "v1",
   "types": {
+    "BrowserCsrfProtection": {
+      "type": "string",
+      "enum": ["same_origin"]
+    },
+    "BrowserSessionResponse": {
+      "type": "object",
+      "required": ["user_id", "csrf_protection"],
+      "properties": {
+        "user_id": {"type": "string"},
+        "csrf_protection": {"$ref": "#/types/BrowserCsrfProtection"}
+      }
+    },
     "JSONValue": {
       "kind": "json-value"
     },
@@ -453,6 +465,22 @@
   "rest": {
     "base_path": "/api/v1",
     "operations": [
+      {
+        "operation_id": "getBrowserSession",
+        "browser_only": true,
+        "method": "GET",
+        "path": "/auth/session",
+        "response_type": "BrowserSessionResponse",
+        "summary": "Read the authenticated browser identity and enforced CSRF protection"
+      },
+      {
+        "operation_id": "logoutBrowserSession",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/auth/logout",
+        "response_status": 204,
+        "summary": "Destroy the current browser session behind same-origin CSRF protection"
+      },
       {
         "operation_id": "listProjects",
         "method": "GET",

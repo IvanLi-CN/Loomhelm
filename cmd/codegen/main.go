@@ -47,6 +47,7 @@ type restContract struct {
 
 type operation struct {
 	OperationID    string            `json:"operation_id"`
+	BrowserOnly    bool              `json:"browser_only"`
 	Method         string            `json:"method"`
 	Path           string            `json:"path"`
 	PathParams     map[string]string `json:"path_params"`
@@ -208,7 +209,10 @@ func validate(source contract) error {
 		} else if operation.ResponseType == "" {
 			return fmt.Errorf("operation %s response type must not be empty unless status is 204", operation.OperationID)
 		}
-		if operation.MCPTool == nil || operation.MCPTool.Name == "" || operation.MCPTool.Description == "" {
+		if operation.BrowserOnly && operation.MCPTool != nil {
+			return fmt.Errorf("browser-only operation %s must not declare an MCP tool", operation.OperationID)
+		}
+		if !operation.BrowserOnly && (operation.MCPTool == nil || operation.MCPTool.Name == "" || operation.MCPTool.Description == "") {
 			return fmt.Errorf("operation %s must declare an MCP tool", operation.OperationID)
 		}
 	}
@@ -366,6 +370,9 @@ func (g generator) goSource() ([]byte, error) {
 	out.WriteString("type MCPToolDefinition struct {\n\tName string\n\tDescription string\n\tOperationID string\n\tInputType string\n}\n\n")
 	out.WriteString("var MCPTools = []MCPToolDefinition{\n")
 	for _, operation := range g.contract.REST.Operations {
+		if operation.BrowserOnly {
+			continue
+		}
 		fmt.Fprintf(&out, "\t{Name: %q, Description: %q, OperationID: %q, InputType: %q},\n", operation.MCPTool.Name, operation.MCPTool.Description, operation.OperationID, operationRequestType(operation))
 	}
 	out.WriteString("}\n\n")
@@ -471,7 +478,9 @@ func (g generator) protocolTypeScript() string {
 	out.WriteString("export interface McpToolDefinition { name: string; description: string; operationId: string; inputType: string; }\n")
 	out.WriteString("export const MCP_TOOLS = [\n")
 	for _, operation := range g.contract.REST.Operations {
-		fmt.Fprintf(&out, "  { name: %q, description: %q, operationId: %q, inputType: %q },\n", operation.MCPTool.Name, operation.MCPTool.Description, operation.OperationID, operationRequestType(operation))
+		if !operation.BrowserOnly {
+			fmt.Fprintf(&out, "  { name: %q, description: %q, operationId: %q, inputType: %q },\n", operation.MCPTool.Name, operation.MCPTool.Description, operation.OperationID, operationRequestType(operation))
+		}
 	}
 	out.WriteString("] as const satisfies readonly McpToolDefinition[];\n\n")
 
