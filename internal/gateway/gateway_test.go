@@ -15,14 +15,16 @@ import (
 )
 
 type fakeRegistry struct {
-	mu         sync.Mutex
-	credential hosts.Credential
-	token      string
-	revoked    bool
-	generation int64
-	current    *hosts.Connection
-	cursor     *hosts.Cursor
-	touches    int
+	mu           sync.Mutex
+	credential   hosts.Credential
+	token        string
+	revoked      bool
+	generation   int64
+	current      *hosts.Connection
+	cursor       *hosts.Cursor
+	touches      int
+	authorizeErr error
+	deliverCalls int
 }
 
 func newFakeRegistry() *fakeRegistry {
@@ -101,6 +103,10 @@ func (r *fakeRegistry) AuthorizeCommand(_ context.Context, connection hosts.Conn
 	if !r.matchesLocked(connection) {
 		return hosts.ErrConnectionStale
 	}
+	if r.authorizeErr != nil {
+		return r.authorizeErr
+	}
+	r.deliverCalls++
 	return deliver()
 }
 
@@ -221,7 +227,16 @@ func TestGatewayWSSCommandEventAndResume(t *testing.T) {
 		t.Fatal("SendCommand() did not receive an acknowledgement")
 	}
 
-	event := protocol.Event{Cursor: "cursor_1", EventID: "event_1", SessionID: command.SessionID, Sequence: 1}
+	event := protocol.Event{
+		Cursor:     "cursor_1",
+		EventID:    "event_1",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Payload:    json.RawMessage(`{"delta":"hello"}`),
+		Sequence:   1,
+		SessionID:  command.SessionID,
+		Source:     protocol.EventSourceHostObservation,
+		Type:       protocol.EventTypeMessageDelta,
+	}
 	if err := connection.SendEvent(context.Background(), event); err != nil {
 		t.Fatalf("SendEvent() error = %v", err)
 	}
@@ -303,7 +318,16 @@ func TestGatewayRejectsEventsWithoutHandler(t *testing.T) {
 	t.Cleanup(httpServer.Close)
 	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
 	connection := connectTestClient(t, client)
-	if err := connection.SendEvent(context.Background(), protocol.Event{Cursor: "cursor_unhandled", EventID: "event_unhandled", SessionID: "session_unhandled"}); err != nil {
+	if err := connection.SendEvent(context.Background(), protocol.Event{
+		Cursor:     "cursor_unhandled",
+		EventID:    "event_unhandled",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Payload:    json.RawMessage(`{"delta":"unhandled"}`),
+		Sequence:   1,
+		SessionID:  "session_unhandled",
+		Source:     protocol.EventSourceHostObservation,
+		Type:       protocol.EventTypeMessageDelta,
+	}); err != nil {
 		t.Fatalf("SendEvent() error = %v", err)
 	}
 	errorMessage := readGatewayMessage(t, connection)
@@ -379,6 +403,59 @@ func TestGatewayValidatesCommandAcknowledgements(t *testing.T) {
 				t.Fatal("decodeMessage() accepted malformed command acknowledgement")
 			}
 		})
+	}
+}
+
+func TestGatewayValidatesEvents(t *testing.T) {
+	valid := `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":1,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{"text":"hello"}}}`
+	if _, err := decodeMessage([]byte(valid), DefaultMaxFrame); err != nil {
+		t.Fatalf("valid event error = %v", err)
+	}
+	for name, payload := range map[string]string{
+		"missing payload":  `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":1,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation"}}`,
+		"missing sequence": `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{}}}`,
+		"invalid sequence": `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":"one","session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{}}}`,
+		"invalid source":   `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":1,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"unknown","payload":{}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeMessage([]byte(payload), DefaultMaxFrame); err == nil {
+				t.Fatal("decodeMessage() accepted malformed event")
+			}
+		})
+	}
+	unknown := `{"type":"event","event":{"event_id":"event_unknown","cursor":"cursor_unknown","sequence":2,"session_id":"session_1","type":"unknown","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":["opaque",null]}}`
+	if _, err := decodeMessage([]byte(unknown), DefaultMaxFrame); err != nil {
+		t.Fatalf("EventTypeUnknown or raw payload rejected: %v", err)
+	}
+}
+
+func TestGatewayDoesNotClassifyPreDeliveryFailureAsUnknown(t *testing.T) {
+	registry := newFakeRegistry()
+	registry.authorizeErr = hosts.ErrCommandNotDelivered
+	server, err := NewServer(registry)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
+	connection := connectTestClient(t, client)
+	defer connection.Close()
+	_, err = server.SendCommand(context.Background(), registry.credential.HostID, protocol.Command{
+		CommandID: "command_not_delivered",
+		IssuedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"text":"not sent"}`),
+		SessionID: "session_not_delivered",
+	})
+	if !errors.Is(err, hosts.ErrCommandNotDelivered) || errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("pre-delivery command error = %v, want non-unknown ErrCommandNotDelivered", err)
+	}
+	registry.mu.Lock()
+	deliverCalls := registry.deliverCalls
+	registry.mu.Unlock()
+	if deliverCalls != 0 {
+		t.Fatalf("pre-delivery command invoked deliver %d times", deliverCalls)
 	}
 }
 

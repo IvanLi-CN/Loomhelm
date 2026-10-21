@@ -382,7 +382,7 @@ func (c *serverConnection) sendCommand(ctx context.Context, command protocol.Com
 	})
 	if deliveryErr != nil {
 		c.removePending(requestID)
-		if errors.Is(deliveryErr, ErrConnectionClosed) || errors.Is(deliveryErr, hosts.ErrConnectionStale) {
+		if errors.Is(deliveryErr, hosts.ErrCommandNotDelivered) || errors.Is(deliveryErr, ErrConnectionClosed) || errors.Is(deliveryErr, hosts.ErrConnectionStale) {
 			return protocol.CommandAck{}, deliveryErr
 		}
 		return protocol.CommandAck{}, fmt.Errorf("%w: %v", protocol.ErrUnknownCommandResult, deliveryErr)

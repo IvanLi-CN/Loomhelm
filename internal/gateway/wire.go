@@ -96,6 +96,9 @@ func (m Message) Validate() error {
 		if m.Event == nil || strings.TrimSpace(m.Event.Cursor) == "" || strings.TrimSpace(m.Event.SessionID) == "" {
 			return errors.New("gateway event requires a session id and event cursor")
 		}
+		if err := validateEvent(*m.Event); err != nil {
+			return err
+		}
 	case MessageHeartbeat:
 		if strings.TrimSpace(m.RequestID) == "" {
 			return errors.New("gateway heartbeat requires request id")
@@ -191,7 +194,78 @@ func decodeMessage(data []byte, maxFrame int64) (Message, error) {
 			return Message{}, err
 		}
 	}
+	if message.Type == MessageEvent {
+		if err := validateEventEnvelope(data); err != nil {
+			return Message{}, err
+		}
+	}
 	return message, nil
+}
+
+func validateEvent(event protocol.Event) error {
+	if strings.TrimSpace(event.EventID) == "" {
+		return errors.New("gateway event requires event id")
+	}
+	if strings.TrimSpace(event.OccurredAt) == "" {
+		return errors.New("gateway event requires occurred time")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, event.OccurredAt); err != nil {
+		return errors.New("gateway event occurred time is malformed")
+	}
+	if len(event.Payload) == 0 {
+		return errors.New("gateway event requires payload")
+	}
+	switch event.Source {
+	case protocol.EventSourceAppServer, protocol.EventSourceHostObservation, protocol.EventSourceArtifact:
+	default:
+		return fmt.Errorf("gateway event has unsupported source %q", event.Source)
+	}
+	switch event.Type {
+	case protocol.EventTypeSessionCreated,
+		protocol.EventTypeSessionAttached,
+		protocol.EventTypeRunStarted,
+		protocol.EventTypeMessageDelta,
+		protocol.EventTypeItemStarted,
+		protocol.EventTypeItemCompleted,
+		protocol.EventTypeApprovalRequested,
+		protocol.EventTypeApprovalResolved,
+		protocol.EventTypeRunInterrupted,
+		protocol.EventTypeRunCompleted,
+		protocol.EventTypeRunFailed,
+		protocol.EventTypeArtifactCreated,
+		protocol.EventTypeReconciliationRequired,
+		protocol.EventTypeReconciliationCompleted,
+		protocol.EventTypeUnknown:
+	default:
+		return fmt.Errorf("gateway event has unsupported type %q", event.Type)
+	}
+	return nil
+}
+
+func validateEventEnvelope(data []byte) error {
+	var envelope struct {
+		Event json.RawMessage `json:"event"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return fmt.Errorf("decode gateway event: %w", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(envelope.Event, &fields); err != nil || fields == nil {
+		return errors.New("gateway event payload must be an object")
+	}
+	for _, field := range []string{"event_id", "cursor", "sequence", "session_id", "type", "occurred_at", "source", "payload"} {
+		if _, ok := fields[field]; !ok {
+			return fmt.Errorf("gateway event requires %s", field)
+		}
+	}
+	if strings.TrimSpace(string(fields["sequence"])) == "null" {
+		return errors.New("gateway event sequence must be an integer")
+	}
+	var sequence int64
+	if err := json.Unmarshal(fields["sequence"], &sequence); err != nil {
+		return errors.New("gateway event sequence must be an integer")
+	}
+	return nil
 }
 
 func validateCommandAck(ack protocol.CommandAck) error {

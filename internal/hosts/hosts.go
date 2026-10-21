@@ -19,13 +19,14 @@ import (
 )
 
 var (
-	ErrInvalid           = errors.New("invalid host request")
-	ErrNotFound          = errors.New("host resource not found")
-	ErrCredentialRevoked = errors.New("host credential is revoked")
-	ErrUnauthenticated   = errors.New("host credential is not valid")
-	ErrConnectionStale   = errors.New("host connection generation is stale")
-	ErrCursorExpired     = errors.New("host reconnect cursor is expired")
-	ErrAlreadyRegistered = errors.New("the configured host is already registered")
+	ErrInvalid             = errors.New("invalid host request")
+	ErrNotFound            = errors.New("host resource not found")
+	ErrCredentialRevoked   = errors.New("host credential is revoked")
+	ErrUnauthenticated     = errors.New("host credential is not valid")
+	ErrConnectionStale     = errors.New("host connection generation is stale")
+	ErrCursorExpired       = errors.New("host reconnect cursor is expired")
+	ErrAlreadyRegistered   = errors.New("the configured host is already registered")
+	ErrCommandNotDelivered = errors.New("host command was not delivered")
 )
 
 type Status string
@@ -348,25 +349,25 @@ func (s *Service) Touch(ctx context.Context, connection Connection) error {
 // an already admitted write.
 func (s *Service) AuthorizeCommand(ctx context.Context, connection Connection, deliver func() error) error {
 	if err := s.ready(ctx); err != nil {
-		return err
+		return commandNotDelivered(err)
 	}
 	if deliver == nil {
-		return fmt.Errorf("%w: command delivery callback is required", ErrInvalid)
+		return commandNotDelivered(fmt.Errorf("%w: command delivery callback is required", ErrInvalid))
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin host command authorization: %w", err)
+		return commandNotDelivered(fmt.Errorf("begin host command authorization: %w", err))
 	}
 	defer tx.Rollback(ctx)
 	if err := lockActiveConnection(ctx, tx, connection); err != nil {
-		return err
+		return commandNotDelivered(err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE host_connections
 		SET last_seen_at = $2
 		WHERE host_id = $1 AND credential_id = $3 AND generation = $4
 	`, connection.HostID, s.now(), connection.CredentialID, connection.Generation); err != nil {
-		return fmt.Errorf("touch host command connection: %w", err)
+		return commandNotDelivered(fmt.Errorf("touch host command connection: %w", err))
 	}
 	if err := deliver(); err != nil {
 		return err
@@ -375,6 +376,13 @@ func (s *Service) AuthorizeCommand(ctx context.Context, connection Connection, d
 		return fmt.Errorf("commit host command authorization: %w", err)
 	}
 	return nil
+}
+
+func commandNotDelivered(err error) error {
+	if err == nil {
+		return ErrCommandNotDelivered
+	}
+	return fmt.Errorf("%w: %w", ErrCommandNotDelivered, err)
 }
 
 // ProcessEvent validates and checkpoints one observed event under the same
