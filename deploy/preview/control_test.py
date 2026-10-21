@@ -1,8 +1,13 @@
+import io
 import json
+import os
+import stat
 import tempfile
 import unittest
 from argparse import Namespace
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import control
 
@@ -22,6 +27,38 @@ def manifest(root: Path, source: str, state_version: int = 1, read_min: int = 1,
 
 
 class PreviewControlTest(unittest.TestCase):
+    def test_compose_environment_preserves_browser_auth_and_private_file_mode(self) -> None:
+        required = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-auth-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+        }
+        configured = {
+            "LOOMHELM_OIDC_ISSUER_URL": "https://issuer.example.test",
+            "LOOMHELM_OIDC_CLIENT_ID": "preview-client",
+            "LOOMHELM_OIDC_CLIENT_SECRET": "fixture-client-secret",
+            "LOOMHELM_OIDC_REDIRECT_URL": "https://preview.example.test/api/v1/auth/oidc/callback",
+        }
+        for name, auth in (("disabled", {}), ("configured", configured), ("isolated-http", {**configured, "LOOMHELM_SESSION_COOKIE_SECURE": "false"})):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {**required, **auth}, clear=True):
+                state_dir = Path(raw_dir) / "state"
+                output = state_dir / "compose.env"
+                captured = io.StringIO()
+                with redirect_stdout(captured):
+                    self.invoke("init", state_dir)
+                    self.invoke("compose_env", state_dir, output=output)
+                actual = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+                for key in configured:
+                    self.assertEqual(actual[key], auth.get(key, ""))
+                self.assertEqual(actual["LOOMHELM_SESSION_COOKIE_SECURE"], auth.get("LOOMHELM_SESSION_COOKIE_SECURE", "true"))
+                self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+                self.assertNotIn(required["LOOMHELM_DRAIN_TOKEN"], captured.getvalue())
+                self.assertNotIn(configured["LOOMHELM_OIDC_CLIENT_SECRET"], captured.getvalue())
+
     def write_manifest(self, path: Path, value: dict) -> None:
         path.write_text(json.dumps(value), encoding="utf-8")
 
