@@ -232,6 +232,9 @@ func (s *Service) CreateCredential(ctx context.Context, principal Principal, req
 		return Credential{}, fmt.Errorf("%w: credential name must be between 1 and 128 characters", ErrInvalid)
 	}
 	projectIDs := uniqueStrings(request.ProjectIDs)
+	if len(principal.ProjectScope) > 0 && len(projectIDs) == 0 {
+		return Credential{}, ErrForbidden
+	}
 	for _, projectID := range projectIDs {
 		if !principal.HasProjectScope(projectID) {
 			return Credential{}, ErrForbidden

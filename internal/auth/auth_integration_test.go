@@ -53,7 +53,7 @@ func TestPostgresSessionStoreSurvivesDatabaseReopen(t *testing.T) {
 		t.Fatalf("session set status = %d, want %d", setResponse.Code, http.StatusNoContent)
 	}
 	cookies := setResponse.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || cookies[0].Value == "" {
+	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || cookies[0].Value == "" || !cookies[0].HttpOnly {
 		t.Fatalf("session cookie = %+v", cookies)
 	}
 	sessionToken := cookies[0].Value

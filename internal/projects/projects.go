@@ -152,6 +152,9 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 	if name == "" || len(name) > 200 {
 		return Project{}, fmt.Errorf("%w: project name must be between 1 and 200 characters", auth.ErrInvalid)
 	}
+	if len(principal.ProjectScope) > 0 {
+		return Project{}, auth.ErrForbidden
+	}
 	id, err := newID("project")
 	if err != nil {
 		return Project{}, err

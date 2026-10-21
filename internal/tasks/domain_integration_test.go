@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/IvanLi-CN/Loomhelm/internal/tasks"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -184,6 +186,63 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	}
 	if len(filteredPage.Children) != 0 || len(filteredPage.Dependents) != 0 {
 		t.Fatalf("scoped relationship page leaked cross-project links: %+v", filteredPage)
+	}
+	if _, err := authService.CreateCredential(ctx, scopedPrincipal, auth.CreateCredentialRequest{Name: "empty scoped credential"}); !errors.Is(err, auth.ErrForbidden) {
+		t.Fatalf("empty scoped credential error = %v, want forbidden", err)
+	}
+	if _, err := authService.CreateCredential(ctx, scopedPrincipal, auth.CreateCredentialRequest{Name: "superset scoped credential", ProjectIDs: []string{projectA.ID, projectB.ID}}); !errors.Is(err, auth.ErrForbidden) {
+		t.Fatalf("superset scoped credential error = %v, want forbidden", err)
+	}
+	credentialRouter := chi.NewRouter()
+	authService.MountAPI(credentialRouter)
+	emptyCredentialRequest := httptest.NewRequest(http.MethodPost, "/credentials/", strings.NewReader(`{"name":"empty HTTP credential","project_ids":[]}`))
+	emptyCredentialRequest.Header.Set("Authorization", "Bearer "+credential.Token)
+	emptyCredentialResponse := httptest.NewRecorder()
+	credentialRouter.ServeHTTP(emptyCredentialResponse, emptyCredentialRequest)
+	if emptyCredentialResponse.Code != http.StatusForbidden {
+		t.Fatalf("empty scoped HTTP credential status = %d, want %d", emptyCredentialResponse.Code, http.StatusForbidden)
+	}
+	projectRouter := chi.NewRouter()
+	projects.NewService(cleanupPool, authService).Mount(projectRouter)
+	limitedProjectRequest := httptest.NewRequest(http.MethodPost, "/projects/", strings.NewReader(`{"name":"denied scoped project"}`))
+	limitedProjectRequest.Header.Set("Authorization", "Bearer "+credential.Token)
+	limitedProjectResponse := httptest.NewRecorder()
+	projectRouter.ServeHTTP(limitedProjectResponse, limitedProjectRequest)
+	if limitedProjectResponse.Code != http.StatusForbidden {
+		t.Fatalf("limited HTTP project creation status = %d, want %d", limitedProjectResponse.Code, http.StatusForbidden)
+	}
+	if _, err := projectService.Create(ctx, scopedPrincipal, projects.CreateRequest{Name: "denied scoped project"}); !errors.Is(err, auth.ErrForbidden) {
+		t.Fatalf("limited project creation error = %v, want forbidden", err)
+	}
+	wideCredential, err := authService.CreateCredential(ctx, owner, auth.CreateCredentialRequest{Name: "wide project scope", ProjectIDs: []string{projectA.ID, projectB.ID}})
+	if err != nil {
+		t.Fatalf("create wide credential: %v", err)
+	}
+	wideRequest := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	wideRequest.Header.Set("Authorization", "Bearer "+wideCredential.Token)
+	widePrincipal, err := authService.ResolvePrincipal(ctx, wideRequest)
+	if err != nil {
+		t.Fatalf("resolve wide credential: %v", err)
+	}
+	subsetCredential, err := authService.CreateCredential(ctx, widePrincipal, auth.CreateCredentialRequest{Name: "subset project scope", ProjectIDs: []string{projectA.ID}})
+	if err != nil {
+		t.Fatalf("create subset credential from wide credential: %v", err)
+	}
+	ownerCredential, err := authService.CreateCredential(ctx, owner, auth.CreateCredentialRequest{Name: "owner management credential"})
+	if err != nil {
+		t.Fatalf("create owner management credential: %v", err)
+	}
+	revokeRequest := httptest.NewRequest(http.MethodDelete, "/credentials/"+subsetCredential.ID, nil)
+	revokeRequest.Header.Set("Authorization", "Bearer "+ownerCredential.Token)
+	revokeResponse := httptest.NewRecorder()
+	credentialRouter.ServeHTTP(revokeResponse, revokeRequest)
+	if revokeResponse.Code != http.StatusNoContent {
+		t.Fatalf("HTTP revoke credential status = %d, want %d", revokeResponse.Code, http.StatusNoContent)
+	}
+	subsetRequest := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	subsetRequest.Header.Set("Authorization", "Bearer "+subsetCredential.Token)
+	if _, err := authService.ResolvePrincipal(ctx, subsetRequest); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("HTTP-revoked subset credential error = %v, want unauthenticated", err)
 	}
 	if err := authService.RevokeCredential(ctx, owner, credential.ID); err != nil {
 		t.Fatalf("revoke credential: %v", err)
