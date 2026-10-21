@@ -81,6 +81,8 @@ The public contract MUST provide membership listing at `GET /api/v1/projects/{pr
 
 The browser MUST obtain its current authenticated identity from `GET /api/v1/auth/session`, which returns `user_id` and `csrf_protection: same_origin` only when an authenticated browser session and the corresponding server protection are present. An unauthenticated request MUST return HTTP 401; the response MUST NOT be cached. This capability declaration MUST NOT grant project permissions or installation administration. Browser mutations, including `POST /api/v1/auth/logout`, MUST pass the Go `net/http.CrossOriginProtection` boundary with no trusted origins or bypass patterns by default. Web and API MUST share an origin behind the deployment proxy. The client MUST NOT invent a CSRF token or infer enforced protection from configuration alone. OIDC start/callback routes MUST remain under `/api/v1/auth/oidc/`, retain state/nonce verification and use HttpOnly session cookies. Logout MUST destroy the current browser session and return HTTP 204 without a response body. API/MCP authentication and project authorization remain independent mandatory checks.
 
+Every session-creation request MUST carry a caller-provided nonempty `command_id`, preserved through the Gateway and Codex adapter. Within the authorized command namespace, retries with the same identity and unchanged creation payload MUST reconcile to the same Session; the same identity with a different payload MUST return `idempotency_conflict`. Different creation identities MUST remain distinct even when project, task and prompt are identical. Missing identities MUST be rejected before opening a transport or starting work; clients and adapters MUST NOT derive creation identity from prompt contents. An ambiguous previous attempt MUST remain `unknown` until reconciled instead of silently starting another conversation. Legacy journal records MAY be read for recovery but MUST NOT be reinterpreted as a new caller-provided identity. The implementing Connector MUST separately declare and verify its journal compatibility window; this contract does not establish safe old-binary access to a new journal format. ADR 0007 defines this boundary.
+
 ### REQ-LH-009
 
 The system MUST preserve original Codex event fields and unknown content types. Initial presentation MUST provide readable basic messages, code/tool state and an unknown-content fallback without requiring arbitrary interactive plugin hosting.
@@ -186,6 +188,7 @@ Association MUST retain the same Session and the identities and continuity of it
 - [Versioned public protocol and reconciliation boundary](../../adr/0003-public-protocol-and-reconciliation.md)
 - [Bounded file publication and content input](../../adr/0005-bounded-file-publication-and-content-input.md)
 - [Scoped credential administration](../../adr/0006-scoped-credential-administration.md)
+- [Explicit session creation identity](../../adr/0007-explicit-session-creation-identity.md)
 
 ## References
 

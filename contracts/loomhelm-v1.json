@@ -463,8 +463,9 @@
     },
     "CreateSessionRequest": {
       "type": "object",
-      "required": ["path"],
+      "required": ["command_id", "path"],
       "properties": {
+        "command_id": {"type": "string"},
         "path": {"$ref": "#/types/SessionPath"},
         "project_id": {"type": "string"},
         "task_id": {"type": "string"},

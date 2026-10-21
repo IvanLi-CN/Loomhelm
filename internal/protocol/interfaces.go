@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 )
 
 var (
@@ -14,8 +15,10 @@ var (
 )
 
 // NewSessionRequest is the Host Gateway input for the supported independent
-// app-server path described by R01.
+// app-server path described by R01. CommandID identifies the creation intent:
+// identical prompts with different IDs must create distinct sessions.
 type NewSessionRequest struct {
+	CommandID string
 	ProjectID string
 	TaskID    string
 	Prompt    string
@@ -26,6 +29,7 @@ type NewSessionRequest struct {
 // current Desktop process does not satisfy this contract and must return
 // ErrUnsupportedSessionPath instead of silently starting a new session.
 type ExistingSessionRequest struct {
+	CommandID       string
 	ProjectID       string
 	TaskID          string
 	ActiveThreadRef string
@@ -120,9 +124,13 @@ func OpenSession(ctx context.Context, gateway HostGateway, adapter CodexAdapter,
 	if gateway == nil || adapter == nil {
 		return AdapterSession{}, errors.New("session gateway and adapter are required")
 	}
+	if strings.TrimSpace(request.CommandID) == "" {
+		return AdapterSession{}, errors.New("session creation command id is required")
+	}
 	switch request.Path {
 	case SessionPathNew:
 		gatewaySession, err := gateway.StartNewSession(ctx, NewSessionRequest{
+			CommandID: request.CommandID,
 			ProjectID: valueOrEmpty(request.ProjectID),
 			TaskID:    valueOrEmpty(request.TaskID),
 			Prompt:    valueOrEmpty(request.Prompt),
@@ -131,6 +139,7 @@ func OpenSession(ctx context.Context, gateway HostGateway, adapter CodexAdapter,
 			return AdapterSession{}, err
 		}
 		return adapter.StartSession(ctx, gatewaySession, NewSessionRequest{
+			CommandID: request.CommandID,
 			ProjectID: valueOrEmpty(request.ProjectID),
 			TaskID:    valueOrEmpty(request.TaskID),
 			Prompt:    valueOrEmpty(request.Prompt),
@@ -140,6 +149,7 @@ func OpenSession(ctx context.Context, gateway HostGateway, adapter CodexAdapter,
 			return AdapterSession{}, ErrUnsupportedSessionPath
 		}
 		active := ExistingSessionRequest{
+			CommandID:       request.CommandID,
 			ProjectID:       valueOrEmpty(request.ProjectID),
 			TaskID:          valueOrEmpty(request.TaskID),
 			ActiveThreadRef: *request.ActiveThreadRef,
