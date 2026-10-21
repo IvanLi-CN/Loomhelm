@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { getConversation, getProject, getTask, useDemoRuntime } from "@/demo/context";
+import { getConversation, getProject, getTask, useDemoRuntime, useOptionalDemoRuntime } from "@/demo/context";
 import { taskStates } from "@/demo/types";
 import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
+import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import { TaskEditor } from "@/features/tasks/TaskForm";
 import { TaskRelationshipEditor } from "@/features/tasks/TaskRelations";
 import { TaskStateBadge } from "@/components/product/TaskViews";
@@ -101,14 +102,51 @@ export function WorkspaceRoute({ taskId, conversationId }: { taskId?: string; co
   );
 }
 
+function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
+  const source = useOptionalProjectTaskSource();
+  const task = source?.getTask(taskId);
+
+  if (!source || source.status === "loading") {
+    return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">TASK WORKSPACE</span><h1>正在读取任务</h1><p>任务工作区会在真实授权数据加载完成后显示，不会使用 Demo 夹具替代项目或任务信息。</p></section>;
+  }
+  if (source.status === "error" || source.status === "permission-changed") {
+    return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><h1>任务当前不可用</h1><p>{source.notice ?? "项目权限或连接状态发生变化，页面保持 fail-closed。"}</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button></section>;
+  }
+  if (!task) {
+    return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><h1>任务当前不可用</h1><p>任务不存在，或当前浏览器身份无权查看它的受保护信息。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button></section>;
+  }
+
+  const project = source.getProject(task.projectId);
+  const projectPermissions = source.getProjectPermissions(task.projectId);
+  return (
+    <section className="workspace-page">
+      <header className="workspace-heading">
+        <div><span className="workspace-context">{project?.name ?? "当前无权查看项目"} / {task.id}</span><h1>{task.title}</h1><div className="workspace-meta"><span className="execution-pill execution-dot">执行服务未接通</span><span className="inline-flex items-center gap-1">任务业务状态：<TaskStateBadge state={task.state} /></span></div></div>
+      </header>
+      <div className="workspace-layout workspace-panel-info">
+        <section className="chat-panel" aria-label="任务工作区">
+          <div className="empty-state"><span className="section-kicker">SESSION / EXECUTION</span><h2>会话与执行尚未接通</h2><p>当前页面展示真实的任务、项目权限和关系数据。对话历史、审批和执行控制会在后续会话服务接入后出现在这里。</p>{project ? <Button asChild variant="secondary" className="button button-secondary"><Link to="/projects/$projectId" params={{ projectId: project.id }}>返回项目</Link></Button> : <Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button>}</div>
+        </section>
+        <aside className="workspace-info" aria-label="任务信息">
+          <section className="info-block"><span className="section-kicker">任务信息</span><h2>目标</h2><p>{task.goal}</p><dl className="info-facts"><dt>项目</dt><dd>{project?.name ?? "当前无权查看"}</dd><dt>业务状态</dt><dd><TaskStateBadge state={task.state} /></dd><dt>执行状态</dt><dd>服务尚未接通</dd></dl></section>
+          <TaskRelationshipEditor source={source} taskId={task.id} />
+          <TaskEditor source={source} taskId={task.id} />
+          <section className="info-block info-note"><Info size={16} aria-hidden="true" /><p>{projectPermissions.canWrite ? "当前项目成员权限允许编辑任务与关系；会话和执行仍保持未就绪。" : "当前项目成员权限为只读；任务编辑与关系写入保持禁用。"}</p></section>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 export function TaskWorkspaceRoute() {
   const { taskId } = useParams({ from: "/tasks/$taskId" });
-  return <WorkspaceRoute taskId={taskId} />;
+  return useOptionalDemoRuntime() ? <WorkspaceRoute taskId={taskId} /> : <ProductionTaskWorkspaceRoute taskId={taskId} />;
 }
 
 export function ConversationWorkspaceRoute() {
   const { conversationId } = useParams({ from: "/conversations/$conversationId" });
-  const runtime = useDemoRuntime();
+  const runtime = useOptionalDemoRuntime();
+  if (!runtime) return <section className="page-section unavailable-page"><span className="eyebrow">CONVERSATION WORKSPACE</span><h1>对话服务尚未接通</h1><p>当前 production 不会在没有真实会话数据时调用 Demo 工作区或展示模拟历史。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">查看任务</Link></Button></section>;
   const conversation = getConversation(runtime.fixtures, conversationId);
   return <WorkspaceRoute taskId={conversation?.taskId} conversationId={conversationId} />;
 }

@@ -5,34 +5,24 @@ import {
   FlaskConical,
   LayoutDashboard,
   ListTodo,
+  LogIn,
+  LogOut,
   Menu,
   Plus,
   X
 } from "lucide-react";
-import { useState, type PropsWithChildren } from "react";
+import { useEffect, useState, type PropsWithChildren } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 
+import { useOptionalProductionApi, useProductionAuthActions } from "@/app/providers";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDemoRuntime, useOptionalDemoRuntime } from "@/demo/context";
+import type { ThemeMode } from "@/demo/types";
+import { useOptionalProjectTaskSource } from "@/features/tasks/source";
+import type { ProjectTaskSource } from "@/features/tasks/types";
 
 import { DemoInspector, DemoNotice, DemoSceneBanner } from "./DemoInspector";
-
-function TechnicalShell() {
-  return (
-    <div className="technical-shell">
-      <header>
-        <strong>Loomhelm / web foundation</strong>
-        <span>Technical verification surface</span>
-      </header>
-      <main><Outlet /></main>
-    </div>
-  );
-}
-
-function isSelected(pathname: string, target: string): boolean {
-  return target === "/" ? pathname === target : pathname === target || pathname.startsWith(`${target}/`);
-}
 
 function ProjectTree({
   expanded,
@@ -107,6 +97,207 @@ function Breadcrumb({ pathname }: { pathname: string }) {
   if (pathname.startsWith("/conversations")) return <span>对话 / 全部项目</span>;
   if (project) return <span>{project.name} / 对话</span>;
   return <span>工作台</span>;
+}
+
+function useProductionTheme(): [ThemeMode, (theme: ThemeMode) => void] {
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof window === "undefined") return "system";
+    try {
+      const stored = window.localStorage.getItem("loomhelm.theme");
+      return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+    } catch {
+      return "system";
+    }
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      root.dataset.theme = theme === "system" ? (media.matches ? "dark" : "light") : theme;
+      delete root.dataset.demo;
+    };
+    applyTheme();
+    if (theme !== "system") return;
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [theme]);
+
+  const updateTheme = (next: ThemeMode) => {
+    setTheme(next);
+    try {
+      window.localStorage.setItem("loomhelm.theme", next);
+    } catch {
+      // Theme persistence is optional; the current document still updates.
+    }
+  };
+
+  return [theme, updateTheme];
+}
+
+function ProductionProjectTree({
+  source,
+  expanded,
+  onToggle,
+  onNavigate
+}: {
+  source: ProjectTaskSource | null;
+  expanded: Record<string, boolean>;
+  onToggle: (key: string) => void;
+  onNavigate: () => void;
+}) {
+  const projects = source?.projects ?? [];
+  return (
+    <div className="nav-projects">
+      <div className="nav-section-label">项目</div>
+      <Button type="button" variant="ghost" className="nav-tree-toggle" onClick={() => onToggle("projects")} aria-expanded={expanded.projects}>
+        {expanded.projects ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+        <span>所有项目</span>
+      </Button>
+      {expanded.projects && source?.status === "loading" && <div className="nav-conversation-link"><span>项目加载中…</span><small>正在读取当前授权范围</small></div>}
+      {expanded.projects && source?.status === "error" && <div className="nav-conversation-link"><span>项目暂不可用</span><small>读取失败，页面保持保护</small></div>}
+      {expanded.projects && source?.status === "permission-changed" && !projects.length && <div className="nav-conversation-link"><span>没有可见项目</span><small>项目权限已发生变化</small></div>}
+      {expanded.projects && source?.status === "ready" && !projects.length && <div className="nav-conversation-link"><span>还没有项目</span><small>可从任务页创建项目</small></div>}
+      {expanded.projects && projects.map((project) => (
+        <div className="nav-project-row" key={project.id}>
+          <span className="project-dot" aria-hidden="true" />
+          <Link
+            to="/projects/$projectId"
+            params={{ projectId: project.id }}
+            className="nav-link nav-project-link"
+            activeProps={{ "aria-current": "page" }}
+            onClick={onNavigate}
+          >
+            <span>{project.name}</span>
+          </Link>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProductionBreadcrumb({ pathname, source }: { pathname: string; source: ProjectTaskSource | null }) {
+  const projectId = pathname.startsWith("/projects/") ? pathname.split("/")[2] : undefined;
+  const taskId = pathname.startsWith("/tasks/") ? pathname.split("/")[2] : undefined;
+  const project = source?.getProject(projectId);
+  const task = source?.getTask(taskId);
+  if (pathname === "/") return <span>工作台</span>;
+  if (task) return <span>任务 / {task.id}</span>;
+  if (pathname.startsWith("/tasks")) return <span>任务 / 全部项目</span>;
+  if (project) return <span>{project.name} / 任务</span>;
+  if (pathname.startsWith("/projects/")) return <span>项目 / 当前范围</span>;
+  if (pathname.startsWith("/conversations")) return <span>对话 / 服务尚未接通</span>;
+  return <span>工作台</span>;
+}
+
+function ProductionAuthGate() {
+  const assembly = useOptionalProductionApi();
+  const { login } = useProductionAuthActions();
+  const auth = assembly?.auth;
+  if (!auth || auth.status === "loading") {
+    return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">AUTHENTICATION</span><h1>正在验证浏览器会话</h1><p>正在读取当前登录身份；受保护的项目和任务数据会在验证完成后显示。</p></section>;
+  }
+  return (
+    <section className="page-section unavailable-page">
+      <span className="eyebrow">AUTHENTICATION</span>
+      <h1>{auth.status === "error" ? "暂时无法验证浏览器会话" : "登录 Loomhelm"}</h1>
+      <p>{auth.message ?? (auth.status === "error" ? "认证服务暂时不可用，当前不会读取受保护数据。" : "使用配置好的 OIDC 身份登录后，才能访问项目和任务。")}</p>
+      <Button type="button" variant="default" className="button button-primary" onClick={login}><LogIn size={15} aria-hidden="true" />{auth.status === "error" ? "重新登录" : "通过 OIDC 登录"}</Button>
+    </section>
+  );
+}
+
+function ProductionShell() {
+  const assembly = useOptionalProductionApi();
+  const source = useOptionalProjectTaskSource();
+  const { login, logout, logoutPending } = useProductionAuthActions();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({ projects: true });
+  const [theme, setTheme] = useProductionTheme();
+  const [logoutMessage, setLogoutMessage] = useState<string | null>(null);
+  const authenticated = assembly?.auth.status === "authenticated";
+
+  const closeMobile = () => setMobileOpen(false);
+  const toggle = (key: string) => setExpanded((current) => ({ ...current, [key]: !current[key] }));
+
+  const navigation = (
+    <nav className="product-navigation" aria-label="主导航">
+      <div className="nav-section">
+        <div className="nav-section-label">工作空间</div>
+        <Link to="/" activeOptions={{ exact: true }} className="nav-link" activeProps={{ "aria-current": "page" }} onClick={closeMobile}>
+          <LayoutDashboard size={17} aria-hidden="true" />
+          <span>工作台</span>
+        </Link>
+        <Link to="/tasks" className="nav-link" activeProps={{ "aria-current": "page" }} onClick={closeMobile}>
+          <ListTodo size={17} aria-hidden="true" />
+          <span>任务</span>
+        </Link>
+      </div>
+      <ProductionProjectTree source={source} expanded={expanded} onToggle={toggle} onNavigate={closeMobile} />
+    </nav>
+  );
+
+  const handleLogout = async () => {
+    setLogoutMessage(null);
+    const result = await logout();
+    if (!result.ok) setLogoutMessage(result.message);
+  };
+
+  return (
+    <div className="product-shell" data-runtime="production">
+      <aside className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`}>
+        <div className="brand-lockup">
+          <span className="brand-mark" aria-hidden="true"><FlaskConical size={21} strokeWidth={1.8} /></span>
+          <span>Loomhelm</span>
+        </div>
+        {navigation}
+        <div className="sidebar-footer">
+          <span className="avatar"><CircleUserRound size={18} aria-hidden="true" /></span>
+          <span><strong>{authenticated ? assembly?.auth.principalId : "浏览器会话"}</strong><small>{authenticated ? "当前登录身份" : "尚未登录"}</small></span>
+        </div>
+      </aside>
+      {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
+      <div className="product-work-area">
+        <header className="product-header">
+          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" title="打开导航" onClick={() => setMobileOpen(true)}>
+            <Menu size={19} aria-hidden="true" />
+          </Button>
+          <div className="breadcrumb"><ProductionBreadcrumb pathname={pathname} source={source} /></div>
+          <div className="header-actions">
+            <span className="demo-label"><span className="demo-label-dot" aria-hidden="true" />{authenticated ? "浏览器会话" : "未登录"}</span>
+            <Select value={theme} onValueChange={(value) => setTheme(value as ThemeMode)}>
+              <SelectTrigger size="sm" className="theme-select-trigger" aria-label="界面主题">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="system">系统主题</SelectItem>
+                  <SelectItem value="light">亮色</SelectItem>
+                  <SelectItem value="dark">暗色</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {authenticated ? <>
+              <Button asChild variant="default" className="button button-primary header-create" onClick={closeMobile}>
+                <Link to="/tasks/new"><Plus size={16} aria-hidden="true" /><span>新建任务</span></Link>
+              </Button>
+              <Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void handleLogout(); }} disabled={logoutPending}>
+                <LogOut size={15} aria-hidden="true" />{logoutPending ? "退出中…" : "退出登录"}
+              </Button>
+            </> : <Button type="button" variant="default" className="button button-primary" onClick={login}><LogIn size={15} aria-hidden="true" />登录</Button>}
+          </div>
+          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-close-button" aria-label="关闭导航" title="关闭导航" onClick={closeMobile}>
+            <X size={19} aria-hidden="true" />
+          </Button>
+        </header>
+        <main className="product-content">
+          {logoutMessage && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{logoutMessage}</div>}
+          {authenticated ? <Outlet /> : <ProductionAuthGate />}
+        </main>
+      </div>
+    </div>
+  );
 }
 
 export function ProductShell({ children }: PropsWithChildren) {
@@ -211,5 +402,5 @@ export function ProductShell({ children }: PropsWithChildren) {
 
 export function AppShell() {
   const runtime = useOptionalDemoRuntime();
-  return runtime ? <ProductShell /> : <TechnicalShell />;
+  return runtime ? <ProductShell /> : <ProductionShell />;
 }

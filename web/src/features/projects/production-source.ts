@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiClientConfigurationError, ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
-import type { ProjectMember, TaskRelationshipPage, TaskStatus } from "@loomhelm/protocol";
+import type { Project, ProjectMember, Task, TaskRelationshipPage, TaskStatus } from "@loomhelm/protocol";
 
 import type { TaskState, TaskView } from "@/demo/types";
 import type {
@@ -15,7 +15,7 @@ import type {
   WriteResult
 } from "@/features/tasks/types";
 
-import { createPublishedProjectTaskApi, mapProject, mapTask, permissionsForProjectMember, type ProjectMemberPermissions } from "./api";
+import { createPublishedProjectTaskApi, mapProject, mapTask, permissionsForProjectMember, type ProjectMemberPermissions, type PublishedProjectTaskApi } from "./api";
 
 export interface ProductionSourceOptions {
   client?: GeneratedApiClient;
@@ -27,8 +27,48 @@ export interface ProductionSourceOptions {
 }
 
 interface TaskQueryData {
-  items: readonly import("@loomhelm/protocol").Task[];
+  items: readonly Task[];
   relationships: Readonly<Record<string, TaskRelationshipPage>>;
+}
+
+export const PROJECT_PAGE_LIMIT = 100;
+export const TASK_PAGE_LIMIT = 200;
+
+interface CursorPage<Item> {
+  has_more: boolean;
+  items: readonly Item[];
+  next_cursor?: string;
+}
+
+export async function readAllCursorPages<Item>(
+  resource: string,
+  readPage: (afterCursor?: string) => Promise<CursorPage<Item>>,
+  limit: number
+): Promise<readonly Item[]> {
+  if (limit <= 0) throw new Error(`${resource} pagination limit must be positive.`);
+  const items: Item[] = [];
+  const seenCursors = new Set<string>();
+  let afterCursor: string | undefined;
+
+  for (;;) {
+    const page = await readPage(afterCursor);
+    items.push(...page.items);
+    if (!page.has_more) return items;
+    const nextCursor = page.next_cursor?.trim();
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      throw new Error(`${resource} pagination did not return a new cursor for the next page.`);
+    }
+    seenCursors.add(nextCursor);
+    afterCursor = nextCursor;
+  }
+}
+
+export function listAllProjects(api: Pick<PublishedProjectTaskApi, "listProjects">): Promise<readonly Project[]> {
+  return readAllCursorPages("projects", (after_cursor) => api.listProjects({ after_cursor, limit: PROJECT_PAGE_LIMIT }), PROJECT_PAGE_LIMIT);
+}
+
+export function listAllTasks(api: Pick<PublishedProjectTaskApi, "listTasks">): Promise<readonly Task[]> {
+  return readAllCursorPages("tasks", (after_cursor) => api.listTasks({ after_cursor, limit: TASK_PAGE_LIMIT }), TASK_PAGE_LIMIT);
 }
 
 interface DesiredRelations {
@@ -144,11 +184,11 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   const queryEnabled = enabled && Boolean(principalId) && !accessRevoked;
   const projectsQuery = useQuery({
     queryKey: projectTaskQueryKeys.projects(subjectId),
-    queryFn: () => api.listProjects({ limit: 100 }),
+    queryFn: () => listAllProjects(api),
     enabled: queryEnabled
   });
   const projectPermissionError = isPermissionError(projectsQuery.error);
-  const projectIds = useMemo(() => [...new Set(projectsQuery.data?.items.map((project) => project.id) ?? [])].sort(), [projectsQuery.data?.items]);
+  const projectIds = useMemo(() => [...new Set(projectsQuery.data?.map((project) => project.id) ?? [])].sort(), [projectsQuery.data]);
   const membershipsQuery = useQuery<Readonly<Record<string, readonly ProjectMember[]>>>({
     queryKey: projectTaskQueryKeys.memberships(subjectId, projectIds),
     queryFn: async () => {
@@ -165,10 +205,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     queryKey: projectTaskQueryKeys.tasks(subjectId),
     queryFn: async () => {
       // Fetch the authorized global set so project views can retain visible cross-project relation nodes.
-      const response = await api.listTasks({ limit: 200 });
-      const entries = await Promise.all(response.items.map(async (task) => [task.id, await api.getTaskRelationships({ task_id: task.id })] as const));
+      const items = await listAllTasks(api);
+      const entries = await Promise.all(items.map(async (task) => [task.id, await api.getTaskRelationships({ task_id: task.id })] as const));
       return {
-        items: response.items,
+        items,
         relationships: Object.fromEntries(entries)
       };
     },
@@ -227,7 +267,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     onSuccess: () => queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId) })
   });
 
-  const projects = useMemo(() => accessRevoked || permissionChanged ? [] : projectsQuery.data?.items.map(mapProject) ?? [], [accessRevoked, permissionChanged, projectsQuery.data]);
+  const projects = useMemo(() => accessRevoked || permissionChanged ? [] : projectsQuery.data?.map(mapProject) ?? [], [accessRevoked, permissionChanged, projectsQuery.data]);
   const relationshipsByTaskId = tasksQuery.data?.relationships ?? {};
   const tasks = useMemo(() => accessRevoked || permissionChanged ? [] : tasksQuery.data?.items.map((task) => mapTask(task, relationshipsByTaskId[task.id])) ?? [], [accessRevoked, permissionChanged, relationshipsByTaskId, tasksQuery.data?.items]);
   const getProject = useMemo(() => (id: string | undefined) => projects.find((project) => project.id === id), [projects]);
