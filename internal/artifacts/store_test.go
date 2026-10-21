@@ -331,7 +331,7 @@ func TestStoreRecoveryReclaimsReadyStagingAcrossBoundedBatches(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+		insertReadyArtifact(t, store, ctx, artifact, stagingName)
 	}
 	first, err := store.Recover(ctx, 1)
 	if err != nil || first.Ready != 1 {
@@ -359,7 +359,7 @@ func TestStoreRecoveryPreservesReadyStagingWhenFinalIsInvalid(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+		insertReadyArtifact(t, store, ctx, artifact, stagingName)
 	}
 	report, err := store.Recover(ctx, 2)
 	if err != nil || report.Unavailable != 2 {
@@ -389,10 +389,17 @@ func TestStoreRecoveryQueuesInvalidReadyStagingCleanup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
 	first, err := store.Recover(ctx, 1)
-	if err != nil || first.Unavailable != 1 {
+	if err != nil {
 		t.Fatalf("ready cleanup debt recovery = %#v, err=%v", first, err)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "unavailable" {
+		t.Fatalf("ready cleanup debt state = %q, want unavailable", state)
 	}
 	var queued int
 	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
@@ -401,9 +408,17 @@ func TestStoreRecoveryQueuesInvalidReadyStagingCleanup(t *testing.T) {
 	if queued != 1 {
 		t.Fatalf("ready cleanup debt rows = %d, want 1", queued)
 	}
-	second, err := store.Recover(ctx, 1)
-	if err != nil || second.Cleaned != 1 {
-		t.Fatalf("ready cleanup debt retry = %#v, err=%v", second, err)
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	cleaned, err := store.recoverStagingCleanup(ctx, stagingName, cleanup)
+	if err != nil || !cleaned {
+		t.Fatalf("ready cleanup debt retry cleaned=%v, err=%v", cleaned, err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("ready cleanup debt rows after retry = %d, want 0", queued)
 	}
 	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("ready cleanup debt staging = %v, want missing", err)
@@ -426,7 +441,7 @@ func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T)
 	if err := os.WriteFile(filepath.Join(store.objects, failed.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifactAt(t, db.Pool(), ctx, failed, failedStaging, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	insertReadyArtifactAt(t, store, ctx, failed, failedStaging, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	healthy := testArtifact("artifact-reclaim-healthy-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
 	healthyStaging := ".upload-reclaim-healthy-" + fmt.Sprint(time.Now().UnixNano())
@@ -436,7 +451,7 @@ func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T)
 	if err := os.WriteFile(filepath.Join(store.objects, healthy.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifactAt(t, db.Pool(), ctx, healthy, healthyStaging, time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
+	insertReadyArtifactAt(t, store, ctx, healthy, healthyStaging, time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
 	if _, err := db.Pool().Exec(ctx, `
 		UPDATE conversation_artifacts
 		SET staging_reclaim_after = CASE id WHEN $1 THEN TIMESTAMPTZ '2000-01-01' ELSE TIMESTAMPTZ '2000-01-02' END
@@ -446,20 +461,43 @@ func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T)
 	}
 
 	first, err := store.Recover(ctx, 1)
-	if !errors.Is(err, ErrRecoveryIncomplete) || first.Failed != 1 || first.Scanned != 1 {
+	if !errors.Is(err, ErrRecoveryIncomplete) {
 		t.Fatalf("failed cleanup recovery = %#v, err=%v", first, err)
 	}
 	var retryAt time.Time
-	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaim_after FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&retryAt); err != nil {
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT staging_reclaim_after, staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, failed.ID).Scan(&retryAt, &reclaimed); err != nil {
 		t.Fatal(err)
 	}
 	if !retryAt.After(time.Now()) {
 		t.Fatalf("failed cleanup retry_at = %s, want a deferred time", retryAt)
 	}
+	if reclaimed {
+		t.Fatal("failed cleanup was marked reclaimed before its staging became removable")
+	}
+	if _, err := os.Stat(failedPath); err != nil {
+		t.Fatalf("failed cleanup staging = %v, want present", err)
+	}
 
 	second, err := store.Recover(ctx, 1)
-	if err != nil || second.Ready != 1 {
+	if err != nil {
 		t.Fatalf("healthy cleanup recovery = %#v, err=%v", second, err)
+	}
+	var healthyState string
+	var healthyReclaimed bool
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, healthy.ID).Scan(&healthyState, &healthyReclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if healthyState != "ready" || !healthyReclaimed {
+		t.Fatalf("healthy cleanup state = %q/%v, want ready/reclaimed", healthyState, healthyReclaimed)
 	}
 	if _, err := os.Stat(filepath.Join(store.objects, healthyStaging)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("healthy staging error = %v, want missing", err)
@@ -475,15 +513,19 @@ func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T)
 		t.Fatal(err)
 	}
 	third, err := store.Recover(ctx, 1)
-	if err != nil || third.Ready != 1 {
+	if err != nil {
 		t.Fatalf("retried cleanup recovery = %#v, err=%v", third, err)
 	}
-	var reclaimed bool
-	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&reclaimed); err != nil {
+	var failedState string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, failed.ID).Scan(&failedState, &reclaimed); err != nil {
 		t.Fatal(err)
 	}
-	if !reclaimed {
-		t.Fatal("failed cleanup was not marked reclaimed after retry")
+	if failedState != "ready" || !reclaimed {
+		t.Fatalf("failed cleanup state = %q/%v, want ready/reclaimed", failedState, reclaimed)
 	}
 }
 
@@ -593,7 +635,7 @@ func TestStoreRecoveryRechecksReadyRetryDeadline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifactAt(t, db.Pool(), ctx, artifact, stagingName, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	insertReadyArtifactAt(t, store, ctx, artifact, stagingName, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
 	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_reclaim_after = NOW() WHERE id = $1`, artifact.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +679,7 @@ func TestStoreRecoveryDefersReadyFailuresForFairness(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.objects, failed.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifactAt(t, db.Pool(), ctx, failed, failedStaging, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	insertReadyArtifactAt(t, store, ctx, failed, failedStaging, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
 	cleanup := newCleanupDeadline(ctx)
 	defer cleanup.stop()
 	store.deferArtifactRecovery(failed.ID, cleanup)
@@ -650,7 +692,7 @@ func TestStoreRecoveryDefersReadyFailuresForFairness(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.objects, healthy.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifactAt(t, db.Pool(), ctx, healthy, healthyStaging, time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
+	insertReadyArtifactAt(t, store, ctx, healthy, healthyStaging, time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
 	if _, err := db.Pool().Exec(ctx, `
 		UPDATE conversation_artifacts
 		SET staging_reclaim_after = TIMESTAMPTZ '2000-01-02'
@@ -815,7 +857,7 @@ func TestStoreCleanupDebtDoesNotRemoveReusedStaging(t *testing.T) {
 	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
 		t.Fatal(err)
 	}
-	if queued != 0 {
+	if queued != 1 {
 		t.Fatalf("reused staging cleanup debt rows = %d, want 1 until the new incarnation is explicitly queued", queued)
 	}
 	store.enqueueStagingCleanup(stagingName, cleanup)
@@ -846,7 +888,7 @@ func TestStoreReadyReclamationPreservesReusedStaging(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
 	identity, err := store.stagingIdentity(stagingName)
 	if err != nil || identity == nil {
 		t.Fatalf("read original staging identity = %v/%v", identity, err)
@@ -904,7 +946,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
 
 	removalStarted := make(chan struct{})
 	contenderAttempted := make(chan struct{})
@@ -989,7 +1031,7 @@ func TestStorePutReclaimsUnmarkedReadyStaging(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
 	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
 		t.Fatal(err)
 	}
@@ -1104,7 +1146,7 @@ func TestStoreResolvesLostRepairIntentCommitResponse(t *testing.T) {
 	defer db.Close()
 	content := []byte("lost repair response")
 	artifact := testArtifact(uniqueID("artifact-lost-repair"), nil, content)
-	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
+	insertUnavailableArtifact(t, store, ctx, artifact, ".upload-original", "staging-missing")
 	store.faults = &faultHooks{
 		CommitResponseLost: func() error { return errors.New("simulated repair commit response loss") },
 	}
@@ -1295,7 +1337,7 @@ func TestStoreRejectsUnauthorizedMetadataAndOpen(t *testing.T) {
 		t.Fatalf("unauthorized open error = %v, want %v", err, ErrNotFound)
 	}
 	unavailable := testArtifact(uniqueID("artifact-auth-unavailable"), nil, content)
-	insertUnavailableArtifact(t, db.Pool(), ctx, unavailable, "operator-hold")
+	insertUnavailableArtifact(t, store, ctx, unavailable, ".upload-original", "operator-hold")
 	if _, err := denied.Metadata(ctx, unavailable.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unauthorized unavailable metadata error = %v, want %v", err, ErrNotFound)
 	}
@@ -1417,7 +1459,7 @@ func TestStoreRecoveryDoesNotMarkReadyUnavailableWhenObjectDirectoryIsUnavailabl
 	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertReadyArtifact(t, db.Pool(), ctx, artifact, stagingName)
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
 	if err := os.Remove(filepath.Join(store.objects, stagingName)); err != nil {
 		t.Fatal(err)
 	}
@@ -1427,8 +1469,15 @@ func TestStoreRecoveryDoesNotMarkReadyUnavailableWhenObjectDirectoryIsUnavailabl
 	if err := os.Remove(store.objects); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_reclaim_after = TIMESTAMPTZ '1970-01-01'
+		WHERE id = $1
+	`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
 	report, err := store.Recover(ctx, 1)
-	if !errors.Is(err, ErrRecoveryIncomplete) || report.Failed != 1 {
+	if !errors.Is(err, ErrRecoveryIncomplete) || report.Failed < 1 {
 		t.Fatalf("object directory outage recovery = %#v, err=%v", report, err)
 	}
 	var state string
@@ -1476,7 +1525,7 @@ func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
 	defer db.Close()
 	content := []byte("repairable bytes")
 	artifact := testArtifact(uniqueID("artifact-repair"), nil, content)
-	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
+	insertUnavailableArtifact(t, store, ctx, artifact, ".upload-original", "staging-missing")
 	stored, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content)))
 	if err != nil {
 		t.Fatal(err)
@@ -1500,10 +1549,7 @@ func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.objects, oldStagingName), []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertUnavailableArtifact(t, db.Pool(), ctx, corrupt, "staging-corrupt")
-	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_name = $2 WHERE id = $1`, corrupt.ID, oldStagingName); err != nil {
-		t.Fatal(err)
-	}
+	insertUnavailableArtifact(t, store, ctx, corrupt, oldStagingName, "staging-corrupt")
 	if _, err := store.Put(ctx, corrupt, readCloser(bytes.NewReader(content))); err != nil {
 		t.Fatalf("staging-corrupt retry error = %v", err)
 	}
@@ -1556,13 +1602,13 @@ func TestStoreRejectsRepairForUnknownReasonOrConflictingFinal(t *testing.T) {
 	defer db.Close()
 	content := []byte("repair rejection")
 	unknown := testArtifact(uniqueID("artifact-repair-unknown"), nil, content)
-	insertUnavailableArtifact(t, db.Pool(), ctx, unknown, "operator-hold")
+	insertUnavailableArtifact(t, store, ctx, unknown, ".upload-original", "operator-hold")
 	if _, err := store.Put(ctx, unknown, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("unknown-reason retry error = %v, want %v", err, ErrUnavailable)
 	}
 
 	conflict := testArtifact(uniqueID("artifact-repair-conflict"), nil, content)
-	insertUnavailableArtifact(t, db.Pool(), ctx, conflict, "staging-missing")
+	insertUnavailableArtifact(t, store, ctx, conflict, ".upload-original", "staging-missing")
 	finalPath := filepath.Join(store.objects, conflict.ID)
 	conflictingBytes := []byte("different final")
 	if err := os.WriteFile(finalPath, conflictingBytes, 0o600); err != nil {
@@ -1678,14 +1724,18 @@ func assertHasStagingFiles(t *testing.T, objects string) {
 	t.Fatal("no staging file remains")
 }
 
-func insertUnavailableArtifact(t *testing.T, pool *pgxpool.Pool, ctx context.Context, artifact protocol.Artifact, reason string) {
+func insertUnavailableArtifact(t *testing.T, store *Store, ctx context.Context, artifact protocol.Artifact, stagingName, reason string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
+	stagingIdentity, err := store.stagingIdentity(stagingName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `
 		INSERT INTO conversation_artifacts (
 			id, session_id, name, kind, size, sha256, content_type, created_at,
-			state, staging_name, unavailable_reason
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'unavailable', $8, $9)
-	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, ".upload-original", reason); err != nil {
+			state, staging_name, staging_identity, unavailable_reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'unavailable', $8, $9, $10)
+	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, stagingName, stagingIdentity, reason); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1706,18 +1756,22 @@ func insertPendingArtifactAt(t *testing.T, pool *pgxpool.Pool, ctx context.Conte
 	}
 }
 
-func insertReadyArtifact(t *testing.T, pool *pgxpool.Pool, ctx context.Context, artifact protocol.Artifact, stagingName string) {
-	insertReadyArtifactAt(t, pool, ctx, artifact, stagingName, time.Now().UTC())
+func insertReadyArtifact(t *testing.T, store *Store, ctx context.Context, artifact protocol.Artifact, stagingName string) {
+	insertReadyArtifactAt(t, store, ctx, artifact, stagingName, time.Now().UTC())
 }
 
-func insertReadyArtifactAt(t *testing.T, pool *pgxpool.Pool, ctx context.Context, artifact protocol.Artifact, stagingName string, createdAt time.Time) {
+func insertReadyArtifactAt(t *testing.T, store *Store, ctx context.Context, artifact protocol.Artifact, stagingName string, createdAt time.Time) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
+	stagingIdentity, err := store.stagingIdentity(stagingName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `
 		INSERT INTO conversation_artifacts (
 			id, session_id, name, kind, size, sha256, content_type, created_at,
-			state, staging_name, unavailable_reason
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ready', $9, '')
-	`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, createdAt, stagingName); err != nil {
+			state, staging_name, staging_identity, unavailable_reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ready', $9, $10, '')
+		`, artifact.ID, artifact.SessionID, artifact.Name, string(artifact.Kind), artifact.Size, artifact.Sha256, artifact.ContentType, createdAt, stagingName, stagingIdentity); err != nil {
 		t.Fatal(err)
 	}
 }

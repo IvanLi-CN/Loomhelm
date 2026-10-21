@@ -340,10 +340,9 @@ func TestStoreRepairsMissingStagingAfterProcessInterruption(t *testing.T) {
 	id := uniqueID("artifact-repair-crash")
 	content := []byte("repair crash boundary content")
 	db, store, ctx := openStoreAtRoot(t, root)
-	_ = store
 	artifact := testArtifact(id, nil, content)
 	oldStagingName := ".upload-repair-crash-old"
-	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, oldStagingName)
+	insertUnavailableArtifact(t, store, ctx, artifact, oldStagingName, "staging-missing")
 	db.Close()
 	if code, output := runArtifactHelper(t, "crash", faultAfterRepairIntentCommit, root, id, content, ""); code != 91 {
 		t.Fatalf("repair helper exit code = %d, output = %s", code, output)
@@ -383,9 +382,9 @@ func TestStoreConcurrentRepairAndRecoveryConverge(t *testing.T) {
 	root := t.TempDir()
 	id := uniqueID("artifact-repair-concurrent")
 	content := []byte("concurrent repair content")
-	db, _, ctx := openStoreAtRoot(t, root)
+	db, store, ctx := openStoreAtRoot(t, root)
 	artifact := testArtifact(id, nil, content)
-	insertUnavailableArtifact(t, db.Pool(), ctx, artifact, "staging-missing")
+	insertUnavailableArtifact(t, store, ctx, artifact, ".upload-original", "staging-missing")
 	db.Close()
 
 	signal := filepath.Join(root, "repair-started")
@@ -431,7 +430,7 @@ func TestStoreConcurrentRepairAndRecoveryConverge(t *testing.T) {
 		t.Fatalf("recovery helper failed: %v", err)
 	}
 
-	db, store, ctx := openStoreAtRoot(t, root)
+	db, store, ctx = openStoreAtRoot(t, root)
 	defer db.Close()
 	metadata, reader, err := store.Open(ctx, id)
 	if err != nil {
