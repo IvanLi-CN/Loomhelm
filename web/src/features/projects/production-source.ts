@@ -72,8 +72,7 @@ export function listAllTasks(api: Pick<PublishedProjectTaskApi, "listTasks">): P
 }
 
 interface DesiredRelations {
-  parentSpecified: boolean;
-  parentTaskId?: string;
+  parentIds?: readonly string[];
   dependenciesSpecified: boolean;
   dependsOn?: readonly string[];
 }
@@ -100,8 +99,8 @@ function denied<T>(message = "当前身份或权限为只读，写入动作没�
   return Promise.resolve({ ok: false, code: "readonly", message });
 }
 
-function success<T>(value: T): WriteResult<T> {
-  return { ok: true, value };
+function success<T>(value: T, warning?: string): WriteResult<T> {
+  return warning ? { ok: true, value, warning } : { ok: true, value };
 }
 
 function bodyMessage(body: unknown): string | undefined {
@@ -133,9 +132,14 @@ function failure<T>(operation: string, error: unknown): WriteResult<T> {
   return { ok: false, code: "invalid", message: error instanceof Error ? `${operation}失败：${error.message}` : `${operation}失败。` };
 }
 
-function isPermissionError(error: unknown): boolean {
+function failureMessage(operation: string, error: unknown): string {
+  const result = failure<never>(operation, error);
+  return result.ok ? `${operation}失败。` : result.message;
+}
+
+export function isPermissionError(error: unknown): boolean {
   if (!(error instanceof ApiClientError)) return false;
-  if (error.status === 401 || error.status === 403) return true;
+  if (error.status === 401 || error.status === 403 || error.status === 404) return true;
   const body = error.body;
   return Boolean(body && typeof body === "object" && "code" in body && (body as { code?: unknown }).code === "unauthorized");
 }
@@ -153,27 +157,30 @@ async function syncTaskRelations(
   taskId: string,
   desired: DesiredRelations
 ): Promise<void> {
-  const current = relationshipsByTaskId[taskId] ?? await api.getTaskRelationships({ task_id: taskId });
+  const current = await api.getTaskRelationships({ task_id: taskId });
   const currentParents = current.parents.map((relationship) => relationship.parent_task_id);
   const currentDependencies = current.prerequisites.map((relationship) => relationship.prerequisite_task_id);
-  const writes: Promise<void>[] = [];
+  const writes: Array<() => Promise<void>> = [];
 
-  if (desired.parentSpecified) {
-    writes.push(...currentParents.filter((parentId) => parentId !== desired.parentTaskId).map((parentTaskId) => api.removeTaskParent({ task_id: taskId, parent_task_id: parentTaskId })));
-    if (desired.parentTaskId && !currentParents.includes(desired.parentTaskId)) {
-      writes.push(api.addTaskParent({ task_id: taskId, parent_task_id: desired.parentTaskId }));
-    }
+  if (desired.parentIds !== undefined) {
+    const nextParents = [...new Set(desired.parentIds)].filter((parentId) => parentId !== taskId);
+    writes.push(...currentParents.filter((parentId) => !nextParents.includes(parentId)).map((parentTaskId) => () => api.removeTaskParent({ task_id: taskId, parent_task_id: parentTaskId })));
+    writes.push(...nextParents.filter((parentId) => !currentParents.includes(parentId)).map((parentTaskId) => () => api.addTaskParent({ task_id: taskId, parent_task_id: parentTaskId })));
   }
 
   if (desired.dependenciesSpecified) {
     const nextDependencies = [...new Set(desired.dependsOn ?? [])];
-    writes.push(...currentDependencies.filter((dependencyId) => !nextDependencies.includes(dependencyId)).map((prerequisiteTaskId) => api.removeTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId })));
-    writes.push(...nextDependencies.filter((dependencyId) => !currentDependencies.includes(dependencyId)).map((prerequisiteTaskId) => api.addTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId })));
+    writes.push(...currentDependencies.filter((dependencyId) => !nextDependencies.includes(dependencyId)).map((prerequisiteTaskId) => () => api.removeTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId })));
+    writes.push(...nextDependencies.filter((dependencyId) => !currentDependencies.includes(dependencyId)).map((prerequisiteTaskId) => () => api.addTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId })));
   }
 
-  await Promise.all(writes);
+  const results = await Promise.allSettled(writes.map((write) => write()));
   await queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(principalId) });
+  const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (rejected) throw rejected.reason;
 }
+
+const PROJECT_TASK_REFRESH_INTERVAL_MS = 30_000;
 
 export function usePublishedProjectTaskSource({ client, enabled = true, canCreateProjects, principalId, taskViews = {}, setTaskView }: ProductionSourceOptions): ProjectTaskSource {
   const api = useMemo(() => createPublishedProjectTaskApi(client), [client]);
@@ -185,7 +192,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   const projectsQuery = useQuery({
     queryKey: projectTaskQueryKeys.projects(subjectId),
     queryFn: () => listAllProjects(api),
-    enabled: queryEnabled
+    enabled: queryEnabled,
+    refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
   const projectPermissionError = isPermissionError(projectsQuery.error);
   const projectIds = useMemo(() => [...new Set(projectsQuery.data?.map((project) => project.id) ?? [])].sort(), [projectsQuery.data]);
@@ -198,7 +206,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       }));
       return Object.fromEntries(entries);
     },
-    enabled: queryEnabled && projectsQuery.isSuccess && !projectPermissionError
+    enabled: queryEnabled && projectsQuery.isSuccess && !projectPermissionError,
+    refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
   const membershipPermissionError = isPermissionError(membershipsQuery.error);
   const tasksQuery = useQuery<TaskQueryData>({
@@ -212,7 +221,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         relationships: Object.fromEntries(entries)
       };
     },
-    enabled: queryEnabled && projectsQuery.isSuccess && membershipsQuery.isSuccess && !projectPermissionError && !membershipPermissionError
+    enabled: queryEnabled && projectsQuery.isSuccess && membershipsQuery.isSuccess && !projectPermissionError && !membershipPermissionError,
+    refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
   const taskPermissionError = isPermissionError(tasksQuery.error);
   const permissionChanged = projectPermissionError || membershipPermissionError || taskPermissionError;
@@ -308,13 +318,18 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       if (!getProjectPermissions(draft.projectId).canWrite) return denied();
       try {
         const response = await createTaskMutation.mutateAsync(draft);
-        await syncTaskRelations(api, queryClient, subjectId, relationshipsByTaskId, response.task.id, {
-          parentSpecified: true,
-          parentTaskId: draft.parentId,
-          dependenciesSpecified: true,
-          dependsOn: draft.dependsOn ?? []
-        });
-        return { ok: true, value: { ...mapTask(response.task), parentId: draft.parentId, dependsOn: [...new Set(draft.dependsOn ?? [])] } };
+        const value = { ...mapTask(response.task), parentId: draft.parentIds?.[0] ?? draft.parentId, parentIds: [...new Set(draft.parentIds ?? (draft.parentId ? [draft.parentId] : []))], dependsOn: [...new Set(draft.dependsOn ?? [])] };
+        try {
+          await syncTaskRelations(api, queryClient, subjectId, relationshipsByTaskId, response.task.id, {
+            parentIds: draft.parentIds ?? (draft.parentId ? [draft.parentId] : []),
+            dependenciesSpecified: true,
+            dependsOn: draft.dependsOn ?? []
+          });
+          return success(value);
+        } catch (error) {
+          if (isPermissionError(error)) revokeSubjectAccess();
+          return success(value, failureMessage("同步任务关系", error));
+        }
       } catch (error) {
         return handleFailure("创建任务", error);
       }
@@ -324,23 +339,25 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       if (!getProjectPermissions(taskProjectId).canWrite) return denied();
       try {
         const response = await updateTaskMutation.mutateAsync({ taskId, update });
-        if (update.parentId !== undefined || update.dependsOn !== undefined) {
-          await syncTaskRelations(api, queryClient, subjectId, relationshipsByTaskId, taskId, {
-            parentSpecified: update.parentId !== undefined,
-            parentTaskId: update.parentId || undefined,
-            dependenciesSpecified: update.dependsOn !== undefined,
-            dependsOn: update.dependsOn
-          });
-        }
         const current = mapTask(response.task, relationshipsByTaskId[taskId]);
-        return {
-          ok: true,
-          value: {
-            ...current,
-            ...(update.parentId !== undefined ? { parentId: update.parentId || undefined } : {}),
-            ...(update.dependsOn !== undefined ? { dependsOn: [...new Set(update.dependsOn)] } : {})
-          }
+        const value = {
+          ...current,
+          ...(update.parentIds !== undefined ? { parentId: update.parentIds[0], parentIds: [...new Set(update.parentIds)] } : update.parentId !== undefined ? { parentId: update.parentId || undefined, parentIds: update.parentId ? [update.parentId] : [] } : {}),
+          ...(update.dependsOn !== undefined ? { dependsOn: [...new Set(update.dependsOn)] } : {})
         };
+        if (update.parentIds !== undefined || update.parentId !== undefined || update.dependsOn !== undefined) {
+          try {
+            await syncTaskRelations(api, queryClient, subjectId, relationshipsByTaskId, taskId, {
+              parentIds: update.parentIds ?? (update.parentId !== undefined ? (update.parentId ? [update.parentId] : []) : undefined),
+              dependenciesSpecified: update.dependsOn !== undefined,
+              dependsOn: update.dependsOn
+            });
+          } catch (error) {
+            if (isPermissionError(error)) revokeSubjectAccess();
+            return success(value, failureMessage("同步任务关系", error));
+          }
+        }
+        return success(value);
       } catch (error) {
         return handleFailure("更新任务", error);
       }
@@ -348,9 +365,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     const deleteTask = (taskId: string): Promise<WriteResult<null>> => getProjectPermissions(getTask(taskId)?.projectId).canWrite
       ? deleteTaskMutation.mutateAsync(taskId).then(() => success(null)).catch((error: unknown) => handleFailure("删除任务", error))
       : denied();
-    const setTaskParent = (taskId: string, parentTaskId?: string): Promise<WriteResult<null>> => getProjectPermissions(getTask(taskId)?.projectId).canWrite
-      ? syncTaskRelations(api, queryClient, subjectId, relationshipsByTaskId, taskId, { parentSpecified: true, parentTaskId, dependenciesSpecified: false }).then(() => success(null)).catch((error: unknown) => handleFailure("更新父任务", error))
+    const setTaskParents = (taskId: string, parentTaskIds: readonly string[]): Promise<WriteResult<null>> => getProjectPermissions(getTask(taskId)?.projectId).canWrite
+      ? syncTaskRelations(api, queryClient, subjectId, relationshipsByTaskId, taskId, { parentIds: parentTaskIds, dependenciesSpecified: false }).then(() => success(null)).catch((error: unknown) => handleFailure("更新父任务", error))
       : denied();
+    const setTaskParent = (taskId: string, parentTaskId?: string): Promise<WriteResult<null>> => setTaskParents(taskId, parentTaskId ? [parentTaskId] : []);
     const addTaskDependency = (taskId: string, prerequisiteTaskId: string): Promise<WriteResult<null>> => getProjectPermissions(getTask(taskId)?.projectId).canWrite
       ? api.addTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId }).then(async () => { await queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId) }); return success(null); }).catch((error: unknown) => handleFailure("添加前置任务", error))
       : denied();
@@ -376,6 +394,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       updateTask,
       deleteTask,
       setTaskParent,
+      setTaskParents,
       addTaskDependency,
       removeTaskDependency,
       notice: !enabled || !principalId ? "当前认证装配尚未就绪，页面不会请求受保护数据。" : accessRevoked || permissionChanged ? "登录状态或项目权限发生变化；当前主体的受保护数据已清除，请重新验证后刷新。" : queryError ? "项目、成员、任务或关系读取失败；页面保持 fail-closed。" : undefined

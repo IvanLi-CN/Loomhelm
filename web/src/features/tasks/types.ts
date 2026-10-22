@@ -17,9 +17,10 @@ export interface TaskRecord {
   goal: string;
   projectId: string;
   state: TaskState;
-  execution: ExecutionState;
+  execution: ExecutionState | null;
   conversationId?: string;
   parentId?: string;
+  parentIds?: string[];
   dependsOn: string[];
   updated: string;
 }
@@ -35,7 +36,7 @@ export interface WriteFailure {
 }
 
 export type WriteResult<T> =
-  | { ok: true; value: T }
+  | { ok: true; value: T; warning?: string }
   | WriteFailure;
 
 export type MutationResult<T> = Promise<WriteResult<T>>;
@@ -58,6 +59,7 @@ export interface TaskDraft {
   projectId: string;
   state?: TaskState;
   parentId?: string;
+  parentIds?: string[];
   dependsOn?: string[];
 }
 
@@ -66,6 +68,7 @@ export interface TaskUpdate {
   goal?: string;
   state?: TaskState;
   parentId?: string;
+  parentIds?: string[];
   dependsOn?: string[];
 }
 
@@ -88,6 +91,7 @@ export interface ProjectTaskSource {
   updateTask: (taskId: string, update: TaskUpdate) => MutationResult<TaskRecord>;
   deleteTask: (taskId: string) => MutationResult<null>;
   setTaskParent: (taskId: string, parentTaskId?: string) => MutationResult<null>;
+  setTaskParents: (taskId: string, parentTaskIds: readonly string[]) => MutationResult<null>;
   addTaskDependency: (taskId: string, prerequisiteTaskId: string) => MutationResult<null>;
   removeTaskDependency: (taskId: string, prerequisiteTaskId: string) => MutationResult<null>;
 }

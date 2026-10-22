@@ -25,7 +25,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const [goal, setGoal] = useState(task?.goal ?? "");
   const [projectId, setProjectId] = useState(task?.projectId ?? defaultProjectId ?? source.projects[0]?.id ?? "");
   const [state, setState] = useState(task?.state ?? "待办");
-  const [parentId, setParentId] = useState(task?.parentId ?? "none");
+  const [parentIds, setParentIds] = useState<string[]>(task?.parentIds ?? (task?.parentId ? [task.parentId] : []));
   const [dependsOn, setDependsOn] = useState<string[]>(task?.dependsOn ?? []);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
@@ -38,27 +38,35 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     setGoal(task?.goal ?? "");
     setProjectId(task?.projectId ?? defaultProjectId ?? source.projects[0]?.id ?? "");
     setState(task?.state ?? "待办");
-    setParentId(task?.parentId ?? "none");
+    setParentIds(task?.parentIds ?? (task?.parentId ? [task.parentId] : []));
     setDependsOn(task?.dependsOn ?? []);
-  }, [defaultProjectId, source.projects, task?.dependsOn, task?.goal, task?.id, task?.parentId, task?.projectId, task?.state, task?.title]);
+  }, [defaultProjectId, mode, task?.id]);
+
+  useEffect(() => {
+    if (mode === "create" && !projectId && source.projects[0]) setProjectId(source.projects[0].id);
+  }, [mode, projectId, source.projects]);
 
   const toggleDependency = (id: string) => {
     setDependsOn((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  };
+
+  const toggleParent = (id: string) => {
+    setParentIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
   };
 
   const submit = async () => {
     setPending(true);
     setFeedback(null);
     const result = mode === "create"
-      ? source.createTask({ title, goal, projectId, state, parentId: parentId === "none" ? undefined : parentId, dependsOn })
-      : task ? source.updateTask(task.id, { title, goal, state, parentId: parentId === "none" ? "" : parentId, dependsOn }) : { ok: false as const, code: "invalid" as const, message: "任务上下文不可用。" };
+      ? source.createTask({ title, goal, projectId, state, parentIds, dependsOn })
+      : task ? source.updateTask(task.id, { title, goal, state, parentIds, dependsOn }) : { ok: false as const, code: "invalid" as const, message: "任务上下文不可用。" };
     const resolved = await result;
     setPending(false);
     if (!resolved.ok) {
       setFeedback({ message: resolved.message, tone: "warning" });
       return;
     }
-    setFeedback({ message: mode === "create" ? "任务已创建，已保留项目归属与关系。" : "任务已更新。", tone: "success" });
+    setFeedback({ message: resolved.warning ?? (mode === "create" ? "任务已创建，已保留项目归属与关系。" : "任务已更新。"), tone: resolved.warning ? "warning" : "success" });
     onSaved?.(resolved.value.id);
   };
 
@@ -73,7 +81,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       <label className="form-field"><span>任务标题</span><Input name="title" required maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="这项任务要完成什么" disabled={!canWrite} /></label>
       <label className="form-field"><span>目标与上下文</span><Textarea name="goal" required rows={5} maxLength={800} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="说明期望结果，以及需要保留的约束" disabled={!canWrite} /></label>
       {mode === "edit" && <label className="form-field"><span>任务业务状态</span><Select value={state} onValueChange={(value) => setState(value as typeof state)} disabled={!canWrite}><SelectTrigger aria-label="任务业务状态"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{taskStates.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectGroup></SelectContent></Select></label>}
-      <label className="form-field"><span>父任务 <small className="font-normal text-[var(--muted)]">（可选）</small></span><Select value={parentId} onValueChange={setParentId} disabled={!canWrite}><SelectTrigger aria-label="父任务"><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="none">无父任务</SelectItem>{candidates.map((candidate) => <SelectItem key={candidate.id} value={candidate.id}>{candidate.id} · {candidate.title} · {source.getProject(candidate.projectId)?.name}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
+      <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)] task-relation-options" disabled={!canWrite}><legend>父任务 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => <label className="task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]" key={candidate.id}><input type="checkbox" checked={parentIds.includes(candidate.id)} onChange={() => toggleParent(candidate.id)} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title} · {source.getProject(candidate.projectId)?.name}</span></label>)}</div> : <p className="font-normal">当前范围没有可选的父任务。</p>}</fieldset>
       <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)]" disabled={!canWrite}><legend>前置依赖 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => <label className="flex min-h-9 items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]" key={candidate.id}><input type="checkbox" checked={dependsOn.includes(candidate.id)} onChange={() => toggleDependency(candidate.id)} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title}</span></label>)}</div> : <p className="font-normal">当前范围没有可选的前置任务。</p>}</fieldset>
       {!canWrite && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>当前项目成员权限为只读，创建和编辑动作保持禁用。</div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}

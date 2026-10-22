@@ -95,16 +95,20 @@ function hasTask(taskId: string): boolean {
   return snapshot.tasks.some((task) => task.id === taskId);
 }
 
-function wouldCreateCycle(taskId: string, parentId: string | undefined): boolean {
-  let current = parentId;
-  const visited = new Set<string>();
-  while (current) {
-    if (current === taskId) return true;
-    if (visited.has(current)) return true;
-    visited.add(current);
-    current = snapshot.tasks.find((task) => task.id === current)?.parentId;
-  }
-  return false;
+function parentIdsFor(task: TaskRecord): string[] {
+  return task.parentIds ?? (task.parentId ? [task.parentId] : []);
+}
+
+function wouldCreateCycle(taskId: string, parentIds: readonly string[]): boolean {
+  const visit = (current: string, path: ReadonlySet<string>): boolean => {
+    if (current === taskId || path.has(current)) return true;
+    const parentTask = snapshot.tasks.find((task) => task.id === current);
+    if (!parentTask) return false;
+    const nextPath = new Set(path);
+    nextPath.add(current);
+    return parentIdsFor(parentTask).some((parentId) => visit(parentId, nextPath));
+  };
+  return parentIds.some((parentId) => visit(parentId, new Set()));
 }
 
 function createProject(draft: ProjectDraft, canManageProjects: boolean): WriteResult<ProjectRecord> {
@@ -163,9 +167,10 @@ function createTask(draft: TaskDraft, writable: boolean): WriteResult<TaskRecord
   const goal = draft.goal.trim();
   if (!title || !goal) return fail("invalid", "任务标题和目标说明不能为空。");
   if (!snapshot.projects.some((project) => project.id === draft.projectId)) return fail("invalid", "目标项目不在当前授权范围内。");
-  const parentId = draft.parentId || undefined;
-  const dependsOn = [...new Set((draft.dependsOn ?? []).filter((id) => id !== parentId && hasTask(id)))];
-  if (parentId && (!hasTask(parentId) || wouldCreateCycle("new-task", parentId))) return fail("invalid", "父任务无效，或会形成循环关系。");
+  const parentIds = [...new Set(draft.parentIds ?? (draft.parentId ? [draft.parentId] : []))].filter((id) => id !== "new-task");
+  const parentId = parentIds[0];
+  const dependsOn = [...new Set((draft.dependsOn ?? []).filter((id) => !parentIds.includes(id) && hasTask(id)))];
+  if (parentIds.some((id) => !hasTask(id)) || wouldCreateCycle("new-task", parentIds)) return fail("invalid", "父任务无效，或会形成循环关系。");
   const task: TaskRecord = {
     id: nextId("DEMO-", snapshot.tasks.map((item) => item.id)),
     title,
@@ -174,6 +179,7 @@ function createTask(draft: TaskDraft, writable: boolean): WriteResult<TaskRecord
     state: draft.state ?? "待办",
     execution: "未开始",
     parentId,
+    parentIds,
     dependsOn,
     updated: nowLabel()
   };
@@ -189,18 +195,26 @@ function updateTask(taskId: string, update: TaskUpdate, writable: boolean): Writ
   const title = update.title?.trim() ?? current.title;
   const goal = update.goal?.trim() ?? current.goal;
   if (!title || !goal) return fail("invalid", "任务标题和目标说明不能为空。");
-  const parentId = update.parentId === undefined ? current.parentId : update.parentId || undefined;
-  if (parentId && (!hasTask(parentId) || parentId === taskId || wouldCreateCycle(taskId, parentId))) return fail("invalid", "父任务无效，或会形成循环关系。");
+  const parentIds = update.parentIds === undefined
+    ? update.parentId === undefined ? parentIdsFor(current) : update.parentId ? [update.parentId] : []
+    : [...new Set(update.parentIds)];
+  const parentId = parentIds[0];
+  if (parentIds.some((id) => !hasTask(id)) || wouldCreateCycle(taskId, parentIds)) return fail("invalid", "父任务无效，或会形成循环关系。");
   const dependsOn = update.dependsOn === undefined
     ? current.dependsOn
     : [...new Set(update.dependsOn.filter((id) => id !== taskId && hasTask(id)))];
-  const task: TaskRecord = { ...current, title, goal, state: update.state ?? current.state, parentId, dependsOn, updated: nowLabel() };
+  const task: TaskRecord = { ...current, title, goal, state: update.state ?? current.state, parentId, parentIds, dependsOn, updated: nowLabel() };
   updateSnapshot({ ...snapshot, tasks: snapshot.tasks.map((item) => item.id === taskId ? task : item) });
   return { ok: true, value: task };
 }
 
 function setTaskParent(taskId: string, parentTaskId: string | undefined, writable: boolean): WriteResult<null> {
-  const result = updateTask(taskId, { parentId: parentTaskId ?? "" }, writable);
+  const result = updateTask(taskId, { parentIds: parentTaskId ? [parentTaskId] : [] }, writable);
+  return result.ok ? { ok: true, value: null } : result;
+}
+
+function setTaskParents(taskId: string, parentTaskIds: readonly string[], writable: boolean): WriteResult<null> {
+  const result = updateTask(taskId, { parentIds: [...parentTaskIds] }, writable);
   return result.ok ? { ok: true, value: null } : result;
 }
 
@@ -235,6 +249,7 @@ function deleteTask(taskId: string, writable: boolean): WriteResult<null> {
       .map((item) => ({
         ...item,
         parentId: item.parentId === taskId ? undefined : item.parentId,
+        parentIds: parentIdsFor(item).filter((id) => id !== taskId),
         dependsOn: item.dependsOn.filter((id) => id !== taskId)
       }))
   });
@@ -264,7 +279,7 @@ export function useOptionalDemoProjectTaskSource(): ProjectTaskSource | null {
     const getTasksForScope = (projectId?: string) => {
       if (!projectId) return current.tasks;
       const local = current.tasks.filter((task) => task.projectId === projectId);
-      const related = new Set(local.flatMap((task) => [task.parentId, ...task.dependsOn].filter((id): id is string => Boolean(id))));
+      const related = new Set(local.flatMap((task) => [...parentIdsFor(task), ...task.dependsOn]));
       return current.tasks.filter((task) => task.projectId === projectId || related.has(task.id));
     };
     const getProjectPermissions = (_projectId: string | undefined): ProjectPermissionSnapshot => ({
@@ -292,6 +307,7 @@ export function useOptionalDemoProjectTaskSource(): ProjectTaskSource | null {
       updateTask: async (taskId: string, update: TaskUpdate) => updateTask(taskId, update, runtime.canWrite),
       deleteTask: async (taskId: string) => deleteTask(taskId, runtime.canWrite),
       setTaskParent: async (taskId: string, parentTaskId?: string) => setTaskParent(taskId, parentTaskId, runtime.canWrite),
+      setTaskParents: async (taskId: string, parentTaskIds: readonly string[]) => setTaskParents(taskId, parentTaskIds, runtime.canWrite),
       addTaskDependency: async (taskId: string, prerequisiteTaskId: string) => addTaskDependency(taskId, prerequisiteTaskId, runtime.canWrite),
       removeTaskDependency: async (taskId: string, prerequisiteTaskId: string) => removeTaskDependency(taskId, prerequisiteTaskId, runtime.canWrite)
     } satisfies ProjectTaskSource;

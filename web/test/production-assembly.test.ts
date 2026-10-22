@@ -7,7 +7,8 @@ import {
   createProductionAuthFailureAssembly,
   createUnauthenticatedProductionAssembly
 } from "../src/app/providers";
-import { readAllCursorPages } from "../src/features/projects/production-source";
+import { isPermissionError, readAllCursorPages } from "../src/features/projects/production-source";
+import { mapTask } from "../src/features/projects/api";
 
 const client = {} as AuthenticatedApiClient;
 
@@ -48,5 +49,28 @@ describe("cursor pagination", () => {
 
   test("fails closed when a server claims another page without advancing the cursor", async () => {
     await expect(readAllCursorPages("tasks", async () => ({ items: ["task-1"], has_more: true, next_cursor: "same" }), 200)).rejects.toThrow("tasks pagination did not return a new cursor");
+  });
+});
+
+describe("protected project/task reads", () => {
+  test("treats concealed not-found responses as authorization changes", () => {
+    expect(isPermissionError(new ApiClientError(404, { code: "not_found" }))).toBe(true);
+    expect(isPermissionError(new ApiClientError(500, { code: "server_error" }))).toBe(false);
+  });
+
+  test("keeps all parent relationships and leaves execution unavailable until Run data exists", () => {
+    const task = mapTask({ created_at: "created", goal: "goal", id: "task/1", project_id: "project/1", status: "todo", title: "Task", updated_at: "updated" }, {
+      children: [],
+      dependents: [],
+      parents: [
+        { child_task_id: "task/1", created_at: "", kind: "hierarchy", parent_task_id: "task/parent-1" },
+        { child_task_id: "task/1", created_at: "", kind: "hierarchy", parent_task_id: "task/parent-2" }
+      ],
+      prerequisites: []
+    });
+
+    expect(task.parentId).toBe("task/parent-1");
+    expect(task.parentIds).toEqual(["task/parent-1", "task/parent-2"]);
+    expect(task.execution).toBeNull();
   });
 });

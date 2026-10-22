@@ -44,6 +44,7 @@ function createSource(overrides: Partial<ProjectTaskSource> = {}): ProjectTaskSo
     updateTask: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     deleteTask: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     setTaskParent: async () => ({ ok: false, code: "unsupported", message: "story source" }),
+    setTaskParents: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     addTaskDependency: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     removeTaskDependency: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     ...overrides

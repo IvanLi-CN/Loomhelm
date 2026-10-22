@@ -1232,6 +1232,12 @@ pre {
   background: transparent;
 }
 
+.search-field:focus-within,
+.filter-field:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 24%, transparent);
+}
+
 .filter-field [data-slot="select-trigger"] {
   min-width: 100px;
 }
@@ -1390,6 +1396,12 @@ pre {
 .execution-已拒绝 {
   color: var(--danger);
   background: var(--danger-bg);
+}
+
+.execution-unavailable {
+  color: var(--muted);
+  border: 1px dashed var(--line-strong);
+  background: transparent;
 }
 
 .task-board-viewport {
@@ -1593,6 +1605,11 @@ pre {
   stroke-width: 2;
 }
 
+.task-graph-edge-ownership {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
 .task-graph-arrow {
   fill: var(--accent);
 }
@@ -1620,6 +1637,23 @@ pre {
 .task-graph-node-external {
   border-style: dashed;
   border-color: var(--accent);
+}
+
+.task-graph-project-node {
+  border-color: var(--accent);
+  background: var(--selected);
+}
+
+.task-graph-project-kicker {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.task-relation-option {
+  min-height: 38px;
 }
 
 .task-graph-node-kicker {
@@ -2463,10 +2497,12 @@ pre {
     min-height: 100dvh;
     transform: translateX(-102%);
     transition: transform 180ms ease-out;
+    visibility: hidden;
   }
 
   .product-sidebar-open {
     transform: translateX(0);
+    visibility: visible;
   }
 
   .mobile-backdrop {
@@ -2579,10 +2615,18 @@ pre {
     min-height: 0;
   }
 
+  .nav-project-row {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
   .nav-project-toggle[data-slot="button"] {
     width: 100%;
-    height: 36px;
-    min-height: 36px;
+    height: var(--control-height-touch);
+    min-height: var(--control-height-touch);
+  }
+
+  .task-relation-option {
+    min-height: var(--control-height-touch);
   }
 
   .product-header {

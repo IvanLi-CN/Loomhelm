@@ -102,15 +102,17 @@ const taskStatusToState: Record<TaskStatus, TaskRecord["state"]> = {
 };
 
 export function mapTask(task: Task, relationships?: TaskRelationshipPage): TaskRecord {
+  const parentIds = relationships?.parents.map((relationship) => relationship.parent_task_id) ?? [];
   return {
     id: task.id,
     title: task.title,
     goal: task.goal,
     projectId: task.project_id,
     state: taskStatusToState[task.status],
-    execution: "未开始",
+    execution: null,
     conversationId: task.session_id,
-    parentId: relationships?.parents[0]?.parent_task_id,
+    parentId: parentIds[0],
+    parentIds,
     dependsOn: relationships?.prerequisites.map((relationship) => relationship.prerequisite_task_id) ?? [],
     updated: task.updated_at
   };
