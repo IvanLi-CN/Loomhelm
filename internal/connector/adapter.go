@@ -53,6 +53,8 @@ type Adapter struct {
 	mu         sync.Mutex
 	recoveryMu sync.Mutex
 	sessions   map[string]*adapterSessionState
+	startMu    sync.Mutex
+	startCalls map[string]chan struct{}
 }
 
 func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConfig) (*Adapter, error) {
@@ -77,7 +79,13 @@ func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConf
 	if config.ServiceName == "" {
 		config.ServiceName = "loomhelm_connector"
 	}
-	return &Adapter{provider: provider, journal: journal, config: config, sessions: make(map[string]*adapterSessionState)}, nil
+	return &Adapter{
+		provider:   provider,
+		journal:    journal,
+		config:     config,
+		sessions:   make(map[string]*adapterSessionState),
+		startCalls: make(map[string]chan struct{}),
+	}, nil
 }
 
 func NewCodexAdapter(provider TransportProvider, journal *Journal) (*Adapter, error) {
@@ -90,6 +98,20 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	}
 	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
 		return protocol.AdapterSession{}, err
+	}
+	for {
+		release, wait := a.acquireSessionStart(request.CommandID)
+		if wait == nil {
+			defer release()
+			break
+		}
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			cleanupCtx := context.WithoutCancel(ctx)
+			_ = a.closeUnusedGatewaySession(cleanupCtx, gatewaySession, nil)
+			return protocol.AdapterSession{}, ctx.Err()
+		}
 	}
 	transport, err := a.provider.TransportFor(ctx, gatewaySession)
 	if err != nil {
@@ -111,6 +133,18 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	if err != nil {
 		_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
 		return protocol.AdapterSession{}, err
+	}
+	if existing, ok, err := a.journal.ResolvedSessionStart(request); err != nil {
+		_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
+		return protocol.AdapterSession{}, err
+	} else if ok {
+		if state := a.sessionState(existing.SessionID); state != nil && !state.closed.Load() && a.isCurrentState(state) {
+			if err := a.discardUnusedGatewaySession(ctx, gatewaySession, transport, state); err != nil {
+				return state.session, err
+			}
+			return state.session, a.ensureInitialPrompt(ctx, request, state.session)
+		}
+		return a.resumeExistingSession(ctx, gatewaySession, request, transport, existing)
 	}
 	params := a.threadStartParams(request)
 	response, err := transport.Call(ctx, "thread/start", mustRawJSON(params))
@@ -140,14 +174,43 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	return session, nil
 }
 
+func (a *Adapter) acquireSessionStart(commandID string) (func(), <-chan struct{}) {
+	a.startMu.Lock()
+	defer a.startMu.Unlock()
+	if wait, ok := a.startCalls[commandID]; ok {
+		return nil, wait
+	}
+	done := make(chan struct{})
+	a.startCalls[commandID] = done
+	return func() {
+		a.startMu.Lock()
+		if current, ok := a.startCalls[commandID]; ok && current == done {
+			delete(a.startCalls, commandID)
+			close(done)
+		}
+		a.startMu.Unlock()
+	}, nil
+}
+
 func (a *Adapter) discardUnusedGatewaySession(ctx context.Context, gatewaySession protocol.GatewaySession, transport RPCTransport, activeState *adapterSessionState) error {
 	if activeState != nil && activeState.gatewaySession.Handle == gatewaySession.Handle {
 		return nil
 	}
+	return a.closeUnusedGatewaySession(ctx, gatewaySession, transport)
+}
+
+func (a *Adapter) closeUnusedGatewaySession(ctx context.Context, gatewaySession protocol.GatewaySession, transport RPCTransport) error {
 	if closer, ok := a.provider.(interface {
 		CloseSession(context.Context, protocol.GatewaySession) error
 	}); ok {
 		return closer.CloseSession(ctx, gatewaySession)
+	}
+	if transport == nil {
+		var err error
+		transport, err = a.provider.TransportFor(ctx, gatewaySession)
+		if err != nil {
+			return err
+		}
 	}
 	return transport.Close()
 }
@@ -716,13 +779,8 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 	if err != nil {
 		return a.rejectCommand(command, ack, err)
 	}
-	ack.State = protocol.CommandStateUnknown
-	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "approval response delivery is unresolved", RequestID: command.CommandID}
-	if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
-		return ack, err
-	}
 	if alreadyClaimed {
-		return ack, protocol.ErrUnknownCommandResult
+		return a.finishTransportError(command, ack, ErrUnknownOutcome, "approval response")
 	}
 	if runID != "" && pending.RunID == "" {
 		if err := a.journal.ReleaseApprovalClaim(state.session.SessionID, requestID, command.CommandID); err != nil {
@@ -889,7 +947,7 @@ func waitForRPCObservation(observation <-chan rpcObservation) (string, error) {
 }
 
 func (a *Adapter) finishTransportError(command protocol.Command, ack protocol.CommandAck, err error, operation string) (protocol.CommandAck, error) {
-	if errors.Is(err, ErrUnknownOutcome) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if isUnknownTransportError(err) {
 		ack.State = protocol.CommandStateUnknown
 		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "command outcome is unknown", RequestID: command.CommandID}
 		if persistErr := a.journal.UpdateCommand(command.CommandID, ack); persistErr != nil {
@@ -903,6 +961,17 @@ func (a *Adapter) finishTransportError(command protocol.Command, ack protocol.Co
 		return ack, fmt.Errorf("persist failed %s result: %w", operation, persistErr)
 	}
 	return ack, fmt.Errorf("%s: %w", operation, err)
+}
+
+func isUnknownTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUnknownOutcome) {
+		return true
+	}
+	var writeErr *TransportWriteError
+	return errors.As(err, &writeErr) && writeErr.Unknown
 }
 
 func (a *Adapter) rejectCommand(command protocol.Command, ack protocol.CommandAck, err error) (protocol.CommandAck, error) {

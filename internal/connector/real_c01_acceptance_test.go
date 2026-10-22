@@ -360,6 +360,22 @@ func writeRealC01ProcessResult(path string, result realC01ProcessResult) error {
 	return file.Close()
 }
 
+func writeExclusiveC01Evidence(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := writeAll(file, data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
 func TestWriteRealC01ProcessResultRejectsSymlink(t *testing.T) {
 	directory := t.TempDir()
 	target := filepath.Join(directory, "target.json")
@@ -379,6 +395,28 @@ func TestWriteRealC01ProcessResultRejectsSymlink(t *testing.T) {
 	}
 	if string(data) != "sentinel" {
 		t.Fatalf("C01 result writer modified symlink target: %q", data)
+	}
+}
+
+func TestWriteExclusiveC01EvidenceRejectsSymlink(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target.json")
+	link := filepath.Join(directory, "evidence.json")
+	if err := os.WriteFile(target, []byte("sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if err := writeExclusiveC01Evidence(link, []byte("replacement")); err == nil {
+		t.Fatal("C01 evidence writer accepted a symlink")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "sentinel" {
+		t.Fatalf("C01 evidence writer modified symlink target: %q", data)
 	}
 }
 
@@ -501,11 +539,8 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		if mkdirErr := os.MkdirAll(filepath.Dir(evidencePath), 0o700); mkdirErr != nil {
 			return fmt.Errorf("create C01 evidence directory: %w", mkdirErr)
 		}
-		if writeErr := os.WriteFile(evidencePath, append(data, '\n'), 0o600); writeErr != nil {
-			return fmt.Errorf("write C01 evidence: %w", writeErr)
-		}
-		if chmodErr := os.Chmod(evidencePath, 0o600); chmodErr != nil {
-			return fmt.Errorf("secure C01 evidence permissions: %w", chmodErr)
+		if writeErr := writeExclusiveC01Evidence(evidencePath, append(data, '\n')); writeErr != nil {
+			return fmt.Errorf("write C01 evidence without replacement: %w", writeErr)
 		}
 		return nil
 	}

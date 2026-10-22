@@ -9,17 +9,21 @@ import (
 )
 
 const (
-	aclSizeInformationClass    = 2
-	accessAllowedAceType       = 0
-	accessAllowedObjectAceType = 5
-	fileAddFile                = 0x00000002
-	fileAddSubdirectory        = 0x00000004
-	fileDeleteChild            = 0x00000040
-	deleteAccess               = 0x00010000
-	writeDACAccess             = 0x00040000
-	writeOwnerAccess           = 0x00080000
-	genericWriteAccess         = 0x40000000
-	genericAllAccess           = 0x10000000
+	aclSizeInformationClass            = 2
+	ownerSecurityInformation           = 0x00000001
+	accessAllowedAceType               = 0
+	accessAllowedObjectAceType         = 5
+	accessAllowedCompoundAceType       = 4
+	accessAllowedCallbackAceType       = 9
+	accessAllowedCallbackObjectAceType = 11
+	fileAddFile                        = 0x00000002
+	fileAddSubdirectory                = 0x00000004
+	fileDeleteChild                    = 0x00000040
+	deleteAccess                       = 0x00010000
+	writeDACAccess                     = 0x00040000
+	writeOwnerAccess                   = 0x00080000
+	genericWriteAccess                 = 0x40000000
+	genericAllAccess                   = 0x10000000
 )
 
 type aclSizeInformation struct {
@@ -48,7 +52,7 @@ func validateJournalDirectory(path string) error {
 	result, _, callErr := getNamedSecurityInfo.Call(
 		uintptr(unsafe.Pointer(name)),
 		seFileObject,
-		daclSecurityInformation,
+		ownerSecurityInformation|daclSecurityInformation,
 		uintptr(unsafe.Pointer(&owner)),
 		uintptr(unsafe.Pointer(&group)),
 		uintptr(unsafe.Pointer(&dacl)),
@@ -63,6 +67,13 @@ func validateJournalDirectory(path string) error {
 	}
 	if dacl == 0 {
 		return fmt.Errorf("journal directory %q has no DACL", path)
+	}
+	if owner == 0 {
+		return fmt.Errorf("journal directory %q has no owner", path)
+	}
+	equal, _, _ := equalSid.Call(userSID, owner)
+	if equal == 0 {
+		return fmt.Errorf("journal directory %q is not owned by the current user", path)
 	}
 
 	var size aclSizeInformation
@@ -83,13 +94,61 @@ func validateJournalDirectory(path string) error {
 		}
 		aceType := *(*byte)(unsafe.Pointer(ace))
 		mask, aceSID, ok := allowedACEAccess(aceType, ace)
-		if !ok || mask&dangerousDirectoryAccess == 0 {
+		if !ok {
+			if isAllowedACEType(aceType) {
+				return fmt.Errorf("journal directory %q contains unsupported allow ACE type %d", path, aceType)
+			}
+			continue
+		}
+		if mask&dangerousDirectoryAccess == 0 {
 			continue
 		}
 		equal, _, _ := equalSid.Call(userSID, aceSID)
 		if equal == 0 && !trustedWindowsPrincipal(aceSID) {
 			return fmt.Errorf("journal directory %q grants non-owner modification rights", path)
 		}
+	}
+	return nil
+}
+
+func validateJournalFile(path string) error {
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	token, err := syscall.OpenCurrentProcessToken()
+	if err != nil {
+		return fmt.Errorf("open current process token: %w", err)
+	}
+	defer token.Close()
+	tokenUser, err := token.GetTokenUser()
+	if err != nil {
+		return fmt.Errorf("read current process user: %w", err)
+	}
+	userSID := uintptr(unsafe.Pointer(tokenUser.User.Sid))
+	var owner, group, dacl, sacl, descriptor uintptr
+	result, _, callErr := getNamedSecurityInfo.Call(
+		uintptr(unsafe.Pointer(name)),
+		seFileObject,
+		ownerSecurityInformation,
+		uintptr(unsafe.Pointer(&owner)),
+		uintptr(unsafe.Pointer(&group)),
+		uintptr(unsafe.Pointer(&dacl)),
+		uintptr(unsafe.Pointer(&sacl)),
+		uintptr(unsafe.Pointer(&descriptor)),
+	)
+	if result != 0 {
+		return fmt.Errorf("read journal file owner: %w", securityCallError(result, callErr))
+	}
+	if descriptor != 0 {
+		defer syscall.LocalFree(syscall.Handle(descriptor))
+	}
+	if owner == 0 {
+		return fmt.Errorf("journal file %q has no owner", path)
+	}
+	equal, _, _ := equalSid.Call(userSID, owner)
+	if equal == 0 {
+		return fmt.Errorf("journal file %q is not owned by the current user", path)
 	}
 	return nil
 }
@@ -118,6 +177,9 @@ func allowedACEAccess(aceType byte, ace uintptr) (uint32, uintptr, bool) {
 		return *(*uint32)(unsafe.Pointer(ace + 4)), ace + 8, true
 	case accessAllowedObjectAceType:
 		flags := *(*uint32)(unsafe.Pointer(ace + 8))
+		if flags&^0x3 != 0 {
+			return 0, 0, false
+		}
 		offset := uintptr(12)
 		if flags&0x1 != 0 {
 			offset += 16
@@ -128,6 +190,15 @@ func allowedACEAccess(aceType byte, ace uintptr) (uint32, uintptr, bool) {
 		return *(*uint32)(unsafe.Pointer(ace + 4)), ace + offset, true
 	default:
 		return 0, 0, false
+	}
+}
+
+func isAllowedACEType(aceType byte) bool {
+	switch aceType {
+	case accessAllowedAceType, accessAllowedObjectAceType, accessAllowedCompoundAceType, accessAllowedCallbackAceType, accessAllowedCallbackObjectAceType:
+		return true
+	default:
+		return false
 	}
 }
 

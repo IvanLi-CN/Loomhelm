@@ -5,15 +5,26 @@ package connector
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"syscall"
 )
 
 func secureJournalPath(string) error { return nil }
 
+func validateJournalFile(string) error { return nil }
+
 func validateJournalDirectory(path string) error {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return fmt.Errorf("stat journal directory: %w", err)
+	}
+	return validateJournalDirectoryInfo(path, info)
+}
+
+func validateJournalDirectoryInfo(path string, info os.FileInfo) error {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("journal parent path %q must not be a symlink", path)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("journal parent path %q is not a directory", path)
@@ -25,4 +36,12 @@ func validateJournalDirectory(path string) error {
 		return fmt.Errorf("journal parent directory %q is not owned by the current user", path)
 	}
 	return nil
+}
+
+func allowedJournalAncestorSymlink(path string) bool {
+	if runtime.GOOS != "darwin" || filepath.Clean(path) != "/var" {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	return err == nil && filepath.Clean(resolved) == "/private/var"
 }

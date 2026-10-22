@@ -20,6 +20,7 @@ type fakeTransport struct {
 	responded      []fakeResponse
 	responses      map[string][]fakeResult
 	responseEvents map[string]RPCMessage
+	respondHook    func()
 	events         chan RPCMessage
 	closed         bool
 }
@@ -62,7 +63,11 @@ func (f *fakeTransport) Respond(_ context.Context, id json.RawMessage, result js
 	f.mu.Lock()
 	f.responded = append(f.responded, fakeResponse{id: append(json.RawMessage(nil), id...), result: append(json.RawMessage(nil), result...)})
 	event, ok := f.responseEvents[string(id)]
+	hook := f.respondHook
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if ok {
 		f.events <- event
 	}
@@ -79,6 +84,27 @@ func (f *fakeTransport) Close() error {
 		close(f.events)
 	}
 	return nil
+}
+
+type blockingTransport struct {
+	*fakeTransport
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (t *blockingTransport) Call(ctx context.Context, method string, params json.RawMessage) (RPCMessage, error) {
+	if method == "thread/start" {
+		select {
+		case t.entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-t.release:
+		case <-ctx.Done():
+			return RPCMessage{}, ctx.Err()
+		}
+	}
+	return t.fakeTransport.Call(ctx, method, params)
 }
 
 type fakeProvider struct{ transport RPCTransport }
@@ -139,6 +165,146 @@ func TestAdapterRejectsMissingSessionCreationIdentityBeforeTransport(t *testing.
 	provider.mu.Unlock()
 	if transportCalls != 0 {
 		t.Fatalf("transport calls for missing identity = %d, want 0", transportCalls)
+	}
+}
+
+func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T) {
+	firstTransport := &blockingTransport{
+		fakeTransport: newFakeTransport(),
+		entered:       make(chan struct{}, 1),
+		release:       make(chan struct{}),
+	}
+	firstTransport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-concurrent"}}`)}}}
+	secondTransport := newFakeTransport()
+	secondTransport.responses["thread/resume"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-concurrent"}}`), Raw: json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-concurrent"}}}`)}}}
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{
+		"gateway-concurrent-1": firstTransport,
+		"gateway-concurrent-2": secondTransport,
+	}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "concurrent-session", ProjectID: "project-concurrent"}
+	firstDone := make(chan struct {
+		session protocol.AdapterSession
+		err     error
+	}, 1)
+	go func() {
+		session, startErr := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-concurrent-1", Generation: "generation-concurrent-1", Path: protocol.SessionPathNew}, request)
+		firstDone <- struct {
+			session protocol.AdapterSession
+			err     error
+		}{session: session, err: startErr}
+	}()
+	select {
+	case <-firstTransport.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first thread/start did not reach the transport")
+	}
+	secondDone := make(chan struct {
+		session protocol.AdapterSession
+		err     error
+	}, 1)
+	go func() {
+		session, startErr := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-concurrent-2", Generation: "generation-concurrent-2", Path: protocol.SessionPathNew}, request)
+		secondDone <- struct {
+			session protocol.AdapterSession
+			err     error
+		}{session: session, err: startErr}
+	}()
+	select {
+	case result := <-secondDone:
+		t.Fatalf("second session start returned before the first completed: %+v", result)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(firstTransport.release)
+	first := <-firstDone
+	if first.err != nil {
+		t.Fatal(first.err)
+	}
+	second := <-secondDone
+	if second.err != nil {
+		t.Fatal(second.err)
+	}
+	if second.session != first.session {
+		t.Fatalf("concurrent session identities differ: first=%+v second=%+v", first.session, second.session)
+	}
+	if got := countCalls(firstTransport.fakeTransport, "thread/start"); got != 1 {
+		t.Fatalf("thread/start calls = %d, want 1", got)
+	}
+	if got := countCalls(secondTransport, "thread/start"); got != 0 {
+		t.Fatalf("second transport thread/start calls = %d, want 0", got)
+	}
+	if got := countCalls(secondTransport, "thread/resume"); got != 0 {
+		t.Fatalf("second transport thread/resume calls = %d, want 0 for active-session reuse", got)
+	}
+	if err := adapter.CloseSession(context.Background(), first.session); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
+	firstTransport := &blockingTransport{
+		fakeTransport: newFakeTransport(),
+		entered:       make(chan struct{}, 1),
+		release:       make(chan struct{}),
+	}
+	firstTransport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-cancelled"}}`)}}}
+	secondTransport := newFakeTransport()
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{
+		"gateway-cancel-1": firstTransport,
+		"gateway-cancel-2": secondTransport,
+	}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "cancelled-session"}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, startErr := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-cancel-1", Generation: "generation-cancel-1"}, request)
+		firstDone <- startErr
+	}()
+	select {
+	case <-firstTransport.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first thread/start did not reach the transport")
+	}
+
+	secondCtx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		_, startErr := adapter.StartSession(secondCtx, protocol.GatewaySession{Handle: "gateway-cancel-2", Generation: "generation-cancel-2"}, request)
+		secondDone <- startErr
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case startErr := <-secondDone:
+		if !errors.Is(startErr, context.Canceled) {
+			t.Fatalf("canceled concurrent session start error = %v", startErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled concurrent session start did not return")
+	}
+	provider.mu.Lock()
+	closeCalls := provider.closeCalls
+	provider.mu.Unlock()
+	if closeCalls != 1 {
+		t.Fatalf("canceled gateway close calls = %d, want 1", closeCalls)
+	}
+	secondTransport.mu.Lock()
+	secondClosed := secondTransport.closed
+	secondTransport.mu.Unlock()
+	if !secondClosed {
+		t.Fatal("canceled gateway transport remained open")
+	}
+	close(firstTransport.release)
+	if startErr := <-firstDone; startErr != nil {
+		t.Fatal(startErr)
 	}
 }
 
@@ -293,6 +459,13 @@ func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	transport.responses["turn/steer"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"turnId":"turn-3"}`)}}}
 	transport.responses["turn/interrupt"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{}`)}}}
 	journal := openTestJournal(t)
+	var stateAtRespond protocol.CommandState
+	transport.respondHook = func() {
+		stored, lookupErr := journal.LookupCommand("approve-3")
+		if lookupErr == nil {
+			stateAtRespond = stored.State
+		}
+	}
 	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
 	if err != nil {
 		t.Fatal(err)
@@ -318,6 +491,9 @@ func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	}
 	if len(transport.responded) != 1 || string(transport.responded[0].id) != "7" || !bytesContains(transport.responded[0].result, []byte(`"accept"`)) {
 		t.Fatalf("approval response = %+v", transport.responded)
+	}
+	if stateAtRespond != protocol.CommandStateExecuting {
+		t.Fatalf("approval command state at Respond = %q, want %q", stateAtRespond, protocol.CommandStateExecuting)
 	}
 	if len(journal.PendingApprovals(session.SessionID, "turn-3")) != 0 {
 		t.Fatal("approval remained pending after response")
@@ -345,6 +521,38 @@ func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	if countCalls(transport, "turn/steer") != 1 || countCalls(transport, "turn/interrupt") != 1 {
 		t.Fatalf("control calls = %+v", transport.calls)
 	}
+}
+
+func TestAdapterTreatsDeterministicTransportCancellationAsFailed(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-canceled"}}`)}}}
+	transport.responses["turn/start"] = []fakeResult{{err: context.Canceled}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-canceled", Generation: "generation-canceled", Path: protocol.SessionPathNew}, testSessionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := testCommand("canceled-command", `{"prompt":"cancel before write"}`)
+	command.SessionID = session.SessionID
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if err == nil || errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("deterministic cancellation error = %v, want a non-unknown failure", err)
+	}
+	if ack.State != protocol.CommandStateFailed {
+		t.Fatalf("deterministic cancellation ACK = %+v, want failed", ack)
+	}
+	stored, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != protocol.CommandStateFailed {
+		t.Fatalf("stored deterministic cancellation ACK = %+v, want failed", stored)
+	}
+	_ = adapter.CloseSession(context.Background(), session)
 }
 
 func TestAdapterKeepsApprovalUnknownForUnrecognizedResolution(t *testing.T) {

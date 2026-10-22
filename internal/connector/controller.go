@@ -30,6 +30,14 @@ func NewRunController(journal *Journal, adapter *Adapter) (*Controller, error) {
 }
 
 func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
+	if ack, found, err := c.journal.LookupCommandForRequest(command); err != nil {
+		return ack, err
+	} else if found {
+		if ack.State == protocol.CommandStateUnknown {
+			return ack, protocol.ErrUnknownCommandResult
+		}
+		return ack, nil
+	}
 	session, ok := c.journal.Session(command.SessionID)
 	if !ok {
 		return protocol.CommandAck{}, errors.New("command session is not present in the journal")
@@ -46,9 +54,12 @@ func (c *Controller) ReadEvents(_ context.Context, query protocol.EventQuery) (p
 }
 
 func (c *Controller) ReconcileCommand(ctx context.Context, commandID string) (protocol.Reconciliation, error) {
-	command, _, err := c.journal.Command(commandID)
+	command, ack, err := c.journal.Command(commandID)
 	if err != nil {
 		return protocol.Reconciliation{}, err
+	}
+	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+		return c.adapter.ReconcileCommand(ctx, protocol.AdapterSession{SessionID: command.SessionID}, commandID)
 	}
 	session, ok := c.journal.Session(command.SessionID)
 	if !ok {
@@ -85,11 +96,20 @@ func (c *Controller) ensureAdapterSession(ctx context.Context, session protocol.
 	if err != nil {
 		return err
 	}
+	bound := false
+	defer func() {
+		if !bound {
+			_ = gateway.CloseSession(ctx, recoveredGatewaySession)
+		}
+	}()
 	transport, err := c.adapter.provider.TransportFor(ctx, recoveredGatewaySession)
 	if err != nil {
 		return err
 	}
 	_, err = c.adapter.bindRecoveredSessionLocked(recoveredGatewaySession, session.ExternalThreadRef, "thread/resume", c.adapter.recoveredSessionResult(session.ExternalThreadRef), transport)
+	if err == nil {
+		bound = true
+	}
 	return err
 }
 

@@ -2,6 +2,7 @@ package connector
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -225,6 +226,60 @@ func TestJournalPreservesLargeJSONNumbersInCommandDigests(t *testing.T) {
 	}
 }
 
+func TestJournalNormalizesLegacyCommandDigestForLargeJSONNumbers(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "legacy-command.jsonl")
+	command := testCommand("legacy-large-number", `{"value":9007199254740993}`)
+	ack := protocol.CommandAck{CommandID: command.CommandID, ReceivedAt: command.IssuedAt, State: protocol.CommandStateAccepted}
+	record := journalRecord{
+		FormatVersion: legacyJournalFormatVersion,
+		Type:          "command",
+		At:            command.IssuedAt,
+		Command:       &command,
+		CommandID:     command.CommandID,
+		Digest:        legacyCommandDigestForTest(t, command),
+		Ack:           &ack,
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	duplicate, deduplicated, err := journal.BeginCommand(command)
+	if err != nil || !deduplicated || duplicate.State != protocol.CommandStateUnknown {
+		t.Fatalf("legacy large-number command = %+v, deduplicated = %v, error = %v", duplicate, deduplicated, err)
+	}
+	conflict := command
+	conflict.Payload = []byte(`{"value":9007199254740992}`)
+	if _, _, err := journal.BeginCommand(conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("legacy large-number conflict error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+}
+
+func TestJournalLookupCommandForRequestDoesNotRequireAdapterState(t *testing.T) {
+	journal := openTestJournal(t)
+	command := testCommand("lookup-command", `{"prompt":"durable"}`)
+	if _, _, err := journal.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	ack, found, err := journal.LookupCommandForRequest(command)
+	if err != nil || !found || !ack.Deduplicated || ack.State != protocol.CommandStateAccepted {
+		t.Fatalf("durable lookup = %+v, found = %v, error = %v", ack, found, err)
+	}
+	missing := command
+	missing.CommandID = "lookup-missing"
+	if _, found, err := journal.LookupCommandForRequest(missing); err != nil || found {
+		t.Fatalf("missing durable lookup = found %v, error %v", found, err)
+	}
+}
+
 func TestOpenJournalRejectsSymlinkPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires elevated privileges on some Windows configurations")
@@ -240,6 +295,39 @@ func TestOpenJournalRejectsSymlinkPath(t *testing.T) {
 	}
 	if _, err := OpenJournal(link); err == nil {
 		t.Fatal("journal symlink was accepted")
+	}
+}
+
+func TestOpenJournalRejectsSymlinkAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on some Windows configurations")
+	}
+	directory := privateTestDir(t)
+	target := privateTestDir(t)
+	link := filepath.Join(directory, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if _, err := OpenJournal(filepath.Join(link, "nested", "journal.jsonl")); err == nil {
+		t.Fatal("journal accepted a symlink ancestor")
+	}
+}
+
+func TestOpenJournalRejectsExistingSymlinkAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on some Windows configurations")
+	}
+	directory := privateTestDir(t)
+	target := privateTestDir(t)
+	if err := os.Mkdir(filepath.Join(target, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if _, err := OpenJournal(filepath.Join(link, "nested", "journal.jsonl")); err == nil {
+		t.Fatal("journal accepted an existing symlink ancestor")
 	}
 }
 
@@ -605,4 +693,36 @@ func testCommand(id, payload string) protocol.Command {
 		Payload:   []byte(payload),
 		SessionID: "session-1",
 	}
+}
+
+func legacyCommandDigestForTest(t *testing.T, command protocol.Command) string {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal(command.Payload, &value); err != nil {
+		t.Fatal(err)
+	}
+	legacyPayload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestValue := struct {
+		CommandID string               `json:"command_id"`
+		IssuedAt  string               `json:"issued_at"`
+		Kind      protocol.CommandKind `json:"kind"`
+		Payload   json.RawMessage      `json:"payload"`
+		RunID     *string              `json:"run_id,omitempty"`
+		SessionID string               `json:"session_id"`
+	}{
+		CommandID: command.CommandID,
+		IssuedAt:  command.IssuedAt,
+		Kind:      command.Kind,
+		Payload:   legacyPayload,
+		RunID:     command.RunID,
+		SessionID: command.SessionID,
+	}
+	data, err := json.Marshal(digestValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digestString(string(data))
 }

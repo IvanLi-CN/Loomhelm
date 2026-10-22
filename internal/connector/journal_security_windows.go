@@ -8,6 +8,8 @@ import (
 	"unsafe"
 )
 
+func allowedJournalAncestorSymlink(string) bool { return false }
+
 const (
 	securityDescriptorRevision       = 1
 	seFileObject                     = 1

@@ -135,22 +135,14 @@ func OpenJournal(path string) (*Journal, error) {
 		if !fileInfo.Mode().IsRegular() {
 			return nil, fmt.Errorf("journal path %q is not a regular file", absPath)
 		}
+		if err := validateJournalFile(absPath); err != nil {
+			return nil, err
+		}
 	}
 	directoryPath := filepath.Dir(absPath)
-	newDirectories, err := missingJournalDirectories(directoryPath)
+	newDirectories, err := prepareJournalDirectories(directoryPath)
 	if err != nil {
 		return nil, err
-	}
-	if err := os.MkdirAll(directoryPath, 0o700); err != nil {
-		return nil, fmt.Errorf("create journal directory: %w", err)
-	}
-	for _, directory := range newDirectories {
-		if err := os.Chmod(directory, 0o700); err != nil {
-			return nil, fmt.Errorf("secure journal directory permissions: %w", err)
-		}
-		if err := secureJournalPath(directory); err != nil {
-			return nil, fmt.Errorf("secure journal directory ACL: %w", err)
-		}
 	}
 	if err := validateJournalDirectory(directoryPath); err != nil {
 		return nil, err
@@ -215,8 +207,11 @@ func missingJournalDirectories(path string) ([]string, error) {
 	var missing []string
 	current := filepath.Clean(path)
 	for {
-		_, err := os.Stat(current)
+		_, err := os.Lstat(current)
 		if err == nil {
+			if err := validateJournalDirectoryAncestors(current); err != nil {
+				return nil, err
+			}
 			return missing, nil
 		}
 		if !errors.Is(err, os.ErrNotExist) {
@@ -229,6 +224,40 @@ func missingJournalDirectories(path string) ([]string, error) {
 		}
 		current = parent
 	}
+}
+
+func validateJournalDirectoryAncestors(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve journal parent path: %w", err)
+	}
+	cleanPath := filepath.Clean(absPath)
+	root := filepath.VolumeName(cleanPath) + string(filepath.Separator)
+	relative, err := filepath.Rel(root, cleanPath)
+	if err != nil {
+		return fmt.Errorf("relate journal parent path to root: %w", err)
+	}
+	if relative == "." {
+		return nil
+	}
+	current := root
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return fmt.Errorf("stat journal parent path %q: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 && !allowedJournalAncestorSymlink(current) {
+			return fmt.Errorf("journal parent path %q must not contain a symlink", current)
+		}
+		if info.Mode()&os.ModeSymlink == 0 && !info.IsDir() {
+			return fmt.Errorf("journal parent path %q is not a directory", current)
+		}
+	}
+	return nil
 }
 
 func (j *Journal) Path() string {
@@ -329,6 +358,32 @@ func (j *Journal) LookupCommand(commandID string) (protocol.CommandAck, error) {
 		return protocol.CommandAck{}, ErrCommandNotFound
 	}
 	return cloneAck(entry.ack), nil
+}
+
+// LookupCommandForRequest checks the durable command identity without requiring
+// a live adapter. A caller can return this ACK before reacquiring a transport;
+// a missing command remains unpersisted until the adapter accepts it.
+func (j *Journal) LookupCommandForRequest(command protocol.Command) (protocol.CommandAck, bool, error) {
+	if err := protocol.ValidateCommand(command); err != nil {
+		return protocol.CommandAck{}, false, err
+	}
+	digest, err := commandDigest(command)
+	if err != nil {
+		return protocol.CommandAck{}, false, err
+	}
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	entry, ok := j.commands[command.CommandID]
+	if !ok {
+		return protocol.CommandAck{}, false, nil
+	}
+	if entry.digest != digest {
+		return protocol.CommandAck{}, true, protocol.ErrIdempotencyConflict
+	}
+	ack := cloneAck(entry.ack)
+	ack.Deduplicated = true
+	return ack, true, nil
 }
 
 func (j *Journal) Command(commandID string) (protocol.Command, protocol.CommandAck, error) {
@@ -969,10 +1024,17 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if record.Command == nil || record.Ack == nil || record.CommandID == "" || record.Digest == "" {
 			return fmt.Errorf("%w: incomplete command record", ErrJournalCorrupt)
 		}
-		if existing, ok := j.commands[record.CommandID]; ok && existing.digest != record.Digest {
+		digest, err := commandDigest(*record.Command)
+		if err != nil {
+			return fmt.Errorf("%w: normalize command digest: %v", ErrJournalCorrupt, err)
+		}
+		if record.FormatVersion == journalFormatVersion && record.Digest != digest {
+			return fmt.Errorf("%w: command digest mismatch for %q", ErrJournalCorrupt, record.CommandID)
+		}
+		if existing, ok := j.commands[record.CommandID]; ok && existing.digest != digest {
 			return fmt.Errorf("%w: conflicting command record %q", ErrJournalCorrupt, record.CommandID)
 		}
-		j.commands[record.CommandID] = commandEntry{command: cloneCommand(*record.Command), digest: record.Digest, ack: cloneAck(*record.Ack)}
+		j.commands[record.CommandID] = commandEntry{command: cloneCommand(*record.Command), digest: digest, ack: cloneAck(*record.Ack)}
 	case "command_update":
 		if record.Ack == nil || record.CommandID == "" {
 			return fmt.Errorf("%w: incomplete command update", ErrJournalCorrupt)
