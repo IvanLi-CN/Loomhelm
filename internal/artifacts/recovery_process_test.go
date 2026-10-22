@@ -68,19 +68,36 @@ func TestArtifactProcessHelper(t *testing.T) {
 		}
 	}
 	if mode == "pause-repair" || mode == "pause-recovery" || mode == "pause-put" {
-		faults.AfterIdentityLock = func() {
+		pauseAfterRepairIntent := mode == "pause-repair" && faultPoint(os.Getenv("LOOMHELM_ARTIFACT_FAULT")) == faultAfterRepairIntentCommit
+		pauseSignal := "locked"
+		if pauseAfterRepairIntent {
+			pauseSignal = "intent-committed"
+		}
+		pause := func() {
 			signal := os.Getenv("LOOMHELM_ARTIFACT_SIGNAL")
 			release := os.Getenv("LOOMHELM_ARTIFACT_RELEASE")
+			timeoutSignal := os.Getenv("LOOMHELM_ARTIFACT_TIMEOUT_SIGNAL")
 			if signal != "" {
-				_ = os.WriteFile(signal, []byte("locked"), 0o600)
+				_ = os.WriteFile(signal, []byte(pauseSignal), 0o600)
 			}
 			deadline := time.Now().Add(20 * time.Second)
 			for {
-				if _, statErr := os.Stat(release); statErr == nil || time.Now().After(deadline) {
+				if _, statErr := os.Stat(release); statErr == nil {
+					return
+				}
+				if time.Now().After(deadline) {
+					if timeoutSignal != "" {
+						_ = os.WriteFile(timeoutSignal, []byte("pause-timeout"), 0o600)
+					}
 					return
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
+		}
+		if pauseAfterRepairIntent {
+			faults.AfterRepairIntentCommit = pause
+		} else {
+			faults.AfterIdentityLock = pause
 		}
 	}
 	if mode == "repair-attempt" || mode == "put-attempt" {
@@ -182,12 +199,9 @@ func TestStoreRecoversAfterProcessCrashBoundaries(t *testing.T) {
 				assertHasStagingFiles(t, store.objects)
 				return
 			}
-			report, err := store.Recover(ctx, MaxRecoveryLimit)
+			_, err := store.Recover(ctx, MaxRecoveryLimit)
 			if err != nil {
-				t.Fatalf("recovery error = %v, report = %#v", err, report)
-			}
-			if point != faultAfterReadyCommit && report.Ready < 1 {
-				t.Fatalf("recovery report = %#v, want a ready publication", report)
+				t.Fatalf("recovery error = %v", err)
 			}
 			metadata, reader, err := store.Open(ctx, id)
 			if err != nil {
@@ -300,12 +314,22 @@ func TestStoreConcurrentProcessesRejectDifferentContentForOneID(t *testing.T) {
 	waitForSignal(t, holderSignal, "locked")
 
 	contenderSignal := filepath.Join(root, "conflict-writer-attempt")
+	contenderPIDSignal := filepath.Join(root, "conflict-writer-pid")
+	probeDB, _, probeCtx := openStoreAtRoot(t, root)
+	defer probeDB.Close()
 	contender := newArtifactHelper(t, "put-attempt", "", root, id, conflictContent)
-	contender.Env = append(contender.Env, "LOOMHELM_ARTIFACT_SIGNAL="+contenderSignal)
+	var contenderOutput bytes.Buffer
+	contender.Stdout = &contenderOutput
+	contender.Stderr = &contenderOutput
+	contender.Env = append(contender.Env,
+		"LOOMHELM_ARTIFACT_SIGNAL="+contenderSignal,
+		"LOOMHELM_ARTIFACT_PID_SIGNAL="+contenderPIDSignal,
+	)
 	if err := contender.Start(); err != nil {
 		t.Fatal(err)
 	}
 	waitForSignal(t, contenderSignal, "attempt")
+	waitForBlockedPID(t, probeDB, probeCtx, contenderPIDSignal)
 	if err := os.WriteFile(holderRelease, []byte("release"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +339,7 @@ func TestStoreConcurrentProcessesRejectDifferentContentForOneID(t *testing.T) {
 	if err := contender.Wait(); err == nil {
 		t.Fatal("conflicting writer unexpectedly succeeded")
 	} else if exitError, ok := err.(*exec.ExitError); !ok || exitError.ExitCode() != 42 {
-		t.Fatalf("conflicting writer error = %v", err)
+		t.Fatalf("conflicting writer error = %v, output=%s", err, contenderOutput.String())
 	}
 
 	db, store, ctx := openStoreAtRoot(t, root)
@@ -361,8 +385,17 @@ func TestStoreRepairsMissingStagingAfterProcessInterruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repair recovery error = %v, report = %#v", err, report)
 	}
-	if report.Ready < 1 {
-		t.Fatalf("repair recovery report = %#v, want a ready publication", report)
+	var state string
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, id).Scan(&state, &reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || !reclaimed {
+		t.Fatalf("repair recovery artifact = state %q/reclaimed %v, want ready/reclaimed", state, reclaimed)
 	}
 	metadata, reader, err := store.Open(ctx, id)
 	if err != nil {
@@ -389,15 +422,17 @@ func TestStoreConcurrentRepairAndRecoveryConverge(t *testing.T) {
 
 	signal := filepath.Join(root, "repair-started")
 	release := filepath.Join(root, "repair-release")
+	timeoutSignal := filepath.Join(root, "repair-pause-timeout")
 	repair := newArtifactHelper(t, "pause-repair", faultAfterRepairIntentCommit, root, id, content)
 	repair.Env = append(repair.Env,
 		"LOOMHELM_ARTIFACT_SIGNAL="+signal,
 		"LOOMHELM_ARTIFACT_RELEASE="+release,
+		"LOOMHELM_ARTIFACT_TIMEOUT_SIGNAL="+timeoutSignal,
 	)
 	if err := repair.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitForFile(t, signal)
+	waitForSignal(t, signal, "intent-committed")
 	t.Cleanup(func() {
 		_ = os.WriteFile(release, []byte("release"), 0o600)
 		if repair.Process != nil {
@@ -405,9 +440,8 @@ func TestStoreConcurrentRepairAndRecoveryConverge(t *testing.T) {
 		}
 	})
 	recoverySignal := filepath.Join(root, "recovery-started")
-	recoveryPIDSignal := filepath.Join(root, "recovery-pid")
 	recovery := newArtifactHelper(t, "recover", "", root, id, content)
-	recovery.Env = append(recovery.Env, "LOOMHELM_ARTIFACT_SIGNAL="+recoverySignal, "LOOMHELM_ARTIFACT_PID_SIGNAL="+recoveryPIDSignal)
+	recovery.Env = append(recovery.Env, "LOOMHELM_ARTIFACT_SIGNAL="+recoverySignal)
 	if err := recovery.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -417,9 +451,12 @@ func TestStoreConcurrentRepairAndRecoveryConverge(t *testing.T) {
 		}
 	})
 	waitForFile(t, recoverySignal)
-	probeDB, _, probeCtx := openStoreAtRoot(t, root)
-	defer probeDB.Close()
-	waitForBlockedPID(t, probeDB, probeCtx, recoveryPIDSignal)
+	if _, err := os.Stat(release); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repair release marker = %v, want absent while recovery attempts", err)
+	}
+	if _, err := os.Stat(timeoutSignal); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repair pause timeout marker = %v, want absent while recovery attempts", err)
+	}
 	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -544,6 +581,7 @@ func runArtifactHelper(t *testing.T, mode string, point faultPoint, root, id str
 
 func newArtifactHelper(t *testing.T, mode string, point faultPoint, root, id string, content []byte) *exec.Cmd {
 	t.Helper()
+	ensureArtifactTestDatabaseClean(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestArtifactProcessHelper$", "-test.v=false")
 	env := append([]string{}, os.Environ()...)
 	env = append(env,
@@ -560,6 +598,7 @@ func newArtifactHelper(t *testing.T, mode string, point faultPoint, root, id str
 func openStoreAtRoot(t *testing.T, root string) (*database.DB, *Store, context.Context) {
 	t.Helper()
 	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
+	ensureArtifactTestDatabaseClean(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	db, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
