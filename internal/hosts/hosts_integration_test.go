@@ -2,8 +2,11 @@ package hosts
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -12,13 +15,15 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestServicePersistsCredentialsGenerationsAndCursorRecovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	db := openHostDatabase(t, ctx)
+	testDB := openHostDatabase(t, ctx)
+	db := testDB.db
 
 	registration, err := NewService(db.Pool()).Register(ctx, RegisterRequest{
 		Name:           "h01 integration " + time.Now().UTC().Format("20060102T150405.000000000"),
@@ -154,7 +159,8 @@ func TestServicePersistsCredentialsGenerationsAndCursorRecovery(t *testing.T) {
 func TestServiceCursorSurvivesDatabaseReopen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	db := openHostDatabase(t, ctx)
+	testDB := openHostDatabase(t, ctx)
+	db := testDB.db
 
 	registration, err := NewService(db.Pool()).Register(ctx, RegisterRequest{Name: "h01 reopen " + time.Now().UTC().Format("20060102T150405.000000000")})
 	if err != nil {
@@ -164,7 +170,7 @@ func TestServiceCursorSurvivesDatabaseReopen(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 		db.Close()
-		reopened, openErr := openHostDatabaseWithContext(cleanupCtx)
+		reopened, openErr := openHostDatabaseWithContext(cleanupCtx, testDB.url)
 		if openErr == nil {
 			defer reopened.Close()
 			cleanupHostRegistration(cleanupCtx, reopened.Pool(), registration.Host.ID)
@@ -185,7 +191,7 @@ func TestServiceCursorSurvivesDatabaseReopen(t *testing.T) {
 	}
 	db.Close()
 
-	reopened, err := openHostDatabaseWithContext(ctx)
+	reopened, err := openHostDatabaseWithContext(ctx, testDB.url)
 	if err != nil {
 		t.Fatalf("reopen database: %v", err)
 	}
@@ -208,16 +214,70 @@ func hasCursor(cursors []Cursor, sessionID, value string) bool {
 	return false
 }
 
-func openHostDatabase(t *testing.T, ctx context.Context) *database.DB {
+type hostTestDatabase struct {
+	db  *database.DB
+	url string
+}
+
+func openHostDatabase(t *testing.T, ctx context.Context) hostTestDatabase {
 	t.Helper()
-	db, err := openHostDatabaseWithContext(ctx)
+	config, err := platform.LoadDatabaseConfig()
 	if err != nil {
 		if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
 			t.Skip("LOOMHELM_DATABASE_URL is not set")
 		}
+		t.Fatalf("load database config: %v", err)
+	}
+	admin, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 1})
+	if err != nil {
+		t.Fatalf("open database admin connection: %v", err)
+	}
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
+		admin.Close()
+		t.Fatalf("generate test schema name: %v", err)
+	}
+	schema := "hosts_test_" + hex.EncodeToString(suffix)
+	identifier := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Pool().Exec(ctx, "CREATE SCHEMA "+identifier); err != nil {
+		admin.Close()
+		t.Fatalf("create owned hosts test schema: %v", err)
+	}
+	var db *database.DB
+	t.Cleanup(func() {
+		if db != nil {
+			db.Close()
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := admin.Pool().Exec(cleanupCtx, "DROP SCHEMA "+identifier+" CASCADE"); err != nil {
+			t.Errorf("drop owned hosts test schema: %v", err)
+		}
+		admin.Close()
+	})
+	testURL, err := databaseURLWithSearchPath(config.URL, schema)
+	if err != nil {
+		t.Fatalf("build isolated database URL: %v", err)
+	}
+	db, err = openHostDatabaseWithContext(ctx, testURL)
+	if err != nil {
 		t.Fatalf("open host database: %v", err)
 	}
-	return db
+	return hostTestDatabase{db: db, url: testURL}
+}
+
+func databaseURLWithSearchPath(rawURL, schema string) (string, error) {
+	if strings.Contains(rawURL, "://") {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return "", err
+		}
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		return parsed.String(), nil
+	}
+	return strings.TrimSpace(rawURL) + " search_path=" + schema, nil
 }
 
 func cleanupHostRegistration(ctx context.Context, pool *pgxpool.Pool, hostID string) {
@@ -229,12 +289,8 @@ func cleanupHostRegistration(ctx context.Context, pool *pgxpool.Pool, hostID str
 	_, _ = pool.Exec(ctx, `DELETE FROM host_registrations WHERE id = $1`, hostID)
 }
 
-func openHostDatabaseWithContext(ctx context.Context) (*database.DB, error) {
-	config, err := platform.LoadDatabaseConfig()
-	if err != nil {
-		return nil, err
-	}
-	db, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 4})
+func openHostDatabaseWithContext(ctx context.Context, databaseURL string) (*database.DB, error) {
+	db, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
 	if err != nil {
 		return nil, err
 	}

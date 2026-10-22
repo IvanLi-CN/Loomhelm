@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +18,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestGatewayWithPostgresTLSWSS(t *testing.T) {
@@ -29,12 +33,6 @@ func TestGatewayWithPostgresTLSWSS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		cleanupGatewayHost(cleanupCtx, db, registration.Host.ID)
-		db.Close()
-	})
 
 	var handlerMu sync.Mutex
 	handlerCalls := make(map[string]int)
@@ -219,12 +217,6 @@ func TestGatewayWithPostgresTLSWSSDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		cleanupGatewayHost(cleanupCtx, db, registration.Host.ID)
-		db.Close()
-	})
 
 	server, err := NewServer(hosts.NewService(db.Pool()), ServerOptions{
 		EventHandler: func(context.Context, hosts.Connection, protocol.Event) error { return nil },
@@ -258,29 +250,74 @@ func TestGatewayWithPostgresTLSWSSDrain(t *testing.T) {
 
 func openGatewayDatabase(t *testing.T, ctx context.Context) *database.DB {
 	t.Helper()
-	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
-		t.Skip("LOOMHELM_DATABASE_URL is not set")
-	}
 	config, err := platform.LoadDatabaseConfig()
 	if err != nil {
+		if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+			t.Skip("LOOMHELM_DATABASE_URL is not set")
+		}
 		t.Fatalf("load database config: %v", err)
 	}
-	db, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 4})
+	admin, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 1})
 	if err != nil {
-		t.Fatalf("open database: %v", err)
+		t.Fatalf("open database admin connection: %v", err)
+	}
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
+		admin.Close()
+		t.Fatalf("generate test schema name: %v", err)
+	}
+	schema := "gateway_test_" + hex.EncodeToString(suffix)
+	identifier := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Pool().Exec(ctx, "CREATE SCHEMA "+identifier); err != nil {
+		admin.Close()
+		t.Fatalf("create owned gateway test schema: %v", err)
+	}
+	var db *database.DB
+	t.Cleanup(func() {
+		if db != nil {
+			db.Close()
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := admin.Pool().Exec(cleanupCtx, "DROP SCHEMA "+identifier+" CASCADE"); err != nil {
+			t.Errorf("drop owned gateway test schema: %v", err)
+		}
+		admin.Close()
+	})
+	databaseURL, err := databaseURLWithSearchPath(config.URL, schema)
+	if err != nil {
+		t.Fatalf("build isolated database URL: %v", err)
+	}
+	db, err = database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open isolated database: %v", err)
 	}
 	if err := db.Migrate(ctx); err != nil {
 		db.Close()
-		t.Fatalf("migrate database: %v", err)
+		t.Fatalf("migrate isolated database: %v", err)
+	}
+	var currentSchema string
+	if err := db.Pool().QueryRow(ctx, "SELECT current_schema()").Scan(&currentSchema); err != nil {
+		db.Close()
+		t.Fatalf("read isolated database schema: %v", err)
+	}
+	if currentSchema != schema {
+		db.Close()
+		t.Fatalf("database schema = %q, want %q", currentSchema, schema)
 	}
 	return db
 }
 
-func cleanupGatewayHost(ctx context.Context, db *database.DB, hostID string) {
-	if db == nil || db.Pool() == nil {
-		return
+func databaseURLWithSearchPath(rawURL, schema string) (string, error) {
+	if strings.Contains(rawURL, "://") {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return "", err
+		}
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		return parsed.String(), nil
 	}
-	_, _ = db.Pool().Exec(ctx, `DELETE FROM host_connections WHERE host_id = $1`, hostID)
-	_, _ = db.Pool().Exec(ctx, `DELETE FROM host_credentials WHERE host_id = $1`, hostID)
-	_, _ = db.Pool().Exec(ctx, `DELETE FROM host_registrations WHERE id = $1`, hostID)
+	return strings.TrimSpace(rawURL) + " search_path=" + schema, nil
 }
