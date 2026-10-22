@@ -894,7 +894,7 @@ func (a *Adapter) interruptRun(ctx context.Context, state *adapterSessionState, 
 func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionState, command protocol.Command, ack protocol.CommandAck, response RPCMessage, callErr error, runID, operation string) (protocol.CommandAck, error) {
 	if callErr != nil {
 		if isUnknownTransportError(callErr) && len(bytes.TrimSpace(response.ID)) > 0 {
-			operationID := string(bytes.TrimSpace(response.ID))
+			operationID := rpcOperationIdentity(state.gatewaySession.Generation, response.ID)
 			ack.OperationID = &operationID
 		}
 		return a.finishTransportError(command, ack, callErr, operation)
@@ -950,7 +950,25 @@ func (a *Adapter) appendRPCResponseEvent(state *adapterSessionState, operation s
 	if state == nil || len(response.Raw) == 0 {
 		return protocol.Event{}, nil
 	}
-	return a.appendObservedEvent(state, protocol.EventTypeUnknown, operation, response.Raw, runID)
+	observed, err := a.appendObservedEvent(state, protocol.EventTypeUnknown, operation, response.Raw, runID)
+	if err != nil || len(response.ID) == 0 || operation == "" {
+		return observed, err
+	}
+	return a.appendRPCResponseCorrelation(state, operation, response, runID, observed)
+}
+
+func (a *Adapter) appendRPCResponseCorrelation(state *adapterSessionState, operation string, response RPCMessage, runID string, observed protocol.Event) (protocol.Event, error) {
+	operationID := rpcOperationIdentity(state.gatewaySession.Generation, response.ID)
+	payload := mustRawJSON(map[string]any{
+		"generation":   state.gatewaySession.Generation,
+		"method":       operation,
+		"operation_id": operationID,
+	})
+	correlation, err := a.appendObservedEventFromSource(state, protocol.EventTypeUnknown, protocol.EventSourceHostObservation, "rpc/response", payload, runID)
+	if err != nil {
+		return observed, err
+	}
+	return correlation, nil
 }
 
 func waitForRPCObservation(observation <-chan rpcObservation) (string, error) {
@@ -1037,7 +1055,7 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error 
 		if runID == "" {
 			runID = turnIDFromResult(message.Result)
 		}
-		event, err := a.appendObservedEvent(state, protocol.EventTypeUnknown, message.operation, message.Raw, runID)
+		event, err := a.appendRPCResponseEvent(state, message.operation, message, runID)
 		if err != nil {
 			notifyRPCObservation(message.observation, rpcObservation{err: err})
 			return err
@@ -1437,7 +1455,11 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 	if operationID == "" {
 		return ack, false, nil
 	}
-	var matched *protocol.Event
+	rawOperationID := rpcOperationRawID(operationID)
+	var exactMatched *protocol.Event
+	exactMatches := 0
+	var rawMatched *protocol.Event
+	rawMatches := 0
 	afterCursor := ""
 	for {
 		page, err := a.journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, AfterCursor: afterCursor, Limit: 1000})
@@ -1446,18 +1468,34 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 		}
 		for index := range page.Events {
 			event := &page.Events[index]
-			if event.Type != protocol.EventTypeUnknown || rpcEnvelopeID(event.Payload) != operationID {
+			if event.Type != protocol.EventTypeUnknown {
 				continue
 			}
-			if matched != nil {
-				return ack, false, nil
+			if event.Source == protocol.EventSourceHostObservation && rpcEnvelopeOperationID(event.Payload) == operationID {
+				exactMatches++
+				exactMatched = event
+				continue
 			}
-			matched = event
+			if rpcEnvelopeID(event.Payload) == rawOperationID {
+				rawMatches++
+				rawMatched = event
+			}
 		}
 		if !page.HasMore || page.NextCursor == nil || *page.NextCursor == "" {
 			break
 		}
 		afterCursor = *page.NextCursor
+	}
+	var matched *protocol.Event
+	switch {
+	case exactMatches == 1:
+		matched = exactMatched
+	case exactMatches > 1:
+		return ack, false, nil
+	case rawMatches == 1:
+		matched = rawMatched
+	default:
+		return ack, false, nil
 	}
 	if matched == nil {
 		return ack, false, nil
@@ -1481,6 +1519,32 @@ func rpcEnvelopeID(payload json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(string(envelope.ID))
+}
+
+func rpcEnvelopeOperationID(payload json.RawMessage) string {
+	var envelope struct {
+		OperationID string `json:"operation_id"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.OperationID)
+}
+
+func rpcOperationIdentity(generation string, id json.RawMessage) string {
+	rawID := strings.TrimSpace(string(id))
+	generation = strings.TrimSpace(generation)
+	if generation == "" {
+		return rawID
+	}
+	return generation + "\x00" + rawID
+}
+
+func rpcOperationRawID(operationID string) string {
+	if separator := strings.IndexByte(operationID, 0); separator >= 0 {
+		return operationID[separator+1:]
+	}
+	return operationID
 }
 
 func turnAfterCommand(command protocol.Command, turn appServerTurn) bool {

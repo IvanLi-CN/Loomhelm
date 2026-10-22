@@ -551,12 +551,13 @@ func TestAdapterPersistsUnknownRPCOperationIdentity(t *testing.T) {
 	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
 		t.Fatalf("unknown ACK = %+v, error = %v", ack, err)
 	}
-	if ack.OperationID == nil || *ack.OperationID != "41" {
-		t.Fatalf("unknown ACK operation ID = %v, want 41", ack.OperationID)
+	wantOperationID := rpcOperationIdentity("generation-operation-id", json.RawMessage(`41`))
+	if ack.OperationID == nil || *ack.OperationID != wantOperationID {
+		t.Fatalf("unknown ACK operation ID = %v, want %q", ack.OperationID, wantOperationID)
 	}
 	_, stored, err := j.Command(command.CommandID)
-	if err != nil || stored.OperationID == nil || *stored.OperationID != "41" {
-		t.Fatalf("stored unknown ACK = %+v, error = %v, want operation ID 41", stored, err)
+	if err != nil || stored.OperationID == nil || *stored.OperationID != wantOperationID {
+		t.Fatalf("stored unknown ACK = %+v, error = %v, want operation ID %q", stored, err, wantOperationID)
 	}
 }
 
@@ -580,9 +581,18 @@ func TestAdapterReconcilesUnknownRPCOperationFromPersistedEvent(t *testing.T) {
 	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
 		t.Fatalf("unknown ACK = %+v, error = %v", ack, err)
 	}
+	oldRunID := "turn-operation-old"
+	oldRaw := json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-operation-old","status":"completed"}}}`)
+	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceAppServer, Payload: oldRaw, RunID: &oldRunID}); err != nil {
+		t.Fatal(err)
+	}
 	runID := "turn-operation-reconcile"
-	raw := json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-operation-reconcile","status":"completed"}}}`)
-	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceAppServer, Payload: raw, RunID: &runID}); err != nil {
+	correlation := mustRawJSON(map[string]string{
+		"generation":   "generation-operation-reconcile",
+		"method":       "turn/start",
+		"operation_id": rpcOperationIdentity("generation-operation-reconcile", json.RawMessage(`41`)),
+	})
+	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceHostObservation, Payload: correlation, RunID: &runID}); err != nil {
 		t.Fatal(err)
 	}
 	reconciliation, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)

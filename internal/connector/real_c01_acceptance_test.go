@@ -200,7 +200,7 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		UnknownAckState:   ack.State,
 	}
 	observedRun, err := waitForRealEventValueAfter(ctx, journal, sessionID, protocol.EventTypeUnknown, "", beforeCursor, func(event protocol.Event) bool {
-		return event.RunID != nil && *event.RunID != "" && realEventRPCID(event) == strings.TrimSpace(*ack.OperationID)
+		return event.RunID != nil && *event.RunID != "" && realEventOperationID(event) == strings.TrimSpace(*ack.OperationID)
 	})
 	if err != nil {
 		_ = journal.Close()
@@ -232,6 +232,13 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 
 func realEventRPCID(event protocol.Event) string {
 	return rpcEnvelopeID(event.Payload)
+}
+
+func realEventOperationID(event protocol.Event) string {
+	if operationID := rpcEnvelopeOperationID(event.Payload); operationID != "" {
+		return operationID
+	}
+	return realEventRPCID(event)
 }
 
 func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, commandID string) (realC01ProcessResult, error) {
