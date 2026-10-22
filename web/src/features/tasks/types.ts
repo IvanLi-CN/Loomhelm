@@ -25,7 +25,7 @@ export interface TaskRecord {
   updated: string;
 }
 
-export type WriteFailureCode = "unauthenticated" | "csrf" | "readonly" | "blocked" | "unsupported" | "invalid";
+export type WriteFailureCode = "unauthenticated" | "csrf" | "readonly" | "blocked" | "unsupported" | "invalid" | "unknown";
 
 export interface WriteFailure {
   ok: false;
@@ -33,6 +33,7 @@ export interface WriteFailure {
   message: string;
   status?: number;
   body?: unknown;
+  reconcile?: boolean;
 }
 
 export type WriteResult<T> =
@@ -63,13 +64,43 @@ export interface TaskDraft {
   dependsOn?: string[];
 }
 
+export interface TaskRelationChanges {
+  addParentIds?: readonly string[];
+  removeParentIds?: readonly string[];
+  addDependencyIds?: readonly string[];
+  removeDependencyIds?: readonly string[];
+}
+
 export interface TaskUpdate {
   title?: string;
   goal?: string;
   state?: TaskState;
-  parentId?: string;
-  parentIds?: string[];
-  dependsOn?: string[];
+  relationChanges?: TaskRelationChanges;
+}
+
+function relationDelta(initial: readonly string[], next: readonly string[]): { add: string[]; remove: string[] } {
+  const initialSet = new Set(initial);
+  const nextSet = new Set(next);
+  return {
+    add: [...nextSet].filter((id) => !initialSet.has(id)),
+    remove: [...initialSet].filter((id) => !nextSet.has(id))
+  };
+}
+
+export function calculateTaskRelationChanges(
+  initialParentIds: readonly string[],
+  nextParentIds: readonly string[],
+  initialDependencyIds: readonly string[],
+  nextDependencyIds: readonly string[]
+): TaskRelationChanges | undefined {
+  const parents = relationDelta(initialParentIds, nextParentIds);
+  const dependencies = relationDelta(initialDependencyIds, nextDependencyIds);
+  const changes: TaskRelationChanges = {};
+  if (parents.add.length) changes.addParentIds = parents.add;
+  if (parents.remove.length) changes.removeParentIds = parents.remove;
+  if (dependencies.add.length) changes.addDependencyIds = dependencies.add;
+  if (dependencies.remove.length) changes.removeDependencyIds = dependencies.remove;
+  return Object.keys(changes).length ? changes : undefined;
 }
 
 export interface ProjectTaskSource {
@@ -90,10 +121,8 @@ export interface ProjectTaskSource {
   createTask: (draft: TaskDraft) => MutationResult<TaskRecord>;
   updateTask: (taskId: string, update: TaskUpdate) => MutationResult<TaskRecord>;
   deleteTask: (taskId: string) => MutationResult<null>;
-  setTaskParent: (taskId: string, parentTaskId?: string) => MutationResult<null>;
-  setTaskParents: (taskId: string, parentTaskIds: readonly string[]) => MutationResult<null>;
-  addTaskDependency: (taskId: string, prerequisiteTaskId: string) => MutationResult<null>;
-  removeTaskDependency: (taskId: string, prerequisiteTaskId: string) => MutationResult<null>;
+  changeTaskRelations: (taskId: string, changes: TaskRelationChanges) => MutationResult<null>;
+  refresh: () => Promise<void>;
 }
 
 export const taskStateLabels: Record<TaskState, string> = {

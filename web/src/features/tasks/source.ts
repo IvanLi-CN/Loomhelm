@@ -50,6 +50,7 @@ export function useOptionalProjectTaskSource(): ProjectTaskSource | null {
     enabled: !demoRuntime && authenticated,
     canCreateProjects: assembly?.permissions.canManageProjects ?? false,
     principalId: assembly?.auth.principalId,
+    sessionGeneration: assembly?.auth.sessionGeneration,
     taskViews,
     setTaskView: (scope, view) => {
       setTaskViews((current) => {

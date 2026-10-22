@@ -9,6 +9,7 @@ import type {
   ProjectRecord,
   ProjectTaskSource,
   TaskDraft,
+  TaskRelationChanges,
   TaskRecord,
   TaskUpdate,
   WriteResult
@@ -111,12 +112,25 @@ function wouldCreateCycle(taskId: string, parentIds: readonly string[]): boolean
   return parentIds.some((parentId) => visit(parentId, new Set()));
 }
 
+export function wouldCreateDependencyCycle(taskId: string, dependencyIds: readonly string[], tasks: readonly TaskRecord[] = snapshot.tasks): boolean {
+  const visit = (current: string, path: ReadonlySet<string>): boolean => {
+    if (current === taskId) return true;
+    if (path.has(current)) return false;
+    const task = tasks.find((item) => item.id === current);
+    if (!task) return false;
+    const nextPath = new Set(path);
+    nextPath.add(current);
+    return task.dependsOn.some((dependencyId) => visit(dependencyId, nextPath));
+  };
+  return dependencyIds.some((dependencyId) => visit(dependencyId, new Set()));
+}
+
 function createProject(draft: ProjectDraft, canManageProjects: boolean): WriteResult<ProjectRecord> {
   const blocked = canManageProject(canManageProjects);
   if (blocked) return blocked;
   const name = draft.name.trim();
   const summary = draft.summary.trim();
-  if (!name || !summary) return fail("invalid", "项目名称和简介不能为空。");
+  if (!name) return fail("invalid", "项目名称不能为空。");
   if (snapshot.projects.some((project) => project.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
     return fail("invalid", "已有同名项目，请使用更明确的名称。");
   }
@@ -138,7 +152,7 @@ function updateProject(projectId: string, draft: ProjectDraft, canManageProjects
   const name = draft.name.trim();
   const summary = draft.summary.trim();
   if (!current) return fail("invalid", "项目已不存在或不在当前权限范围内。");
-  if (!name || !summary) return fail("invalid", "项目名称和简介不能为空。");
+  if (!name) return fail("invalid", "项目名称不能为空。");
   if (snapshot.projects.some((project) => project.id !== projectId && project.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
     return fail("invalid", "已有同名项目，请使用更明确的名称。");
   }
@@ -169,8 +183,9 @@ function createTask(draft: TaskDraft, writable: boolean): WriteResult<TaskRecord
   if (!snapshot.projects.some((project) => project.id === draft.projectId)) return fail("invalid", "目标项目不在当前授权范围内。");
   const parentIds = [...new Set(draft.parentIds ?? (draft.parentId ? [draft.parentId] : []))].filter((id) => id !== "new-task");
   const parentId = parentIds[0];
-  const dependsOn = [...new Set((draft.dependsOn ?? []).filter((id) => !parentIds.includes(id) && hasTask(id)))];
+  const dependsOn = [...new Set(draft.dependsOn ?? [])].filter((id) => !parentIds.includes(id));
   if (parentIds.some((id) => !hasTask(id)) || wouldCreateCycle("new-task", parentIds)) return fail("invalid", "父任务无效，或会形成循环关系。");
+  if (dependsOn.some((id) => id === "new-task" || !hasTask(id)) || wouldCreateDependencyCycle("new-task", dependsOn)) return fail("invalid", "前置任务无效，或会形成循环关系。");
   const task: TaskRecord = {
     id: nextId("DEMO-", snapshot.tasks.map((item) => item.id)),
     title,
@@ -195,43 +210,33 @@ function updateTask(taskId: string, update: TaskUpdate, writable: boolean): Writ
   const title = update.title?.trim() ?? current.title;
   const goal = update.goal?.trim() ?? current.goal;
   if (!title || !goal) return fail("invalid", "任务标题和目标说明不能为空。");
-  const parentIds = update.parentIds === undefined
-    ? update.parentId === undefined ? parentIdsFor(current) : update.parentId ? [update.parentId] : []
-    : [...new Set(update.parentIds)];
-  const parentId = parentIds[0];
-  if (parentIds.some((id) => !hasTask(id)) || wouldCreateCycle(taskId, parentIds)) return fail("invalid", "父任务无效，或会形成循环关系。");
-  const dependsOn = update.dependsOn === undefined
-    ? current.dependsOn
-    : [...new Set(update.dependsOn.filter((id) => id !== taskId && hasTask(id)))];
-  const task: TaskRecord = { ...current, title, goal, state: update.state ?? current.state, parentId, parentIds, dependsOn, updated: nowLabel() };
+  const task: TaskRecord = { ...current, title, goal, state: update.state ?? current.state, updated: nowLabel() };
   updateSnapshot({ ...snapshot, tasks: snapshot.tasks.map((item) => item.id === taskId ? task : item) });
   return { ok: true, value: task };
 }
 
-function setTaskParent(taskId: string, parentTaskId: string | undefined, writable: boolean): WriteResult<null> {
-  const result = updateTask(taskId, { parentIds: parentTaskId ? [parentTaskId] : [] }, writable);
-  return result.ok ? { ok: true, value: null } : result;
-}
-
-function setTaskParents(taskId: string, parentTaskIds: readonly string[], writable: boolean): WriteResult<null> {
-  const result = updateTask(taskId, { parentIds: [...parentTaskIds] }, writable);
-  return result.ok ? { ok: true, value: null } : result;
-}
-
-function addTaskDependency(taskId: string, prerequisiteTaskId: string, writable: boolean): WriteResult<null> {
-  const task = snapshot.tasks.find((item) => item.id === taskId);
-  if (!task) return fail("invalid", "任务已不存在或不在当前权限范围内。");
-  if (task.dependsOn.includes(prerequisiteTaskId)) return { ok: true, value: null };
-  const result = updateTask(taskId, { dependsOn: [...task.dependsOn, prerequisiteTaskId] }, writable);
-  return result.ok ? { ok: true, value: null } : result;
-}
-
-function removeTaskDependency(taskId: string, prerequisiteTaskId: string, writable: boolean): WriteResult<null> {
-  const task = snapshot.tasks.find((item) => item.id === taskId);
-  if (!task) return fail("invalid", "任务已不存在或不在当前权限范围内。");
-  if (!task.dependsOn.includes(prerequisiteTaskId)) return { ok: true, value: null };
-  const result = updateTask(taskId, { dependsOn: task.dependsOn.filter((id) => id !== prerequisiteTaskId) }, writable);
-  return result.ok ? { ok: true, value: null } : result;
+function changeTaskRelations(taskId: string, changes: TaskRelationChanges, writable: boolean): WriteResult<null> {
+  const blocked = canWrite(writable);
+  if (blocked) return blocked;
+  const current = snapshot.tasks.find((task) => task.id === taskId);
+  if (!current) return fail("invalid", "任务已不存在或不在当前权限范围内。");
+  const parentIds = new Set(parentIdsFor(current));
+  const dependencyIds = new Set(current.dependsOn);
+  for (const id of changes.removeParentIds ?? []) parentIds.delete(id);
+  for (const id of changes.addParentIds ?? []) parentIds.add(id);
+  for (const id of changes.removeDependencyIds ?? []) dependencyIds.delete(id);
+  for (const id of changes.addDependencyIds ?? []) dependencyIds.add(id);
+  const nextParents = [...parentIds];
+  const nextDependencies = [...dependencyIds];
+  if (nextParents.some((id) => id === taskId || !hasTask(id)) || wouldCreateCycle(taskId, nextParents)) return fail("invalid", "父任务无效，或会形成循环关系。");
+  if (nextDependencies.some((id) => id === taskId || !hasTask(id)) || wouldCreateDependencyCycle(taskId, nextDependencies)) return fail("invalid", "前置任务无效，或会形成循环关系。");
+  updateSnapshot({
+    ...snapshot,
+    tasks: snapshot.tasks.map((task) => task.id === taskId
+      ? { ...task, parentId: nextParents[0], parentIds: nextParents, dependsOn: nextDependencies, updated: nowLabel() }
+      : task)
+  });
+  return { ok: true, value: null };
 }
 
 function deleteTask(taskId: string, writable: boolean): WriteResult<null> {
@@ -306,10 +311,8 @@ export function useOptionalDemoProjectTaskSource(): ProjectTaskSource | null {
       createTask: async (draft: TaskDraft) => createTask(draft, runtime.canWrite),
       updateTask: async (taskId: string, update: TaskUpdate) => updateTask(taskId, update, runtime.canWrite),
       deleteTask: async (taskId: string) => deleteTask(taskId, runtime.canWrite),
-      setTaskParent: async (taskId: string, parentTaskId?: string) => setTaskParent(taskId, parentTaskId, runtime.canWrite),
-      setTaskParents: async (taskId: string, parentTaskIds: readonly string[]) => setTaskParents(taskId, parentTaskIds, runtime.canWrite),
-      addTaskDependency: async (taskId: string, prerequisiteTaskId: string) => addTaskDependency(taskId, prerequisiteTaskId, runtime.canWrite),
-      removeTaskDependency: async (taskId: string, prerequisiteTaskId: string) => removeTaskDependency(taskId, prerequisiteTaskId, runtime.canWrite)
+      changeTaskRelations: async (taskId: string, changes: TaskRelationChanges) => changeTaskRelations(taskId, changes, runtime.canWrite),
+      refresh: async () => undefined
     } satisfies ProjectTaskSource;
   }, [current, runtime]);
 }

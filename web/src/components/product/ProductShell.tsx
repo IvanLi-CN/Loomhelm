@@ -11,7 +11,7 @@ import {
   Plus,
   X
 } from "lucide-react";
-import { useEffect, useState, type PropsWithChildren } from "react";
+import { useCallback, useEffect, useRef, useState, type PropsWithChildren } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 
 import { useOptionalProductionApi, useProductionAuthActions } from "@/app/providers";
@@ -23,6 +23,59 @@ import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import type { ProjectTaskSource } from "@/features/tasks/types";
 
 import { DemoInspector, DemoNotice, DemoSceneBanner } from "./DemoInspector";
+
+function useMobileDrawer(open: boolean, onClose: () => void) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const openedRef = useRef(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const drawer = drawerRef.current;
+    const focusFirst = () => drawer?.querySelector<HTMLElement>("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])")?.focus();
+    const frame = requestAnimationFrame(focusFirst);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !drawer) return;
+      const focusable = [...drawer.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])")];
+      if (!focusable.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose, open]);
+
+  useEffect(() => {
+    if (open) {
+      openedRef.current = true;
+      return;
+    }
+    if (openedRef.current) {
+      openedRef.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [open]);
+
+  return { drawerRef, triggerRef };
+}
 
 function ProjectTree({
   expanded,
@@ -218,7 +271,9 @@ function ProductionShell() {
   const [logoutMessage, setLogoutMessage] = useState<string | null>(null);
   const authenticated = assembly?.auth.status === "authenticated";
 
-  const closeMobile = () => setMobileOpen(false);
+  const closeMobile = useCallback(() => setMobileOpen(false), []);
+  const openMobile = useCallback(() => setMobileOpen(true), []);
+  const { drawerRef, triggerRef } = useMobileDrawer(mobileOpen, closeMobile);
   const toggle = (key: string) => setExpanded((current) => ({ ...current, [key]: !current[key] }));
 
   const navigation = (
@@ -246,7 +301,7 @@ function ProductionShell() {
 
   return (
     <div className="product-shell" data-runtime="production">
-      <aside className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`}>
+      <aside ref={drawerRef} id="production-mobile-navigation" className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`}>
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true"><FlaskConical size={21} strokeWidth={1.8} /></span>
           <span>Loomhelm</span>
@@ -260,7 +315,7 @@ function ProductionShell() {
       {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
       <div className="product-work-area">
         <header className="product-header">
-          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" title="打开导航" onClick={() => setMobileOpen(true)}>
+          <Button ref={triggerRef} type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" aria-controls="production-mobile-navigation" aria-expanded={mobileOpen} title="打开导航" onClick={openMobile}>
             <Menu size={19} aria-hidden="true" />
           </Button>
           <div className="breadcrumb"><ProductionBreadcrumb pathname={pathname} source={source} /></div>
@@ -280,7 +335,7 @@ function ProductionShell() {
             </Select>
             {authenticated ? <>
               <Button asChild variant="default" className="button button-primary header-create" onClick={closeMobile}>
-                <Link to="/tasks/new"><Plus size={16} aria-hidden="true" /><span>新建任务</span></Link>
+                <Link to="/tasks/new" aria-label="新建任务"><Plus size={16} aria-hidden="true" /><span>新建任务</span></Link>
               </Button>
               <Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void handleLogout(); }} disabled={logoutPending}>
                 <LogOut size={15} aria-hidden="true" />{logoutPending ? "退出中…" : "退出登录"}
@@ -306,7 +361,9 @@ export function ProductShell({ children }: PropsWithChildren) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ projects: true, "project:loomhelm": true });
 
-  const closeMobile = () => setMobileOpen(false);
+  const closeMobile = useCallback(() => setMobileOpen(false), []);
+  const openMobile = useCallback(() => setMobileOpen(true), []);
+  const { drawerRef, triggerRef } = useMobileDrawer(mobileOpen, closeMobile);
   const toggle = (key: string) => setExpanded((current) => ({ ...current, [key]: !current[key] }));
   const openCreate = () => closeMobile();
 
@@ -348,7 +405,7 @@ export function ProductShell({ children }: PropsWithChildren) {
 
   return (
     <div className={`product-shell ${runtime.inspectorOpen ? "has-inspector" : ""}`} data-inspector-mode={runtime.inspectorMode} data-scene={runtime.scene} data-network={runtime.network}>
-      <aside className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`}>
+      <aside ref={drawerRef} id="demo-mobile-navigation" className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`}>
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true"><FlaskConical size={21} strokeWidth={1.8} /></span>
           <span>Loomhelm</span>
@@ -362,7 +419,7 @@ export function ProductShell({ children }: PropsWithChildren) {
       {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
       <div className="product-work-area">
         <header className="product-header">
-          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" title="打开导航" onClick={() => setMobileOpen(true)}>
+          <Button ref={triggerRef} type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" aria-controls="demo-mobile-navigation" aria-expanded={mobileOpen} title="打开导航" onClick={openMobile}>
             <Menu size={19} aria-hidden="true" />
           </Button>
           <div className="breadcrumb"><Breadcrumb pathname={pathname} /></div>
@@ -381,7 +438,7 @@ export function ProductShell({ children }: PropsWithChildren) {
               </SelectContent>
             </Select>
             <Button asChild variant="default" className="button button-primary header-create" onClick={openCreate}>
-              <Link to="/tasks/new">
+              <Link to="/tasks/new" aria-label="新建任务">
                 <Plus size={16} aria-hidden="true" />
                 <span>新建任务</span>
               </Link>

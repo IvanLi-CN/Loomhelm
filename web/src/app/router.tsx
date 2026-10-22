@@ -66,6 +66,7 @@ const tasksRoute = createRoute({
 const createTaskRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks/new",
+  validateSearch: (search: Record<string, unknown>) => typeof search.projectId === "string" ? { projectId: search.projectId } : {},
   component: CreateTaskRoute
 });
 

@@ -14,6 +14,7 @@ export interface ProductionApiAssembly {
     principalId?: string;
     workspaceId?: string;
     message?: string;
+    sessionGeneration?: number;
   };
   permissions: {
     canWrite: boolean;

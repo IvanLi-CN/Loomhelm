@@ -16,7 +16,7 @@ describe("production browser assembly", () => {
   test("uses the bootstrapped browser principal for the production scope", () => {
     const assembly = createAuthenticatedProductionAssembly(client, { user_id: "user/browser", csrf_protection: "same_origin" });
 
-    expect(assembly.auth).toEqual({ status: "authenticated", principalId: "user/browser", workspaceId: "default" });
+    expect(assembly.auth).toEqual({ status: "authenticated", principalId: "user/browser", workspaceId: "default", sessionGeneration: 0 });
     expect(assembly.permissions).toEqual({ canWrite: true, canManageProjects: true, isReadOnly: false });
   });
 
@@ -28,7 +28,7 @@ describe("production browser assembly", () => {
   test("clears write permissions after logout state is committed", () => {
     const assembly = createUnauthenticatedProductionAssembly(client, "已退出当前浏览器会话。");
 
-    expect(assembly.auth).toEqual({ status: "unauthenticated", message: "已退出当前浏览器会话。" });
+    expect(assembly.auth).toEqual({ status: "unauthenticated", message: "已退出当前浏览器会话。", sessionGeneration: 0 });
     expect(assembly.permissions).toEqual({ canWrite: false, canManageProjects: false, isReadOnly: true });
   });
 });

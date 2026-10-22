@@ -28,10 +28,8 @@ export function createStorySource(overrides: Partial<ProjectTaskSource> = {}): P
     createTask: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     updateTask: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     deleteTask: async () => ({ ok: false, code: "unsupported", message: "story source" }),
-    setTaskParent: async () => ({ ok: false, code: "unsupported", message: "story source" }),
-    setTaskParents: async () => ({ ok: false, code: "unsupported", message: "story source" }),
-    addTaskDependency: async () => ({ ok: false, code: "unsupported", message: "story source" }),
-    removeTaskDependency: async () => ({ ok: false, code: "unsupported", message: "story source" }),
+    changeTaskRelations: async () => ({ ok: false, code: "unsupported", message: "story source" }),
+    refresh: async () => undefined,
     ...overrides
   };
   return source;

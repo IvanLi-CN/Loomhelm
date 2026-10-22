@@ -10,6 +10,7 @@ export type BrowserProtectionMode = "same_origin";
 
 export interface AuthenticatedApiClient extends GeneratedApiClient {
   bootstrapBrowserSession: () => Promise<BrowserSessionBootstrap>;
+  invalidateBrowserSession: () => void;
 }
 
 export type ApiClientFactory<TClient = GeneratedApiClient> = () => TClient;
@@ -73,10 +74,17 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
 
   let browserSession: BrowserSessionBootstrap | undefined;
   let bootstrapPromise: Promise<BrowserSessionBootstrap> | undefined;
+  let browserSessionGeneration = 0;
+
+  const invalidateBrowserSession = (): void => {
+    browserSessionGeneration += 1;
+    browserSession = undefined;
+    bootstrapPromise = undefined;
+  };
 
   const notifyUnauthorized = async (response: Response): Promise<void> => {
     if (response.status !== 401) return;
-    browserSession = undefined;
+    invalidateBrowserSession();
     if (!options.onUnauthorized) return;
     try {
       await options.onUnauthorized(response.clone());
@@ -106,13 +114,17 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
     }
     if (browserSession) return browserSession;
     if (!bootstrapPromise) {
+      const requestGeneration = browserSessionGeneration;
       bootstrapPromise = (async () => {
         const session = validateBrowserSession(await bootstrapClient.getBrowserSession());
+        if (requestGeneration !== browserSessionGeneration) {
+          throw new ApiClientConfigurationError("browser session bootstrap was invalidated before it completed");
+        }
         await options.onBrowserSession?.(session);
         browserSession = session;
         return session;
       })().finally(() => {
-        bootstrapPromise = undefined;
+        if (requestGeneration === browserSessionGeneration) bootstrapPromise = undefined;
       });
     }
     return bootstrapPromise;
@@ -161,9 +173,9 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   const logoutBrowserSession = client.logoutBrowserSession.bind(client);
   client.logoutBrowserSession = async (request) => {
     const result = await logoutBrowserSession(request);
-    browserSession = undefined;
+    invalidateBrowserSession();
     return result;
   };
 
-  return Object.assign(client, { bootstrapBrowserSession });
+  return Object.assign(client, { bootstrapBrowserSession, invalidateBrowserSession });
 }

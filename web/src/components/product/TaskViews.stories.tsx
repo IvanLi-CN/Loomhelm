@@ -43,10 +43,8 @@ function createSource(overrides: Partial<ProjectTaskSource> = {}): ProjectTaskSo
     createTask: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     updateTask: async () => ({ ok: false, code: "unsupported", message: "story source" }),
     deleteTask: async () => ({ ok: false, code: "unsupported", message: "story source" }),
-    setTaskParent: async () => ({ ok: false, code: "unsupported", message: "story source" }),
-    setTaskParents: async () => ({ ok: false, code: "unsupported", message: "story source" }),
-    addTaskDependency: async () => ({ ok: false, code: "unsupported", message: "story source" }),
-    removeTaskDependency: async () => ({ ok: false, code: "unsupported", message: "story source" }),
+    changeTaskRelations: async () => ({ ok: false, code: "unsupported", message: "story source" }),
+    refresh: async () => undefined,
     ...overrides
   };
   return source;
@@ -110,16 +108,22 @@ export const ExplorerConsistency: Story = {
   render: () => <ConsistencyHarness />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const views = ["看板", "图谱", "列表"];
+    const views = [
+      ["看板", () => expect(canvas.getByRole("region", { name: "待办任务" })).toBeInTheDocument()],
+      ["图谱", () => expect(canvas.getByRole("region", { name: "任务关系图谱，可横向和纵向浏览" })).toBeInTheDocument()],
+      ["列表", () => expect(canvas.getByRole("table")).toBeInTheDocument()]
+    ] as const;
     await userEvent.click(canvas.getByRole("button", { name: "新增验收任务" }));
-    for (const view of views) {
+    for (const [view, assertView] of views) {
       await userEvent.click(canvas.getByRole("button", { name: view }));
-      expect(canvas.getAllByText("新增验收任务").length).toBeGreaterThan(0);
+      assertView();
+      expect(canvas.getByText("新增验收任务")).toBeInTheDocument();
     }
     await userEvent.click(canvas.getByRole("button", { name: "编辑验收任务" }));
-    for (const view of views) {
+    for (const [view, assertView] of views) {
       await userEvent.click(canvas.getByRole("button", { name: view }));
-      expect(canvas.getAllByText("编辑后验收任务").length).toBeGreaterThan(0);
+      assertView();
+      expect(canvas.getByText("编辑后验收任务")).toBeInTheDocument();
     }
   }
 };

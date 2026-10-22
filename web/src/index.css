@@ -1549,6 +1549,14 @@ pre {
   border-top: 2px solid var(--line-strong);
 }
 
+.legend-line-ownership {
+  border-top-color: var(--accent);
+}
+
+.legend-line-hierarchy {
+  border-top-color: var(--line-strong);
+}
+
 .legend-line-dashed {
   border-top-style: dashed;
   border-top-color: var(--accent);
@@ -1654,6 +1662,11 @@ pre {
 
 .task-relation-option {
   min-height: 38px;
+}
+
+.task-relation-remove {
+  min-width: 32px;
+  min-height: 32px;
 }
 
 .task-graph-node-kicker {
@@ -2626,6 +2639,11 @@ pre {
   }
 
   .task-relation-option {
+    min-height: var(--control-height-touch);
+  }
+
+  .task-relation-remove {
+    min-width: var(--control-height-touch);
     min-height: var(--control-height-touch);
   }
 

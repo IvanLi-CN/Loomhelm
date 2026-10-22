@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "@tanstack/react-router";
 
-import { AppProviders, PRODUCTION_AUTH_INVALIDATED_EVENT } from "@/app/providers";
+import { AppProviders, publishProductionAuthInvalidation } from "@/app/providers";
 import { router } from "@/app/router";
 import { DemoBootstrapFailure } from "@/components/product/DemoBootstrapFailure";
 import { bootstrapDemo, isDemoBuild } from "@/demo/bootstrap";
@@ -22,9 +22,7 @@ const root = createRoot(rootElement);
 const demoMode = isDemoBuild();
 const productionClient = demoMode ? undefined : createWebApiClient({
   browserProtection: "same_origin",
-  onUnauthorized: () => {
-    window.dispatchEvent(new Event(PRODUCTION_AUTH_INVALIDATED_EVENT));
-  }
+  onUnauthorized: publishProductionAuthInvalidation
 });
 
 async function start() {

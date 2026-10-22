@@ -345,6 +345,58 @@ describe("authenticated client transport", () => {
     ]);
   });
 
+  test("rejects an in-flight bootstrap after session invalidation", async () => {
+    let release;
+    let requests = 0;
+    const session = { user_id: "user-browser", csrf_protection: "same_origin" };
+    const firstResponse = new Promise((resolve) => { release = resolve; });
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url) => {
+        requests += 1;
+        return requests === 1 ? firstResponse : Response.json(session);
+      }
+    });
+
+    const pending = client.bootstrapBrowserSession();
+    client.invalidateBrowserSession();
+    release(Response.json(session));
+
+    await expect(pending).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(await client.bootstrapBrowserSession()).toEqual(session);
+    expect(requests).toBe(2);
+  });
+
+  test("does not let an invalidated bootstrap clear the replacement request", async () => {
+    let releaseFirst;
+    let releaseSecond;
+    let requests = 0;
+    const session = { user_id: "user-browser", csrf_protection: "same_origin" };
+    const firstResponse = new Promise((resolve) => { releaseFirst = resolve; });
+    const secondResponse = new Promise((resolve) => { releaseSecond = resolve; });
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async () => {
+        requests += 1;
+        return requests === 1 ? firstResponse : secondResponse;
+      }
+    });
+
+    const first = client.bootstrapBrowserSession();
+    client.invalidateBrowserSession();
+    const second = client.bootstrapBrowserSession();
+    releaseFirst(Response.json(session));
+    await expect(first).rejects.toBeInstanceOf(ApiClientConfigurationError);
+
+    const third = client.bootstrapBrowserSession();
+    releaseSecond(Response.json(session));
+    expect(await second).toEqual(session);
+    expect(await third).toEqual(session);
+    expect(requests).toBe(2);
+  });
+
   test("closes the same-origin gate after a 401 response", async () => {
     let requests = 0;
     const client = createAuthenticatedApiClient({
