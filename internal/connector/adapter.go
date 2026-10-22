@@ -1492,7 +1492,7 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 		matched = exactMatched
 	case exactMatches > 1:
 		return ack, false, nil
-	case rawMatches == 1:
+	case strings.IndexByte(operationID, 0) < 0 && rawMatches == 1:
 		matched = rawMatched
 	default:
 		return ack, false, nil

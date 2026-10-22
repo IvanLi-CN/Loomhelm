@@ -10,6 +10,8 @@ The journal is created with a mode 0700 parent directory and mode 0600 file perm
 
 `event` records contain the generated `protocol.Event` and preserve the complete app-server JSON-RPC object in `event.payload`, including fields unknown to the current adapter.
 
+For journaled RPC responses, the raw app-server event is followed by a host-observation correlation event containing the Gateway generation, method and generation-qualified operation identity. Unknown ACKs use that identity so reused JSON-RPC IDs from different process generations cannot be misattributed; older records without a correlation event fall back only when the raw ID is unique.
+
 session records contain only the Loomhelm session ID, opaque external thread reference, host generation and update time; credentials, access tokens and Desktop process state are not journal data.
 
 session_start records contain the host generation intent, explicit creation command_id, payload digest and pending/resolved/failed state. The digest covers project_id, task_id and prompt; the caller identity is stored separately so equal prompts do not collapse distinct sessions.

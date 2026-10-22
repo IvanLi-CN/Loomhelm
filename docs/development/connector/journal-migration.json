@@ -63,7 +63,8 @@
         "v2 records are rejected by the v1 reader boundary",
         "a torn final write is truncated safely",
         "accepted and executing commands become unknown after restart",
-        "unknown outcomes require explicit reconciliation and are never replayed"
+        "unknown outcomes require explicit reconciliation and are never replayed",
+        "generation-qualified persisted RPC observations disambiguate reused JSON-RPC IDs without rewriting raw response events"
       ],
       "note": "The candidate reads the immediately preceding v1 journal state; v1 binaries are not supported readers for v2 records."
     },

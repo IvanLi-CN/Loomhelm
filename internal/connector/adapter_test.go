@@ -608,6 +608,41 @@ func TestAdapterReconcilesUnknownRPCOperationFromPersistedEvent(t *testing.T) {
 	}
 }
 
+func TestAdapterDoesNotFallbackQualifiedOperationToLegacyEvent(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-operation-legacy-fallback"}}`)}}}
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{ID: json.RawMessage(`41`)}, err: ErrUnknownOutcome}}
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[]}`)}}}
+	j := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-operation-legacy-fallback", Generation: "generation-operation-legacy-fallback", Path: protocol.SessionPathNew}, testSessionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := testCommand("unknown-operation-legacy-fallback", `{"prompt":"do not bind an old generation"}`)
+	command.SessionID = session.SessionID
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
+		t.Fatalf("unknown ACK = %+v, error = %v", ack, err)
+	}
+	oldRunID := "turn-operation-legacy-fallback-old"
+	oldRaw := json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-operation-legacy-fallback-old","status":"completed"}}}`)
+	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceAppServer, Payload: oldRaw, RunID: &oldRunID}); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	if err != nil || reconciliation.State != protocol.ReconciliationStateUnknown {
+		t.Fatalf("legacy fallback reconciliation = %+v, error = %v", reconciliation, err)
+	}
+	_, stored, err := j.Command(command.CommandID)
+	if err != nil || stored.State != protocol.CommandStateUnknown || stored.RunID != nil || stored.EventCursor != nil {
+		t.Fatalf("legacy event was bound to qualified operation: %+v, error = %v", stored, err)
+	}
+}
+
 func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-3"}}`)}}}
