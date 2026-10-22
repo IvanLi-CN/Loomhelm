@@ -836,13 +836,11 @@ func parseRPCMessage(frame []byte) (RPCMessage, error) {
 	if fields == nil {
 		return RPCMessage{}, errors.New("RPC message must be a JSON object")
 	}
-	version, ok := fields["jsonrpc"]
-	if !ok {
-		return RPCMessage{}, errors.New("RPC message is missing jsonrpc version")
-	}
-	var jsonrpc string
-	if err := json.Unmarshal(version, &jsonrpc); err != nil || jsonrpc != "2.0" {
-		return RPCMessage{}, errors.New("RPC message must use jsonrpc version 2.0")
+	if version, ok := fields["jsonrpc"]; ok {
+		var jsonrpc string
+		if err := json.Unmarshal(version, &jsonrpc); err != nil || jsonrpc != "2.0" {
+			return RPCMessage{}, errors.New("RPC message must use jsonrpc version 2.0 when provided")
+		}
 	}
 	message := RPCMessage{Raw: append(json.RawMessage(nil), trimmed...)}
 	if value, ok := fields["id"]; ok {

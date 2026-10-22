@@ -259,15 +259,11 @@ func TestProcessTransportRejectsAmbiguousRPCResponse(t *testing.T) {
 }
 
 func TestProcessTransportRequiresJSONRPCVersion(t *testing.T) {
-	for name, frame := range map[string]string{
-		"missing": `{"id":1,"result":{}}`,
-		"wrong":   `{"jsonrpc":"1.0","id":1,"result":{}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := parseRPCMessage([]byte(frame)); err == nil {
-				t.Fatalf("RPC frame %s jsonrpc version was accepted", name)
-			}
-		})
+	if _, err := parseRPCMessage([]byte(`{"jsonrpc":"1.0","id":1,"result":{}}`)); err == nil {
+		t.Fatal("RPC frame with an incorrect jsonrpc version was accepted")
+	}
+	if message, err := parseRPCMessage([]byte(`{"id":1,"result":{}}`)); err != nil || !message.IsResponse() {
+		t.Fatalf("Codex response without jsonrpc version = %+v, error = %v", message, err)
 	}
 }
 
