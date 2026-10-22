@@ -202,6 +202,11 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
+	ack.RunID = observedRun.RunID
+	if err := journal.UpdateCommand(commandID, ack); err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, fmt.Errorf("persist explicitly observed unknown run identity: %w", err)
+	}
 	result.ReconciledRunID = valueOrEmpty(observedRun.RunID)
 	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
 	if err != nil {
