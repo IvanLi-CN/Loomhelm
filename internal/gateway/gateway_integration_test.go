@@ -1,0 +1,286 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
+	"github.com/IvanLi-CN/Loomhelm/internal/platform"
+	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+)
+
+func TestGatewayWithPostgresTLSWSS(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	db := openGatewayDatabase(t, ctx)
+
+	registration, err := hosts.NewService(db.Pool()).Register(ctx, hosts.RegisterRequest{
+		Name:           "h01 gateway integration " + time.Now().UTC().Format("20060102T150405.000000000"),
+		CredentialName: "gateway-test",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupGatewayHost(cleanupCtx, db, registration.Host.ID)
+		db.Close()
+	})
+
+	var handlerMu sync.Mutex
+	handlerCalls := make(map[string]int)
+	handledEventIDs := make(map[string]struct{})
+	sideEffects := 0
+	observed := make(chan protocol.Event, 4)
+	server, err := NewServer(hosts.NewService(db.Pool()), ServerOptions{
+		EventHandler: func(_ context.Context, _ hosts.Connection, event protocol.Event) error {
+			handlerMu.Lock()
+			handlerCalls[event.EventID]++
+			if _, handled := handledEventIDs[event.EventID]; !handled {
+				handledEventIDs[event.EventID] = struct{}{}
+				sideEffects++
+			}
+			handlerMu.Unlock()
+			observed <- event
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+
+	wssURL := strings.Replace(httpServer.URL, "https://", "wss://", 1)
+	client, err := NewClient(ClientOptions{
+		URL:        wssURL,
+		HostID:     registration.Host.ID,
+		Token:      registration.Token,
+		HTTPClient: httpServer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	invalidClient, err := NewClient(ClientOptions{
+		URL:        wssURL,
+		HostID:     registration.Host.ID,
+		Token:      "invalid-token",
+		HTTPClient: httpServer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient(invalid) error = %v", err)
+	}
+	if _, err := invalidClient.Connect(ctx); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("invalid credential connection error = %v, want HTTP 401", err)
+	}
+
+	connection := connectTestClient(t, client)
+	if connection.Generation() != 1 {
+		t.Fatalf("first gateway generation = %d, want 1", connection.Generation())
+	}
+
+	command := protocol.Command{
+		CommandID: "cmd_pg_gateway_1",
+		IssuedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"text":"hello from postgres"}`),
+		SessionID: "session_pg_gateway_1",
+	}
+	commandResult := make(chan struct {
+		ack protocol.CommandAck
+		err error
+	}, 1)
+	go func() {
+		ack, sendErr := server.SendCommand(ctx, registration.Host.ID, command)
+		commandResult <- struct {
+			ack protocol.CommandAck
+			err error
+		}{ack: ack, err: sendErr}
+	}()
+	commandMessage := readGatewayMessage(t, connection)
+	if commandMessage.Type != MessageCommand || commandMessage.Command == nil || commandMessage.Command.CommandID != command.CommandID {
+		t.Fatalf("gateway command message = %+v", commandMessage)
+	}
+	if err := connection.Acknowledge(ctx, commandMessage.RequestID, protocol.CommandAck{
+		CommandID:  command.CommandID,
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateAccepted,
+	}); err != nil {
+		t.Fatalf("Acknowledge() error = %v", err)
+	}
+	select {
+	case result := <-commandResult:
+		if result.err != nil || result.ack.CommandID != command.CommandID || result.ack.State != protocol.CommandStateAccepted {
+			t.Fatalf("SendCommand() result = %+v", result)
+		}
+	case <-ctx.Done():
+		t.Fatalf("SendCommand() did not receive an acknowledgement: %v", ctx.Err())
+	}
+
+	runID := "run_pg_gateway_1"
+	event := protocol.Event{
+		Cursor:     "event_cursor_1",
+		EventID:    "event_pg_gateway_1",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Payload:    json.RawMessage(`{"delta":"persisted"}`),
+		RunID:      &runID,
+		Sequence:   1,
+		SessionID:  command.SessionID,
+		Source:     protocol.EventSourceHostObservation,
+		Type:       protocol.EventTypeMessageDelta,
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := connection.SendEvent(ctx, event); err != nil {
+			t.Fatalf("SendEvent(attempt=%d) error = %v", attempt, err)
+		}
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		select {
+		case observedEvent := <-observed:
+			if observedEvent.EventID != event.EventID || observedEvent.Cursor != event.Cursor {
+				t.Fatalf("observed event = %+v", observedEvent)
+			}
+		case <-ctx.Done():
+			t.Fatalf("event handler did not observe duplicate %d: %v", attempt+1, ctx.Err())
+		}
+	}
+	handlerMu.Lock()
+	gotCalls := handlerCalls[event.EventID]
+	gotSideEffects := sideEffects
+	handlerMu.Unlock()
+	if gotCalls != 2 || gotSideEffects != 1 {
+		t.Fatalf("event receiver calls=%d side_effects=%d, want calls=2 side_effects=1", gotCalls, gotSideEffects)
+	}
+
+	if err := connection.SendHeartbeatForStream(ctx, command.SessionID, runID, "event_cursor_2"); err != nil {
+		t.Fatalf("SendHeartbeatForStream() error = %v", err)
+	}
+	heartbeat := readGatewayMessage(t, connection)
+	if heartbeat.Type != MessageHeartbeatAck || heartbeat.Generation != connection.Generation() {
+		t.Fatalf("heartbeat acknowledgement = %+v", heartbeat)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("close first connection: %v", err)
+	}
+
+	resumed := connectTestClient(t, client)
+	if resumed.Generation() != 2 {
+		t.Fatalf("replacement gateway generation = %d, want 2", resumed.Generation())
+	}
+	resumeCursors := resumed.ResumeCursors()
+	if len(resumeCursors) != 1 || resumeCursors[0].SessionID != command.SessionID || resumeCursors[0].RunID != runID || resumeCursors[0].Value != "event_cursor_2" {
+		t.Fatalf("replacement resume cursors = %+v", resumeCursors)
+	}
+
+	if err := hosts.NewService(db.Pool()).RevokeCredential(ctx, registration.Credential.ID); err != nil {
+		t.Fatalf("RevokeCredential() error = %v", err)
+	}
+	if _, err := server.SendCommand(ctx, registration.Host.ID, command); !errors.Is(err, hosts.ErrConnectionStale) {
+		t.Fatalf("SendCommand() after revoke error = %v, want ErrConnectionStale", err)
+	}
+	if err := resumed.SendHeartbeatForStream(ctx, command.SessionID, runID, "event_cursor_3"); err != nil {
+		t.Fatalf("heartbeat after revoke write error = %v", err)
+	}
+	staleMessage := readGatewayMessage(t, resumed)
+	if staleMessage.Type != MessageError || staleMessage.Error == nil || staleMessage.Error.Code != "stale_generation" {
+		t.Fatalf("revoked connection error message = %+v", staleMessage)
+	}
+	_ = resumed.Close()
+	if _, err := client.Connect(ctx); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("revoked reconnect error = %v, want HTTP 401", err)
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if _, err := client.Connect(shutdownCtx); err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("connection during drain error = %v, want HTTP 503", err)
+	}
+}
+
+func TestGatewayWithPostgresTLSWSSDrain(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db := openGatewayDatabase(t, ctx)
+	registration, err := hosts.NewService(db.Pool()).Register(ctx, hosts.RegisterRequest{
+		Name: "h01 gateway drain " + time.Now().UTC().Format("20060102T150405.000000000"),
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupGatewayHost(cleanupCtx, db, registration.Host.ID)
+		db.Close()
+	})
+
+	server, err := NewServer(hosts.NewService(db.Pool()), ServerOptions{
+		EventHandler: func(context.Context, hosts.Connection, protocol.Event) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client, err := NewClient(ClientOptions{
+		URL:        strings.Replace(httpServer.URL, "https://", "wss://", 1),
+		HostID:     registration.Host.ID,
+		Token:      registration.Token,
+		HTTPClient: httpServer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	connection := connectTestClient(t, client)
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if _, err := client.Connect(shutdownCtx); err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("connection during drain error = %v, want HTTP 503", err)
+	}
+	_ = connection.Close()
+}
+
+func openGatewayDatabase(t *testing.T, ctx context.Context) *database.DB {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		t.Fatalf("load database config: %v", err)
+	}
+	db, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		db.Close()
+		t.Fatalf("migrate database: %v", err)
+	}
+	return db
+}
+
+func cleanupGatewayHost(ctx context.Context, db *database.DB, hostID string) {
+	if db == nil || db.Pool() == nil {
+		return
+	}
+	_, _ = db.Pool().Exec(ctx, `DELETE FROM host_connections WHERE host_id = $1`, hostID)
+	_, _ = db.Pool().Exec(ctx, `DELETE FROM host_credentials WHERE host_id = $1`, hostID)
+	_, _ = db.Pool().Exec(ctx, `DELETE FROM host_registrations WHERE id = $1`, hostID)
+}
