@@ -90,16 +90,17 @@ const (
 // helper process at durable publication boundaries; production composition
 // cannot configure process-exit behavior through Config.
 type faultHooks struct {
-	AfterStage                func()
-	AfterIntentCommit         func()
-	AfterRepairIntentCommit   func()
-	AfterFinalLink            func()
-	AfterFinalPublication     func()
-	AfterReadyCommit          func()
-	CommitResponseLost        func() error
-	BeforeIdentityLock        func(context.Context, pgx.Tx, string)
-	AfterIdentityLock         func()
-	BeforeReadyStagingRemoval func()
+	AfterStage                 func()
+	AfterIntentCommit          func()
+	AfterRepairIntentCommit    func()
+	AfterFinalLink             func()
+	AfterFinalPublication      func()
+	AfterReadyCommit           func()
+	CommitResponseLost         func() error
+	BeforeIdentityLock         func(context.Context, pgx.Tx, string)
+	AfterIdentityLock          func()
+	BeforeReadyStagingRemoval  func()
+	BeforeStagingDirectorySync func() error
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -132,6 +133,15 @@ func (s *Store) fault(point faultPoint) {
 			s.faults.AfterReadyCommit()
 		}
 	}
+}
+
+func (s *Store) syncStagingDirectory() error {
+	if s != nil && s.faults != nil && s.faults.BeforeStagingDirectorySync != nil {
+		if err := s.faults.BeforeStagingDirectorySync(); err != nil {
+			return err
+		}
+	}
+	return syncDirectory(s.objects)
 }
 
 func (s *Store) commit(ctx context.Context, tx pgx.Tx) error {
@@ -1011,6 +1021,11 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 		}
 		removeStaging = stagingCheck == fileValid
 	}
+	if record.StagingIdentity != nil && currentIdentity == nil {
+		if err := s.syncStagingDirectory(); err != nil {
+			return artifactRecord{}, recoveryPending, fmt.Errorf("sync artifact staging directory after missing staging: %w", err)
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
 		SET staging_reclaim_after = clock_timestamp() + INTERVAL '1 minute'
@@ -1207,7 +1222,7 @@ func (s *Store) removeStaging(name string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove artifact staging: %w", ErrStoreUnavailable)
 	}
-	if err := syncDirectory(s.objects); err != nil {
+	if err := s.syncStagingDirectory(); err != nil {
 		return fmt.Errorf("sync artifact staging directory after removal: %w", ErrStoreUnavailable)
 	}
 	return nil
@@ -1355,6 +1370,9 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 		return false, err
 	}
 	if expectedIdentity != nil && currentIdentity == nil {
+		if err := s.syncStagingDirectory(); err != nil {
+			return false, fmt.Errorf("sync artifact staging directory after missing staging: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, name); err != nil {
 			return false, databaseWriteError("discard replaced staging cleanup debt", err)
 		}

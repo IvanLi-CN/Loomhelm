@@ -597,8 +597,11 @@ func newArtifactHelper(t *testing.T, mode string, point faultPoint, root, id str
 
 func openStoreAtRoot(t *testing.T, root string) (*database.DB, *Store, context.Context) {
 	t.Helper()
-	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
 	ensureArtifactTestDatabaseClean(t)
+	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	db, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
