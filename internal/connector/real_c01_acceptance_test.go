@@ -195,20 +195,14 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		ThreadID:          threadID,
 		UnknownAckState:   ack.State,
 	}
-	if err := waitForRealRunObservation(ctx, journal, sessionID, beforeCursor, 2*time.Second); err != nil {
+	observedRun, err := waitForRealEventValueAfter(ctx, journal, sessionID, protocol.EventTypeUnknown, "", beforeCursor, func(event protocol.Event) bool {
+		return event.RunID != nil && *event.RunID != ""
+	})
+	if err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
-	var reconciledRunID string
-	if err := waitForRealCondition(ctx, func() bool {
-		var ok bool
-		reconciledRunID, ok = journal.UniqueRunIDForCommand(sessionID, commandID, command.IssuedAt)
-		return ok
-	}); err != nil {
-		_ = journal.Close()
-		return realC01ProcessResult{}, err
-	}
-	result.ReconciledRunID = reconciledRunID
+	result.ReconciledRunID = valueOrEmpty(observedRun.RunID)
 	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
 	if err != nil {
 		_ = journal.Close()
@@ -1037,24 +1031,6 @@ func latestRealEventCursor(journal *Journal, sessionID string) string {
 		return ""
 	}
 	return page.Events[len(page.Events)-1].Cursor
-}
-
-func waitForRealRunObservation(ctx context.Context, journal *Journal, sessionID, afterCursor string, duration time.Duration) error {
-	deadlineCtx, cancel := context.WithTimeout(ctx, duration)
-	defer cancel()
-	return waitForRealCondition(deadlineCtx, func() bool {
-		page, err := journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, AfterCursor: afterCursor, Limit: 1000})
-		if err != nil {
-			return false
-		}
-		for _, event := range page.Events {
-			switch event.Type {
-			case protocol.EventTypeRunStarted, protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed:
-				return true
-			}
-		}
-		return false
-	})
 }
 
 func waitForRealCondition(ctx context.Context, condition func() bool) error {

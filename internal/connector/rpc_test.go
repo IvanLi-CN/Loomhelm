@@ -202,7 +202,7 @@ func TestProcessTransportCloseUnblocksFullEventQueue(t *testing.T) {
 	if err := transport.Notify(context.Background(), "burst", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(20 * time.Millisecond)
+	waitForQueuedEvent(t, transport, "burst-complete")
 	closed := make(chan error, 1)
 	go func() { closed <- transport.Close() }()
 	select {
@@ -212,6 +212,40 @@ func TestProcessTransportCloseUnblocksFullEventQueue(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("transport close remained blocked by a full event queue")
+	}
+}
+
+func waitForQueuedEvent(t *testing.T, transport *ProcessTransport, method string) {
+	t.Helper()
+	found := make(chan struct{})
+	stop := make(chan struct{})
+	go func() {
+		transport.eventMu.Lock()
+		defer transport.eventMu.Unlock()
+		for {
+			for _, message := range transport.eventQueue {
+				if message.Method == method {
+					close(found)
+					return
+				}
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			transport.eventCond.Wait()
+		}
+	}()
+	select {
+	case <-found:
+		close(stop)
+	case <-time.After(time.Second):
+		close(stop)
+		transport.eventMu.Lock()
+		transport.eventCond.Broadcast()
+		transport.eventMu.Unlock()
+		t.Fatal("burst helper did not enqueue its completion marker")
 	}
 }
 
@@ -261,6 +295,7 @@ func TestProcessTransportHelper(t *testing.T) {
 			for i := 0; i < 256; i++ {
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notice", "params": map[string]any{"index": i}})
 			}
+			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "burst-complete", "params": map[string]any{}})
 		case "burst-response":
 			for i := 0; i < 256; i++ {
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notice", "params": map[string]any{"index": i}})

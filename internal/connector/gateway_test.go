@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
@@ -59,6 +61,119 @@ func TestGatewayKeepsDesktopAttachUnsupportedAndColdResumeExplicit(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := gateway.CloseSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGatewaySerializesConcurrentSessionStartsByCreationIdentity(t *testing.T) {
+	transport := newFakeTransport()
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	var factoryMu sync.Mutex
+	created := 0
+	gateway, err := NewGateway(GatewayConfig{
+		TransportFactory: func(context.Context) (RPCTransport, error) {
+			factoryMu.Lock()
+			created++
+			factoryMu.Unlock()
+			select {
+			case <-factoryEntered:
+			default:
+				close(factoryEntered)
+			}
+			<-releaseFactory
+			return transport, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "gateway-concurrent-create"}
+	firstDone := make(chan struct {
+		session protocol.GatewaySession
+		err     error
+	}, 1)
+	go func() {
+		session, startErr := gateway.StartNewSession(context.Background(), request)
+		firstDone <- struct {
+			session protocol.GatewaySession
+			err     error
+		}{session: session, err: startErr}
+	}()
+	select {
+	case <-factoryEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first gateway session did not reach the transport factory")
+	}
+
+	secondDone := make(chan struct {
+		session protocol.GatewaySession
+		err     error
+	}, 1)
+	go func() {
+		session, startErr := gateway.StartNewSession(context.Background(), request)
+		secondDone <- struct {
+			session protocol.GatewaySession
+			err     error
+		}{session: session, err: startErr}
+	}()
+	gateway.startMu.Lock()
+	startCall := gateway.startCalls[request.CommandID]
+	gateway.startMu.Unlock()
+	if startCall == nil {
+		t.Fatal("gateway session start call was not registered")
+	}
+	select {
+	case <-startCall.waiterEntered:
+	case result := <-secondDone:
+		t.Fatalf("second gateway session returned before the first completed: %+v", result)
+	case <-time.After(time.Second):
+		t.Fatal("second gateway session did not enter the single-flight waiter")
+	}
+	close(releaseFactory)
+	first := <-firstDone
+	second := <-secondDone
+	if first.err != nil || second.err != nil {
+		t.Fatalf("concurrent gateway starts = first %+v, second %+v", first, second)
+	}
+	if first.session != second.session {
+		t.Fatalf("concurrent gateway sessions differ: first=%+v second=%+v", first.session, second.session)
+	}
+	factoryMu.Lock()
+	factoryCalls := created
+	factoryMu.Unlock()
+	if factoryCalls != 1 {
+		t.Fatalf("transport factory calls = %d, want 1", factoryCalls)
+	}
+	if err := gateway.CloseSession(context.Background(), first.session); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGatewayRejectsCreationIdentityConflictWithoutClosingCachedSession(t *testing.T) {
+	transport := newFakeTransport()
+	gateway, err := NewGateway(GatewayConfig{
+		TransportFactory: func(context.Context) (RPCTransport, error) {
+			return transport, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRequest := protocol.NewSessionRequest{CommandID: "gateway-conflict", Prompt: "first"}
+	first, err := gateway.StartNewSession(context.Background(), firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict := firstRequest
+	conflict.Prompt = "different"
+	if _, err := gateway.StartNewSession(context.Background(), conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("conflicting gateway start error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+	if _, err := gateway.TransportFor(context.Background(), first); err != nil {
+		t.Fatalf("cached session was closed after identity conflict: %v", err)
+	}
+	if err := gateway.CloseSession(context.Background(), first); err != nil {
 		t.Fatal(err)
 	}
 }

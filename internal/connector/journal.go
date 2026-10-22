@@ -155,7 +155,11 @@ func OpenJournal(path string) (*Journal, error) {
 		file.Close()
 		return nil, fmt.Errorf("secure journal permissions: %w", err)
 	}
-	if err := secureJournalPath(absPath); err != nil {
+	if err := validateJournalFileHandle(file); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("validate opened journal: %w", err)
+	}
+	if err := secureJournalFile(file); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("secure journal ACL: %w", err)
 	}
@@ -490,37 +494,6 @@ func (j *Journal) ReadEvents(query protocol.EventQuery) (protocol.EventPage, err
 		}
 	}
 	return page, nil
-}
-
-// UniqueRunIDAfter returns a run identity only when exactly one run-start
-// observation for the session follows the command issuance time. It is used
-// during unknown-result reconciliation when app-server history may not yet
-// contain the submitted user message.
-func (j *Journal) UniqueRunIDAfter(sessionID, issuedAt string) (string, bool) {
-	after, err := time.Parse(time.RFC3339Nano, issuedAt)
-	if err != nil {
-		return "", false
-	}
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	ids := make(map[string]struct{})
-	for _, event := range j.events {
-		if event.SessionID != sessionID || event.Type != protocol.EventTypeRunStarted || event.RunID == nil {
-			continue
-		}
-		occurredAt, parseErr := time.Parse(time.RFC3339Nano, event.OccurredAt)
-		if parseErr != nil || occurredAt.Before(after) {
-			continue
-		}
-		ids[*event.RunID] = struct{}{}
-	}
-	if len(ids) != 1 {
-		return "", false
-	}
-	for id := range ids {
-		return id, true
-	}
-	return "", false
 }
 
 func (j *Journal) RecordSession(sessionID, externalThreadRef, generation string) error {
@@ -900,49 +873,6 @@ func (j *Journal) ActiveTurns(sessionID string) map[string]string {
 	return active
 }
 
-// UniqueRunIDForCommand refuses to infer a run when another unresolved command
-// could have produced the same observed turn. This keeps unknown reconciliation
-// conservative for concurrent sends.
-func (j *Journal) UniqueRunIDForCommand(sessionID, commandID, issuedAt string) (string, bool) {
-	after, err := time.Parse(time.RFC3339Nano, issuedAt)
-	if err != nil {
-		return "", false
-	}
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	type candidate struct {
-		id string
-		at time.Time
-	}
-	var candidates []candidate
-	for _, event := range j.events {
-		if event.SessionID != sessionID || event.Type != protocol.EventTypeRunStarted || event.RunID == nil {
-			continue
-		}
-		occurredAt, parseErr := time.Parse(time.RFC3339Nano, event.OccurredAt)
-		if parseErr != nil || occurredAt.Before(after) {
-			continue
-		}
-		candidates = append(candidates, candidate{id: *event.RunID, at: occurredAt})
-	}
-	if len(candidates) != 1 {
-		return "", false
-	}
-	for otherID, entry := range j.commands {
-		if otherID == commandID || entry.command.SessionID != sessionID {
-			continue
-		}
-		otherIssued, parseErr := time.Parse(time.RFC3339Nano, entry.command.IssuedAt)
-		if parseErr != nil || otherIssued.After(candidates[0].at) {
-			continue
-		}
-		if otherIssued.After(after) || (entry.ack.State != protocol.CommandStateSucceeded && entry.ack.State != protocol.CommandStateFailed && entry.ack.State != protocol.CommandStateRejected) {
-			return "", false
-		}
-	}
-	return candidates[0].id, true
-}
-
 func (j *Journal) load() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -1024,6 +954,9 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if record.Command == nil || record.Ack == nil || record.CommandID == "" || record.Digest == "" {
 			return fmt.Errorf("%w: incomplete command record", ErrJournalCorrupt)
 		}
+		if record.Command.CommandID != record.CommandID || record.Ack.CommandID != record.CommandID {
+			return fmt.Errorf("%w: command identity mismatch for %q", ErrJournalCorrupt, record.CommandID)
+		}
 		digest, err := commandDigest(*record.Command)
 		if err != nil {
 			return fmt.Errorf("%w: normalize command digest: %v", ErrJournalCorrupt, err)
@@ -1039,11 +972,16 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if record.Ack == nil || record.CommandID == "" {
 			return fmt.Errorf("%w: incomplete command update", ErrJournalCorrupt)
 		}
+		if record.Ack.CommandID != "" && record.Ack.CommandID != record.CommandID {
+			return fmt.Errorf("%w: command update identity mismatch for %q", ErrJournalCorrupt, record.CommandID)
+		}
 		entry, ok := j.commands[record.CommandID]
 		if !ok {
 			return fmt.Errorf("%w: command update for %q", ErrJournalCorrupt, record.CommandID)
 		}
-		entry.ack = cloneAck(*record.Ack)
+		ack := cloneAck(*record.Ack)
+		ack.CommandID = record.CommandID
+		entry.ack = ack
 		j.commands[record.CommandID] = entry
 	case "event":
 		if record.Event == nil {

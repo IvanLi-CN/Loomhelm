@@ -214,10 +214,18 @@ func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T
 			err     error
 		}{session: session, err: startErr}
 	}()
+	adapter.startMu.Lock()
+	startCall := adapter.startCalls[request.CommandID]
+	adapter.startMu.Unlock()
+	if startCall == nil {
+		t.Fatal("session start call was not registered")
+	}
 	select {
 	case result := <-secondDone:
 		t.Fatalf("second session start returned before the first completed: %+v", result)
-	case <-time.After(20 * time.Millisecond):
+	case <-startCall.waiterEntered:
+	case <-time.After(time.Second):
+		t.Fatal("second session start did not enter the single-flight waiter")
 	}
 	close(firstTransport.release)
 	first := <-firstDone
@@ -972,6 +980,15 @@ func TestMatchCommandTurnAcceptsKnownRunWithoutSummaryInput(t *testing.T) {
 	turn := appServerTurn{ID: "turn-summary", Status: "completed"}
 	if matched, ambiguous := matchCommandTurn(command, ack, []appServerTurn{turn}); matched == nil || ambiguous {
 		t.Fatalf("summary-only known run = %+v, ambiguous = %v", matched, ambiguous)
+	}
+}
+
+func TestMatchCommandTurnDoesNotInferSummaryRunWithoutRunID(t *testing.T) {
+	command := testCommand("reconcile-summary-without-run", `{"prompt":"expected prompt"}`)
+	command.IssuedAt = "2026-10-21T00:00:00Z"
+	turn := appServerTurn{ID: "turn-summary", CreatedAt: "2026-10-21T00:00:01Z", Status: "completed"}
+	if matched, ambiguous := matchCommandTurn(command, protocol.CommandAck{}, []appServerTurn{turn}); matched != nil || ambiguous {
+		t.Fatalf("summary-only run without durable run ID was inferred: %+v, ambiguous = %v", matched, ambiguous)
 	}
 }
 

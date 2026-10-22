@@ -2,7 +2,31 @@
 
 package connector
 
-// Windows does not provide a portable directory-handle equivalent of Unix
-// fsync. The journal file's FlushFileBuffers call remains the durability
-// boundary; directory entry persistence is best effort on this platform.
-func syncJournalDirectory(string) error { return nil }
+import (
+	"fmt"
+	"syscall"
+)
+
+func syncJournalDirectory(path string) error {
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	handle, err := syscall.CreateFile(
+		name,
+		syscall.GENERIC_READ,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
+		nil,
+		syscall.OPEN_EXISTING,
+		syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		return fmt.Errorf("open journal directory for flush: %w", err)
+	}
+	defer syscall.CloseHandle(handle)
+	if err := syscall.FlushFileBuffers(handle); err != nil {
+		return fmt.Errorf("flush journal directory: %w", err)
+	}
+	return nil
+}

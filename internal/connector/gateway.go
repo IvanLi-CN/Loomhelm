@@ -33,14 +33,31 @@ type gatewaySession struct {
 	resumeResponse json.RawMessage
 }
 
+type gatewayStartRecord struct {
+	session       protocol.GatewaySession
+	requestDigest string
+}
+
+type gatewayStartCall struct {
+	done          chan struct{}
+	waiterEntered chan struct{}
+	waiterOnce    sync.Once
+	requestDigest string
+	session       protocol.GatewaySession
+	err           error
+}
+
 // Gateway owns independent app-server processes and never discovers or
 // controls the private stdio child owned by ChatGPT Desktop.
 type Gateway struct {
-	mu          sync.Mutex
-	reconcileMu sync.Mutex
-	factory     TransportFactory
-	client      ClientInfo
-	sessions    map[string]gatewaySession
+	mu            sync.Mutex
+	reconcileMu   sync.Mutex
+	factory       TransportFactory
+	client        ClientInfo
+	sessions      map[string]gatewaySession
+	startMu       sync.Mutex
+	startCalls    map[string]*gatewayStartCall
+	startSessions map[string]gatewayStartRecord
 }
 
 func NewGateway(config GatewayConfig) (*Gateway, error) {
@@ -63,7 +80,13 @@ func NewGateway(config GatewayConfig) (*Gateway, error) {
 			return NewProcessTransport(context.WithoutCancel(ctx), processConfig)
 		}
 	}
-	return &Gateway{factory: factory, client: client, sessions: make(map[string]gatewaySession)}, nil
+	return &Gateway{
+		factory:       factory,
+		client:        client,
+		sessions:      make(map[string]gatewaySession),
+		startCalls:    make(map[string]*gatewayStartCall),
+		startSessions: make(map[string]gatewayStartRecord),
+	}, nil
 }
 
 func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessionRequest) (protocol.GatewaySession, error) {
@@ -73,13 +96,44 @@ func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessi
 	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
 		return protocol.GatewaySession{}, err
 	}
+	requestDigest, err := sessionStartPayloadDigest(request)
+	if err != nil {
+		return protocol.GatewaySession{}, fmt.Errorf("digest session start request: %w", err)
+	}
+	g.startMu.Lock()
+	if record, ok := g.startSessions[request.CommandID]; ok {
+		if record.requestDigest != requestDigest {
+			g.startMu.Unlock()
+			return protocol.GatewaySession{}, protocol.ErrIdempotencyConflict
+		}
+		g.startMu.Unlock()
+		return record.session, nil
+	}
+	if call, ok := g.startCalls[request.CommandID]; ok {
+		if call.requestDigest != requestDigest {
+			g.startMu.Unlock()
+			return protocol.GatewaySession{}, protocol.ErrIdempotencyConflict
+		}
+		call.waiterOnce.Do(func() { close(call.waiterEntered) })
+		g.startMu.Unlock()
+		select {
+		case <-call.done:
+			return call.session, call.err
+		case <-ctx.Done():
+			return protocol.GatewaySession{}, ctx.Err()
+		}
+	}
+	call := &gatewayStartCall{done: make(chan struct{}), waiterEntered: make(chan struct{}), requestDigest: requestDigest}
+	g.startCalls[request.CommandID] = call
+	g.startMu.Unlock()
+
 	transport, err := g.factory(ctx)
 	if err != nil {
-		return protocol.GatewaySession{}, err
+		return g.finishNewSessionStart(request.CommandID, call, protocol.GatewaySession{}, err)
 	}
 	if err := g.initialize(ctx, transport); err != nil {
 		_ = transport.Close()
-		return protocol.GatewaySession{}, err
+		return g.finishNewSessionStart(request.CommandID, call, protocol.GatewaySession{}, err)
 	}
 	session := protocol.GatewaySession{
 		Handle:     newOpaqueID("gateway"),
@@ -89,7 +143,20 @@ func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessi
 	g.mu.Lock()
 	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport}
 	g.mu.Unlock()
-	return session, nil
+	return g.finishNewSessionStart(request.CommandID, call, session, nil)
+}
+
+func (g *Gateway) finishNewSessionStart(commandID string, call *gatewayStartCall, session protocol.GatewaySession, err error) (protocol.GatewaySession, error) {
+	g.startMu.Lock()
+	defer g.startMu.Unlock()
+	delete(g.startCalls, commandID)
+	call.session = session
+	call.err = err
+	if err == nil {
+		g.startSessions[commandID] = gatewayStartRecord{session: session, requestDigest: call.requestDigest}
+	}
+	close(call.done)
+	return session, err
 }
 
 // SetExternalThreadRef binds the app-server thread identity to the gateway
@@ -214,6 +281,13 @@ func (g *Gateway) TransportFor(_ context.Context, session protocol.GatewaySessio
 func (g *Gateway) CloseSession(_ context.Context, session protocol.GatewaySession) error {
 	g.reconcileMu.Lock()
 	defer g.reconcileMu.Unlock()
+	g.startMu.Lock()
+	for commandID, cached := range g.startSessions {
+		if cached.session.Handle == session.Handle {
+			delete(g.startSessions, commandID)
+		}
+	}
+	g.startMu.Unlock()
 	g.mu.Lock()
 	entry, ok := g.sessions[session.Handle]
 	if ok {

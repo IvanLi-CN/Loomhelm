@@ -14,6 +14,10 @@ func secureJournalPath(string) error { return nil }
 
 func validateJournalFile(string) error { return nil }
 
+func validateJournalFileHandle(*os.File) error { return nil }
+
+func secureJournalFile(*os.File) error { return nil }
+
 func validateJournalDirectory(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {

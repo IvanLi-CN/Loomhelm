@@ -263,6 +263,36 @@ func TestJournalNormalizesLegacyCommandDigestForLargeJSONNumbers(t *testing.T) {
 	}
 }
 
+func TestJournalRejectsMismatchedCommandRecordIdentity(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "mismatched-command.jsonl")
+	command := testCommand("nested-command-id", `{"prompt":"must not be replayed"}`)
+	ack := protocol.CommandAck{CommandID: command.CommandID, ReceivedAt: command.IssuedAt, State: protocol.CommandStateAccepted}
+	digest, err := commandDigest(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := journalRecord{
+		FormatVersion: journalFormatVersion,
+		Type:          "command",
+		At:            command.IssuedAt,
+		Command:       &command,
+		CommandID:     "outer-command-id",
+		Digest:        digest,
+		Ack:           &ack,
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenJournal(path); !errors.Is(err, ErrJournalCorrupt) {
+		t.Fatalf("mismatched command identity error = %v, want %v", err, ErrJournalCorrupt)
+	}
+}
+
 func TestJournalLookupCommandForRequestDoesNotRequireAdapterState(t *testing.T) {
 	journal := openTestJournal(t)
 	command := testCommand("lookup-command", `{"prompt":"durable"}`)
@@ -587,58 +617,6 @@ func TestJournalDoesNotDeduplicateIdenticalObservedPayloads(t *testing.T) {
 	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: "session-events", Limit: 10})
 	if err != nil || len(page.Events) != 2 {
 		t.Fatalf("observed event page = %+v, error = %v", page, err)
-	}
-}
-
-func TestJournalFindsUniqueRunAfterCommandIssuance(t *testing.T) {
-	journal := openTestJournal(t)
-	if _, err := journal.AppendEvent(protocol.Event{
-		SessionID:  "session-1",
-		RunID:      stringPointer("turn-1"),
-		OccurredAt: "2026-10-21T00:00:01Z",
-		Type:       protocol.EventTypeRunStarted,
-		Source:     protocol.EventSourceAppServer,
-		Payload:    []byte(`{"method":"turn/started"}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if runID, ok := journal.UniqueRunIDAfter("session-1", "2026-10-21T00:00:00Z"); !ok || runID != "turn-1" {
-		t.Fatalf("unique run after issuance = %q, %v", runID, ok)
-	}
-}
-
-func TestJournalDoesNotAttributeLaterCommandRunToEarlierUnknownCommand(t *testing.T) {
-	journal := openTestJournal(t)
-	first := testCommand("command-first", `{"prompt":"same"}`)
-	if _, _, err := journal.BeginCommand(first); err != nil {
-		t.Fatal(err)
-	}
-	second := first
-	second.CommandID = "command-second"
-	second.IssuedAt = "2026-10-21T00:00:01Z"
-	if _, _, err := journal.BeginCommand(second); err != nil {
-		t.Fatal(err)
-	}
-	secondAck, err := journal.LookupCommand(second.CommandID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondAck.State = protocol.CommandStateSucceeded
-	if err := journal.UpdateCommand(second.CommandID, secondAck); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := journal.AppendEvent(protocol.Event{
-		SessionID:  first.SessionID,
-		RunID:      stringPointer("turn-second"),
-		OccurredAt: "2026-10-21T00:00:02Z",
-		Type:       protocol.EventTypeRunStarted,
-		Source:     protocol.EventSourceAppServer,
-		Payload:    []byte(`{"method":"turn/started"}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if runID, ok := journal.UniqueRunIDForCommand(first.SessionID, first.CommandID, first.IssuedAt); ok || runID != "" {
-		t.Fatalf("later command run was attributed to earlier unknown command: %q, %v", runID, ok)
 	}
 }
 

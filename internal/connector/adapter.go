@@ -54,7 +54,13 @@ type Adapter struct {
 	recoveryMu sync.Mutex
 	sessions   map[string]*adapterSessionState
 	startMu    sync.Mutex
-	startCalls map[string]chan struct{}
+	startCalls map[string]*sessionStartCall
+}
+
+type sessionStartCall struct {
+	done          chan struct{}
+	waiterEntered chan struct{}
+	waiterOnce    sync.Once
 }
 
 func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConfig) (*Adapter, error) {
@@ -84,7 +90,7 @@ func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConf
 		journal:    journal,
 		config:     config,
 		sessions:   make(map[string]*adapterSessionState),
-		startCalls: make(map[string]chan struct{}),
+		startCalls: make(map[string]*sessionStartCall),
 	}, nil
 }
 
@@ -178,15 +184,16 @@ func (a *Adapter) acquireSessionStart(commandID string) (func(), <-chan struct{}
 	a.startMu.Lock()
 	defer a.startMu.Unlock()
 	if wait, ok := a.startCalls[commandID]; ok {
-		return nil, wait
+		wait.waiterOnce.Do(func() { close(wait.waiterEntered) })
+		return nil, wait.done
 	}
-	done := make(chan struct{})
-	a.startCalls[commandID] = done
+	call := &sessionStartCall{done: make(chan struct{}), waiterEntered: make(chan struct{})}
+	a.startCalls[commandID] = call
 	return func() {
 		a.startMu.Lock()
-		if current, ok := a.startCalls[commandID]; ok && current == done {
+		if current, ok := a.startCalls[commandID]; ok && current == call {
 			delete(a.startCalls, commandID)
-			close(done)
+			close(call.done)
 		}
 		a.startMu.Unlock()
 	}, nil
@@ -645,12 +652,6 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 		return value, nil
 	}
 	runObserved := ack.RunID != nil
-	if ack.RunID == nil {
-		if runID, ok := a.journal.UniqueRunIDForCommand(session.SessionID, command.CommandID, command.IssuedAt); ok {
-			ack.RunID = &runID
-			runObserved = true
-		}
-	}
 	matched, ambiguous := matchCommandTurn(command, ack, turns)
 	reconciliation := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown}
 	if matched != nil && !ambiguous {
