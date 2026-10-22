@@ -2,31 +2,8 @@
 
 package connector
 
-import (
-	"fmt"
-	"syscall"
-)
+// Windows does not provide a portable, reliable directory-handle flush
+// equivalent to Unix fsync. Journal records are flushed through the file
+// handle; directory creation must not make a new journal unopenable.
 
-func syncJournalDirectory(path string) error {
-	name, err := syscall.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	handle, err := syscall.CreateFile(
-		name,
-		syscall.GENERIC_READ|syscall.GENERIC_WRITE,
-		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
-		nil,
-		syscall.OPEN_EXISTING,
-		syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT,
-		0,
-	)
-	if err != nil {
-		return fmt.Errorf("open journal directory for flush: %w", err)
-	}
-	defer syscall.CloseHandle(handle)
-	if err := syscall.FlushFileBuffers(handle); err != nil {
-		return fmt.Errorf("flush journal directory: %w", err)
-	}
-	return nil
-}
+func syncJournalDirectory(string) error { return nil }

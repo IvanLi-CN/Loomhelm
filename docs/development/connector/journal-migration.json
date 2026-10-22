@@ -67,7 +67,9 @@
         "generation-qualified persisted RPC observations disambiguate reused JSON-RPC IDs without rewriting raw response events",
         "approval claims from another session generation cannot apply a decision to the current pending request",
         "approval resolution events retain the pending run identity when the app-server omits turnId",
-        "numeric and string JSON-RPC approval request IDs remain distinct"
+        "numeric and string JSON-RPC approval request IDs remain distinct",
+        "approval resolution and item-completion events must match the pending turn identity",
+        "journal startup and append paths enforce bounded record, event-count and file-size resources"
       ],
       "note": "The candidate reads the immediately preceding v1 journal state; v1 binaries are not supported readers for v2 records."
     },

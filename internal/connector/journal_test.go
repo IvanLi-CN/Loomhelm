@@ -613,6 +613,145 @@ func TestJournalPreservesApprovalRequestIDTypeWhenFindingPendingApproval(t *test
 	}
 }
 
+func TestJournalNormalizesEscapedApprovalRequestID(t *testing.T) {
+	journal := openTestJournal(t)
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-id-escape",
+		RunID:     stringPointer("turn-approval-id-escape"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":"\u0031","method":"item/commandExecution/requestApproval","params":{"turnId":"turn-approval-id-escape","itemId":"item-approval-id-escape"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := journal.FindPendingApproval("session-approval-id-escape", "", []byte(`"1"`))
+	if err != nil || string(pending.RequestID) != `"\u0031"` {
+		t.Fatalf("escaped approval lookup = %+v, error = %v", pending, err)
+	}
+	if _, already, err := journal.ClaimApproval("session-approval-id-escape", []byte(`"1"`), 1, "command-approval-id-escape", "approve"); err != nil || already {
+		t.Fatalf("escaped approval claim = already %v, error %v", already, err)
+	}
+}
+
+func TestJournalDoesNotResolveApprovalAcrossTurnReuse(t *testing.T) {
+	journal := openTestJournal(t)
+	for _, value := range []struct {
+		requestID string
+		turnID    string
+		commandID string
+	}{{"21", "turn-reuse-a", "command-reuse-a"}, {"22", "turn-reuse-b", "command-reuse-b"}} {
+		if _, err := journal.AppendEvent(protocol.Event{
+			SessionID: "session-approval-turn-reuse",
+			RunID:     stringPointer(value.turnID),
+			Type:      protocol.EventTypeApprovalRequested,
+			Source:    protocol.EventSourceAppServer,
+			Payload:   []byte(`{"jsonrpc":"2.0","id":` + value.requestID + `,"method":"item/commandExecution/requestApproval","params":{"turnId":"` + value.turnID + `","revision":1,"itemId":"shared-item"}}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, already, err := journal.ClaimApproval("session-approval-turn-reuse", []byte(value.requestID), 1, value.commandID, "approve"); err != nil || already {
+			t.Fatalf("approval claim %s = already %v, error %v", value.commandID, already, err)
+		}
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-turn-reuse",
+		RunID:     stringPointer("turn-reuse-b"),
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":21,"turnId":"turn-reuse-b","resolution":"accept"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, ok := journal.ApprovalResult("command-reuse-a"); ok {
+		t.Fatalf("wrong-turn resolution applied to command-reuse-a: %q", result)
+	}
+	if !journal.IsApprovalPending("session-approval-turn-reuse", []byte("21")) {
+		t.Fatal("wrong-turn resolution removed command-reuse-a approval")
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-turn-reuse",
+		RunID:     stringPointer("turn-reuse-b"),
+		Type:      protocol.EventTypeItemCompleted,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"item/completed","params":{"turnId":"turn-reuse-b","item":{"id":"shared-item","status":"completed"}}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, ok := journal.ApprovalResult("command-reuse-b"); !ok || result != "accept" {
+		t.Fatalf("matching item completion result = %q, found = %v", result, ok)
+	}
+	if !journal.IsApprovalPending("session-approval-turn-reuse", []byte("21")) {
+		t.Fatal("wrong-turn approval was removed by matching item completion")
+	}
+}
+
+func TestJournalReplaysLegacyApprovalResolutionWithPendingRunIdentity(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "legacy-approval-resolution.jsonl")
+	session := journalSession{
+		SessionID:         "legacy-approval-session",
+		ExternalThreadRef: "legacy-approval-thread",
+		Generation:        "legacy-approval-generation",
+		UpdatedAt:         "2026-10-21T00:00:00Z",
+	}
+	request := protocol.Event{
+		SessionID: session.SessionID,
+		RunID:     stringPointer("legacy-approval-turn"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":11,"method":"item/commandExecution/requestApproval","params":{"turnId":"legacy-approval-turn","revision":1,"itemId":"legacy-approval-item"}}`),
+		Cursor:    session.SessionID + ":1",
+		EventID:   "legacy-approval-request",
+		Sequence:  1,
+	}
+	claim := approvalClaimRecord{
+		SessionID: session.SessionID,
+		RequestID: json.RawMessage(`11`),
+		Revision:  1,
+		CommandID: "legacy-approval-command",
+		Decision:  "approve",
+	}
+	resolved := protocol.Event{
+		SessionID: session.SessionID,
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":11,"resolution":"accept"}}`),
+		Cursor:    session.SessionID + ":2",
+		EventID:   "legacy-approval-resolution",
+		Sequence:  2,
+	}
+	records := []journalRecord{
+		{FormatVersion: legacyJournalFormatVersion, Type: "session", At: session.UpdatedAt, Session: &session},
+		{FormatVersion: legacyJournalFormatVersion, Type: "event", At: session.UpdatedAt, Event: &request},
+		{FormatVersion: legacyJournalFormatVersion, Type: "approval_claim", At: session.UpdatedAt, ApprovalClaim: &claim},
+		{FormatVersion: legacyJournalFormatVersion, Type: "event", At: session.UpdatedAt, Event: &resolved},
+	}
+	var data []byte
+	for _, record := range records {
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, encoded...)
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: session.SessionID, RunID: "legacy-approval-turn", Limit: 10})
+	if err != nil || len(page.Events) != 2 || page.Events[1].Type != protocol.EventTypeApprovalResolved {
+		t.Fatalf("legacy approval events = %+v, error = %v", page.Events, err)
+	}
+	if result, ok := journal.ApprovalResult("legacy-approval-command"); !ok || result != "accept" {
+		t.Fatalf("legacy approval result = %q, found = %v", result, ok)
+	}
+}
+
 func TestJournalWaitsForItemStatusWhenApprovalResolutionIsEmpty(t *testing.T) {
 	journal := openTestJournal(t)
 	if _, err := journal.AppendEvent(protocol.Event{

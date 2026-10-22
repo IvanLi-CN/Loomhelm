@@ -191,6 +191,41 @@ func TestProcessTransportDeliversEarlyResponseBeforeFinish(t *testing.T) {
 	}
 }
 
+func TestProcessTransportPreservesEarlyResponseWhenClosing(t *testing.T) {
+	waiter := make(chan rpcResult, 1)
+	transport := &ProcessTransport{
+		pending: make(map[string]pendingRPC),
+		events:  make(chan RPCMessage, 1),
+		done:    make(chan struct{}),
+	}
+	transport.closeRequested.Store(true)
+	transport.pending["1"] = pendingRPC{
+		result:        waiter,
+		writing:       true,
+		method:        "turn/start",
+		commandID:     "command-early-response-close",
+		earlyResponse: &RPCMessage{ID: json.RawMessage(`1`), Result: json.RawMessage(`{"turn":{"id":"turn-early-close"}}`)},
+	}
+
+	transport.finishTransport(io.EOF)
+	select {
+	case result := <-waiter:
+		if result.err != nil || string(result.message.Result) != `{"turn":{"id":"turn-early-close"}}` {
+			t.Fatalf("closing early response = %+v, want successful response", result)
+		}
+		if result.message.observation != nil {
+			t.Fatal("closing early response retained an observation that cannot be dispatched")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for closing early response")
+	}
+	select {
+	case message := <-transport.events:
+		t.Fatalf("closing early response was dispatched as an event: %+v", message)
+	default:
+	}
+}
+
 func TestProcessTransportDoesNotCloseEventsWhileReaderIsSending(t *testing.T) {
 	stdout := io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","method":"notice","params":{}}` + "\n"))
 	transport := &ProcessTransport{

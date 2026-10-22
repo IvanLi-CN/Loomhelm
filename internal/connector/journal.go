@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -21,6 +22,9 @@ import (
 const (
 	legacyJournalFormatVersion = 1
 	journalFormatVersion       = 2
+	maxJournalBytes            = int64(256 << 20)
+	maxJournalRecordBytes      = 4 << 20
+	maxJournalEvents           = 1_000_000
 )
 
 const approvalResolutionCleared = "cleared"
@@ -28,6 +32,7 @@ const approvalResolutionCleared = "cleared"
 var (
 	ErrCommandNotFound  = errors.New("command is not present in the journal")
 	ErrJournalCorrupt   = errors.New("journal contains a corrupt record")
+	ErrJournalTooLarge  = errors.New("journal exceeds its configured resource limit")
 	ErrApprovalNotFound = errors.New("approval is not pending in the journal")
 	ErrApprovalClaimed  = errors.New("approval is already claimed")
 )
@@ -66,10 +71,9 @@ type sessionStartIntent struct {
 }
 
 type commandEntry struct {
-	command    protocol.Command
-	digest     string
-	ack        protocol.CommandAck
-	receivedAt string
+	command protocol.Command
+	digest  string
+	ack     protocol.CommandAck
 }
 
 type Journal struct {
@@ -79,11 +83,12 @@ type Journal struct {
 	file     *os.File
 	fatalErr error
 
-	commands      map[string]commandEntry
-	events        []protocol.Event
-	eventIDs      map[string]struct{}
-	sessions      map[string]journalSession
-	sessionStarts map[string]sessionStartIntent
+	commands        map[string]commandEntry
+	events          []protocol.Event
+	eventIDs        map[string]struct{}
+	reconciliations map[string]protocol.Reconciliation
+	sessions        map[string]journalSession
+	sessionStarts   map[string]sessionStartIntent
 
 	sequenceBySession map[string]int64
 	pendingApprovals  map[string]PendingApproval
@@ -193,6 +198,7 @@ func OpenJournal(path string) (*Journal, error) {
 		file:              file,
 		commands:          make(map[string]commandEntry),
 		eventIDs:          make(map[string]struct{}),
+		reconciliations:   make(map[string]protocol.Reconciliation),
 		sessions:          make(map[string]journalSession),
 		sessionStarts:     make(map[string]sessionStartIntent),
 		sequenceBySession: make(map[string]int64),
@@ -328,7 +334,7 @@ func (j *Journal) BeginCommand(command protocol.Command) (protocol.CommandAck, b
 	}); err != nil {
 		return protocol.CommandAck{}, false, err
 	}
-	j.commands[command.CommandID] = commandEntry{command: cloneCommand(command), digest: digest, ack: cloneAck(ack), receivedAt: ack.ReceivedAt}
+	j.commands[command.CommandID] = commandEntry{command: cloneCommand(command), digest: digest, ack: cloneAck(ack)}
 	return ack, false, nil
 }
 
@@ -409,19 +415,6 @@ func (j *Journal) Command(commandID string) (protocol.Command, protocol.CommandA
 	return cloneCommand(entry.command), cloneAck(entry.ack), nil
 }
 
-func (j *Journal) CommandReceivedAt(commandID string) (string, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	entry, ok := j.commands[commandID]
-	if !ok {
-		return "", ErrCommandNotFound
-	}
-	if entry.receivedAt != "" {
-		return entry.receivedAt, nil
-	}
-	return entry.ack.ReceivedAt, nil
-}
-
 func (j *Journal) AppendEvent(event protocol.Event) (protocol.Event, error) {
 	if event.SessionID == "" {
 		return protocol.Event{}, fmt.Errorf("event session id must not be empty")
@@ -442,6 +435,9 @@ func (j *Journal) AppendEvent(event protocol.Event) (protocol.Event, error) {
 				}
 			}
 		}
+	}
+	if len(j.events) >= maxJournalEvents {
+		return protocol.Event{}, fmt.Errorf("%w: event count exceeds %d", ErrJournalTooLarge, maxJournalEvents)
 	}
 	if event.OccurredAt == "" {
 		event.OccurredAt = now()
@@ -739,14 +735,31 @@ func (j *Journal) FailSessionStart(intentID string) error {
 }
 
 func (j *Journal) RecordReconciliation(value protocol.Reconciliation) error {
+	if value.CommandID == "" {
+		return errors.New("reconciliation command id must not be empty")
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.appendLocked(journalRecord{
+	if err := j.appendLocked(journalRecord{
 		FormatVersion:  journalFormatVersion,
 		Type:           "reconciliation",
 		At:             value.ObservedAt,
 		Reconciliation: &value,
-	})
+	}); err != nil {
+		return err
+	}
+	j.reconciliations[value.CommandID] = cloneReconciliation(value)
+	return nil
+}
+
+func (j *Journal) Reconciliation(commandID string) (protocol.Reconciliation, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	value, ok := j.reconciliations[commandID]
+	if !ok {
+		return protocol.Reconciliation{}, false
+	}
+	return cloneReconciliation(value), true
 }
 
 func (j *Journal) Session(sessionID string) (protocol.AdapterSession, bool) {
@@ -918,54 +931,50 @@ func (j *Journal) load() error {
 	if err != nil {
 		return fmt.Errorf("stat journal: %w", err)
 	}
-	data := make([]byte, info.Size())
-	if len(data) > 0 {
-		read, readErr := j.file.ReadAt(data, 0)
-		if readErr != nil && !(errors.Is(readErr, io.EOF) && read == len(data)) {
-			return fmt.Errorf("read journal: %w", readErr)
-		}
-		if read != len(data) {
-			return fmt.Errorf("read journal: got %d bytes, want %d", read, len(data))
-		}
+	if info.Size() > maxJournalBytes {
+		return fmt.Errorf("%w: file size %d exceeds %d bytes", ErrJournalTooLarge, info.Size(), maxJournalBytes)
 	}
-	validEnd := 0
+	if _, err := j.file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek journal start: %w", err)
+	}
+	reader := bufio.NewReaderSize(j.file, 64*1024)
+	validEnd := int64(0)
 	needsNewline := false
-	for validEnd < len(data) {
-		relative := bytes.IndexByte(data[validEnd:], '\n')
-		lineEnd := len(data)
-		terminated := false
-		if relative >= 0 {
-			lineEnd = validEnd + relative
-			terminated = true
+	for validEnd < info.Size() {
+		lineStart := validEnd
+		line, recordSize, terminated, err := readJournalRecord(reader)
+		if err != nil {
+			return fmt.Errorf("read journal: %w", err)
 		}
-		line := bytes.TrimSpace(data[validEnd:lineEnd])
+		if recordSize == 0 {
+			break
+		}
+		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
+			validEnd = lineStart + recordSize
 			if terminated {
-				validEnd = lineEnd + 1
 				continue
 			}
-			validEnd = lineEnd
 			break
 		}
 		var record journalRecord
 		if err := json.Unmarshal(line, &record); err != nil {
 			if terminated {
-				return fmt.Errorf("%w at byte %d: %v", ErrJournalCorrupt, validEnd, err)
+				return fmt.Errorf("%w at byte %d: %v", ErrJournalCorrupt, lineStart, err)
 			}
 			break
 		}
 		if err := j.applyRecord(record); err != nil {
 			return err
 		}
-		validEnd = lineEnd
+		validEnd = lineStart + recordSize
 		if terminated {
-			validEnd++
 		} else {
 			needsNewline = true
 		}
 	}
-	if validEnd != len(data) {
-		if err := j.file.Truncate(int64(validEnd)); err != nil {
+	if validEnd != info.Size() {
+		if err := j.file.Truncate(validEnd); err != nil {
 			return fmt.Errorf("truncate incomplete journal record: %w", err)
 		}
 		if err := j.file.Sync(); err != nil {
@@ -981,6 +990,30 @@ func (j *Journal) load() error {
 		}
 	}
 	return nil
+}
+
+func readJournalRecord(reader *bufio.Reader) ([]byte, int64, bool, error) {
+	var record []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		record = append(record, chunk...)
+		if len(record) > maxJournalRecordBytes {
+			return nil, int64(len(record)), false, fmt.Errorf("%w: record exceeds %d bytes", ErrJournalTooLarge, maxJournalRecordBytes)
+		}
+		if err == nil {
+			return record[:len(record)-1], int64(len(record)), true, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if len(record) == 0 {
+				return nil, 0, false, nil
+			}
+			return record, int64(len(record)), false, nil
+		}
+		return nil, int64(len(record)), false, err
+	}
 }
 
 func (j *Journal) applyRecord(record journalRecord) error {
@@ -1008,11 +1041,7 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if _, ok := j.commands[record.CommandID]; ok {
 			return nil
 		}
-		receivedAt := record.At
-		if receivedAt == "" {
-			receivedAt = record.Ack.ReceivedAt
-		}
-		j.commands[record.CommandID] = commandEntry{command: cloneCommand(*record.Command), digest: digest, ack: cloneAck(*record.Ack), receivedAt: receivedAt}
+		j.commands[record.CommandID] = commandEntry{command: cloneCommand(*record.Command), digest: digest, ack: cloneAck(*record.Ack)}
 	case "command_update":
 		if record.Ack == nil || record.CommandID == "" {
 			return fmt.Errorf("%w: incomplete command update", ErrJournalCorrupt)
@@ -1038,6 +1067,14 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		}
 		if _, duplicate := j.eventIDs[event.EventID]; duplicate {
 			return nil
+		}
+		if len(j.events) >= maxJournalEvents {
+			return fmt.Errorf("%w: event count exceeds %d", ErrJournalTooLarge, maxJournalEvents)
+		}
+		if event.Type == protocol.EventTypeApprovalResolved && (event.RunID == nil || strings.TrimSpace(*event.RunID) == "") {
+			if runID := j.approvalRunIDLocked(event); runID != "" {
+				event.RunID = &runID
+			}
 		}
 		j.events = append(j.events, event)
 		j.eventIDs[event.EventID] = struct{}{}
@@ -1068,6 +1105,7 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if record.Reconciliation == nil || record.Reconciliation.CommandID == "" {
 			return fmt.Errorf("%w: incomplete reconciliation record", ErrJournalCorrupt)
 		}
+		j.reconciliations[record.Reconciliation.CommandID] = cloneReconciliation(*record.Reconciliation)
 	case "approval_claim":
 		if record.ApprovalClaim == nil || record.ApprovalClaim.SessionID == "" || len(bytes.TrimSpace(record.ApprovalClaim.RequestID)) == 0 || record.ApprovalClaim.CommandID == "" || record.ApprovalClaim.Revision <= 0 {
 			return fmt.Errorf("%w: incomplete approval claim", ErrJournalCorrupt)
@@ -1151,12 +1189,18 @@ func (j *Journal) appendLocked(record journalRecord) error {
 		return j.poisonLocked(fmt.Errorf("encode journal record: %w", err))
 	}
 	data = append(data, '\n')
+	if len(data) > maxJournalRecordBytes {
+		return j.poisonLocked(fmt.Errorf("%w: record exceeds %d bytes", ErrJournalTooLarge, maxJournalRecordBytes))
+	}
 	if _, err := j.file.Seek(0, io.SeekEnd); err != nil {
 		return j.poisonLocked(fmt.Errorf("seek journal end: %w", err))
 	}
 	start, err := j.file.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return j.poisonLocked(fmt.Errorf("locate journal end: %w", err))
+	}
+	if start > maxJournalBytes-int64(len(data)) {
+		return j.poisonLocked(fmt.Errorf("%w: file would exceed %d bytes", ErrJournalTooLarge, maxJournalBytes))
 	}
 	written, err := writeAll(j.file, data)
 	if err != nil {
@@ -1252,9 +1296,12 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 	if event.Type == protocol.EventTypeApprovalResolved {
 		rawResolution := strings.TrimSpace(message.Params.Resolution)
 		resolution := normalizeApprovalDecision(rawResolution)
+		pending, pendingExists := j.pendingApprovals[key]
+		if !pendingExists || !approvalEventMatchesPending(event, pending, message.Params.TurnID) {
+			return
+		}
 		if claim, claimed := j.approvalClaims[key]; claimed {
-			pending, pendingExists := j.pendingApprovals[key]
-			if !pendingExists || !approvalClaimMatches(claim, pending) || !approvalPendingMatchesCurrentGeneration(j.sessions, pending) {
+			if !approvalClaimMatches(claim, pending) || !approvalPendingMatchesCurrentGeneration(j.sessions, pending) {
 				delete(j.pendingApprovals, key)
 				delete(j.approvalClaims, key)
 				return
@@ -1277,7 +1324,7 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 	}
 	if event.Type == protocol.EventTypeItemCompleted && message.Params.Item.Status != "" && message.Params.Item.Status != "inProgress" {
 		for requestKey, approval := range j.pendingApprovals {
-			if approval.SessionID == event.SessionID && approval.ItemID != "" && approval.ItemID == message.Params.Item.ID {
+			if approval.SessionID == event.SessionID && approval.ItemID != "" && approval.ItemID == message.Params.Item.ID && approvalEventMatchesPending(event, approval, message.Params.TurnID) {
 				if claim, claimed := j.approvalClaims[requestKey]; claimed {
 					if !approvalClaimMatches(claim, approval) || !approvalPendingMatchesCurrentGeneration(j.sessions, approval) {
 						delete(j.pendingApprovals, requestKey)
@@ -1329,7 +1376,7 @@ func approvalRequestIDFromPayload(payload json.RawMessage) json.RawMessage {
 }
 
 func approvalClaimMatches(claim approvalClaimRecord, pending PendingApproval) bool {
-	if claim.SessionID != pending.SessionID || string(bytes.TrimSpace(claim.RequestID)) != string(bytes.TrimSpace(pending.RequestID)) {
+	if claim.SessionID != pending.SessionID || approvalIDIdentity(claim.RequestID) != approvalIDIdentity(pending.RequestID) {
 		return false
 	}
 	if pending.Generation != "" && claim.Generation != pending.Generation {
@@ -1359,11 +1406,31 @@ func approvalPendingMatchesCurrentGeneration(sessions map[string]journalSession,
 }
 
 func approvalKey(sessionID string, requestID json.RawMessage) string {
-	trimmed := bytes.TrimSpace(requestID)
-	if sessionID == "" || len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+	identity := approvalIDIdentity(requestID)
+	if sessionID == "" || identity == "" {
 		return ""
 	}
-	return sessionID + "\x00" + string(trimmed)
+	return sessionID + "\x00" + identity
+}
+
+func approvalEventMatchesPending(event protocol.Event, pending PendingApproval, turnID string) bool {
+	expectedRunID := strings.TrimSpace(pending.RunID)
+	if expectedRunID == "" {
+		expectedRunID = strings.TrimSpace(pending.TurnID)
+	}
+	if expectedRunID == "" {
+		return false
+	}
+	matches := func(value string) bool {
+		value = strings.TrimSpace(value)
+		return value == expectedRunID || value == strings.TrimSpace(pending.RunID) || value == strings.TrimSpace(pending.TurnID)
+	}
+	eventRunID := strings.TrimSpace(valueOrEmpty(event.RunID))
+	turnID = strings.TrimSpace(turnID)
+	if eventRunID == "" && turnID == "" {
+		return false
+	}
+	return (eventRunID == "" || matches(eventRunID)) && (turnID == "" || matches(turnID))
 }
 
 func approvalIDText(requestID json.RawMessage) string {
@@ -1489,6 +1556,18 @@ func cloneEvent(value protocol.Event) protocol.Event {
 	if value.RunID != nil {
 		runID := *value.RunID
 		value.RunID = &runID
+	}
+	return value
+}
+
+func cloneReconciliation(value protocol.Reconciliation) protocol.Reconciliation {
+	if value.EventCursor != nil {
+		cursor := *value.EventCursor
+		value.EventCursor = &cursor
+	}
+	if value.Note != nil {
+		note := *value.Note
+		value.Note = &note
 	}
 	return value
 }

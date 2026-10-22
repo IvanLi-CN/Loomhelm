@@ -4,6 +4,8 @@ The Connector journal is a host-local, append-only JSONL file owned by one Conne
 
 The journal is created with a mode 0700 parent directory and mode 0600 file permissions, and each record carries an explicit format version so a reader can reject an incompatible state instead of guessing.
 
+The journal refuses records larger than 4 MiB, stops accepting events after 1,000,000 retained events, and refuses files larger than 256 MiB. Startup scans records incrementally and fails closed when a limit is exceeded; it does not delete or compact historical state automatically.
+
 ## Records
 
 `command` records contain the complete versioned `protocol.Command`, a canonical payload digest, and the first durable ACK state; `command_update` records contain the latest ACK state, result, operation identity, run identity and API error.
@@ -12,7 +14,7 @@ The journal is created with a mode 0700 parent directory and mode 0600 file perm
 
 For journaled RPC responses, the raw app-server event is followed by a host-observation correlation event containing the Gateway generation, method, command identity when available and generation-qualified operation identity. Unknown ACKs use that identity so reused JSON-RPC IDs from different process generations cannot be misattributed; older records without a correlation event fall back only when the raw ID is unique and no qualified observation exists.
 
-Approval claims retain the session generation and pending run, turn and item identity. A replayed or newly observed approval from another generation cannot apply a decision to the older claim; the affected command remains unknown until explicitly reconciled. Resolution events inherit the pending run identity when the app-server omits `turnId`, and numeric and string JSON-RPC request IDs remain distinct during lookup.
+Approval claims retain the session generation and pending run, turn and item identity. A replayed or newly observed approval from another generation cannot apply a decision to the older claim; the affected command remains unknown until explicitly reconciled. Resolution and item-completion events must carry a matching turn identity, resolution events inherit the pending run identity when the app-server omits `turnId`, and equivalent escaped JSON string IDs share one normalized identity while numeric and string IDs remain distinct.
 
 session records contain only the Loomhelm session ID, opaque external thread reference, host generation and update time; credentials, access tokens and Desktop process state are not journal data.
 

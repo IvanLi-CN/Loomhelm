@@ -60,15 +60,35 @@ func secureJournalDirectoryRoot(root *os.Root, path string) error {
 	if root == nil {
 		return fmt.Errorf("journal directory root must not be nil")
 	}
-	directory, err := root.OpenFile(".", os.O_RDONLY|syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	directory, err := openJournalSecurityHandle(path, true)
 	if err != nil {
 		return fmt.Errorf("open journal directory handle %q: %w", path, err)
 	}
-	defer directory.Close()
-	if err := secureJournalHandle(syscall.Handle(directory.Fd())); err != nil {
+	defer syscall.CloseHandle(directory)
+	if err := secureJournalHandle(directory); err != nil {
 		return fmt.Errorf("secure opened journal directory %q: %w", path, err)
 	}
 	return nil
+}
+
+func openJournalSecurityHandle(path string, directory bool) (syscall.Handle, error) {
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	flags := uint32(syscall.FILE_FLAG_OPEN_REPARSE_POINT)
+	if directory {
+		flags |= syscall.FILE_FLAG_BACKUP_SEMANTICS
+	}
+	return syscall.CreateFile(
+		name,
+		syscall.GENERIC_READ|writeDACAccess,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
+		nil,
+		syscall.OPEN_EXISTING,
+		flags,
+		0,
+	)
 }
 
 func validateJournalHandle(handle syscall.Handle, path string, directory bool) error {
@@ -162,7 +182,12 @@ func secureJournalFile(file *os.File) error {
 	if file == nil {
 		return fmt.Errorf("journal file handle must not be nil")
 	}
-	if err := secureJournalHandle(syscall.Handle(file.Fd())); err != nil {
+	handle, err := openJournalSecurityHandle(file.Name(), false)
+	if err != nil {
+		return fmt.Errorf("open journal file ACL handle %q: %w", file.Name(), err)
+	}
+	defer syscall.CloseHandle(handle)
+	if err := secureJournalHandle(handle); err != nil {
 		return fmt.Errorf("secure opened journal file %q: %w", file.Name(), err)
 	}
 	return nil

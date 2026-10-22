@@ -629,7 +629,17 @@ func (p *ProcessTransport) readLoop() {
 
 func (p *ProcessTransport) deliverResponse(request pendingRPC, message RPCMessage) {
 	message = responseForPending(request, message)
+	if p.closeRequested.Load() || transportDone(p.done) {
+		message.observation = nil
+		request.result <- rpcResult{message: message}
+		return
+	}
 	if err := p.enqueueEvent(message); err != nil {
+		if errors.Is(err, ErrTransportClosed) || p.closeRequested.Load() || transportDone(p.done) {
+			message.observation = nil
+			request.result <- rpcResult{message: message}
+			return
+		}
 		p.setError(err)
 		p.finishTransport(err)
 		go func() { _ = p.Close() }()
@@ -640,11 +650,18 @@ func (p *ProcessTransport) deliverResponse(request pendingRPC, message RPCMessag
 }
 
 func (p *ProcessTransport) deliverResponseBeforeFinish(request pendingRPC, message RPCMessage) bool {
-	if p.closeRequested.Load() {
-		return false
-	}
 	message = responseForPending(request, message)
+	if p.closeRequested.Load() || transportDone(p.done) {
+		message.observation = nil
+		request.result <- rpcResult{message: message}
+		return true
+	}
 	if err := p.enqueueEvent(message); err != nil {
+		if errors.Is(err, ErrTransportClosed) || p.closeRequested.Load() || transportDone(p.done) {
+			message.observation = nil
+			request.result <- rpcResult{message: message}
+			return true
+		}
 		notifyRPCObservation(message.observation, rpcObservation{err: ErrUnknownOutcome})
 		return false
 	}

@@ -589,9 +589,8 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	if command.SessionID != session.SessionID {
 		return protocol.Reconciliation{}, fmt.Errorf("command %q belongs to adapter session %q, not %q", commandID, command.SessionID, session.SessionID)
 	}
-	receivedAt, err := a.journal.CommandReceivedAt(commandID)
-	if err != nil {
-		return protocol.Reconciliation{}, err
+	if previous, ok := a.journal.Reconciliation(commandID); ok && previous.State != protocol.ReconciliationStateUnknown {
+		return previous, nil
 	}
 	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
 		reconciliationState := protocol.ReconciliationStateConfirmed
@@ -679,7 +678,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 		return value, nil
 	}
 	runObserved := ack.RunID != nil
-	matched, ambiguous := matchCommandTurnSince(command, ack, turns, receivedAt)
+	matched, ambiguous := matchCommandTurn(command, ack, turns)
 	reconciliation := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown}
 	if matched != nil && !ambiguous {
 		outcome, established := commandOutcomeFromTurn(command, *matched)
@@ -1458,13 +1457,9 @@ func parseTurnsPage(result json.RawMessage) (appServerTurnsPage, bool) {
 }
 
 func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns []appServerTurn) (*appServerTurn, bool) {
-	return matchCommandTurnSince(command, ack, turns, command.IssuedAt)
-}
-
-func matchCommandTurnSince(command protocol.Command, ack protocol.CommandAck, turns []appServerTurn, receivedAt string) (*appServerTurn, bool) {
 	requestedID := valueOrEmpty(ack.RunID)
 	if requestedID == "" {
-		requestedID = valueOrEmpty(command.RunID)
+		requestedID = commandTargetTurnID(command)
 	}
 	if requestedID != "" {
 		for index := range turns {
@@ -1477,19 +1472,31 @@ func matchCommandTurnSince(command protocol.Command, ack protocol.CommandAck, tu
 		}
 		return nil, false
 	}
-	if command.Kind != protocol.CommandKindRunSend {
-		return nil, false
-	}
-	var matches []appServerTurn
-	for _, turn := range turns {
-		if turnAfterTimestamp(receivedAt, turn) && commandMatchesTurn(command, turn) {
-			matches = append(matches, turn)
+	return nil, false
+}
+
+func commandTargetTurnID(command protocol.Command) string {
+	switch command.Kind {
+	case protocol.CommandKindRunInterrupt:
+		payload, err := decodeCommandPayload(command.Payload)
+		if err == nil {
+			if turnID := firstString(payload, "turn_id", "expected_turn_id"); turnID != "" {
+				return turnID
+			}
 		}
+		return valueOrEmpty(command.RunID)
+	case protocol.CommandKindRunSend:
+		payload, err := decodeCommandPayload(command.Payload)
+		if err != nil || (!firstBool(payload, "steer", "turn_steer") && firstString(payload, "expected_turn_id", "turn_id") == "") {
+			return ""
+		}
+		if turnID := firstString(payload, "expected_turn_id", "turn_id"); turnID != "" {
+			return turnID
+		}
+		return valueOrEmpty(command.RunID)
+	default:
+		return ""
 	}
-	if len(matches) == 1 {
-		return &matches[0], false
-	}
-	return nil, len(matches) > 1
 }
 
 func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protocol.CommandAck) (protocol.CommandAck, bool, error) {
@@ -1641,26 +1648,6 @@ func rpcOperationRawID(operationID string) string {
 	return operationID
 }
 
-func turnAfterCommand(command protocol.Command, turn appServerTurn) bool {
-	return turnAfterTimestamp(command.IssuedAt, turn)
-}
-
-func turnAfterTimestamp(timestamp string, turn appServerTurn) bool {
-	issuedAt, err := time.Parse(time.RFC3339Nano, timestamp)
-	if err != nil {
-		return false
-	}
-	createdAt := turn.CreatedAt
-	if createdAt == "" {
-		createdAt = turn.CreatedAtSnake
-	}
-	if createdAt == "" {
-		return false
-	}
-	turnAt, err := time.Parse(time.RFC3339Nano, createdAt)
-	return err == nil && !turnAt.Before(issuedAt)
-}
-
 func turnProvidesCommandEvidence(turn appServerTurn) bool {
 	input := bytes.TrimSpace(turn.Input)
 	if len(input) > 0 && !bytes.Equal(input, []byte("[]")) && !bytes.Equal(input, []byte("null")) {
@@ -1703,14 +1690,7 @@ func commandOutcomeFromTurn(command protocol.Command, turn appServerTurn) (proto
 		if turn.ID == "" {
 			return "", false
 		}
-		switch strings.ToLower(turn.Status) {
-		case "completed":
-			return protocol.CommandStateSucceeded, true
-		case "failed", "error", "interrupted":
-			return protocol.CommandStateFailed, true
-		default:
-			return "", false
-		}
+		return protocol.CommandStateSucceeded, true
 	default:
 		return "", false
 	}

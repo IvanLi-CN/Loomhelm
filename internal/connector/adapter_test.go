@@ -507,7 +507,7 @@ func TestAdapterMarksAckLossUnknownAndReconcileNeverReplays(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-2"}}`)}}}
 	transport.responses["turn/start"] = []fakeResult{{err: ErrUnknownOutcome}, {message: RPCMessage{Result: json.RawMessage(`{"turn":{"id":"turn-2","status":"completed"}}`)}}}
-	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-2","status":"completed","createdAt":"2099-01-01T00:00:01Z","items":[{"type":"userMessage","content":[{"type":"text","text":"uncertain"}]}]}]}`)}}}
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-2","status":"completed","createdAt":"2026-10-21T00:00:01Z","items":[{"type":"userMessage","content":[{"type":"text","text":"uncertain"}]}]}]}`)}}}
 	journal := openTestJournal(t)
 	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
 	if err != nil {
@@ -524,7 +524,7 @@ func TestAdapterMarksAckLossUnknownAndReconcileNeverReplays(t *testing.T) {
 		t.Fatalf("unknown ACK = %+v, error = %v", ack, err)
 	}
 	reconciled, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
-	if err != nil || reconciled.State != protocol.ReconciliationStateConfirmed {
+	if err != nil || reconciled.State != protocol.ReconciliationStateUnknown {
 		t.Fatalf("reconciliation = %+v, error = %v", reconciled, err)
 	}
 	if got := countCalls(transport, "turn/start"); got != 1 {
@@ -608,6 +608,47 @@ func TestAdapterReconcilesUnknownRPCOperationFromPersistedEvent(t *testing.T) {
 	}
 	if stored.EventCursor == nil || reconciliation.EventCursor == nil || *stored.EventCursor != *reconciliation.EventCursor {
 		t.Fatalf("reconciled event cursor = %v, reconciliation = %+v", stored.EventCursor, reconciliation)
+	}
+}
+
+func TestAdapterReturnsDurableTerminalReconciliation(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-durable-reconciliation"}}`)}}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-durable-reconciliation", Generation: "generation-durable-reconciliation", Path: protocol.SessionPathNew}, testSessionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseSession(context.Background(), session)
+	command := testCommand("durable-reconciliation", `{"prompt":"already observed"}`)
+	command.SessionID = session.SessionID
+	if _, _, err := journal.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack.State = protocol.CommandStateFailed
+	ack.RunID = stringPointer("turn-failed-durable")
+	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server turn ended unsuccessfully", RequestID: command.CommandID}
+	if err := journal.UpdateCommand(command.CommandID, ack); err != nil {
+		t.Fatal(err)
+	}
+	expected := protocol.Reconciliation{CommandID: command.CommandID, ObservedAt: now(), State: protocol.ReconciliationStateConfirmed, Note: stringPointer("turn outcome was observed")}
+	if err := journal.RecordReconciliation(expected); err != nil {
+		t.Fatal(err)
+	}
+	got, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	if err != nil || got.State != protocol.ReconciliationStateConfirmed || valueOrEmpty(got.Note) != "turn outcome was observed" {
+		t.Fatalf("durable reconciliation = %+v, error = %v", got, err)
+	}
+	if gotCalls := countCalls(transport, "thread/turns/list"); gotCalls != 0 {
+		t.Fatalf("durable reconciliation history calls = %d, want 0", gotCalls)
 	}
 }
 
@@ -1323,17 +1364,12 @@ func TestMatchCommandTurnRejectsOlderSamePromptWithoutRunID(t *testing.T) {
 	}
 }
 
-func TestMatchCommandTurnUsesJournalReceivedAtBaseline(t *testing.T) {
-	command := testCommand("reconcile-received-at", `{"prompt":"same prompt"}`)
-	command.IssuedAt = "2026-10-21T00:00:00Z"
-	turn := appServerTurn{
-		ID:        "turn-before-accepted",
-		Status:    "completed",
-		CreatedAt: "2026-10-21T00:00:01Z",
-		Items:     []byte(`[{"type":"userMessage","text":"same prompt"}]`),
-	}
-	if matched, ambiguous := matchCommandTurnSince(command, protocol.CommandAck{}, []appServerTurn{turn}, "2026-10-21T00:00:02Z"); matched != nil || ambiguous {
-		t.Fatalf("turn before journal receipt was matched: %+v, ambiguous = %v", matched, ambiguous)
+func TestMatchCommandTurnDoesNotTrustOrdinaryRunCommandRunID(t *testing.T) {
+	command := testCommand("reconcile-old-run-id", `{"prompt":"same prompt"}`)
+	command.RunID = stringPointer("turn-from-previous-command")
+	turns := []appServerTurn{{ID: "turn-from-previous-command", Status: "completed"}}
+	if matched, ambiguous := matchCommandTurn(command, protocol.CommandAck{}, turns); matched != nil || ambiguous {
+		t.Fatalf("ordinary run.send reused command run ID: %+v, ambiguous = %v", matched, ambiguous)
 	}
 }
 
@@ -1379,16 +1415,16 @@ func TestAdapterPreservesRawAppServerResponseEnvelope(t *testing.T) {
 	}
 }
 
-func TestCommandCanConfirmFromTurnRequiresCompletedRun(t *testing.T) {
+func TestCommandCanConfirmFromTurnUsesCreatedTurnAsDispatchEvidence(t *testing.T) {
 	command := testCommand("reconcile-status", `{"prompt":"run"}`)
-	if commandCanConfirmFromTurn(command, appServerTurn{ID: "turn-failed", Status: "failed"}) {
-		t.Fatal("failed turn was treated as a successful run command")
+	if !commandCanConfirmFromTurn(command, appServerTurn{ID: "turn-failed", Status: "failed"}) {
+		t.Fatal("created failed turn was not treated as a successfully dispatched run command")
 	}
 	if !commandCanConfirmFromTurn(command, appServerTurn{ID: "turn-completed", Status: "completed"}) {
-		t.Fatal("completed turn was not accepted as a successful run command")
+		t.Fatal("created completed turn was not accepted as a successfully dispatched run command")
 	}
-	if outcome, established := commandOutcomeFromTurn(command, appServerTurn{ID: "turn-failed", Status: "failed"}); !established || outcome != protocol.CommandStateFailed {
-		t.Fatalf("failed turn outcome = %q, established = %v", outcome, established)
+	if outcome, established := commandOutcomeFromTurn(command, appServerTurn{ID: "turn-failed", Status: "failed"}); !established || outcome != protocol.CommandStateSucceeded {
+		t.Fatalf("failed turn dispatch outcome = %q, established = %v", outcome, established)
 	}
 }
 
