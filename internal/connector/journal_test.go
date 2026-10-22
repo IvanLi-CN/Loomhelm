@@ -504,6 +504,54 @@ func TestJournalRejectsResourceLimitBreaches(t *testing.T) {
 	})
 }
 
+func TestJournalRejectsOversizedAppendWithoutPoisoning(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "oversized-append.jsonl")
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+
+	payload := append([]byte(`{"prompt":"`), bytes.Repeat([]byte{'x'}, maxJournalRecordBytes)...)
+	payload = append(payload, []byte(`"}`)...)
+	oversized := testCommand("oversized-append", string(payload))
+	if _, _, err := journal.BeginCommand(oversized); !errors.Is(err, ErrJournalTooLarge) {
+		t.Fatalf("oversized append error = %v, want %v", err, ErrJournalTooLarge)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("oversized append polluted journal with %d bytes", len(data))
+	}
+
+	valid := testCommand("valid-after-oversized", `{"prompt":"accepted"}`)
+	ack, deduplicated, err := journal.BeginCommand(valid)
+	if err != nil {
+		t.Fatalf("valid append after oversized record: %v", err)
+	}
+	if deduplicated || ack.State != protocol.CommandStateAccepted {
+		t.Fatalf("valid append ACK = %+v, deduplicated = %v", ack, deduplicated)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	restartedAck, err := reopened.LookupCommand(valid.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restartedAck.CommandID != valid.CommandID || restartedAck.State != protocol.CommandStateUnknown {
+		t.Fatalf("restarted valid command ACK = %+v, want command %q with state %q", restartedAck, valid.CommandID, protocol.CommandStateUnknown)
+	}
+}
+
 func TestJournalRejectsUnsupportedFormatVersion(t *testing.T) {
 	path := filepath.Join(privateTestDir(t), "unsupported-format.jsonl")
 	if err := os.WriteFile(path, []byte(`{"format_version":3,"type":"session"}`+"\n"), 0o600); err != nil {

@@ -1196,7 +1196,7 @@ func (j *Journal) appendLocked(record journalRecord) error {
 	}
 	data = append(data, '\n')
 	if len(data) > maxJournalRecordBytes {
-		return j.poisonLocked(fmt.Errorf("%w: record exceeds %d bytes", ErrJournalTooLarge, maxJournalRecordBytes))
+		return fmt.Errorf("%w: record exceeds %d bytes", ErrJournalTooLarge, maxJournalRecordBytes)
 	}
 	if _, err := j.file.Seek(0, io.SeekEnd); err != nil {
 		return j.poisonLocked(fmt.Errorf("seek journal end: %w", err))
