@@ -966,6 +966,7 @@ pre {
 .attention-item {
   display: grid;
   width: 100%;
+  min-width: 0;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 9px;
@@ -975,6 +976,7 @@ pre {
   color: var(--ink);
   background: transparent;
   text-align: left;
+  white-space: normal;
 }
 
 .attention-item:hover,
@@ -983,9 +985,17 @@ pre {
   background: var(--selected);
 }
 
+.attention-copy {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .attention-item strong,
 .attention-item small {
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .attention-item strong {

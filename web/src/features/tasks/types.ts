@@ -22,6 +22,7 @@ export interface TaskRecord {
   parentId?: string;
   parentIds?: string[];
   dependsOn: string[];
+  relationshipsConfirmed?: boolean;
   updated: string;
 }
 
@@ -36,8 +37,17 @@ export interface WriteFailure {
   reconcile?: boolean;
 }
 
+export interface RelationWriteFailure extends WriteFailure {
+  label: string;
+}
+
+export interface RelationWriteMetadata {
+  failures: readonly RelationWriteFailure[];
+  applied?: TaskRelationChanges;
+}
+
 export type WriteResult<T> =
-  | { ok: true; value: T; warning?: string; reconcile?: boolean }
+  | { ok: true; value: T; warning?: string; reconcile?: boolean; relation?: RelationWriteMetadata }
   | WriteFailure;
 
 export type MutationResult<T> = Promise<WriteResult<T>>;

@@ -4,15 +4,19 @@ import { ApiClientConfigurationError, ApiClientError } from "@loomhelm/api-clien
 
 import {
   isAmbiguousWriteError,
+  filterTaskRelationships,
+  hasIncompleteProjectTaskRead,
   projectTaskQueryKeys,
   readProjectMemberships,
   readTaskRelationships,
   relationWriteBlockReason,
+  stableBlockedWriteMessage,
   syncTaskRelations,
   toProjectUpdateRequest,
   toTaskUpdateRequest
 } from "../src/features/projects/production-source";
 import { editableProjectSummary } from "../src/features/projects/ProjectForm";
+import { reconcileTaskFormState } from "../src/features/tasks/TaskForm";
 import { wouldCreateDependencyCycle } from "../src/features/tasks/demo-store";
 import { calculateTaskRelationChanges, type TaskRecord } from "../src/features/tasks/types";
 import type { Task } from "@loomhelm/protocol";
@@ -40,6 +44,22 @@ describe("project/task write contracts", () => {
     expect(calculateTaskRelationChanges(["parent-1"], ["parent-1"], [], [])).toBeUndefined();
   });
 
+  test("refreshes the same task baseline without replaying applied edges or losing draft intent", () => {
+    const previous = { title: "Old", goal: "Goal", projectId: "project-1", state: "待办" as const, parentIds: [], dependsOn: [] };
+    const next = { title: "Saved", goal: "Goal", projectId: "project-1", state: "进行中" as const, parentIds: ["parent-1"], dependsOn: [] };
+    const draft = { ...previous, title: "Saved", state: "进行中" as const, parentIds: ["parent-1", "parent-2"] };
+
+    const reconciled = reconcileTaskFormState(previous, next, draft, true);
+
+    expect(reconciled.baseline).toEqual(next);
+    expect(reconciled.draft).toMatchObject({ title: "Saved", state: "进行中", parentIds: ["parent-1", "parent-2"] });
+    expect(calculateTaskRelationChanges(reconciled.baseline.parentIds, reconciled.draft.parentIds, reconciled.baseline.dependsOn, reconciled.draft.dependsOn)).toEqual({ addParentIds: ["parent-2"] });
+
+    const incomplete = reconcileTaskFormState(previous, { ...next, parentIds: [] }, draft, false);
+    expect(incomplete.baseline.parentIds).toEqual([]);
+    expect(incomplete.draft.parentIds).toEqual(["parent-1", "parent-2"]);
+  });
+
   test("keeps relation changes out of the task PATCH body", () => {
     expect(toTaskUpdateRequest({ title: "  New title ", goal: " New goal ", state: "进行中", relationChanges: { addDependencyIds: ["task-2"] } })).toEqual({
       title: "New title",
@@ -62,6 +82,12 @@ describe("project/task write contracts", () => {
     expect(isAmbiguousWriteError(new ApiClientError(503, { code: "server_error" }))).toBe(true);
     expect(isAmbiguousWriteError(new ApiClientError(403, { code: "forbidden" }))).toBe(false);
     expect(isAmbiguousWriteError(new ApiClientConfigurationError("missing session"))).toBe(false);
+  });
+
+  test("uses stable protected-delete feedback for conflict responses", () => {
+    expect(stableBlockedWriteMessage("删除任务")).toBe("任务仍有关系、对话或执行事实，受保护删除已阻止。");
+    expect(stableBlockedWriteMessage("删除项目")).toBe("项目仍保留任务、对话或执行事实，受保护删除已阻止。");
+    expect(stableBlockedWriteMessage("更新任务")).toBeUndefined();
   });
 
   test("separates cache generations after session invalidation", () => {
@@ -102,8 +128,48 @@ describe("project/task write contracts", () => {
 
     expect(calls).toEqual(["add-parent:task-1:parent-1", "remove-parent:task-1:parent-2", "add-dependency:task-1:dependency-1", "remove-dependency:task-1:dependency-2"]);
     expect(result.failures).toHaveLength(1);
-    expect(result.failures[0]).toContain("添加前置任务 dependency-1");
+    expect(result.failures[0]?.message).toContain("添加前置任务 dependency-1");
+    expect(result.failures[0]?.code).toBe("unknown");
+    expect(result.applied).toEqual({
+      addParentIds: ["parent-1"],
+      removeParentIds: ["parent-2"],
+      addDependencyIds: undefined,
+      removeDependencyIds: ["dependency-2"]
+    });
     expect(invalidations).toEqual([projectTaskQueryKeys.tasks("user-1", 3)]);
+  });
+
+  test("preserves scoped HTTP classification for relation failures", async () => {
+    const result = await syncTaskRelations({
+      addTaskParent: async () => { throw new ApiClientError(403, { code: "unauthorized" }); },
+      removeTaskParent: async () => undefined,
+      addTaskDependency: async () => undefined,
+      removeTaskDependency: async () => undefined
+    }, { invalidateQueries: async () => undefined } as never, "user-1", 1, "task-1", { addParentIds: ["parent-1"] });
+
+    expect(result.failures[0]).toMatchObject({ code: "readonly", label: "添加父任务 parent-1", status: 403 });
+  });
+
+  test("filters relationship endpoints outside the readable task projection", () => {
+    const page = {
+      parents: [{ parent_task_id: "visible-parent", child_task_id: "task-1" }, { parent_task_id: "denied-parent", child_task_id: "task-1" }],
+      children: [{ parent_task_id: "task-1", child_task_id: "visible-child" }, { parent_task_id: "task-1", child_task_id: "denied-child" }],
+      prerequisites: [{ task_id: "task-1", prerequisite_task_id: "visible-dependency" }, { task_id: "task-1", prerequisite_task_id: "denied-dependency" }],
+      dependents: [{ dependent_task_id: "visible-dependent", prerequisite_task_id: "task-1" }, { dependent_task_id: "denied-dependent", prerequisite_task_id: "task-1" }]
+    };
+
+    expect(filterTaskRelationships(page, new Set(["task-1", "visible-parent", "visible-child", "visible-dependency", "visible-dependent"]))).toEqual({
+      parents: [{ parent_task_id: "visible-parent", child_task_id: "task-1" }],
+      children: [{ parent_task_id: "task-1", child_task_id: "visible-child" }],
+      prerequisites: [{ task_id: "task-1", prerequisite_task_id: "visible-dependency" }],
+      dependents: [{ dependent_task_id: "visible-dependent", prerequisite_task_id: "task-1" }]
+    });
+  });
+
+  test("treats partial or denied readback as incomplete confirmation", () => {
+    expect(hasIncompleteProjectTaskRead({ failures: ["relation unavailable"] })).toBe(true);
+    expect(hasIncompleteProjectTaskRead({ deniedTaskIds: ["task-revoked"] })).toBe(true);
+    expect(hasIncompleteProjectTaskRead({ failures: [], deniedProjectIds: [], deniedTaskIds: [] })).toBe(false);
   });
 
   test("keeps successful project memberships when one scoped read fails", async () => {

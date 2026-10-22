@@ -28,6 +28,7 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
   const mobileQuery = "(max-width: 1199px)";
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
+  const workAreaRef = useRef<HTMLDivElement>(null);
   const openedRef = useRef(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileQuery).matches);
 
@@ -80,6 +81,20 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
   }, [active, onClose]);
 
   useEffect(() => {
+    const workArea = workAreaRef.current;
+    if (!workArea) return;
+    const inertWorkArea = workArea as HTMLDivElement & { inert?: boolean };
+    inertWorkArea.inert = active;
+    if (active) {
+      workArea.setAttribute("aria-hidden", "true");
+      workArea.setAttribute("inert", "");
+    } else {
+      workArea.removeAttribute("aria-hidden");
+      workArea.removeAttribute("inert");
+    }
+  }, [active]);
+
+  useEffect(() => {
     if (active) {
       openedRef.current = true;
       return;
@@ -95,7 +110,7 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
     }
   }, [active]);
 
-  return { drawerRef, triggerRef };
+  return { drawerRef, triggerRef, workAreaRef, isMobile, active };
 }
 
 function ProjectTree({
@@ -294,7 +309,7 @@ function ProductionShell() {
 
   const closeMobile = useCallback(() => setMobileOpen(false), []);
   const openMobile = useCallback(() => setMobileOpen(true), []);
-  const { drawerRef, triggerRef } = useMobileDrawer(mobileOpen, closeMobile);
+  const { drawerRef, triggerRef, workAreaRef, isMobile, active } = useMobileDrawer(mobileOpen, closeMobile);
   const toggle = (key: string) => setExpanded((current) => ({ ...current, [key]: !current[key] }));
 
   const navigation = (
@@ -322,7 +337,7 @@ function ProductionShell() {
 
   return (
     <div className="product-shell" data-runtime="production">
-      <aside ref={drawerRef} id="production-mobile-navigation" className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`}>
+      <aside ref={drawerRef} id="production-mobile-navigation" className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`} role={active ? "dialog" : undefined} aria-modal={active ? true : undefined} aria-label={active ? "移动端主导航" : undefined} aria-hidden={isMobile && !active ? true : undefined}>
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true"><FlaskConical size={21} strokeWidth={1.8} /></span>
           <span>Loomhelm</span>
@@ -334,7 +349,7 @@ function ProductionShell() {
         </div>
       </aside>
       {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
-      <div className="product-work-area">
+      <div ref={workAreaRef} className="product-work-area">
         <header className="product-header">
           <Button ref={triggerRef} type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" aria-controls="production-mobile-navigation" aria-expanded={mobileOpen} title="打开导航" onClick={openMobile}>
             <Menu size={19} aria-hidden="true" />
@@ -384,7 +399,7 @@ export function ProductShell({ children }: PropsWithChildren) {
 
   const closeMobile = useCallback(() => setMobileOpen(false), []);
   const openMobile = useCallback(() => setMobileOpen(true), []);
-  const { drawerRef, triggerRef } = useMobileDrawer(mobileOpen, closeMobile);
+  const { drawerRef, triggerRef, workAreaRef, isMobile, active } = useMobileDrawer(mobileOpen, closeMobile);
   const toggle = (key: string) => setExpanded((current) => ({ ...current, [key]: !current[key] }));
   const openCreate = () => closeMobile();
 
@@ -426,7 +441,7 @@ export function ProductShell({ children }: PropsWithChildren) {
 
   return (
     <div className={`product-shell ${runtime.inspectorOpen ? "has-inspector" : ""}`} data-inspector-mode={runtime.inspectorMode} data-scene={runtime.scene} data-network={runtime.network}>
-      <aside ref={drawerRef} id="demo-mobile-navigation" className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`}>
+      <aside ref={drawerRef} id="demo-mobile-navigation" className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`} role={active ? "dialog" : undefined} aria-modal={active ? true : undefined} aria-label={active ? "移动端主导航" : undefined} aria-hidden={isMobile && !active ? true : undefined}>
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true"><FlaskConical size={21} strokeWidth={1.8} /></span>
           <span>Loomhelm</span>
@@ -438,7 +453,7 @@ export function ProductShell({ children }: PropsWithChildren) {
         </div>
       </aside>
       {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
-      <div className="product-work-area">
+      <div ref={workAreaRef} className="product-work-area">
         <header className="product-header">
           <Button ref={triggerRef} type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" aria-controls="demo-mobile-navigation" aria-expanded={mobileOpen} title="打开导航" onClick={openMobile}>
             <Menu size={19} aria-hidden="true" />

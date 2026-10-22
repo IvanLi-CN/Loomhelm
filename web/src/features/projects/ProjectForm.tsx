@@ -125,18 +125,26 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
 interface ProjectActionsProps {
   source: ProjectTaskSource;
   projectId: string;
+  fallbackProject?: Pick<ProjectRecord, "id" | "name" | "summary">;
+  onDeleteStarted?: () => void;
+  onDeleteFailed?: () => void;
+  onDeleted?: () => void;
 }
 
-export function ProjectActions({ source, projectId }: ProjectActionsProps) {
+export function ProjectActions({ source, projectId, fallbackProject, onDeleteStarted, onDeleteFailed, onDeleted }: ProjectActionsProps) {
   const [editing, setEditing] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
+  const [deleted, setDeleted] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
-  const project = source.getProject(projectId);
-  const canManageProject = source.getProjectPermissions(projectId).canManageProjects;
+  const project = source.getProject(projectId) ?? fallbackProject;
 
+  if (deleted) {
+    return <div className="grid gap-3"><div className="inline-state inline-state-success" role="status"><Check size={15} aria-hidden="true" />项目已删除。</div><div className="form-actions"><Button asChild type="button" variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></div></div>;
+  }
   if (!project) return null;
+  const canManageProject = source.getProjectPermissions(projectId).canManageProjects;
   const finishEditing = () => {
     setEditing(false);
     requestAnimationFrame(() => editButtonRef.current?.focus());
@@ -144,18 +152,22 @@ export function ProjectActions({ source, projectId }: ProjectActionsProps) {
   if (editing) return <ProjectForm source={source} mode="edit" projectId={projectId} onCancelled={finishEditing} onSaved={finishEditing} />;
 
   const remove = async () => {
+    onDeleteStarted?.();
     setPending(true);
     setFeedback(null);
     const result = await source.deleteProject(projectId);
     setPending(false);
     if (!result.ok) {
+      onDeleteFailed?.();
       const reconcile = result.reconcile || result.code === "unknown";
       setBlockedByUnknown(reconcile);
       setFeedback({ message: result.message, tone: "warning", reconcile });
       return;
     }
     setBlockedByUnknown(false);
+    setDeleted(true);
     setFeedback({ message: "项目已删除。", tone: "success" });
+    onDeleted?.();
   };
 
   const reconcile = async () => {

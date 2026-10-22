@@ -1,5 +1,5 @@
 import { ListTodo, MessageCircle, Plus } from "lucide-react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
@@ -17,8 +17,14 @@ export function ProjectRoute() {
   const runtime = useOptionalDemoRuntime();
   const source = useOptionalProjectTaskSource();
   const [panel, setPanel] = useState<ProjectPanel>("tasks");
+  const [deleteState, setDeleteState] = useState<"idle" | "pending" | "success">("idle");
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const project = source ? source.getProject(projectId) : runtime ? getDemoProject(runtime.fixtures, projectId) : undefined;
+  const lastProjectRef = useRef<typeof project>(undefined);
+  useEffect(() => {
+    if (project) lastProjectRef.current = project;
+  }, [project]);
+  const displayedProject = project ?? (deleteState !== "idle" ? lastProjectRef.current : undefined);
   const conversations = runtime?.fixtures.conversations.filter((conversation) => conversation.projectId === projectId) ?? [];
   const localTaskCount = source?.tasks.filter((task) => task.projectId === projectId).length ?? runtime?.fixtures.tasks.filter((task) => task.projectId === projectId).length ?? 0;
   const selectPanel = (nextPanel: ProjectPanel, focus = false) => {
@@ -41,11 +47,15 @@ export function ProjectRoute() {
     selectPanel(projectPanels[nextIndex], true);
   };
 
-  if (source?.status === "loading") {
+  if (deleteState === "success") {
+    return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT</span><h1>项目已删除</h1><div className="inline-state inline-state-success" role="status">项目已删除。</div><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></section>;
+  }
+
+  if (source?.status === "loading" && deleteState === "idle") {
     return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">PROJECT ACCESS</span><h1>正在读取项目</h1><p>正在读取当前浏览器授权的项目范围，受保护的项目数据不会使用本地夹具替代。</p></section>;
   }
 
-  if (!project || !source) {
+  if (!displayedProject || !source) {
     return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT ACCESS</span><h1>项目当前不可用</h1><p>权限或连接状态发生变化，当前页面 fail-closed，不展示受保护项目的标题、数量或关系轮廓。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/">返回工作台</Link></Button></section>;
   }
 
@@ -53,7 +63,7 @@ export function ProjectRoute() {
 
   return (
     <section className="page-section project-page">
-      <div className="page-heading project-heading"><div><span className="eyebrow">PROJECT</span><h1>{project.name}</h1><p>{project.summary}</p></div><div className="grid justify-items-end gap-3"><ProjectActions source={source} projectId={projectId} /><Button type="button" variant="secondary" className="button button-secondary" disabled={!canCreateProjectTask} onClick={() => { void navigate({ to: "/tasks/new", search: { projectId } }); }}><Plus size={16} aria-hidden="true" />新建任务</Button></div></div>
+      <div className="page-heading project-heading"><div><span className="eyebrow">PROJECT</span><h1>{displayedProject.name}</h1><p>{displayedProject.summary}</p></div><div className="grid justify-items-end gap-3"><ProjectActions source={source} projectId={projectId} fallbackProject={displayedProject} onDeleteStarted={() => setDeleteState("pending")} onDeleteFailed={() => setDeleteState("idle")} onDeleted={() => setDeleteState("success")} /><Button type="button" variant="secondary" className="button button-secondary" disabled={!canCreateProjectTask} onClick={() => { void navigate({ to: "/tasks/new", search: { projectId } }); }}><Plus size={16} aria-hidden="true" />新建任务</Button></div></div>
       <div className="project-tabs" role="tablist" aria-label="项目面板"><Button ref={(element) => { tabRefs.current[0] = element; }} id="project-tab-tasks" type="button" variant="ghost" role="tab" aria-selected={panel === "tasks"} aria-controls="project-panel-tasks" tabIndex={panel === "tasks" ? 0 : -1} className={`project-tab ${panel === "tasks" ? "is-selected" : ""}`} onClick={() => selectPanel("tasks")} onKeyDown={handlePanelKeyDown}><ListTodo size={16} aria-hidden="true" />任务 <span>{localTaskCount}</span></Button><Button ref={(element) => { tabRefs.current[1] = element; }} id="project-tab-conversations" type="button" variant="ghost" role="tab" aria-selected={panel === "conversations"} aria-controls="project-panel-conversations" tabIndex={panel === "conversations" ? 0 : -1} className={`project-tab ${panel === "conversations" ? "is-selected" : ""}`} onClick={() => selectPanel("conversations")} onKeyDown={handlePanelKeyDown}><MessageCircle size={16} aria-hidden="true" />对话 <span>{runtime ? conversations.length : "—"}</span></Button></div>
       <section id="project-panel-tasks" role="tabpanel" aria-labelledby="project-tab-tasks" tabIndex={panel === "tasks" ? 0 : -1} hidden={panel !== "tasks"}>
         {panel === "tasks" && <TaskExplorer source={source} scope={`project:${projectId}`} projectId={projectId} />}

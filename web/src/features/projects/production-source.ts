@@ -10,6 +10,8 @@ import type {
   ProjectPermissionSnapshot,
   ProjectRecord,
   ProjectTaskSource,
+  RelationWriteFailure,
+  RelationWriteMetadata,
   TaskDraft,
   TaskRelationChanges,
   TaskRecord,
@@ -133,6 +135,16 @@ export async function readTaskRelationships(
   return { items: tasks, relationships, deniedTaskIds: deniedTaskIds.filter(Boolean), failures };
 }
 
+export function filterTaskRelationships(page: TaskRelationshipPage, visibleTaskIds: ReadonlySet<string>): TaskRelationshipPage {
+  return {
+    ...page,
+    parents: page.parents.filter((relationship) => visibleTaskIds.has(relationship.parent_task_id)),
+    children: page.children.filter((relationship) => visibleTaskIds.has(relationship.child_task_id)),
+    prerequisites: page.prerequisites.filter((relationship) => visibleTaskIds.has(relationship.prerequisite_task_id)),
+    dependents: page.dependents.filter((relationship) => visibleTaskIds.has(relationship.dependent_task_id))
+  };
+}
+
 export const projectTaskQueryKeys = {
   projects: (principalId: string, sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "projects"] as const,
   memberships: (principalId: string, projectIds: readonly string[], sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "memberships", [...projectIds].sort()] as const,
@@ -143,6 +155,12 @@ export const projectTaskQueryKeys = {
 
 export function isProjectTaskQueryForPrincipal(query: { queryKey: readonly unknown[] }, principalId: string): boolean {
   return query.queryKey[0] === "loomhelm" && query.queryKey[1] === principalId;
+}
+
+export function hasIncompleteProjectTaskRead(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const read = data as { failures?: readonly unknown[]; deniedProjectIds?: readonly unknown[]; deniedTaskIds?: readonly unknown[] };
+  return Boolean(read.failures?.length || read.deniedProjectIds?.length || read.deniedTaskIds?.length);
 }
 
 const emptyProjectPermissions: ProjectPermissionSnapshot = {
@@ -156,8 +174,9 @@ function denied<T>(message = "当前身份或权限为只读，写入动作没�
   return Promise.resolve({ ok: false, code: "readonly", message });
 }
 
-function success<T>(value: T, warning?: string, reconcile = false): WriteResult<T> {
-  return warning ? { ok: true, value, warning, reconcile } : { ok: true, value };
+function success<T>(value: T, warning?: string, reconcile = false, relation?: RelationWriteMetadata): WriteResult<T> {
+  if (warning) return { ok: true, value, warning, reconcile, relation };
+  return relation ? { ok: true, value, relation } : { ok: true, value };
 }
 
 function bodyMessage(body: unknown): string | undefined {
@@ -171,13 +190,19 @@ function bodyMessage(body: unknown): string | undefined {
   return undefined;
 }
 
+export function stableBlockedWriteMessage(operation: string): string | undefined {
+  if (operation === "删除任务") return "任务仍有关系、对话或执行事实，受保护删除已阻止。";
+  if (operation === "删除项目") return "项目仍保留任务、对话或执行事实，受保护删除已阻止。";
+  return undefined;
+}
+
 function failure<T>(operation: string, error: unknown): WriteResult<T> {
   if (error instanceof ApiClientConfigurationError) {
     return { ok: false, code: "csrf", message: `${operation}失败：${error.message}` };
   }
   if (error instanceof ApiClientError) {
     const code = error.status === 401 ? "unauthenticated" : error.status === 403 ? "readonly" : error.status === 409 ? "blocked" : "invalid";
-    const detail = bodyMessage(error.body);
+    const detail = error.status === 409 ? stableBlockedWriteMessage(operation) ?? bodyMessage(error.body) : bodyMessage(error.body);
     return {
       ok: false,
       code,
@@ -243,7 +268,8 @@ export function toProjectUpdateRequest(current: ProjectRecord | undefined, draft
 }
 
 export interface RelationSyncResult {
-  failures: readonly string[];
+  failures: readonly RelationWriteFailure[];
+  applied?: TaskRelationChanges;
 }
 
 function relationTargetIds(changes: TaskRelationChanges): readonly string[] {
@@ -280,20 +306,45 @@ export async function syncTaskRelations(
   taskId: string,
   changes: TaskRelationChanges
 ): Promise<RelationSyncResult> {
-  const writes: Array<{ label: string; run: () => Promise<void> }> = [];
+  const writes: Array<{ label: string; run: () => Promise<void>; field: keyof TaskRelationChanges; id: string }> = [];
   const addParentIds = [...new Set(changes.addParentIds ?? [])].filter((id) => id !== taskId);
   const removeParentIds = [...new Set(changes.removeParentIds ?? [])].filter((id) => id !== taskId);
   const addDependencyIds = [...new Set(changes.addDependencyIds ?? [])].filter((id) => id !== taskId);
   const removeDependencyIds = [...new Set(changes.removeDependencyIds ?? [])].filter((id) => id !== taskId);
-  writes.push(...addParentIds.map((parentTaskId) => ({ label: "添加父任务 " + parentTaskId, run: () => api.addTaskParent({ task_id: taskId, parent_task_id: parentTaskId }) })));
-  writes.push(...removeParentIds.map((parentTaskId) => ({ label: "移除父任务 " + parentTaskId, run: () => api.removeTaskParent({ task_id: taskId, parent_task_id: parentTaskId }) })));
-  writes.push(...addDependencyIds.map((prerequisiteTaskId) => ({ label: "添加前置任务 " + prerequisiteTaskId, run: () => api.addTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId }) })));
-  writes.push(...removeDependencyIds.map((prerequisiteTaskId) => ({ label: "移除前置任务 " + prerequisiteTaskId, run: () => api.removeTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId }) })));
+  writes.push(...addParentIds.map((parentTaskId) => ({ field: "addParentIds" as const, id: parentTaskId, label: "添加父任务 " + parentTaskId, run: () => api.addTaskParent({ task_id: taskId, parent_task_id: parentTaskId }) })));
+  writes.push(...removeParentIds.map((parentTaskId) => ({ field: "removeParentIds" as const, id: parentTaskId, label: "移除父任务 " + parentTaskId, run: () => api.removeTaskParent({ task_id: taskId, parent_task_id: parentTaskId }) })));
+  writes.push(...addDependencyIds.map((prerequisiteTaskId) => ({ field: "addDependencyIds" as const, id: prerequisiteTaskId, label: "添加前置任务 " + prerequisiteTaskId, run: () => api.addTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId }) })));
+  writes.push(...removeDependencyIds.map((prerequisiteTaskId) => ({ field: "removeDependencyIds" as const, id: prerequisiteTaskId, label: "移除前置任务 " + prerequisiteTaskId, run: () => api.removeTaskDependency({ task_id: taskId, prerequisite_task_id: prerequisiteTaskId }) })));
 
   const results = await Promise.allSettled(writes.map((write) => write.run()));
   await queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(principalId, sessionGeneration) });
+  const applied = {
+    addParentIds: [] as string[],
+    removeParentIds: [] as string[],
+    addDependencyIds: [] as string[],
+    removeDependencyIds: [] as string[]
+  };
+  const failures: RelationWriteFailure[] = [];
+  results.forEach((result, index) => {
+    const write = writes[index];
+    if (!write) return;
+    if (result.status === "fulfilled") {
+      applied[write.field].push(write.id);
+    } else {
+      const classified = isAmbiguousWriteError(result.reason) ? ambiguousFailure<null>(write.label, result.reason) : failure<null>(write.label, result.reason);
+      if (!classified.ok) failures.push({ ...classified, label: write.label });
+    }
+  });
+  const appliedChanges: TaskRelationChanges = {
+    addParentIds: applied.addParentIds.length ? applied.addParentIds : undefined,
+    removeParentIds: applied.removeParentIds.length ? applied.removeParentIds : undefined,
+    addDependencyIds: applied.addDependencyIds.length ? applied.addDependencyIds : undefined,
+    removeDependencyIds: applied.removeDependencyIds.length ? applied.removeDependencyIds : undefined
+  };
+  const hasAppliedChanges = Object.values(applied).some((values) => values.length > 0);
   return {
-    failures: results.flatMap((result, index) => result.status === "rejected" ? [failureMessage(writes[index].label, result.reason)] : [])
+    failures,
+    applied: hasAppliedChanges ? appliedChanges : undefined
   };
 }
 
@@ -311,6 +362,14 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
   const projectIds = useMemo(() => [...new Set(projectsQuery.isSuccess ? projectsQuery.data.map((project) => project.id) : [])].sort(), [projectsQuery.data, projectsQuery.isSuccess]);
+  const invalidatePermissionScope = useCallback(async (includeProjects: boolean) => {
+    const invalidations = [
+      queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.memberships(subjectId, projectIds, sessionGeneration) }),
+      queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) })
+    ];
+    if (includeProjects) invalidations.push(queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.projects(subjectId, sessionGeneration) }));
+    await Promise.all(invalidations);
+  }, [projectIds, queryClient, sessionGeneration, subjectId]);
   const membershipsQuery = useQuery<MembershipQueryData>({
     queryKey: projectTaskQueryKeys.memberships(subjectId, projectIds, sessionGeneration),
     queryFn: () => readProjectMemberships(api, projectIds),
@@ -409,7 +468,19 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     const denied = new Set(deniedProjectIds);
     return projectsQuery.isSuccess ? projectsQuery.data.filter((project) => !denied.has(project.id)).map(mapProject) : [];
   }, [deniedProjectIds, projectsQuery.data, projectsQuery.isSuccess]);
-  const relationshipsByTaskId = tasksQuery.isSuccess ? tasksQuery.data.relationships : {};
+  const visibleTaskIds = useMemo(() => {
+    const deniedTasks = new Set(deniedTaskIds);
+    const deniedProjects = new Set(deniedProjectIds);
+    return new Set(tasksQuery.isSuccess
+      ? tasksQuery.data.items.filter((task) => !deniedTasks.has(task.id) && !deniedProjects.has(task.project_id)).map((task) => task.id)
+      : []);
+  }, [deniedProjectIds, deniedTaskIds, tasksQuery.data, tasksQuery.isSuccess]);
+  const relationshipsByTaskId = useMemo(() => {
+    if (!tasksQuery.isSuccess) return {};
+    return Object.fromEntries(Object.entries(tasksQuery.data.relationships)
+      .filter(([taskId]) => visibleTaskIds.has(taskId))
+      .map(([taskId, relationships]) => [taskId, filterTaskRelationships(relationships, visibleTaskIds)]));
+  }, [tasksQuery.data, tasksQuery.isSuccess, visibleTaskIds]);
   const tasks = useMemo(() => {
     const deniedTasks = new Set(deniedTaskIds);
     const deniedProjects = new Set(deniedProjectIds);
@@ -468,6 +539,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         clearMutationNotice("project:create");
         return success(mapProject(response.project));
       } catch (error) {
+        if (isPermissionError(error)) await invalidatePermissionScope(true);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<ReturnType<typeof mapProject>>("创建项目", error) : handleFailure<ReturnType<typeof mapProject>>("创建项目", error);
         if (!result.ok && result.reconcile) recordMutationNotice("project:create", result.message);
         return result;
@@ -483,6 +555,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         clearMutationNotice(`project:${targetProjectId}`);
         return success(mapProject(response.project));
       } catch (error) {
+        if (isPermissionError(error)) await invalidatePermissionScope(true);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<ReturnType<typeof mapProject>>("更新项目", error) : handleFailure<ReturnType<typeof mapProject>>("更新项目", error);
         if (!result.ok && result.reconcile) recordMutationNotice(`project:${targetProjectId}`, result.message);
         return result;
@@ -495,6 +568,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         clearMutationNotice(`project:${targetProjectId}`);
         return success(null);
       } catch (error) {
+        if (isPermissionError(error)) await invalidatePermissionScope(true);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<null>("删除项目", error) : handleFailure<null>("删除项目", error);
         if (!result.ok && result.reconcile) recordMutationNotice(`project:${targetProjectId}`, result.message);
         return result;
@@ -512,17 +586,19 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         const response = await createTaskMutation.mutateAsync(draft);
         const relationResult = relationChanges.addParentIds?.length || relationChanges.addDependencyIds?.length
           ? await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, response.task.id, relationChanges)
-          : { failures: [] };
+          : { failures: [], applied: undefined };
         const value = mapTask(response.task);
         if (relationResult.failures.length) {
-          const warning = "任务已创建，但部分关系未保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
+          if (relationResult.failures.some((item) => item.status === 401 || item.status === 403 || item.status === 404)) await invalidatePermissionScope(false);
+          const warning = "任务已创建，但部分关系未保存：" + relationResult.failures.map((item) => item.message).join("；") + "。请刷新后核对。";
           recordMutationNotice(`task:${response.task.id}`, warning);
-          return success(value, warning, true);
+          return success(value, warning, true, { failures: relationResult.failures, applied: relationResult.applied });
         }
         clearMutationNotice("task:create");
         clearMutationNotice(`task:${response.task.id}`);
         return success(value);
       } catch (error) {
+        if (isPermissionError(error)) await invalidatePermissionScope(false);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<TaskRecord>("创建任务", error) : handleFailure<TaskRecord>("创建任务", error);
         if (!result.ok && result.reconcile) recordMutationNotice("task:create", result.message);
         return result;
@@ -548,14 +624,16 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         if (hasRelationChanges && relationChanges) {
           const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, relationChanges);
           if (relationResult.failures.length) {
-            const warning = "任务已更新，但部分关系未保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
+            if (relationResult.failures.some((item) => item.status === 401 || item.status === 403 || item.status === 404)) await invalidatePermissionScope(false);
+            const warning = "任务已更新，但部分关系未保存：" + relationResult.failures.map((item) => item.message).join("；") + "。请刷新后核对。";
             recordMutationNotice(`task:${taskId}`, warning);
-            return success(value, warning, true);
+            return success(value, warning, true, { failures: relationResult.failures, applied: relationResult.applied });
           }
         }
         clearMutationNotice(`task:${taskId}`);
         return success(value);
       } catch (error) {
+        if (isPermissionError(error)) await invalidatePermissionScope(false);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<TaskRecord>("更新任务", error) : handleFailure<TaskRecord>("更新任务", error);
         if (!result.ok && result.reconcile) recordMutationNotice(`task:${taskId}`, result.message);
         return result;
@@ -570,6 +648,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         clearMutationNotice(`task:${taskId}`);
         return success(null);
       } catch (error) {
+        if (isPermissionError(error)) await invalidatePermissionScope(false);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<null>("删除任务", error) : handleFailure<null>("删除任务", error);
         if (!result.ok && result.reconcile) recordMutationNotice(`task:${taskId}`, result.message);
         return result;
@@ -586,13 +665,15 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         relationMutationsInFlight.current.add(taskId);
         const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, changes).finally(() => relationMutationsInFlight.current.delete(taskId));
         if (relationResult.failures.length) {
-          const warning = "任务关系仅部分保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
+          if (relationResult.failures.some((item) => item.status === 401 || item.status === 403 || item.status === 404)) await invalidatePermissionScope(false);
+          const warning = "任务关系仅部分保存：" + relationResult.failures.map((item) => item.message).join("；") + "。请刷新后核对。";
           recordMutationNotice(`task:${taskId}`, warning);
-          return success(null, warning, true);
+          return success(null, warning, true, { failures: relationResult.failures, applied: relationResult.applied });
         }
         clearMutationNotice(`task:${taskId}`);
         return success(null);
       } catch (error) {
+        if (isPermissionError(error)) await invalidatePermissionScope(false);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<null>("更新任务关系", error) : handleFailure<null>("更新任务关系", error);
         if (!result.ok && result.reconcile) recordMutationNotice(`task:${taskId}`, result.message);
         return result;
@@ -601,8 +682,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     const refresh = async (): Promise<void> => {
       const predicate = (query: { queryKey: readonly unknown[] }) => isProjectTaskQueryForPrincipal(query, subjectId) && query.queryKey[2] === sessionGeneration && query.queryKey[3] !== "mutation-notice";
       await queryClient.refetchQueries({ predicate });
-      const failedQuery = queryClient.getQueryCache().findAll({ predicate }).find((query) => query.state.status === "error");
-      if (failedQuery) throw new Error("项目、任务或关系列表刷新失败，待确认结果仍然保留。");
+      const refreshedQueries = queryClient.getQueryCache().findAll({ predicate });
+      const failedQuery = refreshedQueries.find((query) => query.state.status === "error");
+      const incompleteQuery = refreshedQueries.find((query) => hasIncompleteProjectTaskRead(query.state.data));
+      if (failedQuery || incompleteQuery) throw new Error("项目、任务或关系列表刷新不完整，待确认结果仍然保留。");
       clearAllMutationNotices();
     };
 
@@ -627,5 +710,5 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       refresh,
       notice: [readNotice, ...mutationNoticeQuery.data.map((notice) => notice.message)].filter(Boolean).join(" ") || undefined
     } satisfies ProjectTaskSource;
-  }, [api, canCreateProjects, clearAllMutationNotices, clearMutationNotice, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, mutationNoticeQuery.data, permissionChanged, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, relationshipsByTaskId, sessionGeneration, setTaskView, subjectId, taskViews, tasks, updateProjectMutation, updateTaskMutation]);
+  }, [api, canCreateProjects, clearAllMutationNotices, clearMutationNotice, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, invalidatePermissionScope, mutationNoticeQuery.data, permissionChanged, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, relationshipsByTaskId, sessionGeneration, setTaskView, subjectId, taskViews, tasks, updateProjectMutation, updateTaskMutation]);
 }

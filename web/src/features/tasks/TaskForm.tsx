@@ -12,13 +12,41 @@ import { calculateTaskRelationChanges, type ProjectTaskSource, type TaskRecord, 
 
 type Feedback = { message: string; tone: "success" | "warning"; reconcile?: boolean };
 
-interface TaskFormBaseline {
+export interface TaskFormBaseline {
   title: string;
   goal: string;
   projectId: string;
   state: TaskRecord["state"];
   parentIds: string[];
   dependsOn: string[];
+}
+
+interface TaskFormDraftState extends TaskFormBaseline {}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.join("\u0000") === right.join("\u0000");
+}
+
+export function reconcileTaskFormState(
+  previousBaseline: TaskFormBaseline,
+  nextBaseline: TaskFormBaseline,
+  draft: TaskFormDraftState,
+  relationshipsConfirmed: boolean
+): { baseline: TaskFormBaseline; draft: TaskFormDraftState } {
+  const baseline = relationshipsConfirmed
+    ? nextBaseline
+    : { ...nextBaseline, parentIds: previousBaseline.parentIds, dependsOn: previousBaseline.dependsOn };
+  return {
+    baseline,
+    draft: {
+      title: draft.title === previousBaseline.title ? baseline.title : draft.title,
+      goal: draft.goal === previousBaseline.goal ? baseline.goal : draft.goal,
+      projectId: draft.projectId === previousBaseline.projectId ? baseline.projectId : draft.projectId,
+      state: draft.state === previousBaseline.state ? baseline.state : draft.state,
+      parentIds: relationshipsConfirmed && sameIds(draft.parentIds, previousBaseline.parentIds) ? baseline.parentIds : draft.parentIds,
+      dependsOn: relationshipsConfirmed && sameIds(draft.dependsOn, previousBaseline.dependsOn) ? baseline.dependsOn : draft.dependsOn
+    }
+  };
 }
 
 function baselineFor(task: TaskRecord | undefined, defaultProjectId: string | undefined, firstProjectId: string | undefined): TaskFormBaseline {
@@ -55,19 +83,50 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const baselineRef = useRef<TaskFormBaseline>(baselineFor(task, defaultProjectId, source.projects[0]?.id));
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
   const candidates = useMemo(() => source.tasks.filter((candidate) => candidate.id !== task?.id && canWrite && source.getProjectPermissions(candidate.projectId).canWrite), [canWrite, source, task?.id]);
+  const taskSyncKey = [
+    mode,
+    defaultProjectId ?? "",
+    source.projects[0]?.id ?? "",
+    task?.id ?? "",
+    task?.title ?? "",
+    task?.goal ?? "",
+    task?.projectId ?? "",
+    task?.state ?? "",
+    task?.parentId ?? "",
+    task?.parentIds?.join("\u0000") ?? "",
+    task?.dependsOn.join("\u0000") ?? "",
+    task?.relationshipsConfirmed === false ? "incomplete" : "confirmed"
+  ].join("\u0001");
+  const lastSyncedTaskKeyRef = useRef<string | undefined>(undefined);
+  const taskIdentityKey = `${mode}:${task?.id ?? "create"}`;
+  const lastTaskIdentityKeyRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    const nextBaseline = baselineFor(task, defaultProjectId, source.projects[0]?.id);
-    baselineRef.current = nextBaseline;
-    setTitle(nextBaseline.title);
-    setGoal(nextBaseline.goal);
-    setProjectId(nextBaseline.projectId);
-    setState(nextBaseline.state);
-    setParentIds(nextBaseline.parentIds);
-    setDependsOn(nextBaseline.dependsOn);
+    if (lastTaskIdentityKeyRef.current === undefined) {
+      lastTaskIdentityKeyRef.current = taskIdentityKey;
+      return;
+    }
+    if (lastTaskIdentityKeyRef.current === taskIdentityKey) return;
+    lastTaskIdentityKeyRef.current = taskIdentityKey;
     setFeedback(null);
     setBlockedByUnknown(false);
-  }, [defaultProjectId, mode, task?.id]);
+  }, [taskIdentityKey]);
+
+  useEffect(() => {
+    if (lastSyncedTaskKeyRef.current === taskSyncKey) return;
+    lastSyncedTaskKeyRef.current = taskSyncKey;
+    const previousBaseline = baselineRef.current;
+    const nextBaseline = baselineFor(task, defaultProjectId, source.projects[0]?.id);
+    const draft = { title, goal, projectId, state, parentIds, dependsOn };
+    const reconciled = reconcileTaskFormState(previousBaseline, nextBaseline, draft, task?.relationshipsConfirmed !== false);
+    baselineRef.current = reconciled.baseline;
+    setTitle(reconciled.draft.title);
+    setGoal(reconciled.draft.goal);
+    setProjectId(reconciled.draft.projectId);
+    setState(reconciled.draft.state);
+    setParentIds(reconciled.draft.parentIds);
+    setDependsOn(reconciled.draft.dependsOn);
+  }, [defaultProjectId, dependsOn, goal, mode, parentIds, projectId, source.projects, state, task, taskSyncKey, title]);
 
   useEffect(() => {
     if (mode === "create" && !projectId && source.projects[0]) setProjectId(source.projects[0].id);
@@ -121,6 +180,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       const reconcile = resolved.reconcile ?? false;
       setBlockedByUnknown(reconcile);
       setFeedback({ message: resolved.warning, tone: "warning", reconcile });
+      if (mode === "create") onSaved?.(resolved.value.id);
       return;
     }
     setFeedback({ message: mode === "create" ? "任务已创建，已保留项目归属与关系。" : "任务已更新。", tone: "success" });
@@ -154,37 +214,50 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
 interface TaskEditorProps {
   source: ProjectTaskSource;
   taskId: string;
+  fallbackTask?: TaskRecord;
+  onDeleteStarted?: () => void;
+  onDeleteFailed?: () => void;
+  onDeleted?: () => void;
 }
 
-export function TaskEditor({ source, taskId }: TaskEditorProps) {
+export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDeleteFailed, onDeleted }: TaskEditorProps) {
   const [editing, setEditing] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
+  const [deleted, setDeleted] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
-  const task = source.getTask(taskId);
-  if (!task) return null;
-  const canWrite = source.getProjectPermissions(task.projectId).canWrite;
+  const task = source.getTask(taskId) ?? fallbackTask;
   const finishEditing = () => {
     setEditing(false);
     requestAnimationFrame(() => editButtonRef.current?.focus());
   };
 
+  if (deleted) {
+    return <section className="info-block" aria-label="任务操作"><span className="section-kicker">任务操作</span><div className="inline-state inline-state-success" role="status"><Check size={15} aria-hidden="true" />任务已删除。</div><div className="form-actions"><Button asChild type="button" variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></div></section>;
+  }
+  if (!task) return null;
+  const canWrite = source.getProjectPermissions(task.projectId).canWrite;
+
   if (editing) return <TaskForm source={source} mode="edit" task={task} onCancelled={finishEditing} onSaved={finishEditing} />;
 
   const remove = async () => {
+    onDeleteStarted?.();
     setPending(true);
     setFeedback(null);
     const result = await source.deleteTask(taskId);
     setPending(false);
     if (!result.ok) {
+      onDeleteFailed?.();
       const reconcile = result.reconcile || result.code === "unknown";
       setBlockedByUnknown(reconcile);
       setFeedback({ message: result.message, tone: "warning", reconcile });
       return;
     }
     setBlockedByUnknown(false);
+    setDeleted(true);
     setFeedback({ message: "任务已删除。", tone: "success" });
+    onDeleted?.();
   };
 
   const reconcile = async () => {

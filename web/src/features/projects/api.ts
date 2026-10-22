@@ -114,6 +114,7 @@ export function mapTask(task: Task, relationships?: TaskRelationshipPage): TaskR
     parentId: parentIds[0],
     parentIds,
     dependsOn: relationships?.prerequisites.map((relationship) => relationship.prerequisite_task_id) ?? [],
+    relationshipsConfirmed: relationships !== undefined,
     updated: task.updated_at
   };
 }
