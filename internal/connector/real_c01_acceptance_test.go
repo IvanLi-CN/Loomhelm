@@ -206,12 +206,6 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
-	ack.RunID = observedRun.RunID
-	ack.EventCursor = &observedRun.Cursor
-	if err := journal.UpdateCommand(commandID, ack); err != nil {
-		_ = journal.Close()
-		return realC01ProcessResult{}, fmt.Errorf("persist explicitly observed unknown run identity: %w", err)
-	}
 	result.ReconciledRunID = valueOrEmpty(observedRun.RunID)
 	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
 	if err != nil {
@@ -237,13 +231,7 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 }
 
 func realEventRPCID(event protocol.Event) string {
-	var envelope struct {
-		ID json.RawMessage `json:"id"`
-	}
-	if err := json.Unmarshal(event.Payload, &envelope); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(envelope.ID))
+	return rpcEnvelopeID(event.Payload)
 }
 
 func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, commandID string) (realC01ProcessResult, error) {

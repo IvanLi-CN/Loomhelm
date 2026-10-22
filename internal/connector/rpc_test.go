@@ -258,6 +258,19 @@ func TestProcessTransportRejectsAmbiguousRPCResponse(t *testing.T) {
 	}
 }
 
+func TestProcessTransportRequiresJSONRPCVersion(t *testing.T) {
+	for name, frame := range map[string]string{
+		"missing": `{"id":1,"result":{}}`,
+		"wrong":   `{"jsonrpc":"1.0","id":1,"result":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseRPCMessage([]byte(frame)); err == nil {
+				t.Fatalf("RPC frame %s jsonrpc version was accepted", name)
+			}
+		})
+	}
+}
+
 func TestSanitizedCommandEnvExcludesSecrets(t *testing.T) {
 	t.Setenv("LOOMHELM_RPC_SECRET", "must-not-cross-boundary")
 	t.Setenv("HOME", "/tmp/loomhelm-home")

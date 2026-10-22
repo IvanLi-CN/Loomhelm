@@ -336,6 +336,9 @@ func (j *Journal) UpdateCommand(commandID string, ack protocol.CommandAck) error
 	if !ok {
 		return ErrCommandNotFound
 	}
+	if ack.CommandID != "" && ack.CommandID != commandID {
+		return fmt.Errorf("command ACK identity %q does not match command %q", ack.CommandID, commandID)
+	}
 	ack.CommandID = commandID
 	if ack.ReceivedAt == "" {
 		ack.ReceivedAt = entry.ack.ReceivedAt
@@ -966,6 +969,9 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		}
 		if existing, ok := j.commands[record.CommandID]; ok && existing.digest != digest {
 			return fmt.Errorf("%w: conflicting command record %q", ErrJournalCorrupt, record.CommandID)
+		}
+		if _, ok := j.commands[record.CommandID]; ok {
+			return nil
 		}
 		j.commands[record.CommandID] = commandEntry{command: cloneCommand(*record.Command), digest: digest, ack: cloneAck(*record.Ack)}
 	case "command_update":

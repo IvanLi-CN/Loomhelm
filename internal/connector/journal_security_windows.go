@@ -144,11 +144,14 @@ func validateJournalDACL(path string, dacl, userSID uintptr) error {
 			}
 			continue
 		}
-		if mask&dangerousDirectoryAccess == 0 {
+		if mask&(dangerousDirectoryAccess|readableDirectoryAccess) == 0 {
 			continue
 		}
 		equal, _, _ := equalSid.Call(userSID, aceSID)
 		if equal == 0 && !trustedWindowsPrincipal(aceSID) {
+			if mask&readableDirectoryAccess != 0 {
+				return fmt.Errorf("journal directory %q grants non-owner read rights", path)
+			}
 			return fmt.Errorf("journal directory %q grants non-owner modification rights", path)
 		}
 	}

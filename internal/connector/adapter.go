@@ -61,6 +61,7 @@ type sessionStartCall struct {
 	done          chan struct{}
 	waiterEntered chan struct{}
 	waiterOnce    sync.Once
+	gatewayHandle string
 }
 
 func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConfig) (*Adapter, error) {
@@ -106,16 +107,18 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 		return protocol.AdapterSession{}, err
 	}
 	for {
-		release, wait := a.acquireSessionStart(request.CommandID)
+		release, wait := a.acquireSessionStart(request.CommandID, gatewaySession.Handle)
 		if wait == nil {
 			defer release()
 			break
 		}
 		select {
-		case <-wait:
+		case <-wait.done:
 		case <-ctx.Done():
-			cleanupCtx := context.WithoutCancel(ctx)
-			_ = a.closeUnusedGatewaySession(cleanupCtx, gatewaySession, nil)
+			if wait.gatewayHandle != gatewaySession.Handle {
+				cleanupCtx := context.WithoutCancel(ctx)
+				_ = a.closeUnusedGatewaySession(cleanupCtx, gatewaySession, nil)
+			}
 			return protocol.AdapterSession{}, ctx.Err()
 		}
 	}
@@ -137,7 +140,9 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	}
 	intentID, err := a.journal.BeginSessionStart(gatewaySession, request)
 	if err != nil {
-		_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
+		if !errors.Is(err, ErrUnknownOutcome) {
+			_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
+		}
 		return protocol.AdapterSession{}, err
 	}
 	if existing, ok, err := a.journal.ResolvedSessionStart(request); err != nil {
@@ -157,7 +162,7 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	if err != nil {
 		if !errors.Is(err, ErrUnknownOutcome) {
 			_ = a.journal.FailSessionStart(intentID)
-			_ = transport.Close()
+			_ = a.closeUnusedGatewaySession(context.WithoutCancel(ctx), gatewaySession, transport)
 		} else {
 			go a.watchUnknownSessionStart(gatewaySession, intentID, transport)
 		}
@@ -165,7 +170,7 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	}
 	if response.Error != nil {
 		_ = a.journal.FailSessionStart(intentID)
-		_ = transport.Close()
+		_ = a.closeUnusedGatewaySession(context.WithoutCancel(ctx), gatewaySession, transport)
 		return protocol.AdapterSession{}, rpcResponseError("thread/start", response)
 	}
 	session, err := a.bindStartedSession(gatewaySession, intentID, response, transport)
@@ -180,14 +185,14 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	return session, nil
 }
 
-func (a *Adapter) acquireSessionStart(commandID string) (func(), <-chan struct{}) {
+func (a *Adapter) acquireSessionStart(commandID, gatewayHandle string) (func(), *sessionStartCall) {
 	a.startMu.Lock()
 	defer a.startMu.Unlock()
 	if wait, ok := a.startCalls[commandID]; ok {
 		wait.waiterOnce.Do(func() { close(wait.waiterEntered) })
-		return nil, wait.done
+		return nil, wait
 	}
-	call := &sessionStartCall{done: make(chan struct{}), waiterEntered: make(chan struct{})}
+	call := &sessionStartCall{done: make(chan struct{}), waiterEntered: make(chan struct{}), gatewayHandle: gatewayHandle}
 	a.startCalls[commandID] = call
 	return func() {
 		a.startMu.Lock()
@@ -225,7 +230,7 @@ func (a *Adapter) closeUnusedGatewaySession(ctx context.Context, gatewaySession 
 func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, intentID string, response RPCMessage, transport RPCTransport) (protocol.AdapterSession, error) {
 	externalThreadRef := threadIDFromResult(response.Result)
 	if externalThreadRef == "" {
-		_ = transport.Close()
+		_ = a.closeUnusedGatewaySession(context.Background(), gatewaySession, transport)
 		return protocol.AdapterSession{}, fmt.Errorf("%w: thread/start returned no thread id", ErrUnknownOutcome)
 	}
 	session := protocol.AdapterSession{
@@ -239,19 +244,19 @@ func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, int
 		activeTurns:    make(map[string]string),
 	}
 	if err := a.journal.ResolveSessionStart(intentID, session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
-		_ = transport.Close()
+		_ = a.closeUnusedGatewaySession(context.Background(), gatewaySession, transport)
 		return protocol.AdapterSession{}, err
 	}
 	if binder, ok := a.provider.(interface {
 		SetExternalThreadRef(protocol.GatewaySession, string) error
 	}); ok {
 		if err := binder.SetExternalThreadRef(gatewaySession, externalThreadRef); err != nil {
-			_ = transport.Close()
+			_ = a.closeUnusedGatewaySession(context.Background(), gatewaySession, transport)
 			return protocol.AdapterSession{}, err
 		}
 	}
 	if _, err := a.appendObservedEvent(state, protocol.EventTypeSessionCreated, "thread/start", response.Raw, ""); err != nil {
-		_ = transport.Close()
+		_ = a.closeUnusedGatewaySession(context.Background(), gatewaySession, transport)
 		return protocol.AdapterSession{}, err
 	}
 	a.mu.Lock()
@@ -268,7 +273,7 @@ func (a *Adapter) watchUnknownSessionStart(gatewaySession protocol.GatewaySessio
 		}
 		if message.Error != nil {
 			_ = a.journal.FailSessionStart(intentID)
-			_ = transport.Close()
+			_ = a.closeUnusedGatewaySession(context.Background(), gatewaySession, transport)
 			return
 		}
 		if _, err := a.bindStartedSession(gatewaySession, intentID, message, transport); err != nil {
@@ -610,6 +615,11 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	defer state.operationMu.Unlock()
 	if !a.isCurrentState(state) || state.closed.Load() {
 		return protocol.Reconciliation{}, fmt.Errorf("adapter session %q generation is no longer active", session.SessionID)
+	}
+	if updated, _, err := a.bindPersistedOperation(commandID, session.SessionID, ack); err != nil {
+		return protocol.Reconciliation{}, err
+	} else {
+		ack = updated
 	}
 	if command.Kind == protocol.CommandKindRunApprove || command.Kind == protocol.CommandKindRunDeny {
 		observedDecision, ok := a.journal.ApprovalResult(commandID)
@@ -1420,6 +1430,57 @@ func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns [
 		return &matches[0], false
 	}
 	return nil, len(matches) > 1
+}
+
+func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protocol.CommandAck) (protocol.CommandAck, bool, error) {
+	operationID := valueOrEmpty(ack.OperationID)
+	if operationID == "" {
+		return ack, false, nil
+	}
+	var matched *protocol.Event
+	afterCursor := ""
+	for {
+		page, err := a.journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, AfterCursor: afterCursor, Limit: 1000})
+		if err != nil {
+			return ack, false, fmt.Errorf("read persisted operation %q for command %q: %w", operationID, commandID, err)
+		}
+		for index := range page.Events {
+			event := &page.Events[index]
+			if event.Type != protocol.EventTypeUnknown || rpcEnvelopeID(event.Payload) != operationID {
+				continue
+			}
+			if matched != nil {
+				return ack, false, nil
+			}
+			matched = event
+		}
+		if !page.HasMore || page.NextCursor == nil || *page.NextCursor == "" {
+			break
+		}
+		afterCursor = *page.NextCursor
+	}
+	if matched == nil {
+		return ack, false, nil
+	}
+	ack.EventCursor = &matched.Cursor
+	if matched.RunID != nil && strings.TrimSpace(*matched.RunID) != "" {
+		runID := *matched.RunID
+		ack.RunID = &runID
+	}
+	if err := a.journal.UpdateCommand(commandID, ack); err != nil {
+		return ack, false, fmt.Errorf("persist operation observation for command %q: %w", commandID, err)
+	}
+	return ack, true, nil
+}
+
+func rpcEnvelopeID(payload json.RawMessage) string {
+	var envelope struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(envelope.ID))
 }
 
 func turnAfterCommand(command protocol.Command, turn appServerTurn) bool {

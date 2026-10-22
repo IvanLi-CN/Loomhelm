@@ -16,12 +16,15 @@ const (
 	accessAllowedCompoundAceType       = 4
 	accessAllowedCallbackAceType       = 9
 	accessAllowedCallbackObjectAceType = 11
+	fileListDirectory                  = 0x00000001
 	fileAddFile                        = 0x00000002
 	fileAddSubdirectory                = 0x00000004
 	fileDeleteChild                    = 0x00000040
+	readControlAccess                  = 0x00020000
 	deleteAccess                       = 0x00010000
 	writeDACAccess                     = 0x00040000
 	writeOwnerAccess                   = 0x00080000
+	genericReadAccess                  = 0x80000000
 	genericWriteAccess                 = 0x40000000
 	genericAllAccess                   = 0x10000000
 )
@@ -100,11 +103,14 @@ func validateJournalDirectory(path string) error {
 			}
 			continue
 		}
-		if mask&dangerousDirectoryAccess == 0 {
+		if mask&(dangerousDirectoryAccess|readableDirectoryAccess) == 0 {
 			continue
 		}
 		equal, _, _ := equalSid.Call(userSID, aceSID)
 		if equal == 0 && !trustedWindowsPrincipal(aceSID) {
+			if mask&readableDirectoryAccess != 0 {
+				return fmt.Errorf("journal directory %q grants non-owner read rights", path)
+			}
 			return fmt.Errorf("journal directory %q grants non-owner modification rights", path)
 		}
 	}
@@ -170,6 +176,8 @@ func trustedWindowsPrincipal(sid uintptr) bool {
 }
 
 const dangerousDirectoryAccess = fileAddFile | fileAddSubdirectory | fileDeleteChild | deleteAccess | writeDACAccess | writeOwnerAccess | genericWriteAccess | genericAllAccess
+
+const readableDirectoryAccess = fileListDirectory | readControlAccess | genericReadAccess
 
 func allowedACEAccess(aceType byte, ace uintptr) (uint32, uintptr, bool) {
 	switch aceType {

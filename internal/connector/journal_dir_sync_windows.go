@@ -14,7 +14,7 @@ func syncJournalDirectory(path string) error {
 	}
 	handle, err := syscall.CreateFile(
 		name,
-		syscall.GENERIC_READ,
+		syscall.GENERIC_READ|syscall.GENERIC_WRITE,
 		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
 		nil,
 		syscall.OPEN_EXISTING,

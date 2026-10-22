@@ -288,7 +288,17 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 		_, startErr := adapter.StartSession(secondCtx, protocol.GatewaySession{Handle: "gateway-cancel-2", Generation: "generation-cancel-2"}, request)
 		secondDone <- startErr
 	}()
-	time.Sleep(20 * time.Millisecond)
+	adapter.startMu.Lock()
+	startCall := adapter.startCalls[request.CommandID]
+	adapter.startMu.Unlock()
+	if startCall == nil {
+		t.Fatal("canceled session start call was not registered")
+	}
+	select {
+	case <-startCall.waiterEntered:
+	case <-time.After(time.Second):
+		t.Fatal("canceled session start did not enter the single-flight waiter")
+	}
 	cancel()
 	select {
 	case startErr := <-secondDone:
@@ -311,6 +321,68 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 		t.Fatal("canceled gateway transport remained open")
 	}
 	close(firstTransport.release)
+	if startErr := <-firstDone; startErr != nil {
+		t.Fatal(startErr)
+	}
+}
+
+func TestAdapterDoesNotCloseSharedGatewaySessionWhenWaiterCancels(t *testing.T) {
+	transport := &blockingTransport{
+		fakeTransport: newFakeTransport(),
+		entered:       make(chan struct{}, 1),
+		release:       make(chan struct{}),
+	}
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-shared-cancel"}}`)}}}
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{"gateway-shared-cancel": transport}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "shared-cancel-session"}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, startErr := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-shared-cancel", Generation: "generation-shared-cancel"}, request)
+		firstDone <- startErr
+	}()
+	select {
+	case <-transport.entered:
+	case <-time.After(time.Second):
+		t.Fatal("shared session start did not reach the transport")
+	}
+	secondCtx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		_, startErr := adapter.StartSession(secondCtx, protocol.GatewaySession{Handle: "gateway-shared-cancel", Generation: "generation-shared-cancel"}, request)
+		secondDone <- startErr
+	}()
+	adapter.startMu.Lock()
+	startCall := adapter.startCalls[request.CommandID]
+	adapter.startMu.Unlock()
+	if startCall == nil {
+		t.Fatal("shared session start call was not registered")
+	}
+	select {
+	case <-startCall.waiterEntered:
+	case <-time.After(time.Second):
+		t.Fatal("shared session start did not enter the single-flight waiter")
+	}
+	cancel()
+	select {
+	case startErr := <-secondDone:
+		if !errors.Is(startErr, context.Canceled) {
+			t.Fatalf("shared canceled session start error = %v", startErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shared canceled session start did not return")
+	}
+	transport.mu.Lock()
+	closed := transport.closed
+	transport.mu.Unlock()
+	if closed {
+		t.Fatal("shared gateway transport was closed by canceled waiter")
+	}
+	close(transport.release)
 	if startErr := <-firstDone; startErr != nil {
 		t.Fatal(startErr)
 	}
@@ -485,6 +557,44 @@ func TestAdapterPersistsUnknownRPCOperationIdentity(t *testing.T) {
 	_, stored, err := j.Command(command.CommandID)
 	if err != nil || stored.OperationID == nil || *stored.OperationID != "41" {
 		t.Fatalf("stored unknown ACK = %+v, error = %v, want operation ID 41", stored, err)
+	}
+}
+
+func TestAdapterReconcilesUnknownRPCOperationFromPersistedEvent(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-operation-reconcile"}}`)}}}
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{ID: json.RawMessage(`41`)}, err: ErrUnknownOutcome}}
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-operation-reconcile","status":"completed"}]}`)}}}
+	j := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-operation-reconcile", Generation: "generation-operation-reconcile", Path: protocol.SessionPathNew}, testSessionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := testCommand("unknown-operation-reconcile", `{"prompt":"recover by operation identity"}`)
+	command.SessionID = session.SessionID
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
+		t.Fatalf("unknown ACK = %+v, error = %v", ack, err)
+	}
+	runID := "turn-operation-reconcile"
+	raw := json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-operation-reconcile","status":"completed"}}}`)
+	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceAppServer, Payload: raw, RunID: &runID}); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	if err != nil || reconciliation.State != protocol.ReconciliationStateConfirmed {
+		t.Fatalf("operation reconciliation = %+v, error = %v", reconciliation, err)
+	}
+	_, stored, err := j.Command(command.CommandID)
+	if err != nil || stored.State != protocol.CommandStateSucceeded || stored.RunID == nil || *stored.RunID != runID {
+		t.Fatalf("reconciled command = %+v, error = %v", stored, err)
+	}
+	if stored.EventCursor == nil || reconciliation.EventCursor == nil || *stored.EventCursor != *reconciliation.EventCursor {
+		t.Fatalf("reconciled event cursor = %v, reconciliation = %+v", stored.EventCursor, reconciliation)
 	}
 }
 

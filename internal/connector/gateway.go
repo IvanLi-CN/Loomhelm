@@ -167,16 +167,28 @@ func (g *Gateway) SetExternalThreadRef(session protocol.GatewaySession, external
 		return errors.New("gateway session handle and external thread reference are required")
 	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	entry, ok := g.sessions[session.Handle]
 	if !ok {
+		g.mu.Unlock()
 		return fmt.Errorf("gateway session %q is not available", session.Handle)
 	}
 	if entry.session.ExternalThreadRef != "" && entry.session.ExternalThreadRef != externalThreadRef {
+		g.mu.Unlock()
 		return fmt.Errorf("gateway session %q is already bound to another thread", session.Handle)
 	}
 	entry.session.ExternalThreadRef = externalThreadRef
 	g.sessions[session.Handle] = entry
+	g.mu.Unlock()
+
+	g.startMu.Lock()
+	for commandID, cached := range g.startSessions {
+		if cached.session.Handle != session.Handle {
+			continue
+		}
+		cached.session.ExternalThreadRef = externalThreadRef
+		g.startSessions[commandID] = cached
+	}
+	g.startMu.Unlock()
 	return nil
 }
 
@@ -228,15 +240,27 @@ func (g *Gateway) ReconcileSession(ctx context.Context, externalThreadRef string
 		Path:              protocol.SessionPathNew,
 	}
 	var previous []RPCTransport
+	previousHandles := make(map[string]struct{})
 	g.mu.Lock()
 	for handle, entry := range g.sessions {
 		if entry.session.ExternalThreadRef == externalThreadRef {
 			delete(g.sessions, handle)
+			previousHandles[handle] = struct{}{}
 			previous = append(previous, entry.transport)
 		}
 	}
 	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport, resumeResponse: append(json.RawMessage(nil), result.Raw...)}
 	g.mu.Unlock()
+	g.startMu.Lock()
+	for commandID, cached := range g.startSessions {
+		_, replaced := previousHandles[cached.session.Handle]
+		if !replaced && cached.session.ExternalThreadRef != externalThreadRef {
+			continue
+		}
+		cached.session = session
+		g.startSessions[commandID] = cached
+	}
+	g.startMu.Unlock()
 	for _, oldTransport := range previous {
 		_ = oldTransport.Close()
 	}

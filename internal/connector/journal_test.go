@@ -39,6 +39,24 @@ func TestJournalDeduplicatesCommandsAndRejectsConflictingPayloads(t *testing.T) 
 	}
 }
 
+func TestJournalRejectsMismatchedCommandAckIdentity(t *testing.T) {
+	journal := openTestJournal(t)
+	command := testCommand("ack-identity", `{"prompt":"identity"}`)
+	if _, _, err := journal.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommand(command.CommandID, protocol.CommandAck{CommandID: "other-command", State: protocol.CommandStateSucceeded}); err == nil {
+		t.Fatal("journal accepted an ACK for a different command")
+	}
+	ack, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.State != protocol.CommandStateAccepted {
+		t.Fatalf("mismatched ACK changed command state to %q", ack.State)
+	}
+}
+
 func TestJournalTurnsInflightCommandUnknownAfterRestart(t *testing.T) {
 	path := filepath.Join(privateTestDir(t), "journal.jsonl")
 	first, err := OpenJournal(path)
@@ -290,6 +308,45 @@ func TestJournalRejectsMismatchedCommandRecordIdentity(t *testing.T) {
 
 	if _, err := OpenJournal(path); !errors.Is(err, ErrJournalCorrupt) {
 		t.Fatalf("mismatched command identity error = %v, want %v", err, ErrJournalCorrupt)
+	}
+}
+
+func TestJournalDuplicateCommandRecordDoesNotRollBackAck(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "duplicate-command.jsonl")
+	command := testCommand("duplicate-command", `{"prompt":"preserve result"}`)
+	digest, err := commandDigest(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := protocol.CommandAck{CommandID: command.CommandID, ReceivedAt: command.IssuedAt, State: protocol.CommandStateAccepted}
+	succeeded := accepted
+	succeeded.State = protocol.CommandStateSucceeded
+	succeeded.Result = json.RawMessage(`{"ok":true}`)
+	records := []journalRecord{
+		{FormatVersion: journalFormatVersion, Type: "command", At: command.IssuedAt, Command: &command, CommandID: command.CommandID, Digest: digest, Ack: &accepted},
+		{FormatVersion: journalFormatVersion, Type: "command_update", At: command.IssuedAt, CommandID: command.CommandID, Ack: &succeeded},
+		{FormatVersion: journalFormatVersion, Type: "command", At: command.IssuedAt, Command: &command, CommandID: command.CommandID, Digest: digest, Ack: &accepted},
+	}
+	var data []byte
+	for _, record := range records {
+		encoded, marshalErr := json.Marshal(record)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		data = append(data, encoded...)
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	ack, err := journal.LookupCommand(command.CommandID)
+	if err != nil || ack.State != protocol.CommandStateSucceeded || string(ack.Result) != `{"ok":true}` {
+		t.Fatalf("duplicate command replay = %+v, error = %v", ack, err)
 	}
 }
 

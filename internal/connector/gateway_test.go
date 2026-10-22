@@ -37,6 +37,9 @@ func TestGatewayKeepsDesktopAttachUnsupportedAndColdResumeExplicit(t *testing.T)
 	if session.Path != protocol.SessionPathNew || session.Handle == "" || session.Generation == "" {
 		t.Fatalf("new gateway session = %+v", session)
 	}
+	if err := gateway.SetExternalThreadRef(session, "thread-known"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := gateway.AttachActiveSession(context.Background(), protocol.ExistingSessionRequest{ActiveThreadRef: "thread-known"}); !errors.Is(err, protocol.ErrUnsupportedSessionPath) {
 		t.Fatalf("active attach error = %v", err)
 	}
@@ -53,6 +56,16 @@ func TestGatewayKeepsDesktopAttachUnsupportedAndColdResumeExplicit(t *testing.T)
 	}
 	if recovered.ExternalThreadRef != "thread-known" || recovered.Path != protocol.SessionPathNew {
 		t.Fatalf("recovered gateway session = %+v", recovered)
+	}
+	retried, err := gateway.StartNewSession(context.Background(), protocol.NewSessionRequest{CommandID: "gateway-test-create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Handle != recovered.Handle || retried.Generation != recovered.Generation {
+		t.Fatalf("reused creation identity returned stale gateway session: retried=%+v recovered=%+v", retried, recovered)
+	}
+	if _, err := gateway.TransportFor(context.Background(), retried); err != nil {
+		t.Fatalf("reused creation identity returned unavailable session: %v", err)
 	}
 	if countCalls(startTransport, "initialize") != 1 || countCalls(recoveryTransport, "thread/resume") != 1 {
 		t.Fatalf("gateway calls = start %+v, recovery %+v", startTransport.calls, recoveryTransport.calls)
