@@ -29,6 +29,8 @@ UI 设计实现的一致性不只是某个按钮的尺寸或颜色，而是页�
 
 从设计稿落地页面时，视觉层级、间距节奏、排版基线、交互状态、响应式布局、焦点路径、错误恢复和数据新鲜度应共同形成实现契约，而不是把设计还原压缩成若干孤立的像素修正。
 
+这套方法适用于所有需要在页面中形成稳定视觉和操作语义的界面对象：按钮、输入框、选择器、标签、菜单项、分页、卡片、表格、抽屉、弹窗、导航和页面级工作流。按钮只是最容易暴露问题的入口，不是规则的边界。
+
 ## Symptoms
 
 - 具有主题色填充的控件看起来比同尺寸的未填充控件大 1px，即使 `getBoundingClientRect()` 的宽高相同。
@@ -95,6 +97,17 @@ UI 设计实现的一致性不只是某个按钮的尺寸或颜色，而是页�
 | Interaction states | hover、active、focus-visible、disabled、loading 和 permission/error 状态 | 键盘与状态 Storybook 场景 |
 | Composition | wrapper、子控件、图标和文字各自的布局责任 | 搜索框、筛选条、工具栏组合场景 |
 | Responsive behavior | 移动端触控尺寸、折行、隐藏/溢出规则 | 桌面与移动视口证据 |
+
+实现前可以先用下面的范围表检查设计交接是否覆盖了完整 UI，而不是只核对几个控件的像素尺寸。
+
+| UI scope | Must be explicit | Typical regression |
+| - | - | - |
+| Page structure | 页面层级、容器宽度、栅格、留白和内容密度 | 单个组件对齐，但页面节奏松散或主次操作不清 |
+| Shared components | 语义变体、尺寸、表面 owner 和组合边界 | 同一控件在不同页面出现高度、边框或圆角漂移 |
+| Content and typography | 字体、字重、行高、截断、长文本和空值策略 | 文案变长后挤压按钮、表格或导航 |
+| Interaction states | hover、active、focus、disabled、loading、error 和 readonly | 静态态正常，但提交中或失败后没有可操作路径 |
+| Responsive behavior | 断点、折行、溢出、移动导航和触控命中区 | 桌面正常，移动端横向溢出或无法完成操作 |
+| Workflow continuity | 草稿、刷新、取消、返回、焦点恢复和结果确认 | 页面看起来正确，但用户意图被刷新或异步结果覆盖 |
 
 ### 3. Define the page and workflow contract
 
