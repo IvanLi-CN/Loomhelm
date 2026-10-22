@@ -28,6 +28,9 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
+  const identityRef = useRef<{ mode: ProjectFormProps["mode"]; projectId?: string }>({ mode, projectId });
+  const nameDirtyRef = useRef(false);
+  const summaryDirtyRef = useRef(false);
   const projectPermissions = mode === "edit" ? source.getProjectPermissions(projectId) : undefined;
   const canManageProject = mode === "create" ? source.canCreateProjects : projectPermissions?.canManageProjects ?? false;
   const projectWriteMessage = mode === "create"
@@ -37,20 +40,47 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
       : "当前身份或连接状态为只读，项目写入动作保持禁用。";
 
   useEffect(() => {
-    setName(project?.name ?? "");
-    setSummary(editableProjectSummary(project));
-    setFeedback(null);
-    setBlockedByUnknown(false);
-  }, [mode, project?.id]);
+    const identityChanged = identityRef.current.mode !== mode || identityRef.current.projectId !== projectId;
+    if (identityChanged) {
+      identityRef.current = { mode, projectId };
+      nameDirtyRef.current = false;
+      summaryDirtyRef.current = false;
+      setName(project?.name ?? "");
+      setSummary(editableProjectSummary(project));
+      setFeedback(null);
+      setBlockedByUnknown(false);
+      return;
+    }
+    if (!nameDirtyRef.current) setName(project?.name ?? "");
+    if (!summaryDirtyRef.current) setSummary(editableProjectSummary(project));
+  }, [mode, project?.description, project?.id, project?.name, project?.summary, projectId]);
+
+  const reconcile = async () => {
+    setPending(true);
+    try {
+      await source.refresh();
+      setBlockedByUnknown(false);
+      setFeedback({ message: "已刷新并核对项目列表，可以继续操作。", tone: "success" });
+    } catch (error) {
+      setFeedback({ message: error instanceof Error ? `刷新项目列表失败：${error.message}` : "刷新项目列表失败，请稍后重试。", tone: "warning", reconcile: true });
+    } finally {
+      setPending(false);
+    }
+  };
 
   const submit = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     if (blockedByUnknown) return;
     setPending(true);
     setFeedback(null);
+    const latestProject = mode === "edit" && projectId ? source.getProject(projectId) : undefined;
+    const draft = {
+      name: nameDirtyRef.current ? name : latestProject?.name ?? name,
+      summary: summaryDirtyRef.current ? summary : editableProjectSummary(latestProject)
+    };
     const result = mode === "create"
       ? source.createProject({ name, summary })
-      : projectId ? source.updateProject(projectId, { name, summary }) : { ok: false as const, code: "invalid" as const, message: "项目上下文不可用。", reconcile: false };
+      : projectId ? source.updateProject(projectId, draft) : { ok: false as const, code: "invalid" as const, message: "项目上下文不可用。", reconcile: false };
     const resolved = await result;
     setPending(false);
     if (!resolved.ok) {
@@ -63,6 +93,8 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
       setFeedback({ message: resolved.warning, tone: "warning" });
       return;
     }
+    nameDirtyRef.current = false;
+    summaryDirtyRef.current = false;
     setFeedback({ message: mode === "create" ? "项目已创建，当前页面保留这次写入结果。" : "项目已更新。", tone: "success" });
     onSaved?.(resolved.value.id);
   };
@@ -77,10 +109,10 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
         </div>
         {mode === "edit" && <Pencil size={17} className="text-[var(--accent)]" aria-hidden="true" />}
       </div>
-      <label className="form-field"><span>项目名称</span><Input value={name} required maxLength={80} onChange={(event) => setName(event.target.value)} disabled={!canManageProject || pending} autoFocus={mode === "edit"} /></label>
-      <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => setSummary(event.target.value)} disabled={!canManageProject || pending} /></label>
+      <label className="form-field"><span>项目名称</span><Input value={name} required maxLength={80} onChange={(event) => { nameDirtyRef.current = true; setName(event.target.value); }} disabled={!canManageProject || pending} autoFocus={mode === "edit"} /></label>
+      <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => { summaryDirtyRef.current = true; setSummary(event.target.value); }} disabled={!canManageProject || pending} /></label>
       {!canManageProject && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>{projectWriteMessage}</div>}
-      {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void source.refresh(); }}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button></div>}
+      {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button></div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}
       <div className="form-actions">
         <Button type="submit" className="button button-primary" disabled={!canManageProject || pending || blockedByUnknown || !name.trim()}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存项目"}</Button>
@@ -99,6 +131,7 @@ export function ProjectActions({ source, projectId }: ProjectActionsProps) {
   const [editing, setEditing] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
+  const [blockedByUnknown, setBlockedByUnknown] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const project = source.getProject(projectId);
   const canManageProject = source.getProjectPermissions(projectId).canManageProjects;
@@ -112,17 +145,39 @@ export function ProjectActions({ source, projectId }: ProjectActionsProps) {
 
   const remove = async () => {
     setPending(true);
+    setFeedback(null);
     const result = await source.deleteProject(projectId);
     setPending(false);
-    setFeedback(result.ok ? { message: "项目已删除。", tone: "success" } : { message: result.message, tone: "warning" });
+    if (!result.ok) {
+      const reconcile = result.reconcile || result.code === "unknown";
+      setBlockedByUnknown(reconcile);
+      setFeedback({ message: result.message, tone: "warning", reconcile });
+      return;
+    }
+    setBlockedByUnknown(false);
+    setFeedback({ message: "项目已删除。", tone: "success" });
+  };
+
+  const reconcile = async () => {
+    setPending(true);
+    try {
+      await source.refresh();
+      setBlockedByUnknown(false);
+      setFeedback({ message: "已刷新并核对项目列表，可以继续操作。", tone: "success" });
+    } catch (error) {
+      setFeedback({ message: error instanceof Error ? `刷新项目列表失败：${error.message}` : "刷新项目列表失败，请稍后重试。", tone: "warning", reconcile: true });
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button ref={editButtonRef} type="button" variant="secondary" className="button button-secondary" onClick={() => setEditing(true)} disabled={!canManageProject}><Pencil size={15} aria-hidden="true" />编辑项目</Button>
-        <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={remove} disabled={!canManageProject || pending}><Trash2 size={15} aria-hidden="true" />删除项目</Button>
+        <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={() => { void remove(); }} disabled={!canManageProject || pending || blockedByUnknown}><Trash2 size={15} aria-hidden="true" />删除项目</Button>
       </div>
+      {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button></div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
     </div>
   );

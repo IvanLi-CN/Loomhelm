@@ -7,6 +7,7 @@ import {
   projectTaskQueryKeys,
   readProjectMemberships,
   readTaskRelationships,
+  relationWriteBlockReason,
   syncTaskRelations,
   toProjectUpdateRequest,
   toTaskUpdateRequest
@@ -118,6 +119,19 @@ describe("project/task write contracts", () => {
     expect(result.failures).toHaveLength(1);
   });
 
+  test("hides a project whose membership read is no longer authorized", async () => {
+    const result = await readProjectMemberships({
+      listProjectMembers: async ({ project_id }) => {
+        if (project_id === "project-revoked") throw new ApiClientError(403, { code: "unauthorized" });
+        return { items: [{ created_at: "now", project_id, role: "operator", user_id: "user-1" }] };
+      }
+    }, ["project-ok", "project-revoked"]);
+
+    expect(result.items["project-ok"]).toHaveLength(1);
+    expect(result.deniedProjectIds).toEqual(["project-revoked"]);
+    expect(result.failures).toEqual([]);
+  });
+
   test("keeps task data when one relationship read fails", async () => {
     const tasks = [
       { created_at: "now", goal: "one", id: "task-1", project_id: "project-1", status: "todo", title: "Task one", updated_at: "now" },
@@ -134,6 +148,38 @@ describe("project/task write contracts", () => {
     expect(result.relationships["task-1"]).toBeDefined();
     expect(result.relationships["task-2"]).toBeUndefined();
     expect(result.failures).toHaveLength(1);
+  });
+
+  test("hides a task whose relationship read is no longer authorized", async () => {
+    const tasks = [
+      { created_at: "now", goal: "one", id: "task-ok", project_id: "project-1", status: "todo", title: "Task one", updated_at: "now" },
+      { created_at: "now", goal: "two", id: "task-revoked", project_id: "project-1", status: "todo", title: "Task two", updated_at: "now" }
+    ] as const satisfies readonly Task[];
+    const result = await readTaskRelationships({
+      getTaskRelationships: async ({ task_id }) => {
+        if (task_id === "task-revoked") throw new ApiClientError(404, { code: "unauthorized" });
+        return { children: [], dependents: [], parents: [], prerequisites: [] };
+      }
+    }, tasks);
+
+    expect(result.items).toHaveLength(2);
+    expect(result.deniedTaskIds).toEqual(["task-revoked"]);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("fails closed when either relation endpoint is not writable", () => {
+    const tasks = new Map([
+      ["task-1", task("task-1")],
+      ["task-2", { ...task("task-2"), projectId: "project-2" }]
+    ]);
+    const reason = relationWriteBlockReason(
+      "task-1",
+      { addDependencyIds: ["task-2"] },
+      (id) => tasks.get(id ?? ""),
+      (projectId) => ({ role: projectId === "project-1" ? "operator" : "viewer", canWrite: projectId === "project-1", canManageProjects: false, isReadOnly: projectId !== "project-1" })
+    );
+
+    expect(reason).toContain("所属项目为只读");
   });
 
   test("rejects dependency cycles in the demo relation validator", () => {

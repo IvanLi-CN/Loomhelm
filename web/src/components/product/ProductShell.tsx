@@ -25,12 +25,28 @@ import type { ProjectTaskSource } from "@/features/tasks/types";
 import { DemoInspector, DemoNotice, DemoSceneBanner } from "./DemoInspector";
 
 function useMobileDrawer(open: boolean, onClose: () => void) {
+  const mobileQuery = "(max-width: 1199px)";
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const openedRef = useRef(false);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileQuery).matches);
 
   useEffect(() => {
-    if (!open) return;
+    const media = window.matchMedia(mobileQuery);
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  const active = open && isMobile;
+
+  useEffect(() => {
+    if (open && !isMobile) onClose();
+  }, [isMobile, onClose, open]);
+
+  useEffect(() => {
+    if (!active) return;
     const drawer = drawerRef.current;
     const focusFirst = () => drawer?.querySelector<HTMLElement>("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])")?.focus();
     const frame = requestAnimationFrame(focusFirst);
@@ -61,18 +77,23 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
       cancelAnimationFrame(frame);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onClose, open]);
+  }, [active, onClose]);
 
   useEffect(() => {
-    if (open) {
+    if (active) {
       openedRef.current = true;
       return;
     }
     if (openedRef.current) {
       openedRef.current = false;
-      triggerRef.current?.focus();
+      const trigger = triggerRef.current;
+      if (trigger && trigger.getClientRects().length > 0) {
+        trigger.focus();
+      } else {
+        document.querySelector<HTMLElement>("main.product-content")?.focus();
+      }
     }
-  }, [open]);
+  }, [active]);
 
   return { drawerRef, triggerRef };
 }
@@ -346,7 +367,7 @@ function ProductionShell() {
             <X size={19} aria-hidden="true" />
           </Button>
         </header>
-        <main className="product-content">
+        <main className="product-content" tabIndex={-1}>
           {logoutMessage && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{logoutMessage}</div>}
           {authenticated ? <Outlet /> : <ProductionAuthGate />}
         </main>
@@ -449,7 +470,7 @@ export function ProductShell({ children }: PropsWithChildren) {
           </Button>
         </header>
         <DemoSceneBanner />
-        <main className="product-content">{children ?? <Outlet />}</main>
+        <main className="product-content" tabIndex={-1}>{children ?? <Outlet />}</main>
       </div>
       <DemoNotice />
       <DemoInspector />

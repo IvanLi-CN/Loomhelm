@@ -73,6 +73,19 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     if (mode === "create" && !projectId && source.projects[0]) setProjectId(source.projects[0].id);
   }, [mode, projectId, source.projects]);
 
+  const reconcile = async () => {
+    setPending(true);
+    try {
+      await source.refresh();
+      setBlockedByUnknown(false);
+      setFeedback({ message: "已刷新并核对任务列表，可以继续操作。", tone: "success" });
+    } catch (error) {
+      setFeedback({ message: error instanceof Error ? `刷新任务列表失败：${error.message}` : "刷新任务列表失败，请稍后重试。", tone: "warning", reconcile: true });
+    } finally {
+      setPending(false);
+    }
+  };
+
   const toggleDependency = (id: string) => {
     setDependsOn((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
   };
@@ -128,7 +141,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)] task-relation-options" disabled={!canWrite || pending}><legend>父任务 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => <label className="task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]" key={candidate.id}><input type="checkbox" checked={parentIds.includes(candidate.id)} onChange={() => toggleParent(candidate.id)} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title} · {source.getProject(candidate.projectId)?.name}</span></label>)}</div> : <p className="font-normal">当前范围没有可选的父任务。</p>}</fieldset>
       <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)]" disabled={!canWrite || pending}><legend>前置依赖 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => <label className="task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]" key={candidate.id}><input type="checkbox" checked={dependsOn.includes(candidate.id)} onChange={() => toggleDependency(candidate.id)} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title}</span></label>)}</div> : <p className="font-normal">当前范围没有可选的前置任务。</p>}</fieldset>
       {!canWrite && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>当前项目成员权限为只读，创建和编辑动作保持禁用。</div>}
-      {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void source.refresh(); }}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
+      {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}
       <div className="form-actions">
         <Button type="submit" className="button button-primary" disabled={!canWrite || pending || blockedByUnknown || !title.trim() || !goal.trim() || !projectId}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存任务"}</Button>
@@ -147,6 +160,7 @@ export function TaskEditor({ source, taskId }: TaskEditorProps) {
   const [editing, setEditing] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
+  const [blockedByUnknown, setBlockedByUnknown] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const task = source.getTask(taskId);
   if (!task) return null;
@@ -160,9 +174,30 @@ export function TaskEditor({ source, taskId }: TaskEditorProps) {
 
   const remove = async () => {
     setPending(true);
+    setFeedback(null);
     const result = await source.deleteTask(taskId);
     setPending(false);
-    setFeedback(result.ok ? { message: "任务已删除。", tone: "success" } : { message: result.message, tone: "warning" });
+    if (!result.ok) {
+      const reconcile = result.reconcile || result.code === "unknown";
+      setBlockedByUnknown(reconcile);
+      setFeedback({ message: result.message, tone: "warning", reconcile });
+      return;
+    }
+    setBlockedByUnknown(false);
+    setFeedback({ message: "任务已删除。", tone: "success" });
+  };
+
+  const reconcile = async () => {
+    setPending(true);
+    try {
+      await source.refresh();
+      setBlockedByUnknown(false);
+      setFeedback({ message: "已刷新并核对任务列表，可以继续操作。", tone: "success" });
+    } catch (error) {
+      setFeedback({ message: error instanceof Error ? `刷新任务列表失败：${error.message}` : "刷新任务列表失败，请稍后重试。", tone: "warning", reconcile: true });
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -170,8 +205,9 @@ export function TaskEditor({ source, taskId }: TaskEditorProps) {
       <span className="section-kicker">任务操作</span>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button ref={editButtonRef} type="button" variant="secondary" className="button button-secondary" onClick={() => setEditing(true)} disabled={!canWrite}><Pencil size={15} aria-hidden="true" />编辑任务</Button>
-        <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={remove} disabled={!canWrite || pending}><Trash2 size={15} aria-hidden="true" />{pending ? "删除中…" : "删除任务"}</Button>
+        <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={() => { void remove(); }} disabled={!canWrite || pending || blockedByUnknown}><Trash2 size={15} aria-hidden="true" />{pending ? "删除中…" : "删除任务"}</Button>
       </div>
+      {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
     </section>
   );

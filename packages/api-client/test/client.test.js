@@ -322,6 +322,15 @@ describe("authenticated client transport", () => {
     expect(calls).toEqual([{ path: "/api/v1/auth/session", method: "GET" }]);
   });
 
+  test("rejects mixed cookie and bearer identity transport", () => {
+    expect(() => createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      accessToken: () => "bearer-token",
+      fetch: async () => Response.json({ user_id: "user-browser", csrf_protection: "same_origin" })
+    })).toThrow(ApiClientConfigurationError);
+  });
+
   test("clears the browser bootstrap after a completed logout", async () => {
     const calls = [];
     const session = { user_id: "user-browser", csrf_protection: "same_origin" };
@@ -362,6 +371,39 @@ describe("authenticated client transport", () => {
     const pending = client.bootstrapBrowserSession();
     client.invalidateBrowserSession();
     release(Response.json(session));
+
+    await expect(pending).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(await client.bootstrapBrowserSession()).toEqual(session);
+    expect(requests).toBe(2);
+  });
+
+  test("does not commit a session invalidated during auth assembly", async () => {
+    let releaseAssembly;
+    let assemblyStarted;
+    let assemblyCount = 0;
+    let requests = 0;
+    const session = { user_id: "user-browser", csrf_protection: "same_origin" };
+    const started = new Promise((resolve) => { assemblyStarted = resolve; });
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      onBrowserSession: async () => {
+        assemblyCount += 1;
+        if (assemblyCount === 1) {
+          assemblyStarted();
+          await new Promise((resolve) => { releaseAssembly = resolve; });
+        }
+      },
+      fetch: async () => {
+        requests += 1;
+        return Response.json(session);
+      }
+    });
+
+    const pending = client.bootstrapBrowserSession();
+    await started;
+    client.invalidateBrowserSession();
+    releaseAssembly();
 
     await expect(pending).rejects.toBeInstanceOf(ApiClientConfigurationError);
     expect(await client.bootstrapBrowserSession()).toEqual(session);

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiClientConfigurationError, ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
@@ -31,13 +31,20 @@ export interface ProductionSourceOptions {
 
 export interface MembershipQueryData {
   items: Readonly<Record<string, readonly ProjectMember[]>>;
+  deniedProjectIds: readonly string[];
   failures: readonly string[];
 }
 
 export interface TaskQueryData {
   items: readonly Task[];
   relationships: Readonly<Record<string, TaskRelationshipPage>>;
+  deniedTaskIds: readonly string[];
   failures: readonly string[];
+}
+
+export interface MutationNotice {
+  id: string;
+  message: string;
 }
 
 export const PROJECT_PAGE_LIMIT = 100;
@@ -89,15 +96,18 @@ export async function readProjectMemberships(
     members: (await api.listProjectMembers({ project_id: projectId })).items
   })));
   const items: Record<string, readonly ProjectMember[]> = {};
+  const deniedProjectIds: string[] = [];
   const failures: string[] = [];
   results.forEach((result, index) => {
     if (result.status === "fulfilled") {
       items[result.value.projectId] = result.value.members;
+    } else if (isPermissionError(result.reason)) {
+      deniedProjectIds.push(projectIds[index] ?? "");
     } else {
       failures.push(failureMessage(`读取项目 ${projectIds[index] ?? "未知项目"} 的成员`, result.reason));
     }
   });
-  return { items, failures };
+  return { items, deniedProjectIds: deniedProjectIds.filter(Boolean), failures };
 }
 
 export async function readTaskRelationships(
@@ -109,15 +119,18 @@ export async function readTaskRelationships(
     relationships: await api.getTaskRelationships({ task_id: task.id })
   })));
   const relationships: Record<string, TaskRelationshipPage> = {};
+  const deniedTaskIds: string[] = [];
   const failures: string[] = [];
   results.forEach((result, index) => {
     if (result.status === "fulfilled") {
       relationships[result.value.taskId] = result.value.relationships;
+    } else if (isPermissionError(result.reason)) {
+      deniedTaskIds.push(tasks[index]?.id ?? "");
     } else {
       failures.push(failureMessage(`读取任务 ${tasks[index]?.id ?? "未知任务"} 的关系`, result.reason));
     }
   });
-  return { items: tasks, relationships, failures };
+  return { items: tasks, relationships, deniedTaskIds: deniedTaskIds.filter(Boolean), failures };
 }
 
 export const projectTaskQueryKeys = {
@@ -233,6 +246,32 @@ export interface RelationSyncResult {
   failures: readonly string[];
 }
 
+function relationTargetIds(changes: TaskRelationChanges): readonly string[] {
+  return [...new Set([
+    ...(changes.addParentIds ?? []),
+    ...(changes.removeParentIds ?? []),
+    ...(changes.addDependencyIds ?? []),
+    ...(changes.removeDependencyIds ?? [])
+  ])];
+}
+
+export function relationWriteBlockReason(
+  taskId: string,
+  changes: TaskRelationChanges,
+  getTask: (id: string | undefined) => TaskRecord | undefined,
+  getProjectPermissions: (projectId: string | undefined) => ProjectMemberPermissions
+): string | undefined {
+  for (const relatedTaskId of relationTargetIds(changes)) {
+    if (relatedTaskId === taskId) continue;
+    const relatedTask = getTask(relatedTaskId);
+    if (!relatedTask) return `关系目标 ${relatedTaskId} 当前不可见，关系写入没有执行。`;
+    if (!getProjectPermissions(relatedTask.projectId).canWrite) {
+      return `关系目标 ${relatedTaskId} 所属项目为只读，关系写入没有执行。`;
+    }
+  }
+  return undefined;
+}
+
 export async function syncTaskRelations(
   api: Pick<PublishedProjectTaskApi, "addTaskParent" | "removeTaskParent" | "addTaskDependency" | "removeTaskDependency">,
   queryClient: ReturnType<typeof useQueryClient>,
@@ -289,19 +328,51 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
 
+  const deniedProjectIds = membershipsQuery.isSuccess ? membershipsQuery.data.deniedProjectIds : [];
+  const deniedTaskIds = tasksQuery.isSuccess ? tasksQuery.data.deniedTaskIds : [];
+  const deniedProjectKey = deniedProjectIds.join("\u0000");
+  const deniedTaskKey = deniedTaskIds.join("\u0000");
+  const lastDeniedProjectKey = useRef("");
+  const lastDeniedTaskKey = useRef("");
+  useEffect(() => {
+    if (!deniedProjectKey) {
+      lastDeniedProjectKey.current = "";
+      return;
+    }
+    if (deniedProjectKey === lastDeniedProjectKey.current) return;
+    lastDeniedProjectKey.current = deniedProjectKey;
+    void queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.projects(subjectId, sessionGeneration) });
+  }, [deniedProjectKey, queryClient, sessionGeneration, subjectId]);
+  useEffect(() => {
+    if (!deniedTaskKey) {
+      lastDeniedTaskKey.current = "";
+      return;
+    }
+    if (deniedTaskKey === lastDeniedTaskKey.current) return;
+    lastDeniedTaskKey.current = deniedTaskKey;
+    void queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) });
+  }, [deniedTaskKey, queryClient, sessionGeneration, subjectId]);
+
   const mutationNoticeKey = projectTaskQueryKeys.mutationNotice(subjectId, sessionGeneration);
-  const mutationNoticeQuery = useQuery<string | null>({
+  const mutationNoticeQuery = useQuery<readonly MutationNotice[]>({
     queryKey: mutationNoticeKey,
-    queryFn: async () => null,
+    queryFn: async () => [],
     enabled: queryEnabled,
+    initialData: [],
     staleTime: Infinity,
     gcTime: Infinity
   });
-  const recordMutationNotice = useCallback((message: string) => {
-    queryClient.setQueryData(mutationNoticeKey, message);
+  const recordMutationNotice = useCallback((id: string, message: string) => {
+    queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, (current = []) => [
+      ...current.filter((notice) => notice.id !== id),
+      { id, message }
+    ]);
   }, [mutationNoticeKey, queryClient]);
-  const clearMutationNotice = useCallback(() => {
-    queryClient.setQueryData(mutationNoticeKey, null);
+  const clearMutationNotice = useCallback((id: string) => {
+    queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, (current = []) => current.filter((notice) => notice.id !== id));
+  }, [mutationNoticeKey, queryClient]);
+  const clearAllMutationNotices = useCallback(() => {
+    queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, []);
   }, [mutationNoticeKey, queryClient]);
 
   const handleFailure = useCallback(<T,>(operation: string, error: unknown): WriteResult<T> => failure<T>(operation, error), []);
@@ -334,15 +405,27 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     onSuccess: () => queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) })
   });
 
-  const projects = useMemo(() => projectsQuery.isSuccess ? projectsQuery.data.map(mapProject) : [], [projectsQuery.data, projectsQuery.isSuccess]);
+  const projects = useMemo(() => {
+    const denied = new Set(deniedProjectIds);
+    return projectsQuery.isSuccess ? projectsQuery.data.filter((project) => !denied.has(project.id)).map(mapProject) : [];
+  }, [deniedProjectIds, projectsQuery.data, projectsQuery.isSuccess]);
   const relationshipsByTaskId = tasksQuery.isSuccess ? tasksQuery.data.relationships : {};
-  const tasks = useMemo(() => tasksQuery.isSuccess ? tasksQuery.data.items.map((task) => mapTask(task, relationshipsByTaskId[task.id])) : [], [relationshipsByTaskId, tasksQuery.data, tasksQuery.isSuccess]);
+  const tasks = useMemo(() => {
+    const deniedTasks = new Set(deniedTaskIds);
+    const deniedProjects = new Set(deniedProjectIds);
+    return tasksQuery.isSuccess
+      ? tasksQuery.data.items.filter((task) => !deniedTasks.has(task.id) && !deniedProjects.has(task.project_id)).map((task) => mapTask(task, relationshipsByTaskId[task.id]))
+      : [];
+  }, [deniedProjectIds, deniedTaskIds, relationshipsByTaskId, tasksQuery.data, tasksQuery.isSuccess]);
   const getProject = useMemo(() => (id: string | undefined) => projects.find((project) => project.id === id), [projects]);
   const getTask = useMemo(() => (id: string | undefined) => tasks.find((task) => task.id === id), [tasks]);
   const getProjectPermissions = useMemo(() => (projectId: string | undefined): ProjectMemberPermissions => {
     if (!projectId || !membershipsQuery.isSuccess) return emptyProjectPermissions;
+    if (deniedProjectIds.includes(projectId)) return emptyProjectPermissions;
     return permissionsForProjectMember(membershipsQuery.data.items[projectId] ?? [], principalId);
-  }, [membershipsQuery.data, membershipsQuery.isSuccess, principalId]);
+  }, [deniedProjectIds, membershipsQuery.data, membershipsQuery.isSuccess, principalId]);
+  const relationMutationsInFlight = useRef(new Set<string>());
+  const permissionChanged = deniedProjectIds.length > 0 || deniedTaskIds.length > 0;
   const queryPending = projectsQuery.isPending
     || (projectsQuery.isSuccess && membershipsQuery.isPending)
     || (membershipsQuery.isSuccess && tasksQuery.isPending);
@@ -357,7 +440,9 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     : queryError
       ? "部分项目、成员、任务或关系读取失败；未确认的数据已隐藏，未受影响的项目范围仍按权限工作。"
       : partialReadFailures.length
-        ? `部分项目成员或任务关系读取失败；未确认的数据已隐藏，未受影响的范围仍可继续使用：${partialReadFailures.join("；")}`
+        ? `部分项目成员或任务关系读取失败；未受影响的范围仍可继续使用：${partialReadFailures.join("；")}`
+        : deniedProjectIds.length || deniedTaskIds.length
+          ? `部分项目或任务权限已收紧；受影响的资源和关系已隐藏，未受影响的范围仍可继续使用。`
         : undefined;
 
   return useMemo(() => {
@@ -380,11 +465,11 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       if (!canCreateProjects || !projectWriteReady) return denied("当前身份或连接状态不能确认项目写入范围，项目写入没有执行。");
       try {
         const response = await createProjectMutation.mutateAsync(draft);
-        clearMutationNotice();
+        clearMutationNotice("project:create");
         return success(mapProject(response.project));
       } catch (error) {
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<ReturnType<typeof mapProject>>("创建项目", error) : handleFailure<ReturnType<typeof mapProject>>("创建项目", error);
-        if (!result.ok && result.reconcile) recordMutationNotice(result.message);
+        if (!result.ok && result.reconcile) recordMutationNotice("project:create", result.message);
         return result;
       }
     };
@@ -395,39 +480,51 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       if (!Object.keys(body).length && current) return success(current);
       try {
         const response = await updateProjectMutation.mutateAsync({ projectId: targetProjectId, draft, current });
-        clearMutationNotice();
+        clearMutationNotice(`project:${targetProjectId}`);
         return success(mapProject(response.project));
       } catch (error) {
-        return handleFailure("更新项目", error);
+        const result = isAmbiguousWriteError(error) ? ambiguousFailure<ReturnType<typeof mapProject>>("更新项目", error) : handleFailure<ReturnType<typeof mapProject>>("更新项目", error);
+        if (!result.ok && result.reconcile) recordMutationNotice(`project:${targetProjectId}`, result.message);
+        return result;
       }
     };
-    const deleteProject = (targetProjectId: string): Promise<WriteResult<null>> => getProjectPermissions(targetProjectId).canManageProjects
-      ? deleteProjectMutation.mutateAsync(targetProjectId).then(() => success(null)).catch((error: unknown) => handleFailure("删除项目", error))
-      : denied("当前身份或权限不能管理项目或成员，项目写入没有执行。");
+    const deleteProject = async (targetProjectId: string): Promise<WriteResult<null>> => {
+      if (!getProjectPermissions(targetProjectId).canManageProjects) return denied("当前身份或权限不能管理项目或成员，项目写入没有执行。");
+      try {
+        await deleteProjectMutation.mutateAsync(targetProjectId);
+        clearMutationNotice(`project:${targetProjectId}`);
+        return success(null);
+      } catch (error) {
+        const result = isAmbiguousWriteError(error) ? ambiguousFailure<null>("删除项目", error) : handleFailure<null>("删除项目", error);
+        if (!result.ok && result.reconcile) recordMutationNotice(`project:${targetProjectId}`, result.message);
+        return result;
+      }
+    };
     const createTask = async (draft: TaskDraft): Promise<WriteResult<TaskRecord>> => {
       if (!getProjectPermissions(draft.projectId).canWrite) return denied();
+      const relationChanges: TaskRelationChanges = {
+        addParentIds: [...new Set(draft.parentIds ?? (draft.parentId ? [draft.parentId] : []))],
+        addDependencyIds: [...new Set(draft.dependsOn ?? [])]
+      };
+      const relationBlock = relationWriteBlockReason("", relationChanges, getTask, getProjectPermissions);
+      if (relationBlock) return denied(relationBlock);
       try {
         const response = await createTaskMutation.mutateAsync(draft);
-        const parentIds = [...new Set(draft.parentIds ?? (draft.parentId ? [draft.parentId] : []))];
-        const dependencyIds = [...new Set(draft.dependsOn ?? [])];
-        const relationChanges: TaskRelationChanges = {
-          addParentIds: parentIds,
-          addDependencyIds: dependencyIds
-        };
-        const relationResult = parentIds.length || dependencyIds.length
+        const relationResult = relationChanges.addParentIds?.length || relationChanges.addDependencyIds?.length
           ? await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, response.task.id, relationChanges)
           : { failures: [] };
         const value = mapTask(response.task);
         if (relationResult.failures.length) {
           const warning = "任务已创建，但部分关系未保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
-          recordMutationNotice(warning);
+          recordMutationNotice(`task:${response.task.id}`, warning);
           return success(value, warning, true);
         }
-        clearMutationNotice();
+        clearMutationNotice("task:create");
+        clearMutationNotice(`task:${response.task.id}`);
         return success(value);
       } catch (error) {
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<TaskRecord>("创建任务", error) : handleFailure<TaskRecord>("创建任务", error);
-        if (!result.ok && result.reconcile) recordMutationNotice(result.message);
+        if (!result.ok && result.reconcile) recordMutationNotice("task:create", result.message);
         return result;
       }
     };
@@ -435,57 +532,84 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const existingTask = getTask(taskId);
       const taskProjectId = existingTask?.projectId;
       if (!getProjectPermissions(taskProjectId).canWrite) return denied();
+      const relationChanges = update.relationChanges;
+      const hasRelationChanges = Boolean(relationChanges && Object.keys(relationChanges).length);
+      if (hasRelationChanges && relationChanges) {
+        const relationBlock = relationWriteBlockReason(taskId, relationChanges, getTask, getProjectPermissions);
+        if (relationBlock) return denied(relationBlock);
+        if (relationMutationsInFlight.current.has(taskId)) return denied("任务关系写入正在进行，请等待本次操作完成。");
+        relationMutationsInFlight.current.add(taskId);
+      }
       try {
         const body = toTaskUpdateRequest(update);
         const response = Object.keys(body).length ? await updateTaskMutation.mutateAsync({ taskId, update }) : undefined;
         const value = response ? mapTask(response.task, relationshipsByTaskId[taskId]) : existingTask;
         if (!value) return handleFailure("更新任务", new Error("任务上下文不可用。"));
-        if (update.relationChanges && Object.keys(update.relationChanges).length) {
-          const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, update.relationChanges);
+        if (hasRelationChanges && relationChanges) {
+          const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, relationChanges);
           if (relationResult.failures.length) {
             const warning = "任务已更新，但部分关系未保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
-            recordMutationNotice(warning);
+            recordMutationNotice(`task:${taskId}`, warning);
             return success(value, warning, true);
           }
         }
-        clearMutationNotice();
+        clearMutationNotice(`task:${taskId}`);
         return success(value);
       } catch (error) {
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<TaskRecord>("更新任务", error) : handleFailure<TaskRecord>("更新任务", error);
-        if (!result.ok && result.reconcile) recordMutationNotice(result.message);
+        if (!result.ok && result.reconcile) recordMutationNotice(`task:${taskId}`, result.message);
+        return result;
+      } finally {
+        if (hasRelationChanges) relationMutationsInFlight.current.delete(taskId);
+      }
+    };
+    const deleteTask = async (taskId: string): Promise<WriteResult<null>> => {
+      if (!getProjectPermissions(getTask(taskId)?.projectId).canWrite) return denied();
+      try {
+        await deleteTaskMutation.mutateAsync(taskId);
+        clearMutationNotice(`task:${taskId}`);
+        return success(null);
+      } catch (error) {
+        const result = isAmbiguousWriteError(error) ? ambiguousFailure<null>("删除任务", error) : handleFailure<null>("删除任务", error);
+        if (!result.ok && result.reconcile) recordMutationNotice(`task:${taskId}`, result.message);
         return result;
       }
     };
-    const deleteTask = (taskId: string): Promise<WriteResult<null>> => getProjectPermissions(getTask(taskId)?.projectId).canWrite
-      ? deleteTaskMutation.mutateAsync(taskId).then(() => success(null)).catch((error: unknown) => handleFailure("删除任务", error))
-      : denied();
     const changeTaskRelations = async (taskId: string, changes: TaskRelationChanges): Promise<WriteResult<null>> => {
       const task = getTask(taskId);
       if (!getProjectPermissions(task?.projectId).canWrite) return denied();
       if (!Object.keys(changes).length) return success(null);
+      const relationBlock = relationWriteBlockReason(taskId, changes, getTask, getProjectPermissions);
+      if (relationBlock) return denied(relationBlock);
+      if (relationMutationsInFlight.current.has(taskId)) return denied("任务关系写入正在进行，请等待本次操作完成。");
       try {
-        const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, changes);
+        relationMutationsInFlight.current.add(taskId);
+        const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, changes).finally(() => relationMutationsInFlight.current.delete(taskId));
         if (relationResult.failures.length) {
           const warning = "任务关系仅部分保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
-          recordMutationNotice(warning);
+          recordMutationNotice(`task:${taskId}`, warning);
           return success(null, warning, true);
         }
-        clearMutationNotice();
+        clearMutationNotice(`task:${taskId}`);
         return success(null);
       } catch (error) {
-        return handleFailure("更新任务关系", error);
+        const result = isAmbiguousWriteError(error) ? ambiguousFailure<null>("更新任务关系", error) : handleFailure<null>("更新任务关系", error);
+        if (!result.ok && result.reconcile) recordMutationNotice(`task:${taskId}`, result.message);
+        return result;
       }
     };
     const refresh = async (): Promise<void> => {
-      await queryClient.refetchQueries({
-        predicate: (query) => isProjectTaskQueryForPrincipal(query, subjectId) && query.queryKey[2] === sessionGeneration && query.queryKey[3] !== "mutation-notice"
-      });
+      const predicate = (query: { queryKey: readonly unknown[] }) => isProjectTaskQueryForPrincipal(query, subjectId) && query.queryKey[2] === sessionGeneration && query.queryKey[3] !== "mutation-notice";
+      await queryClient.refetchQueries({ predicate });
+      const failedQuery = queryClient.getQueryCache().findAll({ predicate }).find((query) => query.state.status === "error");
+      if (failedQuery) throw new Error("项目、任务或关系列表刷新失败，待确认结果仍然保留。");
+      clearAllMutationNotices();
     };
 
     return {
       projects,
       tasks,
-      status: !enabled || !principalId ? "unauthenticated" : queryPending ? "loading" : queryError ? "error" : "ready",
+      status: !enabled || !principalId ? "unauthenticated" : queryPending ? "loading" : queryError ? "error" : permissionChanged ? "permission-changed" : "ready",
       canCreateProjects: canCreateProjects && projectWriteReady,
       getProjectPermissions,
       getProject,
@@ -501,7 +625,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       deleteTask,
       changeTaskRelations,
       refresh,
-      notice: [readNotice, mutationNoticeQuery.data].filter((notice): notice is string => Boolean(notice)).join(" ") || undefined
+      notice: [readNotice, ...mutationNoticeQuery.data.map((notice) => notice.message)].filter(Boolean).join(" ") || undefined
     } satisfies ProjectTaskSource;
-  }, [api, canCreateProjects, clearMutationNotice, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, mutationNoticeQuery.data, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, relationshipsByTaskId, sessionGeneration, setTaskView, subjectId, taskViews, tasks, updateProjectMutation, updateTaskMutation]);
+  }, [api, canCreateProjects, clearAllMutationNotices, clearMutationNotice, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, mutationNoticeQuery.data, permissionChanged, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, relationshipsByTaskId, sessionGeneration, setTaskView, subjectId, taskViews, tasks, updateProjectMutation, updateTaskMutation]);
 }

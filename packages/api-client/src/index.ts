@@ -68,6 +68,9 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   const fetcher = options.fetch ?? globalThis.fetch;
   if (!fetcher) throw new ApiClientConfigurationError("a fetch implementation is required");
   const sameOriginProtection = options.browserProtection === "same_origin";
+  if (sameOriginProtection && options.accessToken) {
+    throw new ApiClientConfigurationError("same_origin protection cannot be combined with bearer access token transport");
+  }
   if (sameOriginProtection && options.csrf) {
     throw new ApiClientConfigurationError("same_origin protection cannot be combined with token CSRF transport");
   }
@@ -121,6 +124,9 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
           throw new ApiClientConfigurationError("browser session bootstrap was invalidated before it completed");
         }
         await options.onBrowserSession?.(session);
+        if (requestGeneration !== browserSessionGeneration) {
+          throw new ApiClientConfigurationError("browser session bootstrap was invalidated while it was being assembled");
+        }
         browserSession = session;
         return session;
       })().finally(() => {
