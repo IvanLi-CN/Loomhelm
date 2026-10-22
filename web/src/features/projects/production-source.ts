@@ -29,9 +29,15 @@ export interface ProductionSourceOptions {
   setTaskView?: (scope: string, view: TaskView) => void;
 }
 
-interface TaskQueryData {
+export interface MembershipQueryData {
+  items: Readonly<Record<string, readonly ProjectMember[]>>;
+  failures: readonly string[];
+}
+
+export interface TaskQueryData {
   items: readonly Task[];
   relationships: Readonly<Record<string, TaskRelationshipPage>>;
+  failures: readonly string[];
 }
 
 export const PROJECT_PAGE_LIMIT = 100;
@@ -74,6 +80,46 @@ export function listAllTasks(api: Pick<PublishedProjectTaskApi, "listTasks">): P
   return readAllCursorPages("tasks", (after_cursor) => api.listTasks({ after_cursor, limit: TASK_PAGE_LIMIT }), TASK_PAGE_LIMIT);
 }
 
+export async function readProjectMemberships(
+  api: Pick<PublishedProjectTaskApi, "listProjectMembers">,
+  projectIds: readonly string[]
+): Promise<MembershipQueryData> {
+  const results = await Promise.allSettled(projectIds.map(async (projectId) => ({
+    projectId,
+    members: (await api.listProjectMembers({ project_id: projectId })).items
+  })));
+  const items: Record<string, readonly ProjectMember[]> = {};
+  const failures: string[] = [];
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      items[result.value.projectId] = result.value.members;
+    } else {
+      failures.push(failureMessage(`读取项目 ${projectIds[index] ?? "未知项目"} 的成员`, result.reason));
+    }
+  });
+  return { items, failures };
+}
+
+export async function readTaskRelationships(
+  api: Pick<PublishedProjectTaskApi, "getTaskRelationships">,
+  tasks: readonly Task[]
+): Promise<TaskQueryData> {
+  const results = await Promise.allSettled(tasks.map(async (task) => ({
+    taskId: task.id,
+    relationships: await api.getTaskRelationships({ task_id: task.id })
+  })));
+  const relationships: Record<string, TaskRelationshipPage> = {};
+  const failures: string[] = [];
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      relationships[result.value.taskId] = result.value.relationships;
+    } else {
+      failures.push(failureMessage(`读取任务 ${tasks[index]?.id ?? "未知任务"} 的关系`, result.reason));
+    }
+  });
+  return { items: tasks, relationships, failures };
+}
+
 export const projectTaskQueryKeys = {
   projects: (principalId: string, sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "projects"] as const,
   memberships: (principalId: string, projectIds: readonly string[], sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "memberships", [...projectIds].sort()] as const,
@@ -97,8 +143,8 @@ function denied<T>(message = "当前身份或权限为只读，写入动作没�
   return Promise.resolve({ ok: false, code: "readonly", message });
 }
 
-function success<T>(value: T, warning?: string): WriteResult<T> {
-  return warning ? { ok: true, value, warning } : { ok: true, value };
+function success<T>(value: T, warning?: string, reconcile = false): WriteResult<T> {
+  return warning ? { ok: true, value, warning, reconcile } : { ok: true, value };
 }
 
 function bodyMessage(body: unknown): string | undefined {
@@ -226,15 +272,9 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
   const projectIds = useMemo(() => [...new Set(projectsQuery.isSuccess ? projectsQuery.data.map((project) => project.id) : [])].sort(), [projectsQuery.data, projectsQuery.isSuccess]);
-  const membershipsQuery = useQuery<Readonly<Record<string, readonly ProjectMember[]>>>({
+  const membershipsQuery = useQuery<MembershipQueryData>({
     queryKey: projectTaskQueryKeys.memberships(subjectId, projectIds, sessionGeneration),
-    queryFn: async () => {
-      const entries = await Promise.all(projectIds.map(async (projectId) => {
-        const response = await api.listProjectMembers({ project_id: projectId });
-        return [projectId, response.items] as const;
-      }));
-      return Object.fromEntries(entries);
-    },
+    queryFn: () => readProjectMemberships(api, projectIds),
     enabled: queryEnabled && projectsQuery.isSuccess,
     refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
@@ -243,11 +283,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     queryFn: async () => {
       // Fetch the authorized global set so project views can retain visible cross-project relation nodes.
       const items = await listAllTasks(api);
-      const entries = await Promise.all(items.map(async (task) => [task.id, await api.getTaskRelationships({ task_id: task.id })] as const));
-      return {
-        items,
-        relationships: Object.fromEntries(entries)
-      };
+      return readTaskRelationships(api, items);
     },
     enabled: queryEnabled && projectsQuery.isSuccess && membershipsQuery.isSuccess,
     refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
@@ -305,13 +341,24 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   const getTask = useMemo(() => (id: string | undefined) => tasks.find((task) => task.id === id), [tasks]);
   const getProjectPermissions = useMemo(() => (projectId: string | undefined): ProjectMemberPermissions => {
     if (!projectId || !membershipsQuery.isSuccess) return emptyProjectPermissions;
-    return permissionsForProjectMember(membershipsQuery.data[projectId] ?? [], principalId);
+    return permissionsForProjectMember(membershipsQuery.data.items[projectId] ?? [], principalId);
   }, [membershipsQuery.data, membershipsQuery.isSuccess, principalId]);
   const queryPending = projectsQuery.isPending
     || (projectsQuery.isSuccess && membershipsQuery.isPending)
     || (membershipsQuery.isSuccess && tasksQuery.isPending);
   const queryError = projectsQuery.isError || membershipsQuery.isError || tasksQuery.isError;
   const projectWriteReady = projectsQuery.isSuccess && membershipsQuery.isSuccess && !projectsQuery.isError && !membershipsQuery.isError;
+  const partialReadFailures = useMemo(() => [
+    ...(membershipsQuery.isSuccess ? membershipsQuery.data.failures : []),
+    ...(tasksQuery.isSuccess ? tasksQuery.data.failures : [])
+  ], [membershipsQuery.data, membershipsQuery.isSuccess, tasksQuery.data, tasksQuery.isSuccess]);
+  const readNotice = !enabled || !principalId
+    ? "当前认证装配尚未就绪，页面不会请求受保护数据。"
+    : queryError
+      ? "部分项目、成员、任务或关系读取失败；未确认的数据已隐藏，未受影响的项目范围仍按权限工作。"
+      : partialReadFailures.length
+        ? `部分项目成员或任务关系读取失败；未确认的数据已隐藏，未受影响的范围仍可继续使用：${partialReadFailures.join("；")}`
+        : undefined;
 
   return useMemo(() => {
     const getTasksForScope = (targetProjectId?: string) => {
@@ -374,7 +421,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         if (relationResult.failures.length) {
           const warning = "任务已创建，但部分关系未保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
           recordMutationNotice(warning);
-          return success(value, warning);
+          return success(value, warning, true);
         }
         clearMutationNotice();
         return success(value);
@@ -398,7 +445,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           if (relationResult.failures.length) {
             const warning = "任务已更新，但部分关系未保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
             recordMutationNotice(warning);
-            return success(value, warning);
+            return success(value, warning, true);
           }
         }
         clearMutationNotice();
@@ -421,7 +468,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         if (relationResult.failures.length) {
           const warning = "任务关系仅部分保存：" + relationResult.failures.join("；") + "。请刷新后核对。";
           recordMutationNotice(warning);
-          return success(null, warning);
+          return success(null, warning, true);
         }
         clearMutationNotice();
         return success(null);
@@ -454,7 +501,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       deleteTask,
       changeTaskRelations,
       refresh,
-      notice: mutationNoticeQuery.data ?? (!enabled || !principalId ? "当前认证装配尚未就绪，页面不会请求受保护数据。" : queryError ? "部分项目、成员、任务或关系读取失败；未确认的数据已隐藏，未受影响的项目范围仍按权限工作。" : undefined)
+      notice: [readNotice, mutationNoticeQuery.data].filter((notice): notice is string => Boolean(notice)).join(" ") || undefined
     } satisfies ProjectTaskSource;
-  }, [api, canCreateProjects, clearMutationNotice, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, mutationNoticeQuery.data, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, recordMutationNotice, relationshipsByTaskId, sessionGeneration, setTaskView, subjectId, taskViews, tasks, updateProjectMutation, updateTaskMutation]);
+  }, [api, canCreateProjects, clearMutationNotice, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, mutationNoticeQuery.data, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, relationshipsByTaskId, sessionGeneration, setTaskView, subjectId, taskViews, tasks, updateProjectMutation, updateTaskMutation]);
 }

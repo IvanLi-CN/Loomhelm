@@ -5,12 +5,16 @@ import { ApiClientConfigurationError, ApiClientError } from "@loomhelm/api-clien
 import {
   isAmbiguousWriteError,
   projectTaskQueryKeys,
+  readProjectMemberships,
+  readTaskRelationships,
   syncTaskRelations,
   toProjectUpdateRequest,
   toTaskUpdateRequest
 } from "../src/features/projects/production-source";
+import { editableProjectSummary } from "../src/features/projects/ProjectForm";
 import { wouldCreateDependencyCycle } from "../src/features/tasks/demo-store";
 import { calculateTaskRelationChanges, type TaskRecord } from "../src/features/tasks/types";
+import type { Task } from "@loomhelm/protocol";
 
 function task(id: string, dependsOn: string[] = []): TaskRecord {
   return {
@@ -46,6 +50,11 @@ describe("project/task write contracts", () => {
   test("does not write a display-only project description placeholder", () => {
     expect(toProjectUpdateRequest({ id: "project-1", name: "Project", summary: "暂无项目简介", updatedAt: "now", conversationCount: 0 }, { name: "Project", summary: "" })).toEqual({});
     expect(toProjectUpdateRequest({ id: "project-1", name: "Project", summary: "Description", description: "Description", updatedAt: "now", conversationCount: 0 }, { name: "Project", summary: "" })).toEqual({ description: "" });
+  });
+
+  test("keeps display-only project summaries out of the editable form", () => {
+    expect(editableProjectSummary({ id: "project-1", name: "Project", summary: "暂无项目简介", updatedAt: "now", conversationCount: 0 })).toBe("");
+    expect(editableProjectSummary({ id: "project-1", name: "Project", summary: "Description", description: "Description", updatedAt: "now", conversationCount: 0 })).toBe("Description");
   });
 
   test("separates ambiguous transport errors from scoped denials", () => {
@@ -85,13 +94,46 @@ describe("project/task write contracts", () => {
 
     const result = await syncTaskRelations(api, queryClient as never, "user-1", 3, "task-1", {
       addParentIds: ["parent-1"],
-      addDependencyIds: ["dependency-1"]
+      removeParentIds: ["parent-2"],
+      addDependencyIds: ["dependency-1"],
+      removeDependencyIds: ["dependency-2"]
     });
 
-    expect(calls).toEqual(["add-parent:task-1:parent-1", "add-dependency:task-1:dependency-1"]);
+    expect(calls).toEqual(["add-parent:task-1:parent-1", "remove-parent:task-1:parent-2", "add-dependency:task-1:dependency-1", "remove-dependency:task-1:dependency-2"]);
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0]).toContain("添加前置任务 dependency-1");
     expect(invalidations).toEqual([projectTaskQueryKeys.tasks("user-1", 3)]);
+  });
+
+  test("keeps successful project memberships when one scoped read fails", async () => {
+    const result = await readProjectMemberships({
+      listProjectMembers: async ({ project_id }) => {
+        if (project_id === "project-denied") throw new Error("forbidden");
+        return { items: [{ created_at: "now", project_id, role: "operator", user_id: "user-1" }] };
+      }
+    }, ["project-ok", "project-denied"]);
+
+    expect(result.items["project-ok"]).toHaveLength(1);
+    expect(result.items["project-denied"]).toBeUndefined();
+    expect(result.failures).toHaveLength(1);
+  });
+
+  test("keeps task data when one relationship read fails", async () => {
+    const tasks = [
+      { created_at: "now", goal: "one", id: "task-1", project_id: "project-1", status: "todo", title: "Task one", updated_at: "now" },
+      { created_at: "now", goal: "two", id: "task-2", project_id: "project-1", status: "todo", title: "Task two", updated_at: "now" }
+    ] as const satisfies readonly Task[];
+    const result = await readTaskRelationships({
+      getTaskRelationships: async ({ task_id }) => {
+        if (task_id === "task-2") throw new Error("relationship unavailable");
+        return { children: [], dependents: [], parents: [], prerequisites: [] };
+      }
+    }, tasks);
+
+    expect(result.items).toHaveLength(2);
+    expect(result.relationships["task-1"]).toBeDefined();
+    expect(result.relationships["task-2"]).toBeUndefined();
+    expect(result.failures).toHaveLength(1);
   });
 
   test("rejects dependency cycles in the demo relation validator", () => {

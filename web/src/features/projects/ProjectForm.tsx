@@ -5,9 +5,13 @@ import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import type { ProjectTaskSource } from "@/features/tasks/types";
+import type { ProjectRecord, ProjectTaskSource } from "@/features/tasks/types";
 
 type Feedback = { message: string; tone: "success" | "warning"; reconcile?: boolean };
+
+export function editableProjectSummary(project: ProjectRecord | undefined): string {
+  return project?.description ?? (project?.summary === "暂无项目简介" ? "" : project?.summary ?? "");
+}
 
 interface ProjectFormProps {
   source: ProjectTaskSource;
@@ -20,7 +24,7 @@ interface ProjectFormProps {
 export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: ProjectFormProps) {
   const project = projectId ? source.getProject(projectId) : undefined;
   const [name, setName] = useState(project?.name ?? "");
-  const [summary, setSummary] = useState(project?.summary ?? "");
+  const [summary, setSummary] = useState(editableProjectSummary(project));
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
@@ -34,7 +38,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
 
   useEffect(() => {
     setName(project?.name ?? "");
-    setSummary(project?.summary ?? "");
+    setSummary(editableProjectSummary(project));
     setFeedback(null);
     setBlockedByUnknown(false);
   }, [mode, project?.id]);
@@ -73,8 +77,8 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
         </div>
         {mode === "edit" && <Pencil size={17} className="text-[var(--accent)]" aria-hidden="true" />}
       </div>
-      <label className="form-field"><span>项目名称</span><Input value={name} required maxLength={80} onChange={(event) => setName(event.target.value)} disabled={!canManageProject} autoFocus={mode === "edit"} /></label>
-      <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => setSummary(event.target.value)} disabled={!canManageProject} /></label>
+      <label className="form-field"><span>项目名称</span><Input value={name} required maxLength={80} onChange={(event) => setName(event.target.value)} disabled={!canManageProject || pending} autoFocus={mode === "edit"} /></label>
+      <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => setSummary(event.target.value)} disabled={!canManageProject || pending} /></label>
       {!canManageProject && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>{projectWriteMessage}</div>}
       {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void source.refresh(); }}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button></div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}

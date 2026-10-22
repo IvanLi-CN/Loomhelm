@@ -416,6 +416,26 @@ describe("authenticated client transport", () => {
     expect(requests).toBe(2);
   });
 
+  test("does not rebroadcast a 401 from browser session bootstrap", async () => {
+    let unauthorizedCalls = 0;
+    let requests = 0;
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      onUnauthorized: () => {
+        unauthorizedCalls += 1;
+      },
+      fetch: async () => {
+        requests += 1;
+        return Response.json({ code: "unauthorized" }, { status: 401 });
+      }
+    });
+
+    await expect(client.bootstrapBrowserSession()).rejects.toBeInstanceOf(ApiClientError);
+    expect(unauthorizedCalls).toBe(0);
+    expect(requests).toBe(1);
+  });
+
   test("uses session credentials and injects a fresh CSRF token for mutations", async () => {
     const calls = [];
     let token = "csrf-1";

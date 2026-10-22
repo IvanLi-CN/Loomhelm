@@ -82,10 +82,10 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
     bootstrapPromise = undefined;
   };
 
-  const notifyUnauthorized = async (response: Response): Promise<void> => {
+  const notifyUnauthorized = async (response: Response, notifyAuthAssembly = true): Promise<void> => {
     if (response.status !== 401) return;
     invalidateBrowserSession();
-    if (!options.onUnauthorized) return;
+    if (!notifyAuthAssembly || !options.onUnauthorized) return;
     try {
       await options.onUnauthorized(response.clone());
     } catch {
@@ -100,7 +100,7 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
       credentials: options.credentials ?? "include",
       headers
     });
-    await notifyUnauthorized(response);
+    await notifyUnauthorized(response, false);
     return response;
   };
 

@@ -37,7 +37,7 @@ export interface WriteFailure {
 }
 
 export type WriteResult<T> =
-  | { ok: true; value: T; warning?: string }
+  | { ok: true; value: T; warning?: string; reconcile?: boolean }
   | WriteFailure;
 
 export type MutationResult<T> = Promise<WriteResult<T>>;
