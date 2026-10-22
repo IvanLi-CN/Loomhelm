@@ -187,6 +187,10 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		_ = journal.Close()
 		return realC01ProcessResult{}, fmt.Errorf("seed helper ACK = %+v, error = %v", ack, sendErr)
 	}
+	if ack.OperationID == nil || strings.TrimSpace(*ack.OperationID) == "" {
+		_ = journal.Close()
+		return realC01ProcessResult{}, errors.New("seed helper unknown ACK did not preserve the JSON-RPC operation ID")
+	}
 	result := realC01ProcessResult{
 		Mode:              "seed",
 		ProcessID:         os.Getpid(),
@@ -196,13 +200,14 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		UnknownAckState:   ack.State,
 	}
 	observedRun, err := waitForRealEventValueAfter(ctx, journal, sessionID, protocol.EventTypeUnknown, "", beforeCursor, func(event protocol.Event) bool {
-		return event.RunID != nil && *event.RunID != ""
+		return event.RunID != nil && *event.RunID != "" && realEventRPCID(event) == strings.TrimSpace(*ack.OperationID)
 	})
 	if err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
 	ack.RunID = observedRun.RunID
+	ack.EventCursor = &observedRun.Cursor
 	if err := journal.UpdateCommand(commandID, ack); err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, fmt.Errorf("persist explicitly observed unknown run identity: %w", err)
@@ -229,6 +234,16 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		return realC01ProcessResult{}, err
 	}
 	return result, nil
+}
+
+func realEventRPCID(event protocol.Event) string {
+	var envelope struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(event.Payload, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(envelope.ID))
 }
 
 func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, commandID string) (realC01ProcessResult, error) {

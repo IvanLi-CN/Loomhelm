@@ -460,6 +460,34 @@ func TestAdapterMarksAckLossUnknownAndReconcileNeverReplays(t *testing.T) {
 	}
 }
 
+func TestAdapterPersistsUnknownRPCOperationIdentity(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-operation-id"}}`)}}}
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{ID: json.RawMessage(`41`)}, err: ErrUnknownOutcome}}
+	j := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-operation-id", Generation: "generation-operation-id", Path: protocol.SessionPathNew}, testSessionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := testCommand("unknown-operation-id", `{"prompt":"unknown operation"}`)
+	command.SessionID = session.SessionID
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
+		t.Fatalf("unknown ACK = %+v, error = %v", ack, err)
+	}
+	if ack.OperationID == nil || *ack.OperationID != "41" {
+		t.Fatalf("unknown ACK operation ID = %v, want 41", ack.OperationID)
+	}
+	_, stored, err := j.Command(command.CommandID)
+	if err != nil || stored.OperationID == nil || *stored.OperationID != "41" {
+		t.Fatalf("stored unknown ACK = %+v, error = %v, want operation ID 41", stored, err)
+	}
+}
+
 func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-3"}}`)}}}

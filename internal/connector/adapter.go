@@ -883,6 +883,10 @@ func (a *Adapter) interruptRun(ctx context.Context, state *adapterSessionState, 
 
 func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionState, command protocol.Command, ack protocol.CommandAck, response RPCMessage, callErr error, runID, operation string) (protocol.CommandAck, error) {
 	if callErr != nil {
+		if isUnknownTransportError(callErr) && len(bytes.TrimSpace(response.ID)) > 0 {
+			operationID := string(bytes.TrimSpace(response.ID))
+			ack.OperationID = &operationID
+		}
 		return a.finishTransportError(command, ack, callErr, operation)
 	}
 	if response.observation != nil {

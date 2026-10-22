@@ -93,9 +93,12 @@ func TestProcessTransportCancelsAfterWriteWithoutLosingResponseObservation(t *te
 			cancel()
 		}
 	}
-	_, err = transport.Call(ctx, "burst-response", json.RawMessage(`{}`))
+	message, err := transport.Call(ctx, "burst-response", json.RawMessage(`{}`))
 	if !errors.Is(err, ErrUnknownOutcome) {
 		t.Fatalf("after-write cancellation error = %v, want unknown outcome", err)
+	}
+	if len(message.ID) == 0 {
+		t.Fatal("after-write cancellation did not preserve the JSON-RPC request ID")
 	}
 	foundResponse := false
 	deadline := time.After(2 * time.Second)

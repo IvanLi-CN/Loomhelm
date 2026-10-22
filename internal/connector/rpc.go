@@ -308,7 +308,7 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 		p.pendingMu.Unlock()
 		var writeErr *TransportWriteError
 		if errors.As(err, &writeErr) && writeErr.Unknown {
-			return RPCMessage{}, ErrUnknownOutcome
+			return RPCMessage{ID: append(json.RawMessage(nil), id...)}, ErrUnknownOutcome
 		}
 		return RPCMessage{}, err
 	}
@@ -345,7 +345,7 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 		default:
 		}
 		p.abandon(key)
-		return RPCMessage{}, fmt.Errorf("%w: %v", ErrUnknownOutcome, ctx.Err())
+		return RPCMessage{ID: append(json.RawMessage(nil), id...)}, fmt.Errorf("%w: %v", ErrUnknownOutcome, ctx.Err())
 	case <-p.done:
 		select {
 		case result := <-waiter:
@@ -353,7 +353,7 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 		default:
 		}
 		p.abandon(key)
-		return RPCMessage{}, ErrUnknownOutcome
+		return RPCMessage{ID: append(json.RawMessage(nil), id...)}, ErrUnknownOutcome
 	}
 }
 
