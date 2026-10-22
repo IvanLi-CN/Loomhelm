@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -148,6 +149,23 @@ func TestProcessTransportWriteErrorClassifiesPartialWrites(t *testing.T) {
 	var writeErr *TransportWriteError
 	if !errors.As(err, &writeErr) || !writeErr.Unknown || writeErr.BytesWritten != 3 {
 		t.Fatalf("partial write error = %T %v", err, err)
+	}
+}
+
+func TestProcessTransportBoundsAbandonedRPCState(t *testing.T) {
+	transport := &ProcessTransport{abandoned: make(map[string]pendingRPC)}
+	transport.pendingMu.Lock()
+	for index := 0; index < maxAbandonedRPC; index++ {
+		key := fmt.Sprintf("abandoned-%d", index)
+		if !transport.addAbandonedLocked(key, pendingRPC{}) {
+			transport.pendingMu.Unlock()
+			t.Fatalf("abandoned state rejected entry %d before reaching its cap", index)
+		}
+	}
+	accepted := transport.addAbandonedLocked("abandoned-overflow", pendingRPC{})
+	transport.pendingMu.Unlock()
+	if accepted {
+		t.Fatal("abandoned state accepted an entry beyond its cap")
 	}
 }
 

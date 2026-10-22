@@ -73,6 +73,18 @@ func TestJournalTurnsInflightCommandUnknownAfterRestart(t *testing.T) {
 	if _, _, err := first.BeginCommand(command); err != nil {
 		t.Fatal(err)
 	}
+	executing := testCommand("command-restart-executing", `{"prompt":"may also have run"}`)
+	if _, _, err := first.BeginCommand(executing); err != nil {
+		t.Fatal(err)
+	}
+	executingAck, err := first.LookupCommand(executing.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executingAck.State = protocol.CommandStateExecuting
+	if err := first.UpdateCommand(executing.CommandID, executingAck); err != nil {
+		t.Fatal(err)
+	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +104,10 @@ func TestJournalTurnsInflightCommandUnknownAfterRestart(t *testing.T) {
 	duplicate, deduplicated, err := second.BeginCommand(command)
 	if !errors.Is(err, nil) || !deduplicated || duplicate.State != protocol.CommandStateUnknown {
 		t.Fatalf("replayed command = %+v, deduplicated = %v, error = %v", duplicate, deduplicated, err)
+	}
+	executingDuplicate, deduplicated, err := second.BeginCommand(executing)
+	if !errors.Is(err, nil) || !deduplicated || executingDuplicate.State != protocol.CommandStateUnknown {
+		t.Fatalf("replayed executing command = %+v, deduplicated = %v, error = %v", executingDuplicate, deduplicated, err)
 	}
 }
 
@@ -523,6 +539,69 @@ func TestJournalDiscardsInterruptedFinalRecord(t *testing.T) {
 	}
 	if info.Size() != 0 {
 		t.Fatalf("journal size after incomplete record = %d, want 0", info.Size())
+	}
+}
+
+func TestJournalRepairsTornCommandUpdateIdempotentlyAfterRestart(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "journal-repair.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := testCommand("command-repair", `{"prompt":"repair me"}`)
+	if _, _, err := first.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(`{"format_version":2,"type":"command_update","command_id":"command-repair"`); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack, err := second.LookupCommand(command.CommandID)
+	if err != nil {
+		_ = second.Close()
+		t.Fatal(err)
+	}
+	if ack.State != protocol.CommandStateUnknown {
+		_ = second.Close()
+		t.Fatalf("repaired command state = %q, want unknown", ack.State)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	third, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	ack, err = third.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.State != protocol.CommandStateUnknown {
+		t.Fatalf("re-entered repaired command state = %q, want unknown", ack.State)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.Count(data, []byte(`"type":"command_update"`)); got != 1 {
+		t.Fatalf("command update records after re-entry = %d, want 1", got)
 	}
 }
 

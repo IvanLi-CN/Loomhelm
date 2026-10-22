@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,11 +51,12 @@ type Adapter struct {
 	journal  *Journal
 	config   AdapterConfig
 
-	mu         sync.Mutex
-	recoveryMu sync.Mutex
-	sessions   map[string]*adapterSessionState
-	startMu    sync.Mutex
-	startCalls map[string]*sessionStartCall
+	mu                   sync.Mutex
+	recoveryMu           sync.Mutex
+	sessions             map[string]*adapterSessionState
+	startMu              sync.Mutex
+	startCalls           map[string]*sessionStartCall
+	unknownSessionStarts map[string]unknownSessionStart
 }
 
 type sessionStartCall struct {
@@ -62,6 +64,11 @@ type sessionStartCall struct {
 	waiterEntered chan struct{}
 	waiterOnce    sync.Once
 	gatewayHandle string
+}
+
+type unknownSessionStart struct {
+	gatewayHandle string
+	transport     RPCTransport
 }
 
 func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConfig) (*Adapter, error) {
@@ -83,15 +90,21 @@ func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConf
 	if config.Sandbox == "" {
 		config.Sandbox = "workspace-write"
 	}
+	switch config.Sandbox {
+	case "workspace-write", "read-only", "danger-full-access":
+	default:
+		return nil, fmt.Errorf("unsupported sandbox policy %q", config.Sandbox)
+	}
 	if config.ServiceName == "" {
 		config.ServiceName = "loomhelm_connector"
 	}
 	return &Adapter{
-		provider:   provider,
-		journal:    journal,
-		config:     config,
-		sessions:   make(map[string]*adapterSessionState),
-		startCalls: make(map[string]*sessionStartCall),
+		provider:             provider,
+		journal:              journal,
+		config:               config,
+		sessions:             make(map[string]*adapterSessionState),
+		startCalls:           make(map[string]*sessionStartCall),
+		unknownSessionStarts: make(map[string]unknownSessionStart),
 	}, nil
 }
 
@@ -140,7 +153,7 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	}
 	intentID, err := a.journal.BeginSessionStart(gatewaySession, request)
 	if err != nil {
-		if !errors.Is(err, ErrUnknownOutcome) {
+		if !errors.Is(err, ErrUnknownOutcome) || !a.hasUnknownSessionStart(request.CommandID, gatewaySession.Handle, transport) {
 			_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
 		}
 		return protocol.AdapterSession{}, err
@@ -164,7 +177,8 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 			_ = a.journal.FailSessionStart(intentID)
 			_ = a.closeUnusedGatewaySession(context.WithoutCancel(ctx), gatewaySession, transport)
 		} else {
-			go a.watchUnknownSessionStart(gatewaySession, intentID, transport)
+			a.trackUnknownSessionStart(request.CommandID, gatewaySession.Handle, transport)
+			go a.watchUnknownSessionStart(request.CommandID, gatewaySession, intentID, transport)
 		}
 		return protocol.AdapterSession{}, err
 	}
@@ -266,7 +280,8 @@ func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, int
 	return session, nil
 }
 
-func (a *Adapter) watchUnknownSessionStart(gatewaySession protocol.GatewaySession, intentID string, transport RPCTransport) {
+func (a *Adapter) watchUnknownSessionStart(commandID string, gatewaySession protocol.GatewaySession, intentID string, transport RPCTransport) {
+	defer a.clearUnknownSessionStart(commandID, gatewaySession.Handle, transport)
 	for message := range transport.Events() {
 		if !message.IsResponse() || message.operation != "thread/start" {
 			continue
@@ -281,6 +296,40 @@ func (a *Adapter) watchUnknownSessionStart(gatewaySession protocol.GatewaySessio
 		}
 		return
 	}
+}
+
+func (a *Adapter) trackUnknownSessionStart(commandID, gatewayHandle string, transport RPCTransport) {
+	a.startMu.Lock()
+	a.unknownSessionStarts[commandID] = unknownSessionStart{gatewayHandle: gatewayHandle, transport: transport}
+	a.startMu.Unlock()
+}
+
+func (a *Adapter) hasUnknownSessionStart(commandID, gatewayHandle string, transport RPCTransport) bool {
+	a.startMu.Lock()
+	watch, ok := a.unknownSessionStarts[commandID]
+	a.startMu.Unlock()
+	return ok && watch.gatewayHandle == gatewayHandle && sameRPCTransport(watch.transport, transport)
+}
+
+func (a *Adapter) clearUnknownSessionStart(commandID, gatewayHandle string, transport RPCTransport) {
+	a.startMu.Lock()
+	watch, ok := a.unknownSessionStarts[commandID]
+	if ok && watch.gatewayHandle == gatewayHandle && sameRPCTransport(watch.transport, transport) {
+		delete(a.unknownSessionStarts, commandID)
+	}
+	a.startMu.Unlock()
+}
+
+func sameRPCTransport(left, right RPCTransport) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	if leftValue.Type() != rightValue.Type() || !leftValue.Type().Comparable() {
+		return false
+	}
+	return leftValue.Interface() == rightValue.Interface()
 }
 
 func (a *Adapter) resumeExistingSession(ctx context.Context, gatewaySession protocol.GatewaySession, request protocol.NewSessionRequest, transport RPCTransport, existing protocol.AdapterSession) (protocol.AdapterSession, error) {
@@ -1040,6 +1089,7 @@ func (a *Adapter) appendRPCResponseCorrelation(state *adapterSessionState, opera
 	if response.Error != nil {
 		value["error"] = response.Error
 	}
+	value["response_succeeded"] = rpcResponseProvesCommandSuccess(operation, response)
 	payload := mustRawJSON(value)
 	if response.commandID != "" {
 		var object map[string]json.RawMessage
@@ -1246,9 +1296,17 @@ func (a *Adapter) threadStartParams(request protocol.NewSessionRequest) map[stri
 }
 
 func (a *Adapter) sandboxPolicy() map[string]any {
-	policy := map[string]any{"type": "workspaceWrite"}
-	if len(a.config.RuntimeWorkspaceRoots) > 0 {
-		policy["writableRoots"] = append([]string(nil), a.config.RuntimeWorkspaceRoots...)
+	var policy map[string]any
+	switch a.config.Sandbox {
+	case "read-only":
+		policy = map[string]any{"type": "readOnly"}
+	case "danger-full-access":
+		policy = map[string]any{"type": "dangerFullAccess"}
+	default:
+		policy = map[string]any{"type": "workspaceWrite"}
+		if len(a.config.RuntimeWorkspaceRoots) > 0 {
+			policy["writableRoots"] = append([]string(nil), a.config.RuntimeWorkspaceRoots...)
+		}
 	}
 	return policy
 }
@@ -1556,6 +1614,7 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 	exactMatches := 0
 	var rawMatched *protocol.Event
 	rawMatches := 0
+	rawResponses := make([]protocol.Event, 0)
 	qualifiedRawMatches := 0
 	var commandMatched *protocol.Event
 	commandMatches := 0
@@ -1594,6 +1653,7 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 			if rpcEnvelopeID(event.Payload) == rawOperationID {
 				rawMatches++
 				rawMatched = event
+				rawResponses = append(rawResponses, *event)
 			}
 		}
 		if !page.HasMore || page.NextCursor == nil || *page.NextCursor == "" {
@@ -1634,7 +1694,7 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 		ack.State = protocol.CommandStateFailed
 		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server operation failed", RequestID: commandID}
 		ack.Result = nil
-	} else {
+	} else if rpcEnvelopeSuccess(matched.Payload) || (!rpcEnvelopeHasSuccessMarker(matched.Payload) && a.legacyPersistedOperationSucceeded(commandID, matched, rawOperationID, rawResponses)) {
 		ack.State = protocol.CommandStateSucceeded
 		ack.Error = nil
 	}
@@ -1683,6 +1743,95 @@ func rpcEnvelopeError(payload json.RawMessage) bool {
 	}
 	value := bytes.TrimSpace(envelope.Error)
 	return len(value) > 0 && !bytes.Equal(value, []byte("null"))
+}
+
+func rpcEnvelopeSuccess(payload json.RawMessage) bool {
+	succeeded, ok := rpcEnvelopeSuccessValue(payload)
+	return ok && succeeded
+}
+
+func rpcEnvelopeHasSuccessMarker(payload json.RawMessage) bool {
+	_, ok := rpcEnvelopeSuccessValue(payload)
+	return ok
+}
+
+func rpcEnvelopeSuccessValue(payload json.RawMessage) (bool, bool) {
+	var envelope struct {
+		ResponseSucceeded *bool `json:"response_succeeded"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.ResponseSucceeded == nil {
+		return false, false
+	}
+	return *envelope.ResponseSucceeded, true
+}
+
+func (a *Adapter) legacyPersistedOperationSucceeded(commandID string, correlation *protocol.Event, rawOperationID string, rawResponses []protocol.Event) bool {
+	operation := rpcEnvelopeMethod(correlation.Payload)
+	if operation == "" {
+		command, _, err := a.journal.Command(commandID)
+		if err != nil {
+			return false
+		}
+		operation = persistedCommandOperation(command)
+	}
+	if operation == "" {
+		return false
+	}
+	matches := 0
+	successes := 0
+	for _, event := range rawResponses {
+		if !sameEventRun(event.RunID, correlation.RunID) {
+			continue
+		}
+		response, err := parseRPCMessage(event.Payload)
+		if err != nil || rpcEnvelopeID(event.Payload) != rawOperationID {
+			continue
+		}
+		matches++
+		if rpcResponseProvesCommandSuccess(operation, response) {
+			successes++
+		}
+	}
+	return matches == 1 && successes == 1
+}
+
+func rpcEnvelopeMethod(payload json.RawMessage) string {
+	var envelope struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Method)
+}
+
+func persistedCommandOperation(command protocol.Command) string {
+	switch command.Kind {
+	case protocol.CommandKindRunInterrupt:
+		return "turn/interrupt"
+	case protocol.CommandKindRunSend:
+		payload, err := decodeCommandPayload(command.Payload)
+		if err != nil {
+			return ""
+		}
+		if firstBool(payload, "steer", "turn_steer") || firstString(payload, "expected_turn_id", "turn_id") != "" {
+			return "turn/steer"
+		}
+		return "turn/start"
+	default:
+		return ""
+	}
+}
+
+func sameEventRun(left, right *string) bool {
+	return valueOrEmpty(left) == valueOrEmpty(right)
+}
+
+func rpcResponseProvesCommandSuccess(operation string, response RPCMessage) bool {
+	if response.Error != nil || len(bytes.TrimSpace(response.Result)) == 0 {
+		return false
+	}
+	return operation != "turn/start" || turnIDFromResult(response.Result) != ""
 }
 
 func rpcOperationIdentity(generation string, id json.RawMessage) string {

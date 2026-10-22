@@ -45,7 +45,7 @@ func validateJournalFileHandle(file *os.File) error {
 }
 
 func validateJournalDirectoryRoot(root *os.Root, path string, info os.FileInfo) error {
-	if !info.IsDir() {
+	if root == nil || info == nil || !info.IsDir() {
 		return fmt.Errorf("journal parent path %q is not a directory", path)
 	}
 	directory, err := root.OpenFile(".", os.O_RDONLY|syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
@@ -60,12 +60,40 @@ func secureJournalDirectoryRoot(root *os.Root, path string) error {
 	if root == nil {
 		return fmt.Errorf("journal directory root must not be nil")
 	}
+	validated, err := root.OpenFile(".", os.O_RDONLY|syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return fmt.Errorf("open validated journal directory %q: %w", path, err)
+	}
+	validatedInfo, err := validated.Stat()
+	if err != nil {
+		_ = validated.Close()
+		return fmt.Errorf("stat validated journal directory %q: %w", path, err)
+	}
 	directory, err := openJournalSecurityHandle(path, true)
 	if err != nil {
+		_ = validated.Close()
 		return fmt.Errorf("open journal directory handle %q: %w", path, err)
 	}
-	defer syscall.CloseHandle(directory)
-	if err := secureJournalHandle(directory); err != nil {
+	rawFile := os.NewFile(uintptr(directory), path)
+	if rawFile == nil {
+		_ = validated.Close()
+		_ = syscall.CloseHandle(directory)
+		return fmt.Errorf("create journal directory wrapper")
+	}
+	defer rawFile.Close()
+	rawInfo, err := rawFile.Stat()
+	if err != nil {
+		_ = validated.Close()
+		return fmt.Errorf("stat opened journal directory %q: %w", path, err)
+	}
+	if !os.SameFile(validatedInfo, rawInfo) {
+		_ = validated.Close()
+		return fmt.Errorf("journal directory %q changed while securing", path)
+	}
+	if err := validated.Close(); err != nil {
+		return fmt.Errorf("close validated journal directory %q: %w", path, err)
+	}
+	if err := secureJournalHandle(syscall.Handle(rawFile.Fd())); err != nil {
 		return fmt.Errorf("secure opened journal directory %q: %w", path, err)
 	}
 	return nil

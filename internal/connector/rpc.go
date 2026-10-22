@@ -21,6 +21,7 @@ import (
 const (
 	defaultMaxFrameBytes      = 4 << 20
 	maxEventQueueBytes        = 64 << 20
+	maxAbandonedRPC           = 4096
 	eventQueueMessageOverhead = 1024
 )
 
@@ -28,6 +29,7 @@ var (
 	ErrTransportClosed    = errors.New("RPC transport is closed")
 	ErrUnknownOutcome     = errors.New("RPC side effect outcome is unknown")
 	ErrEventQueueOverflow = errors.New("RPC event queue exceeded its memory limit")
+	ErrRPCStateOverflow   = errors.New("RPC transport abandoned state exceeded its memory limit")
 )
 
 // RPCError is the JSON-RPC error object returned by app-server.
@@ -342,7 +344,11 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 			var writeErr *TransportWriteError
 			if errors.As(err, &writeErr) && writeErr.Unknown {
 				request.abandoned = true
-				p.abandoned[key] = request
+				if !p.addAbandonedLocked(key, request) {
+					p.pendingMu.Unlock()
+					p.failRPCStateOverflow()
+					return RPCMessage{ID: append(json.RawMessage(nil), id...)}, ErrUnknownOutcome
+				}
 			}
 		}
 		p.pendingMu.Unlock()
@@ -365,7 +371,11 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 	} else if err := ctx.Err(); err != nil {
 		delete(p.pending, key)
 		request.abandoned = true
-		p.abandoned[key] = request
+		if !p.addAbandonedLocked(key, request) {
+			p.pendingMu.Unlock()
+			p.failRPCStateOverflow()
+			return RPCMessage{ID: append(json.RawMessage(nil), id...)}, ErrUnknownOutcome
+		}
 	} else {
 		p.pending[key] = request
 	}
@@ -403,14 +413,35 @@ func waitForRPCResult(waiter <-chan rpcResult) (RPCMessage, error) {
 }
 
 func (p *ProcessTransport) abandon(key string) {
+	overflow := false
 	p.pendingMu.Lock()
-	defer p.pendingMu.Unlock()
 	request, ok := p.pending[key]
-	if !ok {
-		return
+	if ok {
+		delete(p.pending, key)
+		request.abandoned = true
+		overflow = !p.addAbandonedLocked(key, request)
 	}
-	delete(p.pending, key)
+	p.pendingMu.Unlock()
+	if overflow {
+		p.failRPCStateOverflow()
+	}
+}
+
+func (p *ProcessTransport) addAbandonedLocked(key string, request pendingRPC) bool {
+	if p.abandoned == nil {
+		p.abandoned = make(map[string]pendingRPC)
+	}
+	if _, exists := p.abandoned[key]; !exists && len(p.abandoned) >= maxAbandonedRPC {
+		return false
+	}
 	p.abandoned[key] = request
+	return true
+}
+
+func (p *ProcessTransport) failRPCStateOverflow() {
+	p.setError(ErrRPCStateOverflow)
+	p.finishTransport(ErrRPCStateOverflow)
+	go func() { _ = p.Close() }()
 }
 
 func (p *ProcessTransport) Notify(ctx context.Context, method string, params json.RawMessage) error {

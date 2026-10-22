@@ -83,12 +83,13 @@ type Journal struct {
 	file     *os.File
 	fatalErr error
 
-	commands        map[string]commandEntry
-	events          []protocol.Event
-	eventIDs        map[string]struct{}
-	reconciliations map[string]protocol.Reconciliation
-	sessions        map[string]journalSession
-	sessionStarts   map[string]sessionStartIntent
+	commands           map[string]commandEntry
+	events             []protocol.Event
+	eventIDs           map[string]struct{}
+	eventIndexByCursor map[string]int
+	reconciliations    map[string]protocol.Reconciliation
+	sessions           map[string]journalSession
+	sessionStarts      map[string]sessionStartIntent
 
 	sequenceBySession map[string]int64
 	pendingApprovals  map[string]PendingApproval
@@ -166,13 +167,13 @@ func OpenJournal(path string) (*Journal, error) {
 		file.Close()
 		return nil, fmt.Errorf("secure journal permissions: %w", err)
 	}
-	if err := validateJournalFileHandle(file); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("validate opened journal: %w", err)
-	}
 	if err := secureJournalFile(file); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("secure journal ACL: %w", err)
+	}
+	if err := validateJournalFileHandle(file); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("validate opened journal: %w", err)
 	}
 	if err := lockJournalFile(file); err != nil {
 		file.Close()
@@ -194,17 +195,18 @@ func OpenJournal(path string) (*Journal, error) {
 	}
 
 	journal := &Journal{
-		path:              absPath,
-		file:              file,
-		commands:          make(map[string]commandEntry),
-		eventIDs:          make(map[string]struct{}),
-		reconciliations:   make(map[string]protocol.Reconciliation),
-		sessions:          make(map[string]journalSession),
-		sessionStarts:     make(map[string]sessionStartIntent),
-		sequenceBySession: make(map[string]int64),
-		pendingApprovals:  make(map[string]PendingApproval),
-		approvalClaims:    make(map[string]approvalClaimRecord),
-		approvalResults:   make(map[string]string),
+		path:               absPath,
+		file:               file,
+		commands:           make(map[string]commandEntry),
+		eventIDs:           make(map[string]struct{}),
+		eventIndexByCursor: make(map[string]int),
+		reconciliations:    make(map[string]protocol.Reconciliation),
+		sessions:           make(map[string]journalSession),
+		sessionStarts:      make(map[string]sessionStartIntent),
+		sequenceBySession:  make(map[string]int64),
+		pendingApprovals:   make(map[string]PendingApproval),
+		approvalClaims:     make(map[string]approvalClaimRecord),
+		approvalResults:    make(map[string]string),
 	}
 	if err := journal.load(); err != nil {
 		_ = unlockJournalFile(file)
@@ -460,6 +462,9 @@ func (j *Journal) AppendEvent(event protocol.Event) (protocol.Event, error) {
 		return protocol.Event{}, err
 	}
 	j.events = append(j.events, cloneEvent(event))
+	if _, exists := j.eventIndexByCursor[event.Cursor]; !exists {
+		j.eventIndexByCursor[event.Cursor] = len(j.events) - 1
+	}
 	j.eventIDs[event.EventID] = struct{}{}
 	if event.Sequence > j.sequenceBySession[event.SessionID] {
 		j.sequenceBySession[event.SessionID] = event.Sequence
@@ -476,20 +481,15 @@ func (j *Journal) ReadEvents(query protocol.EventQuery) (protocol.EventPage, err
 	}
 	start := 0
 	if query.AfterCursor != "" {
-		found := false
-		for index, event := range j.events {
-			if event.Cursor == query.AfterCursor {
-				if event.SessionID != query.SessionID || (query.RunID != "" && valueOrEmpty(event.RunID) != query.RunID) {
-					return protocol.EventPage{}, protocol.ErrCursorExpired
-				}
-				start = index + 1
-				found = true
-				break
-			}
-		}
-		if !found {
+		index, found := j.eventIndexByCursor[query.AfterCursor]
+		if !found || index < 0 || index >= len(j.events) {
 			return protocol.EventPage{}, protocol.ErrCursorExpired
 		}
+		event := j.events[index]
+		if event.SessionID != query.SessionID || (query.RunID != "" && valueOrEmpty(event.RunID) != query.RunID) {
+			return protocol.EventPage{}, protocol.ErrCursorExpired
+		}
+		start = index + 1
 	}
 
 	limit := query.Limit
@@ -1080,6 +1080,9 @@ func (j *Journal) applyRecord(record journalRecord) error {
 			}
 		}
 		j.events = append(j.events, event)
+		if _, exists := j.eventIndexByCursor[event.Cursor]; !exists {
+			j.eventIndexByCursor[event.Cursor] = len(j.events) - 1
+		}
 		j.eventIDs[event.EventID] = struct{}{}
 		if event.Sequence > j.sequenceBySession[event.SessionID] {
 			j.sequenceBySession[event.SessionID] = event.Sequence

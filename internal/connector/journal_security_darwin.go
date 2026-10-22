@@ -106,6 +106,13 @@ func secureJournalDirectoryRoot(root *os.Root, path string) error {
 		return fmt.Errorf("open journal directory handle %q: %w", path, err)
 	}
 	defer directory.Close()
+	info, err := directory.Stat()
+	if err != nil {
+		return fmt.Errorf("stat journal directory handle %q: %w", path, err)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && uint32(os.Geteuid()) != stat.Uid {
+		return nil
+	}
 	return clearDarwinJournalACL(directory, path)
 }
 

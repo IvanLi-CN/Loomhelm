@@ -33,8 +33,22 @@ func openJournalFile(path string) (*os.File, error) {
 	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("stat journal file: %w", statErr)
 	}
+	validated, err := root.OpenFile(filepath.Base(path), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open validated journal file: %w", err)
+	}
+	validatedInfo, err := validated.Stat()
+	if err != nil {
+		_ = validated.Close()
+		return nil, fmt.Errorf("stat validated journal file: %w", err)
+	}
+	if !validatedInfo.Mode().IsRegular() {
+		_ = validated.Close()
+		return nil, fmt.Errorf("journal path %q is not a regular file", path)
+	}
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
+		_ = validated.Close()
 		return nil, err
 	}
 	handle, err := syscall.CreateFile(
@@ -47,21 +61,34 @@ func openJournalFile(path string) (*os.File, error) {
 		0,
 	)
 	if err != nil {
+		_ = validated.Close()
 		return nil, err
 	}
 	file := os.NewFile(uintptr(handle), path)
 	if file == nil {
+		_ = validated.Close()
 		_ = syscall.CloseHandle(handle)
 		return nil, errors.New("create journal file wrapper")
 	}
 	info, err := file.Stat()
 	if err != nil {
+		_ = validated.Close()
 		_ = file.Close()
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
+		_ = validated.Close()
 		_ = file.Close()
 		return nil, fmt.Errorf("journal path %q is not a regular file", path)
+	}
+	if !os.SameFile(validatedInfo, info) {
+		_ = validated.Close()
+		_ = file.Close()
+		return nil, fmt.Errorf("journal path %q changed while opening", path)
+	}
+	if err := validated.Close(); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("close validated journal file: %w", err)
 	}
 	return file, nil
 }

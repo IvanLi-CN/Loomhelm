@@ -503,6 +503,74 @@ func TestAdapterSendsRunAndDeduplicatesWithoutReplay(t *testing.T) {
 	_ = adapter.CloseSession(context.Background(), session)
 }
 
+func TestAdapterMapsConfiguredSandboxPolicyToTurnStart(t *testing.T) {
+	tests := []struct {
+		name              string
+		sandbox           string
+		wantType          string
+		wantWritableRoots bool
+	}{
+		{name: "workspace-write", sandbox: "workspace-write", wantType: "workspaceWrite", wantWritableRoots: true},
+		{name: "read-only", sandbox: "read-only", wantType: "readOnly"},
+		{name: "danger-full-access", sandbox: "danger-full-access", wantType: "dangerFullAccess"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newFakeTransport()
+			transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-sandbox"}}`)}}}
+			transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"turn":{"id":"turn-sandbox","status":"inProgress"}}`)}}}
+			journal := openTestJournal(t)
+			adapter, err := NewAdapter(fakeProvider{transport: transport}, journal, AdapterConfig{
+				Sandbox:               test.sandbox,
+				RuntimeWorkspaceRoots: []string{"/workspace"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-sandbox", Generation: "generation-sandbox", Path: protocol.SessionPathNew}, testSessionRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := testCommand("sandbox-command", `{"prompt":"sandbox"}`)
+			command.SessionID = session.SessionID
+			if _, err := adapter.SendCommand(context.Background(), session, command); err != nil {
+				t.Fatal(err)
+			}
+			var params struct {
+				SandboxPolicy map[string]any `json:"sandboxPolicy"`
+			}
+			transport.mu.Lock()
+			for _, call := range transport.calls {
+				if call.method == "turn/start" {
+					if err := json.Unmarshal(call.params, &params); err != nil {
+						transport.mu.Unlock()
+						t.Fatal(err)
+					}
+					break
+				}
+			}
+			transport.mu.Unlock()
+			if params.SandboxPolicy["type"] != test.wantType {
+				t.Fatalf("turn/start sandbox policy = %+v, want type %q", params.SandboxPolicy, test.wantType)
+			}
+			_, hasWritableRoots := params.SandboxPolicy["writableRoots"]
+			if hasWritableRoots != test.wantWritableRoots {
+				t.Fatalf("turn/start writableRoots presence = %v, want %v", hasWritableRoots, test.wantWritableRoots)
+			}
+			if err := adapter.CloseSession(context.Background(), session); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAdapterRejectsUnsupportedSandboxPolicy(t *testing.T) {
+	journal := openTestJournal(t)
+	if _, err := NewAdapter(fakeProvider{transport: newFakeTransport()}, journal, AdapterConfig{Sandbox: "unrestricted"}); err == nil {
+		t.Fatal("unsupported sandbox policy was accepted")
+	}
+}
+
 func TestAdapterMarksAckLossUnknownAndReconcileNeverReplays(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-2"}}`)}}}
@@ -590,10 +658,11 @@ func TestAdapterReconcilesUnknownRPCOperationFromPersistedEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	runID := "turn-operation-reconcile"
-	correlation := mustRawJSON(map[string]string{
-		"generation":   "generation-operation-reconcile",
-		"method":       "turn/start",
-		"operation_id": rpcOperationIdentity("generation-operation-reconcile", json.RawMessage(`41`)),
+	correlation := mustRawJSON(map[string]any{
+		"generation":         "generation-operation-reconcile",
+		"method":             "turn/start",
+		"operation_id":       rpcOperationIdentity("generation-operation-reconcile", json.RawMessage(`41`)),
+		"response_succeeded": true,
 	})
 	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceHostObservation, Payload: correlation, RunID: &runID}); err != nil {
 		t.Fatal(err)
@@ -608,6 +677,37 @@ func TestAdapterReconcilesUnknownRPCOperationFromPersistedEvent(t *testing.T) {
 	}
 	if stored.EventCursor == nil || reconciliation.EventCursor == nil || *stored.EventCursor != *reconciliation.EventCursor {
 		t.Fatalf("reconciled event cursor = %v, reconciliation = %+v", stored.EventCursor, reconciliation)
+	}
+}
+
+func TestAdapterLegacyPersistedCorrelationRequiresRawSuccess(t *testing.T) {
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: newFakeTransport()}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "turn-legacy-correlation"
+	correlation := protocol.Event{
+		RunID:   &runID,
+		Payload: mustRawJSON(map[string]string{"method": "turn/start"}),
+	}
+	operationID := rpcOperationIdentity("generation-legacy-correlation", json.RawMessage(`41`))
+	correlation.Payload = mustRawJSON(map[string]string{
+		"method":       "turn/start",
+		"operation_id": operationID,
+	})
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"jsonrpc":"2.0","id":41}`),
+		json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"status":"inProgress"}}}`),
+	} {
+		rawEvent := protocol.Event{RunID: &runID, Payload: raw}
+		if adapter.legacyPersistedOperationSucceeded("unused-command", &correlation, "41", []protocol.Event{rawEvent}) {
+			t.Fatalf("legacy correlation accepted incomplete response %s", raw)
+		}
+	}
+	valid := protocol.Event{RunID: &runID, Payload: json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-legacy-correlation"}}}`)}
+	if !adapter.legacyPersistedOperationSucceeded("unused-command", &correlation, "41", []protocol.Event{valid}) {
+		t.Fatal("legacy correlation rejected a complete turn/start response")
 	}
 }
 
@@ -1180,6 +1280,45 @@ func TestAdapterResolvesUnknownSessionStartFromLateResponse(t *testing.T) {
 	if err := adapter.CloseSession(context.Background(), session); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAdapterRetainsWatchedTransportWhenRetryingUnknownSessionStart(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{err: ErrUnknownOutcome}}
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{"gateway-late-retry": transport}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewaySession := protocol.GatewaySession{Handle: "gateway-late-retry", Generation: "generation-late-retry", Path: protocol.SessionPathNew}
+	request := testSessionRequest()
+	if _, err := adapter.StartSession(context.Background(), gatewaySession, request); !errors.Is(err, ErrUnknownOutcome) {
+		t.Fatalf("first unknown session start error = %v", err)
+	}
+	if _, err := adapter.StartSession(context.Background(), gatewaySession, request); !errors.Is(err, ErrUnknownOutcome) {
+		t.Fatalf("retry unknown session start error = %v", err)
+	}
+	transport.mu.Lock()
+	closed := transport.closed
+	transport.mu.Unlock()
+	if closed {
+		t.Fatal("retry closed the transport owned by the late-response watcher")
+	}
+	threadID := "thread-late-retry"
+	raw := json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-late-retry"}}}`)
+	transport.events <- RPCMessage{Raw: raw, ID: json.RawMessage(`1`), Result: json.RawMessage(`{"thread":{"id":"thread-late-retry"}}`), operation: "thread/start"}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if session, ok := journal.Session(stableSessionID(threadID)); ok {
+			if err := adapter.CloseSession(context.Background(), protocol.AdapterSession{SessionID: session.SessionID}); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("late session start was not resolved after retry")
 }
 
 func TestAdapterMarksUnexpectedTransportCloseForReconciliation(t *testing.T) {
