@@ -111,6 +111,24 @@ type ProcessTransportConfig struct {
 	afterRequestWrite func(string)
 }
 
+func resolveProcessCommandPath(command string) (string, error) {
+	if filepath.IsAbs(command) || strings.ContainsAny(command, `/\\`) {
+		resolved, err := filepath.Abs(command)
+		if err != nil {
+			return "", fmt.Errorf("resolve app-server command path: %w", err)
+		}
+		if _, err := os.Stat(resolved); err != nil {
+			return "", fmt.Errorf("stat app-server command: %w", err)
+		}
+		return resolved, nil
+	}
+	resolved, err := exec.LookPath(command)
+	if err != nil {
+		return "", fmt.Errorf("find app-server command: %w", err)
+	}
+	return resolved, nil
+}
+
 // NewProcessTransport starts a JSONL app-server child. The default arguments
 // are the documented stdio transport used by the R01 host-owned path.
 func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*ProcessTransport, error) {
@@ -129,19 +147,9 @@ func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*P
 	if config.MaxFrameBytes < 1024 {
 		return nil, errors.New("maximum RPC frame size must be at least 1024 bytes")
 	}
-	commandPath, err := filepath.Abs(config.CommandPath)
+	commandPath, err := resolveProcessCommandPath(config.CommandPath)
 	if err != nil {
-		return nil, fmt.Errorf("resolve app-server command path: %w", err)
-	}
-	if _, err := os.Stat(commandPath); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("stat app-server command: %w", err)
-		}
-		resolved, lookErr := exec.LookPath(config.CommandPath)
-		if lookErr != nil {
-			return nil, fmt.Errorf("find app-server command: %w", lookErr)
-		}
-		commandPath = resolved
+		return nil, err
 	}
 	args := append([]string(nil), config.CommandArgs...)
 	if len(args) == 0 {
@@ -620,12 +628,7 @@ func (p *ProcessTransport) readLoop() {
 }
 
 func (p *ProcessTransport) deliverResponse(request pendingRPC, message RPCMessage) {
-	if message.operation == "" {
-		message.operation = request.method
-	}
-	message.runID = request.runID
-	message.commandID = request.commandID
-	message.observation = request.observation
+	message = responseForPending(request, message)
 	if err := p.enqueueEvent(message); err != nil {
 		p.setError(err)
 		p.finishTransport(err)
@@ -634,6 +637,29 @@ func (p *ProcessTransport) deliverResponse(request pendingRPC, message RPCMessag
 		return
 	}
 	request.result <- rpcResult{message: message}
+}
+
+func (p *ProcessTransport) deliverResponseBeforeFinish(request pendingRPC, message RPCMessage) bool {
+	if p.closeRequested.Load() {
+		return false
+	}
+	message = responseForPending(request, message)
+	if err := p.enqueueEvent(message); err != nil {
+		notifyRPCObservation(message.observation, rpcObservation{err: ErrUnknownOutcome})
+		return false
+	}
+	request.result <- rpcResult{message: message}
+	return true
+}
+
+func responseForPending(request pendingRPC, message RPCMessage) RPCMessage {
+	if message.operation == "" {
+		message.operation = request.method
+	}
+	message.runID = request.runID
+	message.commandID = request.commandID
+	message.observation = request.observation
+	return message
 }
 
 func (p *ProcessTransport) enqueueEvent(message RPCMessage) error {
@@ -781,23 +807,26 @@ func (p *ProcessTransport) finishTransport(err error) {
 		if err != nil && !p.closeRequested.Load() && !errors.Is(err, io.EOF) {
 			p.setError(err)
 		}
-		close(p.done)
-		if p.eventCond != nil {
-			p.eventMu.Lock()
-			p.eventCond.Broadcast()
-			p.eventMu.Unlock()
-		}
 		p.pendingMu.Lock()
 		pending := p.pending
 		p.pending = make(map[string]pendingRPC)
 		p.abandoned = make(map[string]pendingRPC)
 		p.pendingMu.Unlock()
 		for _, request := range pending {
+			if request.earlyResponse != nil && p.deliverResponseBeforeFinish(request, *request.earlyResponse) {
+				continue
+			}
 			if request.sent || request.writing {
 				request.result <- rpcResult{err: ErrUnknownOutcome}
 			} else {
 				request.result <- rpcResult{err: ErrTransportClosed}
 			}
+		}
+		close(p.done)
+		if p.eventCond != nil {
+			p.eventMu.Lock()
+			p.eventCond.Broadcast()
+			p.eventMu.Unlock()
 		}
 	})
 }

@@ -445,7 +445,7 @@ func TestAdapterSendsRunAndDeduplicatesWithoutReplay(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-1"}}`)}}}
 	turnResult := json.RawMessage(`{"turn":{"id":"turn-1","status":"inProgress","unknownField":{"kept":true}}}`)
-	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{Raw: json.RawMessage(`{"jsonrpc":"2.0","id":2,"result":{"turn":{"id":"turn-1","status":"inProgress","unknownField":{"kept":true}}}}`), Result: turnResult}}}
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{Raw: json.RawMessage(`{"jsonrpc":"2.0","id":2,"result":{"turn":{"id":"turn-1","status":"inProgress","unknownField":{"kept":true}}}}`), ID: json.RawMessage(`2`), Result: turnResult}}}
 	journal := openTestJournal(t)
 	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
 	if err != nil {
@@ -463,6 +463,9 @@ func TestAdapterSendsRunAndDeduplicatesWithoutReplay(t *testing.T) {
 	}
 	if ack.State != protocol.CommandStateSucceeded || valueOrEmpty(ack.RunID) != "turn-1" {
 		t.Fatalf("run ACK = %+v", ack)
+	}
+	if ack.OperationID == nil || *ack.OperationID != rpcOperationIdentity("generation-1", json.RawMessage(`2`)) {
+		t.Fatalf("run operation ID = %v", ack.OperationID)
 	}
 	if !bytesContains(ack.Result, []byte(`"unknownField"`)) {
 		t.Fatalf("run result did not preserve unknown fields: %s", ack.Result)
@@ -504,7 +507,7 @@ func TestAdapterMarksAckLossUnknownAndReconcileNeverReplays(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-2"}}`)}}}
 	transport.responses["turn/start"] = []fakeResult{{err: ErrUnknownOutcome}, {message: RPCMessage{Result: json.RawMessage(`{"turn":{"id":"turn-2","status":"completed"}}`)}}}
-	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-2","status":"completed","createdAt":"2026-10-21T00:00:01Z","items":[{"type":"userMessage","content":[{"type":"text","text":"uncertain"}]}]}]}`)}}}
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-2","status":"completed","createdAt":"2099-01-01T00:00:01Z","items":[{"type":"userMessage","content":[{"type":"text","text":"uncertain"}]}]}]}`)}}}
 	journal := openTestJournal(t)
 	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, journal)
 	if err != nil {
@@ -1317,6 +1320,20 @@ func TestMatchCommandTurnRejectsOlderSamePromptWithoutRunID(t *testing.T) {
 	}
 	if matched, ambiguous := matchCommandTurn(command, protocol.CommandAck{}, []appServerTurn{turn}); matched != nil || ambiguous {
 		t.Fatalf("older same-prompt turn was matched: %+v, ambiguous = %v", matched, ambiguous)
+	}
+}
+
+func TestMatchCommandTurnUsesJournalReceivedAtBaseline(t *testing.T) {
+	command := testCommand("reconcile-received-at", `{"prompt":"same prompt"}`)
+	command.IssuedAt = "2026-10-21T00:00:00Z"
+	turn := appServerTurn{
+		ID:        "turn-before-accepted",
+		Status:    "completed",
+		CreatedAt: "2026-10-21T00:00:01Z",
+		Items:     []byte(`[{"type":"userMessage","text":"same prompt"}]`),
+	}
+	if matched, ambiguous := matchCommandTurnSince(command, protocol.CommandAck{}, []appServerTurn{turn}, "2026-10-21T00:00:02Z"); matched != nil || ambiguous {
+		t.Fatalf("turn before journal receipt was matched: %+v, ambiguous = %v", matched, ambiguous)
 	}
 }
 

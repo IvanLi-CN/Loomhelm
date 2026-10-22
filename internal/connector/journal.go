@@ -66,9 +66,10 @@ type sessionStartIntent struct {
 }
 
 type commandEntry struct {
-	command protocol.Command
-	digest  string
-	ack     protocol.CommandAck
+	command    protocol.Command
+	digest     string
+	ack        protocol.CommandAck
+	receivedAt string
 }
 
 type Journal struct {
@@ -327,7 +328,7 @@ func (j *Journal) BeginCommand(command protocol.Command) (protocol.CommandAck, b
 	}); err != nil {
 		return protocol.CommandAck{}, false, err
 	}
-	j.commands[command.CommandID] = commandEntry{command: cloneCommand(command), digest: digest, ack: cloneAck(ack)}
+	j.commands[command.CommandID] = commandEntry{command: cloneCommand(command), digest: digest, ack: cloneAck(ack), receivedAt: ack.ReceivedAt}
 	return ack, false, nil
 }
 
@@ -408,6 +409,19 @@ func (j *Journal) Command(commandID string) (protocol.Command, protocol.CommandA
 	return cloneCommand(entry.command), cloneAck(entry.ack), nil
 }
 
+func (j *Journal) CommandReceivedAt(commandID string) (string, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	entry, ok := j.commands[commandID]
+	if !ok {
+		return "", ErrCommandNotFound
+	}
+	if entry.receivedAt != "" {
+		return entry.receivedAt, nil
+	}
+	return entry.ack.ReceivedAt, nil
+}
+
 func (j *Journal) AppendEvent(event protocol.Event) (protocol.Event, error) {
 	if event.SessionID == "" {
 		return protocol.Event{}, fmt.Errorf("event session id must not be empty")
@@ -415,6 +429,11 @@ func (j *Journal) AppendEvent(event protocol.Event) (protocol.Event, error) {
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if event.Type == protocol.EventTypeApprovalResolved && (event.RunID == nil || strings.TrimSpace(*event.RunID) == "") {
+		if runID := j.approvalRunIDLocked(event); runID != "" {
+			event.RunID = &runID
+		}
+	}
 	if event.EventID != "" {
 		if _, ok := j.eventIDs[event.EventID]; ok {
 			for _, existing := range j.events {
@@ -838,24 +857,23 @@ func (j *Journal) IsApprovalPending(sessionID string, requestID json.RawMessage)
 	return ok
 }
 
-// FindPendingApproval resolves the public string approval id to the exact raw
-// JSON-RPC request id that must be answered. Numeric and string JSON ids are
-// compared by their textual value so the public boundary remains lossless.
+// FindPendingApproval resolves the public approval id to the exact raw JSON-RPC
+// request id that must be answered. Numeric and string JSON ids remain distinct.
 func (j *Journal) FindPendingApproval(sessionID, runID string, requestID json.RawMessage) (PendingApproval, error) {
 	return j.FindPendingApprovalForGeneration(sessionID, "", runID, requestID)
 }
 
 func (j *Journal) FindPendingApprovalForGeneration(sessionID, generation, runID string, requestID json.RawMessage) (PendingApproval, error) {
-	wanted := approvalIDText(requestID)
+	wanted := approvalIDIdentity(requestID)
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	var found *PendingApproval
 	for _, approval := range j.pendingApprovals {
-		if approval.SessionID != sessionID || (generation != "" && approval.Generation != generation) || (runID != "" && approval.RunID != runID) || approvalIDText(approval.RequestID) != wanted {
+		if approval.SessionID != sessionID || (generation != "" && approval.Generation != generation) || (runID != "" && approval.RunID != runID) || approvalIDIdentity(approval.RequestID) != wanted {
 			continue
 		}
 		if found != nil {
-			return PendingApproval{}, fmt.Errorf("approval id %q is ambiguous", wanted)
+			return PendingApproval{}, fmt.Errorf("approval id %q is ambiguous", approvalIDText(requestID))
 		}
 		value := cloneApproval(approval)
 		found = &value
@@ -990,7 +1008,11 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if _, ok := j.commands[record.CommandID]; ok {
 			return nil
 		}
-		j.commands[record.CommandID] = commandEntry{command: cloneCommand(*record.Command), digest: digest, ack: cloneAck(*record.Ack)}
+		receivedAt := record.At
+		if receivedAt == "" {
+			receivedAt = record.Ack.ReceivedAt
+		}
+		j.commands[record.CommandID] = commandEntry{command: cloneCommand(*record.Command), digest: digest, ack: cloneAck(*record.Ack), receivedAt: receivedAt}
 	case "command_update":
 		if record.Ack == nil || record.CommandID == "" {
 			return fmt.Errorf("%w: incomplete command update", ErrJournalCorrupt)
@@ -1232,7 +1254,7 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		resolution := normalizeApprovalDecision(rawResolution)
 		if claim, claimed := j.approvalClaims[key]; claimed {
 			pending, pendingExists := j.pendingApprovals[key]
-			if !pendingExists || !approvalClaimMatches(claim, pending) {
+			if !pendingExists || !approvalClaimMatches(claim, pending) || !approvalPendingMatchesCurrentGeneration(j.sessions, pending) {
 				delete(j.pendingApprovals, key)
 				delete(j.approvalClaims, key)
 				return
@@ -1257,7 +1279,7 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		for requestKey, approval := range j.pendingApprovals {
 			if approval.SessionID == event.SessionID && approval.ItemID != "" && approval.ItemID == message.Params.Item.ID {
 				if claim, claimed := j.approvalClaims[requestKey]; claimed {
-					if !approvalClaimMatches(claim, approval) {
+					if !approvalClaimMatches(claim, approval) || !approvalPendingMatchesCurrentGeneration(j.sessions, approval) {
 						delete(j.pendingApprovals, requestKey)
 						delete(j.approvalClaims, requestKey)
 						continue
@@ -1276,6 +1298,34 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 			}
 		}
 	}
+}
+
+func (j *Journal) approvalRunIDLocked(event protocol.Event) string {
+	requestID := approvalRequestIDFromPayload(event.Payload)
+	key := approvalKey(event.SessionID, requestID)
+	if key == "" {
+		return ""
+	}
+	pending, ok := j.pendingApprovals[key]
+	if !ok || !approvalPendingMatchesCurrentGeneration(j.sessions, pending) {
+		return ""
+	}
+	if pending.RunID != "" {
+		return pending.RunID
+	}
+	return pending.TurnID
+}
+
+func approvalRequestIDFromPayload(payload json.RawMessage) json.RawMessage {
+	var message struct {
+		Params struct {
+			RequestID json.RawMessage `json:"requestId"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil
+	}
+	return append(json.RawMessage(nil), message.Params.RequestID...)
 }
 
 func approvalClaimMatches(claim approvalClaimRecord, pending PendingApproval) bool {
@@ -1297,6 +1347,17 @@ func approvalClaimMatches(claim approvalClaimRecord, pending PendingApproval) bo
 	return true
 }
 
+func approvalPendingMatchesCurrentGeneration(sessions map[string]journalSession, pending PendingApproval) bool {
+	session, ok := sessions[pending.SessionID]
+	if !ok || session.Generation == "" {
+		return true
+	}
+	if pending.Generation == "" {
+		return false
+	}
+	return session.Generation == pending.Generation
+}
+
 func approvalKey(sessionID string, requestID json.RawMessage) string {
 	trimmed := bytes.TrimSpace(requestID)
 	if sessionID == "" || len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
@@ -1312,6 +1373,20 @@ func approvalIDText(requestID json.RawMessage) string {
 		return value
 	}
 	return string(trimmed)
+}
+
+func approvalIDIdentity(requestID json.RawMessage) string {
+	trimmed := bytes.TrimSpace(requestID)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var value string
+		if json.Unmarshal(trimmed, &value) == nil {
+			return "string\x00" + value
+		}
+	}
+	return "json\x00" + string(trimmed)
 }
 
 func normalizeApprovalDecision(value string) string {

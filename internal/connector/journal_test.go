@@ -567,17 +567,49 @@ func TestJournalKeepsUnknownApprovalResolutionUnknown(t *testing.T) {
 	if _, _, err := journal.ClaimApproval("session-resolution", []byte("11"), 1, "command-resolution", "approve"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := journal.AppendEvent(protocol.Event{
+	resolved, err := journal.AppendEvent(protocol.Event{
 		SessionID: "session-resolution",
-		RunID:     stringPointer("turn-resolution"),
 		Type:      protocol.EventTypeApprovalResolved,
 		Source:    protocol.EventSourceAppServer,
 		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":11,"resolution":"unexpected"}}`),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if resolved.RunID == nil || *resolved.RunID != "turn-resolution" {
+		t.Fatalf("resolved approval run ID = %v, want turn-resolution", resolved.RunID)
 	}
 	if got, ok := journal.ApprovalResult("command-resolution"); !ok || got != "unknown" {
 		t.Fatalf("approval result = %q, found = %v, want unknown", got, ok)
+	}
+}
+
+func TestJournalPreservesApprovalRequestIDTypeWhenFindingPendingApproval(t *testing.T) {
+	journal := openTestJournal(t)
+	for _, value := range []struct {
+		id      string
+		turnID  string
+		itemID  string
+		request string
+	}{{"numeric", "turn-numeric", "item-numeric", `1`}, {"string", "turn-string", "item-string", `"1"`}} {
+		if _, err := journal.AppendEvent(protocol.Event{
+			SessionID: "session-approval-id-types",
+			RunID:     stringPointer(value.turnID),
+			Type:      protocol.EventTypeApprovalRequested,
+			Source:    protocol.EventSourceAppServer,
+			Payload:   []byte(`{"jsonrpc":"2.0","id":` + value.request + `,"method":"item/commandExecution/requestApproval","params":{"turnId":"` + value.turnID + `","itemId":"` + value.itemID + `"}}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []struct {
+		request string
+		turnID  string
+	}{{`1`, "turn-numeric"}, {`"1"`, "turn-string"}} {
+		pending, err := journal.FindPendingApproval("session-approval-id-types", "", []byte(value.request))
+		if err != nil || pending.TurnID != value.turnID {
+			t.Fatalf("pending approval for %s = %+v, error = %v", value.request, pending, err)
+		}
 	}
 }
 
@@ -701,6 +733,40 @@ func TestJournalDoesNotApplyApprovalClaimAcrossGenerations(t *testing.T) {
 	}
 	if pending := journal.PendingApprovals("session-approval-generation", ""); len(pending) != 0 {
 		t.Fatalf("resolved new-generation approval remains pending: %+v", pending)
+	}
+}
+
+func TestJournalDoesNotApplyResolutionFromNewGenerationToOldApproval(t *testing.T) {
+	journal := openTestJournal(t)
+	if err := journal.RecordSession("session-approval-resolution-generation", "thread-approval-resolution-generation", "generation-old"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-resolution-generation",
+		RunID:     stringPointer("turn-old"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":13,"method":"item/commandExecution/requestApproval","params":{"turnId":"turn-old","revision":1,"itemId":"item-old"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, already, err := journal.ClaimApproval("session-approval-resolution-generation", []byte("13"), 1, "command-old-resolution", "approve"); err != nil || already {
+		t.Fatalf("old resolution claim = already %v, error %v", already, err)
+	}
+	if err := journal.RecordSession("session-approval-resolution-generation", "thread-approval-resolution-generation", "generation-new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-resolution-generation",
+		RunID:     stringPointer("turn-new"),
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":13,"turnId":"turn-new","resolution":"accept"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, ok := journal.ApprovalResult("command-old-resolution"); ok {
+		t.Fatalf("new generation resolution applied to old claim: %q", result)
 	}
 }
 

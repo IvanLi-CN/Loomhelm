@@ -151,6 +151,46 @@ func TestProcessTransportWriteErrorClassifiesPartialWrites(t *testing.T) {
 	}
 }
 
+func TestProcessTransportDeliversEarlyResponseBeforeFinish(t *testing.T) {
+	waiter := make(chan rpcResult, 1)
+	events := make(chan RPCMessage, 1)
+	observation := make(chan rpcObservation, 1)
+	transport := &ProcessTransport{
+		pending: make(map[string]pendingRPC),
+		events:  events,
+		done:    make(chan struct{}),
+	}
+	transport.pending["1"] = pendingRPC{
+		result:      waiter,
+		writing:     true,
+		method:      "turn/start",
+		commandID:   "command-early-response",
+		observation: observation,
+		earlyResponse: &RPCMessage{
+			ID:     json.RawMessage(`1`),
+			Result: json.RawMessage(`{"turn":{"id":"turn-early"}}`),
+		},
+	}
+
+	transport.finishTransport(io.EOF)
+	select {
+	case result := <-waiter:
+		if result.err != nil || string(result.message.Result) != `{"turn":{"id":"turn-early"}}` {
+			t.Fatalf("finished early response = %+v, want successful response", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for finished early response")
+	}
+	select {
+	case message := <-events:
+		if message.operation != "turn/start" || message.commandID != "command-early-response" {
+			t.Fatalf("observed early response metadata = %+v", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for early response observation")
+	}
+}
+
 func TestProcessTransportDoesNotCloseEventsWhileReaderIsSending(t *testing.T) {
 	stdout := io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","method":"notice","params":{}}` + "\n"))
 	transport := &ProcessTransport{

@@ -589,6 +589,10 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	if command.SessionID != session.SessionID {
 		return protocol.Reconciliation{}, fmt.Errorf("command %q belongs to adapter session %q, not %q", commandID, command.SessionID, session.SessionID)
 	}
+	receivedAt, err := a.journal.CommandReceivedAt(commandID)
+	if err != nil {
+		return protocol.Reconciliation{}, err
+	}
 	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
 		reconciliationState := protocol.ReconciliationStateConfirmed
 		if ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
@@ -675,7 +679,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 		return value, nil
 	}
 	runObserved := ack.RunID != nil
-	matched, ambiguous := matchCommandTurn(command, ack, turns)
+	matched, ambiguous := matchCommandTurnSince(command, ack, turns, receivedAt)
 	reconciliation := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown}
 	if matched != nil && !ambiguous {
 		outcome, established := commandOutcomeFromTurn(command, *matched)
@@ -954,7 +958,11 @@ func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionSta
 		ack.RunID = &runID
 	}
 	if operation != "" {
-		ack.OperationID = stringPointer(operation)
+		operationID := operation
+		if responseID := bytes.TrimSpace(response.ID); len(responseID) > 0 && !bytes.Equal(responseID, []byte("null")) {
+			operationID = rpcOperationIdentity(state.gatewaySession.Generation, responseID)
+		}
+		ack.OperationID = &operationID
 	}
 	if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
 		return ack, err
@@ -1097,6 +1105,9 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error 
 	}
 	eventType := eventTypeForMethod(message.Method, message)
 	runID := runIDFromMessage(message)
+	if eventType == protocol.EventTypeApprovalResolved && runID == "" {
+		runID = a.approvalRunID(state, message)
+	}
 	state.mu.Lock()
 	if message.Method == "turn/started" && runID != "" {
 		state.activeTurns[runID] = runID
@@ -1447,6 +1458,10 @@ func parseTurnsPage(result json.RawMessage) (appServerTurnsPage, bool) {
 }
 
 func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns []appServerTurn) (*appServerTurn, bool) {
+	return matchCommandTurnSince(command, ack, turns, command.IssuedAt)
+}
+
+func matchCommandTurnSince(command protocol.Command, ack protocol.CommandAck, turns []appServerTurn, receivedAt string) (*appServerTurn, bool) {
 	requestedID := valueOrEmpty(ack.RunID)
 	if requestedID == "" {
 		requestedID = valueOrEmpty(command.RunID)
@@ -1467,7 +1482,7 @@ func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns [
 	}
 	var matches []appServerTurn
 	for _, turn := range turns {
-		if turnAfterCommand(command, turn) && commandMatchesTurn(command, turn) {
+		if turnAfterTimestamp(receivedAt, turn) && commandMatchesTurn(command, turn) {
 			matches = append(matches, turn)
 		}
 	}
@@ -1627,7 +1642,11 @@ func rpcOperationRawID(operationID string) string {
 }
 
 func turnAfterCommand(command protocol.Command, turn appServerTurn) bool {
-	issuedAt, err := time.Parse(time.RFC3339Nano, command.IssuedAt)
+	return turnAfterTimestamp(command.IssuedAt, turn)
+}
+
+func turnAfterTimestamp(timestamp string, turn appServerTurn) bool {
+	issuedAt, err := time.Parse(time.RFC3339Nano, timestamp)
 	if err != nil {
 		return false
 	}
@@ -1792,6 +1811,26 @@ func runIDFromMessage(message RPCMessage) string {
 		return params.Turn.ID
 	}
 	return params.TurnID
+}
+
+func (a *Adapter) approvalRunID(state *adapterSessionState, message RPCMessage) string {
+	if state == nil {
+		return ""
+	}
+	var params struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if json.Unmarshal(message.Params, &params) != nil || len(bytes.TrimSpace(params.RequestID)) == 0 {
+		return ""
+	}
+	pending, err := a.journal.FindPendingApprovalForGeneration(state.session.SessionID, state.gatewaySession.Generation, "", params.RequestID)
+	if err != nil {
+		return ""
+	}
+	if pending.RunID != "" {
+		return pending.RunID
+	}
+	return pending.TurnID
 }
 
 func eventTypeForMethod(method string, message RPCMessage) protocol.EventType {

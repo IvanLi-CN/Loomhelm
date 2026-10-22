@@ -12,7 +12,7 @@ The journal is created with a mode 0700 parent directory and mode 0600 file perm
 
 For journaled RPC responses, the raw app-server event is followed by a host-observation correlation event containing the Gateway generation, method, command identity when available and generation-qualified operation identity. Unknown ACKs use that identity so reused JSON-RPC IDs from different process generations cannot be misattributed; older records without a correlation event fall back only when the raw ID is unique and no qualified observation exists.
 
-Approval claims retain the session generation and pending run, turn and item identity. A replayed or newly observed approval from another generation cannot apply a decision to the older claim; the affected command remains unknown until explicitly reconciled.
+Approval claims retain the session generation and pending run, turn and item identity. A replayed or newly observed approval from another generation cannot apply a decision to the older claim; the affected command remains unknown until explicitly reconciled. Resolution events inherit the pending run identity when the app-server omits `turnId`, and numeric and string JSON-RPC request IDs remain distinct during lookup.
 
 session records contain only the Loomhelm session ID, opaque external thread reference, host generation and update time; credentials, access tokens and Desktop process state are not journal data.
 
@@ -40,6 +40,6 @@ Cold `thread/resume` recovery is a new host-owned app-server generation. It is r
 
 ## Validation
 
-The focused Connector tests cover explicit session identities, v1 read/v2 write compatibility, legacy identity isolation, large-number command digests, journal-path symlink rejection, duplicate IDs, conflicting payloads, incomplete final writes, restart conversion to unknown, ordered event cursors, pending approval rebuild, partial transport writes, JSONL request/response flow, ACK-loss reconciliation, approval decisions, steer, interrupt and unsupported active-session attachment.
+The focused Connector tests cover explicit session identities, v1 read/v2 write compatibility, legacy identity isolation, large-number command digests, journal-path symlink rejection, duplicate IDs, conflicting payloads, incomplete final writes, restart conversion to unknown, ordered event cursors, pending approval rebuild, generation checks, JSON-RPC ID typing, partial transport writes, JSONL request/response flow, ACK-loss reconciliation, approval decisions, steer, interrupt and unsupported active-session attachment.
 
 The real acceptance surface remains a disposable host-owned app-server session using the exact installed CLI identity from R01; Desktop hot attachment, production WSS pairing and owner-bound Desktop callbacks remain outside this implementation.
