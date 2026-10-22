@@ -23,7 +23,7 @@ const (
 	legacyJournalFormatVersion = 1
 	journalFormatVersion       = 2
 	maxJournalBytes            = int64(256 << 20)
-	maxJournalRecordBytes      = 4 << 20
+	maxJournalRecordBytes      = 8 << 20
 	maxJournalEvents           = 1_000_000
 )
 
@@ -1018,7 +1018,7 @@ func readJournalRecord(reader *bufio.Reader) ([]byte, int64, bool, error) {
 
 func (j *Journal) applyRecord(record journalRecord) error {
 	if record.FormatVersion != legacyJournalFormatVersion && record.FormatVersion != journalFormatVersion {
-		return fmt.Errorf("unsupported journal format version %d", record.FormatVersion)
+		return fmt.Errorf("%w: unsupported journal format version %d", ErrJournalCorrupt, record.FormatVersion)
 	}
 	switch record.Type {
 	case "command":
@@ -1033,7 +1033,10 @@ func (j *Journal) applyRecord(record journalRecord) error {
 			return fmt.Errorf("%w: normalize command digest: %v", ErrJournalCorrupt, err)
 		}
 		if record.FormatVersion == journalFormatVersion && record.Digest != digest {
-			return fmt.Errorf("%w: command digest mismatch for %q", ErrJournalCorrupt, record.CommandID)
+			legacyDigest, legacyErr := commandDigestWithIssuedAt(*record.Command)
+			if legacyErr != nil || record.Digest != legacyDigest {
+				return fmt.Errorf("%w: command digest mismatch for %q", ErrJournalCorrupt, record.CommandID)
+			}
 		}
 		if existing, ok := j.commands[record.CommandID]; ok && existing.digest != digest {
 			return fmt.Errorf("%w: conflicting command record %q", ErrJournalCorrupt, record.CommandID)
@@ -1468,24 +1471,49 @@ func normalizeApprovalDecision(value string) string {
 }
 
 func commandDigest(command protocol.Command) (string, error) {
+	return commandDigestValue(command, false)
+}
+
+func commandDigestWithIssuedAt(command protocol.Command) (string, error) {
+	return commandDigestValue(command, true)
+}
+
+func commandDigestValue(command protocol.Command, includeIssuedAt bool) (string, error) {
 	payload, err := canonicalJSON(command.Payload)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize command payload: %w", err)
 	}
-	value := struct {
-		CommandID string               `json:"command_id"`
-		IssuedAt  string               `json:"issued_at"`
-		Kind      protocol.CommandKind `json:"kind"`
-		Payload   json.RawMessage      `json:"payload"`
-		RunID     *string              `json:"run_id,omitempty"`
-		SessionID string               `json:"session_id"`
-	}{
-		CommandID: command.CommandID,
-		IssuedAt:  command.IssuedAt,
-		Kind:      command.Kind,
-		Payload:   payload,
-		RunID:     command.RunID,
-		SessionID: command.SessionID,
+	var value any
+	if includeIssuedAt {
+		value = struct {
+			CommandID string               `json:"command_id"`
+			IssuedAt  string               `json:"issued_at"`
+			Kind      protocol.CommandKind `json:"kind"`
+			Payload   json.RawMessage      `json:"payload"`
+			RunID     *string              `json:"run_id,omitempty"`
+			SessionID string               `json:"session_id"`
+		}{
+			CommandID: command.CommandID,
+			IssuedAt:  command.IssuedAt,
+			Kind:      command.Kind,
+			Payload:   payload,
+			RunID:     command.RunID,
+			SessionID: command.SessionID,
+		}
+	} else {
+		value = struct {
+			CommandID string               `json:"command_id"`
+			Kind      protocol.CommandKind `json:"kind"`
+			Payload   json.RawMessage      `json:"payload"`
+			RunID     *string              `json:"run_id,omitempty"`
+			SessionID string               `json:"session_id"`
+		}{
+			CommandID: command.CommandID,
+			Kind:      command.Kind,
+			Payload:   payload,
+			RunID:     command.RunID,
+			SessionID: command.SessionID,
+		}
 	}
 	data, err := json.Marshal(value)
 	if err != nil {

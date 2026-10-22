@@ -619,10 +619,53 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	if !a.isCurrentState(state) || state.closed.Load() {
 		return protocol.Reconciliation{}, fmt.Errorf("adapter session %q generation is no longer active", session.SessionID)
 	}
-	if updated, _, err := a.bindPersistedOperation(commandID, session.SessionID, ack); err != nil {
+	latestCommand, latestAck, err := a.journal.Command(commandID)
+	if err != nil {
+		return protocol.Reconciliation{}, err
+	}
+	if latestCommand.SessionID != session.SessionID {
+		return protocol.Reconciliation{}, fmt.Errorf("command %q belongs to adapter session %q, not %q", commandID, latestCommand.SessionID, session.SessionID)
+	}
+	command = latestCommand
+	ack = latestAck
+	if previous, ok := a.journal.Reconciliation(commandID); ok && previous.State != protocol.ReconciliationStateUnknown {
+		return previous, nil
+	}
+	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+		reconciliationState := protocol.ReconciliationStateConfirmed
+		if ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+			reconciliationState = protocol.ReconciliationStateNotFound
+		}
+		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: reconciliationState, EventCursor: ack.EventCursor}
+		if err := a.journal.RecordReconciliation(value); err != nil {
+			return value, err
+		}
+		return value, nil
+	}
+	if ack.State == protocol.CommandStateAccepted || ack.State == protocol.CommandStateExecuting {
+		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer("command remains in flight; external outcome has not been observed")}
+		if err := a.journal.RecordReconciliation(value); err != nil {
+			return value, err
+		}
+		return value, nil
+	}
+	if updated, bound, err := a.bindPersistedOperation(commandID, session.SessionID, ack); err != nil {
 		return protocol.Reconciliation{}, err
 	} else {
 		ack = updated
+		if bound && ack.State == protocol.CommandStateSucceeded {
+			reconciliation := protocol.Reconciliation{
+				CommandID:   commandID,
+				ObservedAt:  now(),
+				State:       protocol.ReconciliationStateConfirmed,
+				EventCursor: ack.EventCursor,
+				Note:        stringPointer("persisted app-server RPC response proves command delivery"),
+			}
+			if err := a.journal.RecordReconciliation(reconciliation); err != nil {
+				return reconciliation, err
+			}
+			return reconciliation, nil
+		}
 	}
 	if ack.State == protocol.CommandStateFailed {
 		reconciliation := protocol.Reconciliation{
@@ -911,16 +954,30 @@ func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionSta
 	if response.commandID == "" {
 		response.commandID = command.CommandID
 	}
-	if callErr != nil {
-		if isUnknownTransportError(callErr) && len(bytes.TrimSpace(response.ID)) > 0 {
-			operationID := rpcOperationIdentity(state.gatewaySession.Generation, response.ID)
-			ack.OperationID = &operationID
+	if runID != "" {
+		ack.RunID = &runID
+	}
+	if operation != "" {
+		operationID := operation
+		if responseID := bytes.TrimSpace(response.ID); len(responseID) > 0 && !bytes.Equal(responseID, []byte("null")) {
+			operationID = rpcOperationIdentity(state.gatewaySession.Generation, responseID)
 		}
+		ack.OperationID = &operationID
+	}
+	if callErr != nil {
 		return a.finishTransportError(command, ack, callErr, operation)
 	}
 	if response.observation != nil {
 		cursor, err := waitForRPCObservation(response.observation)
 		if err != nil {
+			if errors.Is(err, ErrUnknownOutcome) {
+				state.eventMu.Lock()
+				event, persistErr := a.appendRPCResponseEvent(state, operation, response, runID)
+				state.eventMu.Unlock()
+				if persistErr == nil && event.Cursor != "" {
+					ack.EventCursor = &event.Cursor
+				}
+			}
 			unknownErr := fmt.Errorf("%w: persist %s response observation: %v", ErrUnknownOutcome, operation, err)
 			return a.finishTransportError(command, ack, unknownErr, operation)
 		}
@@ -955,13 +1012,6 @@ func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionSta
 	}
 	if runID != "" {
 		ack.RunID = &runID
-	}
-	if operation != "" {
-		operationID := operation
-		if responseID := bytes.TrimSpace(response.ID); len(responseID) > 0 && !bytes.Equal(responseID, []byte("null")) {
-			operationID = rpcOperationIdentity(state.gatewaySession.Generation, responseID)
-		}
-		ack.OperationID = &operationID
 	}
 	if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
 		return ack, err
@@ -1584,6 +1634,9 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 		ack.State = protocol.CommandStateFailed
 		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server operation failed", RequestID: commandID}
 		ack.Result = nil
+	} else {
+		ack.State = protocol.CommandStateSucceeded
+		ack.Error = nil
 	}
 	if err := a.journal.UpdateCommand(commandID, ack); err != nil {
 		return ack, false, fmt.Errorf("persist operation observation for command %q: %w", commandID, err)

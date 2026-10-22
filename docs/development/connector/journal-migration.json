@@ -33,17 +33,9 @@
       "truncate-final-incomplete-record",
       "mark-inflight-unknown"
     ],
-    "progress_signals": [
-      "journal open success",
-      "journal record count",
-      "unknown command count",
-      "latest event cursor"
-    ],
-    "pause_points": [
-      "before startup repair",
-      "after final-record truncation",
-      "before explicit command reconciliation"
-    ]
+    "progress_signals": [],
+    "pause_points": [],
+    "note": "OpenJournal performs scanning, final-record repair and in-flight marking synchronously; the candidate exposes no runtime progress or pause hooks."
   },
   "recovery": {
     "deployed_migrations_immutable": true,
@@ -60,7 +52,7 @@
         "v1 records round-trip through the journal reader",
         "v1 session-start records do not satisfy a new explicit creation identity",
         "v2 session-start records persist command_id and payload digest",
-        "v2 records are rejected by the v1 reader boundary",
+        "unsupported journal format versions are rejected before state application",
         "a torn final write is truncated safely",
         "accepted and executing commands become unknown after restart",
         "unknown outcomes require explicit reconciliation and are never replayed",
@@ -69,7 +61,7 @@
         "approval resolution events retain the pending run identity when the app-server omits turnId",
         "numeric and string JSON-RPC approval request IDs remain distinct",
         "approval resolution and item-completion events must match the pending turn identity",
-        "journal startup and append paths enforce bounded record, event-count and file-size resources"
+        "journal startup and append paths enforce bounded 8 MiB record, event-count and file-size resources"
       ],
       "note": "The candidate reads the immediately preceding v1 journal state; v1 binaries are not supported readers for v2 records."
     },

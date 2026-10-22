@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package connector
 
@@ -17,6 +17,10 @@ func validateJournalFile(string) error { return nil }
 func validateJournalFileHandle(*os.File) error { return nil }
 
 func secureJournalFile(*os.File) error { return nil }
+
+func validateJournalDirectoryRoot(*os.Root, string, os.FileInfo) error { return nil }
+
+func secureJournalDirectoryRoot(*os.Root, string) error { return nil }
 
 func validateJournalDirectory(path string) error {
 	info, err := os.Lstat(path)

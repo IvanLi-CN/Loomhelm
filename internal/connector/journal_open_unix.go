@@ -107,6 +107,18 @@ func openJournalDirectory(path string, create bool) (*os.Root, []string, error) 
 			}
 			return nil, nil, fmt.Errorf("journal directory %q changed while opening", componentPath)
 		}
+		if wasCreated {
+			if err := secureJournalDirectoryRoot(nextRoot, componentPath); err != nil {
+				_ = nextRoot.Close()
+				_ = root.Close()
+				return nil, nil, fmt.Errorf("secure journal directory ACL: %w", err)
+			}
+		}
+		if err := validateJournalDirectoryRoot(nextRoot, componentPath, nextInfo); err != nil {
+			_ = nextRoot.Close()
+			_ = root.Close()
+			return nil, nil, err
+		}
 		if err := root.Close(); err != nil {
 			_ = nextRoot.Close()
 			return nil, nil, fmt.Errorf("close journal directory component: %w", err)
@@ -123,6 +135,10 @@ func openJournalDirectory(path string, create bool) (*os.Root, []string, error) 
 		return nil, nil, fmt.Errorf("stat opened journal directory: %w", err)
 	}
 	if err := validateJournalDirectoryInfo(currentPath, finalInfo); err != nil {
+		_ = root.Close()
+		return nil, nil, err
+	}
+	if err := validateJournalDirectoryRoot(root, currentPath, finalInfo); err != nil {
 		_ = root.Close()
 		return nil, nil, err
 	}

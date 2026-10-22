@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,8 +19,9 @@ import (
 )
 
 const (
-	defaultMaxFrameBytes = 4 << 20
-	maxEventQueueBytes   = 64 << 20
+	defaultMaxFrameBytes      = 4 << 20
+	maxEventQueueBytes        = 64 << 20
+	eventQueueMessageOverhead = 1024
 )
 
 var (
@@ -112,19 +114,28 @@ type ProcessTransportConfig struct {
 }
 
 func resolveProcessCommandPath(command string) (string, error) {
+	var resolved string
 	if filepath.IsAbs(command) || strings.ContainsAny(command, `/\\`) {
-		resolved, err := filepath.Abs(command)
+		absolute, err := filepath.Abs(command)
 		if err != nil {
 			return "", fmt.Errorf("resolve app-server command path: %w", err)
 		}
-		if _, err := os.Stat(resolved); err != nil {
+		if _, err := os.Stat(absolute); err != nil {
 			return "", fmt.Errorf("stat app-server command: %w", err)
 		}
-		return resolved, nil
+		resolved = absolute
+	} else {
+		var err error
+		resolved, err = exec.LookPath(command)
+		if err != nil {
+			return "", fmt.Errorf("find app-server command: %w", err)
+		}
 	}
-	resolved, err := exec.LookPath(command)
-	if err != nil {
-		return "", fmt.Errorf("find app-server command: %w", err)
+	if runtime.GOOS == "windows" {
+		switch strings.ToLower(filepath.Ext(resolved)) {
+		case ".bat", ".cmd":
+			return "", fmt.Errorf("app-server command %q must be an executable, not a batch file", resolved)
+		}
 	}
 	return resolved, nil
 }
@@ -611,6 +622,9 @@ func (p *ProcessTransport) readLoop() {
 				if request.abandoned {
 					if err := p.enqueueEvent(message); err != nil {
 						p.setError(err)
+						p.finishTransport(err)
+						go func() { _ = p.Close() }()
+						return
 					}
 					continue
 				}
@@ -698,10 +712,7 @@ func (p *ProcessTransport) enqueueEvent(message RPCMessage) error {
 		notifyRPCObservation(message.observation, rpcObservation{err: ErrTransportClosed})
 		return ErrTransportClosed
 	}
-	messageBytes := len(message.Raw)
-	if messageBytes <= 0 {
-		messageBytes = 1
-	}
+	messageBytes := rpcMessageQueueCost(message)
 	if messageBytes > maxEventQueueBytes || p.eventQueueBytes > maxEventQueueBytes-messageBytes {
 		p.eventMu.Unlock()
 		return ErrEventQueueOverflow
@@ -742,10 +753,7 @@ func (p *ProcessTransport) dispatchEvents() {
 		message := p.eventQueue[0]
 		p.eventQueue[0] = RPCMessage{}
 		p.eventQueue = p.eventQueue[1:]
-		messageBytes := len(message.Raw)
-		if messageBytes <= 0 {
-			messageBytes = 1
-		}
+		messageBytes := rpcMessageQueueCost(message)
 		p.eventQueueBytes -= messageBytes
 		p.eventMu.Unlock()
 		select {
@@ -771,6 +779,17 @@ func transportDone(done <-chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+func rpcMessageQueueCost(message RPCMessage) int {
+	cost := eventQueueMessageOverhead + len(message.Raw) + len(message.ID) + len(message.Method) + len(message.Params) + len(message.Result) + len(message.operation) + len(message.runID) + len(message.commandID)
+	if message.Error != nil {
+		cost += eventQueueMessageOverhead + len(message.Error.Message) + len(message.Error.Data)
+	}
+	if cost < eventQueueMessageOverhead {
+		return eventQueueMessageOverhead
+	}
+	return cost
 }
 
 func (p *ProcessTransport) stopEventDispatch() {

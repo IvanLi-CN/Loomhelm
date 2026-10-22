@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 func prepareJournalDirectories(path string) ([]string, error) {
@@ -27,9 +28,31 @@ func openJournalFile(path string) (*os.File, error) {
 		return nil, err
 	}
 	defer root.Close()
-	file, err := root.OpenFile(filepath.Base(path), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	if info, statErr := root.Lstat(filepath.Base(path)); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("journal path %q must not be a symlink", path)
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("stat journal file: %w", statErr)
+	}
+	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
+	}
+	handle, err := syscall.CreateFile(
+		name,
+		syscall.GENERIC_READ|syscall.GENERIC_WRITE|writeDACAccess,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
+		nil,
+		syscall.OPEN_ALWAYS,
+		syscall.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if file == nil {
+		_ = syscall.CloseHandle(handle)
+		return nil, errors.New("create journal file wrapper")
 	}
 	info, err := file.Stat()
 	if err != nil {

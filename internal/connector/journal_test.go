@@ -32,6 +32,11 @@ func TestJournalDeduplicatesCommandsAndRejectsConflictingPayloads(t *testing.T) 
 	if !deduplicated || !second.Deduplicated || second.CommandID != command.CommandID {
 		t.Fatalf("duplicate command = %+v, deduplicated = %v", second, deduplicated)
 	}
+	retry := command
+	retry.IssuedAt = "2026-10-21T00:01:00Z"
+	if third, deduplicated, err := journal.BeginCommand(retry); err != nil || !deduplicated || !third.Deduplicated {
+		t.Fatalf("retry with a new issued_at = %+v, deduplicated = %v, error = %v", third, deduplicated, err)
+	}
 
 	conflict := command
 	conflict.Payload = []byte(`{"prompt":"different"}`)
@@ -438,6 +443,58 @@ func TestJournalWritesCurrentFormatAndCommandIdentity(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte("\"format_version\":2")) || !bytes.Contains(data, []byte("\"command_id\":\"current-format-id\"")) {
 		t.Fatalf("current journal record did not include v2 identity: %s", data)
+	}
+}
+
+func TestJournalRejectsResourceLimitBreaches(t *testing.T) {
+	t.Run("record", func(t *testing.T) {
+		path := filepath.Join(privateTestDir(t), "oversized-record.jsonl")
+		data := append(bytes.Repeat([]byte{'x'}, maxJournalRecordBytes), '\n')
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenJournal(path); !errors.Is(err, ErrJournalTooLarge) {
+			t.Fatalf("oversized record error = %v, want %v", err, ErrJournalTooLarge)
+		}
+	})
+
+	t.Run("file", func(t *testing.T) {
+		path := filepath.Join(privateTestDir(t), "oversized-file.jsonl")
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Truncate(maxJournalBytes + 1); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenJournal(path); !errors.Is(err, ErrJournalTooLarge) {
+			t.Fatalf("oversized file error = %v, want %v", err, ErrJournalTooLarge)
+		}
+	})
+
+	t.Run("event-count", func(t *testing.T) {
+		journal := openTestJournal(t)
+		journal.mu.Lock()
+		journal.events = make([]protocol.Event, maxJournalEvents)
+		journal.mu.Unlock()
+		_, err := journal.AppendEvent(protocol.Event{SessionID: "session-limit", Type: protocol.EventTypeUnknown, Payload: []byte(`{"ok":true}`)})
+		if !errors.Is(err, ErrJournalTooLarge) {
+			t.Fatalf("event-count error = %v, want %v", err, ErrJournalTooLarge)
+		}
+	})
+}
+
+func TestJournalRejectsUnsupportedFormatVersion(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "unsupported-format.jsonl")
+	if err := os.WriteFile(path, []byte(`{"format_version":3,"type":"session"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenJournal(path); !errors.Is(err, ErrJournalCorrupt) {
+		t.Fatalf("unsupported format error = %v, want %v", err, ErrJournalCorrupt)
 	}
 }
 

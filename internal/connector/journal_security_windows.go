@@ -182,12 +182,7 @@ func secureJournalFile(file *os.File) error {
 	if file == nil {
 		return fmt.Errorf("journal file handle must not be nil")
 	}
-	handle, err := openJournalSecurityHandle(file.Name(), false)
-	if err != nil {
-		return fmt.Errorf("open journal file ACL handle %q: %w", file.Name(), err)
-	}
-	defer syscall.CloseHandle(handle)
-	if err := secureJournalHandle(handle); err != nil {
+	if err := secureJournalHandle(syscall.Handle(file.Fd())); err != nil {
 		return fmt.Errorf("secure opened journal file %q: %w", file.Name(), err)
 	}
 	return nil

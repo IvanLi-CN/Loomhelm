@@ -4,11 +4,11 @@ The Connector journal is a host-local, append-only JSONL file owned by one Conne
 
 The journal is created with a mode 0700 parent directory and mode 0600 file permissions, and each record carries an explicit format version so a reader can reject an incompatible state instead of guessing.
 
-The journal refuses records larger than 4 MiB, stops accepting events after 1,000,000 retained events, and refuses files larger than 256 MiB. Startup scans records incrementally and fails closed when a limit is exceeded; it does not delete or compact historical state automatically.
+The journal refuses records larger than 8 MiB, stops accepting events after 1,000,000 retained events, and refuses files larger than 256 MiB. The larger record envelope leaves room for a lossless 4 MiB RPC frame plus journal metadata. Startup scans records incrementally and fails closed when a limit is exceeded; it does not delete or compact historical state automatically.
 
 ## Records
 
-`command` records contain the complete versioned `protocol.Command`, a canonical payload digest, and the first durable ACK state; `command_update` records contain the latest ACK state, result, operation identity, run identity and API error.
+`command` records contain the complete versioned `protocol.Command`, a canonical payload digest, and the first durable ACK state; `command_update` records contain the latest ACK state, result, operation identity, run identity and API error. The command digest excludes `issued_at`, which is audit metadata rather than retry identity, so a caller can reconstruct the same command request during a retry.
 
 `event` records contain the generated `protocol.Event` and preserve the complete app-server JSON-RPC object in `event.payload`, including fields unknown to the current adapter.
 

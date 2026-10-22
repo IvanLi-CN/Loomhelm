@@ -568,7 +568,7 @@ func TestAdapterReconcilesUnknownRPCOperationFromPersistedEvent(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-operation-reconcile"}}`)}}}
 	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{ID: json.RawMessage(`41`)}, err: ErrUnknownOutcome}}
-	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[{"id":"turn-operation-reconcile","status":"completed"}]}`)}}}
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[]}`)}}}
 	j := openTestJournal(t)
 	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, j)
 	if err != nil {
@@ -643,7 +643,21 @@ func TestAdapterReturnsDurableTerminalReconciliation(t *testing.T) {
 	if err := journal.RecordReconciliation(expected); err != nil {
 		t.Fatal(err)
 	}
-	got, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	journalPath := journal.Path()
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopenedAdapter, err := NewCodexAdapter(fakeProvider{transport: newFakeTransport()}, reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedAdapter.CloseSession(context.Background(), session)
+	got, err := reopenedAdapter.ReconcileCommand(context.Background(), session, command.CommandID)
 	if err != nil || got.State != protocol.ReconciliationStateConfirmed || valueOrEmpty(got.Note) != "turn outcome was observed" {
 		t.Fatalf("durable reconciliation = %+v, error = %v", got, err)
 	}
