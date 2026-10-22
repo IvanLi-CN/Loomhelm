@@ -184,7 +184,7 @@ function Field<T extends string>({
     <label className="inspector-field">
       <span>{label}</span>
       <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
-        <SelectTrigger className="inspector-field-trigger">
+        <SelectTrigger size="dense" className="inspector-field-trigger">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

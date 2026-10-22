@@ -46,7 +46,18 @@ export const Default: Story = {
     <DemoProvider runtime={runtime}>
       <StoryFrame><DemoInspector /></StoryFrame>
     </DemoProvider>
-  )
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const triggers = canvas.getAllByRole("combobox");
+    expect(triggers).toHaveLength(5);
+    for (const trigger of triggers) {
+      expect(trigger).toHaveAttribute("data-size", "dense");
+      expect(window.getComputedStyle(trigger).height).toBe("32px");
+    }
+    triggers[0].focus();
+    expect(triggers[0]).toHaveFocus();
+  }
 };
 
 export const Offline: Story = {

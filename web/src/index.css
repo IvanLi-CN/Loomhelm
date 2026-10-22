@@ -50,6 +50,7 @@
   --shadow: 0 12px 36px rgba(52, 78, 115, 0.12);
   --radius-sm: 7px;
   --radius-md: 11px;
+  --control-height-dense: 32px;
   --control-height-compact: 38px;
   --control-height-form: 42px;
   --control-height-touch: 44px;
@@ -242,6 +243,19 @@ textarea:focus-visible {
   padding-block: 0;
   font-size: 14px;
   line-height: 21px;
+}
+
+[data-slot="select-trigger"][data-size="dense"] {
+  height: var(--control-height-dense);
+  min-height: var(--control-height-dense);
+  border-radius: var(--radius-sm);
+  border: var(--control-border-width) solid var(--line);
+  background: var(--surface-glass);
+  box-shadow: none;
+  padding-block: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
 }
 
 [data-slot="select-trigger"][data-size="default"] {
@@ -2344,7 +2358,6 @@ pre {
 
 .inspector-field-trigger {
   min-width: 0;
-  font-size: 11px;
 }
 
 .inspector-share {
@@ -2615,6 +2628,7 @@ pre {
   }
 
   [data-slot="input"],
+  [data-slot="select-trigger"][data-size="dense"],
   [data-slot="select-trigger"][data-size="default"],
   [data-slot="select-trigger"][data-size="sm"] {
     height: var(--control-height-touch);

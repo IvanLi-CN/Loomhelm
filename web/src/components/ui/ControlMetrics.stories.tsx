@@ -52,6 +52,20 @@ function ThemeFrame({ theme }: { theme: "light" | "dark" }) {
             </SelectContent>
           </Select>
         </div>
+        <div className="control-metrics-row" aria-label="辅助面板控件">
+          <span className="control-metrics-context">辅助面板 dense</span>
+          <Select defaultValue="normal">
+            <SelectTrigger size="dense" aria-label="辅助面板场景">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="normal">正常工作区</SelectItem>
+                <SelectItem value="readonly">只读</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
         <div className="control-metrics-row" aria-label="工具栏搜索">
           <span className="control-metrics-context">工具栏搜索</span>
           <div className="search-field control-metrics-search">
