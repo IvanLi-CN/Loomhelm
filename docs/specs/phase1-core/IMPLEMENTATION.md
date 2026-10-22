@@ -80,13 +80,19 @@ The U01 current-head evidence uses the login-free `ui_demo` at `162516e6b2b306f5
 
 ![U01 project tree selection on a narrow viewport](assets/u01-nav-tree-mobile-393x852.png)
 
-### Shared control metrics and U02 project tasks
+### Shared control metrics, U02 project tasks and Batch 6
 
 The accepted U02 mock UI evidence preserves `sourceSha=c270356`; the full `renderSourceSha` is `c2703568297cf41e58b7046d8fc8477348bd5c0c`. The shared-control light and dark captures use source-managed margins, while the project-task captures cover the desktop `1440x900` and mobile `393x852` CSS viewports.
 
 The shared UI implementation uses the `32px` dense metric for Demo Inspector selects, `38px` compact toolbar controls, `42px` form controls and `44px` touch controls, with filled surfaces using `background-clip: padding-box` so a transparent `1px` border does not make the painted control appear larger. Dense selects use an explicit shared `SelectTrigger` size instead of a local font override; mobile rules promote that semantic size to the same `44px` touch target without shrinking forms globally. These facts cover buttons, inputs, selects, search wrappers and related toolbar surfaces rather than a button-only exception.
 
 This evidence records visual acceptance of the mock UI only; it does not prove real API behavior, permissions, persistence or P01 integration. The current VM pass corresponds only to `942095f`; the new candidate's heavy gates remain to be refreshed during final delivery. U02's real P01 integration responsibility remains open.
+
+The Batch 6 candidate evidence uses `ui_demo` at commit `235ae4ec74b334f63837b491fca0c1f418d09579` against base `cfcfad41f0887c28304b362e54943bb6fd96e1a2`, with desktop coverage at `1440x900` and mobile coverage at `393x852`. The owner confirmed the four candidate captures after exact-path comparison returned `current-only` with no baseline or heatmap; trim normalization was unchanged with `ambiguous_border` and zero padding. The confirmed canonical assets cover the 32px desktop Demo Inspector dense Select contract, its 44px mobile touch target, and the surrounding workbench/project-task layouts; this remains UI evidence only and does not establish backend or product acceptance.
+
+![Batch 6 workbench on the desktop viewport](assets/workbench-desktop-dark.png)
+
+![Batch 6 workbench on a narrow viewport](assets/workbench-mobile-dark.png)
 
 ![Shared control metrics in the light theme](assets/shared-control-metrics-light.png)
 
