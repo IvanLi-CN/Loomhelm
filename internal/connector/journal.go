@@ -93,23 +93,28 @@ type Journal struct {
 // PendingApproval is the durable identity needed to answer one app-server
 // approval request after a Connector restart or transport reconnect.
 type PendingApproval struct {
-	RequestID json.RawMessage
-	SessionID string
-	RunID     string
-	ThreadID  string
-	TurnID    string
-	ItemID    string
-	Revision  int64
-	Command   string
+	RequestID  json.RawMessage
+	SessionID  string
+	Generation string
+	RunID      string
+	ThreadID   string
+	TurnID     string
+	ItemID     string
+	Revision   int64
+	Command    string
 }
 
 type approvalClaimRecord struct {
-	SessionID string          `json:"session_id"`
-	RequestID json.RawMessage `json:"request_id"`
-	Revision  int64           `json:"revision"`
-	CommandID string          `json:"command_id"`
-	Decision  string          `json:"decision"`
-	Released  bool            `json:"released,omitempty"`
+	SessionID  string          `json:"session_id"`
+	RequestID  json.RawMessage `json:"request_id"`
+	Generation string          `json:"generation,omitempty"`
+	RunID      string          `json:"run_id,omitempty"`
+	TurnID     string          `json:"turn_id,omitempty"`
+	ItemID     string          `json:"item_id,omitempty"`
+	Revision   int64           `json:"revision"`
+	CommandID  string          `json:"command_id"`
+	Decision   string          `json:"decision"`
+	Released   bool            `json:"released,omitempty"`
 }
 
 // OpenJournal opens or creates a mode-0600 append-only journal. A final
@@ -736,11 +741,15 @@ func (j *Journal) Session(sessionID string) (protocol.AdapterSession, bool) {
 }
 
 func (j *Journal) PendingApprovals(sessionID, runID string) []PendingApproval {
+	return j.PendingApprovalsForGeneration(sessionID, "", runID)
+}
+
+func (j *Journal) PendingApprovalsForGeneration(sessionID, generation, runID string) []PendingApproval {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	values := make([]PendingApproval, 0)
 	for _, approval := range j.pendingApprovals {
-		if approval.SessionID != sessionID || (runID != "" && approval.RunID != runID) {
+		if approval.SessionID != sessionID || (generation != "" && approval.Generation != generation) || (runID != "" && approval.RunID != runID) {
 			continue
 		}
 		values = append(values, cloneApproval(approval))
@@ -769,17 +778,21 @@ func (j *Journal) ClaimApproval(sessionID string, requestID json.RawMessage, rev
 		return PendingApproval{}, false, fmt.Errorf("approval revision %d is stale; current revision is %d", revision, pending.Revision)
 	}
 	if existing, ok := j.approvalClaims[key]; ok {
-		if existing.CommandID != commandID || existing.Decision != decision || existing.Revision != revision {
+		if existing.CommandID != commandID || existing.Decision != decision || existing.Revision != revision || !approvalClaimMatches(existing, pending) {
 			return PendingApproval{}, false, ErrApprovalClaimed
 		}
 		return cloneApproval(pending), true, nil
 	}
 	claim := approvalClaimRecord{
-		SessionID: sessionID,
-		RequestID: append(json.RawMessage(nil), requestID...),
-		Revision:  revision,
-		CommandID: commandID,
-		Decision:  decision,
+		SessionID:  sessionID,
+		RequestID:  append(json.RawMessage(nil), requestID...),
+		Generation: pending.Generation,
+		RunID:      pending.RunID,
+		TurnID:     pending.TurnID,
+		ItemID:     pending.ItemID,
+		Revision:   revision,
+		CommandID:  commandID,
+		Decision:   decision,
 	}
 	if err := j.appendLocked(journalRecord{
 		FormatVersion: journalFormatVersion,
@@ -829,12 +842,16 @@ func (j *Journal) IsApprovalPending(sessionID string, requestID json.RawMessage)
 // JSON-RPC request id that must be answered. Numeric and string JSON ids are
 // compared by their textual value so the public boundary remains lossless.
 func (j *Journal) FindPendingApproval(sessionID, runID string, requestID json.RawMessage) (PendingApproval, error) {
+	return j.FindPendingApprovalForGeneration(sessionID, "", runID, requestID)
+}
+
+func (j *Journal) FindPendingApprovalForGeneration(sessionID, generation, runID string, requestID json.RawMessage) (PendingApproval, error) {
 	wanted := approvalIDText(requestID)
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	var found *PendingApproval
 	for _, approval := range j.pendingApprovals {
-		if approval.SessionID != sessionID || (runID != "" && approval.RunID != runID) || approvalIDText(approval.RequestID) != wanted {
+		if approval.SessionID != sessionID || (generation != "" && approval.Generation != generation) || (runID != "" && approval.RunID != runID) || approvalIDText(approval.RequestID) != wanted {
 			continue
 		}
 		if found != nil {
@@ -1036,6 +1053,20 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		claim := *record.ApprovalClaim
 		claim.RequestID = append(json.RawMessage(nil), claim.RequestID...)
 		key := approvalKey(claim.SessionID, claim.RequestID)
+		if pending, pendingExists := j.pendingApprovals[key]; pendingExists {
+			if claim.Generation == "" {
+				claim.Generation = pending.Generation
+			}
+			if claim.RunID == "" {
+				claim.RunID = pending.RunID
+			}
+			if claim.TurnID == "" {
+				claim.TurnID = pending.TurnID
+			}
+			if claim.ItemID == "" {
+				claim.ItemID = pending.ItemID
+			}
+		}
 		if claim.Released {
 			delete(j.approvalClaims, key)
 		} else {
@@ -1161,6 +1192,10 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		return
 	}
 	if event.Type == protocol.EventTypeApprovalRequested {
+		generation := ""
+		if session, ok := j.sessions[event.SessionID]; ok {
+			generation = session.Generation
+		}
 		itemID := message.Params.Item.ID
 		if itemID == "" {
 			itemID = message.Params.ItemID
@@ -1173,22 +1208,35 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		if command == "" {
 			command = message.Params.Item.Command
 		}
-		j.pendingApprovals[key] = PendingApproval{
-			RequestID: append(json.RawMessage(nil), requestID...),
-			SessionID: event.SessionID,
-			RunID:     valueOrEmpty(event.RunID),
-			ThreadID:  message.Params.ThreadID,
-			TurnID:    message.Params.TurnID,
-			ItemID:    itemID,
-			Revision:  revision,
-			Command:   command,
+		pending := PendingApproval{
+			RequestID:  append(json.RawMessage(nil), requestID...),
+			SessionID:  event.SessionID,
+			Generation: generation,
+			RunID:      valueOrEmpty(event.RunID),
+			ThreadID:   message.Params.ThreadID,
+			TurnID:     message.Params.TurnID,
+			ItemID:     itemID,
+			Revision:   revision,
+			Command:    command,
 		}
+		if _, exists := j.pendingApprovals[key]; exists {
+			if claim, claimed := j.approvalClaims[key]; claimed && !approvalClaimMatches(claim, pending) {
+				delete(j.approvalClaims, key)
+			}
+		}
+		j.pendingApprovals[key] = pending
 		return
 	}
 	if event.Type == protocol.EventTypeApprovalResolved {
 		rawResolution := strings.TrimSpace(message.Params.Resolution)
 		resolution := normalizeApprovalDecision(rawResolution)
 		if claim, claimed := j.approvalClaims[key]; claimed {
+			pending, pendingExists := j.pendingApprovals[key]
+			if !pendingExists || !approvalClaimMatches(claim, pending) {
+				delete(j.pendingApprovals, key)
+				delete(j.approvalClaims, key)
+				return
+			}
 			if rawResolution == "" {
 				// A request can be cleared without proving which decision was
 				// applied. Record delivery separately and keep the claim until
@@ -1209,6 +1257,11 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		for requestKey, approval := range j.pendingApprovals {
 			if approval.SessionID == event.SessionID && approval.ItemID != "" && approval.ItemID == message.Params.Item.ID {
 				if claim, claimed := j.approvalClaims[requestKey]; claimed {
+					if !approvalClaimMatches(claim, approval) {
+						delete(j.pendingApprovals, requestKey)
+						delete(j.approvalClaims, requestKey)
+						continue
+					}
 					resolution := normalizeApprovalDecision(claim.Decision)
 					if strings.EqualFold(message.Params.Item.Status, "declined") {
 						resolution = "decline"
@@ -1223,6 +1276,25 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 			}
 		}
 	}
+}
+
+func approvalClaimMatches(claim approvalClaimRecord, pending PendingApproval) bool {
+	if claim.SessionID != pending.SessionID || string(bytes.TrimSpace(claim.RequestID)) != string(bytes.TrimSpace(pending.RequestID)) {
+		return false
+	}
+	if pending.Generation != "" && claim.Generation != pending.Generation {
+		return false
+	}
+	if claim.RunID != "" && pending.RunID != "" && claim.RunID != pending.RunID {
+		return false
+	}
+	if claim.TurnID != "" && pending.TurnID != "" && claim.TurnID != pending.TurnID {
+		return false
+	}
+	if claim.ItemID != "" && pending.ItemID != "" && claim.ItemID != pending.ItemID {
+		return false
+	}
+	return true
 }
 
 func approvalKey(sessionID string, requestID json.RawMessage) string {

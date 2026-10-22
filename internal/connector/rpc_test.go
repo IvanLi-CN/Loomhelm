@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -166,6 +167,28 @@ func TestProcessTransportDoesNotCloseEventsWhileReaderIsSending(t *testing.T) {
 	<-transport.readDone
 	if _, ok := <-transport.events; ok {
 		t.Fatal("events channel remained open after reader exit")
+	}
+}
+
+func TestProcessTransportRejectsEventsAfterDispatcherStops(t *testing.T) {
+	transport := &ProcessTransport{
+		eventCond: sync.NewCond(&sync.Mutex{}),
+		done:      make(chan struct{}),
+	}
+	transport.eventMu.Lock()
+	transport.eventDispatchStopped = true
+	transport.eventMu.Unlock()
+	observation := make(chan rpcObservation, 1)
+	if err := transport.enqueueEvent(RPCMessage{observation: observation}); !errors.Is(err, ErrTransportClosed) {
+		t.Fatalf("enqueue after dispatcher stop error = %v, want %v", err, ErrTransportClosed)
+	}
+	select {
+	case result := <-observation:
+		if !errors.Is(result.err, ErrTransportClosed) {
+			t.Fatalf("stopped dispatcher observation error = %v, want %v", result.err, ErrTransportClosed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stopped dispatcher did not notify response observation")
 	}
 }
 

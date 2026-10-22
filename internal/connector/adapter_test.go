@@ -643,6 +643,137 @@ func TestAdapterDoesNotFallbackQualifiedOperationToLegacyEvent(t *testing.T) {
 	}
 }
 
+func TestAdapterDoesNotFallbackLegacyOperationToQualifiedEvent(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-operation-qualified-fallback"}}`)}}}
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{ID: json.RawMessage(`41`)}, err: ErrUnknownOutcome}}
+	transport.responses["thread/turns/list"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"data":[]}`)}}}
+	j := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-operation-qualified-fallback", Generation: "generation-operation-qualified-fallback", Path: protocol.SessionPathNew}, testSessionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := testCommand("unknown-operation-qualified-fallback", `{"prompt":"do not bind a new generation"}`)
+	command.SessionID = session.SessionID
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
+		t.Fatalf("unknown ACK = %+v, error = %v", ack, err)
+	}
+	legacyOperationID := "41"
+	ack.OperationID = &legacyOperationID
+	if err := j.UpdateCommand(command.CommandID, ack); err != nil {
+		t.Fatal(err)
+	}
+	runID := "turn-operation-qualified-fallback-new"
+	raw := json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-operation-qualified-fallback-new","status":"completed"}}}`)
+	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceAppServer, Payload: raw, RunID: &runID}); err != nil {
+		t.Fatal(err)
+	}
+	correlation := mustRawJSON(map[string]string{
+		"generation":   "generation-operation-qualified-fallback-new",
+		"method":       "turn/start",
+		"operation_id": rpcOperationIdentity("generation-operation-qualified-fallback-new", json.RawMessage(`41`)),
+		"command_id":   "a-different-command",
+	})
+	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceHostObservation, Payload: correlation, RunID: &runID}); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	if err != nil || reconciliation.State != protocol.ReconciliationStateUnknown {
+		t.Fatalf("qualified fallback reconciliation = %+v, error = %v", reconciliation, err)
+	}
+	_, stored, err := j.Command(command.CommandID)
+	if err != nil || stored.State != protocol.CommandStateUnknown || stored.RunID != nil || stored.EventCursor != nil {
+		t.Fatalf("qualified event was bound to legacy operation: %+v, error = %v", stored, err)
+	}
+}
+
+func TestAdapterBindsPersistedOperationWhenAckLostItsIdentity(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-operation-ack-loss"}}`)}}}
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-operation-ack-loss","status":"inProgress"}}}`),
+		ID:     json.RawMessage(`41`),
+		Result: json.RawMessage(`{"turn":{"id":"turn-operation-ack-loss","status":"inProgress"}}`),
+	}}}
+	j := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-operation-ack-loss", Generation: "generation-operation-ack-loss", Path: protocol.SessionPathNew}, testSessionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := testCommand("unknown-operation-ack-loss", `{"prompt":"recover persisted correlation"}`)
+	command.SessionID = session.SessionID
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack.State = protocol.CommandStateUnknown
+	ack.OperationID = nil
+	ack.EventCursor = nil
+	if err := j.UpdateCommand(command.CommandID, ack); err != nil {
+		t.Fatal(err)
+	}
+	_, stored, err := j.Command(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, bound, err := adapter.bindPersistedOperation(command.CommandID, session.SessionID, stored)
+	if err != nil || !bound {
+		t.Fatalf("persisted correlation binding = %+v, bound = %v, error = %v", updated, bound, err)
+	}
+	wantOperationID := rpcOperationIdentity("generation-operation-ack-loss", json.RawMessage(`41`))
+	if updated.OperationID == nil || *updated.OperationID != wantOperationID || updated.EventCursor == nil {
+		t.Fatalf("recovered operation identity = %+v, want %q and event cursor", updated, wantOperationID)
+	}
+}
+
+func TestAdapterReconcilesPersistedRPCErrorBeforeTurnHistory(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-operation-error"}}`)}}}
+	transport.responses["turn/start"] = []fakeResult{{message: RPCMessage{ID: json.RawMessage(`41`)}, err: ErrUnknownOutcome}}
+	j := openTestJournal(t)
+	adapter, err := NewCodexAdapter(fakeProvider{transport: transport}, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.StartSession(context.Background(), protocol.GatewaySession{Handle: "gateway-operation-error", Generation: "generation-operation-error", Path: protocol.SessionPathNew}, testSessionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := testCommand("unknown-operation-error", `{"prompt":"same prompt may be retried"}`)
+	command.SessionID = session.SessionID
+	ack, err := adapter.SendCommand(context.Background(), session, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown || ack.OperationID == nil {
+		t.Fatalf("unknown ACK = %+v, error = %v", ack, err)
+	}
+	errorEvent := mustRawJSON(map[string]any{
+		"generation":   "generation-operation-error",
+		"method":       "turn/start",
+		"operation_id": *ack.OperationID,
+		"command_id":   command.CommandID,
+		"error":        map[string]any{"code": -32000, "message": "turn rejected"},
+	})
+	if _, err := j.AppendEvent(protocol.Event{SessionID: session.SessionID, Type: protocol.EventTypeUnknown, Source: protocol.EventSourceHostObservation, Payload: errorEvent}); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := adapter.ReconcileCommand(context.Background(), session, command.CommandID)
+	if err != nil || reconciliation.State != protocol.ReconciliationStateNotFound {
+		t.Fatalf("persisted RPC error reconciliation = %+v, error = %v", reconciliation, err)
+	}
+	_, stored, err := j.Command(command.CommandID)
+	if err != nil || stored.State != protocol.CommandStateFailed || stored.RunID != nil {
+		t.Fatalf("persisted RPC error command = %+v, error = %v", stored, err)
+	}
+}
+
 func TestAdapterApprovalDecisionAndControlMethods(t *testing.T) {
 	transport := newFakeTransport()
 	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-3"}}`)}}}

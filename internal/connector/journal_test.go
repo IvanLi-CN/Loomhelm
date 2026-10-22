@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -654,6 +655,105 @@ func TestJournalPersistsApprovalClaimAcrossRestart(t *testing.T) {
 	}
 	if _, already, err := second.ClaimApproval("session-claim", []byte("9"), 1, "command-claim", "approve"); err != nil || !already {
 		t.Fatalf("same approval claim = already %v, error %v", already, err)
+	}
+}
+
+func TestJournalDoesNotApplyApprovalClaimAcrossGenerations(t *testing.T) {
+	journal := openTestJournal(t)
+	if err := journal.RecordSession("session-approval-generation", "thread-approval-generation", "generation-old"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-generation",
+		RunID:     stringPointer("turn-old"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":9,"method":"item/commandExecution/requestApproval","params":{"turnId":"turn-old","revision":1,"itemId":"item-old"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, already, err := journal.ClaimApproval("session-approval-generation", []byte("9"), 1, "command-old", "approve"); err != nil || already {
+		t.Fatalf("old approval claim = already %v, error %v", already, err)
+	}
+	if err := journal.RecordSession("session-approval-generation", "thread-approval-generation", "generation-new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-generation",
+		RunID:     stringPointer("turn-new"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":9,"method":"item/commandExecution/requestApproval","params":{"turnId":"turn-new","revision":1,"itemId":"item-new"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-generation",
+		RunID:     stringPointer("turn-new"),
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":9,"turnId":"turn-new","resolution":"accept"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, ok := journal.ApprovalResult("command-old"); ok {
+		t.Fatalf("old generation claim received new resolution %q", result)
+	}
+	if pending := journal.PendingApprovals("session-approval-generation", ""); len(pending) != 0 {
+		t.Fatalf("resolved new-generation approval remains pending: %+v", pending)
+	}
+}
+
+func TestJournalSerializesCompetingApprovalClaims(t *testing.T) {
+	journal := openTestJournal(t)
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-approval-race",
+		RunID:     stringPointer("turn-approval-race"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":11,"method":"item/commandExecution/requestApproval","params":{"turnId":"turn-approval-race","revision":1,"itemId":"item-approval-race"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	type claimResult struct {
+		already bool
+		err     error
+	}
+	results := make(chan claimResult, 2)
+	var group sync.WaitGroup
+	for _, claim := range []struct {
+		commandID string
+		decision  string
+	}{
+		{commandID: "approval-race-approve", decision: "approve"},
+		{commandID: "approval-race-deny", decision: "deny"},
+	} {
+		claim := claim
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			_, already, err := journal.ClaimApproval("session-approval-race", []byte("11"), 1, claim.commandID, claim.decision)
+			results <- claimResult{already: already, err: err}
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	winners := 0
+	losers := 0
+	for result := range results {
+		if result.err == nil && !result.already {
+			winners++
+		} else if errors.Is(result.err, ErrApprovalClaimed) {
+			losers++
+		} else {
+			t.Fatalf("competing approval claim result = %+v", result)
+		}
+	}
+	if winners != 1 || losers != 1 {
+		t.Fatalf("competing approval claims = winners %d, losers %d, want one each", winners, losers)
 	}
 }
 

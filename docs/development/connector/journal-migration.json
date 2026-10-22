@@ -64,7 +64,8 @@
         "a torn final write is truncated safely",
         "accepted and executing commands become unknown after restart",
         "unknown outcomes require explicit reconciliation and are never replayed",
-        "generation-qualified persisted RPC observations disambiguate reused JSON-RPC IDs without rewriting raw response events"
+        "generation-qualified persisted RPC observations disambiguate reused JSON-RPC IDs without rewriting raw response events",
+        "approval claims from another session generation cannot apply a decision to the current pending request"
       ],
       "note": "The candidate reads the immediately preceding v1 journal state; v1 binaries are not supported readers for v2 records."
     },

@@ -46,7 +46,25 @@ type RPCMessage struct {
 	Error       *RPCError
 	operation   string
 	runID       string
+	commandID   string
 	observation chan rpcObservation
+}
+
+type rpcCommandIDContextKey struct{}
+
+func withRPCCommandID(ctx context.Context, commandID string) context.Context {
+	if commandID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, rpcCommandIDContextKey{}, commandID)
+}
+
+func rpcCommandIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	commandID, _ := ctx.Value(rpcCommandIDContextKey{}).(string)
+	return commandID
 }
 
 type rpcObservation struct {
@@ -201,6 +219,7 @@ type pendingRPC struct {
 	writing       bool
 	method        string
 	runID         string
+	commandID     string
 	observe       bool
 	observation   chan rpcObservation
 	earlyResponse *RPCMessage
@@ -227,22 +246,23 @@ type ProcessTransport struct {
 	pending   map[string]pendingRPC
 	abandoned map[string]pendingRPC
 
-	events            chan RPCMessage
-	eventMu           sync.Mutex
-	eventCond         *sync.Cond
-	eventQueue        []RPCMessage
-	eventQueueBytes   int
-	eventDispatchDone chan struct{}
-	eventStop         chan struct{}
-	eventStopOnce     sync.Once
-	afterRequestWrite func(string)
-	done              chan struct{}
-	closed            sync.Once
-	eventsClosed      sync.Once
-	closeRequested    atomic.Bool
-	finish            sync.Once
-	errMu             sync.Mutex
-	err               error
+	events               chan RPCMessage
+	eventMu              sync.Mutex
+	eventCond            *sync.Cond
+	eventQueue           []RPCMessage
+	eventQueueBytes      int
+	eventDispatchStopped bool
+	eventDispatchDone    chan struct{}
+	eventStop            chan struct{}
+	eventStopOnce        sync.Once
+	afterRequestWrite    func(string)
+	done                 chan struct{}
+	closed               sync.Once
+	eventsClosed         sync.Once
+	closeRequested       atomic.Bool
+	finish               sync.Once
+	errMu                sync.Mutex
+	err                  error
 
 	waitDone chan struct{}
 	readDone chan struct{}
@@ -282,6 +302,7 @@ func (p *ProcessTransport) Call(ctx context.Context, method string, params json.
 		writing:     true,
 		method:      method,
 		runID:       runID,
+		commandID:   rpcCommandIDFromContext(ctx),
 		observation: observation,
 	}
 	p.pendingMu.Unlock()
@@ -577,6 +598,7 @@ func (p *ProcessTransport) readLoop() {
 					message.operation = request.method
 				}
 				message.runID = request.runID
+				message.commandID = request.commandID
 				message.observation = request.observation
 				if request.abandoned {
 					if err := p.enqueueEvent(message); err != nil {
@@ -602,6 +624,7 @@ func (p *ProcessTransport) deliverResponse(request pendingRPC, message RPCMessag
 		message.operation = request.method
 	}
 	message.runID = request.runID
+	message.commandID = request.commandID
 	message.observation = request.observation
 	if err := p.enqueueEvent(message); err != nil {
 		p.setError(err)
@@ -615,6 +638,10 @@ func (p *ProcessTransport) deliverResponse(request pendingRPC, message RPCMessag
 
 func (p *ProcessTransport) enqueueEvent(message RPCMessage) error {
 	if p.eventCond == nil {
+		if p.closeRequested.Load() || transportDone(p.done) {
+			notifyRPCObservation(message.observation, rpcObservation{err: ErrTransportClosed})
+			return ErrTransportClosed
+		}
 		select {
 		case p.events <- message:
 			return nil
@@ -623,6 +650,11 @@ func (p *ProcessTransport) enqueueEvent(message RPCMessage) error {
 		}
 	}
 	p.eventMu.Lock()
+	if p.eventDispatchStopped || p.closeRequested.Load() || transportDone(p.done) {
+		p.eventMu.Unlock()
+		notifyRPCObservation(message.observation, rpcObservation{err: ErrTransportClosed})
+		return ErrTransportClosed
+	}
 	messageBytes := len(message.Raw)
 	if messageBytes <= 0 {
 		messageBytes = 1
@@ -652,12 +684,14 @@ func (p *ProcessTransport) dispatchEvents() {
 			discarded := p.eventQueue
 			p.eventQueue = nil
 			p.eventQueueBytes = 0
+			p.eventDispatchStopped = true
 			p.eventMu.Unlock()
 			notifyRPCObservations(discarded, ErrTransportClosed)
 			p.eventsClosed.Do(func() { close(p.events) })
 			return
 		}
 		if len(p.eventQueue) == 0 && transportDone(p.done) {
+			p.eventDispatchStopped = true
 			p.eventMu.Unlock()
 			p.eventsClosed.Do(func() { close(p.events) })
 			return
@@ -678,6 +712,7 @@ func (p *ProcessTransport) dispatchEvents() {
 			discarded := append([]RPCMessage{message}, p.eventQueue...)
 			p.eventQueue = nil
 			p.eventQueueBytes = 0
+			p.eventDispatchStopped = true
 			p.eventMu.Unlock()
 			notifyRPCObservations(discarded, ErrTransportClosed)
 			p.eventsClosed.Do(func() { close(p.events) })

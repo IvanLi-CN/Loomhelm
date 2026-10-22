@@ -570,7 +570,7 @@ func (a *Adapter) Steer(ctx context.Context, session protocol.AdapterSession, co
 	if err != nil {
 		return a.rejectCommand(command, ack, err)
 	}
-	response, callErr := state.transport.Call(ctx, "turn/steer", mustRawJSON(map[string]any{
+	response, callErr := state.transport.Call(withRPCCommandID(ctx, command.CommandID), "turn/steer", mustRawJSON(map[string]any{
 		"threadId":       session.ExternalThreadRef,
 		"expectedTurnId": turnID,
 		"input":          input,
@@ -620,6 +620,19 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 		return protocol.Reconciliation{}, err
 	} else {
 		ack = updated
+	}
+	if ack.State == protocol.CommandStateFailed {
+		reconciliation := protocol.Reconciliation{
+			CommandID:   commandID,
+			ObservedAt:  now(),
+			State:       protocol.ReconciliationStateNotFound,
+			EventCursor: ack.EventCursor,
+			Note:        stringPointer("persisted app-server RPC error proves the command did not complete"),
+		}
+		if err := a.journal.RecordReconciliation(reconciliation); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
 	}
 	if command.Kind == protocol.CommandKindRunApprove || command.Kind == protocol.CommandKindRunDeny {
 		observedDecision, ok := a.journal.ApprovalResult(commandID)
@@ -722,7 +735,7 @@ func (a *Adapter) sendRun(ctx context.Context, state *adapterSessionState, comma
 		if inputErr != nil {
 			return a.rejectCommand(command, ack, inputErr)
 		}
-		response, callErr := state.transport.Call(ctx, "turn/steer", mustRawJSON(map[string]any{
+		response, callErr := state.transport.Call(withRPCCommandID(ctx, command.CommandID), "turn/steer", mustRawJSON(map[string]any{
 			"threadId":       state.session.ExternalThreadRef,
 			"expectedTurnId": turnID,
 			"input":          input,
@@ -745,7 +758,7 @@ func (a *Adapter) sendRun(ctx context.Context, state *adapterSessionState, comma
 		"approvalPolicy": a.config.ApprovalPolicy,
 		"sandboxPolicy":  a.sandboxPolicy(),
 	}
-	response, callErr := state.transport.Call(ctx, "turn/start", mustRawJSON(params))
+	response, callErr := state.transport.Call(withRPCCommandID(ctx, command.CommandID), "turn/start", mustRawJSON(params))
 	turnID := turnIDFromResult(response.Result)
 	return a.finishRPCCommand(ctx, state, command, ack, response, callErr, turnID, "turn/start")
 }
@@ -761,13 +774,13 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 		runID = firstString(payload, "run_id", "turn_id")
 	}
 	if len(requestID) == 0 {
-		pending := a.journal.PendingApprovals(state.session.SessionID, runID)
+		pending := a.journal.PendingApprovalsForGeneration(state.session.SessionID, state.gatewaySession.Generation, runID)
 		if len(pending) != 1 {
 			return a.rejectCommand(command, ack, errors.New("approval command does not identify exactly one pending approval"))
 		}
 		requestID = pending[0].RequestID
 	}
-	canonicalApproval, err := a.journal.FindPendingApproval(state.session.SessionID, runID, requestID)
+	canonicalApproval, err := a.journal.FindPendingApprovalForGeneration(state.session.SessionID, state.gatewaySession.Generation, runID, requestID)
 	if err != nil {
 		return a.rejectCommand(command, ack, err)
 	}
@@ -884,7 +897,7 @@ func (a *Adapter) interruptRun(ctx context.Context, state *adapterSessionState, 
 	if turnID == "" {
 		return a.rejectCommand(command, ack, errors.New("interrupt requires an active turn id"))
 	}
-	response, callErr := state.transport.Call(ctx, "turn/interrupt", mustRawJSON(map[string]string{
+	response, callErr := state.transport.Call(withRPCCommandID(ctx, command.CommandID), "turn/interrupt", mustRawJSON(map[string]string{
 		"threadId": state.session.ExternalThreadRef,
 		"turnId":   turnID,
 	}))
@@ -892,6 +905,9 @@ func (a *Adapter) interruptRun(ctx context.Context, state *adapterSessionState, 
 }
 
 func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionState, command protocol.Command, ack protocol.CommandAck, response RPCMessage, callErr error, runID, operation string) (protocol.CommandAck, error) {
+	if response.commandID == "" {
+		response.commandID = command.CommandID
+	}
 	if callErr != nil {
 		if isUnknownTransportError(callErr) && len(bytes.TrimSpace(response.ID)) > 0 {
 			operationID := rpcOperationIdentity(state.gatewaySession.Generation, response.ID)
@@ -959,11 +975,22 @@ func (a *Adapter) appendRPCResponseEvent(state *adapterSessionState, operation s
 
 func (a *Adapter) appendRPCResponseCorrelation(state *adapterSessionState, operation string, response RPCMessage, runID string, observed protocol.Event) (protocol.Event, error) {
 	operationID := rpcOperationIdentity(state.gatewaySession.Generation, response.ID)
-	payload := mustRawJSON(map[string]any{
+	value := map[string]any{
 		"generation":   state.gatewaySession.Generation,
 		"method":       operation,
 		"operation_id": operationID,
-	})
+	}
+	if response.Error != nil {
+		value["error"] = response.Error
+	}
+	payload := mustRawJSON(value)
+	if response.commandID != "" {
+		var object map[string]json.RawMessage
+		if json.Unmarshal(payload, &object) == nil {
+			object["command_id"] = mustRawJSON(response.commandID)
+			payload = mustRawJSON(object)
+		}
+	}
 	correlation, err := a.appendObservedEventFromSource(state, protocol.EventTypeUnknown, protocol.EventSourceHostObservation, "rpc/response", payload, runID)
 	if err != nil {
 		return observed, err
@@ -1452,14 +1479,15 @@ func matchCommandTurn(command protocol.Command, ack protocol.CommandAck, turns [
 
 func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protocol.CommandAck) (protocol.CommandAck, bool, error) {
 	operationID := valueOrEmpty(ack.OperationID)
-	if operationID == "" {
-		return ack, false, nil
-	}
 	rawOperationID := rpcOperationRawID(operationID)
 	var exactMatched *protocol.Event
 	exactMatches := 0
 	var rawMatched *protocol.Event
 	rawMatches := 0
+	qualifiedRawMatches := 0
+	var commandMatched *protocol.Event
+	commandMatches := 0
+	commandOperationID := ""
 	afterCursor := ""
 	for {
 		page, err := a.journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, AfterCursor: afterCursor, Limit: 1000})
@@ -1471,9 +1499,24 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 			if event.Type != protocol.EventTypeUnknown {
 				continue
 			}
-			if event.Source == protocol.EventSourceHostObservation && rpcEnvelopeOperationID(event.Payload) == operationID {
-				exactMatches++
-				exactMatched = event
+			if event.Source == protocol.EventSourceHostObservation {
+				persistedOperationID := rpcEnvelopeOperationID(event.Payload)
+				persistedCommandID := rpcEnvelopeCommandID(event.Payload)
+				if persistedOperationID != "" && rpcOperationRawID(persistedOperationID) == rawOperationID {
+					qualifiedRawMatches++
+				}
+				if persistedCommandID != "" && persistedCommandID != commandID {
+					continue
+				}
+				if persistedCommandID == commandID && persistedOperationID != "" {
+					commandMatches++
+					commandMatched = event
+					commandOperationID = persistedOperationID
+				}
+				if persistedOperationID == operationID {
+					exactMatches++
+					exactMatched = event
+				}
 				continue
 			}
 			if rpcEnvelopeID(event.Payload) == rawOperationID {
@@ -1486,13 +1529,23 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 		}
 		afterCursor = *page.NextCursor
 	}
+	if operationID == "" {
+		if commandMatches != 1 {
+			return ack, false, nil
+		}
+		operationID = commandOperationID
+		rawOperationID = rpcOperationRawID(operationID)
+		exactMatched = commandMatched
+		exactMatches = 1
+		ack.OperationID = &operationID
+	}
 	var matched *protocol.Event
 	switch {
 	case exactMatches == 1:
 		matched = exactMatched
 	case exactMatches > 1:
 		return ack, false, nil
-	case strings.IndexByte(operationID, 0) < 0 && rawMatches == 1:
+	case strings.IndexByte(operationID, 0) < 0 && rawMatches == 1 && qualifiedRawMatches == 0:
 		matched = rawMatched
 	default:
 		return ack, false, nil
@@ -1504,6 +1557,11 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 	if matched.RunID != nil && strings.TrimSpace(*matched.RunID) != "" {
 		runID := *matched.RunID
 		ack.RunID = &runID
+	}
+	if rpcEnvelopeError(matched.Payload) {
+		ack.State = protocol.CommandStateFailed
+		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server operation failed", RequestID: commandID}
+		ack.Result = nil
 	}
 	if err := a.journal.UpdateCommand(commandID, ack); err != nil {
 		return ack, false, fmt.Errorf("persist operation observation for command %q: %w", commandID, err)
@@ -1529,6 +1587,27 @@ func rpcEnvelopeOperationID(payload json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(envelope.OperationID)
+}
+
+func rpcEnvelopeCommandID(payload json.RawMessage) string {
+	var envelope struct {
+		CommandID string `json:"command_id"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.CommandID)
+}
+
+func rpcEnvelopeError(payload json.RawMessage) bool {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return false
+	}
+	value := bytes.TrimSpace(envelope.Error)
+	return len(value) > 0 && !bytes.Equal(value, []byte("null"))
 }
 
 func rpcOperationIdentity(generation string, id json.RawMessage) string {

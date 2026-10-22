@@ -10,7 +10,9 @@ The journal is created with a mode 0700 parent directory and mode 0600 file perm
 
 `event` records contain the generated `protocol.Event` and preserve the complete app-server JSON-RPC object in `event.payload`, including fields unknown to the current adapter.
 
-For journaled RPC responses, the raw app-server event is followed by a host-observation correlation event containing the Gateway generation, method and generation-qualified operation identity. Unknown ACKs use that identity so reused JSON-RPC IDs from different process generations cannot be misattributed; older records without a correlation event fall back only when the raw ID is unique.
+For journaled RPC responses, the raw app-server event is followed by a host-observation correlation event containing the Gateway generation, method, command identity when available and generation-qualified operation identity. Unknown ACKs use that identity so reused JSON-RPC IDs from different process generations cannot be misattributed; older records without a correlation event fall back only when the raw ID is unique and no qualified observation exists.
+
+Approval claims retain the session generation and pending run, turn and item identity. A replayed or newly observed approval from another generation cannot apply a decision to the older claim; the affected command remains unknown until explicitly reconciled.
 
 session records contain only the Loomhelm session ID, opaque external thread reference, host generation and update time; credentials, access tokens and Desktop process state are not journal data.
 
