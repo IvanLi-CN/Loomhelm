@@ -77,12 +77,21 @@ function validateSameOriginBaseUrl(baseUrl?: string): void {
   }
 }
 
+function hasAuthorizationHeader(headers?: HeadersInit): boolean {
+  if (!headers) return false;
+  try {
+    return new Headers(headers).has("authorization");
+  } catch {
+    throw new ApiClientConfigurationError("same_origin browser protection requires valid request headers");
+  }
+}
+
 export function createAuthenticatedApiClient(options: AuthenticatedApiClientOptions = {}): AuthenticatedApiClient {
   const fetcher = options.fetch ?? globalThis.fetch;
   if (!fetcher) throw new ApiClientConfigurationError("a fetch implementation is required");
   const sameOriginProtection = options.browserProtection === "same_origin";
   if (sameOriginProtection) validateSameOriginBaseUrl(options.baseUrl);
-  if (sameOriginProtection && options.accessToken) {
+  if (sameOriginProtection && (options.accessToken || hasAuthorizationHeader(options.headers))) {
     throw new ApiClientConfigurationError("same_origin protection cannot be combined with bearer access token transport");
   }
   if (sameOriginProtection && options.csrf) {
@@ -122,7 +131,7 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   };
 
   const bootstrapClient = sameOriginProtection
-    ? createGeneratedApiClient({ baseUrl: options.baseUrl, fetch: fetchBrowserSession, headers: options.headers })
+    ? createGeneratedApiClient({ baseUrl: options.baseUrl, fetch: fetchBrowserSession, headers: undefined })
     : undefined;
 
   const bootstrapBrowserSession = async (): Promise<BrowserSessionBootstrap> => {
@@ -152,6 +161,9 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
 
   const fetchWithAuthentication: typeof globalThis.fetch = async (input, init = {}) => {
     const headers = new Headers(init.headers);
+    if (sameOriginProtection && headers.has("authorization")) {
+      throw new ApiClientConfigurationError("same_origin protection cannot send an Authorization header");
+    }
     const method = (init.method ?? "GET").toString().toUpperCase();
     const accessToken = await options.accessToken?.();
     if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
@@ -184,7 +196,7 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   const client = createGeneratedApiClient({
     baseUrl: options.baseUrl,
     fetch: fetchWithAuthentication,
-    headers: options.headers
+    headers: sameOriginProtection ? undefined : options.headers
   });
 
   if (sameOriginProtection) {

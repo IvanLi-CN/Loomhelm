@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { ProjectRecord, ProjectTaskSource } from "@/features/tasks/types";
 
-type Feedback = { message: string; tone: "success" | "warning"; reconcile?: boolean };
+type Feedback = { message: string; tone: "success" | "warning"; reconcile?: boolean; noticeId?: string };
 
 export function editableProjectSummary(project: ProjectRecord | undefined): string {
   return project?.description ?? (project?.summary === "暂无项目简介" ? "" : project?.summary ?? "");
@@ -62,7 +62,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
       await source.refresh();
       if (mode === "create") {
         setBlockedByUnknown(true);
-        setFeedback({ message: "列表已刷新，但本次项目创建结果仍待确认；为避免重复创建，当前表单不会再次提交。", tone: "warning", reconcile: true });
+        setFeedback({ message: "列表已刷新，但本次项目创建结果仍待确认；为避免重复创建，当前表单不会再次提交。", tone: "warning", reconcile: true, noticeId: feedback?.noticeId });
       } else {
         setBlockedByUnknown(false);
         setFeedback({ message: "已刷新并核对项目列表，可以继续操作。", tone: "success" });
@@ -75,7 +75,8 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
   };
 
   const acknowledgePendingCreation = () => {
-    source.acknowledgePendingProjectCreation?.();
+    if (!feedback?.noticeId) return;
+    source.acknowledgePendingProjectCreation?.(feedback.noticeId);
     setBlockedByUnknown(false);
     setFeedback({ message: "已确认项目列表中没有这次写入，可以重新提交。", tone: "success" });
   };
@@ -92,13 +93,13 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
     };
     const result = mode === "create"
       ? source.createProject({ name, summary })
-      : projectId ? source.updateProject(projectId, draft) : { ok: false as const, code: "invalid" as const, message: "项目上下文不可用。", reconcile: false };
+      : projectId ? source.updateProject(projectId, draft) : { ok: false as const, code: "invalid" as const, message: "项目上下文不可用。", reconcile: false, noticeId: undefined };
     const resolved = await result;
     setPending(false);
     if (!resolved.ok) {
       const reconcile = resolved.reconcile || resolved.code === "unknown";
       setBlockedByUnknown(reconcile);
-      setFeedback({ message: resolved.message, tone: "warning", reconcile });
+      setFeedback({ message: resolved.message, tone: "warning", reconcile, noticeId: resolved.noticeId });
       return;
     }
     if (resolved.warning) {
@@ -125,7 +126,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
       <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => { summaryDirtyRef.current = true; setSummary(event.target.value); }} disabled={!canManageProject || pending || effectiveBlocked} /></label>
       {!canManageProject && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>{projectWriteMessage}</div>}
       {mode === "create" && source.pendingProjectCreation && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>上一次项目创建结果仍待确认；请先检查项目列表，当前表单不会再次提交。<Link to="/tasks" className="inline-link ml-2">打开项目列表</Link></div>}
-      {(feedback?.reconcile || (mode === "create" && source.pendingProjectCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button>{feedback?.reconcile && source.pendingProjectCreation && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}</div>}
+      {(feedback?.reconcile || (mode === "create" && source.pendingProjectCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button>{feedback?.reconcile && feedback.noticeId && source.pendingProjectCreation && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}</div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}
       <div className="form-actions">
         <Button type="submit" className="button button-primary" disabled={!canManageProject || pending || effectiveBlocked || !name.trim()}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存项目"}</Button>

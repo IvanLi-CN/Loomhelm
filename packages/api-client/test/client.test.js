@@ -352,6 +352,12 @@ describe("authenticated client transport", () => {
       accessToken: () => "bearer-token",
       fetch: async () => Response.json({ user_id: "user-browser", csrf_protection: "same_origin" })
     })).toThrow(ApiClientConfigurationError);
+    expect(() => createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      headers: { Authorization: "Bearer mutable-header" },
+      fetch: async () => Response.json({ user_id: "user-browser", csrf_protection: "same_origin" })
+    })).toThrow(ApiClientConfigurationError);
   });
 
   test("clears the browser bootstrap after a completed logout", async () => {

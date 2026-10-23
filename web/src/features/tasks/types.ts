@@ -36,6 +36,7 @@ export interface WriteFailure {
   status?: number;
   body?: unknown;
   reconcile?: boolean;
+  noticeId?: string;
 }
 
 export interface RelationWriteFailure extends WriteFailure {
@@ -48,7 +49,7 @@ export interface RelationWriteMetadata {
 }
 
 export type WriteResult<T> =
-  | { ok: true; value: T; warning?: string; reconcile?: boolean; relation?: RelationWriteMetadata }
+  | { ok: true; value: T; warning?: string; reconcile?: boolean; relation?: RelationWriteMetadata; noticeId?: string }
   | WriteFailure;
 
 export type MutationResult<T> = Promise<WriteResult<T>>;
@@ -130,8 +131,8 @@ export interface ProjectTaskSource {
   notice?: string;
   pendingProjectCreation?: boolean;
   pendingTaskCreation?: boolean;
-  acknowledgePendingProjectCreation?: () => void;
-  acknowledgePendingTaskCreation?: () => void;
+  acknowledgePendingProjectCreation?: (noticeId: string) => void;
+  acknowledgePendingTaskCreation?: (noticeId: string) => void;
   isTaskRelationWritePending?: (taskId: string) => boolean;
   canCreateProjects: boolean;
   getProjectPermissions: (projectId: string | undefined) => ProjectPermissionSnapshot;
