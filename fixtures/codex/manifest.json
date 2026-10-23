@@ -1,0 +1,31 @@
+{
+  "schema": "loomhelm.codex.fixture/manifest/v1",
+  "fixtureSchema": "loomhelm.codex.fixture/v1",
+  "parser": "parse.mjs",
+  "scenarios": [
+    {
+      "path": "samples/observed-control.jsonl",
+      "source": "observed-r01",
+      "status": "observed",
+      "covers": ["messages", "command-execution", "approval-accept", "approval-decline", "interrupt", "disconnect", "reconnect"]
+    },
+    {
+      "path": "samples/content-and-artifacts.jsonl",
+      "source": "protocol-shape",
+      "status": "documented-shape",
+      "covers": ["mcp-tool", "file-change", "diff", "artifact-snapshot", "plan", "reasoning"]
+    },
+    {
+      "path": "samples/unknown-event.jsonl",
+      "source": "protocol-shape",
+      "status": "parser-regression",
+      "covers": ["unknown-method", "unknown-item-type", "unknown-field-retention"]
+    }
+  ],
+  "redaction": {
+    "identifiers": "stable truncated references, never raw thread/session/turn/request ids",
+    "paths": "<TEST_WORKSPACE> and other placeholders, never user-specific absolute paths",
+    "credentials": "not present; sensitive keys are rejected by the parser",
+    "content": "synthetic or fixed markers only; no complete user messages or rollout transcripts"
+  }
+}

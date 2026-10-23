@@ -1,0 +1,218 @@
+#!/bin/sh
+set -u
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "checks: cannot resolve repository root" >&2
+	exit 1
+}
+cd "$repo_root" || exit 1
+
+usage() {
+	cat <<'EOF'
+usage: scripts/checks <command>
+
+Commands:
+  all          Run every repository quality check.
+  quality      Check the quality declaration, Markdown/dprint, scripts and deployment config.
+  bootstrap    Run the canonical worktree bootstrap entrypoint.
+  generated    Check protocol, sqlc and module generated-state drift.
+  source       Run Go tests, race tests and vet.
+  database     Run the real PostgreSQL-backed database and job tests.
+  web          Run client transport tests, frozen Web typecheck and production/Storybook builds.
+  react        Run the pinned React Doctor changed-file check.
+EOF
+}
+
+check_failures=0
+total_failures=0
+
+run_command() {
+	label=$1
+	shift
+	printf '\n[check] %s\n' "$label"
+	"$@"
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		printf '[check] FAIL: %s (exit %s)\n' "$label" "$status" >&2
+		check_failures=$((check_failures + 1))
+	else
+		printf '[check] PASS: %s\n' "$label"
+	fi
+}
+
+finish_check() {
+	if [ "$check_failures" -ne 0 ]; then
+		return 1
+	fi
+	return 0
+}
+
+run_group() {
+	label=$1
+	shift
+	check_failures=0
+	printf '\n=== %s ===\n' "$label"
+	"$@"
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		total_failures=$((total_failures + 1))
+	fi
+}
+
+check_quality() {
+	run_command "quality-gates declaration" \
+		python3 .agents/skills/quality-gates/assets/scripts/check_quality_gates.py \
+		--repo-root . --allow-unchecked-branch-protection
+	run_command "Markdown and dprint" python3 tools/markdown.py check
+	run_command "shell and Python syntax" check_syntax
+	run_command "deployment configuration" check_deployment
+	finish_check
+}
+
+check_syntax() {
+	for script in scripts/build-candidate scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
+		sh -n "$script"
+	done
+	python3 - <<'PY'
+import ast
+from pathlib import Path
+
+for path in (
+    Path("deploy/preview/control.py"),
+    Path("deploy/preview/control_test.py"),
+    Path("scripts/check-react-doctor"),
+):
+    ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+PY
+}
+
+check_deployment() {
+	if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+		echo "checks: Docker Compose is required for deployment configuration validation" >&2
+		return 1
+	fi
+	tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-quality.XXXXXX") || return 1
+	trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
+	mkdir -p "$tmp_dir/state/caddy" "$tmp_dir/web"
+	LOOMHELM_POSTGRES_PORT=55432 \
+		docker compose --project-name loomhelm-quality-dev -f deploy/dev/compose.yaml config >/dev/null || return 1
+	LOOMHELM_PREVIEW_STATE_DIR="$tmp_dir/state" \
+	LOOMHELM_PREVIEW_WEB_DIR="$tmp_dir/web" \
+	LOOMHELM_PREVIEW_HTTP_PORT=18080 \
+	LOOMHELM_PREVIEW_ADMIN_PORT=18081 \
+	LOOMHELM_BLUE_SERVER_PORT=18082 \
+	LOOMHELM_GREEN_SERVER_PORT=18083 \
+	LOOMHELM_DATABASE_URL=postgres://loomhelm:loomhelm_dev_only@127.0.0.1:55432/loomhelm?sslmode=disable \
+	LOOMHELM_DRAIN_TOKEN=quality-check-token \
+		docker compose --project-name loomhelm-quality-preview -f deploy/preview/compose.yaml config >/dev/null
+}
+
+check_bootstrap() {
+	run_command "canonical worktree bootstrap" scripts/setup
+	finish_check
+}
+
+check_generated() {
+	run_command "public contract generation drift" scripts/codegen -check
+	run_command "sqlc generation drift" check_sqlc
+	finish_check
+}
+
+check_sqlc() {
+	sqlc_command=${SQLC_BIN:-sqlc}
+	if [ -x "$sqlc_command" ]; then
+		sqlc_executable=$sqlc_command
+	elif command -v "$sqlc_command" >/dev/null 2>&1; then
+		sqlc_executable=$(command -v "$sqlc_command")
+	else
+		echo "checks: sqlc is required for generation drift validation" >&2
+		return 1
+	fi
+	tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-sqlc.XXXXXX") || return 1
+	trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
+	mkdir -p "$tmp_dir/internal/platform/database"
+	cp sqlc.yaml "$tmp_dir/sqlc.yaml"
+	cp -R db "$tmp_dir/db"
+	cp -R internal/platform/database/queries "$tmp_dir/internal/platform/database/queries"
+	cp -R internal/platform/database/generated "$tmp_dir/internal/platform/database/generated"
+	"$sqlc_executable" generate -f "$tmp_dir/sqlc.yaml" || return 1
+	diff -ru --no-dereference internal/platform/database/generated "$tmp_dir/internal/platform/database/generated"
+}
+
+check_source() {
+	run_command "Go unit and integration-capable tests" go test ./...
+	run_command "Go race tests" go test -race ./...
+	run_command "Go shuffled tests" go test -shuffle=on ./...
+	run_command "Go vet" go vet ./...
+	finish_check
+}
+
+check_database() {
+	if [ -z "${LOOMHELM_DATABASE_URL:-}" ]; then
+		echo "checks: LOOMHELM_DATABASE_URL is required; database checks must not silently skip" >&2
+		check_failures=$((check_failures + 1))
+	else
+		run_command "PostgreSQL-backed database and River job tests" scripts/db test
+	fi
+	finish_check
+}
+
+check_web() {
+	run_command "frozen Web dependency install" bun install --frozen-lockfile
+	run_command "generated API client transport tests" bun test packages/api-client/test
+	run_command "Web typecheck" bun run typecheck
+	run_command "Web production build" bun run build
+	run_command "Storybook build" bun run build:storybook
+	finish_check
+}
+
+check_react() {
+	run_command "React Doctor" scripts/check-react-doctor
+	finish_check
+}
+
+run_named_group() {
+	case "$1" in
+		quality) run_group "quality" check_quality ;;
+		bootstrap) run_group "bootstrap" check_bootstrap ;;
+		generated) run_group "generated" check_generated ;;
+		source) run_group "source" check_source ;;
+		database) run_group "database" check_database ;;
+		web) run_group "web" check_web ;;
+		react) run_group "React Doctor" check_react ;;
+		*)
+			echo "checks: unknown command: $1" >&2
+			usage >&2
+			return 2
+			;;
+	esac
+}
+
+command=${1:-all}
+if [ "$#" -gt 0 ]; then
+	shift
+fi
+
+if [ "$command" = "all" ]; then
+	if [ "$#" -ne 0 ]; then
+		echo "checks: all does not accept extra arguments" >&2
+		usage >&2
+		exit 2
+	fi
+	for group in quality bootstrap generated source database web react; do
+		run_named_group "$group"
+	done
+else
+	if [ "$#" -ne 0 ]; then
+		echo "checks: command does not accept extra arguments: $*" >&2
+		usage >&2
+		exit 2
+	fi
+	run_named_group "$command"
+fi
+
+if [ "$total_failures" -ne 0 ]; then
+	printf '\nchecks: failed group count=%s\n' "$total_failures" >&2
+	exit 1
+fi
+printf '\nchecks: all requested groups passed\n'

@@ -1,0 +1,31 @@
+min_version: 2.1.16
+lefthook: sh tools/lefthook.sh
+assert_lefthook_installed: true
+no_auto_install: true
+glob_matcher: doublestar
+
+pre-commit:
+  parallel: false
+  commands:
+    markdown:
+      files: git diff --cached --name-only --diff-filter=ACMRT
+      glob: "**/*.md"
+      run: python3 tools/markdown.py staged -- {files}
+      stage_fixed: true
+    react-doctor:
+      run: |
+        if [ -f web/doctor.config.ts ]; then
+          if [ ! -f web/scripts/react-doctor.ts ]; then
+            echo "React Doctor entrypoint is missing for this Web package." >&2
+            exit 1
+          fi
+          node web/scripts/react-doctor.ts staged
+        elif git cat-file -e :web/doctor.config.ts 2>/dev/null; then
+          echo "React Doctor configuration marker is staged but missing from the worktree." >&2
+          exit 1
+        elif ! git log --all --format='%H' -- web/doctor.config.ts | grep -q . || git diff --cached --quiet --diff-filter=ACMRT -- web/src web/scripts/render-public.tsx; then
+          exit 0
+        else
+          echo "React Doctor configuration marker is missing for a staged Web React change." >&2
+          exit 1
+        fi

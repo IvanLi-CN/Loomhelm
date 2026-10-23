@@ -1,0 +1,573 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	cat <<'EOF'
+usage: scripts/build-candidate --source-sha SHA [--output DIR] [--goos GOOS] [--goarch GOARCH]
+
+Build one immutable Loomhelm candidate from the exact clean checkout SHA. The
+output contains the Server, Worker and Connector binaries, Web static assets,
+the candidate manifest and a deterministic candidate archive.
+EOF
+}
+
+checkout_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "build-candidate: cannot resolve repository root" >&2
+	exit 1
+}
+repo_root=$checkout_root
+
+stage_dir=""
+build_parent=""
+build_root=""
+cleanup() {
+	status=$?
+	trap - EXIT HUP INT TERM
+	if [ -n "$stage_dir" ] && { [ -e "$stage_dir" ] || [ -L "$stage_dir" ]; }; then
+		rm -rf -- "$stage_dir"
+	fi
+	if [ -n "$build_root" ] && { [ -e "$build_root" ] || [ -L "$build_root" ]; }; then
+		git -C "$checkout_root" worktree remove --force "$build_root" >/dev/null 2>&1 || rm -rf -- "$build_root"
+	fi
+	if [ -n "$build_parent" ] && { [ -e "$build_parent" ] || [ -L "$build_parent" ]; }; then
+		rm -rf -- "$build_parent"
+	fi
+	exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+cd "$repo_root"
+
+source_sha=${LOOMHELM_SOURCE_SHA:-}
+output_dir=""
+goos=${LOOMHELM_GOOS:-linux}
+goarch=${LOOMHELM_GOARCH:-amd64}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--source-sha)
+			[ "$#" -ge 2 ] || { echo "build-candidate: --source-sha needs a value" >&2; exit 2; }
+			source_sha=$2
+			shift 2
+			;;
+		--source-sha=*)
+			source_sha=${1#*=}
+			shift
+			;;
+		--output)
+			[ "$#" -ge 2 ] || { echo "build-candidate: --output needs a value" >&2; exit 2; }
+			output_dir=$2
+			shift 2
+			;;
+		--output=*)
+			output_dir=${1#*=}
+			shift
+			;;
+		--goos)
+			[ "$#" -ge 2 ] || { echo "build-candidate: --goos needs a value" >&2; exit 2; }
+			goos=$2
+			shift 2
+			;;
+		--goos=*)
+			goos=${1#*=}
+			shift
+			;;
+		--goarch)
+			[ "$#" -ge 2 ] || { echo "build-candidate: --goarch needs a value" >&2; exit 2; }
+			goarch=$2
+			shift 2
+			;;
+		--goarch=*)
+			goarch=${1#*=}
+			shift
+			;;
+		--help|-h)
+			usage
+			exit 0
+			;;
+		*)
+			echo "build-candidate: unknown argument: $1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+if [ -z "$source_sha" ]; then
+	echo "build-candidate: --source-sha is required" >&2
+	exit 2
+fi
+
+if ! python3 - "$source_sha" <<'PY'
+import re
+import sys
+
+value = sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value) is None:
+    raise SystemExit("source SHA must be a full lowercase 40- or 64-character Git object id")
+PY
+then
+	echo "build-candidate: invalid source SHA: $source_sha" >&2
+	exit 2
+fi
+
+resolved_source_sha=$(git rev-parse --verify "${source_sha}^{commit}" 2>/dev/null) || {
+	echo "build-candidate: source SHA is not a commit in this checkout: $source_sha" >&2
+	exit 1
+}
+head_sha=$(git rev-parse HEAD)
+if [ "$resolved_source_sha" != "$source_sha" ] || [ "$head_sha" != "$source_sha" ]; then
+	echo "build-candidate: checkout HEAD $head_sha does not match source SHA $source_sha" >&2
+	exit 1
+fi
+
+if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+	echo "build-candidate: checkout must be clean; refusing to build from a dirty source tree" >&2
+	git status --short >&2
+	exit 1
+fi
+
+version_from_env() {
+	key=$1
+	awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' tools/versions.env
+}
+
+expected_go=$(version_from_env GO_VERSION)
+expected_bun=$(version_from_env BUN_VERSION)
+actual_go=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//') || actual_go=""
+actual_bun=$(bun --version 2>/dev/null) || actual_bun=""
+if [ "$actual_go" != "$expected_go" ]; then
+	echo "build-candidate: Go $expected_go is required; found ${actual_go:-unreadable}" >&2
+	exit 1
+fi
+if [ "$actual_bun" != "$expected_bun" ]; then
+	echo "build-candidate: Bun $expected_bun is required; found ${actual_bun:-unreadable}" >&2
+	exit 1
+fi
+
+case "$goos" in
+	[a-z][a-z0-9]*) ;;
+	*) echo "build-candidate: invalid GOOS: $goos" >&2; exit 2 ;;
+esac
+case "$goarch" in
+	[a-z][a-z0-9]*) ;;
+	*) echo "build-candidate: invalid GOARCH: $goarch" >&2; exit 2 ;;
+esac
+
+if [ -z "$output_dir" ]; then
+	output_dir="build/candidates/$source_sha"
+fi
+case "$output_dir" in
+	/*) ;;
+	*) output_dir="$repo_root/$output_dir" ;;
+esac
+case "$output_dir" in
+	*..*)
+		echo "build-candidate: output path must not contain parent traversal" >&2
+		exit 2
+		;;
+esac
+case "$output_dir" in
+	"$repo_root"|"$repo_root/"*)
+		case "$output_dir" in
+			"$repo_root/build"|"$repo_root/build/"*) ;;
+			*) echo "build-candidate: output must not replace the repository root" >&2; exit 2 ;;
+		esac
+		;;
+esac
+output_parent=$(dirname -- "$output_dir")
+mkdir -p "$output_parent"
+output_dir=$(CDPATH='' cd -- "$output_parent" && pwd -P)/$(basename -- "$output_dir")
+if [ -e "$output_dir" ] || [ -L "$output_dir" ]; then
+	echo "build-candidate: refusing to overwrite existing output: $output_dir" >&2
+	exit 1
+fi
+
+stage_dir=$(mktemp -d "$output_dir.tmp.XXXXXX")
+mkdir -p "$stage_dir/bin" "$stage_dir/web"
+
+build_parent=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-candidate-build.XXXXXX")
+build_root="$build_parent/source"
+git -C "$checkout_root" worktree add --detach "$build_root" "$source_sha" >/dev/null
+repo_root=$build_root
+cd "$repo_root"
+source_tree_sha=$(git rev-parse "${source_sha}^{tree}")
+source_date_epoch=$(git show -s --format=%ct "$source_sha")
+python3 - "$repo_root" <<'PY'
+import os
+import stat
+import sys
+
+root = sys.argv[1]
+for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+    for name in (*directories, *files):
+        path = os.path.join(current, name)
+        if stat.S_ISLNK(os.lstat(path).st_mode):
+            raise SystemExit(f"build-candidate: source tree contains a symlink: {path}")
+PY
+
+echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
+GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+	go mod download
+for component in server worker connector; do
+	GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
+		go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$stage_dir/bin/$component" "./cmd/$component"
+done
+
+echo "build-candidate: building Web static assets with Bun $actual_bun"
+if [ -L "$repo_root/web/dist" ]; then
+	echo "build-candidate: refusing to follow a symlink at web/dist" >&2
+	exit 1
+fi
+env -u STORYBOOK -u VITE_DEMO bun install --frozen-lockfile
+env STORYBOOK=false VITE_DEMO=false bun run build
+python3 - "$repo_root/web/dist" "$stage_dir/web" <<'PY'
+import os
+import stat
+import sys
+
+source_path, target_path = sys.argv[1:]
+directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+if not getattr(os, "O_DIRECTORY", 0) or not getattr(os, "O_NOFOLLOW", 0):
+    raise SystemExit("build-candidate: secure Web artifact copy is unavailable on this platform")
+
+
+def copy_tree(source_fd: int, target_fd: int, display: str) -> None:
+    for name in sorted(os.listdir(source_fd)):
+        metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        if stat.S_ISLNK(metadata.st_mode):
+            raise SystemExit(f"build-candidate: refusing a symlink in Web output: {display}/{name}")
+        if stat.S_ISDIR(metadata.st_mode):
+            os.mkdir(name, 0o755, dir_fd=target_fd)
+            child_source = os.open(name, directory_flags, dir_fd=source_fd)
+            child_target = os.open(name, directory_flags, dir_fd=target_fd)
+            try:
+                copy_tree(child_source, child_target, f"{display}/{name}")
+            finally:
+                os.close(child_source)
+                os.close(child_target)
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit(f"build-candidate: Web output contains a non-regular entry: {display}/{name}")
+        source_file = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd)
+        target_file = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o644,
+            dir_fd=target_fd,
+        )
+        try:
+            while True:
+                chunk = os.read(source_file, 1024 * 1024)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(target_file, view)
+                    view = view[written:]
+        finally:
+            os.close(source_file)
+            os.close(target_file)
+
+
+try:
+    source_fd = os.open(source_path, directory_flags)
+except OSError as error:
+    raise SystemExit(f"build-candidate: Web build did not produce a safe web/dist directory: {error}")
+target_fd = os.open(target_path, directory_flags)
+try:
+    copy_tree(source_fd, target_fd, source_path)
+finally:
+    os.close(source_fd)
+    os.close(target_fd)
+PY
+
+final_head_sha=$(git rev-parse HEAD)
+final_tree_sha=$(git rev-parse 'HEAD^{tree}')
+if [ "$final_head_sha" != "$source_sha" ] || [ "$final_tree_sha" != "$source_tree_sha" ] || [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+	echo "build-candidate: isolated source checkout changed during the build" >&2
+	git status --short >&2
+	exit 1
+fi
+
+candidate_digest=$(python3 - "$stage_dir" "$repo_root" "$source_sha" "$source_tree_sha" "$source_date_epoch" "$goos" "$goarch" "$actual_go" "$actual_bun" <<'PY'
+from __future__ import annotations
+
+import gzip
+import hashlib
+import io
+import json
+import os
+import sys
+import tarfile
+from pathlib import Path
+
+stage, repo, source_sha, source_tree_sha, source_date_epoch, goos, goarch, go_version, bun_version = sys.argv[1:]
+stage_path = Path(stage).resolve()
+repo_path = Path(repo).resolve()
+source_date_epoch_int = int(source_date_epoch)
+os.chmod(stage_path, 0o755)
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_record(path: Path, relative: str) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"candidate artifact is not a regular file: {path}")
+    return {
+        "path": relative,
+        "sha256": sha256_file(path),
+        "size": path.stat().st_size,
+        "mode": path.stat().st_mode & 0o7777,
+    }
+
+
+def directory_records(path: Path) -> tuple[str, list[dict[str, object]]]:
+    records: list[dict[str, object]] = []
+    for child in sorted(path.rglob("*")):
+        if child.is_dir():
+            if child.is_symlink():
+                raise SystemExit(f"candidate artifact contains a directory symlink: {child}")
+            if not any(child.iterdir()):
+                raise SystemExit(f"candidate Web artifact contains an empty directory: {child}")
+            continue
+        if not child.is_file():
+            raise SystemExit(f"candidate artifact is not a regular file or directory: {child}")
+        relative = child.relative_to(path).as_posix()
+        records.append(file_record(child, relative))
+    if not records:
+        raise SystemExit("candidate Web artifact is empty")
+    encoded = "".join(
+        f"{record['path']}\0{record['sha256']}\0{record['size']}\0{record['mode']}\n" for record in records
+    ).encode("utf-8")
+    return sha256_bytes(encoded), records
+
+
+def canonical_json(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+components: dict[str, dict[str, object]] = {}
+os.chmod(stage_path / "bin", 0o755)
+for name in ("server", "worker", "connector"):
+    relative = f"bin/{name}"
+    os.chmod(stage_path / relative, 0o755)
+    components[name] = file_record(stage_path / relative, relative)
+for child in (stage_path / "web").rglob("*"):
+    if child.is_symlink():
+        raise SystemExit(f"candidate Web artifact contains a symlink: {child}")
+    if child.is_dir():
+        os.chmod(child, 0o755)
+    elif child.is_file():
+        os.chmod(child, 0o644)
+    else:
+        raise SystemExit(f"candidate Web artifact contains a non-file entry: {child}")
+os.chmod(stage_path / "web", 0o755)
+web_digest, web_files = directory_records(stage_path / "web")
+artifacts: dict[str, object] = {
+    **components,
+    "web": {"path": "web", "sha256": web_digest, "files": web_files},
+}
+
+inputs = {
+    "build_contract": "candidate-v2",
+    "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
+    "build_environment": {
+        "GOAMD64": "v1",
+        "GOARM": "7",
+        "GOARM64": "v8.0",
+        "GO386": "sse2",
+        "GOEXPERIMENT": "",
+        "GOMIPS": "hardfloat",
+        "GOMIPS64": "hardfloat",
+        "GOTOOLCHAIN": "local",
+        "GOPPC64": "power8",
+        "GORISCV64": "rva20u64",
+        "GOWASM": "",
+        "STORYBOOK": "false",
+        "VITE_DEMO": "false",
+    },
+    "bun_lock_sha256": sha256_file(repo_path / "bun.lock"),
+    "build_script_sha256": sha256_file(repo_path / "scripts/build-candidate"),
+	"promote_script_sha256": sha256_file(repo_path / "scripts/promote-candidate"),
+    "go_mod_sha256": sha256_file(repo_path / "go.mod"),
+    "go_sum_sha256": sha256_file(repo_path / "go.sum"),
+    "go_version": f"go{go_version}",
+    "bun_version": bun_version,
+    "web_package_sha256": sha256_file(repo_path / "web/package.json"),
+    "vite_config_sha256": sha256_file(repo_path / "web/vite.config.ts"),
+}
+platform = {"goos": goos, "goarch": goarch, "cgo_enabled": False}
+identity = {
+    "schema_version": 2,
+    "source_sha": source_sha,
+    "source_tree_sha": source_tree_sha,
+    "source_date_epoch": source_date_epoch_int,
+    "platform": platform,
+    "inputs": inputs,
+    "artifacts": artifacts,
+}
+candidate_digest = sha256_bytes(canonical_json(identity))
+manifest = {
+    "schema_version": 2,
+    "candidate": {
+        "digest": candidate_digest,
+        "source_sha": source_sha,
+        "source_tree_sha": source_tree_sha,
+        "source_date_epoch": source_date_epoch_int,
+    },
+    "platform": platform,
+    "inputs": inputs,
+    "artifacts": artifacts,
+}
+manifest_bytes = canonical_json(manifest) + b"\n"
+manifest_path = stage_path / "candidate-manifest.json"
+manifest_path.write_bytes(manifest_bytes)
+os.chmod(manifest_path, 0o644)
+manifest_digest = sha256_bytes(manifest_bytes)
+manifest_sidecar = stage_path / "candidate-manifest.json.sha256"
+manifest_sidecar.write_text(
+    f"{manifest_digest}  candidate-manifest.json\n", encoding="ascii"
+)
+os.chmod(manifest_sidecar, 0o644)
+
+
+def archive_members(root: Path) -> list[tuple[str, Path]]:
+    members: dict[str, Path] = {}
+    for name in ("bin", "web", "candidate-manifest.json"):
+        path = root / name
+        if path.is_dir():
+            members[name] = path
+            for child in path.rglob("*"):
+                if child.is_symlink():
+                    raise SystemExit(f"candidate archive contains a symlink: {child}")
+                members[child.relative_to(root).as_posix()] = child
+        else:
+            members[name] = path
+    return [(name, members[name]) for name in sorted(members)]
+
+
+archive_path = stage_path / "candidate.tar.gz"
+with archive_path.open("wb") as raw_archive:
+    with gzip.GzipFile(fileobj=raw_archive, mode="wb", filename="", mtime=0, compresslevel=9) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for name, path in archive_members(stage_path):
+                info = tarfile.TarInfo(name)
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = source_date_epoch_int
+                if path.is_dir():
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    info.size = 0
+                    archive.addfile(info)
+                else:
+                    if not path.is_file():
+                        raise SystemExit(f"candidate archive member is not a regular file: {path}")
+                    data = path.read_bytes()
+                    info.type = tarfile.REGTYPE
+                    info.mode = 0o755 if name.startswith("bin/") else 0o644
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+os.chmod(archive_path, 0o644)
+package_digest = sha256_file(archive_path)
+package_sidecar = stage_path / "candidate.tar.gz.sha256"
+package_sidecar.write_text(
+    f"{package_digest}  candidate.tar.gz\n", encoding="ascii"
+)
+os.chmod(package_sidecar, 0o644)
+
+print(candidate_digest)
+PY
+)
+
+python3 - "$stage_dir" "$output_dir" "$repo_root" "$candidate_digest" "$source_sha" <<'PY'
+import ctypes
+import os
+import stat
+import subprocess
+import sys
+
+stage, output, repo, candidate_digest, source_sha = sys.argv[1:]
+stage_parent, stage_name = os.path.dirname(stage), os.path.basename(stage)
+output_parent, output_name = os.path.dirname(output), os.path.basename(output)
+if stage_parent != output_parent:
+    raise SystemExit("build-candidate: staging directory is not adjacent to output")
+
+directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+parent_fd = os.open(output_parent, directory_flags)
+stage_fd = os.open(stage_name, directory_flags, dir_fd=parent_fd)
+
+
+def rename_noreplace(source_name: str, destination_name: str, directory_fd: int) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        try:
+            renameat2 = libc.renameat2
+        except AttributeError as error:
+            raise SystemExit(f"build-candidate: no-replace rename is unavailable: {error}")
+        renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(directory_fd, source_name.encode(), directory_fd, destination_name.encode(), 1)
+    elif sys.platform == "darwin":
+        try:
+            renameatx_np = libc.renameatx_np
+        except AttributeError as error:
+            raise SystemExit(f"build-candidate: no-replace rename is unavailable: {error}")
+        renameatx_np.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameatx_np.restype = ctypes.c_int
+        result = renameatx_np(directory_fd, source_name.encode(), directory_fd, destination_name.encode(), 4)
+    else:
+        raise SystemExit(f"build-candidate: no-replace rename is unsupported on {sys.platform}")
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), destination_name)
+
+
+try:
+    subprocess.run(
+        [
+            os.path.join(repo, "scripts", "promote-candidate"),
+            "--manifest",
+            os.path.join(stage, "candidate-manifest.json"),
+            "--destination",
+            stage + ".validation",
+            "--expected-digest",
+            candidate_digest,
+            "--expected-source-sha",
+            source_sha,
+            "--dry-run",
+        ],
+        check=True,
+    )
+    stage_metadata = os.fstat(stage_fd)
+    path_metadata = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or path_metadata.st_dev != stage_metadata.st_dev
+        or path_metadata.st_ino != stage_metadata.st_ino
+    ):
+        raise SystemExit("build-candidate: staging directory changed during final validation")
+    rename_noreplace(stage_name, output_name, parent_fd)
+except OSError as error:
+    raise SystemExit(f"build-candidate: refusing to replace existing output: {error}")
+finally:
+    os.close(stage_fd)
+    os.close(parent_fd)
+PY
+echo "build-candidate: candidate_digest=$candidate_digest"
+echo "build-candidate: source_sha=$source_sha"
+echo "build-candidate: manifest=$output_dir/candidate-manifest.json"
+echo "build-candidate: package=$output_dir/candidate.tar.gz"

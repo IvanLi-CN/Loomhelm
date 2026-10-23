@@ -1,0 +1,15 @@
+{
+  "includes": ["**/*.md"],
+  "newLineKind": "lf",
+  "markdown": {
+    "textWrap": "never",
+    "wrapUnspacedScripts": true,
+    "wrapCodeSpans": false,
+    "table.cellPadding": "space",
+    "codeBlock.skipFormat": true,
+    "codeBlock.preserveIndentation": true,
+    "codeBlock.preserveBlankLines": true,
+    "html.skipFormat": true
+  },
+  "plugins": ["./.tmp/markdown-tools/markdown-0.26.0.wasm"]
+}

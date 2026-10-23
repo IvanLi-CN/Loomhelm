@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["web/src/*"],
+      "@loomhelm/api-client": ["packages/api-client/src/index.ts"],
+      "@loomhelm/content": ["packages/content/src/index.ts"],
+      "@loomhelm/protocol": ["packages/protocol/src/index.ts"]
+    }
+  },
+  "include": [
+    "web/src",
+    "web/.storybook",
+    "web/vite.config.ts",
+    "packages"
+  ]
+}

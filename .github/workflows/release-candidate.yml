@@ -1,0 +1,154 @@
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Completed workflow run that uploaded the immutable candidate
+        required: true
+        type: string
+      artifact_name:
+        description: Exact candidate artifact name from the source run
+        required: true
+        type: string
+      source_sha:
+        description: Full source SHA recorded in the candidate manifest
+        required: true
+        type: string
+      candidate_digest:
+        description: Candidate digest recorded in the candidate manifest
+        required: true
+        type: string
+      environment:
+        description: Release environment protected by repository approvals
+        required: true
+        default: production
+        type: environment
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: loomhelm-release-${{ inputs.environment || 'production' }}-${{ inputs.candidate_digest || 'unknown' }}
+  cancel-in-progress: false
+
+jobs:
+  validate-release-ref:
+    name: Validate Release Ref
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the protected parent branch
+        run: |
+          test "$GITHUB_REF" = refs/heads/feat/phase1 || {
+            echo "Release Candidate must run from feat/phase1" >&2
+            exit 1
+          }
+
+  publish-candidate:
+    name: Publish Candidate
+    needs: validate-release-ref
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - name: Verify candidate provenance
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+        with:
+          script: |
+            const runId = Number(process.env.SOURCE_RUN_ID);
+            if (!Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed("source_run_id must be a positive workflow run id");
+              return;
+            }
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId
+            });
+            if (run.name !== "Candidate CI" || run.path !== ".github/workflows/candidate-ci.yml") {
+              core.setFailed(`source run is not Candidate CI: ${run.name} ${run.path}`);
+              return;
+            }
+            if (run.event !== "workflow_dispatch" || run.head_branch !== "feat/phase1") {
+              core.setFailed(`source run must be a manual Candidate CI run from feat/phase1: ${run.event}/${run.head_branch}`);
+              return;
+            }
+            if (run.head_repository?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              core.setFailed(`source run repository is not trusted: ${run.head_repository?.full_name}`);
+              return;
+            }
+            if (run.status !== "completed" || run.conclusion !== "success") {
+              core.setFailed(`source run is not successful: ${run.status}/${run.conclusion}`);
+              return;
+            }
+            if (run.head_sha !== process.env.SOURCE_SHA) {
+              core.setFailed(`source SHA mismatch: run=${run.head_sha} input=${process.env.SOURCE_SHA}`);
+              return;
+            }
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+              per_page: 100
+            });
+            const candidateBuild = jobs.find((job) => job.name === "Candidate Build");
+            if (!candidateBuild || candidateBuild.status !== "completed" || candidateBuild.conclusion !== "success" || candidateBuild.head_sha !== process.env.SOURCE_SHA) {
+              core.setFailed("source run does not contain a successful Candidate Build job for the requested source SHA");
+              return;
+            }
+            const expectedArtifactName = `loomhelm-candidate-${process.env.SOURCE_SHA}-${process.env.CANDIDATE_DIGEST}`;
+            if (process.env.ARTIFACT_NAME !== expectedArtifactName) {
+              core.setFailed(`candidate artifact name is not bound to the requested identity: ${process.env.ARTIFACT_NAME}`);
+              return;
+            }
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+              per_page: 100
+            });
+            const artifact = artifacts.find((item) => item.name === process.env.ARTIFACT_NAME);
+            if (!artifact || artifact.expired) {
+              core.setFailed(`candidate artifact is missing or expired: ${process.env.ARTIFACT_NAME}`);
+            }
+
+      - name: Check out trusted release tooling
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: feat/phase1
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download the immutable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ inputs.source_run_id }}
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/loomhelm-candidate
+          github-token: ${{ github.token }}
+      - name: Publish without rebuilding
+        env:
+          EXPECTED_DIGEST: ${{ inputs.candidate_digest }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          manifest=$(find "$RUNNER_TEMP/loomhelm-candidate" -type f -name candidate-manifest.json -print -quit)
+          test -n "$manifest"
+          promote_script_sha=$(sha256sum scripts/promote-candidate | awk '{print $1}')
+          scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-release" --expected-digest "$EXPECTED_DIGEST" --expected-source-sha "$EXPECTED_SOURCE_SHA" --expected-promote-script-sha "$promote_script_sha"
+      - name: Package the release handoff with file modes
+        run: |
+          handoff_dir=$(find "$RUNNER_TEMP/loomhelm-release" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$handoff_dir"
+          tar --format=posix -czf "$RUNNER_TEMP/loomhelm-release-handoff.tar.gz" -C "$handoff_dir" .
+      - name: Upload the release handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loomhelm-release-${{ inputs.candidate_digest }}
+          path: ${{ runner.temp }}/loomhelm-release-handoff.tar.gz
+          if-no-files-found: error
+          retention-days: 90
