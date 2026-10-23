@@ -67,6 +67,28 @@ export function mergeMutationNoticeChanges(
   return [...notices.values()];
 }
 
+function sameMutationNoticeContent(left: MutationNotice, right: MutationNotice): boolean {
+  return left.id === right.id
+    && left.message === right.message
+    && left.kind === right.kind
+    && left.lockScope === right.lockScope
+    && left.projectId === right.projectId
+    && left.taskId === right.taskId;
+}
+
+export function mergePersistedMutationNotices(
+  current: readonly MutationNotice[],
+  persisted: readonly MutationNotice[]
+): readonly MutationNotice[] {
+  const persistedById = new Map(persisted.map((notice) => [notice.id, notice] as const));
+  const volatile = current.filter((notice) => {
+    const stored = persistedById.get(notice.id);
+    return Boolean(notice.volatile && (!stored || !sameMutationNoticeContent(notice, stored)));
+  });
+  const volatileIds = new Set(volatile.map((notice) => notice.id));
+  return [...persisted.filter((notice) => !volatileIds.has(notice.id)), ...volatile];
+}
+
 const MUTATION_NOTICE_STORAGE_PREFIX = "loomhelm.project-task.mutation-notice.v2";
 const MUTATION_NOTICE_CHANNEL = "loomhelm-project-task-mutation-notices";
 
@@ -658,9 +680,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         return;
       }
       const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
-      const persistedIds = new Set(notices.map((notice) => notice.id));
-      const volatile = current.filter((notice) => notice.volatile && !persistedIds.has(notice.id));
-      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, [...notices, ...volatile]);
+      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergePersistedMutationNotices(current, notices));
     };
     apply(readPersistedMutationNotices(subjectId), true);
     const handleStorage = (event: StorageEvent) => {
@@ -1207,7 +1227,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
             ? "创建结果待确认；完整刷新已完成，请确认列表中没有本次写入后再解除阻塞。"
             : "项目写入结果待确认；完整刷新已完成，请确认当前状态后解除阻塞。";
         const result = await withAvailableBrowserMutationLock(subjectId, scope, "busy" as const, async () => {
-          const persistedNotices = readPersistedMutationNotices(subjectId);
+          const persistedNotices = mergePersistedMutationNotices(
+            queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [],
+            readPersistedMutationNotices(subjectId)
+          );
           queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, persistedNotices);
           const persistedNotice = persistedNotices.find((currentNotice) => currentNotice.id === notice.id);
           if (!persistedNotice

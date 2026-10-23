@@ -8,6 +8,7 @@ import {
   filterTasksToVisibleProjects,
   hasIncompleteProjectTaskRead,
   mergeMutationNoticeChanges,
+  mergePersistedMutationNotices,
   projectTaskQueryKeys,
   readProjectMemberships,
   readTaskRelationships,
@@ -197,6 +198,14 @@ describe("project/task write contracts", () => {
     expect(mergeMutationNoticeChanges([], [first], [])).toEqual([first]);
     expect(mergeMutationNoticeChanges([first], [second], [])).toEqual([first, second]);
     expect(mergeMutationNoticeChanges([first, second], [], [first.id])).toEqual([second]);
+  });
+
+  test("preserves a newer volatile notice over a stale persisted version", () => {
+    const persisted = { id: "task:create:one", message: "creating", kind: "in-flight" as const, lockScope: "task:create" };
+    const volatile = { ...persisted, message: "task is ready for reconciliation", kind: "reconciliation" as const, lockScope: "task:one", taskId: "task-1", volatile: true };
+
+    expect(mergePersistedMutationNotices([volatile], [persisted])).toEqual([volatile]);
+    expect(mergePersistedMutationNotices([], [persisted])).toEqual([persisted]);
   });
 
   test("keeps successful project memberships when one scoped read fails", async () => {
