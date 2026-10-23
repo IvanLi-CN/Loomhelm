@@ -733,17 +733,17 @@ func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T)
 	if !errors.Is(err, ErrRecoveryIncomplete) {
 		t.Fatalf("failed cleanup recovery = %#v, err=%v", first, err)
 	}
-	var retryAt time.Time
+	var retryDeferred bool
 	var reclaimed bool
 	if err := db.Pool().QueryRow(ctx, `
-		SELECT staging_reclaim_after, staging_reclaimed_at IS NOT NULL
+		SELECT staging_reclaim_after > clock_timestamp(), staging_reclaimed_at IS NOT NULL
 		FROM conversation_artifacts
 		WHERE id = $1
-	`, failed.ID).Scan(&retryAt, &reclaimed); err != nil {
+	`, failed.ID).Scan(&retryDeferred, &reclaimed); err != nil {
 		t.Fatal(err)
 	}
-	if !retryAt.After(time.Now()) {
-		t.Fatalf("failed cleanup retry_at = %s, want a deferred time", retryAt)
+	if !retryDeferred {
+		t.Fatal("failed cleanup retry_at is not in the future according to the database clock")
 	}
 	if reclaimed {
 		t.Fatal("failed cleanup was marked reclaimed before its staging became removable")
@@ -837,12 +837,12 @@ func TestStoreRecoveryDefersFailedStagingCleanupWithoutStarvingLaterDebt(t *test
 	if !errors.Is(err, ErrRecoveryIncomplete) {
 		t.Fatalf("failed staging cleanup recovery = %#v, err=%v", first, err)
 	}
-	var retryAt time.Time
-	if err := db.Pool().QueryRow(ctx, `SELECT retry_after FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, badName).Scan(&retryAt); err != nil {
+	var retryDeferred bool
+	if err := db.Pool().QueryRow(ctx, `SELECT retry_after > clock_timestamp() FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, badName).Scan(&retryDeferred); err != nil {
 		t.Fatal(err)
 	}
-	if !retryAt.After(time.Now()) {
-		t.Fatalf("failed staging cleanup retry_at = %s, want a deferred time", retryAt)
+	if !retryDeferred {
+		t.Fatal("failed staging cleanup retry_at is not in the future according to the database clock")
 	}
 
 	store.faults = nil
@@ -905,12 +905,12 @@ func TestStoreRecoveryDefersPendingFailuresForFairness(t *testing.T) {
 	if healthyState != string(publicationReady) || !healthyReclaimed {
 		t.Fatalf("healthy pending state = %q/%v, want ready/reclaimed", healthyState, healthyReclaimed)
 	}
-	var retryAt time.Time
-	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaim_after FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&retryAt); err != nil {
+	var retryDeferred bool
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaim_after > clock_timestamp() FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&retryDeferred); err != nil {
 		t.Fatal(err)
 	}
-	if !retryAt.After(time.Now()) {
-		t.Fatalf("pending retry_at = %s, want a deferred time", retryAt)
+	if !retryDeferred {
+		t.Fatal("pending retry_at is not in the future according to the database clock")
 	}
 
 	failedStaging := ".upload-pending-failed-retry-" + fmt.Sprint(time.Now().UnixNano())
@@ -1077,12 +1077,12 @@ func TestStoreRecoveryDefersReadyFailuresForFairness(t *testing.T) {
 	if healthyState != string(publicationReady) || !healthyReclaimed {
 		t.Fatalf("healthy ready state = %q/%v, want ready/reclaimed", healthyState, healthyReclaimed)
 	}
-	var retryAt time.Time
-	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaim_after FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&retryAt); err != nil {
+	var retryDeferred bool
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaim_after > clock_timestamp() FROM conversation_artifacts WHERE id = $1`, failed.ID).Scan(&retryDeferred); err != nil {
 		t.Fatal(err)
 	}
-	if !retryAt.After(time.Now()) {
-		t.Fatalf("ready retry_at = %s, want a deferred time", retryAt)
+	if !retryDeferred {
+		t.Fatal("ready retry_at is not in the future according to the database clock")
 	}
 }
 
@@ -1110,12 +1110,12 @@ func TestStoreRetriesKnownUnreferencedStagingCleanupDebt(t *testing.T) {
 	if _, err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err == nil {
 		t.Fatal("cleanup unexpectedly succeeded for non-empty staging directory")
 	}
-	var retryAt time.Time
-	if err := db.Pool().QueryRow(ctx, `SELECT retry_after FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&retryAt); err != nil {
+	var retryDeferred bool
+	if err := db.Pool().QueryRow(ctx, `SELECT retry_after > clock_timestamp() FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&retryDeferred); err != nil {
 		t.Fatal(err)
 	}
-	if !retryAt.After(time.Now()) {
-		t.Fatalf("cleanup retry_at = %s, want a deferred time", retryAt)
+	if !retryDeferred {
+		t.Fatal("cleanup retry_at is not in the future according to the database clock")
 	}
 	if err := os.Remove(filepath.Join(stagingPath, "keep")); err != nil {
 		t.Fatal(err)
@@ -1493,7 +1493,23 @@ func TestStoreReadyReclamationPreservesUnidentifiedStaging(t *testing.T) {
 	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_identity = NULL WHERE id = $1`, artifact.ID); err != nil {
 		t.Fatal(err)
 	}
+	syncErr := errors.New("injected unidentified staging directory sync failure")
+	store.faults = &faultHooks{
+		BeforeStagingDirectorySync: func() error { return syncErr },
+	}
 	_, status, err := store.reclaimReadyStagingForRecovery(ctx, artifact.ID, nil)
+	if !errors.Is(err, syncErr) || status != recoveryPending {
+		t.Fatalf("unidentified ready staging reclamation with failed sync = status %q, err %v, want pending/injected error", status, err)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed {
+		t.Fatal("unidentified ready staging was marked reclaimed after failed directory sync")
+	}
+	store.faults = nil
+	_, status, err = store.reclaimReadyStagingForRecovery(ctx, artifact.ID, nil)
 	if err != nil || status != recoveryReady {
 		t.Fatalf("unidentified ready staging reclamation = status %q, err %v, want ready/nil", status, err)
 	}
@@ -1501,7 +1517,6 @@ func TestStoreReadyReclamationPreservesUnidentifiedStaging(t *testing.T) {
 	if err != nil || !bytes.Equal(retained, content) {
 		t.Fatalf("unidentified ready staging = %q, err=%v, want retained original bytes", retained, err)
 	}
-	var reclaimed bool
 	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&reclaimed); err != nil {
 		t.Fatal(err)
 	}

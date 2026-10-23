@@ -714,6 +714,8 @@ func waitForSignal(t *testing.T, path, expected string) {
 func waitForBlockedPID(t *testing.T, db *database.DB, ctx context.Context, path string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	var pid int
 	for {
 		data, readErr := os.ReadFile(path)
@@ -730,7 +732,7 @@ func waitForBlockedPID(t *testing.T, db *database.DB, ctx context.Context, path 
 	}
 	for {
 		var blocked bool
-		if err := db.Pool().QueryRow(ctx, `SELECT COALESCE(array_length(pg_blocking_pids($1), 1), 0) > 0`, pid).Scan(&blocked); err != nil {
+		if err := db.Pool().QueryRow(probeCtx, `SELECT COALESCE(array_length(pg_blocking_pids($1), 1), 0) > 0`, pid).Scan(&blocked); err != nil {
 			t.Fatal(err)
 		}
 		if blocked {
