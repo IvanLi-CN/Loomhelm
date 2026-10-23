@@ -112,6 +112,7 @@ type faultHooks struct {
 	BeforeIdentityLock         func(context.Context, pgx.Tx, string)
 	AfterIdentityLock          func()
 	BeforeReadyStagingRemoval  func()
+	AfterReadyStagingRemoval   func()
 	BeforeStagingDirectorySync func() error
 }
 
@@ -567,6 +568,20 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 
 	existing, err := readArtifactRecord(ctx, tx, candidate.ID)
 	if err == nil {
+		if authErr := s.authorize(ctx, OperationPut, existing.Artifact); authErr != nil {
+			if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
+				return artifactRecord{}, authErr
+			}
+			// The candidate was authorized before staging, but the durable row may
+			// belong to a different caller scope. Hide its existence and discard
+			// the newly staged bytes before releasing the identity lock.
+			rollbackTx(tx, cleanup)
+			tx = nil
+			if removeErr := s.removeStaging(stagingName); removeErr != nil {
+				_ = s.enqueueStagingCleanup(stagingName, cleanup)
+			}
+			return artifactRecord{}, ErrNotFound
+		}
 		if !sameArtifactMetadata(candidate, existing.Artifact) {
 			return artifactRecord{}, ErrConflict
 		}
@@ -1072,11 +1087,10 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 		return artifactRecord{}, recoveryPending, identityErr
 	}
 	removeStaging := record.StagingIdentity != nil && currentIdentity != nil && sameStagingIdentity(record.StagingIdentity, currentIdentity)
-	if currentIdentity == nil || record.StagingIdentity == nil {
+	if !removeStaging {
 		if err := s.syncStagingDirectory(); err != nil {
 			return artifactRecord{}, recoveryPending, fmt.Errorf("sync artifact staging directory before retaining staging: %w", err)
 		}
-		removeStaging = false
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
@@ -1125,6 +1139,9 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 				return confirmed, recoveryReady, nil
 			}
 			return confirmed, recoveryPending, removeErr
+		}
+		if s.faults != nil && s.faults.AfterReadyStagingRemoval != nil {
+			s.faults.AfterReadyStagingRemoval()
 		}
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1540,9 +1557,12 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 			SELECT 1
 			FROM conversation_artifacts
 			WHERE staging_name = $1
-			  AND state = 'unavailable'
-			  AND unavailable_reason IN ('final-missing', 'final-mismatch')
-			  AND staging_reclaimed_at IS NULL
+			  AND (
+					(state = 'unavailable'
+					 AND unavailable_reason IN ('final-missing', 'final-mismatch')
+					 AND staging_reclaimed_at IS NULL)
+				 OR (state = 'ready' AND staging_reclaimed_at IS NOT NULL AND staging_identity IS NULL)
+			  )
 			  AND (staging_identity IS NULL OR $2::text IS NULL OR staging_identity IS NOT DISTINCT FROM $2::text)
 		)
 	`, name, nullableString(expectedIdentity)).Scan(&diagnostic); err != nil {
@@ -1843,6 +1863,9 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 					firstFailure = err
 				}
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					if deferErr := s.deferArtifactRecovery(item.name, cleanup); deferErr != nil {
+						return report, errors.Join(err, deferErr)
+					}
 					return report, err
 				}
 				if deferErr := s.deferArtifactRecovery(item.name, cleanup); errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
@@ -1869,6 +1892,9 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 				firstFailure = err
 			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				if deferErr := s.deferStagingCleanupRetry(item.name, cleanup); deferErr != nil {
+					return report, errors.Join(err, deferErr)
+				}
 				return report, err
 			}
 			if deferErr := s.deferStagingCleanupRetry(item.name, cleanup); errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {

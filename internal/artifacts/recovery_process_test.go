@@ -558,7 +558,21 @@ func runArtifactHelper(t *testing.T, mode string, point faultPoint, root, id str
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output
-	err := command.Run()
+	if err := command.Start(); err != nil {
+		return -1, output.String() + err.Error()
+	}
+	runContext, cancel := context.WithTimeout(context.Background(), processTestTimeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-runContext.Done():
+		_ = command.Process.Kill()
+		err = <-done
+		return -1, output.String() + fmt.Sprintf("helper timed out: %v (%v)", runContext.Err(), err)
+	}
 	if err == nil {
 		return 0, output.String()
 	}
