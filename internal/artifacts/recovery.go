@@ -160,15 +160,18 @@ func (s *Store) syncStagingDirectory() error {
 	return nil
 }
 
-func (s *Store) cleanupFailedStaging(ctx context.Context, name string) {
+func (s *Store) cleanupFailedStaging(name string, cleanup *cleanupDeadline) {
 	if s == nil {
 		return
 	}
-	cleanup := newCleanupDeadline(ctx)
-	defer cleanup.stop()
 	identity, identityErr := s.stagingIdentity(name)
 	if identityErr != nil {
-		identity = nil
+		if s.pool != nil {
+			_ = s.enqueueStagingCleanup(name, cleanup)
+			return
+		}
+		_ = s.removeStaging(name)
+		return
 	}
 	if err := s.removeStaging(name); err == nil || s.pool == nil {
 		return
@@ -792,6 +795,8 @@ func (s *Store) stage(ctx context.Context, artifact protocol.Artifact, expectedH
 	if err := s.ensureObjectDirectory(); err != nil {
 		return protocol.Artifact{}, "", err
 	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
 	temporary, err := os.CreateTemp(s.objects, ".upload-*")
 	if err != nil {
 		return protocol.Artifact{}, "", fmt.Errorf("create artifact staging file: %w", ErrStoreUnavailable)
@@ -801,7 +806,7 @@ func (s *Store) stage(ctx context.Context, artifact protocol.Artifact, expectedH
 	defer func() {
 		_ = temporary.Close()
 		if !keep {
-			s.cleanupFailedStaging(ctx, filepath.Base(temporaryPath))
+			s.cleanupFailedStaging(filepath.Base(temporaryPath), cleanup)
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
@@ -1340,7 +1345,10 @@ func (s *Store) removeStaging(name string) error {
 func (s *Store) discardRejectedStaging(name string, cleanup *cleanupDeadline) error {
 	identity, identityErr := s.stagingIdentity(name)
 	if identityErr != nil {
-		identity = nil
+		if err := s.enqueueStagingCleanup(name, cleanup); err != nil {
+			return databaseWriteError("inspect rejected staging cleanup", err)
+		}
+		return nil
 	}
 	if err := s.removeStaging(name); err == nil {
 		return nil
