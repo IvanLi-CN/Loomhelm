@@ -516,6 +516,9 @@ func TestStoreCancellationDuringExistingArtifactAuthorizationCleansStaging(t *te
 	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("authorization-cancelled Put did not finish")
 	}
+	if report, err := requester.Recover(ctx, 1); err != nil || report.Cleaned != 1 {
+		t.Fatalf("authorization-cancelled staging recovery = %#v, err=%v, want one cleaned item", report, err)
+	}
 	assertNoStagingFiles(t, requester.objects)
 }
 
@@ -2558,6 +2561,9 @@ func TestStoreCancellationClosesBlockedSourceAndReturns(t *testing.T) {
 	}
 	if got := source.closeCount.Load(); got != 1 {
 		t.Fatalf("blocked source close count = %d, want 1", got)
+	}
+	if report, err := store.Recover(ctx, 1); err != nil || report.Cleaned != 1 {
+		t.Fatalf("cancelled staging recovery = %#v, err=%v, want one cleaned item", report, err)
 	}
 	assertNoStagingFiles(t, store.objects)
 }

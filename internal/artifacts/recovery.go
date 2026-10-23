@@ -173,6 +173,14 @@ func (s *Store) cleanupFailedStaging(name string, cleanup *cleanupDeadline) {
 		_ = s.removeStaging(name)
 		return
 	}
+	if cleanup != nil && cleanup.parent != nil && cleanup.parent.Err() != nil {
+		if s.pool != nil {
+			_ = s.enqueueStagingCleanupWithIdentity(name, identity, cleanup)
+			return
+		}
+		_ = s.removeStaging(name)
+		return
+	}
 	if err := s.removeStaging(name); err == nil || s.pool == nil {
 		return
 	}
@@ -650,7 +658,11 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 }
 
 func (s *Store) rejectStagedPut(authErr error, stagingName string, cleanup *cleanupDeadline) error {
-	cleanupErr := s.discardRejectedStaging(stagingName, cleanup)
+	cleanupStaging := s.discardRejectedStaging
+	if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
+		cleanupStaging = s.enqueueRejectedStagingCleanup
+	}
+	cleanupErr := cleanupStaging(stagingName, cleanup)
 	if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
 		if cleanupErr != nil {
 			return errors.Join(authErr, cleanupErr)
@@ -792,11 +804,11 @@ func (s *Store) updateUnavailableState(ctx context.Context, tx pgx.Tx, record ar
 }
 
 func (s *Store) stage(ctx context.Context, artifact protocol.Artifact, expectedHash string, source io.Reader) (protocol.Artifact, string, error) {
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
 	if err := s.ensureObjectDirectory(); err != nil {
 		return protocol.Artifact{}, "", err
 	}
-	cleanup := newCleanupDeadline(ctx)
-	defer cleanup.stop()
 	temporary, err := os.CreateTemp(s.objects, ".upload-*")
 	if err != nil {
 		return protocol.Artifact{}, "", fmt.Errorf("create artifact staging file: %w", ErrStoreUnavailable)
@@ -1340,6 +1352,14 @@ func (s *Store) removeStaging(name string) error {
 		return fmt.Errorf("sync artifact staging directory after removal: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) enqueueRejectedStagingCleanup(name string, cleanup *cleanupDeadline) error {
+	identity, identityErr := s.stagingIdentity(name)
+	if identityErr != nil {
+		return s.enqueueStagingCleanup(name, cleanup)
+	}
+	return s.enqueueStagingCleanupWithIdentity(name, identity, cleanup)
 }
 
 func (s *Store) discardRejectedStaging(name string, cleanup *cleanupDeadline) error {
