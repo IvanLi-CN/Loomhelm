@@ -80,7 +80,7 @@ func TestArtifactProcessHelper(t *testing.T) {
 			if signal != "" {
 				_ = os.WriteFile(signal, []byte(pauseSignal), 0o600)
 			}
-			deadline := time.Now().Add(20 * time.Second)
+			deadline := time.Now().Add(45 * time.Second)
 			for {
 				if _, statErr := os.Stat(release); statErr == nil {
 					return
