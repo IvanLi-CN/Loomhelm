@@ -50,40 +50,79 @@ export interface MutationNotice {
   message: string;
 }
 
-const MUTATION_NOTICE_STORAGE_PREFIX = "loomhelm.project-task.mutation-notices.v1";
-const MUTATION_NOTICE_CHANNEL = "loomhelm-project-task-mutation-notices";
-
-function mutationNoticeStorageKey(principalId: string): string {
-  return `${MUTATION_NOTICE_STORAGE_PREFIX}.${encodeURIComponent(principalId)}`;
+export function mergeMutationNoticeChanges(
+  current: readonly MutationNotice[],
+  added: readonly MutationNotice[],
+  removed: readonly string[]
+): readonly MutationNotice[] {
+  const notices = new Map(current.map((notice) => [notice.id, notice] as const));
+  removed.forEach((id) => notices.delete(id));
+  added.forEach((notice) => notices.set(notice.id, notice));
+  return [...notices.values()];
 }
 
-function parseMutationNotices(value: unknown): readonly MutationNotice[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((notice): notice is MutationNotice => Boolean(notice && typeof notice === "object" && typeof (notice as MutationNotice).id === "string" && typeof (notice as MutationNotice).message === "string"));
+const MUTATION_NOTICE_STORAGE_PREFIX = "loomhelm.project-task.mutation-notice.v2";
+const MUTATION_NOTICE_CHANNEL = "loomhelm-project-task-mutation-notices";
+
+function mutationNoticeStoragePrefix(principalId: string): string {
+  return `${MUTATION_NOTICE_STORAGE_PREFIX}.${encodeURIComponent(principalId)}.`;
+}
+
+function mutationNoticeStorageKey(principalId: string, id: string): string {
+  return `${mutationNoticeStoragePrefix(principalId)}${encodeURIComponent(id)}`;
+}
+
+function parseMutationNotice(value: unknown): MutationNotice | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const notice = value as Partial<MutationNotice>;
+  return typeof notice.id === "string" && typeof notice.message === "string" ? { id: notice.id, message: notice.message } : undefined;
 }
 
 function readPersistedMutationNotices(principalId: string): readonly MutationNotice[] {
   if (typeof window === "undefined") return [];
+  const prefix = mutationNoticeStoragePrefix(principalId);
+  const notices: MutationNotice[] = [];
   try {
-    const raw = window.localStorage.getItem(mutationNoticeStorageKey(principalId));
-    return raw ? parseMutationNotices(JSON.parse(raw)) : [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key?.startsWith(prefix)) continue;
+      const notice = parseMutationNotice(JSON.parse(window.localStorage.getItem(key) ?? "null"));
+      if (notice) notices.push(notice);
+    }
   } catch {
-    return [];
+    return notices;
   }
+  return notices;
 }
 
-function publishMutationNotices(principalId: string, notices: readonly MutationNotice[]): void {
+function publishMutationNoticeChanges(principalId: string, added: readonly MutationNotice[], removed: readonly string[]): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(mutationNoticeStorageKey(principalId), JSON.stringify(notices));
+    removed.forEach((id) => window.localStorage.removeItem(mutationNoticeStorageKey(principalId, id)));
+    added.forEach((notice) => window.localStorage.setItem(mutationNoticeStorageKey(principalId, notice.id), JSON.stringify(notice)));
   } catch {
     // BroadcastChannel remains available when localStorage is blocked.
   }
   if (typeof BroadcastChannel !== "undefined") {
     const channel = new BroadcastChannel(MUTATION_NOTICE_CHANNEL);
-    channel.postMessage({ principalId, notices });
+    channel.postMessage({ principalId, added, removed });
     channel.close();
   }
+}
+
+function isPendingProjectCreationNotice(id: string): boolean {
+  return id === "project:create" || id.startsWith("project:create:");
+}
+
+function isPendingTaskCreationNotice(id: string): boolean {
+  return id === "task:create" || id.startsWith("task:create:");
+}
+
+function createMutationNoticeId(kind: "project" | "task"): string {
+  const suffix = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${kind}:create:${suffix}`;
 }
 
 export const PROJECT_PAGE_LIMIT = 100;
@@ -459,7 +498,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   }, [deniedTaskKey, queryClient, sessionGeneration, subjectId]);
 
   const mutationNoticeKey = useMemo(() => projectTaskQueryKeys.mutationNotice(subjectId), [subjectId]);
-  const mutationNoticeStorageKeyValue = useMemo(() => mutationNoticeStorageKey(subjectId), [subjectId]);
+  const mutationNoticeStoragePrefixValue = useMemo(() => mutationNoticeStoragePrefix(subjectId), [subjectId]);
   const mutationNoticeQuery = useQuery<readonly MutationNotice[]>({
     queryKey: mutationNoticeKey,
     queryFn: async () => readPersistedMutationNotices(subjectId),
@@ -472,18 +511,17 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     if (!queryEnabled || typeof window === "undefined") return;
     const apply = (notices: readonly MutationNotice[]) => queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, notices);
     const handleStorage = (event: StorageEvent) => {
-      if (event.key !== mutationNoticeStorageKeyValue) return;
-      try {
-        apply(event.newValue ? parseMutationNotices(JSON.parse(event.newValue)) : []);
-      } catch {
-        // Ignore malformed state from another browsing context.
-      }
+      if (!event.key?.startsWith(mutationNoticeStoragePrefixValue)) return;
+      apply(readPersistedMutationNotices(subjectId));
     };
     const handleBroadcast = (event: MessageEvent<unknown>) => {
       if (!event.data || typeof event.data !== "object") return;
-      const signal = event.data as { principalId?: unknown; notices?: unknown };
+      const signal = event.data as { principalId?: unknown; added?: unknown; removed?: unknown };
       if (signal.principalId !== subjectId) return;
-      apply(parseMutationNotices(signal.notices));
+      const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
+      const removed = Array.isArray(signal.removed) ? signal.removed.filter((id): id is string => typeof id === "string") : [];
+      const added = Array.isArray(signal.added) ? signal.added.map(parseMutationNotice).filter((notice): notice is MutationNotice => Boolean(notice)) : [];
+      apply(mergeMutationNoticeChanges(current, added, removed));
     };
     let channel: BroadcastChannel | undefined;
     if (typeof BroadcastChannel !== "undefined") {
@@ -496,12 +534,16 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       channel?.removeEventListener("message", handleBroadcast);
       channel?.close();
     };
-  }, [mutationNoticeKey, mutationNoticeStorageKeyValue, queryClient, queryEnabled, subjectId]);
+  }, [mutationNoticeKey, mutationNoticeStoragePrefixValue, queryClient, queryEnabled, subjectId]);
   const updateMutationNotices = useCallback((update: (current: readonly MutationNotice[]) => readonly MutationNotice[]) => {
     const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
     const next = update(current);
+    const currentById = new Map(current.map((notice) => [notice.id, notice] as const));
+    const nextById = new Map(next.map((notice) => [notice.id, notice] as const));
+    const removed = [...currentById.keys()].filter((id) => !nextById.has(id));
+    const added = [...nextById.values()].filter((notice) => currentById.get(notice.id)?.message !== notice.message);
     queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, next);
-    publishMutationNotices(subjectId, next);
+    if (added.length || removed.length) publishMutationNoticeChanges(subjectId, added, removed);
   }, [mutationNoticeKey, queryClient, subjectId]);
   const recordMutationNotice = useCallback((id: string, message: string) => {
     updateMutationNotices((current) => [
@@ -514,11 +556,11 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   }, [updateMutationNotices]);
   const reconciliationNoticeByTaskId = useMemo(() => new Map(
     mutationNoticeQuery.data
-      .filter((notice) => notice.id.startsWith("task:") && notice.id !== "task:create")
+      .filter((notice) => notice.id.startsWith("task:") && !isPendingTaskCreationNotice(notice.id))
       .map((notice) => [notice.id.slice("task:".length), notice.message] as const)
   ), [mutationNoticeQuery.data]);
-  const pendingProjectCreation = mutationNoticeQuery.data.some((notice) => notice.id === "project:create");
-  const pendingTaskCreation = mutationNoticeQuery.data.some((notice) => notice.id === "task:create");
+  const pendingProjectCreation = mutationNoticeQuery.data.some((notice) => isPendingProjectCreationNotice(notice.id));
+  const pendingTaskCreation = mutationNoticeQuery.data.some((notice) => isPendingTaskCreationNotice(notice.id));
 
   const handleFailure = useCallback(<T,>(operation: string, error: unknown): WriteResult<T> => failure<T>(operation, error), []);
 
@@ -627,14 +669,15 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
 
     const createProject = async (draft: ProjectDraft): Promise<WriteResult<ReturnType<typeof mapProject>>> => {
       if (!canCreateProjects || !projectWriteReady) return denied("当前身份或连接状态不能确认项目写入范围，项目写入没有执行。");
+      const createNoticeId = createMutationNoticeId("project");
       try {
         const response = await createProjectMutation.mutateAsync(draft);
-        clearMutationNotice("project:create");
+        clearMutationNotice(createNoticeId);
         return success(mapProject(response.project));
       } catch (error) {
         if (isPermissionError(error)) await invalidatePermissionScope(true);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<ReturnType<typeof mapProject>>("创建项目", error) : handleFailure<ReturnType<typeof mapProject>>("创建项目", error);
-        if (!result.ok && result.reconcile) recordMutationNotice("project:create", result.message);
+        if (!result.ok && result.reconcile) recordMutationNotice(createNoticeId, result.message);
         return result;
       }
     };
@@ -669,6 +712,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const createTask = async (draft: TaskDraft): Promise<WriteResult<TaskRecord>> => {
       if (!getProjectPermissions(draft.projectId).canWrite) return denied();
+      const createNoticeId = createMutationNoticeId("task");
       const relationChanges: TaskRelationChanges = {
         addParentIds: [...new Set(draft.parentIds ?? (draft.parentId ? [draft.parentId] : []))],
         addDependencyIds: [...new Set(draft.dependsOn ?? [])]
@@ -687,13 +731,13 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           recordMutationNotice(`task:${response.task.id}`, warning);
           return success(value, warning, true, { failures: relationResult.failures, applied: relationResult.applied });
         }
-        clearMutationNotice("task:create");
+        clearMutationNotice(createNoticeId);
         clearMutationNotice(`task:${response.task.id}`);
         return success(value);
       } catch (error) {
         if (isPermissionError(error)) await invalidatePermissionScope(false);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<TaskRecord>("创建任务", error) : handleFailure<TaskRecord>("创建任务", error);
-        if (!result.ok && result.reconcile) recordMutationNotice("task:create", result.message);
+        if (!result.ok && result.reconcile) recordMutationNotice(createNoticeId, result.message);
         return result;
       }
     };
@@ -770,8 +814,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       try {
         relationMutationsInFlight.current.add(taskId);
         setRelationMutationPending(taskId, true);
-        const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, changes).finally(() => relationMutationsInFlight.current.delete(taskId));
-        setRelationMutationPending(taskId, false);
+        const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, changes);
         if (relationResult.failures.length) {
           if (relationResult.failures.some((item) => item.status === 401 || item.status === 403 || item.status === 404)) await invalidatePermissionScope(false);
           const warning = "任务关系仅部分保存：" + relationResult.failures.map((item) => item.message).join("；") + "。请刷新后核对。";
@@ -781,11 +824,13 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         clearMutationNotice(`task:${taskId}`);
         return success(null);
       } catch (error) {
-        setRelationMutationPending(taskId, false);
         if (isPermissionError(error)) await invalidatePermissionScope(false);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<null>("更新任务关系", error) : handleFailure<null>("更新任务关系", error);
         if (!result.ok && result.reconcile) recordMutationNotice(`task:${taskId}`, result.message);
         return result;
+      } finally {
+        relationMutationsInFlight.current.delete(taskId);
+        setRelationMutationPending(taskId, false);
       }
     };
     const refresh = async (): Promise<void> => {
@@ -795,17 +840,17 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const failedQuery = refreshedQueries.find((query) => query.state.status === "error");
       const incompleteQuery = refreshedQueries.find((query) => hasIncompleteProjectTaskRead(query.state.data));
       if (failedQuery || incompleteQuery) throw new Error("项目、任务或关系列表刷新不完整，待确认结果仍然保留。");
-      updateMutationNotices((notices) => notices.filter((notice) => notice.id === "project:create" || notice.id === "task:create"));
+      updateMutationNotices((notices) => notices.filter((notice) => isPendingProjectCreationNotice(notice.id) || isPendingTaskCreationNotice(notice.id)));
     };
 
     return {
       projects,
       tasks,
-      status: !enabled || !principalId ? "unauthenticated" : queryPending ? "loading" : queryError ? "error" : permissionChanged ? "permission-changed" : "ready",
+      status: !enabled || !principalId ? "unauthenticated" : queryPending ? "loading" : queryError ? "error" : "ready",
       pendingProjectCreation,
       pendingTaskCreation,
-      acknowledgePendingProjectCreation: () => clearMutationNotice("project:create"),
-      acknowledgePendingTaskCreation: () => clearMutationNotice("task:create"),
+      acknowledgePendingProjectCreation: () => updateMutationNotices((notices) => notices.filter((notice) => !isPendingProjectCreationNotice(notice.id))),
+      acknowledgePendingTaskCreation: () => updateMutationNotices((notices) => notices.filter((notice) => !isPendingTaskCreationNotice(notice.id))),
       isTaskRelationWritePending: (taskId: string) => relationMutationsPending.has(taskId),
       canCreateProjects: canCreateProjects && projectWriteReady,
       getProjectPermissions,

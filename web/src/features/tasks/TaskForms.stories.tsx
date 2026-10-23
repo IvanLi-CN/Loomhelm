@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { ReactNode } from "react";
 import { expect, userEvent, within } from "storybook/test";
 
-import { createStorySource } from "./story-source";
+import { createStorySource, storyTasks } from "./story-source";
 import { TaskEditor, TaskForm } from "./TaskForm";
 import { TaskRelationshipEditor } from "./TaskRelations";
 
@@ -45,5 +45,33 @@ export const ProtectedDelete: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "删除任务" }));
     expect(await canvas.findByText("任务已有对话或执行事实，受保护删除已阻止。"));
+  }
+};
+
+export const ReconciliationBlocked: Story = {
+  args: { source: createStorySource(), mode: "edit" },
+  render: () => {
+    const task = { ...storyTasks[0], relationshipsConfirmed: false, reconciliationNotice: "关系写入结果待核对；请先刷新列表。" };
+    const source = createStorySource({ tasks: [task, ...storyTasks.slice(1)], getTask: (id) => id === task.id ? task : storyTasks.find((item) => item.id === id) });
+    return <StoryFrame><TaskEditor source={source} taskId={task.id} /></StoryFrame>;
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.getByRole("alert")).toHaveTextContent("关系写入结果待核对");
+    expect(canvas.getByRole("button", { name: "编辑任务" })).toBeDisabled();
+    expect(canvas.getByRole("button", { name: "删除任务" })).toBeDisabled();
+  }
+};
+
+export const RelationWritePending: Story = {
+  args: { source: createStorySource(), mode: "edit" },
+  render: () => {
+    const source = createStorySource({ isTaskRelationWritePending: (taskId) => taskId === "STORY-01" });
+    return <StoryFrame><div className="grid gap-4"><TaskEditor source={source} taskId="STORY-01" /><TaskRelationshipEditor source={source} taskId="STORY-01" /></div></StoryFrame>;
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.getByText("任务关系保存中，编辑和删除暂时不可用。")).toBeInTheDocument();
+    expect(canvas.getByText("关系保存中…")).toBeInTheDocument();
   }
 };

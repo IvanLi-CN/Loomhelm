@@ -7,6 +7,7 @@ import {
   filterTaskRelationships,
   filterTasksToVisibleProjects,
   hasIncompleteProjectTaskRead,
+  mergeMutationNoticeChanges,
   projectTaskQueryKeys,
   readProjectMemberships,
   readTaskRelationships,
@@ -187,6 +188,15 @@ describe("project/task write contracts", () => {
     expect(hasIncompleteProjectTaskRead({ failures: ["relation unavailable"] })).toBe(true);
     expect(hasIncompleteProjectTaskRead({ deniedTaskIds: ["task-revoked"] })).toBe(true);
     expect(hasIncompleteProjectTaskRead({ failures: [], deniedProjectIds: [], deniedTaskIds: [] })).toBe(false);
+  });
+
+  test("merges cross-tab mutation notice deltas without replacing unrelated barriers", () => {
+    const first = { id: "task:one", message: "one" };
+    const second = { id: "task:two", message: "two" };
+
+    expect(mergeMutationNoticeChanges([], [first], [])).toEqual([first]);
+    expect(mergeMutationNoticeChanges([first], [second], [])).toEqual([first, second]);
+    expect(mergeMutationNoticeChanges([first, second], [], [first.id])).toEqual([second]);
   });
 
   test("keeps successful project memberships when one scoped read fails", async () => {
