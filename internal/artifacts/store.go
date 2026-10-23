@@ -199,11 +199,20 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 	if err != nil {
 		return protocol.Artifact{}, err
 	}
+	stagedIdentity, identityErr := s.stagingIdentity(stagingName)
+	if identityErr != nil {
+		s.cleanupFailedStaging(stagingName, cleanup)
+		return protocol.Artifact{}, identityErr
+	}
+	if stagedIdentity == nil {
+		s.cleanupFailedStaging(stagingName, cleanup)
+		return protocol.Artifact{}, fmt.Errorf("staging object disappeared after staging: %w", ErrStoreUnavailable)
+	}
 	keepStaging := true
 	defer func() {
 		if !keepStaging {
-			if err := s.removeStaging(stagingName); err != nil {
-				s.enqueueStagingCleanup(stagingName, cleanup)
+			if err := s.removeStagingIfIdentity(stagingName, stagedIdentity); err != nil {
+				_ = s.enqueueStagingCleanupWithIdentity(stagingName, stagedIdentity, cleanup)
 			}
 		}
 	}()

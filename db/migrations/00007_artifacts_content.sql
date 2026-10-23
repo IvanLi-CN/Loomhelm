@@ -28,6 +28,7 @@ CREATE INDEX conversation_artifacts_run_idx ON conversation_artifacts (run_id, c
 CREATE INDEX conversation_artifacts_pending_idx ON conversation_artifacts (staging_reclaim_after, created_at, id) WHERE state = 'pending';
 CREATE INDEX conversation_artifacts_ready_staging_idx ON conversation_artifacts (staging_reclaim_after, created_at, id) WHERE state = 'ready' AND staging_reclaimed_at IS NULL;
 CREATE UNIQUE INDEX conversation_artifacts_active_staging_idx ON conversation_artifacts (staging_name) WHERE state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL);
+CREATE INDEX conversation_artifacts_staging_name_lookup_idx ON conversation_artifacts (staging_name) WHERE staging_name IS NOT NULL;
 CREATE INDEX conversation_artifact_staging_cleanup_retry_idx ON conversation_artifact_staging_cleanup (retry_after, staging_name);
 
 -- Session and Run ownership foreign keys are intentionally added by a follow-up

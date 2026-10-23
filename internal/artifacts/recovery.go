@@ -1452,6 +1452,17 @@ func (s *Store) removeStaging(name string) error {
 	return nil
 }
 
+func (s *Store) removeStagingIfIdentity(name string, expected *string) error {
+	current, err := s.stagingIdentity(name)
+	if err != nil {
+		return err
+	}
+	if !sameStagingIdentity(expected, current) {
+		return nil
+	}
+	return s.removeStaging(name)
+}
+
 func (s *Store) enqueueStagingCleanup(name string, cleanup *cleanupDeadline) error {
 	var intendedIdentity *string
 	return s.enqueueStagingCleanupWithQueue(name, cleanup, func(ctx context.Context, tx pgx.Tx) error {

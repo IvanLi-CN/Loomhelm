@@ -73,7 +73,7 @@
     "ddl_structural_changes": [
       {
         "id": "ddl-00007-artifacts-content",
-        "description": "Create conversation_artifacts, conversation_artifact_staging_cleanup and their lookup, coordination and retry indexes in one atomic Goose DDL transaction; the only observable and pauseable boundary is after that transaction commits.",
+        "description": "Create conversation_artifacts, conversation_artifact_staging_cleanup and their active, diagnostic-lookup, coordination and retry indexes in one atomic Goose DDL transaction; the only observable and pauseable boundary is after that transaction commits.",
         "order": 1,
         "observable": true,
         "pauseable": true

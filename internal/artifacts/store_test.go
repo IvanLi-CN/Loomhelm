@@ -50,6 +50,41 @@ func TestConfigValidateRejectsFilesystemRoot(t *testing.T) {
 	}
 }
 
+func TestStoreRemoveStagingIfIdentityPreservesReplacement(t *testing.T) {
+	root := t.TempDir()
+	objects := filepath.Join(root, "objects")
+	if err := prepareDirectory(objects, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{objects: objects}
+	stagingName := ".upload-identity-guard"
+	stagingPath := filepath.Join(objects, stagingName)
+	if err := os.WriteFile(stagingPath, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := store.stagingIdentity(stagingName)
+	if err != nil || expected == nil {
+		t.Fatalf("original staging identity = %v/%v", expected, err)
+	}
+	replacementPath := stagingPath + "-replacement"
+	if err := os.WriteFile(replacementPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementPath, stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.removeStagingIfIdentity(stagingName, expected); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(stagingPath)
+	if err != nil || string(content) != "replacement" {
+		t.Fatalf("replacement staging = %q, err=%v, want replacement", content, err)
+	}
+}
+
 func TestStorePutDeniesBeforeWritingWhenAuthorizationIsMissing(t *testing.T) {
 	root := t.TempDir()
 	objects := filepath.Join(root, "objects")
