@@ -51,6 +51,7 @@ export interface MutationNotice {
   message: string;
   kind?: "creation" | "in-flight" | "reconciliation";
   lockScope?: string;
+  volatile?: boolean;
   projectId?: string;
   taskId?: string;
 }
@@ -82,9 +83,10 @@ function parseMutationNotice(value: unknown): MutationNotice | undefined {
   const notice = value as Partial<MutationNotice>;
   const kind = notice.kind === "creation" || notice.kind === "in-flight" || notice.kind === "reconciliation" ? notice.kind : undefined;
   const lockScope = typeof notice.lockScope === "string" ? notice.lockScope : undefined;
+  const volatile = notice.volatile === true;
   const projectId = typeof notice.projectId === "string" ? notice.projectId : undefined;
   const taskId = typeof notice.taskId === "string" ? notice.taskId : undefined;
-  return typeof notice.id === "string" && typeof notice.message === "string" ? { id: notice.id, message: notice.message, ...(kind ? { kind } : {}), ...(lockScope ? { lockScope } : {}), ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) } : undefined;
+  return typeof notice.id === "string" && typeof notice.message === "string" ? { id: notice.id, message: notice.message, ...(kind ? { kind } : {}), ...(lockScope ? { lockScope } : {}), ...(volatile ? { volatile } : {}), ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) } : undefined;
 }
 
 interface MutationNoticeStorageRead {
@@ -133,28 +135,32 @@ function readPersistedMutationNotices(principalId: string): readonly MutationNot
 function publishMutationNoticeChanges(principalId: string, added: readonly MutationNotice[], removed: readonly string[]): boolean {
   if (typeof window === "undefined") return true;
   const sharedStorage = getBrowserStorage("localStorage");
-  if (!sharedStorage) return false;
-  try {
-    removed.forEach((id) => sharedStorage.removeItem(mutationNoticeStorageKey(principalId, id)));
-    added.forEach((notice) => sharedStorage.setItem(mutationNoticeStorageKey(principalId, notice.id), JSON.stringify(notice)));
-  } catch {
-    return false;
+  let persisted = false;
+  if (sharedStorage) {
+    try {
+      removed.forEach((id) => sharedStorage.removeItem(mutationNoticeStorageKey(principalId, id)));
+      added.forEach((notice) => sharedStorage.setItem(mutationNoticeStorageKey(principalId, notice.id), JSON.stringify(notice)));
+      persisted = true;
+    } catch {
+      persisted = false;
+    }
   }
+  const signalAdded = persisted ? added : added.map((notice) => ({ ...notice, volatile: true }));
   const sessionStorage = getBrowserStorage("sessionStorage");
   if (sessionStorage) {
     try {
       removed.forEach((id) => sessionStorage.removeItem(mutationNoticeStorageKey(principalId, id)));
-      added.forEach((notice) => sessionStorage.setItem(mutationNoticeStorageKey(principalId, notice.id), JSON.stringify(notice)));
+      signalAdded.forEach((notice) => sessionStorage.setItem(mutationNoticeStorageKey(principalId, notice.id), JSON.stringify(notice)));
     } catch {
       // localStorage is the shared source of truth; sessionStorage is best effort.
     }
   }
   if (typeof BroadcastChannel !== "undefined") {
     const channel = new BroadcastChannel(MUTATION_NOTICE_CHANNEL);
-    channel.postMessage({ principalId, added, removed });
+    channel.postMessage({ principalId, added: signalAdded, removed });
     channel.close();
   }
-  return true;
+  return persisted;
 }
 
 function isPendingProjectCreationNotice(notice: Pick<MutationNotice, "id" | "projectId">): boolean {
@@ -245,6 +251,10 @@ async function withAvailableBrowserMutationLock<T>(principalId: string, scope: s
 async function runWithBrowserMutationLock<T>(principalId: string, scope: string, operation: () => Promise<WriteResult<T>>, ifAvailable = true): Promise<WriteResult<T>> {
   if (!browserMutationLocks()) return blockedWithoutReconcile("当前浏览器不支持跨标签写入协调，写入没有执行。");
   return withAvailableBrowserMutationLock(principalId, scope, blockedWithoutReconcile("同一写入正在其他标签页处理中，请刷新核对后再试。"), operation, ifAvailable);
+}
+
+async function runWithTaskMutationLocks<T>(principalId: string, taskId: string, operation: () => Promise<WriteResult<T>>): Promise<WriteResult<T>> {
+  return runWithBrowserMutationLock(principalId, "task:create", () => runWithBrowserMutationLock(principalId, `task:${taskId}`, operation));
 }
 
 function hasPersistedMutationBarrier(principalId: string, scope: string): boolean {
@@ -642,11 +652,20 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   });
   useEffect(() => {
     if (!queryEnabled || typeof window === "undefined") return;
-    const apply = (notices: readonly MutationNotice[]) => queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, notices);
-    apply(readPersistedMutationNotices(subjectId));
+    const apply = (notices: readonly MutationNotice[], preserveVolatile = false) => {
+      if (!preserveVolatile) {
+        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, notices);
+        return;
+      }
+      const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
+      const persistedIds = new Set(notices.map((notice) => notice.id));
+      const volatile = current.filter((notice) => notice.volatile && !persistedIds.has(notice.id));
+      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, [...notices, ...volatile]);
+    };
+    apply(readPersistedMutationNotices(subjectId), true);
     const handleStorage = (event: StorageEvent) => {
       if (!event.key?.startsWith(mutationNoticeStoragePrefixValue)) return;
-      apply(readPersistedMutationNotices(subjectId));
+      apply(readPersistedMutationNotices(subjectId), true);
     };
     const handleBroadcast = (event: MessageEvent<unknown>) => {
       if (!event.data || typeof event.data !== "object") return;
@@ -677,12 +696,13 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     const removed = [...currentById.keys()].filter((id) => !nextById.has(id));
     const added = [...nextById.values()].filter((notice) => {
       const previous = currentById.get(notice.id);
-      return previous?.message !== notice.message || previous?.kind !== notice.kind || previous?.lockScope !== notice.lockScope || previous?.projectId !== notice.projectId || previous?.taskId !== notice.taskId;
+      return previous?.message !== notice.message || previous?.kind !== notice.kind || previous?.lockScope !== notice.lockScope || previous?.volatile !== notice.volatile || previous?.projectId !== notice.projectId || previous?.taskId !== notice.taskId;
     });
     if (added.length || removed.length) {
       const persisted = publishMutationNoticeChanges(subjectId, added, removed);
       if (!persisted && !allowLocalFallback) return { applied: false, persisted: false };
-      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, next);
+      const localNext = persisted ? next : next.map((notice) => added.some((addedNotice) => addedNotice.id === notice.id) ? { ...notice, volatile: true } : notice);
+      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, localNext);
       return { applied: true, persisted };
     }
     queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, next);
@@ -1035,7 +1055,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         const relationBlock = relationWriteBlockReason(taskId, relationChanges, getTask, getProjectPermissions);
         if (relationBlock) return denied(relationBlock);
       }
-      return runWithBrowserMutationLock(subjectId, `task:${taskId}`, async () => {
+      return runWithTaskMutationLocks(subjectId, taskId, async () => {
         if (!isCurrentSession()) return blocked("登录身份已变化，任务写入没有执行。");
         const barrier = mutationBarrier<TaskRecord>(`task:${taskId}`, "任务更新");
         if (barrier) return barrier;
@@ -1087,7 +1107,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const reconciliationBlock = taskWriteBlockReason(task);
       if (reconciliationBlock) return blocked(reconciliationBlock);
       if (!getProjectPermissions(task?.projectId).canWrite) return denied();
-      return runWithBrowserMutationLock(subjectId, `task:${taskId}`, async () => {
+      return runWithTaskMutationLocks(subjectId, taskId, async () => {
         if (!isCurrentSession()) return blocked("登录身份已变化，任务写入没有执行。");
         const barrier = mutationBarrier<null>(`task:${taskId}`, "任务删除");
         if (barrier) return barrier;
@@ -1118,7 +1138,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       if (!Object.keys(changes).length) return success(null);
       const relationBlock = relationWriteBlockReason(taskId, changes, getTask, getProjectPermissions);
       if (relationBlock) return denied(relationBlock);
-      return runWithBrowserMutationLock(subjectId, `task:${taskId}`, async () => {
+      return runWithTaskMutationLocks(subjectId, taskId, async () => {
         if (!isCurrentSession()) return blocked("登录身份已变化，关系写入没有执行。");
         const barrier = mutationBarrier<null>(`task:${taskId}`, "任务关系写入");
         if (barrier) return barrier;
