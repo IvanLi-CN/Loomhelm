@@ -205,6 +205,7 @@ describe("project/task write contracts", () => {
     const volatile = { ...persisted, message: "task is ready for reconciliation", kind: "reconciliation" as const, lockScope: "task:one", taskId: "task-1", volatile: true };
 
     expect(mergePersistedMutationNotices([volatile], [persisted])).toEqual([volatile]);
+    expect(mergePersistedMutationNotices([volatile], [], false)).toEqual([]);
     expect(mergePersistedMutationNotices([], [persisted])).toEqual([persisted]);
   });
 
