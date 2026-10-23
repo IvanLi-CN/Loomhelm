@@ -90,6 +90,8 @@ This evidence records visual acceptance of the mock UI only; it does not by itse
 
 The Batch 6 candidate evidence uses `ui_demo` at commit `235ae4ec74b334f63837b491fca0c1f418d09579` against base `cfcfad41f0887c28304b362e54943bb6fd96e1a2`, with desktop coverage at `1440x900` and mobile coverage at `393x852`. The owner confirmed the four candidate captures after exact-path comparison returned `current-only` with no baseline or heatmap; trim normalization was unchanged with `ambiguous_border` and zero padding. The confirmed canonical assets cover the 32px desktop Demo Inspector dense Select contract and the surrounding workbench/project-task layouts; the mobile screenshot shows the collapsed Inspector entry, so the 44px mobile touch metric is evidenced by the DOM/Storybook runtime checks rather than by the mobile screenshot itself. This remains UI evidence only and does not establish backend or product acceptance.
 
+The current U02 candidate is `80f4bbe9c9bfb42a4019565f6e06dbd8845a8506` against base `92c6c748f192f8984f97f5cb1b42c261bd7df91d`, re-rendered from the login-free `ui_demo` at `1440x900` and `393x852` CSS viewports. The current candidate preserves the owner-confirmed workbench layout while the implementation changes only mutation/reconciliation handling; trim-only normalization retained both captures with `ambiguous_border` and zero padding, and the canonical workbench assets below are bound to this candidate.
+
 ![Batch 6 workbench on the desktop viewport](assets/workbench-desktop-dark.png)
 
 ![Batch 6 workbench on a narrow viewport](assets/workbench-mobile-dark.png)
