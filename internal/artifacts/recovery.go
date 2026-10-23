@@ -1174,6 +1174,9 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 	if s.faults != nil && s.faults.BeforeReadyStagingRemoval != nil {
 		s.faults.BeforeReadyStagingRemoval()
 	}
+	if err := ctx.Err(); err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
 	if removeStaging {
 		if removeErr := s.removeStaging(record.StagingName); removeErr != nil {
 			commitErr := s.commit(ctx, tx)
@@ -1667,6 +1670,9 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 			return false, err
 		}
 		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
 	if removeErr := s.removeStaging(name); removeErr != nil {
 		if _, err := tx.Exec(ctx, `
