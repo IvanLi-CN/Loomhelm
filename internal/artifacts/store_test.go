@@ -1922,11 +1922,22 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 	firstContext, cancelFirst := context.WithCancel(ctx)
 	defer cancelFirst()
 	intentStarted := make(chan struct{})
+	secondEntered := make(chan struct{})
 	var intentOnce sync.Once
+	var intentCalls atomic.Int32
+	var secondEntryOnce sync.Once
+	secondID := uniqueID("artifact-unrelated")
 	store.faults = &faultHooks{
 		AfterIntentCommit: func() {
-			intentOnce.Do(func() { close(intentStarted) })
-			<-firstContext.Done()
+			if intentCalls.Add(1) == 1 {
+				intentOnce.Do(func() { close(intentStarted) })
+				<-firstContext.Done()
+			}
+		},
+		BeforeIdentityLock: func(_ context.Context, _ pgx.Tx, id string) {
+			if id == secondID {
+				secondEntryOnce.Do(func() { close(secondEntered) })
+			}
 		},
 	}
 	firstContent := []byte("cancelled after intent")
@@ -1943,11 +1954,23 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 		t.Fatal("first upload did not reach committed intent")
 	}
 	secondResult := make(chan error, 1)
-	secondID := uniqueID("artifact-unrelated")
 	go func() {
 		_, err := store.Put(ctx, testArtifact(secondID, nil, secondContent), readCloser(bytes.NewReader(secondContent)))
 		secondResult <- err
 	}()
+	select {
+	case <-secondEntered:
+	case <-time.After(cleanupTimeout + time.Second):
+		t.Fatal("unrelated upload did not enter while first upload was blocked")
+	}
+	select {
+	case err := <-secondResult:
+		if err != nil {
+			t.Fatalf("unrelated upload error while first was blocked = %v", err)
+		}
+	case <-time.After(cleanupTimeout + time.Second):
+		t.Fatal("unrelated upload was stalled by cancelled upload")
+	}
 	cancelFirst()
 	select {
 	case err := <-firstResult:
@@ -1956,14 +1979,6 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 		}
 	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("cancelled after-intent upload did not return")
-	}
-	select {
-	case err := <-secondResult:
-		if err != nil {
-			t.Fatalf("unrelated upload error = %v", err)
-		}
-	case <-time.After(cleanupTimeout + time.Second):
-		t.Fatal("unrelated upload was stalled by cancelled upload")
 	}
 	store.faults = nil
 	_, err := store.Recover(ctx, MaxRecoveryLimit)
@@ -2024,14 +2039,15 @@ func TestCleanupContextExtendsWhenCancellationStartsAfterAllocation(t *testing.T
 	cleanupContext, cleanupCancel := cleanup.context()
 	defer cleanupCancel()
 	time.Sleep(25 * time.Millisecond)
+	cancelledAt := time.Now()
 	cancel()
 	cleanup.start()
 	deadline, ok := cleanupContext.Deadline()
 	if !ok {
 		t.Fatal("cleanup context has no deadline")
 	}
-	if remaining := time.Until(deadline); remaining < cleanupTimeout-100*time.Millisecond {
-		t.Fatalf("cleanup deadline remaining = %s, want at least %s after cancellation", remaining, cleanupTimeout-100*time.Millisecond)
+	if deadline.Before(cancelledAt.Add(cleanupTimeout)) {
+		t.Fatalf("cleanup deadline = %s, want at least %s after cancellation", deadline, cancelledAt.Add(cleanupTimeout))
 	}
 }
 

@@ -1294,19 +1294,29 @@ func (s *Store) removeStaging(name string) error {
 }
 
 func (s *Store) enqueueStagingCleanup(name string, cleanup *cleanupDeadline) error {
+	var intendedIdentity *string
 	return s.enqueueStagingCleanupWithQueue(name, cleanup, func(ctx context.Context, tx pgx.Tx) error {
-		return s.queueCurrentStagingCleanupTx(ctx, tx, name)
+		identity, err := s.stagingIdentity(name)
+		if err != nil {
+			return err
+		}
+		intendedIdentity = identity
+		return s.queueStagingCleanupTx(ctx, tx, name, identity)
+	}, func(confirmCleanup *cleanupDeadline) (bool, error) {
+		return s.stagingCleanupMatches(name, intendedIdentity, confirmCleanup)
 	})
 }
 
 func (s *Store) enqueueStagingCleanupWithIdentity(name string, identity *string, cleanup *cleanupDeadline) error {
 	return s.enqueueStagingCleanupWithQueue(name, cleanup, func(ctx context.Context, tx pgx.Tx) error {
 		return s.queueStagingCleanupTx(ctx, tx, name, identity)
+	}, func(confirmCleanup *cleanupDeadline) (bool, error) {
+		return s.stagingCleanupMatches(name, identity, confirmCleanup)
 	})
 }
 
-func (s *Store) enqueueStagingCleanupWithQueue(name string, cleanup *cleanupDeadline, queue func(context.Context, pgx.Tx) error) error {
-	if s == nil || s.pool == nil || cleanup == nil || queue == nil {
+func (s *Store) enqueueStagingCleanupWithQueue(name string, cleanup *cleanupDeadline, queue func(context.Context, pgx.Tx) error, confirm func(*cleanupDeadline) (bool, error)) error {
+	if s == nil || s.pool == nil || cleanup == nil || queue == nil || confirm == nil {
 		return nil
 	}
 	var lastErr error
@@ -1335,8 +1345,8 @@ func (s *Store) enqueueStagingCleanupWithQueue(name string, cleanup *cleanupDead
 		rollbackTx(tx, cleanup)
 		cancel()
 		lastErr = commitErr
-		exists, confirmErr := s.stagingCleanupExists(name, cleanup)
-		if confirmErr == nil && exists {
+		confirmed, confirmErr := confirm(cleanup)
+		if confirmErr == nil && confirmed {
 			return nil
 		}
 		if confirmErr != nil {
@@ -1352,26 +1362,41 @@ func (s *Store) enqueueStagingCleanupWithQueue(name string, cleanup *cleanupDead
 	return databaseWriteError("enqueue staging cleanup", lastErr)
 }
 
-func (s *Store) stagingCleanupExists(name string, cleanup *cleanupDeadline) (bool, error) {
+func (s *Store) stagingCleanupState(name string, cleanup *cleanupDeadline) (bool, *string, bool, error) {
 	if s == nil || s.pool == nil || cleanup == nil {
-		return false, ErrStoreUnavailable
+		return false, nil, false, ErrStoreUnavailable
 	}
 	ctx, cancel := cleanup.context()
 	defer cancel()
-	var exists bool
+	var identity *string
+	var retryFuture bool
 	if err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM conversation_artifact_staging_cleanup
-			WHERE staging_name = $1
-		)
-	`, name).Scan(&exists); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return false, err
+		SELECT staging_identity, retry_after > clock_timestamp()
+		FROM conversation_artifact_staging_cleanup
+		WHERE staging_name = $1
+	`, name).Scan(&identity, &retryFuture); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil, false, nil
 		}
-		return false, fmt.Errorf("confirm staging cleanup debt: %w", ErrStoreUnavailable)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return false, nil, false, err
+		}
+		return false, nil, false, fmt.Errorf("confirm staging cleanup debt: %w", ErrStoreUnavailable)
 	}
-	return exists, nil
+	return true, identity, retryFuture, nil
+}
+
+func (s *Store) stagingCleanupMatches(name string, expectedIdentity *string, cleanup *cleanupDeadline) (bool, error) {
+	exists, identity, _, err := s.stagingCleanupState(name, cleanup)
+	if err != nil {
+		return false, err
+	}
+	return exists && sameStagingIdentity(identity, expectedIdentity), nil
+}
+
+func (s *Store) stagingCleanupExists(name string, cleanup *cleanupDeadline) (bool, error) {
+	exists, _, _, err := s.stagingCleanupState(name, cleanup)
+	return exists, err
 }
 
 func (s *Store) queueStagingCleanupTx(ctx context.Context, tx pgx.Tx, name string, identity *string) error {
@@ -1435,12 +1460,12 @@ func (s *Store) stagingIdentity(name string) (*string, error) {
 	return &identity, nil
 }
 
-func (s *Store) commitStagingCleanupState(ctx context.Context, tx pgx.Tx, name string, cleanup *cleanupDeadline, expectExists bool) error {
+func (s *Store) commitStagingCleanupState(ctx context.Context, tx pgx.Tx, name string, cleanup *cleanupDeadline, expectExists, expectDeferred bool) error {
 	if err := s.commit(ctx, tx); err == nil {
 		return nil
 	} else {
-		exists, confirmErr := s.stagingCleanupExists(name, cleanup)
-		if confirmErr == nil && exists == expectExists {
+		exists, _, retryFuture, confirmErr := s.stagingCleanupState(name, cleanup)
+		if confirmErr == nil && exists == expectExists && (!expectDeferred || retryFuture) {
 			return nil
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1504,7 +1529,7 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 		if _, err := tx.Exec(ctx, `DELETE FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, name); err != nil {
 			return false, databaseWriteError("discard active staging cleanup debt", err)
 		}
-		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, false); err != nil {
+		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, false, false); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1530,7 +1555,7 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 		if _, err := tx.Exec(ctx, `DELETE FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, name); err != nil {
 			return false, databaseWriteError("retire diagnostic staging cleanup debt", err)
 		}
-		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, false); err != nil {
+		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, false, false); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1546,7 +1571,7 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 		if _, err := tx.Exec(ctx, `DELETE FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, name); err != nil {
 			return false, databaseWriteError("discard replaced staging cleanup debt", err)
 		}
-		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, false); err != nil {
+		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, false, false); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1559,7 +1584,7 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 		`, name); err != nil {
 			return false, databaseWriteError("defer replaced staging cleanup debt", err)
 		}
-		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, true); err != nil {
+		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, true, true); err != nil {
 			return false, err
 		}
 		return false, nil
@@ -1572,7 +1597,7 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 		`, name); err != nil {
 			return false, databaseWriteError("defer staging cleanup", err)
 		}
-		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, true); err != nil {
+		if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, true, true); err != nil {
 			return false, err
 		}
 		return false, removeErr
@@ -1580,7 +1605,7 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 	if _, err := tx.Exec(ctx, `DELETE FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, name); err != nil {
 		return false, databaseWriteError("delete staging cleanup debt", err)
 	}
-	if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, false); err != nil {
+	if err := s.commitStagingCleanupState(ctx, tx, name, cleanup, false, false); err != nil {
 		return false, err
 	}
 	return true, nil
