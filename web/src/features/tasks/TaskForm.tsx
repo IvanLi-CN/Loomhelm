@@ -102,7 +102,8 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const lastSyncedTaskKeyRef = useRef<string | undefined>(undefined);
   const taskIdentityKey = `${mode}:${task?.id ?? "create"}`;
   const lastTaskIdentityKeyRef = useRef<string | undefined>(undefined);
-  const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked || (mode === "create" && source.pendingTaskCreation === true);
+  const relationWritePending = mode === "edit" && task?.id ? source.isTaskRelationWritePending?.(task.id) === true : false;
+  const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked || relationWritePending || (mode === "create" && source.pendingTaskCreation === true);
 
   useEffect(() => {
     if (lastTaskIdentityKeyRef.current === undefined) {
@@ -151,6 +152,12 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     } finally {
       setPending(false);
     }
+  };
+
+  const acknowledgePendingCreation = () => {
+    source.acknowledgePendingTaskCreation?.();
+    setBlockedByUnknown(false);
+    setFeedback({ message: "已确认任务列表中没有这次写入，可以重新提交。", tone: "success" });
   };
 
   const toggleDependency = (id: string) => {
@@ -210,8 +217,9 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)]" disabled={!canWrite || pending || effectiveBlocked}><legend>前置依赖 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => { const candidateCanWrite = source.getProjectPermissions(candidate.projectId).canWrite; return <label className={`task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]${candidateCanWrite ? "" : " opacity-70"}`} key={candidate.id} title={candidateCanWrite ? undefined : "当前前置任务只读，关系不可修改"}><input type="checkbox" checked={dependsOn.includes(candidate.id)} onChange={() => toggleDependency(candidate.id)} disabled={!candidateCanWrite} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title}{candidateCanWrite ? "" : " · 只读"}</span></label>; })}</div> : <p className="font-normal">当前范围没有可选的前置任务。</p>}</fieldset>
       {!canWrite && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>当前项目成员权限为只读，创建和编辑动作保持禁用。</div>}
       {mode === "create" && source.pendingTaskCreation && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>上一次任务创建结果仍待确认；请先检查任务列表，当前表单不会再次提交。<Link to="/tasks" className="inline-link ml-2">打开任务列表</Link></div>}
+      {relationWritePending && !feedback && <div className="inline-state inline-state-warning" role="status"><span aria-hidden="true">!</span>任务关系保存中，普通编辑暂时不可用。</div>}
       {sourceRelationshipBlocked && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{sourceRelationshipNotice}</div>}
-      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
+      {(feedback?.reconcile || sourceRelationshipBlocked || (mode === "create" && source.pendingTaskCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{feedback?.reconcile && mode === "create" && source.pendingTaskCreation && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}</div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}{feedback.taskId && <Link to="/tasks/$taskId" params={{ taskId: feedback.taskId }} className="inline-link ml-2">打开已创建任务</Link>}</div>}
       <div className="form-actions">
         <Button type="submit" className="button button-primary" disabled={!canWrite || pending || effectiveBlocked || !title.trim() || !goal.trim() || !projectId}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存任务"}</Button>
@@ -250,7 +258,8 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
   const canWrite = source.getProjectPermissions(task.projectId).canWrite;
   const sourceRelationshipNotice = taskWriteBlockReason(task);
   const sourceRelationshipBlocked = Boolean(sourceRelationshipNotice);
-  const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked;
+  const relationWritePending = source.isTaskRelationWritePending?.(taskId) === true;
+  const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked || relationWritePending;
 
   if (editing) return <TaskForm source={source} mode="edit" task={task} onCancelled={finishEditing} onSaved={finishEditing} />;
 
@@ -295,6 +304,7 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
       </div>
       {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
       {sourceRelationshipBlocked && !feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="alert">{sourceRelationshipNotice}</p>}
+      {relationWritePending && !feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="status">任务关系保存中，编辑和删除暂时不可用。</p>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
     </section>
   );

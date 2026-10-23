@@ -130,6 +130,9 @@ export interface ProjectTaskSource {
   notice?: string;
   pendingProjectCreation?: boolean;
   pendingTaskCreation?: boolean;
+  acknowledgePendingProjectCreation?: () => void;
+  acknowledgePendingTaskCreation?: () => void;
+  isTaskRelationWritePending?: (taskId: string) => boolean;
   canCreateProjects: boolean;
   getProjectPermissions: (projectId: string | undefined) => ProjectPermissionSnapshot;
   getProject: (projectId: string | undefined) => ProjectRecord | undefined;

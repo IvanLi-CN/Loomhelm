@@ -5,6 +5,7 @@ import { ApiClientConfigurationError, ApiClientError } from "@loomhelm/api-clien
 import {
   isAmbiguousWriteError,
   filterTaskRelationships,
+  filterTasksToVisibleProjects,
   hasIncompleteProjectTaskRead,
   projectTaskQueryKeys,
   readProjectMemberships,
@@ -101,6 +102,14 @@ describe("project/task write contracts", () => {
     expect(projectTaskQueryKeys.projects("user-1", 1)).not.toEqual(projectTaskQueryKeys.projects("user-1", 2));
     expect(projectTaskQueryKeys.tasks("user-1", 1)).not.toEqual(projectTaskQueryKeys.tasks("user-1", 2));
     expect(projectTaskQueryKeys.mutationNotice("user-1")).toEqual(["loomhelm", "user-1", "mutation-notice"]);
+  });
+
+  test("hides cached tasks whose projects are no longer visible", () => {
+    const items = [
+      { id: "task-visible", project_id: "project-visible" },
+      { id: "task-revoked", project_id: "project-revoked" }
+    ] as Task[];
+    expect(filterTasksToVisibleProjects(items, new Set(["project-visible"]))).toEqual([items[0]]);
   });
 
   test("writes each relation edge independently and reports partial failure", async () => {
