@@ -556,7 +556,7 @@ func runArtifactHelper(t *testing.T, mode string, point faultPoint, root, id str
 
 func newArtifactHelper(t *testing.T, mode string, point faultPoint, root, id string, content []byte) *exec.Cmd {
 	t.Helper()
-	ensureArtifactTestDatabaseClean(t)
+	ensureArtifactTestDatabase(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestArtifactProcessHelper$", "-test.v=false")
 	env := artifactHelperEnvironment()
 	env = append(env,
@@ -640,7 +640,7 @@ func startArtifactHelper(t *testing.T, command *exec.Cmd, releasePaths ...string
 
 func openStoreAtRoot(t *testing.T, root string) (*database.DB, *Store, context.Context) {
 	t.Helper()
-	ensureArtifactTestDatabaseClean(t)
+	ensureArtifactTestDatabase(t)
 	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("LOOMHELM_DATABASE_URL is not set")

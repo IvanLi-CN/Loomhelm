@@ -1178,10 +1178,14 @@ func TestStoreCleanupDebtDoesNotRemoveReusedStaging(t *testing.T) {
 	cleanup := newCleanupDeadline(ctx)
 	defer cleanup.stop()
 	store.enqueueStagingCleanup(stagingName, cleanup)
+	replacementPath := stagingPath + ".replacement"
+	if err := os.WriteFile(replacementPath, []byte("new staging"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(stagingPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stagingPath, []byte("new staging"), 0o600); err != nil {
+	if err := os.Rename(replacementPath, stagingPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.recoverStagingCleanup(ctx, stagingName, cleanup); err != nil {
@@ -1820,6 +1824,68 @@ func TestStoreReadyReclamationMissingStagingRequiresDirectorySync(t *testing.T) 
 	}
 }
 
+func TestStoreReadyReclamationMissingUnrecordedStagingRequiresDirectorySync(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("ready missing unrecorded sync")
+	artifact := testArtifact(uniqueID("artifact-ready-missing-unrecorded-sync"), nil, content)
+	stagingName := ".upload-ready-missing-unrecorded-sync-" + fmt.Sprint(time.Now().UnixNano())
+	stagingPath := filepath.Join(store.objects, stagingName)
+	if err := os.WriteFile(stagingPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_identity = NULL
+		WHERE id = $1
+	`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stagingPath); err != nil {
+		t.Fatal(err)
+	}
+
+	syncErr := errors.New("injected staging directory sync failure")
+	store.faults = &faultHooks{
+		BeforeStagingDirectorySync: func() error { return syncErr },
+	}
+	_, status, err := store.reclaimReadyStagingForRecovery(ctx, artifact.ID, nil)
+	if !errors.Is(err, syncErr) || status != recoveryPending {
+		t.Fatalf("missing unrecorded staging reclamation with failed sync = status %q, err %v, want pending/injected error", status, err)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, artifact.ID).Scan(&reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed {
+		t.Fatal("missing unrecorded staging was marked reclaimed after failed directory sync")
+	}
+
+	store.faults = nil
+	_, status, err = store.reclaimReadyStagingForRecovery(ctx, artifact.ID, nil)
+	if err != nil || status != recoveryReady {
+		t.Fatalf("missing unrecorded staging reclamation retry = status %q, err %v, want ready/nil", status, err)
+	}
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, artifact.ID).Scan(&reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if !reclaimed {
+		t.Fatal("missing unrecorded staging was not marked reclaimed after successful directory sync")
+	}
+}
+
 func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -2316,7 +2382,6 @@ const (
 )
 
 var artifactTestSchemaSequence atomic.Uint64
-var artifactTestSchemaName string
 var artifactHelperProcess bool
 
 func TestMain(m *testing.M) {
@@ -2326,80 +2391,59 @@ func TestMain(m *testing.M) {
 		os.Exit(m.Run())
 	}
 
+	if err := os.Setenv(artifactTestBaseURLEnv, baseURL); err != nil {
+		fmt.Fprintf(os.Stderr, "set shared artifact database URL: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
+var artifactTestDatabaseState = struct {
+	sync.Mutex
+	schemas map[*testing.T]string
+}{
+	schemas: make(map[*testing.T]string),
+}
+
+func ensureArtifactTestDatabase(t *testing.T) {
+	t.Helper()
+	if artifactHelperProcess {
+		return
+	}
+	baseURL := strings.TrimSpace(os.Getenv(artifactTestBaseURLEnv))
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
+	}
+	if baseURL == "" {
+		return
+	}
+	artifactTestDatabaseState.Lock()
+	if _, ok := artifactTestDatabaseState.schemas[t]; ok {
+		artifactTestDatabaseState.Unlock()
+		return
+	}
 	schema := fmt.Sprintf("loomhelm_artifacts_test_%d_%d", os.Getpid(), artifactTestSchemaSequence.Add(1))
+	artifactTestDatabaseState.schemas[t] = schema
+	artifactTestDatabaseState.Unlock()
 	scopedURL, err := artifactTestDatabaseURL(baseURL, schema)
 	if err == nil {
 		err = prepareArtifactTestDatabase(baseURL, schema, scopedURL)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "prepare isolated artifact integration database: %v\n", err)
-		os.Exit(1)
-	}
-	artifactTestSchemaName = schema
-	if err := os.Setenv("LOOMHELM_DATABASE_URL", scopedURL); err != nil {
-		fmt.Fprintf(os.Stderr, "set isolated artifact database URL: %v\n", err)
-		_ = dropArtifactTestDatabase(baseURL, schema)
-		os.Exit(1)
-	}
-	if err := os.Setenv(artifactTestSchemaEnv, schema); err != nil {
-		fmt.Fprintf(os.Stderr, "set isolated artifact database schema: %v\n", err)
-		_ = dropArtifactTestDatabase(baseURL, schema)
-		os.Exit(1)
-	}
-	if err := os.Setenv(artifactTestBaseURLEnv, baseURL); err != nil {
-		fmt.Fprintf(os.Stderr, "set shared artifact database URL: %v\n", err)
-		_ = dropArtifactTestDatabase(baseURL, schema)
-		os.Exit(1)
-	}
-
-	code := m.Run()
-	if err := dropArtifactTestDatabase(baseURL, schema); err != nil {
-		fmt.Fprintf(os.Stderr, "drop isolated artifact integration schema: %v\n", err)
-		if code == 0 {
-			code = 1
-		}
-	}
-	os.Exit(code)
-}
-
-var artifactTestDatabaseState = struct {
-	sync.Mutex
-	prepared map[*testing.T]struct{}
-}{
-	prepared: make(map[*testing.T]struct{}),
-}
-
-func ensureArtifactTestDatabaseClean(t *testing.T) {
-	t.Helper()
-	if artifactHelperProcess {
-		return
-	}
-	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if databaseURL == "" {
-		return
-	}
-	if strings.TrimSpace(artifactTestSchemaName) == "" {
-		t.Fatal("artifact integration schema is not initialized")
-	}
-	artifactTestDatabaseState.Lock()
-	if _, ok := artifactTestDatabaseState.prepared[t]; ok {
-		artifactTestDatabaseState.Unlock()
-		return
-	}
-	artifactTestDatabaseState.prepared[t] = struct{}{}
-	artifactTestDatabaseState.Unlock()
-	if err := resetArtifactTestDatabase(databaseURL); err != nil {
 		artifactTestDatabaseState.Lock()
-		delete(artifactTestDatabaseState.prepared, t)
+		delete(artifactTestDatabaseState.schemas, t)
 		artifactTestDatabaseState.Unlock()
-		t.Fatalf("reset isolated artifact integration schema: %v", err)
+		t.Fatalf("prepare isolated artifact integration schema: %v", err)
 	}
+	t.Setenv("LOOMHELM_DATABASE_URL", scopedURL)
+	t.Setenv(artifactTestSchemaEnv, schema)
 	t.Cleanup(func() {
-		defer func() {
-			artifactTestDatabaseState.Lock()
-			delete(artifactTestDatabaseState.prepared, t)
-			artifactTestDatabaseState.Unlock()
-		}()
+		if err := dropArtifactTestDatabase(baseURL, schema); err != nil {
+			t.Errorf("drop isolated artifact integration schema: %v", err)
+		}
+		artifactTestDatabaseState.Lock()
+		delete(artifactTestDatabaseState.schemas, t)
+		artifactTestDatabaseState.Unlock()
 	})
 }
 
@@ -2658,35 +2702,6 @@ func cleanupArtifactTestDatabase(databaseURL, schema string, cause error) error 
 	return cause
 }
 
-func resetArtifactTestDatabase(databaseURL string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	db, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 2})
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	expectedSchema := strings.TrimSpace(os.Getenv(artifactTestSchemaEnv))
-	if expectedSchema == "" {
-		return errors.New("artifact test schema is not configured")
-	}
-	var currentSchema string
-	if err := db.Pool().QueryRow(ctx, `SELECT current_schema()`).Scan(&currentSchema); err != nil {
-		return fmt.Errorf("verify artifact test schema: %w", err)
-	}
-	if currentSchema != expectedSchema {
-		return fmt.Errorf("refusing to reset artifact test schema %q through schema %q", expectedSchema, currentSchema)
-	}
-	qualifiedSchema := quoteArtifactTestIdentifier(expectedSchema)
-	if _, err := db.Pool().Exec(ctx, `DELETE FROM `+qualifiedSchema+`.conversation_artifact_staging_cleanup`); err != nil {
-		return err
-	}
-	if _, err := db.Pool().Exec(ctx, `DELETE FROM `+qualifiedSchema+`.conversation_artifacts`); err != nil {
-		return err
-	}
-	return nil
-}
-
 func dropArtifactTestDatabase(databaseURL, schema string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -2710,7 +2725,7 @@ func openIntegrationStore(t *testing.T, authorizer Authorizer) (*database.DB, *S
 	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
 		t.Skip("LOOMHELM_DATABASE_URL is not set")
 	}
-	ensureArtifactTestDatabaseClean(t)
+	ensureArtifactTestDatabase(t)
 	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)

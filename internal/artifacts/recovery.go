@@ -1021,10 +1021,11 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 		}
 		removeStaging = stagingCheck == fileValid
 	}
-	if record.StagingIdentity != nil && currentIdentity == nil {
+	if currentIdentity == nil {
 		if err := s.syncStagingDirectory(); err != nil {
 			return artifactRecord{}, recoveryPending, fmt.Errorf("sync artifact staging directory after missing staging: %w", err)
 		}
+		removeStaging = false
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
