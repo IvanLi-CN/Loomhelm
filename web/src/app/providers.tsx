@@ -158,7 +158,7 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
 
   const commitAssembly = useCallback((next: ProductionApiAssembly) => {
     const previousPrincipalId = assemblyRef.current?.auth.principalId;
-    if (previousPrincipalId && previousPrincipalId !== next.auth.principalId) clearPrincipalQueries(previousPrincipalId);
+    if (previousPrincipalId && next.auth.principalId && previousPrincipalId !== next.auth.principalId) clearPrincipalQueries(previousPrincipalId);
     assemblyRef.current = next;
     setProductionApi(next);
   }, [clearPrincipalQueries]);

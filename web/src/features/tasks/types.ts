@@ -128,6 +128,8 @@ export interface ProjectTaskSource {
   tasks: readonly TaskRecord[];
   status: "ready" | "loading" | "error" | "permission-changed" | "unauthenticated";
   notice?: string;
+  pendingProjectCreation?: boolean;
+  pendingTaskCreation?: boolean;
   canCreateProjects: boolean;
   getProjectPermissions: (projectId: string | undefined) => ProjectPermissionSnapshot;
   getProject: (projectId: string | undefined) => ProjectRecord | undefined;

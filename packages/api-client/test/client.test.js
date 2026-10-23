@@ -270,6 +270,29 @@ describe("generated project membership transport", () => {
 });
 
 describe("authenticated client transport", () => {
+  test("rejects a cross-origin base URL when same-origin protection is enabled", () => {
+    const previousLocation = globalThis.location;
+    Object.defineProperty(globalThis, "location", { configurable: true, value: { origin: "https://loomhelm.example" } });
+    try {
+      expect(() => createAuthenticatedApiClient({
+        baseUrl: "https://api.loomhelm.example",
+        browserProtection: "same_origin",
+        fetch: async () => Response.json({ user_id: "user-browser", csrf_protection: "same_origin" })
+      })).toThrow(ApiClientConfigurationError);
+      expect(() => createAuthenticatedApiClient({
+        baseUrl: "/api",
+        browserProtection: "same_origin",
+        fetch: async () => Response.json({ user_id: "user-browser", csrf_protection: "same_origin" })
+      })).not.toThrow();
+    } finally {
+      if (previousLocation === undefined) {
+        Reflect.deleteProperty(globalThis, "location");
+      } else {
+        Object.defineProperty(globalThis, "location", { configurable: true, value: previousLocation });
+      }
+    }
+  });
+
   test("requires a real same-origin browser bootstrap before cookie requests", async () => {
     const calls = [];
     const session = { user_id: "user-browser", csrf_protection: "same_origin" };

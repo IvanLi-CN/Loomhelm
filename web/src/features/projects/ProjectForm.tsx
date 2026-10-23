@@ -38,6 +38,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
     : projectPermissions?.canWrite
       ? "当前身份可以操作任务，但不能管理项目或成员。项目写入动作保持禁用。"
       : "当前身份或连接状态为只读，项目写入动作保持禁用。";
+  const effectiveBlocked = blockedByUnknown || (mode === "create" && source.pendingProjectCreation === true);
 
   useEffect(() => {
     const identityChanged = identityRef.current.mode !== mode || identityRef.current.projectId !== projectId;
@@ -59,8 +60,13 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
     setPending(true);
     try {
       await source.refresh();
-      setBlockedByUnknown(false);
-      setFeedback({ message: "已刷新并核对项目列表，可以继续操作。", tone: "success" });
+      if (mode === "create") {
+        setBlockedByUnknown(true);
+        setFeedback({ message: "列表已刷新，但本次项目创建结果仍待确认；为避免重复创建，当前表单不会再次提交。", tone: "warning", reconcile: true });
+      } else {
+        setBlockedByUnknown(false);
+        setFeedback({ message: "已刷新并核对项目列表，可以继续操作。", tone: "success" });
+      }
     } catch (error) {
       setFeedback({ message: error instanceof Error ? `刷新项目列表失败：${error.message}` : "刷新项目列表失败，请稍后重试。", tone: "warning", reconcile: true });
     } finally {
@@ -70,7 +76,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
 
   const submit = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
-    if (blockedByUnknown) return;
+    if (effectiveBlocked) return;
     setPending(true);
     setFeedback(null);
     const latestProject = mode === "edit" && projectId ? source.getProject(projectId) : undefined;
@@ -109,13 +115,14 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
         </div>
         {mode === "edit" && <Pencil size={17} className="text-[var(--accent)]" aria-hidden="true" />}
       </div>
-      <label className="form-field"><span>项目名称</span><Input value={name} required maxLength={80} onChange={(event) => { nameDirtyRef.current = true; setName(event.target.value); }} disabled={!canManageProject || pending} autoFocus={mode === "edit"} /></label>
-      <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => { summaryDirtyRef.current = true; setSummary(event.target.value); }} disabled={!canManageProject || pending} /></label>
+      <label className="form-field"><span>项目名称</span><Input value={name} required maxLength={80} onChange={(event) => { nameDirtyRef.current = true; setName(event.target.value); }} disabled={!canManageProject || pending || effectiveBlocked} autoFocus={mode === "edit"} /></label>
+      <label className="form-field"><span>项目简介</span><Textarea value={summary} maxLength={240} rows={4} onChange={(event) => { summaryDirtyRef.current = true; setSummary(event.target.value); }} disabled={!canManageProject || pending || effectiveBlocked} /></label>
       {!canManageProject && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>{projectWriteMessage}</div>}
+      {mode === "create" && source.pendingProjectCreation && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>上一次项目创建结果仍待确认；请先检查项目列表，当前表单不会再次提交。<Link to="/tasks" className="inline-link ml-2">打开项目列表</Link></div>}
       {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button></div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}
       <div className="form-actions">
-        <Button type="submit" className="button button-primary" disabled={!canManageProject || pending || blockedByUnknown || !name.trim()}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存项目"}</Button>
+        <Button type="submit" className="button button-primary" disabled={!canManageProject || pending || effectiveBlocked || !name.trim()}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存项目"}</Button>
         {onCancelled && <Button type="button" variant="secondary" className="button button-secondary" onClick={onCancelled}><X size={15} aria-hidden="true" />取消</Button>}
       </div>
     </form>

@@ -100,6 +100,7 @@ describe("project/task write contracts", () => {
   test("separates cache generations after session invalidation", () => {
     expect(projectTaskQueryKeys.projects("user-1", 1)).not.toEqual(projectTaskQueryKeys.projects("user-1", 2));
     expect(projectTaskQueryKeys.tasks("user-1", 1)).not.toEqual(projectTaskQueryKeys.tasks("user-1", 2));
+    expect(projectTaskQueryKeys.mutationNotice("user-1")).toEqual(["loomhelm", "user-1", "mutation-notice"]);
   });
 
   test("writes each relation edge independently and reports partial failure", async () => {

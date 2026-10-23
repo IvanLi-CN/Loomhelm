@@ -64,10 +64,24 @@ function validateBrowserSession(value: unknown): BrowserSessionBootstrap {
   return { user_id: session.user_id, csrf_protection: "same_origin" };
 }
 
+function validateSameOriginBaseUrl(baseUrl?: string): void {
+  if (baseUrl === undefined || typeof location === "undefined") return;
+  let resolved: URL;
+  try {
+    resolved = new URL(baseUrl, location.origin);
+  } catch {
+    throw new ApiClientConfigurationError("same_origin browser protection requires a valid API base URL");
+  }
+  if (resolved.origin !== location.origin) {
+    throw new ApiClientConfigurationError("same_origin browser protection requires the API base URL to share the page origin");
+  }
+}
+
 export function createAuthenticatedApiClient(options: AuthenticatedApiClientOptions = {}): AuthenticatedApiClient {
   const fetcher = options.fetch ?? globalThis.fetch;
   if (!fetcher) throw new ApiClientConfigurationError("a fetch implementation is required");
   const sameOriginProtection = options.browserProtection === "same_origin";
+  if (sameOriginProtection) validateSameOriginBaseUrl(options.baseUrl);
   if (sameOriginProtection && options.accessToken) {
     throw new ApiClientConfigurationError("same_origin protection cannot be combined with bearer access token transport");
   }
