@@ -1778,6 +1778,12 @@ func TestRecoveryStateConvergenceRequiresReplacementBinding(t *testing.T) {
 	if !recoveryStateConverged(artifactRecord{State: publicationReady}, updated) {
 		t.Fatal("ready convergence was rejected")
 	}
+	if !recoveryStateConverged(artifactRecord{
+		State:             publicationUnavailable,
+		UnavailableReason: "final-missing",
+	}, artifactRecord{State: publicationReady}) {
+		t.Fatal("ready to unavailable convergence was rejected")
+	}
 }
 
 func TestStoreKeepsDurableStagingWhenDatabaseCommitIsUnavailable(t *testing.T) {
