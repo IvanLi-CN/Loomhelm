@@ -1010,7 +1010,9 @@ pre {
   min-height: 46px;
   align-items: center;
   gap: 8px;
-  padding: 9px 0;
+  width: calc(100% + 16px);
+  margin-inline: -8px;
+  padding: 9px 8px;
   border-radius: 0;
   transition: background-color 150ms ease-out;
 }
@@ -2669,6 +2671,11 @@ pre {
 
   [data-slot="button"][data-size="icon-lg"] {
     width: var(--control-height-touch);
+  }
+
+  [data-slot="button"].attention-item {
+    height: auto;
+    min-height: 50px;
   }
 
   [data-slot="input"],
