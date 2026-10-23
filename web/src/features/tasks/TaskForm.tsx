@@ -8,9 +8,9 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Textarea } from "@/components/ui/textarea";
 import { taskStates } from "@/demo/types";
 
-import { calculateTaskRelationChanges, type ProjectTaskSource, type TaskRecord, type TaskUpdate } from "./types";
+import { calculateTaskRelationChanges, taskWriteBlockReason, type ProjectTaskSource, type TaskRecord, type TaskUpdate } from "./types";
 
-type Feedback = { message: string; tone: "success" | "warning"; reconcile?: boolean };
+type Feedback = { message: string; tone: "success" | "warning"; reconcile?: boolean; taskId?: string };
 
 export interface TaskFormBaseline {
   title: string;
@@ -80,6 +80,8 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const [pending, setPending] = useState(false);
   const targetProjectId = task?.projectId ?? projectId;
   const canWrite = source.getProjectPermissions(targetProjectId).canWrite;
+  const sourceRelationshipNotice = taskWriteBlockReason(task);
+  const sourceRelationshipBlocked = Boolean(sourceRelationshipNotice);
   const baselineRef = useRef<TaskFormBaseline>(baselineFor(task, defaultProjectId, source.projects[0]?.id));
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
   const candidates = useMemo(() => source.tasks.filter((candidate) => candidate.id !== task?.id && canWrite && source.getProjectPermissions(candidate.projectId).canWrite), [canWrite, source, task?.id]);
@@ -100,6 +102,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const lastSyncedTaskKeyRef = useRef<string | undefined>(undefined);
   const taskIdentityKey = `${mode}:${task?.id ?? "create"}`;
   const lastTaskIdentityKeyRef = useRef<string | undefined>(undefined);
+  const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked;
 
   useEffect(() => {
     if (lastTaskIdentityKeyRef.current === undefined) {
@@ -155,7 +158,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
 
   const submit = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
-    if (blockedByUnknown) return;
+    if (effectiveBlocked) return;
     setPending(true);
     setFeedback(null);
     const baseline = baselineRef.current;
@@ -179,7 +182,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     if (resolved.warning) {
       const reconcile = resolved.reconcile ?? false;
       setBlockedByUnknown(reconcile);
-      setFeedback({ message: resolved.warning, tone: "warning", reconcile });
+      setFeedback({ message: resolved.warning, tone: "warning", reconcile, taskId: mode === "create" ? resolved.value.id : undefined });
       if (mode === "create") onSaved?.(resolved.value.id);
       return;
     }
@@ -194,17 +197,18 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
         <h2 className="mt-1 text-lg font-semibold">{mode === "create" ? "创建任务" : "编辑任务"}</h2>
         <p className="mt-1 text-xs leading-6 text-[var(--muted)]">业务状态与执行事实分开保存；关系只改变当前任务的指向，不迁移项目归属。</p>
       </div>
-      <label className="form-field"><span>项目</span><Select value={projectId} onValueChange={setProjectId} disabled={mode === "edit" || source.status !== "ready" || pending}><SelectTrigger aria-label="任务项目"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{source.projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
-      <label className="form-field"><span>任务标题</span><Input name="title" required maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="这项任务要完成什么" disabled={!canWrite || pending} autoFocus={mode === "edit"} /></label>
-      <label className="form-field"><span>目标与上下文</span><Textarea name="goal" required rows={5} maxLength={800} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="说明期望结果，以及需要保留的约束" disabled={!canWrite || pending} /></label>
-      {mode === "edit" && <label className="form-field"><span>任务业务状态</span><Select value={state} onValueChange={(value) => setState(value as typeof state)} disabled={!canWrite || pending}><SelectTrigger aria-label="任务业务状态"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{taskStates.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectGroup></SelectContent></Select></label>}
-      <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)] task-relation-options" disabled={!canWrite || pending}><legend>父任务 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => <label className="task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]" key={candidate.id}><input type="checkbox" checked={parentIds.includes(candidate.id)} onChange={() => toggleParent(candidate.id)} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title} · {source.getProject(candidate.projectId)?.name}</span></label>)}</div> : <p className="font-normal">当前范围没有可选的父任务。</p>}</fieldset>
-      <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)]" disabled={!canWrite || pending}><legend>前置依赖 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => <label className="task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]" key={candidate.id}><input type="checkbox" checked={dependsOn.includes(candidate.id)} onChange={() => toggleDependency(candidate.id)} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title}</span></label>)}</div> : <p className="font-normal">当前范围没有可选的前置任务。</p>}</fieldset>
+      <label className="form-field"><span>项目</span><Select value={projectId} onValueChange={setProjectId} disabled={mode === "edit" || source.status !== "ready" || pending || effectiveBlocked}><SelectTrigger aria-label="任务项目"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{source.projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
+      <label className="form-field"><span>任务标题</span><Input name="title" required maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="这项任务要完成什么" disabled={!canWrite || pending || effectiveBlocked} autoFocus={mode === "edit"} /></label>
+      <label className="form-field"><span>目标与上下文</span><Textarea name="goal" required rows={5} maxLength={800} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="说明期望结果，以及需要保留的约束" disabled={!canWrite || pending || effectiveBlocked} /></label>
+      {mode === "edit" && <label className="form-field"><span>任务业务状态</span><Select value={state} onValueChange={(value) => setState(value as typeof state)} disabled={!canWrite || pending || effectiveBlocked}><SelectTrigger aria-label="任务业务状态"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{taskStates.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectGroup></SelectContent></Select></label>}
+      <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)] task-relation-options" disabled={!canWrite || pending || effectiveBlocked}><legend>父任务 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => <label className="task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]" key={candidate.id}><input type="checkbox" checked={parentIds.includes(candidate.id)} onChange={() => toggleParent(candidate.id)} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title} · {source.getProject(candidate.projectId)?.name}</span></label>)}</div> : <p className="font-normal">当前范围没有可选的父任务。</p>}</fieldset>
+      <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)]" disabled={!canWrite || pending || effectiveBlocked}><legend>前置依赖 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => <label className="task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]" key={candidate.id}><input type="checkbox" checked={dependsOn.includes(candidate.id)} onChange={() => toggleDependency(candidate.id)} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title}</span></label>)}</div> : <p className="font-normal">当前范围没有可选的前置任务。</p>}</fieldset>
       {!canWrite && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>当前项目成员权限为只读，创建和编辑动作保持禁用。</div>}
-      {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
-      {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}
+      {sourceRelationshipBlocked && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{sourceRelationshipNotice}</div>}
+      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
+      {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}{feedback.taskId && <Link to="/tasks/$taskId" params={{ taskId: feedback.taskId }} className="inline-link ml-2">打开已创建任务</Link>}</div>}
       <div className="form-actions">
-        <Button type="submit" className="button button-primary" disabled={!canWrite || pending || blockedByUnknown || !title.trim() || !goal.trim() || !projectId}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存任务"}</Button>
+        <Button type="submit" className="button button-primary" disabled={!canWrite || pending || effectiveBlocked || !title.trim() || !goal.trim() || !projectId}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存任务"}</Button>
         {onCancelled && <Button type="button" variant="secondary" className="button button-secondary" onClick={onCancelled}><X size={15} aria-hidden="true" />取消</Button>}
       </div>
     </form>
@@ -238,6 +242,9 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
   }
   if (!task) return null;
   const canWrite = source.getProjectPermissions(task.projectId).canWrite;
+  const sourceRelationshipNotice = taskWriteBlockReason(task);
+  const sourceRelationshipBlocked = Boolean(sourceRelationshipNotice);
+  const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked;
 
   if (editing) return <TaskForm source={source} mode="edit" task={task} onCancelled={finishEditing} onSaved={finishEditing} />;
 
@@ -277,10 +284,11 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
     <section className="info-block" aria-label="任务操作">
       <span className="section-kicker">任务操作</span>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Button ref={editButtonRef} type="button" variant="secondary" className="button button-secondary" onClick={() => setEditing(true)} disabled={!canWrite}><Pencil size={15} aria-hidden="true" />编辑任务</Button>
-        <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={() => { void remove(); }} disabled={!canWrite || pending || blockedByUnknown}><Trash2 size={15} aria-hidden="true" />{pending ? "删除中…" : "删除任务"}</Button>
+        <Button ref={editButtonRef} type="button" variant="secondary" className="button button-secondary" onClick={() => setEditing(true)} disabled={!canWrite || effectiveBlocked}><Pencil size={15} aria-hidden="true" />编辑任务</Button>
+        <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={() => { void remove(); }} disabled={!canWrite || pending || effectiveBlocked}><Trash2 size={15} aria-hidden="true" />{pending ? "删除中…" : "删除任务"}</Button>
       </div>
-      {feedback?.reconcile && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
+      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button></div>}
+      {sourceRelationshipBlocked && !feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="alert">{sourceRelationshipNotice}</p>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
     </section>
   );

@@ -41,7 +41,7 @@ export function publishProductionAuthInvalidation(): void {
     nonce: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     reason: "session-invalidated"
   };
-  window.dispatchEvent(new Event(PRODUCTION_AUTH_INVALIDATED_EVENT));
+  window.dispatchEvent(new CustomEvent<ProductionAuthInvalidationSignal>(PRODUCTION_AUTH_INVALIDATED_EVENT, { detail: signal }));
   try {
     window.localStorage.setItem(PRODUCTION_AUTH_INVALIDATION_STORAGE_KEY, JSON.stringify(signal));
   } catch {
@@ -201,7 +201,17 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
 
   useEffect(() => {
     if (!productionClient || typeof window === "undefined") return;
-    const handleInvalidated = () => invalidateAndRevalidate();
+    const handleSignal = (signal: ProductionAuthInvalidationSignal | undefined) => {
+      if (signal) {
+        if (seenInvalidationSignalsRef.current.has(signal.nonce)) return;
+        seenInvalidationSignalsRef.current.add(signal.nonce);
+      }
+      invalidateAndRevalidate();
+    };
+    const handleInvalidated = (event: Event) => {
+      const detail = event instanceof CustomEvent ? parseProductionAuthInvalidationSignal(event.detail) : undefined;
+      handleSignal(detail);
+    };
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== PRODUCTION_AUTH_INVALIDATION_STORAGE_KEY) return;
       let value: unknown;
@@ -211,15 +221,11 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
         return;
       }
       const signal = parseProductionAuthInvalidationSignal(value);
-      if (!signal || seenInvalidationSignalsRef.current.has(signal.nonce)) return;
-      seenInvalidationSignalsRef.current.add(signal.nonce);
-      invalidateAndRevalidate();
+      handleSignal(signal);
     };
     const handleBroadcast = (event: MessageEvent<unknown>) => {
       const signal = parseProductionAuthInvalidationSignal(event.data);
-      if (!signal || seenInvalidationSignalsRef.current.has(signal.nonce)) return;
-      seenInvalidationSignalsRef.current.add(signal.nonce);
-      invalidateAndRevalidate();
+      handleSignal(signal);
     };
     let channel: BroadcastChannel | undefined;
     if (typeof BroadcastChannel !== "undefined") {

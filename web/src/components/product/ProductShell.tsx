@@ -19,10 +19,13 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDemoRuntime, useOptionalDemoRuntime } from "@/demo/context";
 import type { ThemeMode } from "@/demo/types";
+import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import type { ProjectTaskSource } from "@/features/tasks/types";
 
 import { DemoInspector, DemoNotice, DemoSceneBanner } from "./DemoInspector";
+
+type MobileCloseReason = "dismiss" | "navigate";
 
 function useMobileDrawer(open: boolean, onClose: () => void) {
   const mobileQuery = "(max-width: 1199px)";
@@ -30,6 +33,7 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
   const drawerRef = useRef<HTMLElement>(null);
   const workAreaRef = useRef<HTMLDivElement>(null);
   const openedRef = useRef(false);
+  const closeReasonRef = useRef<MobileCloseReason>("dismiss");
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileQuery).matches);
 
   useEffect(() => {
@@ -41,10 +45,14 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
   }, []);
 
   const active = open && isMobile;
+  const close = useCallback((reason: MobileCloseReason) => {
+    closeReasonRef.current = reason;
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
-    if (open && !isMobile) onClose();
-  }, [isMobile, onClose, open]);
+    if (open && !isMobile) close("dismiss");
+  }, [close, isMobile, open]);
 
   useEffect(() => {
     if (!active) return;
@@ -54,7 +62,7 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        close("dismiss");
         return;
       }
       if (event.key !== "Tab" || !drawer) return;
@@ -78,7 +86,7 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
       cancelAnimationFrame(frame);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [active, onClose]);
+  }, [active, close]);
 
   useEffect(() => {
     const workArea = workAreaRef.current;
@@ -101,6 +109,12 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
     }
     if (openedRef.current) {
       openedRef.current = false;
+      const closeReason = closeReasonRef.current;
+      closeReasonRef.current = "dismiss";
+      if (closeReason === "navigate") {
+        document.querySelector<HTMLElement>("main.product-content")?.focus();
+        return;
+      }
       const trigger = triggerRef.current;
       if (trigger && trigger.getClientRects().length > 0) {
         trigger.focus();
@@ -110,7 +124,7 @@ function useMobileDrawer(open: boolean, onClose: () => void) {
     }
   }, [active]);
 
-  return { drawerRef, triggerRef, workAreaRef, isMobile, active };
+  return { drawerRef, triggerRef, workAreaRef, isMobile, active, close };
 }
 
 function ProjectTree({
@@ -123,6 +137,8 @@ function ProjectTree({
   onNavigate: () => void;
 }) {
   const runtime = useDemoRuntime();
+  const source = useOptionalDemoProjectTaskSource();
+  const projects = source?.projects ?? runtime.fixtures.projects;
   return (
     <div className="nav-projects">
       <div className="nav-section-label">项目</div>
@@ -130,8 +146,9 @@ function ProjectTree({
         {expanded.projects ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
         <span>所有项目</span>
       </Button>
-      {expanded.projects && runtime.fixtures.projects.map((project) => {
+      {expanded.projects && projects.map((project) => {
         const conversations = runtime.fixtures.conversations.filter((conversation) => conversation.projectId === project.id);
+        const accent = runtime.fixtures.projects.find((fixture) => fixture.id === project.id)?.accent ?? "blue";
         const key = `project:${project.id}`;
         return (
           <div className="nav-project" key={project.id}>
@@ -146,7 +163,7 @@ function ProjectTree({
                 activeProps={{ "aria-current": "page" }}
                 onClick={onNavigate}
               >
-                <span className={`project-dot project-dot-${project.accent}`} aria-hidden="true" />
+                <span className={`project-dot project-dot-${accent}`} aria-hidden="true" />
                 <span>{project.name}</span>
               </Link>
             </div>
@@ -309,23 +326,23 @@ function ProductionShell() {
 
   const closeMobile = useCallback(() => setMobileOpen(false), []);
   const openMobile = useCallback(() => setMobileOpen(true), []);
-  const { drawerRef, triggerRef, workAreaRef, isMobile, active } = useMobileDrawer(mobileOpen, closeMobile);
+  const { drawerRef, triggerRef, workAreaRef, isMobile, active, close: closeDrawer } = useMobileDrawer(mobileOpen, closeMobile);
   const toggle = (key: string) => setExpanded((current) => ({ ...current, [key]: !current[key] }));
 
   const navigation = (
     <nav className="product-navigation" aria-label="主导航">
       <div className="nav-section">
         <div className="nav-section-label">工作空间</div>
-        <Link to="/" activeOptions={{ exact: true }} className="nav-link" activeProps={{ "aria-current": "page" }} onClick={closeMobile}>
+        <Link to="/" activeOptions={{ exact: true }} className="nav-link" activeProps={{ "aria-current": "page" }} onClick={() => closeDrawer("navigate")}>
           <LayoutDashboard size={17} aria-hidden="true" />
           <span>工作台</span>
         </Link>
-        <Link to="/tasks" className="nav-link" activeProps={{ "aria-current": "page" }} onClick={closeMobile}>
+        <Link to="/tasks" className="nav-link" activeProps={{ "aria-current": "page" }} onClick={() => closeDrawer("navigate")}>
           <ListTodo size={17} aria-hidden="true" />
           <span>任务</span>
         </Link>
       </div>
-      <ProductionProjectTree source={source} expanded={expanded} onToggle={toggle} onNavigate={closeMobile} />
+      <ProductionProjectTree source={source} expanded={expanded} onToggle={toggle} onNavigate={() => closeDrawer("navigate")} />
     </nav>
   );
 
@@ -348,7 +365,7 @@ function ProductionShell() {
           <span><strong>{authenticated ? assembly?.auth.principalId : "浏览器会话"}</strong><small>{authenticated ? "当前登录身份" : "尚未登录"}</small></span>
         </div>
       </aside>
-      {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
+      {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={() => closeDrawer("dismiss")} />}
       <div ref={workAreaRef} className="product-work-area">
         <header className="product-header">
           <Button ref={triggerRef} type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" aria-controls="production-mobile-navigation" aria-expanded={mobileOpen} title="打开导航" onClick={openMobile}>
@@ -370,7 +387,7 @@ function ProductionShell() {
               </SelectContent>
             </Select>
             {authenticated ? <>
-              <Button asChild variant="default" className="button button-primary header-create" onClick={closeMobile}>
+              <Button asChild variant="default" className="button button-primary header-create" onClick={() => closeDrawer("navigate")}>
                 <Link to="/tasks/new" aria-label="新建任务"><Plus size={16} aria-hidden="true" /><span>新建任务</span></Link>
               </Button>
               <Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void handleLogout(); }} disabled={logoutPending}>
@@ -378,7 +395,7 @@ function ProductionShell() {
               </Button>
             </> : <Button type="button" variant="default" className="button button-primary" onClick={login}><LogIn size={15} aria-hidden="true" />登录</Button>}
           </div>
-          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-close-button" aria-label="关闭导航" title="关闭导航" onClick={closeMobile}>
+          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-close-button" aria-label="关闭导航" title="关闭导航" onClick={() => closeDrawer("dismiss")}>
             <X size={19} aria-hidden="true" />
           </Button>
         </header>
@@ -399,20 +416,20 @@ export function ProductShell({ children }: PropsWithChildren) {
 
   const closeMobile = useCallback(() => setMobileOpen(false), []);
   const openMobile = useCallback(() => setMobileOpen(true), []);
-  const { drawerRef, triggerRef, workAreaRef, isMobile, active } = useMobileDrawer(mobileOpen, closeMobile);
+  const { drawerRef, triggerRef, workAreaRef, isMobile, active, close: closeDrawer } = useMobileDrawer(mobileOpen, closeMobile);
   const toggle = (key: string) => setExpanded((current) => ({ ...current, [key]: !current[key] }));
-  const openCreate = () => closeMobile();
+  const openCreate = () => closeDrawer("navigate");
 
   const navigation = (
     <nav className="product-navigation" aria-label="主导航">
       <div className="nav-section">
         <div className="nav-section-label">工作空间</div>
-        <Link to="/" activeOptions={{ exact: true }} className="nav-link" activeProps={{ "aria-current": "page" }} onClick={closeMobile}>
+        <Link to="/" activeOptions={{ exact: true }} className="nav-link" activeProps={{ "aria-current": "page" }} onClick={() => closeDrawer("navigate")}>
           <LayoutDashboard size={17} aria-hidden="true" />
           <span>工作台</span>
           {runtime.fixtures.attention.filter((item) => item.status === "pending").length > 0 && <span className="nav-count">{runtime.fixtures.attention.filter((item) => item.status === "pending").length}</span>}
         </Link>
-        <Link to="/tasks" className="nav-link" activeProps={{ "aria-current": "page" }} onClick={closeMobile}>
+        <Link to="/tasks" className="nav-link" activeProps={{ "aria-current": "page" }} onClick={() => closeDrawer("navigate")}>
           <ListTodo size={17} aria-hidden="true" />
           <span>任务</span>
         </Link>
@@ -427,7 +444,7 @@ export function ProductShell({ children }: PropsWithChildren) {
             params={{ conversationId: conversation.id }}
             className="nav-conversation-link nav-conversation-link-root"
             activeProps={{ "aria-current": "page" }}
-            onClick={closeMobile}
+            onClick={() => closeDrawer("navigate")}
           >
             <span>{conversation.title}</span>
             <small>{conversation.execution}</small>
@@ -435,7 +452,7 @@ export function ProductShell({ children }: PropsWithChildren) {
         ))}
       </div>
 
-      <ProjectTree expanded={expanded} onToggle={toggle} onNavigate={closeMobile} />
+      <ProjectTree expanded={expanded} onToggle={toggle} onNavigate={() => closeDrawer("navigate")} />
     </nav>
   );
 
@@ -452,7 +469,7 @@ export function ProductShell({ children }: PropsWithChildren) {
           <span><strong>我的工作区</strong><small>个人工作空间</small></span>
         </div>
       </aside>
-      {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={closeMobile} />}
+      {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={() => closeDrawer("dismiss")} />}
       <div ref={workAreaRef} className="product-work-area">
         <header className="product-header">
           <Button ref={triggerRef} type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" aria-controls="demo-mobile-navigation" aria-expanded={mobileOpen} title="打开导航" onClick={openMobile}>
@@ -480,7 +497,7 @@ export function ProductShell({ children }: PropsWithChildren) {
               </Link>
             </Button>
           </div>
-          <Button type="button" variant="ghost" size="icon" className="icon-button mobile-close-button" aria-label="关闭导航" title="关闭导航" onClick={closeMobile}>
+            <Button type="button" variant="ghost" size="icon" className="icon-button mobile-close-button" aria-label="关闭导航" title="关闭导航" onClick={() => closeDrawer("dismiss")}>
             <X size={19} aria-hidden="true" />
           </Button>
         </header>

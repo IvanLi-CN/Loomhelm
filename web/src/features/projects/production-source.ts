@@ -5,18 +5,19 @@ import { ApiClientConfigurationError, ApiClientError, type GeneratedApiClient } 
 import type { Project, ProjectMember, Task, TaskRelationshipPage, TaskStatus, UpdateProjectRequest, UpdateTaskRequest } from "@loomhelm/protocol";
 
 import type { TaskState, TaskView } from "@/demo/types";
-import type {
-  ProjectDraft,
-  ProjectPermissionSnapshot,
-  ProjectRecord,
-  ProjectTaskSource,
-  RelationWriteFailure,
-  RelationWriteMetadata,
-  TaskDraft,
-  TaskRelationChanges,
-  TaskRecord,
-  TaskUpdate,
-  WriteResult
+import {
+  taskWriteBlockReason,
+  type ProjectDraft,
+  type ProjectPermissionSnapshot,
+  type ProjectRecord,
+  type ProjectTaskSource,
+  type RelationWriteFailure,
+  type RelationWriteMetadata,
+  type TaskDraft,
+  type TaskRelationChanges,
+  type TaskRecord,
+  type TaskUpdate,
+  type WriteResult
 } from "@/features/tasks/types";
 
 import { createPublishedProjectTaskApi, mapProject, mapTask, permissionsForProjectMember, type ProjectMemberPermissions, type PublishedProjectTaskApi } from "./api";
@@ -174,6 +175,10 @@ function denied<T>(message = "当前身份或权限为只读，写入动作没�
   return Promise.resolve({ ok: false, code: "readonly", message });
 }
 
+function blocked<T>(message: string): WriteResult<T> {
+  return { ok: false, code: "blocked", message, reconcile: true };
+}
+
 function success<T>(value: T, warning?: string, reconcile = false, relation?: RelationWriteMetadata): WriteResult<T> {
   if (warning) return { ok: true, value, warning, reconcile, relation };
   return relation ? { ok: true, value, relation } : { ok: true, value };
@@ -291,6 +296,7 @@ export function relationWriteBlockReason(
     if (relatedTaskId === taskId) continue;
     const relatedTask = getTask(relatedTaskId);
     if (!relatedTask) return `关系目标 ${relatedTaskId} 当前不可见，关系写入没有执行。`;
+    if (taskWriteBlockReason(relatedTask)) return `关系目标 ${relatedTaskId} 尚未完成关系核对，关系写入没有执行。`;
     if (!getProjectPermissions(relatedTask.projectId).canWrite) {
       return `关系目标 ${relatedTaskId} 所属项目为只读，关系写入没有执行。`;
     }
@@ -433,6 +439,11 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   const clearAllMutationNotices = useCallback(() => {
     queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, []);
   }, [mutationNoticeKey, queryClient]);
+  const reconciliationNoticeByTaskId = useMemo(() => new Map(
+    mutationNoticeQuery.data
+      .filter((notice) => notice.id.startsWith("task:") && notice.id !== "task:create")
+      .map((notice) => [notice.id.slice("task:".length), notice.message] as const)
+  ), [mutationNoticeQuery.data]);
 
   const handleFailure = useCallback(<T,>(operation: string, error: unknown): WriteResult<T> => failure<T>(operation, error), []);
 
@@ -485,9 +496,13 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     const deniedTasks = new Set(deniedTaskIds);
     const deniedProjects = new Set(deniedProjectIds);
     return tasksQuery.isSuccess
-      ? tasksQuery.data.items.filter((task) => !deniedTasks.has(task.id) && !deniedProjects.has(task.project_id)).map((task) => mapTask(task, relationshipsByTaskId[task.id]))
+      ? tasksQuery.data.items.filter((task) => !deniedTasks.has(task.id) && !deniedProjects.has(task.project_id)).map((task) => {
+        const mapped = mapTask(task, relationshipsByTaskId[task.id]);
+        const reconciliationNotice = reconciliationNoticeByTaskId.get(task.id);
+        return reconciliationNotice ? { ...mapped, relationshipsConfirmed: false, reconciliationNotice } : mapped;
+      })
       : [];
-  }, [deniedProjectIds, deniedTaskIds, relationshipsByTaskId, tasksQuery.data, tasksQuery.isSuccess]);
+  }, [deniedProjectIds, deniedTaskIds, reconciliationNoticeByTaskId, relationshipsByTaskId, tasksQuery.data, tasksQuery.isSuccess]);
   const getProject = useMemo(() => (id: string | undefined) => projects.find((project) => project.id === id), [projects]);
   const getTask = useMemo(() => (id: string | undefined) => tasks.find((task) => task.id === id), [tasks]);
   const getProjectPermissions = useMemo(() => (projectId: string | undefined): ProjectMemberPermissions => {
@@ -606,6 +621,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const updateTask = async (taskId: string, update: TaskUpdate): Promise<WriteResult<TaskRecord>> => {
       const existingTask = getTask(taskId);
+      const reconciliationBlock = taskWriteBlockReason(existingTask);
+      if (reconciliationBlock) return blocked(reconciliationBlock);
       const taskProjectId = existingTask?.projectId;
       if (!getProjectPermissions(taskProjectId).canWrite) return denied();
       const relationChanges = update.relationChanges;
@@ -642,7 +659,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       }
     };
     const deleteTask = async (taskId: string): Promise<WriteResult<null>> => {
-      if (!getProjectPermissions(getTask(taskId)?.projectId).canWrite) return denied();
+      const task = getTask(taskId);
+      const reconciliationBlock = taskWriteBlockReason(task);
+      if (reconciliationBlock) return blocked(reconciliationBlock);
+      if (!getProjectPermissions(task?.projectId).canWrite) return denied();
       try {
         await deleteTaskMutation.mutateAsync(taskId);
         clearMutationNotice(`task:${taskId}`);
@@ -656,6 +676,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const changeTaskRelations = async (taskId: string, changes: TaskRelationChanges): Promise<WriteResult<null>> => {
       const task = getTask(taskId);
+      const reconciliationBlock = taskWriteBlockReason(task);
+      if (reconciliationBlock) return blocked(reconciliationBlock);
       if (!getProjectPermissions(task?.projectId).canWrite) return denied();
       if (!Object.keys(changes).length) return success(null);
       const relationBlock = relationWriteBlockReason(taskId, changes, getTask, getProjectPermissions);

@@ -18,7 +18,7 @@ import {
 import { editableProjectSummary } from "../src/features/projects/ProjectForm";
 import { reconcileTaskFormState } from "../src/features/tasks/TaskForm";
 import { wouldCreateDependencyCycle } from "../src/features/tasks/demo-store";
-import { calculateTaskRelationChanges, type TaskRecord } from "../src/features/tasks/types";
+import { calculateTaskRelationChanges, taskWriteBlockReason, type TaskRecord } from "../src/features/tasks/types";
 import type { Task } from "@loomhelm/protocol";
 
 function task(id: string, dependsOn: string[] = []): TaskRecord {
@@ -88,6 +88,13 @@ describe("project/task write contracts", () => {
     expect(stableBlockedWriteMessage("删除任务")).toBe("任务仍有关系、对话或执行事实，受保护删除已阻止。");
     expect(stableBlockedWriteMessage("删除项目")).toBe("项目仍保留任务、对话或执行事实，受保护删除已阻止。");
     expect(stableBlockedWriteMessage("更新任务")).toBeUndefined();
+  });
+
+  test("keeps the task write barrier scoped to an incompletely reconciled task", () => {
+    expect(taskWriteBlockReason(undefined)).toBeUndefined();
+    expect(taskWriteBlockReason({ relationshipsConfirmed: true })).toBeUndefined();
+    expect(taskWriteBlockReason({ relationshipsConfirmed: false })).toContain("编辑、关系修改和删除已暂停");
+    expect(taskWriteBlockReason({ relationshipsConfirmed: false, reconciliationNotice: "关系结果待确认。" })).toBe("关系结果待确认。");
   });
 
   test("separates cache generations after session invalidation", () => {
@@ -246,6 +253,21 @@ describe("project/task write contracts", () => {
     );
 
     expect(reason).toContain("所属项目为只读");
+  });
+
+  test("does not write through an incompletely reconciled relation endpoint", () => {
+    const tasks = new Map([
+      ["task-1", task("task-1")],
+      ["task-2", { ...task("task-2"), relationshipsConfirmed: false }]
+    ]);
+    const reason = relationWriteBlockReason(
+      "task-1",
+      { addDependencyIds: ["task-2"] },
+      (id) => tasks.get(id ?? ""),
+      () => ({ role: "operator", canWrite: true, canManageProjects: false, isReadOnly: false })
+    );
+
+    expect(reason).toContain("尚未完成关系核对");
   });
 
   test("rejects dependency cycles in the demo relation validator", () => {

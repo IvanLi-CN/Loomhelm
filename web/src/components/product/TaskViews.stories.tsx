@@ -98,8 +98,8 @@ export const ExplorerList: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const search = canvas.getByPlaceholderText("搜索任务、目标或编号");
-    await userEvent.type(search, "STORY-01");
-    expect(search).toHaveValue("STORY-01");
+    await userEvent.type(search, "STORY-1");
+    expect(search).toHaveValue("STORY-1");
     expect(canvas.getByText("待办状态任务")).toBeInTheDocument();
   }
 };
@@ -117,13 +117,13 @@ export const ExplorerConsistency: Story = {
     for (const [view, assertView] of views) {
       await userEvent.click(canvas.getByRole("button", { name: view }));
       assertView();
-      expect(canvas.getByText("新增验收任务")).toBeInTheDocument();
+      expect(canvas.getAllByRole("link", { name: /新增验收任务/ }).length).toBeGreaterThan(0);
     }
     await userEvent.click(canvas.getByRole("button", { name: "编辑验收任务" }));
     for (const [view, assertView] of views) {
       await userEvent.click(canvas.getByRole("button", { name: view }));
       assertView();
-      expect(canvas.getByText("编辑后验收任务")).toBeInTheDocument();
+      expect(canvas.getAllByRole("link", { name: /编辑后验收任务/ }).length).toBeGreaterThan(0);
     }
   }
 };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import { useOptionalDemoRuntime } from "@/demo/context";
 import { taskStates, type DemoFixtures, type TaskState, type TaskView } from "@/demo/types";
@@ -272,10 +272,8 @@ export function useOptionalDemoProjectTaskSource(): ProjectTaskSource | null {
   const runtime = useOptionalDemoRuntime();
   const key = runtime ? `${runtime.scene}:${runtime.persona}:${runtime.dataMode}` : "none";
 
+  if (runtime) ensureSeeded(key, runtime.fixtures);
   const current = useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
-  useEffect(() => {
-    if (runtime && ensureSeeded(key, runtime.fixtures)) emit();
-  }, [key, runtime]);
 
   return useMemo(() => {
     if (!runtime) return null;

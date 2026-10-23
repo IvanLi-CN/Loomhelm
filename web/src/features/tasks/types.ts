@@ -23,6 +23,7 @@ export interface TaskRecord {
   parentIds?: string[];
   dependsOn: string[];
   relationshipsConfirmed?: boolean;
+  reconciliationNotice?: string;
   updated: string;
 }
 
@@ -51,6 +52,15 @@ export type WriteResult<T> =
   | WriteFailure;
 
 export type MutationResult<T> = Promise<WriteResult<T>>;
+
+export const TASK_RECONCILIATION_BLOCK_MESSAGE = "任务关系尚未完成完整核对，当前任务的编辑、关系修改和删除已暂停。请手动刷新并完成核对。";
+
+export function taskWriteBlockReason(task: unknown): string | undefined {
+  if (!task || typeof task !== "object") return undefined;
+  const candidate = task as { relationshipsConfirmed?: unknown; reconciliationNotice?: unknown };
+  if (candidate.relationshipsConfirmed !== false) return undefined;
+  return typeof candidate.reconciliationNotice === "string" ? candidate.reconciliationNotice : TASK_RECONCILIATION_BLOCK_MESSAGE;
+}
 
 export interface ProjectPermissionSnapshot {
   role: ProjectMemberRole | null;
