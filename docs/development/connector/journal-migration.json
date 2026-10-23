@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "migration": {
+    "description": "Upgrade the host-local Connector journal with explicit session-creation identity and a forward-readable format boundary.",
+    "release_unit_description": "Phase-one Connector local journal format v2.",
+    "version_impact": "minor"
+  },
+  "durable_state": {
+    "description": "Append-only JSONL records for commands, ACK updates, host-owned session identities, observed app-server events and reconciliation outcomes.",
+    "storage_implementation": "Mode-0600 journal file inside a mode-0700 host-local directory.",
+    "source_compatibility_range": {
+      "from_program_versions": "Phase-one Connector journal format v1.",
+      "to_program_version": "Phase-one Connector journal format v2.",
+      "reader_accepts": [
+        "v1",
+        "v2"
+      ],
+      "writer_emits": "v2",
+      "older_writer_can_read_new_state": false,
+      "direct_major_skips_supported": false
+    }
+  },
+  "database_migration": {
+    "applicable": false,
+    "ddl_structural_changes": [],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": true,
+    "operation_sequence": [
+      "open-and-scan",
+      "truncate-final-incomplete-record",
+      "mark-inflight-unknown"
+    ],
+    "progress_signals": [],
+    "pause_points": [],
+    "note": "OpenJournal performs scanning, final-record repair and in-flight marking synchronously; the candidate exposes no runtime progress or pause hooks."
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-or-replay-command-state",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "patch": {
+      "required_test_evidence": []
+    },
+    "minor": {
+      "required_test_evidence": [
+        "v1 records round-trip through the journal reader",
+        "v1 session-start records do not satisfy a new explicit creation identity",
+        "v2 session-start records persist command_id and payload digest",
+        "unsupported journal format versions are rejected before state application",
+        "a torn final write is truncated safely",
+        "accepted and executing commands become unknown after restart",
+        "unknown outcomes require explicit reconciliation and are never replayed",
+        "generation-qualified persisted RPC observations disambiguate reused JSON-RPC IDs without rewriting raw response events",
+        "approval claims from another session generation cannot apply a decision to the current pending request",
+        "approval resolution events retain the pending run identity when the app-server omits turnId",
+        "numeric and string JSON-RPC approval request IDs remain distinct",
+        "approval resolution and item-completion events must match the pending turn identity",
+        "journal startup and append paths enforce bounded 8 MiB record, event-count and file-size resources"
+      ],
+      "note": "The candidate reads the immediately preceding v1 journal state; v1 binaries are not supported readers for v2 records."
+    },
+    "major": {
+      "required_test_evidence": [],
+      "note": "Direct major skips are rejected by format-version validation."
+    }
+  }
+}
