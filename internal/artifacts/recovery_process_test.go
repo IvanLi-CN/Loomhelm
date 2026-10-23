@@ -682,7 +682,7 @@ func waitForFile(t *testing.T, path string) {
 
 func waitForSignal(t *testing.T, path, expected string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(processTestTimeout)
 	var data []byte
 	for {
 		read, err := os.ReadFile(path)

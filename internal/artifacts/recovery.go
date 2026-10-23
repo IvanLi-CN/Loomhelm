@@ -1518,14 +1518,32 @@ func (s *Store) listRecoveryWork(ctx context.Context, limit int) ([]recoveryWork
 	rows, err := s.pool.Query(ctx, `
 		SELECT work_kind, work_name
 		FROM (
-			SELECT 0 AS work_kind, id::text AS work_name, staging_reclaim_after AS due_at, created_at AS tie_at
-			FROM conversation_artifacts
-			WHERE (state = 'pending' AND staging_reclaim_after <= NOW())
-			   OR (state = 'ready' AND staging_reclaimed_at IS NULL AND staging_reclaim_after <= NOW())
+			SELECT work_kind, work_name, due_at, tie_at
+			FROM (
+				SELECT 0 AS work_kind, id::text AS work_name, staging_reclaim_after AS due_at, created_at AS tie_at
+				FROM conversation_artifacts
+				WHERE state = 'pending' AND staging_reclaim_after <= NOW()
+				ORDER BY staging_reclaim_after, created_at, id
+				LIMIT $1
+			) AS pending_work
 			UNION ALL
-			SELECT 1 AS work_kind, staging_name AS work_name, retry_after AS due_at, retry_after AS tie_at
-			FROM conversation_artifact_staging_cleanup
-			WHERE retry_after <= NOW()
+			SELECT work_kind, work_name, due_at, tie_at
+			FROM (
+				SELECT 0 AS work_kind, id::text AS work_name, staging_reclaim_after AS due_at, created_at AS tie_at
+				FROM conversation_artifacts
+				WHERE state = 'ready' AND staging_reclaimed_at IS NULL AND staging_reclaim_after <= NOW()
+				ORDER BY staging_reclaim_after, created_at, id
+				LIMIT $1
+			) AS ready_work
+			UNION ALL
+			SELECT work_kind, work_name, due_at, tie_at
+			FROM (
+				SELECT 1 AS work_kind, staging_name AS work_name, retry_after AS due_at, retry_after AS tie_at
+				FROM conversation_artifact_staging_cleanup
+				WHERE retry_after <= NOW()
+				ORDER BY retry_after, staging_name
+				LIMIT $1
+			) AS cleanup_work
 		) AS recovery_work
 		ORDER BY due_at, work_kind, tie_at, work_name
 		LIMIT $1
