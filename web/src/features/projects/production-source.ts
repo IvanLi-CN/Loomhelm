@@ -114,6 +114,7 @@ function parseMutationNotice(value: unknown): MutationNotice | undefined {
 
 interface MutationNoticeStorageRead {
   available: boolean;
+  shared: boolean;
   notices: readonly MutationNotice[];
 }
 
@@ -123,7 +124,7 @@ interface MutationNoticeUpdateResult {
 }
 
 function readMutationNoticesFromStorage(storage: Storage | undefined, prefix: string): MutationNoticeStorageRead {
-  if (!storage) return { available: false, notices: [] };
+  if (!storage) return { available: false, shared: false, notices: [] };
   const notices: MutationNotice[] = [];
   try {
     for (let index = 0; index < storage.length; index += 1) {
@@ -132,9 +133,9 @@ function readMutationNoticesFromStorage(storage: Storage | undefined, prefix: st
       const notice = parseMutationNotice(JSON.parse(storage.getItem(key) ?? "null"));
       if (notice) notices.push(notice);
     }
-    return { available: true, notices };
+    return { available: true, shared: false, notices };
   } catch {
-    return { available: false, notices };
+    return { available: false, shared: false, notices };
   }
 }
 
@@ -148,10 +149,10 @@ function getBrowserStorage(name: "localStorage" | "sessionStorage"): Storage | u
 }
 
 function readPersistedMutationNoticeState(principalId: string): MutationNoticeStorageRead {
-  if (typeof window === "undefined") return { available: false, notices: [] };
+  if (typeof window === "undefined") return { available: false, shared: false, notices: [] };
   const prefix = mutationNoticeStoragePrefix(principalId);
   const local = readMutationNoticesFromStorage(getBrowserStorage("localStorage"), prefix);
-  if (local.available) return local;
+  if (local.available) return { ...local, shared: true };
   return readMutationNoticesFromStorage(getBrowserStorage("sessionStorage"), prefix);
 }
 
@@ -686,7 +687,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         return;
       }
       const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
-      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergePersistedMutationNotices(current, state.notices, !state.available));
+      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergePersistedMutationNotices(current, state.notices, !state.shared));
     };
     apply(readPersistedMutationNoticeState(subjectId), true);
     const handleStorage = (event: StorageEvent) => {
@@ -700,7 +701,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
       const removed = Array.isArray(signal.removed) ? signal.removed.filter((id): id is string => typeof id === "string") : [];
       const added = Array.isArray(signal.added) ? signal.added.map(parseMutationNotice).filter((notice): notice is MutationNotice => Boolean(notice)) : [];
-      apply({ available: false, notices: mergeMutationNoticeChanges(current, added, removed) });
+      apply({ available: false, shared: false, notices: mergeMutationNoticeChanges(current, added, removed) });
     };
     let channel: BroadcastChannel | undefined;
     if (typeof BroadcastChannel !== "undefined") {
@@ -1237,7 +1238,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           const persistedNotices = mergePersistedMutationNotices(
             queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [],
             persistedState.notices,
-            !persistedState.available
+            !persistedState.shared
           );
           queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, persistedNotices);
           const persistedNotice = persistedNotices.find((currentNotice) => currentNotice.id === notice.id);
