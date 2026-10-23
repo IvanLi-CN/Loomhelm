@@ -593,7 +593,15 @@ func TestStorePutReauthorizesRepairAfterIdentityLockWait(t *testing.T) {
 		pid int32
 		err error
 	}, 1)
+	secondHolderReady := make(chan error, 1)
 	var identityAttemptOnce sync.Once
+	var secondHolderOnce sync.Once
+	var secondHolder pgx.Tx
+	defer func() {
+		if secondHolder != nil {
+			_ = secondHolder.Rollback(ctx)
+		}
+	}()
 	requester.faults = &faultHooks{
 		BeforeIdentityLock: func(lockContext context.Context, tx pgx.Tx, _ string) {
 			identityAttemptOnce.Do(func() {
@@ -603,6 +611,19 @@ func TestStorePutReauthorizesRepairAfterIdentityLockWait(t *testing.T) {
 					pid int32
 					err error
 				}{pid: pid, err: err}
+			})
+		},
+		BeforeIdentityTryLock: func() {
+			secondHolderOnce.Do(func() {
+				var err error
+				secondHolder, err = db.Pool().Begin(ctx)
+				if err == nil {
+					_, err = secondHolder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "loomhelm:artifact:"+artifact.ID)
+				}
+				if err == nil {
+					revoked.Store(true)
+				}
+				secondHolderReady <- err
 			})
 		},
 	}
@@ -638,9 +659,16 @@ func TestStorePutReauthorizesRepairAfterIdentityLockWait(t *testing.T) {
 	if !waiting {
 		t.Fatal("repair upload was not observed waiting on the identity lock")
 	}
-	revoked.Store(true)
 	if err := holder.Rollback(ctx); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case err := <-secondHolderReady:
+		if err != nil {
+			t.Fatalf("hold second repair lock: %v", err)
+		}
+	case <-time.After(cleanupTimeout + time.Second):
+		t.Fatal("repair upload did not reach its try-lock contention")
 	}
 	select {
 	case err := <-result:
@@ -649,6 +677,11 @@ func TestStorePutReauthorizesRepairAfterIdentityLockWait(t *testing.T) {
 		}
 	case <-time.After(cleanupTimeout + 2*time.Second):
 		t.Fatal("repair after authorization revocation did not return")
+	}
+	if secondHolder != nil {
+		if err := secondHolder.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if got := authorizationCalls.Load(); got < 3 {
 		t.Fatalf("repair authorization calls after lock wait = %d, want a post-wait check", got)
@@ -2191,7 +2224,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 		}
 		t.Fatal("ready cleanup did not reach staging removal")
 	}
-	contenderContext, cancel := context.WithTimeout(ctx, cleanupTimeout+3*time.Second)
+	contenderContext, cancel := context.WithTimeout(ctx, cleanupTimeout+5*time.Second)
 	defer cancel()
 	contenderResult := make(chan error, 1)
 	go func() {

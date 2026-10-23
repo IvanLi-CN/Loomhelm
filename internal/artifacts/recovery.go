@@ -110,6 +110,7 @@ type faultHooks struct {
 	AfterReadyCommit           func()
 	CommitResponseLost         func() error
 	BeforeIdentityLock         func(context.Context, pgx.Tx, string)
+	BeforeIdentityTryLock      func()
 	AfterIdentityLock          func()
 	BeforeReadyStagingRemoval  func()
 	AfterReadyStagingRemoval   func()
@@ -422,6 +423,9 @@ func (s *Store) beginIdentityTx(ctx context.Context, id string, cleanup *cleanup
 func (s *Store) beginIdentityTryTx(ctx context.Context, id string, cleanup *cleanupDeadline) (pgx.Tx, bool, error) {
 	if s == nil || s.pool == nil {
 		return nil, false, ErrStoreUnavailable
+	}
+	if s.faults != nil && s.faults.BeforeIdentityTryLock != nil {
+		s.faults.BeforeIdentityTryLock()
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
