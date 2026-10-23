@@ -836,7 +836,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       return tasks.filter((task) => task.projectId === targetProjectId || related.has(task.id));
     };
 
-    const mutationPersistenceFailure = <T,>(operation: string): WriteResult<T> => blocked(`${operation}的确认状态无法保存，写入没有执行。`);
+    const mutationPersistenceFailure = <T,>(operation: string, noticeId?: string): WriteResult<T> => ({
+      ...blocked(`${operation}的确认状态无法保存，写入没有执行。`),
+      ...(noticeId ? { noticeId } : {})
+    });
     const beginMutation = <T,>(noticeId: string, message: string, taskId?: string, projectId?: string, lockScope?: string): WriteResult<T> | undefined => recordMutationNotice(noticeId, message, "in-flight", taskId, projectId, lockScope) ? undefined : mutationPersistenceFailure("本次写入");
     const finishMutation = <T,>(noticeId: string, value: T, operation: string): WriteResult<T> => clearMutationNotice(noticeId)
       ? success(value)
@@ -941,25 +944,30 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         if (blockedResult) return blockedResult;
         const hasRelationChanges = Boolean(relationChanges.addParentIds?.length || relationChanges.addDependencyIds?.length);
         let createdTaskId: string | undefined;
+        let createdTaskValue: TaskRecord | undefined;
+        const createdTaskPersistenceFailure = (message: string): WriteResult<TaskRecord> => createdTaskValue
+          ? { ...success(createdTaskValue, `${message}确认状态无法保存；请刷新后核对，切勿重复提交。`, true), noticeId: createNoticeId }
+          : mutationPersistenceFailure("任务创建", createNoticeId);
         try {
           const response = await createTaskMutation.mutateAsync(draft);
           createdTaskId = response.task.id;
           const value = mapTask(response.task);
-          if (!recordMutationNotice(createNoticeId, hasRelationChanges ? "任务已创建，关系写入正在进行，请等待本次操作完成。" : "任务已创建，正在确认本次写入。", "in-flight", response.task.id, undefined, `task:${response.task.id}`)) return mutationPersistenceFailure("任务创建");
+          createdTaskValue = value;
+          recordMutationNotice(createNoticeId, hasRelationChanges ? "任务已创建，关系写入正在进行，请等待本次操作完成。" : "任务已创建，正在确认本次写入。", "in-flight", response.task.id, undefined, `task:${response.task.id}`);
           const completeCreatedTask = async (): Promise<WriteResult<TaskRecord>> => {
             if (hasRelationChanges) {
               relationMutationsInFlight.current.add(response.task.id);
               setRelationMutationPending(response.task.id, true);
               if (!isCurrentSession()) {
                 const warning = "任务已创建，但登录身份已变化，关系写入没有继续；请重新登录后核对。";
-                if (!recordMutationNotice(createNoticeId, warning, "reconciliation", response.task.id)) return mutationPersistenceFailure("任务关系写入");
+                if (!recordMutationNotice(createNoticeId, warning, "reconciliation", response.task.id)) return createdTaskPersistenceFailure(warning);
                 return { ...success(value, warning, true), noticeId: createNoticeId };
               }
               const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, response.task.id, relationChanges);
               if (relationResult.failures.length) {
                 if (relationResult.failures.some((item) => item.status === 401 || item.status === 403 || item.status === 404)) await invalidatePermissionScope(false);
                 const warning = "任务已创建，但部分关系未保存：" + relationResult.failures.map((item) => item.message).join("；") + "。请刷新后核对。";
-                if (!recordMutationNotice(createNoticeId, warning, "reconciliation", response.task.id)) return mutationPersistenceFailure("任务关系写入");
+                if (!recordMutationNotice(createNoticeId, warning, "reconciliation", response.task.id)) return createdTaskPersistenceFailure(warning);
                 return { ...success(value, warning, true, { failures: relationResult.failures, applied: relationResult.applied }), noticeId: createNoticeId };
               }
             } else {
@@ -978,7 +986,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           if (createdTaskId) {
             const resultMessage = result.ok ? result.warning ?? "后续写入没有完成。" : result.message;
             const message = `任务已创建，但后续写入结果待确认：${resultMessage}请刷新后核对。`;
-            if (!recordMutationNotice(createNoticeId, message, "reconciliation", createdTaskId)) return mutationPersistenceFailure("任务创建");
+            if (!recordMutationNotice(createNoticeId, message, "reconciliation", createdTaskId)) return createdTaskPersistenceFailure(message);
             return { ...result, noticeId: createNoticeId };
           }
           if (!result.ok && result.reconcile) {
@@ -1154,9 +1162,12 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         const scope = mutationNoticeScope(notice);
         if (!scope) continue;
         const taskId = mutationNoticeTaskId(notice);
+        const pendingCreation = isPendingProjectCreationNotice(notice) || isPendingTaskCreationNotice(notice);
         const message = taskId
           ? "任务写入结果待确认；完整刷新已完成，请确认当前状态后解除阻塞。"
-          : "项目写入结果待确认；完整刷新已完成，请确认当前状态后解除阻塞。";
+          : pendingCreation
+            ? "创建结果待确认；完整刷新已完成，请确认列表中没有本次写入后再解除阻塞。"
+            : "项目写入结果待确认；完整刷新已完成，请确认当前状态后解除阻塞。";
         const result = await withAvailableBrowserMutationLock(subjectId, scope, "busy" as const, async () => {
           const persistedNotices = readPersistedMutationNotices(subjectId);
           queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, persistedNotices);
@@ -1174,7 +1185,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
               || currentNotice.lockScope !== notice.lockScope
               || currentNotice.projectId !== notice.projectId
               || currentNotice.taskId !== notice.taskId;
-            return unchanged ? currentNotice : { ...currentNotice, kind: "reconciliation" as const, message };
+            return unchanged ? currentNotice : { ...currentNotice, kind: pendingCreation ? "creation" as const : "reconciliation" as const, message };
           }));
           return persisted ? "converted" as const : "failed" as const;
         });
