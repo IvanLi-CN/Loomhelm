@@ -1523,21 +1523,27 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 		} else {
 			checkContext, checkCancel := context.WithTimeout(ctx, 2*time.Second)
 			ticker := time.NewTicker(5 * time.Millisecond)
-			blocked := false
-			for failure == "" && !blocked {
-				var currentlyBlocked bool
+			waitingOnIdentityLock := false
+			for failure == "" && !waitingOnIdentityLock {
+				var waiting bool
 				if err := db.Pool().QueryRow(checkContext, `
 					SELECT EXISTS (
 						SELECT 1
-						FROM pg_stat_activity
-						WHERE pid = $1 AND cardinality(pg_blocking_pids(pid)) > 0
+						FROM pg_locks
+						WHERE pid = $1
+						  AND locktype = 'advisory'
+						  AND NOT granted
+						  AND mode = 'ExclusiveLock'
+						  AND classid = ((hashtextextended($2, 0) >> 32) & 4294967295::bigint)::oid
+						  AND objid = (hashtextextended($2, 0) & 4294967295::bigint)::oid
+						  AND objsubid = 1
 					)
-				`, outcome.pid).Scan(&currentlyBlocked); err != nil {
+				`, outcome.pid, "loomhelm:artifact:"+artifact.ID).Scan(&waiting); err != nil {
 					failure = fmt.Sprintf("check contender lock wait: %v", err)
 					break
 				}
-				blocked = currentlyBlocked
-				if blocked {
+				waitingOnIdentityLock = waiting
+				if waitingOnIdentityLock {
 					break
 				}
 				select {
@@ -1804,7 +1810,7 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled after-intent error = %v, want %v", err, context.Canceled)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("cancelled after-intent upload did not return")
 	}
 	select {
