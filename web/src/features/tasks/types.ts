@@ -9,6 +9,7 @@ export interface ProjectRecord {
   description?: string;
   updatedAt: string;
   conversationCount: number;
+  reconciliationNotice?: string;
 }
 
 export interface TaskRecord {
@@ -55,12 +56,19 @@ export type WriteResult<T> =
 export type MutationResult<T> = Promise<WriteResult<T>>;
 
 export const TASK_RECONCILIATION_BLOCK_MESSAGE = "任务关系尚未完成完整核对，当前任务的编辑、关系修改和删除已暂停。请手动刷新并完成核对。";
+export const PROJECT_RECONCILIATION_BLOCK_MESSAGE = "项目写入结果尚未完成核对，当前项目编辑、删除和成员操作已暂停。请手动刷新并完成核对。";
 
 export function taskWriteBlockReason(task: unknown): string | undefined {
   if (!task || typeof task !== "object") return undefined;
   const candidate = task as { relationshipsConfirmed?: unknown; reconciliationNotice?: unknown };
   if (candidate.relationshipsConfirmed !== false) return undefined;
   return typeof candidate.reconciliationNotice === "string" ? candidate.reconciliationNotice : TASK_RECONCILIATION_BLOCK_MESSAGE;
+}
+
+export function projectWriteBlockReason(project: unknown): string | undefined {
+  if (!project || typeof project !== "object") return undefined;
+  const candidate = project as { reconciliationNotice?: unknown };
+  return typeof candidate.reconciliationNotice === "string" ? candidate.reconciliationNotice : undefined;
 }
 
 export interface ProjectPermissionSnapshot {
@@ -133,9 +141,12 @@ export interface ProjectTaskSource {
   pendingTaskCreation?: boolean;
   pendingProjectCreationNoticeId?: string;
   pendingTaskCreationNoticeId?: string;
-  acknowledgePendingProjectCreation?: (noticeId: string) => void;
-  acknowledgePendingTaskCreation?: (noticeId: string) => void;
-  acknowledgeTaskReconciliation?: (taskId: string) => void;
+  acknowledgePendingProjectCreation?: (noticeId: string) => boolean;
+  acknowledgePendingTaskCreation?: (noticeId: string) => boolean;
+  acknowledgeTaskReconciliation?: (taskId: string) => boolean;
+  isTaskReconciliationReady?: (taskId: string) => boolean;
+  acknowledgeProjectReconciliation?: (projectId: string) => boolean;
+  isProjectReconciliationReady?: (projectId: string) => boolean;
   isTaskRelationWritePending?: (taskId: string) => boolean;
   canCreateProjects: boolean;
   getProjectPermissions: (projectId: string | undefined) => ProjectPermissionSnapshot;

@@ -42,9 +42,10 @@ export function TaskRelationshipEditor({ source, taskId }: { source: ProjectTask
     setPending(true);
     try {
       await source.refresh();
-      setBlockedByUnknown(false);
-      setCanAcknowledgeReconciliation(true);
-      setFeedback({ message: "已刷新并核对任务关系，可以继续操作。" });
+      const ready = source.isTaskReconciliationReady?.(taskId) === true;
+      setBlockedByUnknown(!ready);
+      setCanAcknowledgeReconciliation(ready);
+      setFeedback({ message: ready ? "已刷新并核对任务关系，可以确认当前状态后解除阻塞。" : "列表已刷新，但任务关系仍在进行或尚未完成确认；请稍后再次刷新。", reconcile: !ready });
     } catch (error) {
       setFeedback({ message: error instanceof Error ? `刷新任务关系失败：${error.message}` : "刷新任务关系失败，请稍后重试。", reconcile: true });
     } finally {
@@ -72,7 +73,7 @@ export function TaskRelationshipEditor({ source, taskId }: { source: ProjectTask
       <label className="info-select"><span>添加前置任务</span><Select value="none" onValueChange={addDependency} disabled={!canWrite || pending || relationBlocked || writableCandidates.every((candidate) => task.dependsOn.includes(candidate.id))}><SelectTrigger className="info-select-trigger" aria-label="添加前置任务"><SelectValue placeholder="选择任务" /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="none">选择任务</SelectItem>{writableCandidates.filter((candidate) => !task.dependsOn.includes(candidate.id)).map((candidate) => <SelectItem key={candidate.id} value={candidate.id}>{candidate.id} · {candidate.title} · {source.getProject(candidate.projectId)?.name}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
       {task.dependsOn.length > 0 && <div className="mt-3 grid gap-2"><span className="text-[11px] text-[var(--muted)]">当前前置任务</span>{task.dependsOn.map((dependencyId) => { const dependency = source.getTask(dependencyId); const canWriteDependency = Boolean(dependency) && source.getProjectPermissions(dependency?.projectId).canWrite; return <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--selected)] px-2 py-1.5 text-xs" key={dependencyId}><Link2 size={13} aria-hidden="true" /><span className="min-w-0 flex-1 truncate">{dependency?.id ?? dependencyId} · {dependency?.title ?? "当前无权查看"}</span><Button type="button" variant="ghost" size="icon" className="task-relation-remove text-[var(--muted)]" onClick={() => removeDependency(dependencyId)} disabled={!canWrite || !canWriteDependency || pending || relationBlocked} aria-label={`移除前置任务 ${dependencyId}`} title={canWriteDependency ? "移除前置任务" : "当前关系端点为只读或不可见"}><X size={13} aria-hidden="true" /></Button></div>; })}</div>}
       {(pending || relationWritePending) && <p className="mt-3 text-xs leading-6 text-[var(--muted)]" role="status">关系保存中…</p>}
-      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务关系</Button>{sourceRelationshipBlocked && canAcknowledgeReconciliation && <Button type="button" variant="ghost" className="button button-quiet" onClick={() => { source.acknowledgeTaskReconciliation?.(taskId); setCanAcknowledgeReconciliation(false); setFeedback({ message: "已确认当前关系状态，可以继续操作。" }); }}><Check size={15} aria-hidden="true" />确认当前关系，解除阻塞</Button>}</div>}
+      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务关系</Button>{sourceRelationshipBlocked && canAcknowledgeReconciliation && <Button type="button" variant="ghost" className="button button-quiet" onClick={() => { if (!source.acknowledgeTaskReconciliation?.(taskId)) return; setCanAcknowledgeReconciliation(false); setFeedback({ message: "已确认当前关系状态，可以继续操作。" }); }}><Check size={15} aria-hidden="true" />确认当前关系，解除阻塞</Button>}</div>}
       {sourceRelationshipBlocked && !feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="alert">{sourceRelationshipNotice}</p>}
       {feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="alert">{feedback.message}</p>}
       {!canWrite && <p className="mt-3 text-xs leading-6 text-[var(--muted)]">当前关系只读；请在有权项目范围内完成关系编辑。</p>}
