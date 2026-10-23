@@ -126,6 +126,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
     }
     if (resolved.warning) {
       setFeedback({ message: resolved.warning, tone: "warning", reconcile: resolved.reconcile, noticeId: resolved.noticeId });
+      if (mode === "create" && resolved.reconcile) onSaved?.(resolved.value.id);
       return;
     }
     nameDirtyRef.current = false;
