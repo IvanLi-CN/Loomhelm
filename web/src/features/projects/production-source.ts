@@ -178,7 +178,7 @@ function publishMutationNoticeChanges(principalId: string, added: readonly Mutat
   const sessionStorage = getBrowserStorage("sessionStorage");
   if (sessionStorage) {
     try {
-      removed.forEach((id) => sessionStorage.removeItem(mutationNoticeStorageKey(principalId, id)));
+      if (persisted) removed.forEach((id) => sessionStorage.removeItem(mutationNoticeStorageKey(principalId, id)));
       signalAdded.forEach((notice) => sessionStorage.setItem(mutationNoticeStorageKey(principalId, notice.id), JSON.stringify(notice)));
     } catch {
       // localStorage is the shared source of truth; sessionStorage is best effort.
@@ -702,6 +702,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const removed = Array.isArray(signal.removed) ? signal.removed.filter((id): id is string => typeof id === "string") : [];
       const added = Array.isArray(signal.added) ? signal.added.map(parseMutationNotice).filter((notice): notice is MutationNotice => Boolean(notice)) : [];
       apply({ available: false, shared: false, notices: mergeMutationNoticeChanges(current, added, removed) });
+      if (removed.length) {
+        void queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.projects(subjectId, sessionGeneration) });
+        void queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) });
+      }
     };
     let channel: BroadcastChannel | undefined;
     if (typeof BroadcastChannel !== "undefined") {
@@ -714,7 +718,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       channel?.removeEventListener("message", handleBroadcast);
       channel?.close();
     };
-  }, [mutationNoticeKey, mutationNoticeStoragePrefixValue, queryClient, queryEnabled, subjectId]);
+  }, [mutationNoticeKey, mutationNoticeStoragePrefixValue, queryClient, queryEnabled, sessionGeneration, subjectId]);
   const applyMutationNoticeUpdate = useCallback((update: (current: readonly MutationNotice[]) => readonly MutationNotice[], allowLocalFallback = false): MutationNoticeUpdateResult => {
     const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
     const next = update(current);
