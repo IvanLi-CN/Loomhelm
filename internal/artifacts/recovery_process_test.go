@@ -21,7 +21,7 @@ import (
 
 func TestArtifactProcessHelper(t *testing.T) {
 	mode := os.Getenv("LOOMHELM_ARTIFACT_HELPER")
-	if mode == "" {
+	if mode == "" || !artifactHelperProcess {
 		return
 	}
 	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
@@ -137,6 +137,11 @@ func TestArtifactProcessHelper(t *testing.T) {
 				}
 			}
 		}
+		faults.AfterIdentityLock = func() {
+			if signal := os.Getenv("LOOMHELM_ARTIFACT_AFTER_LOCK_SIGNAL"); signal != "" {
+				_ = os.WriteFile(signal, []byte("locked"), 0o600)
+			}
+		}
 		_, _, err := store.reconcileOneForRecovery(ctx, id, nil)
 		cancel()
 		if err != nil {
@@ -230,15 +235,12 @@ func TestStoreConcurrentProcessesConvergeAndProtectConflicts(t *testing.T) {
 	content := []byte("concurrent immutable content")
 	holderSignal := filepath.Join(root, "writer-locked")
 	holderRelease := filepath.Join(root, "writer-release")
-	t.Cleanup(func() { _ = os.WriteFile(holderRelease, []byte("release"), 0o600) })
 	holder := newArtifactHelper(t, "pause-put", "", root, id, content)
 	holder.Env = append(holder.Env,
 		"LOOMHELM_ARTIFACT_SIGNAL="+holderSignal,
 		"LOOMHELM_ARTIFACT_RELEASE="+holderRelease,
 	)
-	if err := holder.Start(); err != nil {
-		t.Fatal(err)
-	}
+	startArtifactHelper(t, holder, holderRelease)
 	waitForSignal(t, holderSignal, "locked")
 
 	contenderSignal := filepath.Join(root, "writer-contender-blocked")
@@ -253,9 +255,7 @@ func TestStoreConcurrentProcessesConvergeAndProtectConflicts(t *testing.T) {
 		"LOOMHELM_ARTIFACT_SIGNAL="+contenderSignal,
 		"LOOMHELM_ARTIFACT_PID_SIGNAL="+contenderPIDSignal,
 	)
-	if err := contender.Start(); err != nil {
-		t.Fatal(err)
-	}
+	startArtifactHelper(t, contender)
 	waitForSignal(t, contenderSignal, "attempt")
 	waitForBlockedPID(t, probeDB, probeCtx, contenderPIDSignal)
 	if err := os.WriteFile(holderRelease, []byte("release"), 0o600); err != nil {
@@ -305,12 +305,9 @@ func TestStoreConcurrentProcessesRejectDifferentContentForOneID(t *testing.T) {
 	conflictContent := []byte("second concurrent content")
 	holderSignal := filepath.Join(root, "conflict-writer-locked")
 	holderRelease := filepath.Join(root, "conflict-writer-release")
-	t.Cleanup(func() { _ = os.WriteFile(holderRelease, []byte("release"), 0o600) })
 	holder := newArtifactHelper(t, "pause-put", "", root, id, winnerContent)
 	holder.Env = append(holder.Env, "LOOMHELM_ARTIFACT_SIGNAL="+holderSignal, "LOOMHELM_ARTIFACT_RELEASE="+holderRelease)
-	if err := holder.Start(); err != nil {
-		t.Fatal(err)
-	}
+	startArtifactHelper(t, holder, holderRelease)
 	waitForSignal(t, holderSignal, "locked")
 
 	contenderSignal := filepath.Join(root, "conflict-writer-attempt")
@@ -325,9 +322,7 @@ func TestStoreConcurrentProcessesRejectDifferentContentForOneID(t *testing.T) {
 		"LOOMHELM_ARTIFACT_SIGNAL="+contenderSignal,
 		"LOOMHELM_ARTIFACT_PID_SIGNAL="+contenderPIDSignal,
 	)
-	if err := contender.Start(); err != nil {
-		t.Fatal(err)
-	}
+	startArtifactHelper(t, contender)
 	waitForSignal(t, contenderSignal, "attempt")
 	waitForBlockedPID(t, probeDB, probeCtx, contenderPIDSignal)
 	if err := os.WriteFile(holderRelease, []byte("release"), 0o600); err != nil {
@@ -429,28 +424,13 @@ func TestStoreConcurrentRepairAndRecoveryConverge(t *testing.T) {
 		"LOOMHELM_ARTIFACT_RELEASE="+release,
 		"LOOMHELM_ARTIFACT_TIMEOUT_SIGNAL="+timeoutSignal,
 	)
-	if err := repair.Start(); err != nil {
-		t.Fatal(err)
-	}
+	startArtifactHelper(t, repair, release)
 	waitForSignal(t, signal, "intent-committed")
-	t.Cleanup(func() {
-		_ = os.WriteFile(release, []byte("release"), 0o600)
-		if repair.Process != nil {
-			_ = repair.Process.Kill()
-		}
-	})
-	recoverySignal := filepath.Join(root, "recovery-started")
+	recoveryLockedSignal := filepath.Join(root, "recovery-locked")
 	recovery := newArtifactHelper(t, "recover", "", root, id, content)
-	recovery.Env = append(recovery.Env, "LOOMHELM_ARTIFACT_SIGNAL="+recoverySignal)
-	if err := recovery.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if recovery.Process != nil {
-			_ = recovery.Process.Kill()
-		}
-	})
-	waitForFile(t, recoverySignal)
+	recovery.Env = append(recovery.Env, "LOOMHELM_ARTIFACT_AFTER_LOCK_SIGNAL="+recoveryLockedSignal)
+	startArtifactHelper(t, recovery)
+	waitForSignal(t, recoveryLockedSignal, "locked")
 	if _, err := os.Stat(release); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("repair release marker = %v, want absent while recovery attempts", err)
 	}
@@ -502,10 +482,7 @@ func TestStoreRepairAndRecoveryContendOnIdentityLock(t *testing.T) {
 		"LOOMHELM_ARTIFACT_SIGNAL="+recoverySignal,
 		"LOOMHELM_ARTIFACT_RELEASE="+recoveryRelease,
 	)
-	t.Cleanup(func() { _ = os.WriteFile(recoveryRelease, []byte("release"), 0o600) })
-	if err := recovery.Start(); err != nil {
-		t.Fatal(err)
-	}
+	startArtifactHelper(t, recovery, recoveryRelease)
 	waitForSignal(t, recoverySignal, "locked")
 	probe, err := db.Pool().Begin(ctx)
 	if err != nil {
@@ -531,9 +508,7 @@ func TestStoreRepairAndRecoveryContendOnIdentityLock(t *testing.T) {
 		"LOOMHELM_ARTIFACT_SIGNAL="+repairSignal,
 		"LOOMHELM_ARTIFACT_PID_SIGNAL="+repairPIDSignal,
 	)
-	if err := repair.Start(); err != nil {
-		t.Fatal(err)
-	}
+	startArtifactHelper(t, repair)
 	waitForSignal(t, repairSignal, "attempt")
 	waitForBlockedPID(t, db, ctx, repairPIDSignal)
 	if err := os.WriteFile(recoveryRelease, []byte("release"), 0o600); err != nil {
@@ -583,7 +558,7 @@ func newArtifactHelper(t *testing.T, mode string, point faultPoint, root, id str
 	t.Helper()
 	ensureArtifactTestDatabaseClean(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestArtifactProcessHelper$", "-test.v=false")
-	env := append([]string{}, os.Environ()...)
+	env := artifactHelperEnvironment()
 	env = append(env,
 		"LOOMHELM_ARTIFACT_HELPER="+mode,
 		"LOOMHELM_ARTIFACT_FAULT="+string(point),
@@ -592,7 +567,75 @@ func newArtifactHelper(t *testing.T, mode string, point faultPoint, root, id str
 		"LOOMHELM_ARTIFACT_CONTENT="+base64.StdEncoding.EncodeToString(content),
 	)
 	command.Env = env
+	capability, err := os.CreateTemp(t.TempDir(), "loomhelm-artifact-helper-capability-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := capability.WriteString(artifactHelperCapability); err != nil {
+		_ = capability.Close()
+		t.Fatal(err)
+	}
+	if _, err := capability.Seek(0, io.SeekStart); err != nil {
+		_ = capability.Close()
+		t.Fatal(err)
+	}
+	command.ExtraFiles = []*os.File{capability}
+	t.Cleanup(func() { _ = capability.Close() })
 	return command
+}
+
+func artifactHelperEnvironment() []string {
+	env := make([]string, 0, 20)
+	for _, key := range []string{
+		"LOOMHELM_DATABASE_URL",
+		artifactTestSchemaEnv,
+		"PGHOST",
+		"PGPORT",
+		"PGDATABASE",
+		"PGUSER",
+		"PGPASSWORD",
+		"PGPASSFILE",
+		"PGSERVICE",
+		"PGSERVICEFILE",
+		"PGSSLMODE",
+		"PGSSLCERT",
+		"PGSSLKEY",
+		"PGSSLROOTCERT",
+		"PGSSLPASSWORD",
+		"PGSSLSNI",
+		"PGSSLNEGOTIATION",
+		"PGCHANNELBINDING",
+		"PGREQUIREAUTH",
+		"PGAPPNAME",
+		"PGCONNECT_TIMEOUT",
+		"PGTARGETSESSIONATTRS",
+		"PGTZ",
+		"PGMINPROTOCOLVERSION",
+		"PGMAXPROTOCOLVERSION",
+		"HOME",
+	} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
+}
+
+func startArtifactHelper(t *testing.T, command *exec.Cmd, releasePaths ...string) {
+	t.Helper()
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, path := range releasePaths {
+			_ = os.WriteFile(path, []byte("release"), 0o600)
+		}
+		if command.Process == nil || command.ProcessState != nil {
+			return
+		}
+		_ = command.Process.Kill()
+		_ = command.Wait()
+	})
 }
 
 func openStoreAtRoot(t *testing.T, root string) (*database.DB, *Store, context.Context) {
@@ -608,6 +651,7 @@ func openStoreAtRoot(t *testing.T, root string) (*database.DB, *Store, context.C
 	if err != nil {
 		t.Fatalf("open integration database: %v", err)
 	}
+	t.Cleanup(db.Close)
 	if err := db.Migrate(ctx); err != nil {
 		db.Close()
 		t.Fatalf("migrate integration database: %v", err)
@@ -655,16 +699,21 @@ func waitForSignal(t *testing.T, path, expected string) {
 
 func waitForBlockedPID(t *testing.T, db *database.DB, ctx context.Context, path string) {
 	t.Helper()
-	waitForFile(t, path)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		t.Fatalf("backend pid = %q: %v", data, err)
-	}
 	deadline := time.Now().Add(10 * time.Second)
+	var pid int
+	for {
+		data, readErr := os.ReadFile(path)
+		if readErr == nil {
+			pid, readErr = strconv.Atoi(strings.TrimSpace(string(data)))
+			if readErr == nil {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("backend pid signal = %q: %v", data, readErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	for {
 		var blocked bool
 		if err := db.Pool().QueryRow(ctx, `SELECT COALESCE(array_length(pg_blocking_pids($1), 1), 0) > 0`, pid).Scan(&blocked); err != nil {

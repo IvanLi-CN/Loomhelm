@@ -491,6 +491,134 @@ func TestStoreRecoveryQueuesInvalidReadyStagingCleanup(t *testing.T) {
 	}
 }
 
+func TestStoreRecoveryUsesSharedBatchLimit(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("shared recovery limit")
+
+	pending := testArtifact(uniqueID("artifact-shared-limit-pending"), nil, content)
+	pendingStaging := ".upload-shared-limit-pending-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, pendingStaging), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertPendingArtifactAt(t, db.Pool(), ctx, pending, pendingStaging, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	ready := testArtifact(uniqueID("artifact-shared-limit-ready"), nil, content)
+	readyStaging := ".upload-shared-limit-ready-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, readyStaging), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, ready.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifactAt(t, store, ctx, ready, readyStaging, time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
+
+	cleanupName := ".upload-shared-limit-cleanup-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, cleanupName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	store.enqueueStagingCleanup(cleanupName, cleanup)
+
+	report, err := store.Recover(ctx, 1)
+	if err != nil {
+		t.Fatalf("shared recovery limit error = %#v, err=%v", report, err)
+	}
+	if report.Scanned != 1 {
+		t.Fatalf("shared recovery limit report = %#v, want exactly one scanned item", report)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, ready.ID).Scan(&reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed {
+		t.Fatal("ready work was scanned despite the shared recovery limit")
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, cleanupName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("cleanup work was scanned despite the shared recovery limit: rows=%d", queued)
+	}
+}
+
+func TestStoreRecoveryOrdersDueWorkAcrossQueues(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("recovery queue order")
+	ready := testArtifact(uniqueID("artifact-recovery-order-ready"), nil, content)
+	readyStaging := ".upload-recovery-order-ready-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, readyStaging), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, ready.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifactAt(t, store, ctx, ready, readyStaging, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_reclaim_after = TIMESTAMPTZ '2000-01-01'
+		WHERE id = $1
+	`, ready.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	pending := testArtifact(uniqueID("artifact-recovery-order-pending"), nil, content)
+	pendingStaging := ".upload-recovery-order-pending-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, pendingStaging), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertPendingArtifactAt(t, db.Pool(), ctx, pending, pendingStaging, time.Now().UTC())
+
+	first, err := store.Recover(ctx, 1)
+	if err != nil {
+		t.Fatalf("old ready recovery = %#v, err=%v", first, err)
+	}
+	var readyReclaimed bool
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, ready.ID).Scan(&readyReclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if !readyReclaimed {
+		t.Fatal("older ready work was starved by newer pending work")
+	}
+
+	cleanupName := ".upload-recovery-order-cleanup-" + fmt.Sprint(time.Now().UnixNano())
+	cleanupPath := filepath.Join(store.objects, cleanupName)
+	if err := os.WriteFile(cleanupPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	store.enqueueStagingCleanup(cleanupName, cleanup)
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifact_staging_cleanup
+		SET retry_after = TIMESTAMPTZ '2000-01-01'
+		WHERE staging_name = $1
+	`, cleanupName); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Recover(ctx, 1)
+	if err != nil {
+		t.Fatalf("old cleanup recovery = %#v, err=%v", second, err)
+	}
+	if _, err := os.Stat(cleanupPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old cleanup staging = %v, want missing", err)
+	}
+	var pendingState string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, pending.ID).Scan(&pendingState); err != nil {
+		t.Fatal(err)
+	}
+	if pendingState != string(publicationPending) {
+		t.Fatalf("newer pending state = %q, want pending after fair queue pass", pendingState)
+	}
+}
+
 func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -592,6 +720,73 @@ func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T)
 	}
 	if failedState != "ready" || !reclaimed {
 		t.Fatalf("failed cleanup state = %q/%v, want ready/reclaimed", failedState, reclaimed)
+	}
+}
+
+func TestStoreRecoveryDefersFailedStagingCleanupWithoutStarvingLaterDebt(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("staging cleanup retry fairness")
+	badName := ".upload-staging-cleanup-starve-bad-" + fmt.Sprint(time.Now().UnixNano())
+	badPath := filepath.Join(store.objects, badName)
+	if err := os.WriteFile(badPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	store.enqueueStagingCleanup(badName, cleanup)
+	if err := os.Remove(badPath); err != nil {
+		t.Fatal(err)
+	}
+
+	healthyName := ".upload-staging-cleanup-starve-healthy-" + fmt.Sprint(time.Now().UnixNano())
+	healthyPath := filepath.Join(store.objects, healthyName)
+	if err := os.WriteFile(healthyPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store.enqueueStagingCleanup(healthyName, cleanup)
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifact_staging_cleanup
+		SET retry_after = CASE staging_name
+			WHEN $1 THEN TIMESTAMPTZ '2000-01-01'
+			ELSE TIMESTAMPTZ '2000-01-02'
+		END
+		WHERE staging_name IN ($1, $2)
+	`, badName, healthyName); err != nil {
+		t.Fatal(err)
+	}
+
+	syncErr := errors.New("injected staging cleanup sync failure")
+	store.faults = &faultHooks{BeforeStagingDirectorySync: func() error { return syncErr }}
+	first, err := store.Recover(ctx, 1)
+	if !errors.Is(err, ErrRecoveryIncomplete) {
+		t.Fatalf("failed staging cleanup recovery = %#v, err=%v", first, err)
+	}
+	var retryAt time.Time
+	if err := db.Pool().QueryRow(ctx, `SELECT retry_after FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, badName).Scan(&retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if !retryAt.After(time.Now()) {
+		t.Fatalf("failed staging cleanup retry_at = %s, want a deferred time", retryAt)
+	}
+
+	store.faults = nil
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifact_staging_cleanup SET retry_after = NOW() WHERE staging_name = $1`, healthyName); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Recover(ctx, 1)
+	if err != nil {
+		t.Fatalf("healthy staging cleanup recovery = %#v, err=%v", second, err)
+	}
+	if _, err := os.Stat(healthyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("healthy staging cleanup path = %v, want missing", err)
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, healthyName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("healthy staging cleanup debt = %d, want 0", queued)
 	}
 }
 
@@ -1924,7 +2119,7 @@ func testArtifact(id string, runID *string, content []byte) protocol.Artifact {
 	}
 }
 
-func TestArtifactIntegrationFixturesDoNotClearSharedRows(t *testing.T) {
+func TestArtifactIntegrationFixturesDoNotClearSiblingSchemaRows(t *testing.T) {
 	baseURL := strings.TrimSpace(os.Getenv(artifactTestBaseURLEnv))
 	if baseURL == "" {
 		baseURL = strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
@@ -1934,14 +2129,24 @@ func TestArtifactIntegrationFixturesDoNotClearSharedRows(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	sharedDB, err := database.Open(ctx, database.Config{URL: baseURL, MinConns: 1, MaxConns: 2})
+	sharedSchema := fmt.Sprintf("loomhelm_artifacts_sentinel_%d_%d", os.Getpid(), artifactTestSchemaSequence.Add(1))
+	sharedURL, err := artifactTestDatabaseURL(baseURL, sharedSchema)
 	if err != nil {
-		t.Fatalf("open shared integration database: %v", err)
+		t.Fatalf("scope sibling integration database: %v", err)
+	}
+	if err := prepareArtifactTestDatabase(baseURL, sharedSchema, sharedURL); err != nil {
+		t.Fatalf("prepare sibling integration database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dropArtifactTestDatabase(baseURL, sharedSchema); err != nil {
+			t.Errorf("drop sibling integration schema: %v", err)
+		}
+	})
+	sharedDB, err := database.Open(ctx, database.Config{URL: sharedURL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		t.Fatalf("open sibling integration database: %v", err)
 	}
 	defer sharedDB.Close()
-	if err := sharedDB.Migrate(ctx); err != nil {
-		t.Fatalf("migrate shared integration database: %v", err)
-	}
 
 	content := []byte("shared fixture sentinel")
 	artifact := testArtifact(uniqueID("artifact-shared-fixture"), nil, content)
@@ -1955,15 +2160,6 @@ func TestArtifactIntegrationFixturesDoNotClearSharedRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert shared artifact sentinel: %v", err)
 	}
-	defer func() {
-		cleanupCtx := context.Background()
-		if _, err := sharedDB.Pool().Exec(cleanupCtx, `DELETE FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName); err != nil {
-			t.Errorf("remove shared cleanup sentinel: %v", err)
-		}
-		if _, err := sharedDB.Pool().Exec(cleanupCtx, `DELETE FROM conversation_artifacts WHERE id = $1`, artifact.ID); err != nil {
-			t.Errorf("remove shared fixture sentinels: %v", err)
-		}
-	}()
 	if _, err := sharedDB.Pool().Exec(ctx, `
 		INSERT INTO conversation_artifact_staging_cleanup (staging_name, staging_identity, retry_after)
 		VALUES ($1, NULL, NOW())
@@ -1983,6 +2179,49 @@ func TestArtifactIntegrationFixturesDoNotClearSharedRows(t *testing.T) {
 	}
 	if artifactCount != 1 || cleanupCount != 1 {
 		t.Fatalf("shared fixture rows after isolated setup = artifact %d/cleanup %d, want 1/1", artifactCount, cleanupCount)
+	}
+}
+
+func TestArtifactTestDatabaseURLScopesSupportedDSNs(t *testing.T) {
+	const schema = "loomhelm_artifacts_test_scope"
+	t.Setenv("PGOPTIONS", "-c lock_timeout=2500")
+	for _, tt := range []struct {
+		name string
+		base string
+	}{
+		{name: "uri", base: "postgresql://test:secret@example.test/loomhelm?options=-c%20search_path%3Dpg_catalog&search_path=public&sslmode=disable"},
+		{name: "keyword", base: "host=example.test port=5432 user=test password='literal%value' dbname=loomhelm options='-c search_path=pg_catalog' search_path=public sslmode=disable"},
+		{name: "uri-uppercase", base: "postgresql://test:secret@example.test/loomhelm?OPTIONS=-c%20search_path%3Dpg_catalog&SEARCH_PATH=public&sslmode=disable"},
+		{name: "keyword-uppercase", base: "host=example.test port=5432 user=test password='literal%value' dbname=loomhelm OPTIONS='-c search_path=pg_catalog' SEARCH_PATH=public sslmode=disable"},
+		{name: "uri-options-plus", base: "postgresql://test:secret@example.test/loomhelm?options=-c%20application_name%3Da+b&search_path=public&sslmode=disable"},
+		{name: "environment-options", base: "postgresql://test:secret@example.test/loomhelm?search_path=public&sslmode=disable"},
+		{name: "literal-plus", base: "postgresql://test:secret@example.test/loomhelm?application_name=a+b&search_path=public&sslmode=disable"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			scoped, err := artifactTestDatabaseURL(tt.base, schema)
+			if err != nil {
+				t.Fatalf("scope database URL: %v", err)
+			}
+			parsed, err := pgx.ParseConfig(scoped)
+			if err != nil {
+				t.Fatalf("parse scoped database URL: %v", err)
+			}
+			if got := parsed.RuntimeParams["search_path"]; got != schema+",public" {
+				t.Fatalf("search_path = %q, want %q in %q", got, schema+",public", scoped)
+			}
+			wantOptions := "-c search_path=pg_catalog -c search_path=" + schema + ",public"
+			if tt.name == "environment-options" || tt.name == "literal-plus" {
+				wantOptions = "-c lock_timeout=2500 -c search_path=" + schema + ",public"
+			} else if tt.name == "uri-options-plus" {
+				wantOptions = "-c application_name=a+b -c search_path=" + schema + ",public"
+			}
+			if got := parsed.RuntimeParams["options"]; got != wantOptions {
+				t.Fatalf("options = %q, want %q in %q", got, wantOptions, scoped)
+			}
+			if tt.name == "literal-plus" && parsed.RuntimeParams["application_name"] != "a+b" {
+				t.Fatalf("application_name = %q, want literal plus in %q", parsed.RuntimeParams["application_name"], scoped)
+			}
+		})
 	}
 }
 
@@ -2070,16 +2309,20 @@ func uniqueID(prefix string) string {
 }
 
 const (
-	artifactTestSchemaEnv  = "LOOMHELM_ARTIFACT_TEST_SCHEMA"
-	artifactTestBaseURLEnv = "LOOMHELM_ARTIFACT_TEST_BASE_URL"
-	artifactTestHelperEnv  = "LOOMHELM_ARTIFACT_HELPER"
+	artifactTestSchemaEnv    = "LOOMHELM_ARTIFACT_TEST_SCHEMA"
+	artifactTestBaseURLEnv   = "LOOMHELM_ARTIFACT_TEST_BASE_URL"
+	artifactTestHelperEnv    = "LOOMHELM_ARTIFACT_HELPER"
+	artifactHelperCapability = "loomhelm-artifact-helper-v1\n"
 )
 
 var artifactTestSchemaSequence atomic.Uint64
+var artifactTestSchemaName string
+var artifactHelperProcess bool
 
 func TestMain(m *testing.M) {
 	baseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
-	if baseURL == "" || strings.TrimSpace(os.Getenv(artifactTestSchemaEnv)) != "" {
+	artifactHelperProcess = authenticatedArtifactHelper()
+	if baseURL == "" || artifactHelperProcess {
 		os.Exit(m.Run())
 	}
 
@@ -2092,16 +2335,20 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "prepare isolated artifact integration database: %v\n", err)
 		os.Exit(1)
 	}
+	artifactTestSchemaName = schema
 	if err := os.Setenv("LOOMHELM_DATABASE_URL", scopedURL); err != nil {
 		fmt.Fprintf(os.Stderr, "set isolated artifact database URL: %v\n", err)
+		_ = dropArtifactTestDatabase(baseURL, schema)
 		os.Exit(1)
 	}
 	if err := os.Setenv(artifactTestSchemaEnv, schema); err != nil {
 		fmt.Fprintf(os.Stderr, "set isolated artifact database schema: %v\n", err)
+		_ = dropArtifactTestDatabase(baseURL, schema)
 		os.Exit(1)
 	}
 	if err := os.Setenv(artifactTestBaseURLEnv, baseURL); err != nil {
 		fmt.Fprintf(os.Stderr, "set shared artifact database URL: %v\n", err)
+		_ = dropArtifactTestDatabase(baseURL, schema)
 		os.Exit(1)
 	}
 
@@ -2124,14 +2371,14 @@ var artifactTestDatabaseState = struct {
 
 func ensureArtifactTestDatabaseClean(t *testing.T) {
 	t.Helper()
-	if strings.TrimSpace(os.Getenv(artifactTestHelperEnv)) != "" {
+	if artifactHelperProcess {
 		return
 	}
 	databaseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
 	if databaseURL == "" {
 		return
 	}
-	if strings.TrimSpace(os.Getenv(artifactTestSchemaEnv)) == "" {
+	if strings.TrimSpace(artifactTestSchemaName) == "" {
 		t.Fatal("artifact integration schema is not initialized")
 	}
 	artifactTestDatabaseState.Lock()
@@ -2156,22 +2403,227 @@ func ensureArtifactTestDatabaseClean(t *testing.T) {
 	})
 }
 
+func authenticatedArtifactHelper() bool {
+	if strings.TrimSpace(os.Getenv(artifactTestHelperEnv)) == "" {
+		return false
+	}
+	capability := os.NewFile(uintptr(3), "loomhelm-artifact-helper-capability")
+	if capability == nil {
+		return false
+	}
+	defer capability.Close()
+	contents, err := io.ReadAll(capability)
+	return err == nil && string(contents) == artifactHelperCapability
+}
+
 func artifactTestDatabaseURL(databaseURL, schema string) (string, error) {
-	parsed, err := url.Parse(databaseURL)
+	rawURL := strings.TrimSpace(databaseURL)
+	parsedConfig, err := pgx.ParseConfig(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("parse database URL: %w", err)
 	}
-	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
-		return "", fmt.Errorf("database URL must use postgres scheme")
+	searchPath := schema + ",public"
+	if strings.HasPrefix(rawURL, "postgres://") || strings.HasPrefix(rawURL, "postgresql://") {
+		parsedURL, err := url.Parse(rawURL)
+		if err != nil {
+			return "", fmt.Errorf("parse database URL for schema scoping: %w", err)
+		}
+		existingOptions := artifactTestRuntimeParam(parsedConfig.RuntimeParams, "options")
+		if rawOptions, found, err := artifactTestURIParam(rawURL, "options"); err != nil {
+			return "", fmt.Errorf("parse database URL options for schema scoping: %w", err)
+		} else if found {
+			existingOptions = rawOptions
+		}
+		options := artifactTestConnectionOptions(existingOptions, searchPath)
+		queryParts := make([]string, 0, strings.Count(parsedURL.RawQuery, "&")+2)
+		for _, part := range strings.Split(parsedURL.RawQuery, "&") {
+			key := part
+			if index := strings.IndexByte(part, '='); index >= 0 {
+				key = part[:index]
+			}
+			decodedKey, err := url.QueryUnescape(key)
+			if err != nil {
+				return "", fmt.Errorf("parse database URL query for schema scoping: %w", err)
+			}
+			if strings.EqualFold(decodedKey, "search_path") || strings.EqualFold(decodedKey, "options") {
+				continue
+			}
+			if part != "" {
+				queryParts = append(queryParts, part)
+			}
+		}
+		queryParts = append(queryParts,
+			"search_path="+encodeArtifactTestQueryValue(searchPath),
+			"options="+encodeArtifactTestQueryValue(options),
+		)
+		parsedURL.RawQuery = strings.Join(queryParts, "&")
+		parsedURL.ForceQuery = parsedURL.RawQuery != ""
+		return parsedURL.String(), nil
 	}
-	query := parsed.Query()
-	options := strings.TrimSpace(query.Get("options"))
-	if options != "" {
-		options += " "
+	settings, err := parseArtifactTestKeywordSettings(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse keyword database URL for schema scoping: %w", err)
 	}
-	query.Set("options", options+"-csearch_path="+schema+",public")
-	parsed.RawQuery = query.Encode()
-	return parsed.String(), nil
+	existingOptions := artifactTestRuntimeParam(parsedConfig.RuntimeParams, "options")
+	for _, setting := range settings {
+		if strings.EqualFold(setting.key, "options") {
+			existingOptions = setting.value
+		}
+	}
+	options := artifactTestConnectionOptions(existingOptions, searchPath)
+	parts := make([]string, 0, len(settings)+2)
+	for _, setting := range settings {
+		if strings.EqualFold(setting.key, "search_path") || strings.EqualFold(setting.key, "options") {
+			continue
+		}
+		parts = append(parts, setting.key+"="+quoteArtifactTestKeywordValue(setting.value))
+	}
+	parts = append(parts,
+		"search_path="+quoteArtifactTestKeywordValue(searchPath),
+		"options="+quoteArtifactTestKeywordValue(options),
+	)
+	return strings.Join(parts, " "), nil
+}
+
+type artifactTestKeywordSetting struct {
+	key   string
+	value string
+}
+
+func artifactTestRuntimeParam(params map[string]string, key string) string {
+	for name, value := range params {
+		if strings.EqualFold(name, key) {
+			return value
+		}
+	}
+	return ""
+}
+
+func artifactTestURIParam(rawURL, key string) (string, bool, error) {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "", false, err
+	}
+	var value string
+	found := false
+	for _, part := range strings.Split(parsedURL.RawQuery, "&") {
+		if part == "" {
+			continue
+		}
+		rawKey, rawValue, ok := strings.Cut(part, "=")
+		if !ok || strings.ContainsRune(rawValue, '=') {
+			return "", false, errors.New("invalid URI query parameter")
+		}
+		decodedKey, err := artifactTestURIComponent(rawKey)
+		if err != nil {
+			return "", false, err
+		}
+		if !strings.EqualFold(decodedKey, key) {
+			continue
+		}
+		value, err = artifactTestURIComponent(rawValue)
+		if err != nil {
+			return "", false, err
+		}
+		found = true
+	}
+	return value, found, nil
+}
+
+func artifactTestURIComponent(value string) (string, error) {
+	return url.QueryUnescape(strings.ReplaceAll(value, "+", "%2B"))
+}
+
+func parseArtifactTestKeywordSettings(raw string) ([]artifactTestKeywordSetting, error) {
+	settings := make([]artifactTestKeywordSetting, 0)
+	raw = strings.TrimLeft(raw, " \t\n\r\v\f")
+	for len(raw) > 0 {
+		eqIndex := strings.IndexByte(raw, '=')
+		if eqIndex < 0 {
+			return nil, errors.New("invalid keyword/value")
+		}
+		key := strings.Trim(raw[:eqIndex], " \t\n\r\v\f")
+		if key == "" || strings.ContainsAny(key, " \t\n\r\v\f") {
+			return nil, errors.New("invalid keyword/value key")
+		}
+		raw = strings.TrimLeft(raw[eqIndex+1:], " \t\n\r\v\f")
+		value := ""
+		if len(raw) > 0 && raw[0] == '\'' {
+			raw = raw[1:]
+			end := 0
+			for end < len(raw) {
+				if raw[end] == '\\' {
+					end += 2
+					continue
+				}
+				if raw[end] == '\'' {
+					break
+				}
+				end++
+			}
+			if end >= len(raw) {
+				return nil, errors.New("unterminated quoted string")
+			}
+			value = unescapeArtifactTestKeywordValue(raw[:end])
+			raw = strings.TrimLeft(raw[end+1:], " \t\n\r\v\f")
+		} else {
+			end := 0
+			for end < len(raw) {
+				if asciiSpaceByte(raw[end]) {
+					break
+				}
+				if raw[end] == '\\' {
+					end++
+					if end == len(raw) {
+						break
+					}
+				}
+				end++
+			}
+			value = unescapeArtifactTestKeywordValue(raw[:end])
+			raw = strings.TrimLeft(raw[end:], " \t\n\r\v\f")
+		}
+		settings = append(settings, artifactTestKeywordSetting{key: key, value: value})
+	}
+	return settings, nil
+}
+
+func unescapeArtifactTestKeywordValue(value string) string {
+	if !strings.ContainsRune(value, '\\') {
+		return value
+	}
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for index := 0; index < len(value); index++ {
+		if value[index] == '\\' {
+			index++
+			if index == len(value) {
+				break
+			}
+		}
+		builder.WriteByte(value[index])
+	}
+	return builder.String()
+}
+
+func asciiSpaceByte(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\v' || value == '\f'
+}
+
+func artifactTestConnectionOptions(existing, searchPath string) string {
+	scopedSearchPath := "-c search_path=" + searchPath
+	if strings.TrimSpace(existing) == "" {
+		return scopedSearchPath
+	}
+	return strings.TrimSpace(existing) + " " + scopedSearchPath
+}
+
+func encodeArtifactTestQueryValue(value string) string {
+	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
+}
+
+func quoteArtifactTestKeywordValue(value string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
 }
 
 func prepareArtifactTestDatabase(databaseURL, schema, scopedURL string) error {
@@ -2189,10 +2641,21 @@ func prepareArtifactTestDatabase(databaseURL, schema, scopedURL string) error {
 
 	scopedDB, err := database.Open(ctx, database.Config{URL: scopedURL, MinConns: 1, MaxConns: 2})
 	if err != nil {
-		return err
+		return cleanupArtifactTestDatabase(databaseURL, schema, fmt.Errorf("open scoped database: %w", err))
 	}
-	defer scopedDB.Close()
-	return scopedDB.Migrate(ctx)
+	migrationErr := scopedDB.Migrate(ctx)
+	scopedDB.Close()
+	if migrationErr != nil {
+		return cleanupArtifactTestDatabase(databaseURL, schema, fmt.Errorf("migrate scoped database: %w", migrationErr))
+	}
+	return nil
+}
+
+func cleanupArtifactTestDatabase(databaseURL, schema string, cause error) error {
+	if err := dropArtifactTestDatabase(databaseURL, schema); err != nil {
+		return errors.Join(cause, fmt.Errorf("drop partially prepared artifact test schema: %w", err))
+	}
+	return cause
 }
 
 func resetArtifactTestDatabase(databaseURL string) error {
@@ -2214,10 +2677,11 @@ func resetArtifactTestDatabase(databaseURL string) error {
 	if currentSchema != expectedSchema {
 		return fmt.Errorf("refusing to reset artifact test schema %q through schema %q", expectedSchema, currentSchema)
 	}
-	if _, err := db.Pool().Exec(ctx, `DELETE FROM conversation_artifact_staging_cleanup`); err != nil {
+	qualifiedSchema := quoteArtifactTestIdentifier(expectedSchema)
+	if _, err := db.Pool().Exec(ctx, `DELETE FROM `+qualifiedSchema+`.conversation_artifact_staging_cleanup`); err != nil {
 		return err
 	}
-	if _, err := db.Pool().Exec(ctx, `DELETE FROM conversation_artifacts`); err != nil {
+	if _, err := db.Pool().Exec(ctx, `DELETE FROM `+qualifiedSchema+`.conversation_artifacts`); err != nil {
 		return err
 	}
 	return nil
