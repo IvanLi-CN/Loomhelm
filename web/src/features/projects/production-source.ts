@@ -945,7 +945,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           const response = await createTaskMutation.mutateAsync(draft);
           createdTaskId = response.task.id;
           const value = mapTask(response.task);
-          if (!recordMutationNotice(createNoticeId, hasRelationChanges ? "任务已创建，关系写入正在进行，请等待本次操作完成。" : "任务已创建，正在确认本次写入。", "in-flight", response.task.id, undefined, "task:create")) return mutationPersistenceFailure("任务创建");
+          if (!recordMutationNotice(createNoticeId, hasRelationChanges ? "任务已创建，关系写入正在进行，请等待本次操作完成。" : "任务已创建，正在确认本次写入。", "in-flight", response.task.id, undefined, `task:${response.task.id}`)) return mutationPersistenceFailure("任务创建");
           const completeCreatedTask = async (): Promise<WriteResult<TaskRecord>> => {
             if (hasRelationChanges) {
               relationMutationsInFlight.current.add(response.task.id);
@@ -1158,6 +1158,15 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           ? "任务写入结果待确认；完整刷新已完成，请确认当前状态后解除阻塞。"
           : "项目写入结果待确认；完整刷新已完成，请确认当前状态后解除阻塞。";
         const result = await withAvailableBrowserMutationLock(subjectId, scope, "busy" as const, async () => {
+          const persistedNotices = readPersistedMutationNotices(subjectId);
+          queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, persistedNotices);
+          const persistedNotice = persistedNotices.find((currentNotice) => currentNotice.id === notice.id);
+          if (!persistedNotice
+            || persistedNotice.kind !== "in-flight"
+            || persistedNotice.message !== notice.message
+            || persistedNotice.lockScope !== notice.lockScope
+            || persistedNotice.projectId !== notice.projectId
+            || persistedNotice.taskId !== notice.taskId) return "unchanged" as const;
           const persisted = updateMutationNotices((current) => current.map((currentNotice) => {
             const unchanged = currentNotice.id !== notice.id
               || currentNotice.kind !== "in-flight"
