@@ -1542,7 +1542,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 	select {
 	case <-removalStarted:
 		started = true
-	case <-time.After(2 * time.Second):
+	case <-time.After(cleanupTimeout + time.Second):
 	}
 	if !started {
 		releaseHolder()
@@ -1568,7 +1568,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 		if outcome.err != nil {
 			failure = fmt.Sprintf("capture contender backend pid: %v", outcome.err)
 		} else {
-			checkContext, checkCancel := context.WithTimeout(ctx, 2*time.Second)
+			checkContext, checkCancel := context.WithTimeout(ctx, cleanupTimeout+time.Second)
 			ticker := time.NewTicker(5 * time.Millisecond)
 			waitingOnIdentityLock := false
 			for failure == "" && !waitingOnIdentityLock {
@@ -1608,7 +1608,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 			ticker.Stop()
 			checkCancel()
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(cleanupTimeout + time.Second):
 		failure = "contender did not reach the identity-lock attempt"
 	}
 	releaseHolder()
@@ -1855,7 +1855,7 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 	}()
 	select {
 	case <-intentStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("first upload did not reach committed intent")
 	}
 	secondResult := make(chan error, 1)
@@ -2047,7 +2047,7 @@ func TestStoreCancellationClosesBlockedSourceAndReturns(t *testing.T) {
 	}()
 	select {
 	case <-source.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("blocked source was not read")
 	}
 	cancel()
@@ -2056,7 +2056,7 @@ func TestStoreCancellationClosesBlockedSourceAndReturns(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled Put error = %v, want %v", err, context.Canceled)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("cancelled Put did not return after source Close")
 	}
 	if got := source.closeCount.Load(); got != 1 {

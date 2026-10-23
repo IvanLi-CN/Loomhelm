@@ -919,7 +919,7 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 	}
 	if err := s.commit(ctx, tx); err != nil {
 		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
-		if confirmErr == nil && samePublicationState(confirmed, updated) {
+		if confirmErr == nil && recoveryStateConverged(confirmed, updated) {
 			if confirmed.State == publicationReady {
 				return reclaimReady(ctx, id, cleanup)
 			}
@@ -937,7 +937,7 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
-	if !samePublicationState(confirmed, updated) {
+	if !recoveryStateConverged(confirmed, updated) {
 		return artifactRecord{}, recoveryPending, fmt.Errorf("artifact recovery state changed unexpectedly: %w", ErrStoreUnavailable)
 	}
 	if confirmed.State == publicationReady {
@@ -1121,6 +1121,16 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 
 func samePublicationState(left, right artifactRecord) bool {
 	return left.State == right.State && left.UnavailableReason == right.UnavailableReason
+}
+
+func recoveryStateConverged(confirmed, updated artifactRecord) bool {
+	if samePublicationState(confirmed, updated) {
+		return true
+	}
+	if updated.State != publicationUnavailable || !repairableUnavailableReason(updated.UnavailableReason) {
+		return false
+	}
+	return confirmed.State == publicationPending || confirmed.State == publicationReady || confirmed.State == publicationUnavailable
 }
 
 func sameStagingIdentity(expected, current *string) bool {
