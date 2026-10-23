@@ -114,6 +114,10 @@ The browser-authentication runtime configuration also passes through the existin
 
 The owner confirmed PRD decision DEC-LH-006 for partial relationship creation: retain and open the already-created Task, keep its warning visible and block its edits, relationship changes and deletion until an explicit complete refresh establishes its state. Other Tasks remain usable; incomplete refresh does not unlock writes, and the client neither recreates the Task nor automatically retries relationship mutations. This settles the interaction contract without changing public endpoints or persisted schema and does not establish implementation or acceptance evidence.
 
+## U02 Wave 8 Identity and Cross-Client Recovery
+
+The approved Wave 8 repair adds optional caller-selected project/task identities so a shared creation notice can identify the resource before the POST. Existing callers remain server-generated, invalid identities fail with HTTP 400, duplicate identities fail with generic HTTP 409, and no schema migration or conflict-as-success behavior is introduced. The browser now keeps a known-ID creation barrier through recovery and verifies the response identity before accepting the result; remote notice removal refreshes affected project/task state before unlocking. Compatibility classification is `public_api=minor` and `persistent_state=patch`. Candidate `ab3100c` passed local Go and Web checks; Agent VM admission and real database/Web evidence remain pending because the native control plane timed out during `native-init`.
+
 ## References
 
 - [Requirements](SPEC.md)
