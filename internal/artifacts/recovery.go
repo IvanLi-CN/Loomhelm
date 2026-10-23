@@ -573,6 +573,7 @@ func sameArtifactMetadata(candidate, existing protocol.Artifact) bool {
 }
 
 func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
+	repairAuthorizationChecked := false
 	for attempt := 0; attempt < 3; attempt++ {
 		existing, readErr := readArtifactRecord(ctx, s.pool, candidate.ID)
 		if readErr != nil && !errors.Is(readErr, ErrNotFound) {
@@ -584,8 +585,10 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 				return artifactRecord{}, s.rejectStagedPut(ctxErr, stagingName, nil, cleanup)
 			}
 			stagedIdentity, _ = s.stagingIdentity(stagingName)
-			if authErr := s.authorize(ctx, OperationPut, existing.Artifact); authErr != nil {
-				return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, stagedIdentity, cleanup)
+			if !repairAuthorizationChecked {
+				if authErr := s.authorize(ctx, OperationPut, existing.Artifact); authErr != nil {
+					return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, stagedIdentity, cleanup)
+				}
 			}
 		}
 
@@ -606,6 +609,7 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 		locked, lockedErr := readArtifactRecord(ctx, tx, candidate.ID)
 		if lockedErr == nil {
 			if readErr != nil || !sameArtifactMetadata(existing.Artifact, locked.Artifact) {
+				repairAuthorizationChecked = false
 				rollbackTx(tx, cleanup)
 				keepTransaction = false
 				continue
@@ -614,9 +618,18 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 				return artifactRecord{}, ErrConflict
 			}
 			if locked.State == publicationUnavailable && repairableUnavailableReason(locked.UnavailableReason) {
-				if authErr := s.authorize(ctx, OperationPut, locked.Artifact); authErr != nil {
-					return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, stagedIdentity, cleanup)
+				if !repairAuthorizationChecked {
+					// Release the identity lock before authorization because a
+					// database-backed authorizer may need this pool connection.
+					rollbackTx(tx, cleanup)
+					keepTransaction = false
+					if authErr := s.authorize(ctx, OperationPut, locked.Artifact); authErr != nil {
+						return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, stagedIdentity, cleanup)
+					}
+					repairAuthorizationChecked = true
+					continue
 				}
+				repairAuthorizationChecked = false
 				return s.repairUnavailable(ctx, tx, locked, candidate, stagingName, cleanup)
 			}
 			return locked, nil
@@ -625,6 +638,7 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 			return artifactRecord{}, lockedErr
 		}
 		if readErr == nil {
+			repairAuthorizationChecked = false
 			rollbackTx(tx, cleanup)
 			keepTransaction = false
 			continue
