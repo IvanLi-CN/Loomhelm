@@ -110,6 +110,10 @@ Storage review identified ambiguity between identical retries and unavailable st
 
 The browser-authentication runtime configuration also passes through the existing branch-preview controller and both Server slots. Its secure-cookie default remains enabled, explicitly isolated HTTP tests can opt out, and Workers do not receive browser identity-provider credentials. Deployment validation also preserves literal credential characters and suppresses expanded secrets from its configuration-check output. This completes deployment wiring for the established browser contract without changing public authentication semantics or durable state.
 
+## Partial Relationship Outcomes
+
+The owner confirmed PRD decision DEC-LH-006 for partial relationship creation: retain and open the already-created Task, keep its warning visible and block its edits, relationship changes and deletion until an explicit complete refresh establishes its state. Other Tasks remain usable; incomplete refresh does not unlock writes, and the client neither recreates the Task nor automatically retries relationship mutations. This settles the interaction contract without changing public endpoints or persisted schema and does not establish implementation or acceptance evidence.
+
 ## References
 
 - [Requirements](SPEC.md)
