@@ -43,7 +43,7 @@ type Task struct {
 }
 
 type CreateRequest struct {
-	ID        string  `json:"id,omitempty"`
+	ID        *string `json:"id,omitempty"`
 	ProjectID string  `json:"project_id"`
 	Title     string  `json:"title"`
 	Goal      string  `json:"goal"`
@@ -128,14 +128,16 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 	if !validStatus(status) {
 		return Task{}, fmt.Errorf("%w: unsupported task status", auth.ErrInvalid)
 	}
-	id := request.ID
-	if id == "" {
+	id := ""
+	if request.ID == nil {
 		id, err = newID("task")
 		if err != nil {
 			return Task{}, err
 		}
-	} else if !validResourceID(id, "task") {
+	} else if !validResourceID(*request.ID, "task") {
 		return Task{}, fmt.Errorf("%w: task id must match task_<32 lowercase hex characters>", auth.ErrInvalid)
+	} else {
+		id = *request.ID
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -524,7 +526,7 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 
 func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
 	var body struct {
-		ID        string  `json:"id,omitempty"`
+		ID        *string `json:"id,omitempty"`
 		ProjectID string  `json:"project_id"`
 		Title     string  `json:"title"`
 		Goal      *string `json:"goal"`

@@ -52,6 +52,12 @@ function knownCreationSource() {
   return source;
 }
 
+function incompleteKnownCreationSource() {
+  const source = knownCreationSource();
+  source.isProjectReconciliationReady = () => false;
+  return source;
+}
+
 function reconciliationSource() {
   const project: ProjectRecord = { ...storyProjects[0], reconciliationNotice: "项目写入结果待确认；请刷新后核对。" };
   const source = createStorySource({
@@ -100,6 +106,28 @@ export const KnownCreationRecovery: Story = {
     expect(await canvas.findByText("已刷新并核对预选项目，可以确认当前状态后解除阻塞。")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "确认当前项目状态，解除阻塞" }));
     expect(await canvas.findByText("已确认当前项目状态，可以继续操作。")).toBeInTheDocument();
+  }
+};
+
+export const KnownCreationIncompleteRefresh: Story = {
+  args: { source: incompleteKnownCreationSource(), mode: "create" },
+  render: (args) => <StoryFrame><ProjectForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对项目列表" }));
+    expect(await canvas.findByText("列表已刷新，但预选项目写入仍在进行或尚未完成确认；请稍后再次刷新。")).toBeInTheDocument();
+    expect(canvas.queryByRole("button", { name: "确认当前项目状态，解除阻塞" })).not.toBeInTheDocument();
+  }
+};
+
+export const KnownCreationRefreshFailure: Story = {
+  args: { source: createStorySource({ ...knownCreationSource(), refresh: async () => { throw new Error("模拟刷新失败"); } }), mode: "create" },
+  render: (args) => <StoryFrame><ProjectForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对项目列表" }));
+    expect(await canvas.findByText("刷新项目列表失败：模拟刷新失败")).toBeInTheDocument();
+    expect(canvas.queryByRole("button", { name: "确认当前项目状态，解除阻塞" })).not.toBeInTheDocument();
   }
 };
 

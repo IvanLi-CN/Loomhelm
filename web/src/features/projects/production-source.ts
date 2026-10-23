@@ -51,6 +51,7 @@ export interface MutationNotice {
   message: string;
   kind?: "creation" | "in-flight" | "reconciliation";
   lockScope?: string;
+  identityMismatch?: boolean;
   volatile?: boolean;
   projectId?: string;
   taskId?: string;
@@ -72,6 +73,7 @@ function sameMutationNoticeContent(left: MutationNotice, right: MutationNotice):
     && left.message === right.message
     && left.kind === right.kind
     && left.lockScope === right.lockScope
+    && left.identityMismatch === right.identityMismatch
     && left.projectId === right.projectId
     && left.taskId === right.taskId;
 }
@@ -106,10 +108,11 @@ function parseMutationNotice(value: unknown): MutationNotice | undefined {
   const notice = value as Partial<MutationNotice>;
   const kind = notice.kind === "creation" || notice.kind === "in-flight" || notice.kind === "reconciliation" ? notice.kind : undefined;
   const lockScope = typeof notice.lockScope === "string" ? notice.lockScope : undefined;
+  const identityMismatch = notice.identityMismatch === true;
   const volatile = notice.volatile === true;
   const projectId = typeof notice.projectId === "string" ? notice.projectId : undefined;
   const taskId = typeof notice.taskId === "string" ? notice.taskId : undefined;
-  return typeof notice.id === "string" && typeof notice.message === "string" ? { id: notice.id, message: notice.message, ...(kind ? { kind } : {}), ...(lockScope ? { lockScope } : {}), ...(volatile ? { volatile } : {}), ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) } : undefined;
+  return typeof notice.id === "string" && typeof notice.message === "string" ? { id: notice.id, message: notice.message, ...(kind ? { kind } : {}), ...(lockScope ? { lockScope } : {}), ...(identityMismatch ? { identityMismatch } : {}), ...(volatile ? { volatile } : {}), ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) } : undefined;
 }
 
 function parseSerializedMutationNotice(value: string | null): MutationNotice | undefined {
@@ -169,7 +172,7 @@ function readPersistedMutationNotices(principalId: string): readonly MutationNot
   return readPersistedMutationNoticeState(principalId).notices;
 }
 
-function publishMutationNoticeChanges(principalId: string, added: readonly MutationNotice[], removed: readonly string[]): boolean {
+function publishMutationNoticeChanges(principalId: string, added: readonly MutationNotice[], removed: readonly string[], removedNotices: readonly MutationNotice[] = []): boolean {
   if (typeof window === "undefined") return true;
   const sharedStorage = getBrowserStorage("localStorage");
   let persisted = false;
@@ -195,7 +198,7 @@ function publishMutationNoticeChanges(principalId: string, added: readonly Mutat
   }
   if (typeof BroadcastChannel !== "undefined") {
     const channel = new BroadcastChannel(MUTATION_NOTICE_CHANNEL);
-    channel.postMessage({ principalId, added: signalAdded, removed: signalRemoved });
+    channel.postMessage({ principalId, added: signalAdded, removed: signalRemoved, removedNotices });
     channel.close();
   }
   return persisted;
@@ -257,7 +260,15 @@ function mutationNoticeScope(notice: MutationNotice): string | undefined {
 
 export function mutationNoticeRemovalScopes(current: readonly MutationNotice[], removed: readonly string[]): readonly string[] {
   const removedIds = new Set(removed);
-  return [...new Set(current.filter((notice) => removedIds.has(notice.id)).map(mutationNoticeScope).filter((scope): scope is string => Boolean(scope)))];
+  const scopes = current.filter((notice) => removedIds.has(notice.id)).flatMap((notice) => {
+    const result = [mutationNoticeScope(notice)];
+    const projectId = mutationNoticeProjectId(notice);
+    const taskId = mutationNoticeTaskId(notice);
+    if (projectId) result.push(`project:${projectId}`);
+    if (taskId) result.push(`task:${taskId}`);
+    return result;
+  });
+  return [...new Set(scopes.filter((scope): scope is string => Boolean(scope)))];
 }
 
 export function createClientResourceId(kind: "project" | "task"): string | undefined {
@@ -736,7 +747,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           const query = queryClient.getQueryCache().find({ queryKey, exact: true });
           return query ? [query] : [];
         });
-        if (refreshedQueries.some((query) => query.state.status === "error" || hasIncompleteProjectTaskRead(query.state.data))) {
+        if (refreshedQueries.length !== 3 || refreshedQueries.some((query) => query.state.status !== "success" || query.state.fetchStatus !== "idle" || query.state.data === undefined || hasIncompleteProjectTaskRead(query.state.data))) {
           throw new Error("项目、任务或关系列表刷新不完整，待确认结果仍然保留。");
         }
         const persistedState = readPersistedMutationNoticeState(subjectId);
@@ -765,14 +776,15 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const handleBroadcast = (event: MessageEvent<unknown>) => {
       if (!event.data || typeof event.data !== "object") return;
-      const signal = event.data as { principalId?: unknown; added?: unknown; removed?: unknown };
+      const signal = event.data as { principalId?: unknown; added?: unknown; removed?: unknown; removedNotices?: unknown };
       if (signal.principalId !== subjectId) return;
       const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
       const removed = Array.isArray(signal.removed) ? signal.removed.filter((id): id is string => typeof id === "string") : [];
+      const removedNotices = Array.isArray(signal.removedNotices) ? signal.removedNotices.map(parseMutationNotice).filter((notice): notice is MutationNotice => Boolean(notice)) : [];
       const added = Array.isArray(signal.added) ? signal.added.map(parseMutationNotice).filter((notice): notice is MutationNotice => Boolean(notice)) : [];
       if (removed.length) {
         queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, added, []));
-        void refreshAfterRemoteRemoval(current, removed);
+        void refreshAfterRemoteRemoval([...current, ...removedNotices], removed);
         return;
       }
       apply({ available: false, shared: false, notices: mergeMutationNoticeChanges(current, added, []) });
@@ -797,10 +809,11 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     const removed = [...currentById.keys()].filter((id) => !nextById.has(id));
     const added = [...nextById.values()].filter((notice) => {
       const previous = currentById.get(notice.id);
-      return previous?.message !== notice.message || previous?.kind !== notice.kind || previous?.lockScope !== notice.lockScope || previous?.volatile !== notice.volatile || previous?.projectId !== notice.projectId || previous?.taskId !== notice.taskId;
+      return previous?.message !== notice.message || previous?.kind !== notice.kind || previous?.lockScope !== notice.lockScope || previous?.identityMismatch !== notice.identityMismatch || previous?.volatile !== notice.volatile || previous?.projectId !== notice.projectId || previous?.taskId !== notice.taskId;
     });
     if (added.length || removed.length) {
-      const persisted = publishMutationNoticeChanges(subjectId, added, removed);
+      const removedNotices = removed.map((id) => currentById.get(id)).filter((notice): notice is MutationNotice => Boolean(notice));
+      const persisted = publishMutationNoticeChanges(subjectId, added, removed, removedNotices);
       if (!persisted && !allowLocalFallback) return { applied: false, persisted: false };
       const localNext = persisted ? next : next.map((notice) => added.some((addedNotice) => addedNotice.id === notice.id) ? { ...notice, volatile: true } : notice);
       queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, localNext);
@@ -810,18 +823,18 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     return { applied: true, persisted: true };
   }, [mutationNoticeKey, queryClient, subjectId]);
   const updateMutationNotices = useCallback((update: (current: readonly MutationNotice[]) => readonly MutationNotice[]) => applyMutationNoticeUpdate(update).persisted, [applyMutationNoticeUpdate]);
-  const writeMutationNotice = useCallback((id: string, message: string, kind: MutationNotice["kind"] = "reconciliation", taskId?: string, projectId?: string, lockScope?: string, allowLocalFallback = false): MutationNoticeUpdateResult => {
+  const writeMutationNotice = useCallback((id: string, message: string, kind: MutationNotice["kind"] = "reconciliation", taskId?: string, projectId?: string, lockScope?: string, allowLocalFallback = false, identityMismatch = false): MutationNoticeUpdateResult => {
     return applyMutationNoticeUpdate((current) => {
       const previous = current.find((notice) => notice.id === id);
       const retainedLockScope = lockScope ?? previous?.lockScope;
       return [
         ...current.filter((notice) => notice.id !== id),
-        { id, message, kind, ...(retainedLockScope ? { lockScope: retainedLockScope } : {}), ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) }
+        { id, message, kind, ...(retainedLockScope ? { lockScope: retainedLockScope } : {}), ...(identityMismatch || previous?.identityMismatch ? { identityMismatch: true } : {}), ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) }
       ];
     }, allowLocalFallback);
   }, [applyMutationNoticeUpdate]);
   const recordMutationNotice = useCallback((id: string, message: string, kind: MutationNotice["kind"] = "reconciliation", taskId?: string, projectId?: string, lockScope?: string) => writeMutationNotice(id, message, kind, taskId, projectId, lockScope).persisted, [writeMutationNotice]);
-  const recordMutationNoticeWithFallback = useCallback((id: string, message: string, kind: MutationNotice["kind"] = "reconciliation", taskId?: string, projectId?: string, lockScope?: string) => writeMutationNotice(id, message, kind, taskId, projectId, lockScope, true), [writeMutationNotice]);
+  const recordMutationNoticeWithFallback = useCallback((id: string, message: string, kind: MutationNotice["kind"] = "reconciliation", taskId?: string, projectId?: string, lockScope?: string, identityMismatch = false) => writeMutationNotice(id, message, kind, taskId, projectId, lockScope, true, identityMismatch), [writeMutationNotice]);
   const clearMutationNotice = useCallback((id: string) => {
     return updateMutationNotices((current) => current.filter((notice) => notice.id !== id));
   }, [updateMutationNotices]);
@@ -989,6 +1002,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
 
     const createProject = async (draft: ProjectDraft): Promise<WriteResult<ReturnType<typeof mapProject>>> => {
       if (!isCurrentSession()) return blocked("登录身份已变化，项目写入没有执行。");
+      const barrier = mutationBarrier<ReturnType<typeof mapProject>>("project:create", "项目创建");
+      if (barrier) return barrier;
       if (!canCreateProjects || !projectWriteReady) return denied("当前身份或连接状态不能确认项目写入范围，项目写入没有执行。");
       return runWithBrowserMutationLock(subjectId, "project:create", async () => {
         if (!isCurrentSession()) return blocked("登录身份已变化，项目写入没有执行。");
@@ -1003,7 +1018,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           const response = await createProjectMutation.mutateAsync({ draft, projectId });
           if (response.project.id !== projectId) {
             const message = "服务端未返回预选项目身份，写入结果待确认；请刷新后核对。";
-            const notice = recordMutationNoticeWithFallback(createNoticeId, message, "reconciliation", undefined, projectId, "project:create");
+            const notice = recordMutationNoticeWithFallback(createNoticeId, message, "reconciliation", undefined, projectId, "project:create", true);
             if (!notice.applied || !notice.persisted) return mutationPersistenceFailure("项目创建", createNoticeId);
             return { ...blocked<ReturnType<typeof mapProject>>(message), noticeId: createNoticeId };
           }
@@ -1024,6 +1039,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const updateProject = async (targetProjectId: string, draft: ProjectDraft): Promise<WriteResult<ReturnType<typeof mapProject>>> => {
       if (!isCurrentSession()) return blocked("登录身份已变化，项目写入没有执行。");
+      const barrier = mutationBarrier<ReturnType<typeof mapProject>>(`project:${targetProjectId}`, "项目更新");
+      if (barrier) return barrier;
       if (!getProjectPermissions(targetProjectId).canManageProjects) return denied("当前身份或权限不能管理项目或成员，项目写入没有执行。");
       const current = getProject(targetProjectId);
       const body = toProjectUpdateRequest(current, draft);
@@ -1051,6 +1068,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const deleteProject = async (targetProjectId: string): Promise<WriteResult<null>> => {
       if (!isCurrentSession()) return blocked("登录身份已变化，项目写入没有执行。");
+      const barrier = mutationBarrier<null>(`project:${targetProjectId}`, "项目删除");
+      if (barrier) return barrier;
       if (!getProjectPermissions(targetProjectId).canManageProjects) return denied("当前身份或权限不能管理项目或成员，项目写入没有执行。");
       return runWithBrowserMutationLock(subjectId, `project:${targetProjectId}`, async () => {
         if (!isCurrentSession()) return blocked("登录身份已变化，项目写入没有执行。");
@@ -1075,6 +1094,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const createTask = async (draft: TaskDraft): Promise<WriteResult<TaskRecord>> => {
       if (!isCurrentSession()) return blocked("登录身份已变化，任务写入没有执行。");
+      const barrier = mutationBarrier<TaskRecord>("task:create", "任务创建");
+      if (barrier) return barrier;
       if (!getProjectPermissions(draft.projectId).canWrite) return denied();
       const relationChanges: TaskRelationChanges = {
         addParentIds: [...new Set(draft.parentIds ?? (draft.parentId ? [draft.parentId] : []))],
@@ -1101,7 +1122,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           const response = await createTaskMutation.mutateAsync({ draft, taskId });
           if (response.task.id !== taskId) {
             const message = "服务端未返回预选任务身份，写入结果待确认；请刷新后核对。";
-            const notice = recordMutationNoticeWithFallback(createNoticeId, message, "reconciliation", taskId, undefined, "task:create");
+            const notice = recordMutationNoticeWithFallback(createNoticeId, message, "reconciliation", taskId, undefined, "task:create", true);
             if (!notice.applied || !notice.persisted) return mutationPersistenceFailure("任务创建", createNoticeId);
             return { ...blocked<TaskRecord>(message), noticeId: createNoticeId };
           }
@@ -1163,6 +1184,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const updateTask = async (taskId: string, update: TaskUpdate): Promise<WriteResult<TaskRecord>> => {
       if (!isCurrentSession()) return blocked("登录身份已变化，任务写入没有执行。");
+      const barrier = mutationBarrier<TaskRecord>(`task:${taskId}`, "任务更新");
+      if (barrier) return barrier;
       const existingTask = getTask(taskId);
       const reconciliationBlock = taskWriteBlockReason(existingTask);
       if (reconciliationBlock) return blocked(reconciliationBlock);
@@ -1224,6 +1247,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const deleteTask = async (taskId: string): Promise<WriteResult<null>> => {
       if (!isCurrentSession()) return blocked("登录身份已变化，任务写入没有执行。");
+      const barrier = mutationBarrier<null>(`task:${taskId}`, "任务删除");
+      if (barrier) return barrier;
       const task = getTask(taskId);
       const reconciliationBlock = taskWriteBlockReason(task);
       if (reconciliationBlock) return blocked(reconciliationBlock);
@@ -1252,6 +1277,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const changeTaskRelations = async (taskId: string, changes: TaskRelationChanges): Promise<WriteResult<null>> => {
       if (!isCurrentSession()) return blocked("登录身份已变化，关系写入没有执行。");
+      const barrier = mutationBarrier<null>(`task:${taskId}`, "任务关系写入");
+      if (barrier) return barrier;
       const task = getTask(taskId);
       const reconciliationBlock = taskWriteBlockReason(task);
       if (reconciliationBlock) return blocked(reconciliationBlock);
@@ -1360,11 +1387,11 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     const currentMutationNotices = (): readonly MutationNotice[] => queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
     const isTaskReconciliationReady = (taskId: string): boolean => {
       const notices = currentMutationNotices().filter((notice) => mutationNoticeTaskId(notice) === taskId);
-      return notices.length > 0 && notices.every((notice) => notice.kind !== "in-flight");
+      return notices.length > 0 && notices.every((notice) => notice.kind !== "in-flight" && (!notice.identityMismatch || tasks.some((task) => task.id === taskId)));
     };
     const isProjectReconciliationReady = (projectId: string): boolean => {
       const notices = currentMutationNotices().filter((notice) => mutationNoticeProjectId(notice) === projectId);
-      return notices.length > 0 && notices.every((notice) => notice.kind !== "in-flight");
+      return notices.length > 0 && notices.every((notice) => notice.kind !== "in-flight" && (!notice.identityMismatch || projects.some((project) => project.id === projectId)));
     };
     const isPendingProjectCreationReady = (noticeId: string): boolean => currentMutationNotices().some((notice) => notice.id === noticeId && isPendingProjectCreationNotice(notice) && notice.kind === "creation");
     const isPendingTaskCreationReady = (noticeId: string): boolean => currentMutationNotices().some((notice) => notice.id === noticeId && isPendingTaskCreationNotice(notice) && notice.kind === "creation");

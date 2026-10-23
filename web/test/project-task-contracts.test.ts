@@ -220,6 +220,20 @@ describe("project/task write contracts", () => {
     expect(mutationNoticeRemovalScopes(current, ["task:two", "project:create:one"])).toEqual(["task:task-2", "project:create"]);
   });
 
+  test("keeps known creation resources blocked while their shared creation scope refreshes", () => {
+    const notice = {
+      id: "task:create:known",
+      message: "task",
+      taskId: "task_0123456789abcdef0123456789abcdef",
+      lockScope: "task:create"
+    };
+
+    expect(mutationNoticeRemovalScopes([notice], [notice.id])).toEqual([
+      "task:create",
+      "task:task_0123456789abcdef0123456789abcdef"
+    ]);
+  });
+
   test("preserves a newer volatile notice over a stale persisted version", () => {
     const persisted = { id: "task:create:one", message: "creating", kind: "in-flight" as const, lockScope: "task:create" };
     const volatile = { ...persisted, message: "task is ready for reconciliation", kind: "reconciliation" as const, lockScope: "task:one", taskId: "task-1", volatile: true };

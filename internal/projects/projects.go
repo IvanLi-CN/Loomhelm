@@ -35,9 +35,9 @@ type Project struct {
 }
 
 type CreateRequest struct {
-	ID          string `json:"id,omitempty"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID          *string `json:"id,omitempty"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
 }
 
 type UpdateRequest struct {
@@ -303,15 +303,17 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 	if len(principal.ProjectScope) > 0 {
 		return Project{}, auth.ErrForbidden
 	}
-	id := request.ID
-	if id == "" {
+	id := ""
+	if request.ID == nil {
 		generatedID, err := newID("project")
 		if err != nil {
 			return Project{}, err
 		}
 		id = generatedID
-	} else if !validResourceID(id, "project") {
+	} else if !validResourceID(*request.ID, "project") {
 		return Project{}, fmt.Errorf("%w: project id must match project_<32 lowercase hex characters>", auth.ErrInvalid)
+	} else {
+		id = *request.ID
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -660,8 +662,8 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 		auth.WriteError(writer, request, http.StatusUnauthorized, err, "authentication required")
 		return
 	}
-	var body CreateRequest
-	if err := auth.DecodeJSON(request, &body); err != nil {
+	body, err := decodeCreateRequest(request)
+	if err != nil {
 		auth.WriteError(writer, request, http.StatusBadRequest, err, "invalid project request")
 		return
 	}
@@ -671,6 +673,14 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	auth.WriteJSON(writer, http.StatusCreated, map[string]Project{"project": project})
+}
+
+func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
+	var body CreateRequest
+	if err := auth.DecodeJSON(request, &body); err != nil {
+		return CreateRequest{}, err
+	}
+	return body, nil
 }
 
 func (s *Service) handleGet(writer http.ResponseWriter, request *http.Request) {

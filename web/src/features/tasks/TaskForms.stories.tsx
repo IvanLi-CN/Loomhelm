@@ -33,6 +33,27 @@ function knownCreationSource() {
   return source;
 }
 
+function pendingCreationSource() {
+  const source = createStorySource();
+  const noticeId = "task:create:story";
+  source.pendingTaskCreation = true;
+  source.pendingTaskCreationNoticeId = noticeId;
+  source.isPendingTaskCreationReady = (id) => id === noticeId;
+  source.acknowledgePendingTaskCreation = (id) => {
+    if (id !== noticeId) return false;
+    source.pendingTaskCreation = false;
+    delete source.pendingTaskCreationNoticeId;
+    return true;
+  };
+  return source;
+}
+
+function incompleteKnownCreationSource() {
+  const source = knownCreationSource();
+  source.isTaskReconciliationReady = () => false;
+  return source;
+}
+
 export const Create: Story = {
   args: { source: createStorySource(), mode: "create" },
   render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>,
@@ -53,6 +74,41 @@ export const KnownCreationRecovery: Story = {
     expect(await canvas.findByText("已刷新并核对预选任务，可以确认当前状态后解除阻塞。")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "确认当前任务状态，解除阻塞" }));
     expect(await canvas.findByText("已确认当前任务状态，可以继续操作。")).toBeInTheDocument();
+  }
+};
+
+export const PendingCreationRecovery: Story = {
+  args: { source: pendingCreationSource(), mode: "create" },
+  render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(await canvas.findByText("上一次任务创建结果仍待确认；请先检查任务列表，当前表单不会再次提交。")).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务列表" }));
+    expect(await canvas.findByText("列表已刷新，但本次任务创建结果仍待确认；为避免重复创建，当前表单不会再次提交。")).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "确认未创建，允许重新提交" }));
+    expect(await canvas.findByText("已确认任务列表中没有这次写入，可以重新提交。")).toBeInTheDocument();
+  }
+};
+
+export const KnownCreationIncompleteRefresh: Story = {
+  args: { source: incompleteKnownCreationSource(), mode: "create" },
+  render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务列表" }));
+    expect(await canvas.findByText("列表已刷新，但预选任务写入仍在进行或尚未完成确认；请稍后再次刷新。")).toBeInTheDocument();
+    expect(canvas.queryByRole("button", { name: "确认当前任务状态，解除阻塞" })).not.toBeInTheDocument();
+  }
+};
+
+export const KnownCreationRefreshFailure: Story = {
+  args: { source: createStorySource({ ...knownCreationSource(), refresh: async () => { throw new Error("模拟刷新失败"); } }), mode: "create" },
+  render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务列表" }));
+    expect(await canvas.findByText("刷新任务列表失败：模拟刷新失败")).toBeInTheDocument();
+    expect(canvas.queryByRole("button", { name: "确认当前任务状态，解除阻塞" })).not.toBeInTheDocument();
   }
 };
 

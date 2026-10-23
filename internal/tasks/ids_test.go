@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -24,6 +25,24 @@ func TestValidResourceID(t *testing.T) {
 		if validResourceID(value, "task") {
 			t.Errorf("validResourceID(%q) = true", value)
 		}
+	}
+}
+
+func TestDecodeCreateRequestDistinguishesMissingAndEmptyID(t *testing.T) {
+	omitted, err := decodeCreateRequest(httptest.NewRequest("POST", "/tasks", strings.NewReader(`{"project_id":"project_0123456789abcdef0123456789abcdef","title":"Task","goal":"Goal"}`)))
+	if err != nil {
+		t.Fatalf("decode omitted id: %v", err)
+	}
+	if omitted.ID != nil {
+		t.Fatalf("omitted id = %q, want nil", *omitted.ID)
+	}
+
+	empty, err := decodeCreateRequest(httptest.NewRequest("POST", "/tasks", strings.NewReader(`{"id":"","project_id":"project_0123456789abcdef0123456789abcdef","title":"Task","goal":"Goal"}`)))
+	if err != nil {
+		t.Fatalf("decode empty id: %v", err)
+	}
+	if empty.ID == nil || *empty.ID != "" {
+		t.Fatalf("empty id = %#v, want pointer to empty string", empty.ID)
 	}
 }
 
