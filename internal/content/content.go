@@ -108,6 +108,9 @@ func Encode(record Record) ([]byte, error) {
 	if record.Schema != FixtureSchema || record.Source == "" || !validStream(record.Stream) || record.Sequence < 1 || !isJSONObject(record.Payload) {
 		return nil, fmt.Errorf("content record is incomplete: %w", ErrInvalid)
 	}
+	if len(record.Source) > DefaultMaxRecordBytes {
+		return nil, ErrTooLarge
+	}
 	if len(record.Payload) > DefaultMaxRecordBytes {
 		return nil, ErrTooLarge
 	}

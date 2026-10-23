@@ -150,6 +150,9 @@ func TestDecodeAndParseRejectMalformedOrOversizedRecords(t *testing.T) {
 	if _, err := Encode(Record{Source: "test", Stream: "app-server", Sequence: 1, Payload: payload}); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized encoded record error = %v, want %v", err, ErrTooLarge)
 	}
+	if _, err := Encode(Record{Source: strings.Repeat("x", DefaultMaxRecordBytes+1), Stream: "app-server", Sequence: 1, Payload: json.RawMessage(`{}`)}); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized source error = %v, want %v", err, ErrTooLarge)
+	}
 	if _, err := Encode(Record{Source: "test", Stream: "app-server", Sequence: 1, Payload: json.RawMessage(`{"broken":}`)}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("malformed encoded payload error = %v, want %v", err, ErrInvalid)
 	}
