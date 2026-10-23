@@ -1752,6 +1752,34 @@ func TestStorePendingMetadataAndOpenReturnUnavailableWithoutIntegrity(t *testing
 	}
 }
 
+func TestRecoveryStateConvergenceRequiresReplacementBinding(t *testing.T) {
+	identity := "1:2"
+	updated := artifactRecord{
+		State:             publicationUnavailable,
+		StagingName:       ".upload-original",
+		StagingIdentity:   &identity,
+		UnavailableReason: "staging-missing",
+	}
+	if recoveryStateConverged(artifactRecord{
+		State:           publicationPending,
+		StagingName:     updated.StagingName,
+		StagingIdentity: &identity,
+	}, updated) {
+		t.Fatal("unchanged pending binding was treated as a recovered convergence")
+	}
+	replacementIdentity := "3:4"
+	if !recoveryStateConverged(artifactRecord{
+		State:           publicationPending,
+		StagingName:     ".upload-replacement",
+		StagingIdentity: &replacementIdentity,
+	}, updated) {
+		t.Fatal("replacement pending binding was not treated as a recovered convergence")
+	}
+	if !recoveryStateConverged(artifactRecord{State: publicationReady}, updated) {
+		t.Fatal("ready convergence was rejected")
+	}
+}
+
 func TestStoreKeepsDurableStagingWhenDatabaseCommitIsUnavailable(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	content := []byte("preserve this staging")

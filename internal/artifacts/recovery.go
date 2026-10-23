@@ -1130,7 +1130,10 @@ func recoveryStateConverged(confirmed, updated artifactRecord) bool {
 	if updated.State != publicationUnavailable || !repairableUnavailableReason(updated.UnavailableReason) {
 		return false
 	}
-	return confirmed.State == publicationPending || confirmed.State == publicationReady || confirmed.State == publicationUnavailable
+	if confirmed.State == publicationPending {
+		return confirmed.StagingName != updated.StagingName || !sameStagingIdentity(confirmed.StagingIdentity, updated.StagingIdentity)
+	}
+	return confirmed.State == publicationReady || confirmed.State == publicationUnavailable
 }
 
 func sameStagingIdentity(expected, current *string) bool {
