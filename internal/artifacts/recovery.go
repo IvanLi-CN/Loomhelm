@@ -1147,6 +1147,9 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 	}
 	removeStaging := record.StagingIdentity != nil && currentIdentity != nil && sameStagingIdentity(record.StagingIdentity, currentIdentity)
 	if !removeStaging {
+		if err := ctx.Err(); err != nil {
+			return artifactRecord{}, recoveryPending, err
+		}
 		if err := s.syncStagingDirectory(); err != nil {
 			return artifactRecord{}, recoveryPending, fmt.Errorf("sync artifact staging directory before retaining staging: %w", err)
 		}
@@ -1647,6 +1650,9 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 		return false, err
 	}
 	if expectedIdentity != nil && currentIdentity == nil {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if err := s.syncStagingDirectory(); err != nil {
 			return false, fmt.Errorf("sync artifact staging directory after missing staging: %w", err)
 		}

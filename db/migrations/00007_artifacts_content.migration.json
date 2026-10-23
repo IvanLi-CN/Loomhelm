@@ -7,7 +7,7 @@
     "version_impact": "minor"
   },
   "durable_state": {
-    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object and its filesystem incarnation, its staging recovery retry deadline and ready-row reclamation marker, the bounded cleanup debt for known-unreferenced staging objects with a filesystem incarnation, and the reason for an unavailable publication.",
+    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object and its filesystem incarnation, its staging recovery retry deadline and ready-row reclamation marker, the per-name cleanup debt for known-unreferenced staging objects with a filesystem incarnation, and the reason for an unavailable publication.",
     "staging_recovery": {
       "pending_row": "A pending row that encounters a transient recovery failure remains pending but receives a bounded retry deadline, so one failing identity cannot occupy every later recovery batch.",
       "ready_row": "A ready row records the staging filesystem incarnation and records staging_reclaimed_at only after the matching staging object is removed and the containing directory is synced; a replaced or already-missing incarnation is preserved and the marker is advanced without deleting the replacement, while failed reclamation records a bounded retry deferral.",

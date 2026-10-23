@@ -508,6 +508,13 @@ func TestStoreCancellationDuringExistingArtifactAuthorizationRetainsStaging(t *t
 	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("authorization-cancelled Put did not finish")
 	}
+	var cleanupCount int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup`).Scan(&cleanupCount); err != nil {
+		t.Fatal(err)
+	}
+	if cleanupCount != 0 {
+		t.Fatalf("authorization-cancelled staging cleanup debt = %d, want 0", cleanupCount)
+	}
 	assertHasStagingFiles(t, requester.objects)
 }
 
@@ -2360,6 +2367,15 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("unrelated upload was stalled by cancelled upload")
 	}
+	secondMetadata, secondReader, err := store.Open(ctx, secondID)
+	if err != nil {
+		t.Fatalf("unrelated upload Open error = %v", err)
+	}
+	secondReadBack, readErr := io.ReadAll(secondReader)
+	closeErr := secondReader.Close()
+	if readErr != nil || closeErr != nil || secondMetadata.ID != secondID || !bytes.Equal(secondReadBack, secondContent) {
+		t.Fatalf("unrelated upload publication = %#v/%q, readErr=%v, closeErr=%v", secondMetadata, secondReadBack, readErr, closeErr)
+	}
 	cancelFirst()
 	select {
 	case err := <-firstResult:
@@ -2370,7 +2386,7 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 		t.Fatal("cancelled after-intent upload did not return")
 	}
 	store.faults = nil
-	_, err := store.Recover(ctx, MaxRecoveryLimit)
+	_, err = store.Recover(ctx, MaxRecoveryLimit)
 	if err != nil {
 		t.Fatalf("cancelled intent recovery err=%v", err)
 	}
@@ -2550,6 +2566,13 @@ func TestStoreCancellationClosesBlockedSourceAndReturns(t *testing.T) {
 	}
 	if got := source.closeCount.Load(); got != 1 {
 		t.Fatalf("blocked source close count = %d, want 1", got)
+	}
+	var cleanupCount int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup`).Scan(&cleanupCount); err != nil {
+		t.Fatal(err)
+	}
+	if cleanupCount != 0 {
+		t.Fatalf("cancelled staging cleanup debt = %d, want 0", cleanupCount)
 	}
 	assertHasStagingFiles(t, store.objects)
 }
