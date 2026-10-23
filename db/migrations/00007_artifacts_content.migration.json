@@ -114,7 +114,7 @@
         "A permitted Put persists original bytes and ready metadata, and Metadata/Open remain available after database close and reopen.",
         "Process interruption after staging, intent, repair intent, final publication and readiness, including lost database responses, is recovered by a new Store process without deleting potentially committed bytes; ready-row staging reclamation is bounded and retryable.",
         "Separate processes coordinate same-ID publication, repair and reconciliation; identical immutable retries converge, while conflicting association, metadata, content, final objects, unknown reasons and previously-ready loss cannot overwrite or resurrect a publication.",
-        "Size and SHA-256 mismatches, blocked or non-cancellable readers, malformed identifiers, traversal/symlink paths and unauthorized operations are rejected without exposing host paths or partial metadata; cancellation cleanup remains bounded and does not leave a copy goroutine.",
+        "Size and SHA-256 mismatches, blocked or non-cancellable readers, malformed identifiers, traversal/symlink paths and unauthorized operations are rejected without exposing host paths or partial metadata; cancellation cleanup remains bounded when an admitted source's Close unblocks its Read.",
         "R02 basic and unknown fixture content retains its raw envelope/payload and remains a non-executing classification fallback under the per-record, total-byte and record-count budgets; fixture-only sanitization does not rewrite runtime codec data.",
         "Migration 00007 is recognized idempotently and is not automatically reversed; E01 Session/Run ownership foreign keys are added only by a later ordered migration after their schema exists."
       ]

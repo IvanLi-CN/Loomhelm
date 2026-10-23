@@ -378,6 +378,60 @@ func TestStorePutHidesCrossSessionArtifactExistence(t *testing.T) {
 	assertNoStagingFiles(t, requester.objects)
 }
 
+func TestStoreCancellationDuringExistingArtifactAuthorizationCleansStaging(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("authorization cancellation")
+	artifact := testArtifact(uniqueID("artifact-auth-cancel"), nil, content)
+	artifact.SessionID = "session-owner"
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	authorizationStarted := make(chan struct{})
+	var authorizationCalls atomic.Int32
+	requester, err := NewStore(db.Pool(), Config{
+		Root: store.root,
+		Authorizer: AuthorizerFunc(func(authContext context.Context, _ Operation, candidate protocol.Artifact) error {
+			if authorizationCalls.Add(1) == 1 {
+				if candidate.SessionID != "session-requester" {
+					return ErrUnauthorized
+				}
+				return nil
+			}
+			close(authorizationStarted)
+			<-authContext.Done()
+			return authContext.Err()
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := artifact
+	candidate.SessionID = "session-requester"
+	putContext, cancel := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() {
+		_, err := requester.Put(putContext, candidate, readCloser(bytes.NewReader(content)))
+		result <- err
+	}()
+	select {
+	case <-authorizationStarted:
+	case <-time.After(cleanupTimeout + time.Second):
+		cancel()
+		t.Fatal("existing artifact authorization did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("authorization-cancelled Put error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(cleanupTimeout + time.Second):
+		t.Fatal("authorization-cancelled Put did not finish")
+	}
+	assertNoStagingFiles(t, requester.objects)
+}
+
 func TestStoreRetainsStagingWhenRecoveryConflictsAfterIntentCommit(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -851,18 +905,80 @@ func TestStoreRecoveryDefersArtifactAfterIdentityLockTimeout(t *testing.T) {
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "loomhelm:artifact:"+artifact.ID); err != nil {
 		t.Fatal(err)
 	}
-	commitResult := make(chan error, 1)
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		commitResult <- holder.Commit(ctx)
-	}()
-	recoveryContext, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-	_, recoverErr := store.Recover(recoveryContext, 1)
-	cancel()
-	if !errors.Is(recoverErr, context.DeadlineExceeded) {
-		t.Fatalf("lock-timeout recovery error = %v, want %v", recoverErr, context.DeadlineExceeded)
+	identityAttempt := make(chan struct {
+		pid int32
+		err error
+	}, 1)
+	var identityAttemptOnce sync.Once
+	store.faults = &faultHooks{
+		BeforeIdentityLock: func(hookContext context.Context, tx pgx.Tx, _ string) {
+			identityAttemptOnce.Do(func() {
+				var pid int32
+				err := tx.QueryRow(hookContext, `SELECT pg_backend_pid()`).Scan(&pid)
+				identityAttempt <- struct {
+					pid int32
+					err error
+				}{pid: pid, err: err}
+			})
+		},
 	}
-	if err := <-commitResult; err != nil {
+	recoveryContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	recoverResult := make(chan error, 1)
+	go func() {
+		_, err := store.Recover(recoveryContext, 1)
+		recoverResult <- err
+	}()
+	var attempt struct {
+		pid int32
+		err error
+	}
+	select {
+	case attempt = <-identityAttempt:
+	case <-time.After(cleanupTimeout + time.Second):
+		cancel()
+		_ = holder.Rollback(ctx)
+		select {
+		case <-recoverResult:
+		case <-time.After(cleanupTimeout + time.Second):
+			t.Fatal("recovery did not finish after identity-lock attempt timeout")
+		}
+		t.Fatal("recovery did not reach the identity-lock attempt")
+	}
+	if attempt.err != nil {
+		cancel()
+		_ = holder.Rollback(ctx)
+		<-recoverResult
+		t.Fatalf("capture recovery backend pid: %v", attempt.err)
+	}
+	checkContext, checkCancel := context.WithTimeout(ctx, 2*time.Second)
+	var waiting bool
+	for deadline := time.Now().Add(2 * time.Second); !waiting && time.Now().Before(deadline); {
+		if err := db.Pool().QueryRow(checkContext, `SELECT COALESCE(array_length(pg_blocking_pids($1), 1), 0) > 0`, attempt.pid).Scan(&waiting); err != nil {
+			checkCancel()
+			cancel()
+			_ = holder.Rollback(ctx)
+			<-recoverResult
+			t.Fatalf("check recovery lock wait: %v", err)
+		}
+		if !waiting {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	checkCancel()
+	if !waiting {
+		cancel()
+		_ = holder.Rollback(ctx)
+		<-recoverResult
+		t.Fatal("recovery backend was not observed waiting on the held identity lock")
+	}
+	cancel()
+	recoverErr := <-recoverResult
+	if !errors.Is(recoverErr, context.Canceled) {
+		_ = holder.Rollback(ctx)
+		t.Fatalf("lock-timeout recovery error = %v, want %v", recoverErr, context.Canceled)
+	}
+	if err := holder.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var retryDeferred bool
@@ -1689,6 +1805,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 	contenderRemovalEntered := make(chan struct{})
 	contenderDone := make(chan struct{})
 	holderRemovalCompleted := make(chan struct{})
+	markerRelease := make(chan struct{})
 	holderRelease := make(chan struct{})
 	contenderIdentity := make(chan struct {
 		pid int32
@@ -1702,6 +1819,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 	var contenderAttemptOnce sync.Once
 	var contenderRemovalOnce sync.Once
 	var releaseOnce sync.Once
+	var markerReleaseOnce sync.Once
 	store.faults = &faultHooks{
 		BeforeIdentityLock: func(hookContext context.Context, tx pgx.Tx, _ string) {
 			if attemptCount.Add(1) != 2 {
@@ -1736,6 +1854,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 		},
 		AfterReadyStagingRemoval: func() {
 			close(holderRemovalCompleted)
+			<-markerRelease
 		},
 	}
 	cleanup := newCleanupDeadline(ctx)
@@ -1747,6 +1866,10 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 		})
 	}
 	defer releaseHolder()
+	releaseMarker := func() {
+		markerReleaseOnce.Do(func() { close(markerRelease) })
+	}
+	defer releaseMarker()
 	waitResult := func(result <-chan error, label string) error {
 		select {
 		case err := <-result:
@@ -1834,6 +1957,21 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 		failure = "contender did not reach the identity-lock attempt"
 	}
 	releaseHolder()
+	if failure == "" {
+		select {
+		case <-holderRemovalCompleted:
+		case <-contenderRemovalEntered:
+			failure = "contender entered staging removal before the holder committed its reclamation marker"
+		case <-time.After(cleanupTimeout + time.Second):
+			failure = "holder did not reach the post-removal marker barrier"
+		}
+		select {
+		case err := <-reclaimResult:
+			failure = fmt.Sprintf("ready cleanup committed before the marker barrier released: %v", err)
+		default:
+		}
+	}
+	releaseMarker()
 	if err := waitResult(reclaimResult, "ready cleanup"); err != nil {
 		t.Fatalf("ready cleanup = %v", err)
 	}

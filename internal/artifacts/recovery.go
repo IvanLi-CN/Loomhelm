@@ -569,16 +569,20 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 	existing, err := readArtifactRecord(ctx, tx, candidate.ID)
 	if err == nil {
 		if authErr := s.authorize(ctx, OperationPut, existing.Artifact); authErr != nil {
-			if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
-				return artifactRecord{}, authErr
-			}
 			// The candidate was authorized before staging, but the durable row may
 			// belong to a different caller scope. Hide its existence and discard
 			// the newly staged bytes before releasing the identity lock.
 			rollbackTx(tx, cleanup)
 			tx = nil
-			if removeErr := s.removeStaging(stagingName); removeErr != nil {
-				_ = s.enqueueStagingCleanup(stagingName, cleanup)
+			cleanupErr := s.discardRejectedStaging(stagingName, cleanup)
+			if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
+				if cleanupErr != nil {
+					return artifactRecord{}, errors.Join(authErr, cleanupErr)
+				}
+				return artifactRecord{}, authErr
+			}
+			if cleanupErr != nil {
+				return artifactRecord{}, cleanupErr
 			}
 			return artifactRecord{}, ErrNotFound
 		}
@@ -1310,6 +1314,16 @@ func (s *Store) removeStaging(name string) error {
 	return nil
 }
 
+func (s *Store) discardRejectedStaging(name string, cleanup *cleanupDeadline) error {
+	if err := s.removeStaging(name); err == nil {
+		return nil
+	}
+	if err := s.enqueueStagingCleanup(name, cleanup); err != nil {
+		return databaseWriteError("record rejected staging cleanup", err)
+	}
+	return nil
+}
+
 func (s *Store) enqueueStagingCleanup(name string, cleanup *cleanupDeadline) error {
 	var intendedIdentity *string
 	return s.enqueueStagingCleanupWithQueue(name, cleanup, func(ctx context.Context, tx pgx.Tx) error {
@@ -1737,34 +1751,23 @@ func (s *Store) deferArtifactRecovery(id string, cleanup *cleanupDeadline) error
 	}
 	ctx, cancel := cleanup.context()
 	defer cancel()
-	tx, err := s.beginIdentityTx(ctx, id, cleanup)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
-	}
-	defer func() { rollbackTx(tx, cleanup) }()
-	var state string
-	var reclaimed bool
-	if err := tx.QueryRow(ctx, `
-		SELECT state, (staging_reclaimed_at IS NOT NULL)
-		FROM conversation_artifacts
-		WHERE id = $1
-		FOR UPDATE
-	`, id).Scan(&state, &reclaimed); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
-		return fmt.Errorf("read artifact recovery state: %w", ErrStoreUnavailable)
+		return fmt.Errorf("begin artifact recovery deferral: %w", ErrStoreUnavailable)
 	}
-	if state != string(publicationPending) && !(state == string(publicationReady) && !reclaimed) {
-		return nil
-	}
+	defer func() { rollbackTx(tx, cleanup) }()
+	// The conditional row update serializes against publication state changes;
+	// retry deferral must not reacquire the identity advisory lock that caused
+	// this recovery attempt to time out.
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_artifacts
 		SET staging_reclaim_after = clock_timestamp() + INTERVAL '1 minute'
-		WHERE id = $1 AND (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL))
+		WHERE id = $1
+		  AND (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL))
+		  AND staging_reclaim_after <= clock_timestamp()
 	`, id); err != nil {
 		return databaseWriteError("defer artifact recovery", err)
 	}
