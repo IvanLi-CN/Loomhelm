@@ -65,6 +65,21 @@ func TestStorePutDeniesBeforeWritingWhenAuthorizationIsMissing(t *testing.T) {
 	}
 }
 
+func TestStoreSyncStagingDirectorySanitizesFilesystemErrors(t *testing.T) {
+	privatePath := filepath.Join(t.TempDir(), "private-artifact-root", "objects")
+	store := &Store{objects: privatePath}
+	err := store.syncStagingDirectory()
+	if err == nil {
+		t.Fatal("sync staging directory unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), privatePath) {
+		t.Fatalf("sync staging directory error exposes private path: %v", err)
+	}
+	if !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("sync staging directory error = %v, want %v", err, ErrStoreUnavailable)
+	}
+}
+
 func TestStoreRejectsUnsupportedInputBeforeStaging(t *testing.T) {
 	root := t.TempDir()
 	objects := filepath.Join(root, "objects")
@@ -427,8 +442,8 @@ func TestStoreRecoveryPreservesReadyStagingWhenFinalIsInvalid(t *testing.T) {
 		if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
 			t.Fatal(err)
 		}
-		if queued != 1 {
-			t.Fatalf("invalid ready cleanup rows for %q = %d, want 1", stagingName, queued)
+		if queued != 0 {
+			t.Fatalf("invalid ready cleanup rows for %q = %d, want 0", stagingName, queued)
 		}
 	}
 	entries, err := os.ReadDir(store.objects)
@@ -446,7 +461,7 @@ func TestStoreRecoveryPreservesReadyStagingWhenFinalIsInvalid(t *testing.T) {
 	}
 }
 
-func TestStoreRecoveryQueuesInvalidReadyStagingCleanup(t *testing.T) {
+func TestStoreRecoveryRetiresInvalidReadyStagingCleanupWithoutRemovingStaging(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
 	content := []byte("ready cleanup debt")
@@ -471,8 +486,18 @@ func TestStoreRecoveryQueuesInvalidReadyStagingCleanup(t *testing.T) {
 	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
 		t.Fatal(err)
 	}
-	if queued != 1 {
-		t.Fatalf("ready cleanup debt rows = %d, want 1", queued)
+	if queued != 0 {
+		t.Fatalf("invalid ready cleanup rows after transition = %d, want 0", queued)
+	}
+	stagingIdentity, err := store.stagingIdentity(stagingName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO conversation_artifact_staging_cleanup (staging_name, staging_identity, retry_after)
+		VALUES ($1, $2, NOW())
+	`, stagingName, stagingIdentity); err != nil {
+		t.Fatal(err)
 	}
 	cleanup := newCleanupDeadline(ctx)
 	defer cleanup.stop()
@@ -486,8 +511,8 @@ func TestStoreRecoveryQueuesInvalidReadyStagingCleanup(t *testing.T) {
 	if queued != 0 {
 		t.Fatalf("ready cleanup debt rows after retry = %d, want 0", queued)
 	}
-	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("ready cleanup debt staging = %v, want missing", err)
+	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); err != nil {
+		t.Fatalf("diagnostic ready staging = %v, want retained", err)
 	}
 }
 
@@ -1300,30 +1325,79 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 
 	removalStarted := make(chan struct{})
 	contenderAttempted := make(chan struct{})
+	contenderRemovalEntered := make(chan struct{})
+	contenderDone := make(chan struct{})
+	holderRelease := make(chan struct{})
+	contenderIdentity := make(chan struct {
+		pid int32
+		err error
+	}, 1)
 	var attemptCount atomic.Int32
-	var removalOnce sync.Once
+	var removalCount atomic.Int32
+	var holderReleased atomic.Bool
+	var lockViolated atomic.Bool
+	var removalStartOnce sync.Once
+	var contenderAttemptOnce sync.Once
+	var contenderRemovalOnce sync.Once
+	var releaseOnce sync.Once
 	store.faults = &faultHooks{
-		BeforeIdentityLock: func(context.Context, pgx.Tx, string) {
-			if attemptCount.Add(1) == 2 {
-				close(contenderAttempted)
+		BeforeIdentityLock: func(hookContext context.Context, tx pgx.Tx, _ string) {
+			if attemptCount.Add(1) != 2 {
+				return
 			}
+			var pid int32
+			err := tx.QueryRow(hookContext, `SELECT pg_backend_pid()`).Scan(&pid)
+			contenderIdentity <- struct {
+				pid int32
+				err error
+			}{pid: pid, err: err}
+			contenderAttemptOnce.Do(func() { close(contenderAttempted) })
 		},
 		BeforeReadyStagingRemoval: func() {
-			removalOnce.Do(func() { close(removalStarted) })
-			<-contenderAttempted
-			time.Sleep(100 * time.Millisecond)
+			if removalCount.Add(1) == 1 {
+				removalStartOnce.Do(func() { close(removalStarted) })
+				<-holderRelease
+				return
+			}
+			if !holderReleased.Load() {
+				lockViolated.Store(true)
+			}
+			contenderRemovalOnce.Do(func() { close(contenderRemovalEntered) })
 		},
 	}
 	cleanup := newCleanupDeadline(ctx)
 	defer cleanup.stop()
+	releaseHolder := func() {
+		releaseOnce.Do(func() {
+			holderReleased.Store(true)
+			close(holderRelease)
+		})
+	}
+	defer releaseHolder()
+	waitResult := func(result <-chan error, label string) error {
+		select {
+		case err := <-result:
+			return err
+		case <-time.After(6 * time.Second):
+			return fmt.Errorf("%s did not finish", label)
+		}
+	}
 	reclaimResult := make(chan error, 1)
 	go func() {
 		_, _, err := store.reclaimReadyStaging(ctx, artifact.ID, cleanup)
 		reclaimResult <- err
 	}()
+	started := false
 	select {
 	case <-removalStarted:
+		started = true
 	case <-time.After(2 * time.Second):
+	}
+	if !started {
+		releaseHolder()
+		if err := waitResult(reclaimResult, "ready cleanup"); err != nil {
+			t.Fatalf("ready cleanup did not reach staging removal: %v", err)
+		}
 		t.Fatal("ready cleanup did not reach staging removal")
 	}
 	contenderContext, cancel := context.WithTimeout(ctx, cleanupTimeout)
@@ -1332,17 +1406,69 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 	go func() {
 		_, _, err := store.reconcileOne(contenderContext, artifact.ID, nil)
 		contenderResult <- err
+		close(contenderDone)
 	}()
+	failure := ""
+	var contenderErr error
+	contenderResultConsumed := false
 	select {
-	case err := <-contenderResult:
-		t.Fatalf("contender completed while cleanup held identity lock: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-contenderAttempted:
+		outcome := <-contenderIdentity
+		if outcome.err != nil {
+			failure = fmt.Sprintf("capture contender backend pid: %v", outcome.err)
+		} else {
+			checkContext, checkCancel := context.WithTimeout(ctx, 2*time.Second)
+			ticker := time.NewTicker(5 * time.Millisecond)
+			blocked := false
+			for failure == "" && !blocked {
+				var currentlyBlocked bool
+				if err := db.Pool().QueryRow(checkContext, `
+					SELECT EXISTS (
+						SELECT 1
+						FROM pg_stat_activity
+						WHERE pid = $1 AND cardinality(pg_blocking_pids(pid)) > 0
+					)
+				`, outcome.pid).Scan(&currentlyBlocked); err != nil {
+					failure = fmt.Sprintf("check contender lock wait: %v", err)
+					break
+				}
+				blocked = currentlyBlocked
+				if blocked {
+					break
+				}
+				select {
+				case <-contenderRemovalEntered:
+					failure = "contender entered staging removal before the holder released the identity lock"
+				case <-contenderDone:
+					contenderErr = <-contenderResult
+					contenderResultConsumed = true
+					failure = fmt.Sprintf("contender completed before the holder released the identity lock: %v", contenderErr)
+				case <-checkContext.Done():
+					failure = "contender backend was not observed waiting on the identity lock"
+				case <-ticker.C:
+				}
+			}
+			ticker.Stop()
+			checkCancel()
+		}
+	case <-time.After(2 * time.Second):
+		failure = "contender did not reach the identity-lock attempt"
 	}
-	if err := <-reclaimResult; err != nil {
-		t.Fatal(err)
+	releaseHolder()
+	if err := waitResult(reclaimResult, "ready cleanup"); err != nil {
+		t.Fatalf("ready cleanup = %v", err)
 	}
-	if err := <-contenderResult; err != nil {
-		t.Fatal(err)
+	if !contenderResultConsumed {
+		contenderErr = waitResult(contenderResult, "contender")
+	}
+	if failure != "" {
+		t.Fatal(failure)
+	}
+	if contenderErr != nil {
+		t.Fatalf("contender = %v", contenderErr)
+	}
+	if lockViolated.Load() {
+		t.Fatal("contender entered staging removal before the holder released the identity lock")
 	}
 }
 

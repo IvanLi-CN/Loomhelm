@@ -36,6 +36,18 @@ func databaseWriteError(message string, err error) error {
 	return fmt.Errorf("%s: %w", message, ErrStoreUnavailable)
 }
 
+type sanitizedStagingSyncError struct {
+	cause error
+}
+
+func (e sanitizedStagingSyncError) Error() string {
+	return "artifact staging directory sync failed"
+}
+
+func (e sanitizedStagingSyncError) Is(target error) bool {
+	return target == ErrStoreUnavailable || errors.Is(e.cause, target)
+}
+
 type publicationState string
 
 const (
@@ -138,10 +150,13 @@ func (s *Store) fault(point faultPoint) {
 func (s *Store) syncStagingDirectory() error {
 	if s != nil && s.faults != nil && s.faults.BeforeStagingDirectorySync != nil {
 		if err := s.faults.BeforeStagingDirectorySync(); err != nil {
-			return err
+			return sanitizedStagingSyncError{cause: err}
 		}
 	}
-	return syncDirectory(s.objects)
+	if err := syncDirectory(s.objects); err != nil {
+		return sanitizedStagingSyncError{cause: err}
+	}
+	return nil
 }
 
 func (s *Store) commit(ctx context.Context, tx pgx.Tx) error {
@@ -965,11 +980,6 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 		`, id, reason); err != nil {
 			return artifactRecord{}, recoveryPending, databaseWriteError("update invalid ready artifact", err)
 		}
-		if !record.StagingReclaimed {
-			if err := s.queueStagingCleanupTx(ctx, tx, record.StagingName, record.StagingIdentity); err != nil {
-				return artifactRecord{}, recoveryPending, err
-			}
-		}
 		updated := record
 		updated.State = publicationUnavailable
 		updated.UnavailableReason = reason
@@ -1224,7 +1234,7 @@ func (s *Store) removeStaging(name string) error {
 		return fmt.Errorf("remove artifact staging: %w", ErrStoreUnavailable)
 	}
 	if err := s.syncStagingDirectory(); err != nil {
-		return fmt.Errorf("sync artifact staging directory after removal: %w", ErrStoreUnavailable)
+		return fmt.Errorf("sync artifact staging directory after removal: %w", err)
 	}
 	return nil
 }
@@ -1363,6 +1373,32 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 		}
 		if err := s.commit(ctx, tx); err != nil {
 			return false, databaseWriteError("commit active staging cleanup debt", err)
+		}
+		return true, nil
+	}
+	var diagnostic bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM conversation_artifacts
+			WHERE staging_name = $1
+			  AND state = 'unavailable'
+			  AND unavailable_reason IN ('final-missing', 'final-mismatch')
+			  AND staging_reclaimed_at IS NULL
+			  AND ($2::text IS NULL OR staging_identity IS NOT DISTINCT FROM $2::text)
+		)
+	`, name, nullableString(expectedIdentity)).Scan(&diagnostic); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return false, err
+		}
+		return false, fmt.Errorf("check diagnostic staging reference: %w", ErrStoreUnavailable)
+	}
+	if diagnostic {
+		if _, err := tx.Exec(ctx, `DELETE FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, name); err != nil {
+			return false, databaseWriteError("retire diagnostic staging cleanup debt", err)
+		}
+		if err := s.commit(ctx, tx); err != nil {
+			return false, databaseWriteError("commit diagnostic staging cleanup retirement", err)
 		}
 		return true, nil
 	}
@@ -1692,15 +1728,13 @@ func (s *Store) markReadyObjectUnavailable(parent context.Context, id string, re
 		return err
 	}
 	defer func() { rollbackTx(tx, cleanup) }()
-	var state, stagingName string
-	var stagingIdentity *string
-	var reclaimed bool
+	var state string
 	if err := tx.QueryRow(ctx, `
-		SELECT state, staging_name, staging_identity, (staging_reclaimed_at IS NOT NULL)
+		SELECT state
 		FROM conversation_artifacts
 		WHERE id = $1
 		FOR UPDATE
-	`, id).Scan(&state, &stagingName, &stagingIdentity, &reclaimed); err != nil {
+	`, id).Scan(&state); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -1714,11 +1748,6 @@ func (s *Store) markReadyObjectUnavailable(parent context.Context, id string, re
 	}
 	if _, err := tx.Exec(ctx, `UPDATE conversation_artifacts SET state = 'unavailable', unavailable_reason = $2 WHERE id = $1 AND state = 'ready'`, id, reason); err != nil {
 		return databaseWriteError("mark ready artifact unavailable", err)
-	}
-	if !reclaimed {
-		if err := s.queueStagingCleanupTx(ctx, tx, stagingName, stagingIdentity); err != nil {
-			return err
-		}
 	}
 	if err := s.commit(ctx, tx); err != nil {
 		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)

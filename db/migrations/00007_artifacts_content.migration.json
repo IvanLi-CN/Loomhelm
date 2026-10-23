@@ -63,16 +63,9 @@
     "applicable": true,
     "ddl_structural_changes": [
       {
-        "id": "ddl-00007-conversation-artifacts",
-        "description": "Create conversation_artifacts metadata with validated identifiers, associations, immutable content metadata, pending publication intent, ready/unavailable state, staging filesystem incarnations and session/run lookup indexes, including the unique active staging-name lookup used by publication and cleanup coordination.",
+        "id": "ddl-00007-artifacts-content",
+        "description": "Create conversation_artifacts, conversation_artifact_staging_cleanup and their lookup, coordination and retry indexes in one atomic Goose DDL transaction; the only observable and pauseable boundary is after that transaction commits.",
         "order": 1,
-        "observable": true,
-        "pauseable": true
-      },
-      {
-        "id": "ddl-00007-staging-cleanup",
-        "description": "Create bounded retry state for exact staging objects whose database outcome is confirmed and whose publication rows no longer reference them, retaining a filesystem incarnation to prevent name reuse from deleting a newer upload.",
-        "order": 2,
         "observable": true,
         "pauseable": true
       }
@@ -83,7 +76,7 @@
   "rollout_observability": {
     "operations_must_remain_separate": true,
     "operation_sequence": [
-      "ddl-00007-conversation-artifacts",
+      "ddl-00007-artifacts-content",
       "artifact-file-volume-admission"
     ],
     "progress_signals": [
