@@ -114,6 +114,7 @@ type faultHooks struct {
 	BeforeReadyStagingRemoval  func()
 	AfterReadyStagingRemoval   func()
 	BeforeStagingDirectorySync func() error
+	BeforeStagingCleanupCommit func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -577,8 +578,8 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 		if readErr != nil && !errors.Is(readErr, ErrNotFound) {
 			return artifactRecord{}, readErr
 		}
+		var stagedIdentity *string
 		if readErr == nil {
-			var stagedIdentity *string
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return artifactRecord{}, s.rejectStagedPut(ctxErr, stagingName, nil, cleanup)
 			}
@@ -613,6 +614,9 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 				return artifactRecord{}, ErrConflict
 			}
 			if locked.State == publicationUnavailable && repairableUnavailableReason(locked.UnavailableReason) {
+				if authErr := s.authorize(ctx, OperationPut, locked.Artifact); authErr != nil {
+					return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, stagedIdentity, cleanup)
+				}
 				return s.repairUnavailable(ctx, tx, locked, candidate, stagingName, cleanup)
 			}
 			return locked, nil
@@ -681,7 +685,10 @@ func (s *Store) rejectStagedPut(authErr error, stagingName string, stagingIdenti
 	if stagingIdentity == nil {
 		return ErrNotFound
 	}
-	if err := s.enqueueStagingCleanupWithIdentity(stagingName, stagingIdentity, cleanup); err != nil {
+	if err := s.enqueueStagingCleanupWithIdentityBeforeCancellation(stagingName, stagingIdentity, cleanup); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		return databaseWriteError("record rejected staging cleanup", err)
 	}
 	if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
@@ -1397,13 +1404,39 @@ func (s *Store) enqueueStagingCleanupWithIdentity(name string, identity *string,
 	})
 }
 
+func (s *Store) enqueueStagingCleanupWithIdentityBeforeCancellation(name string, identity *string, cleanup *cleanupDeadline) error {
+	return s.enqueueStagingCleanupWithQueuePolicy(name, cleanup, true, func(ctx context.Context, tx pgx.Tx) error {
+		return s.queueStagingCleanupTx(ctx, tx, name, identity)
+	}, func(confirmCleanup *cleanupDeadline) (bool, error) {
+		return s.stagingCleanupMatches(name, identity, confirmCleanup)
+	})
+}
+
 func (s *Store) enqueueStagingCleanupWithQueue(name string, cleanup *cleanupDeadline, queue func(context.Context, pgx.Tx) error, confirm func(*cleanupDeadline) (bool, error)) error {
+	return s.enqueueStagingCleanupWithQueuePolicy(name, cleanup, false, queue, confirm)
+}
+
+func (s *Store) enqueueStagingCleanupWithQueuePolicy(name string, cleanup *cleanupDeadline, honorParentCancellation bool, queue func(context.Context, pgx.Tx) error, confirm func(*cleanupDeadline) (bool, error)) error {
 	if s == nil || s.pool == nil || cleanup == nil || queue == nil || confirm == nil {
 		return nil
 	}
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		ctx, cancel := cleanup.context()
+		var ctx context.Context
+		var cancel context.CancelFunc
+		if honorParentCancellation {
+			parent := cleanup.parent
+			if parent == nil {
+				parent = context.Background()
+			}
+			ctx, cancel = context.WithTimeout(parent, cleanupTimeout)
+			if err := parent.Err(); err != nil {
+				cancel()
+				return err
+			}
+		} else {
+			ctx, cancel = cleanup.context()
+		}
 		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 		if err == nil {
 			err = queue(ctx, tx)
@@ -1419,9 +1452,24 @@ func (s *Store) enqueueStagingCleanupWithQueue(name string, cleanup *cleanupDead
 			}
 			continue
 		}
+		if honorParentCancellation && cleanup.parent != nil {
+			if parentErr := cleanup.parent.Err(); parentErr != nil {
+				rollbackTx(tx, cleanup)
+				cancel()
+				return parentErr
+			}
+		}
+		if s.faults != nil && s.faults.BeforeStagingCleanupCommit != nil {
+			s.faults.BeforeStagingCleanupCommit()
+		}
 		commitErr := s.commit(ctx, tx)
 		if commitErr == nil {
 			cancel()
+			if honorParentCancellation && cleanup.parent != nil {
+				if parentErr := cleanup.parent.Err(); parentErr != nil {
+					return parentErr
+				}
+			}
 			return nil
 		}
 		rollbackTx(tx, cleanup)

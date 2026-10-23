@@ -518,6 +518,105 @@ func TestStoreCancellationDuringExistingArtifactAuthorizationRetainsStaging(t *t
 	assertHasStagingFiles(t, requester.objects)
 }
 
+func TestStorePutReauthorizesRepairAfterIdentityLock(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("repair authorization")
+	artifact := testArtifact(uniqueID("artifact-repair-auth"), nil, content)
+	insertUnavailableArtifact(t, store, ctx, artifact, ".upload-repair-auth-old", "staging-missing")
+	authorizationCalls := atomic.Int32{}
+	requester, err := NewStore(db.Pool(), Config{
+		Root: store.root,
+		Authorizer: AuthorizerFunc(func(context.Context, Operation, protocol.Artifact) error {
+			if authorizationCalls.Add(1) < 3 {
+				return nil
+			}
+			return ErrUnauthorized
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := requester.Put(ctx, artifact, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("repair authorization error = %v, want %v", err, ErrNotFound)
+	}
+	if got := authorizationCalls.Load(); got < 3 {
+		t.Fatalf("repair authorization calls = %d, want a post-lock check", got)
+	}
+	var cleanupCount int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup`).Scan(&cleanupCount); err != nil {
+		t.Fatal(err)
+	}
+	if cleanupCount != 1 {
+		t.Fatalf("repair authorization cleanup debt = %d, want 1", cleanupCount)
+	}
+	if _, err := requester.Recover(ctx, MaxRecoveryLimit); err != nil {
+		t.Fatal(err)
+	}
+	assertNoStagingFiles(t, requester.objects)
+}
+
+func TestStoreCancellationBeforeRejectedCleanupCommitRetainsStaging(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("rejected cleanup cancellation")
+	artifact := testArtifact(uniqueID("artifact-rejected-cleanup-cancel"), nil, content)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	putContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var authorizationCalls atomic.Int32
+	commitStarted := make(chan struct{})
+	var commitOnce sync.Once
+	requester, err := NewStore(db.Pool(), Config{
+		Root: store.root,
+		Authorizer: AuthorizerFunc(func(context.Context, Operation, protocol.Artifact) error {
+			if authorizationCalls.Add(1) == 1 {
+				return nil
+			}
+			return ErrUnauthorized
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requester.faults = &faultHooks{
+		BeforeStagingCleanupCommit: func() {
+			commitOnce.Do(func() {
+				close(commitStarted)
+				cancel()
+			})
+		},
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := requester.Put(putContext, artifact, readCloser(bytes.NewReader(content)))
+		result <- err
+	}()
+	select {
+	case <-commitStarted:
+	case <-time.After(cleanupTimeout + time.Second):
+		t.Fatal("rejected cleanup did not reach its commit boundary")
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("rejected cleanup cancellation error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(cleanupTimeout + time.Second):
+		t.Fatal("rejected cleanup cancellation did not return")
+	}
+	var cleanupCount int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup`).Scan(&cleanupCount); err != nil {
+		t.Fatal(err)
+	}
+	if cleanupCount != 0 {
+		t.Fatalf("cancelled rejected cleanup debt = %d, want 0", cleanupCount)
+	}
+	assertHasStagingFiles(t, requester.objects)
+}
+
 func TestStoreRetainsStagingWhenRecoveryConflictsAfterIntentCommit(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -1982,7 +2081,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 		}
 		t.Fatal("ready cleanup did not reach staging removal")
 	}
-	contenderContext, cancel := context.WithTimeout(ctx, cleanupTimeout)
+	contenderContext, cancel := context.WithTimeout(ctx, cleanupTimeout+2*time.Second)
 	defer cancel()
 	contenderResult := make(chan error, 1)
 	go func() {
