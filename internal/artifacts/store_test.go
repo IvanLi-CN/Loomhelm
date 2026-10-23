@@ -247,15 +247,23 @@ func TestStoreStageFailureQueuesCleanupDebt(t *testing.T) {
 	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&artifactCount); err != nil {
 		t.Fatal(err)
 	}
+	var cleanupIdentity *string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT staging_identity
+		FROM conversation_artifact_staging_cleanup
+		LIMIT 1
+	`).Scan(&cleanupIdentity); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup`).Scan(&cleanupCount); err != nil {
 		t.Fatal(err)
 	}
-	if artifactCount != 0 || cleanupCount != 1 {
-		t.Fatalf("stage failure durable rows = artifact %d/cleanup %d, want 0/1", artifactCount, cleanupCount)
+	if artifactCount != 0 || cleanupCount != 1 || cleanupIdentity == nil {
+		t.Fatalf("stage failure durable rows = artifact %d/cleanup %d/identity %v, want 0/1/non-null", artifactCount, cleanupCount, cleanupIdentity)
 	}
 	assertNoStagingFiles(t, store.objects)
 
-	store.faults = nil
+	store.faults = &faultHooks{CommitResponseLost: func() error { return errors.New("simulated cleanup commit response loss") }}
 	if report, err := store.Recover(ctx, 1); err != nil || report.Cleaned != 1 {
 		t.Fatalf("stage cleanup recovery = %#v, err=%v, want one cleaned item", report, err)
 	}
@@ -2279,6 +2287,32 @@ func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.
 		t.Fatalf("ready-loss retry recreated final object: %v", err)
 	}
 	assertNoStagingFiles(t, store.objects)
+}
+
+func TestStoreReconcileRevalidatesReclaimedReadyBytes(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("reconcile ready bytes")
+	artifact := testArtifact(uniqueID("artifact-reconcile-ready-loss"), nil, content)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store.objects, artifact.ID)); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	resolved, status, err := store.reconcileOne(ctx, artifact.ID, cleanup)
+	if err != nil || status != recoveryUnavailable || resolved.UnavailableReason != "final-missing" {
+		t.Fatalf("reconcile reclaimed ready loss = %#v/%q, err=%v, want final-missing unavailable", resolved, status, err)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationUnavailable) {
+		t.Fatalf("reconciled ready loss state = %q, want unavailable", state)
+	}
 }
 
 func TestStoreMetadataDoesNotMutateWhenObjectDirectoryIsUnavailable(t *testing.T) {

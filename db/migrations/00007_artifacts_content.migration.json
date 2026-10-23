@@ -56,7 +56,15 @@
       "from_program_version": "Phase-one candidate before migration 00007; no earlier artifact metadata or file-volume state is supported.",
       "to_program_version": "Phase-one candidate containing migration 00007.",
       "direct_major_skips_supported": false,
-      "earlier_state": "The absent table is treated as an unapplied migration; the candidate is not ready until migration 00007 commits. Session/Run ownership foreign keys are deferred until the E01 schema is published."
+      "earlier_state": "The absent table is treated as an unapplied migration; the candidate is not ready until migration 00007 commits. Session/Run ownership foreign keys are deferred until the E01 schema is published.",
+      "mixed_process_compatibility": {
+        "supported": false,
+        "reason": "No mixed-process compatibility window is claimed for artifact-capable processes; admission requires the phase-one candidate and its recovery behavior to be deployed together with the migration."
+      },
+      "switchback_eligibility": {
+        "supported": false,
+        "reason": "A pre-00007 program is not an eligible switchback target after this durable state is introduced; recovery is forward-only and does not reverse or compensate the migration."
+      }
     }
   },
   "database_migration": {
