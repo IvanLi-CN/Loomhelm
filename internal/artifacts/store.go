@@ -103,6 +103,9 @@ func (c Config) validate() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve artifact storage root: %w", ErrInvalid)
 	}
+	if filepath.Dir(absRoot) == absRoot {
+		return "", fmt.Errorf("artifact storage root must not be the filesystem root: %w", ErrInvalid)
+	}
 	return absRoot, nil
 }
 

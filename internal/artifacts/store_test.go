@@ -44,6 +44,12 @@ func TestValidateArtifactRejectsHostPathIdentifiers(t *testing.T) {
 	}
 }
 
+func TestConfigValidateRejectsFilesystemRoot(t *testing.T) {
+	if _, err := (Config{Root: string(filepath.Separator)}).validate(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("filesystem root validation error = %v, want %v", err, ErrInvalid)
+	}
+}
+
 func TestStorePutDeniesBeforeWritingWhenAuthorizationIsMissing(t *testing.T) {
 	root := t.TempDir()
 	objects := filepath.Join(root, "objects")
