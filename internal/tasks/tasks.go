@@ -17,6 +17,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -42,6 +43,7 @@ type Task struct {
 }
 
 type CreateRequest struct {
+	ID        string  `json:"id,omitempty"`
 	ProjectID string  `json:"project_id"`
 	Title     string  `json:"title"`
 	Goal      string  `json:"goal"`
@@ -126,9 +128,14 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 	if !validStatus(status) {
 		return Task{}, fmt.Errorf("%w: unsupported task status", auth.ErrInvalid)
 	}
-	id, err := newID("task")
-	if err != nil {
-		return Task{}, err
+	id := request.ID
+	if id == "" {
+		id, err = newID("task")
+		if err != nil {
+			return Task{}, err
+		}
+	} else if !validResourceID(id, "task") {
+		return Task{}, fmt.Errorf("%w: task id must match task_<32 lowercase hex characters>", auth.ErrInvalid)
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -145,9 +152,15 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 		&task.ID, &task.ProjectID, &task.Title, &task.Goal, &task.Status, &task.SessionID, &createdAt, &updatedAt,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return Task{}, auth.ErrConflict
+		}
 		return Task{}, fmt.Errorf("create task: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO task_execution_refs (task_id) VALUES ($1)`, task.ID); err != nil {
+		if isUniqueViolation(err) {
+			return Task{}, auth.ErrConflict
+		}
 		return Task{}, fmt.Errorf("create task execution protection: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -511,6 +524,7 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 
 func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
 	var body struct {
+		ID        string  `json:"id,omitempty"`
 		ProjectID string  `json:"project_id"`
 		Title     string  `json:"title"`
 		Goal      *string `json:"goal"`
@@ -522,7 +536,7 @@ func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
 	if body.Goal == nil {
 		return CreateRequest{}, fmt.Errorf("%w: goal is required", auth.ErrInvalid)
 	}
-	return CreateRequest{ProjectID: body.ProjectID, Title: body.Title, Goal: *body.Goal, Status: body.Status}, nil
+	return CreateRequest{ID: body.ID, ProjectID: body.ProjectID, Title: body.Title, Goal: *body.Goal, Status: body.Status}, nil
 }
 
 func (s *Service) handleGet(writer http.ResponseWriter, request *http.Request) {
@@ -580,6 +594,23 @@ func newID(prefix string) (string, error) {
 		return "", fmt.Errorf("generate task identifier: %w", err)
 	}
 	return prefix + "_" + hex.EncodeToString(value), nil
+}
+
+func validResourceID(value, prefix string) bool {
+	if len(value) != len(prefix)+1+16*2 || !strings.HasPrefix(value, prefix+"_") {
+		return false
+	}
+	for _, character := range value[len(prefix)+1:] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func isUniqueViolation(err error) bool {
+	var pgError *pgconn.PgError
+	return errors.As(err, &pgError) && pgError.Code == "23505"
 }
 
 func parseLimit(raw string) (int, error) {

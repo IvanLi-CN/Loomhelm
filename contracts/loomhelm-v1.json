@@ -410,6 +410,7 @@
       "type": "object",
       "required": ["name"],
       "properties": {
+        "id": {"type": "string"},
         "name": {"type": "string"},
         "description": {"type": "string"}
       }
@@ -439,6 +440,7 @@
       "type": "object",
       "required": ["project_id", "title", "goal"],
       "properties": {
+        "id": {"type": "string"},
         "project_id": {"type": "string"},
         "title": {"type": "string"},
         "goal": {"type": "string"},

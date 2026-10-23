@@ -4,11 +4,13 @@ import { ApiClientConfigurationError, ApiClientError } from "@loomhelm/api-clien
 
 import {
   isAmbiguousWriteError,
+  createClientResourceId,
   filterTaskRelationships,
   filterTasksToVisibleProjects,
   hasIncompleteProjectTaskRead,
   mergeMutationNoticeChanges,
   mergePersistedMutationNotices,
+  mutationNoticeRemovalScopes,
   projectTaskQueryKeys,
   readProjectMemberships,
   readTaskRelationships,
@@ -198,6 +200,24 @@ describe("project/task write contracts", () => {
     expect(mergeMutationNoticeChanges([], [first], [])).toEqual([first]);
     expect(mergeMutationNoticeChanges([first], [second], [])).toEqual([first, second]);
     expect(mergeMutationNoticeChanges([first, second], [], [first.id])).toEqual([second]);
+  });
+
+  test("creates browser resource IDs with the server-owned shape", () => {
+    const projectId = createClientResourceId("project");
+    const taskId = createClientResourceId("task");
+
+    expect(projectId).toMatch(/^project_[0-9a-f]{32}$/);
+    expect(taskId).toMatch(/^task_[0-9a-f]{32}$/);
+  });
+
+  test("refreshes only scopes affected by a remote mutation notice removal", () => {
+    const current = [
+      { id: "task:one", message: "one", taskId: "task-1", lockScope: "task:task-1" },
+      { id: "task:two", message: "two", taskId: "task-2", lockScope: "task:task-2" },
+      { id: "project:create:one", message: "project", lockScope: "project:create" }
+    ];
+
+    expect(mutationNoticeRemovalScopes(current, ["task:two", "project:create:one"])).toEqual(["task:task-2", "project:create"]);
   });
 
   test("preserves a newer volatile notice over a stale persisted version", () => {

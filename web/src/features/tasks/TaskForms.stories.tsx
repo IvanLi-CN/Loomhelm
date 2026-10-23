@@ -21,6 +21,18 @@ function StoryFrame({ children }: { children: ReactNode }) {
   return <div className="min-h-screen bg-[var(--canvas)] p-8" data-visual-evidence-surface><div className="mx-auto max-w-3xl" data-visual-evidence-target>{children}</div></div>;
 }
 
+function knownCreationSource() {
+  const taskId = "task_0123456789abcdef0123456789abcdef";
+  const source = createStorySource({ pendingTaskCreation: true, pendingTaskCreationResourceId: taskId, isTaskReconciliationReady: (id) => id === taskId });
+  source.acknowledgeTaskReconciliation = (id) => {
+    if (id !== taskId) return false;
+    source.pendingTaskCreation = false;
+    delete source.pendingTaskCreationResourceId;
+    return true;
+  };
+  return source;
+}
+
 export const Create: Story = {
   args: { source: createStorySource(), mode: "create" },
   render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>,
@@ -29,6 +41,18 @@ export const Create: Story = {
     const title = canvas.getByLabelText("任务标题");
     await userEvent.type(title, "新任务");
     expect(title).toHaveValue("新任务");
+  }
+};
+
+export const KnownCreationRecovery: Story = {
+  args: { source: knownCreationSource(), mode: "create" },
+  render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务列表" }));
+    expect(await canvas.findByText("已刷新并核对预选任务，可以确认当前状态后解除阻塞。")).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "确认当前任务状态，解除阻塞" }));
+    expect(await canvas.findByText("已确认当前任务状态，可以继续操作。")).toBeInTheDocument();
   }
 };
 

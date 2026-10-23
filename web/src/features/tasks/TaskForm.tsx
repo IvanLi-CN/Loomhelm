@@ -146,9 +146,19 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     try {
       await source.refresh();
       if (mode === "create") {
-        setBlockedByUnknown(true);
-        setCanAcknowledgePendingCreation(Boolean(noticeId && source.pendingTaskCreationNoticeId === noticeId && source.isPendingTaskCreationReady?.(noticeId) === true));
-        setFeedback({ message: "列表已刷新，但本次任务创建结果仍待确认；为避免重复创建，当前表单不会再次提交。", tone: "warning", reconcile: true, noticeId });
+        const knownTaskId = source.pendingTaskCreationResourceId;
+        if (knownTaskId) {
+          const ready = source.isTaskReconciliationReady?.(knownTaskId) === true;
+          setBlockedByUnknown(!ready);
+          setCanAcknowledgePendingCreation(false);
+          setCanAcknowledgeReconciliation(ready);
+          setFeedback({ message: ready ? "已刷新并核对预选任务，可以确认当前状态后解除阻塞。" : "列表已刷新，但预选任务写入仍在进行或尚未完成确认；请稍后再次刷新。", tone: "warning", reconcile: true, noticeId });
+        } else {
+          setBlockedByUnknown(true);
+          setCanAcknowledgePendingCreation(Boolean(noticeId && source.pendingTaskCreationNoticeId === noticeId && source.isPendingTaskCreationReady?.(noticeId) === true));
+          setCanAcknowledgeReconciliation(false);
+          setFeedback({ message: "列表已刷新，但本次任务创建结果仍待确认；为避免重复创建，当前表单不会再次提交。", tone: "warning", reconcile: true, noticeId });
+        }
       } else {
         const ready = source.isTaskReconciliationReady?.(task?.id ?? "") === true;
         setBlockedByUnknown(!ready);
@@ -169,6 +179,15 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     setBlockedByUnknown(false);
     setCanAcknowledgePendingCreation(false);
     setFeedback({ message: "已确认任务列表中没有这次写入，可以重新提交。", tone: "success" });
+  };
+
+  const acknowledgeReconciliation = () => {
+    const targetTaskId = mode === "edit" ? task?.id : source.pendingTaskCreationResourceId;
+    if (!targetTaskId || !canAcknowledgeReconciliation) return;
+    if (!source.acknowledgeTaskReconciliation?.(targetTaskId)) return;
+    setBlockedByUnknown(false);
+    setCanAcknowledgeReconciliation(false);
+    setFeedback({ message: "已确认当前任务状态，可以继续操作。", tone: "success" });
   };
 
   const toggleDependency = (id: string) => {
@@ -229,10 +248,10 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)] task-relation-options" disabled={!canWrite || pending || effectiveBlocked}><legend>父任务 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => { const candidateCanWrite = source.getProjectPermissions(candidate.projectId).canWrite; return <label className={`task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]${candidateCanWrite ? "" : " opacity-70"}`} key={candidate.id} title={candidateCanWrite ? undefined : "当前父任务只读，关系不可修改"}><input type="checkbox" checked={parentIds.includes(candidate.id)} onChange={() => toggleParent(candidate.id)} disabled={!candidateCanWrite} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title} · {source.getProject(candidate.projectId)?.name}{candidateCanWrite ? "" : " · 只读"}</span></label>; })}</div> : <p className="font-normal">当前范围没有可选的父任务。</p>}</fieldset>
       <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)]" disabled={!canWrite || pending || effectiveBlocked}><legend>前置依赖 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => { const candidateCanWrite = source.getProjectPermissions(candidate.projectId).canWrite; return <label className={`task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]${candidateCanWrite ? "" : " opacity-70"}`} key={candidate.id} title={candidateCanWrite ? undefined : "当前前置任务只读，关系不可修改"}><input type="checkbox" checked={dependsOn.includes(candidate.id)} onChange={() => toggleDependency(candidate.id)} disabled={!candidateCanWrite} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title}{candidateCanWrite ? "" : " · 只读"}</span></label>; })}</div> : <p className="font-normal">当前范围没有可选的前置任务。</p>}</fieldset>
       {!canWrite && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>当前项目成员权限为只读，创建和编辑动作保持禁用。</div>}
-      {mode === "create" && source.pendingTaskCreation && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>上一次任务创建结果仍待确认；请先检查任务列表，当前表单不会再次提交。<Link to="/tasks" className="inline-link ml-2">打开任务列表</Link></div>}
+      {mode === "create" && source.pendingTaskCreation && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{source.pendingTaskCreationResourceId ? "任务创建结果已关联预选身份，仍待刷新核对；当前表单不会再次提交。" : "上一次任务创建结果仍待确认；请先检查任务列表，当前表单不会再次提交。"}<Link to="/tasks" className="inline-link ml-2">打开任务列表</Link></div>}
       {relationWritePending && !feedback && <div className="inline-state inline-state-warning" role="status"><span aria-hidden="true">!</span>任务关系保存中，普通编辑暂时不可用。</div>}
       {sourceRelationshipBlocked && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{sourceRelationshipNotice}</div>}
-      {(feedback?.reconcile || sourceRelationshipBlocked || (mode === "create" && source.pendingTaskCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{mode === "create" && canAcknowledgePendingCreation && (feedback?.noticeId ?? source.pendingTaskCreationNoticeId) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}{sourceRelationshipBlocked && canAcknowledgeReconciliation && <Button type="button" variant="ghost" className="button button-quiet" onClick={() => { if (!source.acknowledgeTaskReconciliation?.(task?.id ?? "")) return; setCanAcknowledgeReconciliation(false); setFeedback({ message: "已确认当前关系状态，可以继续操作。", tone: "success" }); }}>确认当前关系，解除阻塞</Button>}</div>}
+      {(feedback?.reconcile || sourceRelationshipBlocked || (mode === "create" && source.pendingTaskCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{mode === "create" && canAcknowledgePendingCreation && (feedback?.noticeId ?? source.pendingTaskCreationNoticeId) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}{canAcknowledgeReconciliation && (sourceRelationshipBlocked || (mode === "create" && Boolean(source.pendingTaskCreationResourceId))) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}>{mode === "create" ? "确认当前任务状态，解除阻塞" : "确认当前关系，解除阻塞"}</Button>}</div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}{feedback.taskId && <Link to="/tasks/$taskId" params={{ taskId: feedback.taskId }} className="inline-link ml-2">打开已创建任务</Link>}</div>}
       <div className="form-actions">
         <Button type="submit" className="button button-primary" disabled={!canWrite || pending || effectiveBlocked || !title.trim() || !goal.trim() || !projectId}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存任务"}</Button>

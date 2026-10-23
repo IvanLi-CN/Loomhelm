@@ -14,6 +14,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -34,6 +35,7 @@ type Project struct {
 }
 
 type CreateRequest struct {
+	ID          string `json:"id,omitempty"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
@@ -301,9 +303,15 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 	if len(principal.ProjectScope) > 0 {
 		return Project{}, auth.ErrForbidden
 	}
-	id, err := newID("project")
-	if err != nil {
-		return Project{}, err
+	id := request.ID
+	if id == "" {
+		generatedID, err := newID("project")
+		if err != nil {
+			return Project{}, err
+		}
+		id = generatedID
+	} else if !validResourceID(id, "project") {
+		return Project{}, fmt.Errorf("%w: project id must match project_<32 lowercase hex characters>", auth.ErrInvalid)
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -318,11 +326,17 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 		RETURNING id, name, description, created_at, updated_at
 	`, id, name, strings.TrimSpace(request.Description), principal.UserID).Scan(&project.ID, &project.Name, &project.Description, &createdAt, &updatedAt)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return Project{}, auth.ErrConflict
+		}
 		return Project{}, fmt.Errorf("create project: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)
 	`, project.ID, principal.UserID, RoleOwner); err != nil {
+		if isUniqueViolation(err) {
+			return Project{}, auth.ErrConflict
+		}
 		return Project{}, fmt.Errorf("create project owner membership: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -567,6 +581,23 @@ func newID(prefix string) (string, error) {
 		return "", err
 	}
 	return prefix + "_" + fmt.Sprintf("%x", value), nil
+}
+
+func validResourceID(value, prefix string) bool {
+	if len(value) != len(prefix)+1+16*2 || !strings.HasPrefix(value, prefix+"_") {
+		return false
+	}
+	for _, character := range value[len(prefix)+1:] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func isUniqueViolation(err error) bool {
+	var pgError *pgconn.PgError
+	return errors.As(err, &pgError) && pgError.Code == "23505"
 }
 
 func randomBytes(size int) ([]byte, error) {

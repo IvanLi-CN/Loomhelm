@@ -139,6 +139,8 @@ export interface ProjectTaskSource {
   notice?: string;
   pendingProjectCreation?: boolean;
   pendingTaskCreation?: boolean;
+  pendingProjectCreationResourceId?: string;
+  pendingTaskCreationResourceId?: string;
   pendingProjectCreationNoticeId?: string;
   pendingTaskCreationNoticeId?: string;
   isPendingProjectCreationReady?: (noticeId: string) => boolean;

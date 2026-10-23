@@ -37,6 +37,21 @@ function pendingCreationSource() {
   return source;
 }
 
+function knownCreationSource() {
+  const source = createStorySource();
+  const projectId = "project_0123456789abcdef0123456789abcdef";
+  source.pendingProjectCreation = true;
+  source.pendingProjectCreationResourceId = projectId;
+  source.isProjectReconciliationReady = (id) => id === projectId;
+  source.acknowledgeProjectReconciliation = (id) => {
+    if (id !== projectId) return false;
+    source.pendingProjectCreation = false;
+    delete source.pendingProjectCreationResourceId;
+    return true;
+  };
+  return source;
+}
+
 function reconciliationSource() {
   const project: ProjectRecord = { ...storyProjects[0], reconciliationNotice: "项目写入结果待确认；请刷新后核对。" };
   const source = createStorySource({
@@ -73,6 +88,18 @@ export const PendingCreationRecovery: Story = {
     expect(await canvas.findByText("列表已刷新，但本次项目创建结果仍待确认；为避免重复创建，当前表单不会再次提交。")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "确认未创建，允许重新提交" }));
     expect(await canvas.findByText("已确认项目列表中没有这次写入，可以重新提交。")).toBeInTheDocument();
+  }
+};
+
+export const KnownCreationRecovery: Story = {
+  args: { source: knownCreationSource(), mode: "create" },
+  render: (args) => <StoryFrame><ProjectForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对项目列表" }));
+    expect(await canvas.findByText("已刷新并核对预选项目，可以确认当前状态后解除阻塞。")).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "确认当前项目状态，解除阻塞" }));
+    expect(await canvas.findByText("已确认当前项目状态，可以继续操作。")).toBeInTheDocument();
   }
 };
 
