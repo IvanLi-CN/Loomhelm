@@ -375,10 +375,13 @@ func TestStorePutHidesCrossSessionArtifactExistence(t *testing.T) {
 	if _, err := requester.Put(ctx, candidate, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-session existing artifact error = %v, want %v", err, ErrNotFound)
 	}
+	if report, err := requester.Recover(ctx, 1); err != nil || report.Cleaned != 1 {
+		t.Fatalf("cross-session rejected staging recovery = %#v, err=%v, want one cleaned item", report, err)
+	}
 	assertNoStagingFiles(t, requester.objects)
 }
 
-func TestStoreRejectedStagingCleanupPreservesIdentityAfterDirectorySyncFailure(t *testing.T) {
+func TestStoreRejectedStagingQueuesCleanupWithIdentity(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
 	content := []byte("cross-session cleanup identity")
@@ -399,16 +402,6 @@ func TestStoreRejectedStagingCleanupPreservesIdentityAfterDirectorySyncFailure(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	var syncCalls atomic.Int32
-	syncErr := errors.New("injected rejected staging directory sync failure")
-	requester.faults = &faultHooks{
-		BeforeStagingDirectorySync: func() error {
-			if syncCalls.Add(1) == 2 {
-				return syncErr
-			}
-			return nil
-		},
-	}
 	candidate := artifact
 	candidate.SessionID = "session-requester"
 	if _, err := requester.Put(ctx, candidate, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrNotFound) {
@@ -426,7 +419,6 @@ func TestStoreRejectedStagingCleanupPreservesIdentityAfterDirectorySyncFailure(t
 	if cleanupName == "" || cleanupIdentity == nil {
 		t.Fatalf("rejected staging cleanup = %q/%v, want a retained filesystem identity", cleanupName, cleanupIdentity)
 	}
-	requester.faults = nil
 	report, err := requester.Recover(ctx, 1)
 	if err != nil || report.Cleaned != 1 {
 		t.Fatalf("rejected staging cleanup recovery = %#v, err=%v, want one cleaned item", report, err)

@@ -171,6 +171,12 @@ func (s *Store) cleanupFailedStaging(name string, cleanup *cleanupDeadline) {
 		return
 	}
 	identity, identityErr := s.stagingIdentity(name)
+	if cleanup != nil && cleanup.parent != nil && cleanup.parent.Err() != nil {
+		if s.pool == nil {
+			_ = s.removeStaging(name)
+		}
+		return
+	}
 	if identityErr != nil {
 		if s.pool != nil {
 			_ = s.enqueueStagingCleanup(name, cleanup)
@@ -572,8 +578,13 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 			return artifactRecord{}, readErr
 		}
 		if readErr == nil {
+			var stagedIdentity *string
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return artifactRecord{}, s.rejectStagedPut(ctxErr, stagingName, nil, cleanup)
+			}
+			stagedIdentity, _ = s.stagingIdentity(stagingName)
 			if authErr := s.authorize(ctx, OperationPut, existing.Artifact); authErr != nil {
-				return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, cleanup)
+				return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, stagedIdentity, cleanup)
 			}
 		}
 
@@ -655,7 +666,7 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 	return artifactRecord{}, fmt.Errorf("revalidate artifact authorization: %w", ErrStoreUnavailable)
 }
 
-func (s *Store) rejectStagedPut(authErr error, stagingName string, cleanup *cleanupDeadline) error {
+func (s *Store) rejectStagedPut(authErr error, stagingName string, stagingIdentity *string, cleanup *cleanupDeadline) error {
 	if cleanup != nil && cleanup.parent != nil {
 		if contextErr := cleanup.parent.Err(); contextErr != nil {
 			return contextErr
@@ -667,15 +678,14 @@ func (s *Store) rejectStagedPut(authErr error, stagingName string, cleanup *clea
 		// operation on the request's cancellation path.
 		return authErr
 	}
-	cleanupErr := s.discardRejectedStaging(stagingName, cleanup)
-	if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
-		if cleanupErr != nil {
-			return errors.Join(authErr, cleanupErr)
-		}
-		return authErr
+	if stagingIdentity == nil {
+		return ErrNotFound
 	}
-	if cleanupErr != nil {
-		return cleanupErr
+	if err := s.enqueueStagingCleanupWithIdentity(stagingName, stagingIdentity, cleanup); err != nil {
+		return databaseWriteError("record rejected staging cleanup", err)
+	}
+	if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
+		return authErr
 	}
 	return ErrNotFound
 }
@@ -1355,23 +1365,6 @@ func (s *Store) removeStaging(name string) error {
 	}
 	if err := s.syncStagingDirectory(); err != nil {
 		return fmt.Errorf("sync artifact staging directory after removal: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) discardRejectedStaging(name string, cleanup *cleanupDeadline) error {
-	identity, identityErr := s.stagingIdentity(name)
-	if identityErr != nil {
-		if err := s.enqueueStagingCleanup(name, cleanup); err != nil {
-			return databaseWriteError("inspect rejected staging cleanup", err)
-		}
-		return nil
-	}
-	if err := s.removeStaging(name); err == nil {
-		return nil
-	}
-	if err := s.enqueueStagingCleanupWithIdentity(name, identity, cleanup); err != nil {
-		return databaseWriteError("record rejected staging cleanup", err)
 	}
 	return nil
 }
