@@ -1315,6 +1315,53 @@ func TestStoreCleanupDebtWithUnknownIdentityPreservesReplacement(t *testing.T) {
 	}
 }
 
+func TestStoreCleanupDebtPreservesArtifactWithUnknownIdentity(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("unavailable artifact staging")
+	artifact := testArtifact(uniqueID("artifact-cleanup-unknown-artifact-identity"), nil, content)
+	stagingName := ".upload-cleanup-unknown-artifact-identity-" + fmt.Sprint(time.Now().UnixNano())
+	stagingPath := filepath.Join(store.objects, stagingName)
+	if err := os.WriteFile(stagingPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertUnavailableArtifact(t, store, ctx, artifact, stagingName, "final-missing")
+	stagingIdentity, err := store.stagingIdentity(stagingName)
+	if err != nil || stagingIdentity == nil {
+		t.Fatalf("read cleanup staging identity = %v/%v", stagingIdentity, err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_identity = NULL
+		WHERE id = $1
+	`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO conversation_artifact_staging_cleanup (staging_name, staging_identity, retry_after)
+		VALUES ($1, $2, NOW())
+	`, stagingName, stagingIdentity); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	cleaned, err := store.recoverStagingCleanup(ctx, stagingName, cleanup)
+	if err != nil || !cleaned {
+		t.Fatalf("unknown-artifact-identity cleanup = cleaned %v, err %v, want true/nil", cleaned, err)
+	}
+	retained, err := os.ReadFile(stagingPath)
+	if err != nil || !bytes.Equal(retained, content) {
+		t.Fatalf("unknown-artifact-identity staging = %q, err=%v, want retained original bytes", retained, err)
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("unknown-artifact-identity cleanup debt = %d, want 0", queued)
+	}
+}
+
 func TestStoreReadyReclamationPreservesReusedStaging(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -1692,6 +1739,19 @@ func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {
 	}
 }
 
+func TestStorePendingMetadataAndOpenReturnUnavailableWithoutIntegrity(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	artifact := testArtifact(uniqueID("artifact-pending-read"), nil, []byte("pending read"))
+	insertPendingArtifact(t, db.Pool(), ctx, artifact, ".upload-pending-read")
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrIntegrity) {
+		t.Fatalf("pending metadata error = %v, want unavailable without integrity", err)
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrIntegrity) {
+		t.Fatalf("pending open error = %v, want unavailable without integrity", err)
+	}
+}
+
 func TestStoreKeepsDurableStagingWhenDatabaseCommitIsUnavailable(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	content := []byte("preserve this staging")
@@ -1818,7 +1878,7 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unrelated upload error = %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(cleanupTimeout + time.Second):
 		t.Fatal("unrelated upload was stalled by cancelled upload")
 	}
 	store.faults = nil
@@ -2341,9 +2401,26 @@ func TestStoreRejectsRepairForUnknownReasonOrConflictingFinal(t *testing.T) {
 	if _, err := store.Put(ctx, conflict, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflicting-final retry error = %v, want %v", err, ErrConflict)
 	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, unavailable_reason
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, conflict.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationUnavailable) || reason != "final-conflict" {
+		t.Fatalf("conflicting-final state = %q/%q, want unavailable/final-conflict", state, reason)
+	}
+	if err := os.Remove(finalPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(ctx, conflict, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("conflicting-final retry after removal error = %v, want %v", err, ErrUnavailable)
+	}
 	readBack, err := os.ReadFile(finalPath)
-	if err != nil || !bytes.Equal(readBack, conflictingBytes) {
-		t.Fatalf("conflicting final changed: %q, err=%v", readBack, err)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("conflicting final after removal = %q, err=%v, want missing", readBack, err)
 	}
 	assertNoStagingFiles(t, store.objects)
 }

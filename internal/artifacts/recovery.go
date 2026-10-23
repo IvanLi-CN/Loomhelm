@@ -513,6 +513,9 @@ func (s *Store) readAuthorizedReadyRecord(ctx context.Context, id string, operat
 		return artifactRecord{}, ErrNotFound
 	}
 	if record.State != publicationReady {
+		if record.State == publicationPending {
+			return artifactRecord{}, ErrUnavailable
+		}
 		return artifactRecord{}, unavailableError(ErrIntegrity)
 	}
 	return record, nil
@@ -624,6 +627,20 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 		}
 		return s.commitRepairState(ctx, updated, cleanup, tx, false, "", nil)
 	case fileInvalid:
+		updated, updateErr := s.updateUnavailableState(ctx, tx, existing, publicationUnavailable, existing.StagingName, existing.StagingIdentity, "final-conflict")
+		if updateErr != nil {
+			return artifactRecord{}, updateErr
+		}
+		if commitErr := s.commit(ctx, tx); commitErr != nil {
+			confirmed, confirmErr := s.confirmRecordWithCleanup(existing.Artifact.ID, cleanup)
+			if confirmErr == nil && samePublicationState(confirmed, updated) {
+				return artifactRecord{}, ErrConflict
+			}
+			if errors.Is(commitErr, context.Canceled) || errors.Is(commitErr, context.DeadlineExceeded) {
+				return artifactRecord{}, commitErr
+			}
+			return artifactRecord{}, fmt.Errorf("confirm final conflict state: %w", ErrStoreUnavailable)
+		}
 		return artifactRecord{}, ErrConflict
 	case fileUnknown:
 		return artifactRecord{}, fmt.Errorf("inspect final artifact for repair: %w", ErrStoreUnavailable)
@@ -1374,7 +1391,7 @@ func (s *Store) recoverStagingCleanup(ctx context.Context, name string, cleanup 
 			  AND state = 'unavailable'
 			  AND unavailable_reason IN ('final-missing', 'final-mismatch')
 			  AND staging_reclaimed_at IS NULL
-			  AND ($2::text IS NULL OR staging_identity IS NOT DISTINCT FROM $2::text)
+			  AND (staging_identity IS NULL OR $2::text IS NULL OR staging_identity IS NOT DISTINCT FROM $2::text)
 		)
 	`, name, nullableString(expectedIdentity)).Scan(&diagnostic); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
