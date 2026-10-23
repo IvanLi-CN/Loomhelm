@@ -159,6 +159,18 @@ func (s *Store) syncStagingDirectory() error {
 	return nil
 }
 
+func (s *Store) cleanupFailedStaging(ctx context.Context, name string) {
+	if s == nil {
+		return
+	}
+	if err := s.removeStaging(name); err == nil || s.pool == nil {
+		return
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	s.enqueueStagingCleanup(name, cleanup)
+}
+
 func (s *Store) commit(ctx context.Context, tx pgx.Tx) error {
 	if err := tx.Commit(ctx); err != nil {
 		return err
@@ -743,7 +755,7 @@ func (s *Store) stage(ctx context.Context, artifact protocol.Artifact, expectedH
 	defer func() {
 		_ = temporary.Close()
 		if !keep {
-			_ = os.Remove(temporaryPath)
+			s.cleanupFailedStaging(ctx, filepath.Base(temporaryPath))
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
@@ -777,15 +789,12 @@ func (s *Store) stage(ctx context.Context, artifact protocol.Artifact, expectedH
 	}
 	artifact.Sha256 = actualHash
 	if err := temporary.Sync(); err != nil {
-		keep = true
 		return protocol.Artifact{}, "", fmt.Errorf("sync artifact staging file: %w", ErrStoreUnavailable)
 	}
 	if err := temporary.Close(); err != nil {
-		keep = true
 		return protocol.Artifact{}, "", fmt.Errorf("close artifact staging file: %w", ErrStoreUnavailable)
 	}
-	if err := syncDirectory(s.objects); err != nil {
-		keep = true
+	if err := s.syncStagingDirectory(); err != nil {
 		return protocol.Artifact{}, "", fmt.Errorf("sync artifact staging directory: %w", ErrStoreUnavailable)
 	}
 	keep = true

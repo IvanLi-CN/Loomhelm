@@ -220,7 +220,19 @@ func TestStoreRecoversAfterProcessCrashBoundaries(t *testing.T) {
 				t.Fatal(err)
 			}
 			expected := testArtifact(id, &runID, content)
-			if metadata.ID != id || metadata.SessionID != expected.SessionID || !sameOptionalID(metadata.RunID, expected.RunID) || !bytes.Equal(readBack, content) {
+			createdAt, createdAtErr := time.Parse(time.RFC3339Nano, metadata.CreatedAt)
+			if metadata.ID != expected.ID ||
+				metadata.SessionID != expected.SessionID ||
+				!sameOptionalID(metadata.RunID, expected.RunID) ||
+				metadata.Name != expected.Name ||
+				metadata.Kind != expected.Kind ||
+				metadata.Size != expected.Size ||
+				metadata.Sha256 != expected.Sha256 ||
+				metadata.ContentType != expected.ContentType ||
+				metadata.CreatedAt == "" ||
+				createdAtErr != nil ||
+				createdAt.IsZero() ||
+				!bytes.Equal(readBack, content) {
 				t.Fatalf("recovered publication = %#v/%q", metadata, readBack)
 			}
 			assertNoStagingFiles(t, store.objects)

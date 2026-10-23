@@ -225,6 +225,48 @@ func TestStageHonorsCancellationBeforeWriting(t *testing.T) {
 	assertNoStagingFiles(t, objects)
 }
 
+func TestStoreStageFailureQueuesCleanupDebt(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("stage cleanup debt")
+	artifact := testArtifact(uniqueID("artifact-stage-cleanup"), nil, content)
+	var syncFailures atomic.Int32
+	syncErr := errors.New("injected stage sync failure")
+	store.faults = &faultHooks{
+		BeforeStagingDirectorySync: func() error {
+			if syncFailures.Add(1) <= 2 {
+				return syncErr
+			}
+			return nil
+		},
+	}
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("stage sync failure = %v, want %v", err, ErrStoreUnavailable)
+	}
+	var artifactCount, cleanupCount int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&artifactCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup`).Scan(&cleanupCount); err != nil {
+		t.Fatal(err)
+	}
+	if artifactCount != 0 || cleanupCount != 1 {
+		t.Fatalf("stage failure durable rows = artifact %d/cleanup %d, want 0/1", artifactCount, cleanupCount)
+	}
+	assertNoStagingFiles(t, store.objects)
+
+	store.faults = nil
+	if report, err := store.Recover(ctx, 1); err != nil || report.Cleaned != 1 {
+		t.Fatalf("stage cleanup recovery = %#v, err=%v, want one cleaned item", report, err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup`).Scan(&cleanupCount); err != nil {
+		t.Fatal(err)
+	}
+	if cleanupCount != 0 {
+		t.Fatalf("stage cleanup debt after recovery = %d, want 0", cleanupCount)
+	}
+}
+
 func TestStoreRetriesImmutableArtifactAndRejectsConflicts(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
