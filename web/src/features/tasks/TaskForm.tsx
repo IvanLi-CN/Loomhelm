@@ -147,7 +147,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       await source.refresh();
       if (mode === "create") {
         setBlockedByUnknown(true);
-        setCanAcknowledgePendingCreation(Boolean(noticeId && source.pendingTaskCreationNoticeId === noticeId));
+        setCanAcknowledgePendingCreation(Boolean(noticeId && source.pendingTaskCreationNoticeId === noticeId && source.isPendingTaskCreationReady?.(noticeId) === true));
         setFeedback({ message: "列表已刷新，但本次任务创建结果仍待确认；为避免重复创建，当前表单不会再次提交。", tone: "warning", reconcile: true, noticeId });
       } else {
         const ready = source.isTaskReconciliationReady?.(task?.id ?? "") === true;

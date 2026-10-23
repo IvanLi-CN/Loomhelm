@@ -69,7 +69,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
       await source.refresh();
       if (mode === "create") {
         setBlockedByUnknown(true);
-        setCanAcknowledgePendingCreation(Boolean(noticeId && source.pendingProjectCreationNoticeId === noticeId));
+        setCanAcknowledgePendingCreation(Boolean(noticeId && source.pendingProjectCreationNoticeId === noticeId && source.isPendingProjectCreationReady?.(noticeId) === true));
         setFeedback({ message: "列表已刷新，但本次项目创建结果仍待确认；为避免重复创建，当前表单不会再次提交。", tone: "warning", reconcile: true, noticeId });
       } else {
         const ready = source.isProjectReconciliationReady?.(projectId ?? "") === true;

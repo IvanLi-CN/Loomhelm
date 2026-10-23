@@ -141,6 +141,8 @@ export interface ProjectTaskSource {
   pendingTaskCreation?: boolean;
   pendingProjectCreationNoticeId?: string;
   pendingTaskCreationNoticeId?: string;
+  isPendingProjectCreationReady?: (noticeId: string) => boolean;
+  isPendingTaskCreationReady?: (noticeId: string) => boolean;
   acknowledgePendingProjectCreation?: (noticeId: string) => boolean;
   acknowledgePendingTaskCreation?: (noticeId: string) => boolean;
   acknowledgeTaskReconciliation?: (taskId: string) => boolean;
