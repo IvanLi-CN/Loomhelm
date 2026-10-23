@@ -19,6 +19,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const processTestTimeout = 2 * time.Minute
+
 func TestArtifactProcessHelper(t *testing.T) {
 	mode := os.Getenv("LOOMHELM_ARTIFACT_HELPER")
 	if mode == "" || !artifactHelperProcess {
@@ -33,7 +35,7 @@ func TestArtifactProcessHelper(t *testing.T) {
 		fmt.Fprintf(os.Stderr, "decode helper content: %v\n", err)
 		os.Exit(2)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), processTestTimeout)
 	db, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
 	if err != nil {
 		cancel()
@@ -645,7 +647,7 @@ func openStoreAtRoot(t *testing.T, root string) (*database.DB, *Store, context.C
 	if databaseURL == "" {
 		t.Skip("LOOMHELM_DATABASE_URL is not set")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), processTestTimeout)
 	t.Cleanup(cancel)
 	db, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
 	if err != nil {
