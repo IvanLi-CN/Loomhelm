@@ -164,6 +164,8 @@ func (s *Store) cleanupFailedStaging(ctx context.Context, name string) {
 	if s == nil {
 		return
 	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
 	identity, identityErr := s.stagingIdentity(name)
 	if identityErr != nil {
 		identity = nil
@@ -171,8 +173,6 @@ func (s *Store) cleanupFailedStaging(ctx context.Context, name string) {
 	if err := s.removeStaging(name); err == nil || s.pool == nil {
 		return
 	}
-	cleanup := newCleanupDeadline(ctx)
-	defer cleanup.stop()
 	_ = s.enqueueStagingCleanupWithIdentity(name, identity, cleanup)
 }
 
@@ -557,81 +557,107 @@ func sameArtifactMetadata(candidate, existing protocol.Artifact) bool {
 }
 
 func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
-	tx, err := s.beginIdentityTx(ctx, candidate.ID, cleanup)
-	if err != nil {
-		return artifactRecord{}, err
-	}
-	defer func() { rollbackTx(tx, cleanup) }()
-	if err := lockStagingName(ctx, tx, stagingName); err != nil {
-		return artifactRecord{}, err
-	}
+	for attempt := 0; attempt < 3; attempt++ {
+		existing, readErr := readArtifactRecord(ctx, s.pool, candidate.ID)
+		if readErr != nil && !errors.Is(readErr, ErrNotFound) {
+			return artifactRecord{}, readErr
+		}
+		if readErr == nil {
+			if authErr := s.authorize(ctx, OperationPut, existing.Artifact); authErr != nil {
+				return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, cleanup)
+			}
+		}
 
-	existing, err := readArtifactRecord(ctx, tx, candidate.ID)
-	if err == nil {
-		if authErr := s.authorize(ctx, OperationPut, existing.Artifact); authErr != nil {
-			// The candidate was authorized before staging, but the durable row may
-			// belong to a different caller scope. Hide its existence and discard
-			// the newly staged bytes before releasing the identity lock.
-			rollbackTx(tx, cleanup)
-			tx = nil
-			cleanupErr := s.discardRejectedStaging(stagingName, cleanup)
-			if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
-				if cleanupErr != nil {
-					return artifactRecord{}, errors.Join(authErr, cleanupErr)
-				}
-				return artifactRecord{}, authErr
-			}
-			if cleanupErr != nil {
-				return artifactRecord{}, cleanupErr
-			}
-			return artifactRecord{}, ErrNotFound
-		}
-		if !sameArtifactMetadata(candidate, existing.Artifact) {
-			return artifactRecord{}, ErrConflict
-		}
-		if existing.State == publicationUnavailable && repairableUnavailableReason(existing.UnavailableReason) {
-			return s.repairUnavailable(ctx, tx, existing, candidate, stagingName, cleanup)
-		}
-		return existing, nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return artifactRecord{}, err
-	}
-	stagingIdentity, identityErr := s.stagingIdentity(stagingName)
-	if identityErr != nil {
-		return artifactRecord{}, identityErr
-	}
-	if stagingIdentity == nil {
-		return artifactRecord{}, fmt.Errorf("staging object disappeared before intent: %w", ErrStoreUnavailable)
-	}
-	candidate.CreatedAt = formatTime(time.Now())
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO conversation_artifacts (
-			id, session_id, run_id, name, kind, size, sha256, content_type,
-			created_at, state, staging_name, staging_identity, unavailable_reason
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, '')
-	`, candidate.ID, candidate.SessionID, nullableString(candidate.RunID), candidate.Name, string(candidate.Kind), candidate.Size, candidate.Sha256, candidate.ContentType, parseCreatedAt(candidate.CreatedAt), stagingName, stagingIdentity); err != nil {
-		return artifactRecord{}, databaseWriteError("persist artifact intent", err)
-	}
-	if err := s.commit(ctx, tx); err != nil {
-		confirmed, confirmErr := s.confirmRecordWithCleanup(candidate.ID, cleanup)
-		if confirmErr == nil && sameArtifactMetadata(candidate, confirmed.Artifact) && publicationStateMatchesIntent(confirmed.State) {
-			return confirmed, nil
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		tx, err := s.beginIdentityTx(ctx, candidate.ID, cleanup)
+		if err != nil {
 			return artifactRecord{}, err
 		}
-		return artifactRecord{}, fmt.Errorf("confirm artifact intent: %w", ErrStoreUnavailable)
+		keepTransaction := true
+		defer func() {
+			if keepTransaction {
+				rollbackTx(tx, cleanup)
+			}
+		}()
+		if err := lockStagingName(ctx, tx, stagingName); err != nil {
+			return artifactRecord{}, err
+		}
+
+		locked, lockedErr := readArtifactRecord(ctx, tx, candidate.ID)
+		if lockedErr == nil {
+			if readErr != nil || !sameArtifactMetadata(existing.Artifact, locked.Artifact) {
+				rollbackTx(tx, cleanup)
+				keepTransaction = false
+				continue
+			}
+			if !sameArtifactMetadata(candidate, locked.Artifact) {
+				return artifactRecord{}, ErrConflict
+			}
+			if locked.State == publicationUnavailable && repairableUnavailableReason(locked.UnavailableReason) {
+				return s.repairUnavailable(ctx, tx, locked, candidate, stagingName, cleanup)
+			}
+			return locked, nil
+		}
+		if !errors.Is(lockedErr, ErrNotFound) {
+			return artifactRecord{}, lockedErr
+		}
+		if readErr == nil {
+			rollbackTx(tx, cleanup)
+			keepTransaction = false
+			continue
+		}
+
+		stagingIdentity, identityErr := s.stagingIdentity(stagingName)
+		if identityErr != nil {
+			return artifactRecord{}, identityErr
+		}
+		if stagingIdentity == nil {
+			return artifactRecord{}, fmt.Errorf("staging object disappeared before intent: %w", ErrStoreUnavailable)
+		}
+		candidate.CreatedAt = formatTime(time.Now())
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO conversation_artifacts (
+				id, session_id, run_id, name, kind, size, sha256, content_type,
+				created_at, state, staging_name, staging_identity, unavailable_reason
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, '')
+		`, candidate.ID, candidate.SessionID, nullableString(candidate.RunID), candidate.Name, string(candidate.Kind), candidate.Size, candidate.Sha256, candidate.ContentType, parseCreatedAt(candidate.CreatedAt), stagingName, stagingIdentity); err != nil {
+			return artifactRecord{}, databaseWriteError("persist artifact intent", err)
+		}
+		if err := s.commit(ctx, tx); err != nil {
+			confirmed, confirmErr := s.confirmRecordWithCleanup(candidate.ID, cleanup)
+			if confirmErr == nil && sameArtifactMetadata(candidate, confirmed.Artifact) && publicationStateMatchesIntent(confirmed.State) {
+				return confirmed, nil
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return artifactRecord{}, err
+			}
+			return artifactRecord{}, fmt.Errorf("confirm artifact intent: %w", ErrStoreUnavailable)
+		}
+		keepTransaction = false
+		s.fault(faultAfterIntentCommit)
+		confirmed, err := s.confirmRecordWithCleanup(candidate.ID, cleanup)
+		if err != nil {
+			return artifactRecord{}, err
+		}
+		if !sameArtifactMetadata(candidate, confirmed.Artifact) || !publicationStateMatchesIntent(confirmed.State) {
+			return artifactRecord{}, ErrConflict
+		}
+		return confirmed, nil
 	}
-	s.fault(faultAfterIntentCommit)
-	confirmed, err := s.confirmRecordWithCleanup(candidate.ID, cleanup)
-	if err != nil {
-		return artifactRecord{}, err
+	return artifactRecord{}, fmt.Errorf("revalidate artifact authorization: %w", ErrStoreUnavailable)
+}
+
+func (s *Store) rejectStagedPut(authErr error, stagingName string, cleanup *cleanupDeadline) error {
+	cleanupErr := s.discardRejectedStaging(stagingName, cleanup)
+	if errors.Is(authErr, context.Canceled) || errors.Is(authErr, context.DeadlineExceeded) {
+		if cleanupErr != nil {
+			return errors.Join(authErr, cleanupErr)
+		}
+		return authErr
 	}
-	if !sameArtifactMetadata(candidate, confirmed.Artifact) || !publicationStateMatchesIntent(confirmed.State) {
-		return artifactRecord{}, ErrConflict
+	if cleanupErr != nil {
+		return cleanupErr
 	}
-	return confirmed, nil
+	return ErrNotFound
 }
 
 func repairableUnavailableReason(reason string) bool {
@@ -643,9 +669,6 @@ func publicationStateMatchesIntent(state publicationState) bool {
 }
 
 func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artifactRecord, candidate protocol.Artifact, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
-	if err := s.authorize(ctx, OperationPut, candidate); err != nil {
-		return artifactRecord{}, err
-	}
 	finalPath, err := s.objectPath(candidate.ID)
 	if err != nil {
 		return artifactRecord{}, err
@@ -1315,10 +1338,14 @@ func (s *Store) removeStaging(name string) error {
 }
 
 func (s *Store) discardRejectedStaging(name string, cleanup *cleanupDeadline) error {
+	identity, identityErr := s.stagingIdentity(name)
+	if identityErr != nil {
+		identity = nil
+	}
 	if err := s.removeStaging(name); err == nil {
 		return nil
 	}
-	if err := s.enqueueStagingCleanup(name, cleanup); err != nil {
+	if err := s.enqueueStagingCleanupWithIdentity(name, identity, cleanup); err != nil {
 		return databaseWriteError("record rejected staging cleanup", err)
 	}
 	return nil

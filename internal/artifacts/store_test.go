@@ -378,6 +378,93 @@ func TestStorePutHidesCrossSessionArtifactExistence(t *testing.T) {
 	assertNoStagingFiles(t, requester.objects)
 }
 
+func TestStoreRejectedStagingCleanupPreservesIdentityAfterDirectorySyncFailure(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("cross-session cleanup identity")
+	artifact := testArtifact(uniqueID("artifact-cross-session-cleanup"), nil, content)
+	artifact.SessionID = "session-owner"
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	requester, err := NewStore(db.Pool(), Config{
+		Root: store.root,
+		Authorizer: AuthorizerFunc(func(_ context.Context, _ Operation, candidate protocol.Artifact) error {
+			if candidate.SessionID != "session-requester" {
+				return ErrUnauthorized
+			}
+			return nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var syncCalls atomic.Int32
+	syncErr := errors.New("injected rejected staging directory sync failure")
+	requester.faults = &faultHooks{
+		BeforeStagingDirectorySync: func() error {
+			if syncCalls.Add(1) == 2 {
+				return syncErr
+			}
+			return nil
+		},
+	}
+	candidate := artifact
+	candidate.SessionID = "session-requester"
+	if _, err := requester.Put(ctx, candidate, readCloser(bytes.NewReader(content))); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-session sync-failed cleanup error = %v, want %v", err, ErrNotFound)
+	}
+	var cleanupName string
+	var cleanupIdentity *string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT staging_name, staging_identity
+		FROM conversation_artifact_staging_cleanup
+		LIMIT 1
+	`).Scan(&cleanupName, &cleanupIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if cleanupName == "" || cleanupIdentity == nil {
+		t.Fatalf("rejected staging cleanup = %q/%v, want a retained filesystem identity", cleanupName, cleanupIdentity)
+	}
+	requester.faults = nil
+	report, err := requester.Recover(ctx, 1)
+	if err != nil || report.Cleaned != 1 {
+		t.Fatalf("rejected staging cleanup recovery = %#v, err=%v, want one cleaned item", report, err)
+	}
+}
+
+func TestStorePutReauthorizesExistingArtifactWithSingleConnectionPool(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("single connection authorization")
+	artifact := testArtifact(uniqueID("artifact-single-connection"), nil, content)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	singleDB, err := database.Open(ctx, database.Config{
+		URL:      strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")),
+		MinConns: 1,
+		MaxConns: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer singleDB.Close()
+	authorizer := AuthorizerFunc(func(authContext context.Context, _ Operation, _ protocol.Artifact) error {
+		var one int
+		return singleDB.Pool().QueryRow(authContext, `SELECT 1`).Scan(&one)
+	})
+	singleStore, err := NewStore(singleDB.Pool(), Config{Root: store.root, Authorizer: authorizer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	putContext, cancel := context.WithTimeout(ctx, cleanupTimeout+time.Second)
+	defer cancel()
+	if _, err := singleStore.Put(putContext, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatalf("single-connection existing artifact Put = %v", err)
+	}
+}
+
 func TestStoreCancellationDuringExistingArtifactAuthorizationCleansStaging(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
