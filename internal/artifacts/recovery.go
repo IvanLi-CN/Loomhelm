@@ -419,6 +419,35 @@ func (s *Store) beginIdentityTx(ctx context.Context, id string, cleanup *cleanup
 	return tx, nil
 }
 
+func (s *Store) beginIdentityTryTx(ctx context.Context, id string, cleanup *cleanupDeadline) (pgx.Tx, bool, error) {
+	if s == nil || s.pool == nil {
+		return nil, false, ErrStoreUnavailable
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, false, err
+		}
+		return nil, false, fmt.Errorf("begin artifact publication: %w", ErrStoreUnavailable)
+	}
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`, "loomhelm:artifact:"+id).Scan(&locked); err != nil {
+		rollbackTx(tx, cleanup)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, false, err
+		}
+		return nil, false, fmt.Errorf("check artifact publication lock: %w", ErrStoreUnavailable)
+	}
+	if !locked {
+		rollbackTx(tx, cleanup)
+		return nil, false, nil
+	}
+	if s.faults != nil && s.faults.AfterIdentityLock != nil {
+		s.faults.AfterIdentityLock()
+	}
+	return tx, true, nil
+}
+
 func lockStagingName(ctx context.Context, tx pgx.Tx, name string) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "loomhelm:staging:"+name); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -574,6 +603,7 @@ func sameArtifactMetadata(candidate, existing protocol.Artifact) bool {
 
 func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, stagingName string, cleanup *cleanupDeadline) (artifactRecord, error) {
 	repairAuthorizationChecked := false
+	repairTryLock := false
 	for attempt := 0; attempt < 3; attempt++ {
 		existing, readErr := readArtifactRecord(ctx, s.pool, candidate.ID)
 		if readErr != nil && !errors.Is(readErr, ErrNotFound) {
@@ -592,9 +622,27 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 			}
 		}
 
-		tx, err := s.beginIdentityTx(ctx, candidate.ID, cleanup)
-		if err != nil {
-			return artifactRecord{}, err
+		var tx pgx.Tx
+		var err error
+		if repairTryLock && readErr == nil {
+			var acquired bool
+			tx, acquired, err = s.beginIdentityTryTx(ctx, candidate.ID, cleanup)
+			if err != nil {
+				return artifactRecord{}, err
+			}
+			if !acquired {
+				if authErr := s.authorize(ctx, OperationPut, existing.Artifact); authErr != nil {
+					return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, stagedIdentity, cleanup)
+				}
+				repairAuthorizationChecked = true
+				continue
+			}
+		} else {
+			repairTryLock = false
+			tx, err = s.beginIdentityTx(ctx, candidate.ID, cleanup)
+			if err != nil {
+				return artifactRecord{}, err
+			}
 		}
 		keepTransaction := true
 		defer func() {
@@ -610,6 +658,7 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 		if lockedErr == nil {
 			if readErr != nil || !sameArtifactMetadata(existing.Artifact, locked.Artifact) {
 				repairAuthorizationChecked = false
+				repairTryLock = false
 				rollbackTx(tx, cleanup)
 				keepTransaction = false
 				continue
@@ -627,9 +676,11 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 						return artifactRecord{}, s.rejectStagedPut(authErr, stagingName, stagedIdentity, cleanup)
 					}
 					repairAuthorizationChecked = true
+					repairTryLock = true
 					continue
 				}
 				repairAuthorizationChecked = false
+				repairTryLock = false
 				return s.repairUnavailable(ctx, tx, locked, candidate, stagingName, cleanup)
 			}
 			return locked, nil
@@ -639,6 +690,7 @@ func (s *Store) ensurePending(ctx context.Context, candidate protocol.Artifact, 
 		}
 		if readErr == nil {
 			repairAuthorizationChecked = false
+			repairTryLock = false
 			rollbackTx(tx, cleanup)
 			keepTransaction = false
 			continue
