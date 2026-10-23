@@ -1019,18 +1019,7 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 	if identityErr != nil {
 		return artifactRecord{}, recoveryPending, identityErr
 	}
-	removeStaging := sameStagingIdentity(record.StagingIdentity, currentIdentity)
-	if record.StagingIdentity == nil && currentIdentity != nil {
-		stagingPath, pathErr := s.stagingPath(record.StagingName)
-		if pathErr != nil {
-			return artifactRecord{}, recoveryPending, pathErr
-		}
-		stagingCheck, checkErr := inspectArtifactFile(stagingPath, record.Artifact)
-		if checkErr != nil {
-			return artifactRecord{}, recoveryPending, checkErr
-		}
-		removeStaging = stagingCheck == fileValid
-	}
+	removeStaging := record.StagingIdentity != nil && currentIdentity != nil && sameStagingIdentity(record.StagingIdentity, currentIdentity)
 	if currentIdentity == nil {
 		if err := s.syncStagingDirectory(); err != nil {
 			return artifactRecord{}, recoveryPending, fmt.Errorf("sync artifact staging directory after missing staging: %w", err)

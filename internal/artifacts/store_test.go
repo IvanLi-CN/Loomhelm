@@ -1245,6 +1245,76 @@ func TestStoreCleanupDebtDoesNotRemoveReusedStaging(t *testing.T) {
 	}
 }
 
+func TestStoreCleanupDebtWithUnknownIdentityPreservesReplacement(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	stagingName := ".upload-cleanup-unknown-identity-" + fmt.Sprint(time.Now().UnixNano())
+	stagingPath := filepath.Join(store.objects, stagingName)
+	if err := os.WriteFile(stagingPath, []byte("old staging"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := newCleanupDeadline(ctx)
+	defer cleanup.stop()
+	store.enqueueStagingCleanup(stagingName, cleanup)
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifact_staging_cleanup
+		SET staging_identity = NULL
+		WHERE staging_name = $1
+	`, stagingName); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stagingPath+".replacement", []byte("new staging"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(stagingPath+".replacement", stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err := store.recoverStagingCleanup(ctx, stagingName, cleanup)
+	if err != nil || cleaned {
+		t.Fatalf("unknown-identity replacement cleanup = cleaned %v, err %v, want false/nil", cleaned, err)
+	}
+	content, err := os.ReadFile(stagingPath)
+	if err != nil || string(content) != "new staging" {
+		t.Fatalf("unknown-identity replacement content = %q, err=%v", content, err)
+	}
+	var queued int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("unknown-identity replacement cleanup debt = %d, want 1", queued)
+	}
+	if err := os.Remove(stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifact_staging_cleanup SET retry_after = NOW() WHERE staging_name = $1`, stagingName); err != nil {
+		t.Fatal(err)
+	}
+	syncErr := fmt.Errorf("open %s: permission denied", filepath.Join(store.objects, "private-staging-root"))
+	store.faults = &faultHooks{BeforeStagingDirectorySync: func() error { return syncErr }}
+	cleaned, err = store.recoverStagingCleanup(ctx, stagingName, cleanup)
+	if !errors.Is(err, syncErr) || cleaned {
+		t.Fatalf("unknown-identity missing cleanup with failed sync = cleaned %v, err %v, want false/injected error", cleaned, err)
+	}
+	store.faults = nil
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifact_staging_cleanup SET retry_after = NOW() WHERE staging_name = $1`, stagingName); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err = store.recoverStagingCleanup(ctx, stagingName, cleanup)
+	if err != nil || !cleaned {
+		t.Fatalf("unknown-identity missing cleanup retry = cleaned %v, err %v, want true/nil", cleaned, err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM conversation_artifact_staging_cleanup WHERE staging_name = $1`, stagingName).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("unknown-identity missing cleanup debt after retry = %d, want 0", queued)
+	}
+}
+
 func TestStoreReadyReclamationPreservesReusedStaging(t *testing.T) {
 	db, store, ctx := openIntegrationStore(t, nil)
 	defer db.Close()
@@ -1306,6 +1376,40 @@ func TestStoreReadyReclamationPreservesReusedStaging(t *testing.T) {
 	}
 	if state != string(publicationReady) || !reclaimed {
 		t.Fatalf("ready recovery state = %q/reclaimed %v, want ready/reclaimed after preserving the replacement", state, reclaimed)
+	}
+}
+
+func TestStoreReadyReclamationPreservesUnidentifiedStaging(t *testing.T) {
+	db, store, ctx := openIntegrationStore(t, nil)
+	defer db.Close()
+	content := []byte("unidentified ready staging")
+	artifact := testArtifact(uniqueID("artifact-ready-unidentified"), nil, content)
+	stagingName := ".upload-ready-unidentified-" + fmt.Sprint(time.Now().UnixNano())
+	stagingPath := filepath.Join(store.objects, stagingName)
+	if err := os.WriteFile(stagingPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_identity = NULL WHERE id = $1`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, status, err := store.reclaimReadyStagingForRecovery(ctx, artifact.ID, nil)
+	if err != nil || status != recoveryReady {
+		t.Fatalf("unidentified ready staging reclamation = status %q, err %v, want ready/nil", status, err)
+	}
+	retained, err := os.ReadFile(stagingPath)
+	if err != nil || !bytes.Equal(retained, content) {
+		t.Fatalf("unidentified ready staging = %q, err=%v, want retained original bytes", retained, err)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `SELECT staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if !reclaimed {
+		t.Fatal("unidentified ready staging was not marked reclaimed after retaining its bytes")
 	}
 }
 
