@@ -580,8 +580,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     ])
   });
   const createTaskMutation = useMutation({
-    mutationFn: (draft: TaskDraft) => api.createTask({ body: { title: draft.title.trim(), goal: draft.goal.trim(), project_id: draft.projectId, status: taskStatus(draft.state) } }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) })
+    mutationFn: (draft: TaskDraft) => api.createTask({ body: { title: draft.title.trim(), goal: draft.goal.trim(), project_id: draft.projectId, status: taskStatus(draft.state) } })
   });
   const updateTaskMutation = useMutation({
     mutationFn: ({ taskId, update }: { taskId: string; update: TaskUpdate }) => api.updateTask({ task_id: taskId, body: toTaskUpdateRequest(update) }),
@@ -719,8 +718,17 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       };
       const relationBlock = relationWriteBlockReason("", relationChanges, getTask, getProjectPermissions);
       if (relationBlock) return denied(relationBlock);
+      const hasRelationChanges = Boolean(relationChanges.addParentIds?.length || relationChanges.addDependencyIds?.length);
+      let createdTaskId: string | undefined;
       try {
         const response = await createTaskMutation.mutateAsync(draft);
+        createdTaskId = response.task.id;
+        const taskNoticeId = `task:${response.task.id}`;
+        if (hasRelationChanges) {
+          relationMutationsInFlight.current.add(response.task.id);
+          setRelationMutationPending(response.task.id, true);
+          recordMutationNotice(taskNoticeId, "任务已创建，关系写入正在进行，请等待本次操作完成。");
+        }
         const relationResult = relationChanges.addParentIds?.length || relationChanges.addDependencyIds?.length
           ? await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, response.task.id, relationChanges)
           : { failures: [], applied: undefined };
@@ -728,17 +736,27 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         if (relationResult.failures.length) {
           if (relationResult.failures.some((item) => item.status === 401 || item.status === 403 || item.status === 404)) await invalidatePermissionScope(false);
           const warning = "任务已创建，但部分关系未保存：" + relationResult.failures.map((item) => item.message).join("；") + "。请刷新后核对。";
-          recordMutationNotice(`task:${response.task.id}`, warning);
+          recordMutationNotice(taskNoticeId, warning);
           return success(value, warning, true, { failures: relationResult.failures, applied: relationResult.applied });
         }
+        if (!hasRelationChanges) await queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) });
         clearMutationNotice(createNoticeId);
-        clearMutationNotice(`task:${response.task.id}`);
+        clearMutationNotice(taskNoticeId);
         return success(value);
       } catch (error) {
         if (isPermissionError(error)) await invalidatePermissionScope(false);
         const result = isAmbiguousWriteError(error) ? ambiguousFailure<TaskRecord>("创建任务", error) : handleFailure<TaskRecord>("创建任务", error);
-        if (!result.ok && result.reconcile) recordMutationNotice(createNoticeId, result.message);
+        if (createdTaskId && hasRelationChanges && !result.ok) {
+          recordMutationNotice(`task:${createdTaskId}`, `任务已创建，但关系写入结果待确认：${result.message}请刷新后核对。`);
+        } else if (!result.ok && result.reconcile) {
+          recordMutationNotice(createNoticeId, result.message);
+        }
         return result;
+      } finally {
+        if (createdTaskId && relationMutationsInFlight.current.has(createdTaskId)) {
+          relationMutationsInFlight.current.delete(createdTaskId);
+          setRelationMutationPending(createdTaskId, false);
+        }
       }
     };
     const updateTask = async (taskId: string, update: TaskUpdate): Promise<WriteResult<TaskRecord>> => {
