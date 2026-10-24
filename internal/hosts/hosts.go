@@ -780,6 +780,15 @@ func cursorStateHasRow(ctx context.Context, queryer cursorQueryer, query string,
 }
 
 func validateCursor(cursor Cursor) error {
+	if strings.IndexByte(cursor.SessionID, 0) >= 0 {
+		return fmt.Errorf("%w: cursor session id must not contain NUL", ErrInvalid)
+	}
+	if strings.IndexByte(cursor.RunID, 0) >= 0 {
+		return fmt.Errorf("%w: cursor run id must not contain NUL", ErrInvalid)
+	}
+	if strings.IndexByte(cursor.Value, 0) >= 0 {
+		return fmt.Errorf("%w: cursor value must not contain NUL", ErrInvalid)
+	}
 	if strings.TrimSpace(cursor.SessionID) == "" {
 		return fmt.Errorf("%w: cursor session id is required", ErrInvalid)
 	}

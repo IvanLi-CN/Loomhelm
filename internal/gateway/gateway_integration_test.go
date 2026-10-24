@@ -209,6 +209,77 @@ func TestGatewayWithPostgresTLSWSS(t *testing.T) {
 	}
 }
 
+func TestGatewayWithPostgresTLSWSSRejectsRevokedCommandAcknowledgement(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db := openGatewayDatabase(t, ctx)
+	service := hosts.NewService(db.Pool())
+	registration, err := service.Register(ctx, hosts.RegisterRequest{
+		Name: "h01 gateway revoked acknowledgement " + time.Now().UTC().Format("20060102T150405.000000000"),
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	server, err := NewServer(service)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client, err := NewClient(ClientOptions{
+		URL:        strings.Replace(httpServer.URL, "https://", "wss://", 1),
+		HostID:     registration.Host.ID,
+		Token:      registration.Token,
+		HTTPClient: httpServer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	connection := connectTestClient(t, client)
+	defer connection.Close()
+
+	command := protocol.Command{
+		CommandID: "cmd_revoked_acknowledgement",
+		IssuedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"text":"must remain uncertain"}`),
+		SessionID: "session_revoked_acknowledgement",
+	}
+	commandResult := make(chan struct {
+		ack protocol.CommandAck
+		err error
+	}, 1)
+	go func() {
+		ack, sendErr := server.SendCommand(ctx, registration.Host.ID, command)
+		commandResult <- struct {
+			ack protocol.CommandAck
+			err error
+		}{ack: ack, err: sendErr}
+	}()
+	commandMessage := readGatewayMessage(t, connection)
+	if commandMessage.Type != MessageCommand || commandMessage.Command == nil || commandMessage.Command.CommandID != command.CommandID {
+		t.Fatalf("gateway command message = %+v", commandMessage)
+	}
+	if err := service.RevokeCredential(ctx, registration.Credential.ID); err != nil {
+		t.Fatalf("RevokeCredential() error = %v", err)
+	}
+	if err := connection.Acknowledge(ctx, commandMessage.RequestID, protocol.CommandAck{
+		CommandID:  command.CommandID,
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateAccepted,
+	}); err != nil {
+		t.Fatalf("Acknowledge() error = %v", err)
+	}
+	select {
+	case result := <-commandResult:
+		if result.err == nil || !errors.Is(result.err, protocol.ErrUnknownCommandResult) {
+			t.Fatalf("SendCommand() after revoked acknowledgement = %+v, want unknown result", result)
+		}
+	case <-ctx.Done():
+		t.Fatalf("SendCommand() did not resolve after revoked acknowledgement: %v", ctx.Err())
+	}
+}
+
 func TestGatewayWithPostgresTLSWSSRejectsNonPositiveEventSequence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

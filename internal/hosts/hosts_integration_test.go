@@ -252,6 +252,81 @@ func TestServiceCursorAdmissionBoundsAndHandlerFence(t *testing.T) {
 	}
 }
 
+func TestServiceProcessEventRejectsNULCursorTextBeforeHandler(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	registration, err := NewService(testDB.db.Pool()).Register(ctx, RegisterRequest{Name: "h01 cursor NUL " + time.Now().UTC().Format("20060102T150405.000000000")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	service := NewService(testDB.db.Pool())
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	baseline := Cursor{SessionID: "会话_日本", RunID: "运行_🚀", Value: "游标_✓"}
+	if err := service.Checkpoint(ctx, connection, baseline); err != nil {
+		t.Fatalf("Checkpoint(unicode) error = %v", err)
+	}
+
+	var baselineCount int
+	if err := testDB.db.Pool().QueryRow(ctx, `SELECT count(*) FROM host_cursors WHERE host_id = $1`, registration.Host.ID).Scan(&baselineCount); err != nil {
+		t.Fatalf("count baseline cursors: %v", err)
+	}
+	if baselineCount != 1 {
+		t.Fatalf("baseline cursor count = %d, want 1", baselineCount)
+	}
+	var baselineValue string
+	if err := testDB.db.Pool().QueryRow(ctx, `
+		SELECT cursor FROM host_cursors
+		WHERE host_id = $1 AND session_id = $2 AND run_id = $3
+	`, registration.Host.ID, baseline.SessionID, baseline.RunID).Scan(&baselineValue); err != nil {
+		t.Fatalf("read baseline cursor: %v", err)
+	}
+
+	cases := map[string]Cursor{
+		"session id": {SessionID: "会话\x00日本", RunID: baseline.RunID, Value: "cursor_session"},
+		"run id":     {SessionID: baseline.SessionID, RunID: "运行\x00🚀", Value: "cursor_run"},
+		"value":      {SessionID: baseline.SessionID, RunID: baseline.RunID, Value: "游标\x00✓"},
+	}
+	for name, cursor := range cases {
+		t.Run(name, func(t *testing.T) {
+			handlerCalls := 0
+			if err := service.ProcessEvent(ctx, connection, cursor, func(context.Context) error {
+				handlerCalls++
+				return nil
+			}); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("ProcessEvent() error = %v, want ErrInvalid", err)
+			}
+			if handlerCalls != 0 {
+				t.Fatalf("ProcessEvent() handler calls = %d, want 0", handlerCalls)
+			}
+			var count int
+			if err := testDB.db.Pool().QueryRow(ctx, `SELECT count(*) FROM host_cursors WHERE host_id = $1`, registration.Host.ID).Scan(&count); err != nil {
+				t.Fatalf("count cursors after rejection: %v", err)
+			}
+			if count != baselineCount {
+				t.Fatalf("cursor count after rejection = %d, want %d", count, baselineCount)
+			}
+			var value string
+			if err := testDB.db.Pool().QueryRow(ctx, `
+				SELECT cursor FROM host_cursors
+				WHERE host_id = $1 AND session_id = $2 AND run_id = $3
+			`, registration.Host.ID, baseline.SessionID, baseline.RunID).Scan(&value); err != nil {
+				t.Fatalf("read cursor after rejection: %v", err)
+			}
+			if value != baselineValue {
+				t.Fatalf("baseline cursor after rejection = %q, want %q", value, baselineValue)
+			}
+		})
+	}
+}
+
 func TestServiceCursorAdmissionIsAtomicAtHostLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

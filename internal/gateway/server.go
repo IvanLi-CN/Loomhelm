@@ -322,7 +322,9 @@ func (c *serverConnection) readLoop(ctx context.Context) error {
 				return err
 			}
 		case MessageCommandAck:
-			c.resolve(message)
+			if err := c.resolve(ctx, message); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unexpected Connector gateway message %q", message.Type)
 		}
@@ -431,14 +433,32 @@ func (c *serverConnection) sendCommand(ctx context.Context, command protocol.Com
 	}
 }
 
-func (c *serverConnection) resolve(message Message) {
+func (c *serverConnection) resolve(ctx context.Context, message Message) error {
+	if message.Generation != c.connection.Generation {
+		return hosts.ErrConnectionStale
+	}
 	c.pendingMu.Lock()
-	response := c.pending[message.RequestID]
-	delete(c.pending, message.RequestID)
+	_, pending := c.pending[message.RequestID]
 	c.pendingMu.Unlock()
+	if !pending {
+		return nil
+	}
+	var response chan commandResponse
+	if err := c.registry.AuthorizeCommand(ctx, c.connection, func() error {
+		c.pendingMu.Lock()
+		response = c.pending[message.RequestID]
+		if response != nil {
+			delete(c.pending, message.RequestID)
+		}
+		c.pendingMu.Unlock()
+		return nil
+	}); err != nil {
+		return err
+	}
 	if response != nil {
 		response <- commandResponse{ack: message.Ack}
 	}
+	return nil
 }
 
 func (c *serverConnection) removePending(requestID string) {

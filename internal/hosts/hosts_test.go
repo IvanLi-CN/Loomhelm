@@ -16,10 +16,17 @@ func TestValidateCursorBounds(t *testing.T) {
 	if err := validateCursor(valid); err != nil {
 		t.Fatalf("validateCursor(valid) error = %v", err)
 	}
+	unicode := Cursor{SessionID: "会话_日本", RunID: "运行_🚀", Value: "游标_✓"}
+	if err := validateCursor(unicode); err != nil {
+		t.Fatalf("validateCursor(unicode) error = %v", err)
+	}
 	for name, cursor := range map[string]Cursor{
-		"session id": {SessionID: strings.Repeat("s", MaxCursorIDBytes+1), Value: "cursor"},
-		"run id":     {SessionID: "session", RunID: strings.Repeat("r", MaxCursorIDBytes+1), Value: "cursor"},
-		"value":      {SessionID: "session", Value: strings.Repeat("v", MaxCursorValueBytes+1)},
+		"session id":     {SessionID: strings.Repeat("s", MaxCursorIDBytes+1), Value: "cursor"},
+		"run id":         {SessionID: "session", RunID: strings.Repeat("r", MaxCursorIDBytes+1), Value: "cursor"},
+		"value":          {SessionID: "session", Value: strings.Repeat("v", MaxCursorValueBytes+1)},
+		"session id NUL": {SessionID: "session\x00id", RunID: "run", Value: "cursor"},
+		"run id NUL":     {SessionID: "session", RunID: "run\x00id", Value: "cursor"},
+		"value NUL":      {SessionID: "session", RunID: "run", Value: "cursor\x00value"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateCursor(cursor); !errors.Is(err, ErrInvalid) {

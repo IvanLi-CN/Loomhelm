@@ -453,6 +453,105 @@ func TestGatewayRevocationFencesConnection(t *testing.T) {
 	_ = connection.Close()
 }
 
+func TestGatewayRejectsStaleCommandAcknowledgements(t *testing.T) {
+	ack := &protocol.CommandAck{
+		CommandID:  "command_ack_fence",
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateAccepted,
+	}
+
+	t.Run("generation mismatch", func(t *testing.T) {
+		registry := newFakeRegistry()
+		connection, err := registry.OpenConnection(context.Background(), registry.credential)
+		if err != nil {
+			t.Fatalf("OpenConnection() error = %v", err)
+		}
+		assertCommandAckRejected(t, registry, connection, connection.Generation+1, ack)
+		registry.mu.Lock()
+		deliverCalls := registry.deliverCalls
+		registry.mu.Unlock()
+		if deliverCalls != 0 {
+			t.Fatalf("generation mismatch invoked delivery %d times", deliverCalls)
+		}
+	})
+
+	t.Run("revoked connection", func(t *testing.T) {
+		registry := newFakeRegistry()
+		connection, err := registry.OpenConnection(context.Background(), registry.credential)
+		if err != nil {
+			t.Fatalf("OpenConnection() error = %v", err)
+		}
+		registry.revoke()
+		assertCommandAckRejected(t, registry, connection, connection.Generation, ack)
+	})
+
+	t.Run("replaced connection", func(t *testing.T) {
+		registry := newFakeRegistry()
+		connection, err := registry.OpenConnection(context.Background(), registry.credential)
+		if err != nil {
+			t.Fatalf("OpenConnection(first) error = %v", err)
+		}
+		if _, err := registry.OpenConnection(context.Background(), registry.credential); err != nil {
+			t.Fatalf("OpenConnection(replacement) error = %v", err)
+		}
+		assertCommandAckRejected(t, registry, connection, connection.Generation, ack)
+	})
+
+	t.Run("current connection", func(t *testing.T) {
+		registry := newFakeRegistry()
+		connection, err := registry.OpenConnection(context.Background(), registry.credential)
+		if err != nil {
+			t.Fatalf("OpenConnection() error = %v", err)
+		}
+		response := make(chan commandResponse, 1)
+		serverConnection := &serverConnection{
+			registry:   registry,
+			connection: connection,
+			pending:    map[string]chan commandResponse{"request_ack_fence": response},
+		}
+		if err := serverConnection.resolve(context.Background(), Message{
+			Type:       MessageCommandAck,
+			RequestID:  "request_ack_fence",
+			Generation: connection.Generation,
+			Ack:        ack,
+		}); err != nil {
+			t.Fatalf("resolve(current) error = %v", err)
+		}
+		select {
+		case result := <-response:
+			if result.ack != ack || result.err != nil {
+				t.Fatalf("current acknowledgement result = %+v, want ack", result)
+			}
+		default:
+			t.Fatal("current acknowledgement did not resolve the pending command")
+		}
+	})
+}
+
+func assertCommandAckRejected(t *testing.T, registry *fakeRegistry, connection hosts.Connection, generation int64, ack *protocol.CommandAck) {
+	t.Helper()
+	response := make(chan commandResponse, 1)
+	serverConnection := &serverConnection{
+		registry:   registry,
+		connection: connection,
+		pending:    map[string]chan commandResponse{"request_ack_fence": response},
+	}
+	err := serverConnection.resolve(context.Background(), Message{
+		Type:       MessageCommandAck,
+		RequestID:  "request_ack_fence",
+		Generation: generation,
+		Ack:        ack,
+	})
+	if !errors.Is(err, hosts.ErrConnectionStale) {
+		t.Fatalf("resolve() error = %v, want ErrConnectionStale", err)
+	}
+	select {
+	case result := <-response:
+		t.Fatalf("stale acknowledgement resolved command: %+v", result)
+	default:
+	}
+}
+
 func TestGatewayRejectsEventsWithoutHandler(t *testing.T) {
 	registry := newFakeRegistry()
 	server, err := NewServer(registry)
