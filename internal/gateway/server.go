@@ -19,6 +19,7 @@ var (
 	ErrConnectionClosed        = errors.New("host gateway connection is closed")
 	ErrUnknownDelivery         = errors.New("gateway delivery result is unknown")
 	ErrServerDraining          = errors.New("host gateway is draining")
+	ErrConnectionSuperseded    = errors.New("host gateway connection was superseded")
 	ErrEventHandlerUnavailable = errors.New("gateway event handler is not configured")
 )
 
@@ -172,26 +173,31 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		handlerDone: make(chan struct{}),
 		pending:     make(map[string]chan commandResponse),
 	}
-	if !s.replace(result) {
+	if err := s.replace(result); err != nil {
 		_ = s.registry.CloseConnection(context.Background(), connection)
-		return nil, ErrServerDraining
+		result.closeNow()
+		return nil, err
 	}
 	return result, nil
 }
 
-func (s *Server) replace(connection *serverConnection) bool {
+func (s *Server) replace(connection *serverConnection) error {
 	s.mu.Lock()
 	if s.draining {
 		s.mu.Unlock()
-		return false
+		return ErrServerDraining
 	}
 	previous := s.connections[connection.connection.HostID]
+	if previous != nil && previous.connection.Generation >= connection.connection.Generation {
+		s.mu.Unlock()
+		return ErrConnectionSuperseded
+	}
 	s.connections[connection.connection.HostID] = connection
 	s.mu.Unlock()
 	if previous != nil {
 		previous.closeNow()
 	}
-	return true
+	return nil
 }
 
 func (s *Server) remove(connection *serverConnection) {

@@ -21,6 +21,7 @@ type fakeRegistry struct {
 	revoked      bool
 	generation   int64
 	current      *hosts.Connection
+	closed       []hosts.Connection
 	cursor       *hosts.Cursor
 	touches      int
 	authorizeErr error
@@ -134,10 +135,49 @@ func (r *fakeRegistry) ProcessEvent(ctx context.Context, connection hosts.Connec
 func (r *fakeRegistry) CloseConnection(_ context.Context, connection hosts.Connection) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.closed = append(r.closed, connection)
 	if r.current != nil && sameConnection(*r.current, connection) {
 		r.current = nil
 	}
 	return nil
+}
+
+type orderedOpenRegistry struct {
+	*fakeRegistry
+	firstOpened  chan struct{}
+	releaseFirst chan struct{}
+}
+
+func newOrderedOpenRegistry() *orderedOpenRegistry {
+	return &orderedOpenRegistry{
+		fakeRegistry: newFakeRegistry(),
+		firstOpened:  make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+}
+
+func (r *orderedOpenRegistry) OpenConnection(_ context.Context, credential hosts.Credential) (hosts.Connection, error) {
+	r.fakeRegistry.mu.Lock()
+	if r.fakeRegistry.revoked || credential.ID != r.fakeRegistry.credential.ID || credential.HostID != r.fakeRegistry.credential.HostID {
+		r.fakeRegistry.mu.Unlock()
+		return hosts.Connection{}, hosts.ErrCredentialRevoked
+	}
+	r.fakeRegistry.generation++
+	connection := hosts.Connection{
+		HostID:        credential.HostID,
+		CredentialID:  credential.ID,
+		Generation:    r.fakeRegistry.generation,
+		ConnectedAt:   time.Now().UTC(),
+		ResumeCursors: cloneCursors(r.fakeRegistry.cursor),
+	}
+	r.fakeRegistry.current = &connection
+	generation := connection.Generation
+	r.fakeRegistry.mu.Unlock()
+	if generation == 1 {
+		close(r.firstOpened)
+		<-r.releaseFirst
+	}
+	return connection, nil
 }
 
 func (r *fakeRegistry) revoke() {
@@ -270,6 +310,83 @@ func TestGatewayWSSCommandEventAndResume(t *testing.T) {
 	}
 	if err := resumed.Close(); err != nil {
 		t.Fatalf("close replacement connection: %v", err)
+	}
+}
+
+func TestGatewayRejectsLateOlderHandshake(t *testing.T) {
+	registry := newOrderedOpenRegistry()
+	server, err := NewServer(registry)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
+
+	var releaseOnce sync.Once
+	releaseFirst := func() { releaseOnce.Do(func() { close(registry.releaseFirst) }) }
+	t.Cleanup(releaseFirst)
+	firstResult := make(chan struct {
+		connection *ClientConnection
+		err        error
+	}, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		connection, connectErr := client.Connect(ctx)
+		firstResult <- struct {
+			connection *ClientConnection
+			err        error
+		}{connection: connection, err: connectErr}
+	}()
+	select {
+	case <-registry.firstOpened:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first handshake did not reach OpenConnection")
+	}
+
+	second := connectTestClient(t, client)
+	defer second.Close()
+	if got := second.Generation(); got != 2 {
+		t.Fatalf("newer gateway generation = %d, want 2", got)
+	}
+	releaseFirst()
+
+	select {
+	case result := <-firstResult:
+		if result.connection != nil {
+			_ = result.connection.Close()
+		}
+		if result.err == nil {
+			t.Fatal("older handshake succeeded after newer connection replaced it")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("older handshake did not finish after release")
+	}
+
+	registry.mu.Lock()
+	current := registry.current
+	closed := append([]hosts.Connection(nil), registry.closed...)
+	registry.mu.Unlock()
+	if current == nil || current.Generation != 2 {
+		t.Fatalf("registry current connection = %+v, want generation 2", current)
+	}
+	var closedOlder bool
+	for _, connection := range closed {
+		if connection.HostID == registry.credential.HostID && connection.Generation == 1 {
+			closedOlder = true
+			break
+		}
+	}
+	if !closedOlder {
+		t.Fatalf("closed connections = %+v, want rejected generation 1", closed)
+	}
+	if err := second.SendHeartbeat(context.Background(), ""); err != nil {
+		t.Fatalf("newer connection heartbeat error = %v", err)
+	}
+	heartbeat := readGatewayMessage(t, second)
+	if heartbeat.Type != MessageHeartbeatAck || heartbeat.Generation != 2 {
+		t.Fatalf("newer connection heartbeat acknowledgement = %+v", heartbeat)
 	}
 }
 
