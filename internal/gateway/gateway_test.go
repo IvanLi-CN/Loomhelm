@@ -15,6 +15,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/coder/websocket"
 )
 
 type fakeRegistry struct {
@@ -784,6 +785,79 @@ func TestGatewayRejectsLateOlderHandshake(t *testing.T) {
 	}
 }
 
+func TestGatewayRejectsLateOlderHandshakeAfterNewerRemoved(t *testing.T) {
+	registry := newOrderedOpenRegistry()
+	server, err := NewServer(registry)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
+
+	var releaseOnce sync.Once
+	releaseFirst := func() { releaseOnce.Do(func() { close(registry.releaseFirst) }) }
+	t.Cleanup(releaseFirst)
+	firstResult := make(chan struct {
+		connection *ClientConnection
+		err        error
+	}, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		connection, connectErr := client.Connect(ctx)
+		firstResult <- struct {
+			connection *ClientConnection
+			err        error
+		}{connection: connection, err: connectErr}
+	}()
+	select {
+	case <-registry.firstOpened:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first handshake did not reach OpenConnection")
+	}
+
+	second := connectTestClient(t, client)
+	if got := second.Generation(); got != 2 {
+		t.Fatalf("newer gateway generation = %d, want 2", got)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("close newer gateway connection: %v", err)
+	}
+	waitForGatewayConnectionRemoval(t, server, registry.credential.HostID)
+	releaseFirst()
+
+	select {
+	case result := <-firstResult:
+		if result.connection != nil {
+			_ = result.connection.Close()
+		}
+		if result.err == nil {
+			t.Fatal("older handshake succeeded after newer connection was removed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("older handshake did not finish after release")
+	}
+
+	registry.mu.Lock()
+	current := registry.current
+	closed := append([]hosts.Connection(nil), registry.closed...)
+	registry.mu.Unlock()
+	if current != nil {
+		t.Fatalf("registry current connection = %+v, want none after newer removal", current)
+	}
+	var closedOlder bool
+	for _, connection := range closed {
+		if connection.HostID == registry.credential.HostID && connection.Generation == 1 {
+			closedOlder = true
+			break
+		}
+	}
+	if !closedOlder {
+		t.Fatalf("closed connections = %+v, want rejected generation 1", closed)
+	}
+}
+
 func TestGatewayRevocationFencesConnection(t *testing.T) {
 	registry := newFakeRegistry()
 	server, err := NewServer(registry)
@@ -957,47 +1031,62 @@ func TestGatewayWSSRejectsInternalErrorDetails(t *testing.T) {
 	const marker = "private path=/srv/loomhelm/secrets credential=credential-secret raw-envelope={\"token\":\"raw-secret\"}"
 	for _, test := range []struct {
 		name        string
-		configure   func(*fakeRegistry)
-		send        func(*ClientConnection) error
+		configure   func(*fakeRegistry) error
+		invoke      func(*serverConnection) error
+		options     ServerOptions
 		wantCode    string
 		wantMessage string
 	}{
 		{
 			name: "heartbeat",
-			configure: func(registry *fakeRegistry) {
-				registry.touchErr = errors.New(marker)
+			configure: func(registry *fakeRegistry) error {
+				internalErr := errors.New(marker)
+				registry.touchErr = internalErr
+				return internalErr
 			},
-			send: func(connection *ClientConnection) error {
-				return connection.SendHeartbeat(context.Background(), "")
+			invoke: func(connection *serverConnection) error {
+				return connection.handleHeartbeat(context.Background(), Message{
+					Type:       MessageHeartbeat,
+					RequestID:  "request_error_details",
+					Generation: connection.connection.Generation,
+				})
 			},
 			wantCode:    "heartbeat_rejected",
 			wantMessage: "gateway heartbeat rejected",
 		},
 		{
 			name: "event",
-			configure: func(registry *fakeRegistry) {
-				registry.processEventErr = errors.New(marker)
+			configure: func(registry *fakeRegistry) error {
+				internalErr := errors.New(marker)
+				registry.processEventErr = internalErr
+				return internalErr
 			},
-			send: func(connection *ClientConnection) error {
-				return connection.SendEvent(context.Background(), protocol.Event{
-					Cursor:     "cursor_error_details",
-					EventID:    "event_error_details",
-					OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
-					Payload:    json.RawMessage("{\"raw\":\"error details\"}"),
-					Sequence:   1,
-					SessionID:  "session_error_details",
-					Source:     protocol.EventSourceHostObservation,
-					Type:       protocol.EventTypeMessageDelta,
+			invoke: func(connection *serverConnection) error {
+				runID := "run_error_details"
+				return connection.handleEvent(context.Background(), Message{
+					Type: MessageEvent,
+					Event: &protocol.Event{
+						Cursor:     "cursor_error_details",
+						EventID:    "event_error_details",
+						OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+						Payload:    json.RawMessage("{\"raw\":\"error details\"}"),
+						Sequence:   1,
+						SessionID:  "session_error_details",
+						RunID:      &runID,
+						Source:     protocol.EventSourceHostObservation,
+						Type:       protocol.EventTypeMessageDelta,
+					},
 				})
 			},
+			options:     ServerOptions{EventHandler: func(context.Context, hosts.Connection, protocol.Event) error { return nil }},
 			wantCode:    "event_rejected",
 			wantMessage: "gateway event rejected",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			registry := newFakeRegistry()
-			test.configure(registry)
-			server, err := NewServer(registry)
+			internalErr := test.configure(registry)
+			server, err := NewServer(registry, test.options)
 			if err != nil {
 				t.Fatalf("NewServer() error = %v", err)
 			}
@@ -1006,10 +1095,11 @@ func TestGatewayWSSRejectsInternalErrorDetails(t *testing.T) {
 			connection := connectTestClient(t, newTestClient(t, httpServer, registry.credential.HostID, registry.token))
 			t.Cleanup(func() { _ = connection.Close() })
 
-			if err := test.send(connection); err != nil {
-				t.Fatalf("send %s error = %v", test.name, err)
+			serverConnection := gatewayServerConnection(t, server, registry.credential.HostID)
+			if err := test.invoke(serverConnection); !errors.Is(err, internalErr) {
+				t.Fatalf("invoke %s error = %v, want original internal error", test.name, err)
 			}
-			errorMessage := readGatewayMessage(t, connection)
+			rawFrame, errorMessage := readGatewayFrame(t, connection)
 			if errorMessage.Type != MessageError || errorMessage.Error == nil {
 				t.Fatalf("error frame = %+v, want MessageError", errorMessage)
 			}
@@ -1020,8 +1110,8 @@ func TestGatewayWSSRejectsInternalErrorDetails(t *testing.T) {
 				t.Fatalf("error frame message = %q, want fixed safe message %q", errorMessage.Error.Message, test.wantMessage)
 			}
 			for _, fragment := range []string{"/srv/loomhelm/secrets", "credential-secret", "raw-envelope", "raw-secret"} {
-				if strings.Contains(errorMessage.Error.Message, fragment) {
-					t.Fatalf("error frame leaked internal detail %q: %q", fragment, errorMessage.Error.Message)
+				if strings.Contains(string(rawFrame), fragment) {
+					t.Fatalf("raw error frame leaked internal detail %q: %q", fragment, rawFrame)
 				}
 			}
 		})
@@ -1501,11 +1591,56 @@ func connectTestClient(t *testing.T, client *Client) *ClientConnection {
 
 func readGatewayMessage(t *testing.T, connection *ClientConnection) Message {
 	t.Helper()
+	_, message := readGatewayFrame(t, connection)
+	return message
+}
+
+func readGatewayFrame(t *testing.T, connection *ClientConnection) ([]byte, Message) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	message, err := connection.Read(ctx)
+	messageType, data, err := connection.ws.Read(ctx)
 	if err != nil {
-		t.Fatalf("ClientConnection.Read() error = %v", err)
+		t.Fatalf("ClientConnection.ws.Read() error = %v", err)
 	}
-	return message
+	if messageType != websocket.MessageText {
+		t.Fatalf("gateway frame type = %v, want text", messageType)
+	}
+	message, err := decodeMessage(data, connection.maxFrame)
+	if err != nil {
+		t.Fatalf("decode gateway frame: %v", err)
+	}
+	return data, message
+}
+
+func gatewayServerConnection(t *testing.T, server *Server, hostID string) *serverConnection {
+	t.Helper()
+	server.mu.RLock()
+	connection := server.connections[hostID]
+	server.mu.RUnlock()
+	if connection == nil {
+		t.Fatalf("server connection for host %q is missing", hostID)
+	}
+	return connection
+}
+
+func waitForGatewayConnectionRemoval(t *testing.T, server *Server, hostID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		server.mu.RLock()
+		_, present := server.connections[hostID]
+		server.mu.RUnlock()
+		if !present {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("gateway connection for host %q was not removed: %v", hostID, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }

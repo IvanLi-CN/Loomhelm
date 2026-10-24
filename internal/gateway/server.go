@@ -38,11 +38,12 @@ type Server struct {
 	registry Registry
 	options  ServerOptions
 
-	mu            sync.RWMutex
-	connections   map[string]*serverConnection
-	draining      bool
-	handshakes    int
-	handshakeDone chan struct{}
+	mu               sync.RWMutex
+	connections      map[string]*serverConnection
+	latestGeneration map[string]int64
+	draining         bool
+	handshakes       int
+	handshakeDone    chan struct{}
 }
 
 type serverConnection struct {
@@ -90,10 +91,11 @@ func NewServer(registry Registry, options ...ServerOptions) (*Server, error) {
 	handshakeDone := make(chan struct{})
 	close(handshakeDone)
 	return &Server{
-		registry:      registry,
-		options:       config,
-		connections:   make(map[string]*serverConnection),
-		handshakeDone: handshakeDone,
+		registry:         registry,
+		options:          config,
+		connections:      make(map[string]*serverConnection),
+		latestGeneration: make(map[string]int64),
+		handshakeDone:    handshakeDone,
 	}, nil
 }
 
@@ -220,7 +222,12 @@ func (s *Server) replace(connection *serverConnection) error {
 		s.mu.Unlock()
 		return ErrConnectionSuperseded
 	}
+	if latest, ok := s.latestGeneration[connection.connection.HostID]; ok && latest >= connection.connection.Generation {
+		s.mu.Unlock()
+		return ErrConnectionSuperseded
+	}
 	s.connections[connection.connection.HostID] = connection
+	s.latestGeneration[connection.connection.HostID] = connection.connection.Generation
 	s.mu.Unlock()
 	if previous != nil {
 		previous.closeNow()

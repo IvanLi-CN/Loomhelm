@@ -239,7 +239,6 @@ func (s *Service) openConnection(ctx context.Context, credential Credential, pre
 	if strings.TrimSpace(credential.ID) == "" || strings.TrimSpace(credential.HostID) == "" {
 		return Connection{}, ErrUnauthenticated
 	}
-	now := s.now()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Connection{}, fmt.Errorf("begin host connection: %w", err)
@@ -266,6 +265,7 @@ func (s *Service) openConnection(ctx context.Context, credential Credential, pre
 	if credentialRevoked != nil {
 		return Connection{}, ErrCredentialRevoked
 	}
+	now := s.now()
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM host_cursors
 		WHERE host_id = $1 AND cursor_retained_until <= $2

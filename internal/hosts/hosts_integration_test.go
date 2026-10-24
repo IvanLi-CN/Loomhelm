@@ -432,6 +432,88 @@ func TestServiceCursorAdmissionReclaimsExpiredPositions(t *testing.T) {
 	}
 }
 
+func TestServiceOpenConnectionRefreshesClockAfterHostLockWait(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	start := time.Date(2026, time.October, 25, 0, 0, 0, 0, time.UTC)
+	var clockMu sync.Mutex
+	clock := start
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	}
+	advance := func(delta time.Duration) {
+		clockMu.Lock()
+		clock = clock.Add(delta)
+		clockMu.Unlock()
+	}
+	service := NewService(testDB.db.Pool(), Config{CursorRetention: time.Hour, Now: now})
+	registration, err := service.Register(ctx, RegisterRequest{Name: "h01 cursor lock wait " + start.Format("20060102T150405")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	first, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection(first) error = %v", err)
+	}
+	if err := service.Checkpoint(ctx, first, Cursor{SessionID: "lock_wait", Value: "cursor_expires"}); err != nil {
+		t.Fatalf("Checkpoint() error = %v", err)
+	}
+
+	blocker, err := testDB.db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin host row blocker: %v", err)
+	}
+	defer func() { _ = blocker.Rollback(context.Background()) }()
+	if _, err := blocker.Exec(ctx, `
+		SELECT connection_generation
+		FROM host_registrations
+		WHERE id = $1
+		FOR UPDATE
+	`, registration.Host.ID); err != nil {
+		t.Fatalf("lock host row: %v", err)
+	}
+
+	result := make(chan struct {
+		connection Connection
+		err        error
+	}, 1)
+	openCtx, openCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer openCancel()
+	go func() {
+		connection, openErr := service.OpenConnection(openCtx, credential)
+		result <- struct {
+			connection Connection
+			err        error
+		}{connection: connection, err: openErr}
+	}()
+	if err := waitForHostConnectionLockWaiter(ctx, testDB.db.Pool()); err != nil {
+		t.Fatalf("wait for OpenConnection() row lock waiter: %v", err)
+	}
+
+	advance(2 * time.Hour)
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatalf("release host row blocker: %v", err)
+	}
+	select {
+	case opened := <-result:
+		if opened.err != nil {
+			t.Fatalf("OpenConnection(after lock wait) error = %v", opened.err)
+		}
+		if len(opened.connection.ResumeCursors) != 0 {
+			t.Fatalf("resume cursors after clock advanced during lock wait = %+v, want none", opened.connection.ResumeCursors)
+		}
+	case <-ctx.Done():
+		t.Fatalf("OpenConnection(after lock wait) did not finish: %v", ctx.Err())
+	}
+}
+
 func TestServiceCursorAdmissionRejectsEscapedRecoveryOverflow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -750,6 +832,35 @@ func cleanupHostRegistration(ctx context.Context, pool *pgxpool.Pool, hostID str
 	_, _ = pool.Exec(ctx, `DELETE FROM host_connections WHERE host_id = $1`, hostID)
 	_, _ = pool.Exec(ctx, `DELETE FROM host_credentials WHERE host_id = $1`, hostID)
 	_, _ = pool.Exec(ctx, `DELETE FROM host_registrations WHERE id = $1`, hostID)
+}
+
+func waitForHostConnectionLockWaiter(ctx context.Context, pool *pgxpool.Pool) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var count int
+		err := pool.QueryRow(waitCtx, `
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE state = 'active'
+			  AND wait_event IS NOT NULL
+			  AND query ILIKE '%FROM host_registrations AS h%'
+			  AND query ILIKE '%FOR UPDATE OF h%'
+		`).Scan(&count)
+		if err == nil && count > 0 {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if err != nil {
+				return err
+			}
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func openHostDatabaseWithContext(ctx context.Context, databaseURL string) (*database.DB, error) {
