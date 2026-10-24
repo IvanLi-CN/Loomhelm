@@ -421,22 +421,50 @@ func (c *serverConnection) sendCommand(ctx context.Context, command protocol.Com
 		}
 		return protocol.CommandAck{}, fmt.Errorf("%w: %v", protocol.ErrUnknownCommandResult, deliveryErr)
 	}
+	ack, resultErr := waitCommandResponse(ctx, c.done, response, command.CommandID)
+	c.removePending(requestID)
+	return ack, resultErr
+}
+
+// Prefer an already queued valid acknowledgement over a simultaneous cancellation or close.
+func waitCommandResponse(ctx context.Context, done <-chan struct{}, response <-chan commandResponse, commandID string) (protocol.CommandAck, error) {
+	if ack, err, ok := takeCommandResponse(response, commandID); ok {
+		return ack, err
+	}
 	select {
 	case result := <-response:
-		if result.err != nil {
-			return protocol.CommandAck{}, result.err
-		}
-		if result.ack == nil || result.ack.CommandID != command.CommandID {
-			return protocol.CommandAck{}, fmt.Errorf("%w: gateway command acknowledgement identity mismatch", protocol.ErrUnknownCommandResult)
-		}
-		return *result.ack, nil
+		return commandResponseResult(result, commandID)
 	case <-ctx.Done():
-		c.removePending(requestID)
+		if ack, err, ok := takeCommandResponse(response, commandID); ok {
+			return ack, err
+		}
 		return protocol.CommandAck{}, protocol.ErrUnknownCommandResult
-	case <-c.done:
-		c.removePending(requestID)
+	case <-done:
+		if ack, err, ok := takeCommandResponse(response, commandID); ok {
+			return ack, err
+		}
 		return protocol.CommandAck{}, protocol.ErrUnknownCommandResult
 	}
+}
+
+func takeCommandResponse(response <-chan commandResponse, commandID string) (protocol.CommandAck, error, bool) {
+	select {
+	case result := <-response:
+		ack, err := commandResponseResult(result, commandID)
+		return ack, err, true
+	default:
+		return protocol.CommandAck{}, nil, false
+	}
+}
+
+func commandResponseResult(result commandResponse, commandID string) (protocol.CommandAck, error) {
+	if result.err != nil {
+		return protocol.CommandAck{}, result.err
+	}
+	if result.ack == nil || result.ack.CommandID != commandID {
+		return protocol.CommandAck{}, fmt.Errorf("%w: gateway command acknowledgement identity mismatch", protocol.ErrUnknownCommandResult)
+	}
+	return *result.ack, nil
 }
 
 func (c *serverConnection) resolve(ctx context.Context, message Message) error {

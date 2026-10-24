@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -239,6 +241,17 @@ type helloAckGateConn struct {
 	blockedOnce  sync.Once
 }
 
+type observableContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *observableContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
 func newHelloAckGateConn(connection net.Conn) *helloAckGateConn {
 	return &helloAckGateConn{
 		Conn:         connection,
@@ -430,7 +443,8 @@ func TestGatewayDoesNotAuthorizeCommandBeforeHelloAck(t *testing.T) {
 		Payload:   json.RawMessage(`{"text":"hello ack gate"}`),
 		SessionID: "session_hello_ack_gate",
 	}
-	commandCtx, cancelCommand := context.WithTimeout(context.Background(), 3*time.Second)
+	baseCommandCtx, cancelCommand := context.WithTimeout(context.Background(), 3*time.Second)
+	commandCtx := &observableContext{Context: baseCommandCtx, entered: make(chan struct{})}
 	defer cancelCommand()
 	commandResult := make(chan error, 1)
 	go func() {
@@ -439,13 +453,22 @@ func TestGatewayDoesNotAuthorizeCommandBeforeHelloAck(t *testing.T) {
 	}()
 
 	select {
+	case <-commandCtx.entered:
+	case <-registry.authorizeStarted:
+		gate.releaseWrites()
+		t.Fatal("SendCommand() authorized delivery before entering the HelloAck readiness wait")
+	case err := <-commandResult:
+		gate.releaseWrites()
+		t.Fatalf("SendCommand() returned before entering the HelloAck readiness wait: %v", err)
+	}
+	select {
 	case <-registry.authorizeStarted:
 		gate.releaseWrites()
 		t.Fatal("SendCommand() authorized delivery before hello acknowledgement write completed")
 	case err := <-commandResult:
 		gate.releaseWrites()
 		t.Fatalf("SendCommand() returned before hello acknowledgement write completed: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 
 	gate.releaseWrites()
@@ -469,6 +492,107 @@ func TestGatewayDoesNotAuthorizeCommandBeforeHelloAck(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("SendCommand() did not finish after its context was cancelled")
 	}
+}
+
+type gatewayRoundTripFunc struct {
+	roundTrip func(*http.Request) (*http.Response, error)
+}
+
+func (f *gatewayRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f.roundTrip(request)
+}
+
+func TestGatewayClientRejectsRedirectWithoutMutatingHTTPClient(t *testing.T) {
+	const token = "disposable-gateway-token"
+	callerRedirectErr := errors.New("caller redirect policy")
+	callerRedirectCalled := false
+	requests := make([]*http.Request, 0, 2)
+	transport := &gatewayRoundTripFunc{roundTrip: func(request *http.Request) (*http.Response, error) {
+		requests = append(requests, request)
+		if len(requests) > 1 {
+			return nil, errors.New("gateway redirect was followed")
+		}
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Status:     "302 Found",
+			Header:     http.Header{"Location": []string{"ws://gateway.test/redirect"}},
+			Body:       io.NopCloser(strings.NewReader("redirect")),
+			Request:    request,
+		}, nil
+	}}
+	caller := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			callerRedirectCalled = true
+			return callerRedirectErr
+		},
+	}
+	client, err := NewClient(ClientOptions{
+		URL:        "wss://gateway.test/gateway",
+		HostID:     "host_test",
+		Token:      token,
+		HTTPClient: caller,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err := client.Connect(context.Background()); !errors.Is(err, errGatewayRedirect) {
+		t.Fatalf("Client.Connect() error = %v, want redirect rejection", err)
+	}
+	if callerRedirectCalled {
+		t.Fatal("Client.Connect() invoked the caller redirect policy")
+	}
+	if caller.Transport != transport {
+		t.Fatal("Client.Connect() mutated the caller HTTP transport")
+	}
+	if got := caller.CheckRedirect(nil, nil); !errors.Is(got, callerRedirectErr) {
+		t.Fatalf("caller CheckRedirect() = %v, want unchanged caller policy", got)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("redirect round trips = %d, want 1", len(requests))
+	}
+	if got := requests[0].Header.Get("Authorization"); got != "Bearer "+token {
+		t.Fatalf("initial Authorization header = %q, want disposable token", got)
+	}
+}
+
+func TestGatewayQueuedCommandAcknowledgementWinsOverCloseAndCancellation(t *testing.T) {
+	ack := &protocol.CommandAck{
+		CommandID:  "command_ack_race",
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateAccepted,
+	}
+	for _, test := range []struct {
+		name    string
+		trigger func(context.CancelFunc, chan struct{})
+	}{
+		{name: "close", trigger: func(_ context.CancelFunc, done chan struct{}) { close(done) }},
+		{name: "cancel", trigger: func(cancel context.CancelFunc, _ chan struct{}) { cancel() }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan struct{})
+			response := make(chan commandResponse, 1)
+			response <- commandResponse{ack: ack}
+			test.trigger(cancel, done)
+			got, err := waitCommandResponse(ctx, done, response, ack.CommandID)
+			if err != nil || got.CommandID != ack.CommandID || got.ReceivedAt != ack.ReceivedAt || got.State != ack.State || got.Deduplicated != ack.Deduplicated {
+				t.Fatalf("waitCommandResponse() = %+v, %v; want queued acknowledgement", got, err)
+			}
+		})
+	}
+
+	t.Run("without acknowledgement remains unknown", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		done := make(chan struct{})
+		close(done)
+		_, err := waitCommandResponse(ctx, done, make(chan commandResponse, 1), ack.CommandID)
+		if !errors.Is(err, protocol.ErrUnknownCommandResult) {
+			t.Fatalf("waitCommandResponse() error = %v, want unknown result", err)
+		}
+	})
 }
 
 func TestGatewayWSSCommandEventAndResume(t *testing.T) {

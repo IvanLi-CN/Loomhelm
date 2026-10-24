@@ -30,6 +30,8 @@ type Client struct {
 	maxFrameBytes int64
 }
 
+var errGatewayRedirect = errors.New("gateway redirects are not allowed")
+
 type ClientConnection struct {
 	ws         *websocket.Conn
 	maxFrame   int64
@@ -77,8 +79,16 @@ func (c *Client) Connect(ctx context.Context) (*ClientConnection, error) {
 	}
 	header := make(http.Header)
 	header.Set("Authorization", "Bearer "+c.token)
+	httpClient := c.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	httpClientCopy := *httpClient
+	httpClientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errGatewayRedirect
+	}
 	ws, _, err := websocket.Dial(ctx, c.url, &websocket.DialOptions{
-		HTTPClient:      c.httpClient,
+		HTTPClient:      &httpClientCopy,
 		HTTPHeader:      header,
 		CompressionMode: websocket.CompressionDisabled,
 	})
