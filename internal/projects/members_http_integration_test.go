@@ -87,6 +87,33 @@ func TestProjectMemberHTTPAuthorization(t *testing.T) {
 
 	projectA := createMemberHTTPProject(t, handler, sessionCookie, "Member HTTP A")
 	projectIDs = append(projectIDs, projectA.ID)
+	exactProjectID := "project_" + fmt.Sprintf("%032x", time.Now().UnixNano())
+	exactProjectResponse := serveMemberHTTP(handler, http.MethodPost, "/api/v1/projects/", fmt.Sprintf(`{"id":%q,"name":"Exact HTTP project"}`, exactProjectID), "", sessionCookie)
+	requireMemberHTTPStatus(t, exactProjectResponse, http.StatusCreated)
+	var exactProjectBody struct {
+		Project projects.Project `json:"project"`
+	}
+	decodeMemberHTTPJSON(t, exactProjectResponse, &exactProjectBody)
+	if exactProjectBody.Project.ID != exactProjectID || exactProjectBody.Project.Name != "Exact HTTP project" {
+		t.Fatalf("exact project response = %+v", exactProjectBody.Project)
+	}
+	projectIDs = append(projectIDs, exactProjectID)
+	duplicateProjectResponse := serveMemberHTTP(handler, http.MethodPost, "/api/v1/projects/", fmt.Sprintf(`{"id":%q,"name":"Must not overwrite"}`, exactProjectID), "", sessionCookie)
+	requireMemberHTTPStatus(t, duplicateProjectResponse, http.StatusConflict)
+	exactProjectGet := serveMemberHTTP(handler, http.MethodGet, "/api/v1/projects/"+url.PathEscape(exactProjectID), "", "", sessionCookie)
+	requireMemberHTTPStatus(t, exactProjectGet, http.StatusOK)
+	decodeMemberHTTPJSON(t, exactProjectGet, &exactProjectBody)
+	if exactProjectBody.Project.Name != "Exact HTTP project" {
+		t.Fatalf("duplicate project changed stored name to %q", exactProjectBody.Project.Name)
+	}
+	for _, payload := range []string{
+		fmt.Sprintf(`{"id":null,"name":"Null project"}`),
+		fmt.Sprintf(`{"id":"","name":"Empty project"}`),
+		fmt.Sprintf(`{"id":"project_not-a-valid-id","name":"Malformed project"}`),
+	} {
+		response := serveMemberHTTP(handler, http.MethodPost, "/api/v1/projects/", payload, "", sessionCookie)
+		requireMemberHTTPStatus(t, response, http.StatusBadRequest)
+	}
 	projectB := createMemberHTTPProject(t, handler, sessionCookie, "Member HTTP B")
 	projectIDs = append(projectIDs, projectB.ID)
 

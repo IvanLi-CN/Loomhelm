@@ -2,11 +2,12 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "@tanstack/react-router";
 
-import { AppProviders } from "@/app/providers";
+import { AppProviders, publishProductionAuthInvalidation } from "@/app/providers";
 import { router } from "@/app/router";
 import { DemoBootstrapFailure } from "@/components/product/DemoBootstrapFailure";
 import { bootstrapDemo, isDemoBuild } from "@/demo/bootstrap";
 import { DemoProvider } from "@/demo/context";
+import { createWebApiClient } from "@/lib/api/client";
 import { PwaRegistration } from "@/pwa/PwaRegistration";
 
 import "./index.css";
@@ -19,12 +20,16 @@ if (!rootElement) {
 
 const root = createRoot(rootElement);
 const demoMode = isDemoBuild();
+const productionClient = demoMode ? undefined : createWebApiClient({
+  browserProtection: "same_origin",
+  onUnauthorized: publishProductionAuthInvalidation
+});
 
 async function start() {
   if (!demoMode) {
     root.render(
       <StrictMode>
-        <AppProviders>
+        <AppProviders productionClient={productionClient}>
           <PwaRegistration />
           <RouterProvider router={router} />
         </AppProviders>

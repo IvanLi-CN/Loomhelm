@@ -61,7 +61,7 @@ const sceneLabels: Record<DemoScene, string> = {
 
 const personaLabels: Record<DemoPersona, string> = {
   owner: "工作区主人",
-  reviewer: "项目审阅者",
+  operator: "项目操作员",
   viewer: "只读访客"
 };
 
@@ -184,7 +184,7 @@ function Field<T extends string>({
     <label className="inspector-field">
       <span>{label}</span>
       <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
-        <SelectTrigger className="inspector-field-trigger">
+        <SelectTrigger size="dense" className="inspector-field-trigger">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -436,10 +436,6 @@ export function DemoInspector() {
         )}
       </div>
 
-      <Button type="button" variant="ghost" className="inspector-close" onClick={() => runtime.setInspectorOpen(false)}>
-        <X size={14} aria-hidden="true" />
-        收起为浮标
-      </Button>
     </aside>
   );
 }

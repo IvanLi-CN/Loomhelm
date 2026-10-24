@@ -65,7 +65,7 @@ export function WorkbenchRoute() {
           {activeItems.length ? <div className="attention-list">{activeItems.map((item) => (
             <Button type="button" variant="ghost" key={item.id} className={`attention-item ${selected?.id === item.id ? "is-selected" : ""}`} aria-pressed={selected?.id === item.id} onClick={() => setSelectedId(item.id)}>
               <span className={`attention-kind attention-${item.kind === "审批" ? "approval" : item.kind === "需要输入" ? "input" : "result"}`}>{item.kind}</span>
-              <span><strong>{item.title}</strong><small>{item.summary}</small></span>
+              <span className="attention-copy"><strong>{item.title}</strong><small>{item.summary}</small></span>
               <ChevronRight size={15} aria-hidden="true" />
             </Button>
           ))}</div> : <p className="muted-copy">当前没有需要处理的事项。</p>}
