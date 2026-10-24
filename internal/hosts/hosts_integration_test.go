@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -202,6 +203,233 @@ func TestServiceCursorSurvivesDatabaseReopen(t *testing.T) {
 	}
 	if len(reconnected.ResumeCursors) != 1 || !hasCursor(reconnected.ResumeCursors, "session_reopen", "cursor_reopen") {
 		t.Fatalf("resume cursors after reopen = %+v", reconnected.ResumeCursors)
+	}
+}
+
+func TestServiceCursorAdmissionBoundsAndHandlerFence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	registration, err := NewService(testDB.db.Pool()).Register(ctx, RegisterRequest{Name: "h01 cursor bounds " + time.Now().UTC().Format("20060102T150405.000000000")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	service := NewService(testDB.db.Pool())
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	if err := service.Checkpoint(ctx, connection, Cursor{
+		SessionID: strings.Repeat("s", MaxCursorIDBytes),
+		RunID:     strings.Repeat("r", MaxCursorIDBytes),
+		Value:     "cursor_boundary",
+	}); err != nil {
+		t.Fatalf("Checkpoint(boundary) error = %v", err)
+	}
+	for name, cursor := range map[string]Cursor{
+		"session id": {SessionID: strings.Repeat("s", MaxCursorIDBytes+1), Value: "cursor"},
+		"run id":     {SessionID: "session", RunID: strings.Repeat("r", MaxCursorIDBytes+1), Value: "cursor"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := service.Checkpoint(ctx, connection, cursor); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Checkpoint() error = %v, want ErrInvalid", err)
+			}
+		})
+	}
+	called := false
+	if err := service.ProcessEvent(ctx, connection, Cursor{SessionID: "empty_cursor", Value: "   "}, func(context.Context) error {
+		called = true
+		return nil
+	}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("ProcessEvent(empty cursor) error = %v, want ErrInvalid", err)
+	}
+	if called {
+		t.Fatal("ProcessEvent(empty cursor) ran its handler")
+	}
+}
+
+func TestServiceCursorAdmissionIsAtomicAtHostLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	registration, err := NewService(testDB.db.Pool()).Register(ctx, RegisterRequest{Name: "h01 cursor concurrency " + time.Now().UTC().Format("20060102T150405.000000000")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	service := NewService(testDB.db.Pool())
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := testDB.db.Pool().Exec(ctx, `
+		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
+		SELECT $1, 'seed_' || g::text, '', 'cursor_' || g::text, $2, $3
+		FROM generate_series(1, $4) AS g
+	`, registration.Host.ID, now, now.Add(time.Hour), MaxResumeCursorCount-1); err != nil {
+		t.Fatalf("seed host cursors: %v", err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		i := i
+		go func() {
+			<-start
+			results <- service.Checkpoint(ctx, connection, Cursor{SessionID: fmt.Sprintf("concurrent_%d", i), Value: "cursor"})
+		}()
+	}
+	close(start)
+	var successes int
+	for i := 0; i < 2; i++ {
+		if err := <-results; err == nil {
+			successes++
+		} else if !errors.Is(err, ErrCursorLimit) {
+			t.Fatalf("concurrent Checkpoint() error = %v, want ErrCursorLimit", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent Checkpoint() successes = %d, want 1", successes)
+	}
+	var count int
+	if err := testDB.db.Pool().QueryRow(ctx, `SELECT count(*) FROM host_cursors WHERE host_id = $1 AND cursor_retained_until > CURRENT_TIMESTAMP`, registration.Host.ID).Scan(&count); err != nil {
+		t.Fatalf("count host cursors: %v", err)
+	}
+	if count != MaxResumeCursorCount {
+		t.Fatalf("unexpired cursor count = %d, want %d", count, MaxResumeCursorCount)
+	}
+	if err := service.Checkpoint(ctx, connection, Cursor{SessionID: "seed_1", Value: "updated_at_limit"}); err != nil {
+		t.Fatalf("Checkpoint(existing at limit) error = %v", err)
+	}
+	called := false
+	if err := service.ProcessEvent(ctx, connection, Cursor{SessionID: "handler_overflow", Value: "cursor"}, func(context.Context) error {
+		called = true
+		return nil
+	}); !errors.Is(err, ErrCursorLimit) {
+		t.Fatalf("ProcessEvent(over limit) error = %v, want ErrCursorLimit", err)
+	}
+	if called {
+		t.Fatal("ProcessEvent(over limit) ran its handler")
+	}
+}
+
+func TestServiceRejectsOverfullStoredRecoveryState(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	registration, err := NewService(testDB.db.Pool()).Register(ctx, RegisterRequest{Name: "h01 cursor overfull " + time.Now().UTC().Format("20060102T150405.000000000")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	service := NewService(testDB.db.Pool())
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := testDB.db.Pool().Exec(ctx, `
+		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
+		SELECT $1, 'legacy_' || g::text, '', 'cursor', $2, $3
+		FROM generate_series(1, $4) AS g
+	`, registration.Host.ID, now, now.Add(time.Hour), MaxResumeCursorCount+1); err != nil {
+		t.Fatalf("seed overfull host cursors: %v", err)
+	}
+	if _, err := service.OpenConnection(ctx, credential); !errors.Is(err, ErrCursorLimit) {
+		t.Fatalf("OpenConnection(overfull state) error = %v, want ErrCursorLimit", err)
+	}
+	var generation int64
+	if err := testDB.db.Pool().QueryRow(ctx, `SELECT connection_generation FROM host_registrations WHERE id = $1`, registration.Host.ID).Scan(&generation); err != nil {
+		t.Fatalf("read host generation: %v", err)
+	}
+	if generation != connection.Generation {
+		t.Fatalf("host generation after rejected recovery read = %d, want %d", generation, connection.Generation)
+	}
+}
+
+func TestServiceRejectsOversizedStoredRecoveryState(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	registration, err := NewService(testDB.db.Pool()).Register(ctx, RegisterRequest{Name: "h01 cursor overbudget " + time.Now().UTC().Format("20060102T150405.000000000")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	service := NewService(testDB.db.Pool())
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := testDB.db.Pool().Exec(ctx, `
+		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
+		SELECT $1, 'legacy_' || g::text, '', $2, $3, $4
+		FROM generate_series(1, $5) AS g
+	`, registration.Host.ID, strings.Repeat(`\`, 1024), now, now.Add(time.Hour), MaxResumeCursorCount); err != nil {
+		t.Fatalf("seed overbudget host cursors: %v", err)
+	}
+	if _, err := service.OpenConnection(ctx, credential); !errors.Is(err, ErrCursorRecoveryTooLarge) {
+		t.Fatalf("OpenConnection(overbudget state) error = %v, want ErrCursorRecoveryTooLarge", err)
+	}
+	var generation int64
+	if err := testDB.db.Pool().QueryRow(ctx, `SELECT connection_generation FROM host_registrations WHERE id = $1`, registration.Host.ID).Scan(&generation); err != nil {
+		t.Fatalf("read host generation: %v", err)
+	}
+	if generation != connection.Generation {
+		t.Fatalf("host generation after rejected recovery read = %d, want %d", generation, connection.Generation)
+	}
+}
+
+func TestServiceCursorLimitSurvivesDatabaseReopen(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	registration, err := NewService(testDB.db.Pool()).Register(ctx, RegisterRequest{Name: "h01 cursor reopen limit " + time.Now().UTC().Format("20060102T150405.000000000")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	service := NewService(testDB.db.Pool())
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if _, err := service.OpenConnection(ctx, credential); err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := testDB.db.Pool().Exec(ctx, `
+		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
+		SELECT $1, 'reopen_' || g::text, '', 'cursor_' || g::text, $2, $3
+		FROM generate_series(1, $4) AS g
+	`, registration.Host.ID, now, now.Add(time.Hour), MaxResumeCursorCount); err != nil {
+		t.Fatalf("seed reopen host cursors: %v", err)
+	}
+	testDB.db.Close()
+	reopened, err := openHostDatabaseWithContext(ctx, testDB.url)
+	if err != nil {
+		t.Fatalf("reopen database: %v", err)
+	}
+	defer reopened.Close()
+	reconnected, err := NewService(reopened.Pool()).OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection(after reopen) error = %v", err)
+	}
+	if len(reconnected.ResumeCursors) != MaxResumeCursorCount {
+		t.Fatalf("resume cursor count after reopen = %d, want %d", len(reconnected.ResumeCursors), MaxResumeCursorCount)
 	}
 }
 

@@ -248,6 +248,64 @@ func TestGatewayWithPostgresTLSWSSDrain(t *testing.T) {
 	_ = connection.Close()
 }
 
+func TestGatewayWithPostgresTLSWSSRejectsRecoveryFrameOverflow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db := openGatewayDatabase(t, ctx)
+	service := hosts.NewService(db.Pool())
+	registration, err := service.Register(ctx, hosts.RegisterRequest{
+		Name: "h01 gateway frame limit " + time.Now().UTC().Format("20060102T150405.000000000"),
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	if err := service.Checkpoint(ctx, connection, hosts.Cursor{
+		SessionID: "frame_session",
+		Value:     strings.Repeat("v", 700),
+	}); err != nil {
+		t.Fatalf("Checkpoint() error = %v", err)
+	}
+	if err := service.CloseConnection(ctx, connection); err != nil {
+		t.Fatalf("CloseConnection() error = %v", err)
+	}
+
+	const maxFrameBytes = 512
+	server, err := NewServer(service, ServerOptions{MaxFrameBytes: maxFrameBytes})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client, err := NewClient(ClientOptions{
+		URL:           strings.Replace(httpServer.URL, "https://", "wss://", 1),
+		HostID:        registration.Host.ID,
+		Token:         registration.Token,
+		HTTPClient:    httpServer.Client(),
+		MaxFrameBytes: maxFrameBytes,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err := client.Connect(ctx); err == nil {
+		t.Fatal("Client.Connect() accepted a hello acknowledgement above the configured frame limit")
+	}
+	var active bool
+	if err := db.Pool().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM host_connections WHERE host_id = $1)`, registration.Host.ID).Scan(&active); err != nil {
+		t.Fatalf("check active gateway connection: %v", err)
+	}
+	if active {
+		t.Fatal("frame-overflow handshake left an active host connection")
+	}
+}
+
 func openGatewayDatabase(t *testing.T, ctx context.Context) *database.DB {
 	t.Helper()
 	config, err := platform.LoadDatabaseConfig()

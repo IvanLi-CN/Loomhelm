@@ -76,6 +76,9 @@ func (m Message) Validate() error {
 		if strings.TrimSpace(m.HostID) == "" || m.Generation <= 0 {
 			return errors.New("gateway hello acknowledgement requires host id and generation")
 		}
+		if err := validateRecoveryCursors(m.Cursors); err != nil {
+			return err
+		}
 		for _, cursor := range m.Cursors {
 			if err := cursor.validate(); err != nil {
 				return err
@@ -103,8 +106,17 @@ func (m Message) Validate() error {
 		if strings.TrimSpace(m.RequestID) == "" {
 			return errors.New("gateway heartbeat requires request id")
 		}
+		if err := validateCursorID(m.SessionID, "heartbeat session id", false); err != nil {
+			return err
+		}
+		if err := validateCursorID(m.RunID, "heartbeat run id", false); err != nil {
+			return err
+		}
 		if m.Cursor != "" && strings.TrimSpace(m.SessionID) == "" {
 			return errors.New("gateway heartbeat cursor requires a session id")
+		}
+		if len(m.Cursor) > hosts.MaxCursorValueBytes {
+			return fmt.Errorf("gateway heartbeat cursor must be at most %d bytes", hosts.MaxCursorValueBytes)
 		}
 	case MessageHeartbeatAck:
 		if strings.TrimSpace(m.RequestID) == "" {
@@ -121,7 +133,13 @@ func (m Message) Validate() error {
 }
 
 func (c WireCursor) validate() error {
-	if strings.TrimSpace(c.SessionID) == "" || strings.TrimSpace(c.Value) == "" {
+	if err := validateCursorID(c.SessionID, "resume cursor session id", true); err != nil {
+		return err
+	}
+	if err := validateCursorID(c.RunID, "resume cursor run id", false); err != nil {
+		return err
+	}
+	if strings.TrimSpace(c.Value) == "" || len(c.Value) > hosts.MaxCursorValueBytes {
 		return errors.New("gateway resume cursor requires a session id and value")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, c.ObservedAt); err != nil {
@@ -129,6 +147,33 @@ func (c WireCursor) validate() error {
 	}
 	if _, err := time.Parse(time.RFC3339Nano, c.RetainedUntil); err != nil {
 		return errors.New("gateway resume cursor retention time is malformed")
+	}
+	return nil
+}
+
+func validateCursorID(value, field string, required bool) error {
+	if required && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("gateway %s is required", field)
+	}
+	if len(value) > hosts.MaxCursorIDBytes {
+		return fmt.Errorf("gateway %s must be at most %d bytes", field, hosts.MaxCursorIDBytes)
+	}
+	return nil
+}
+
+func validateRecoveryCursors(cursors []WireCursor) error {
+	if len(cursors) > hosts.MaxResumeCursorCount {
+		return fmt.Errorf("gateway hello acknowledgement contains more than %d recovery positions", hosts.MaxResumeCursorCount)
+	}
+	if len(cursors) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(cursors)
+	if err != nil {
+		return fmt.Errorf("encode gateway recovery payload: %w", err)
+	}
+	if len(data) > hosts.MaxRecoveryPayloadBytes {
+		return fmt.Errorf("gateway recovery payload exceeds %d bytes", hosts.MaxRecoveryPayloadBytes)
 	}
 	return nil
 }
@@ -203,6 +248,17 @@ func decodeMessage(data []byte, maxFrame int64) (Message, error) {
 }
 
 func validateEvent(event protocol.Event) error {
+	if err := validateCursorID(event.SessionID, "event session id", true); err != nil {
+		return err
+	}
+	if event.RunID != nil {
+		if err := validateCursorID(*event.RunID, "event run id", false); err != nil {
+			return err
+		}
+	}
+	if len(event.Cursor) > hosts.MaxCursorValueBytes {
+		return fmt.Errorf("gateway event cursor must be at most %d bytes", hosts.MaxCursorValueBytes)
+	}
 	if strings.TrimSpace(event.EventID) == "" {
 		return errors.New("gateway event requires event id")
 	}

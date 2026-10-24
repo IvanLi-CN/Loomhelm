@@ -173,6 +173,17 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		handlerDone: make(chan struct{}),
 		pending:     make(map[string]chan commandResponse),
 	}
+	ack := Message{
+		Type:       MessageHelloAck,
+		HostID:     connection.HostID,
+		Generation: connection.Generation,
+		Cursors:    resumeCursors(connection.ResumeCursors),
+	}
+	if _, err := encodeMessage(ack, s.options.MaxFrameBytes); err != nil {
+		_ = s.registry.CloseConnection(context.Background(), connection)
+		result.closeNow()
+		return nil, fmt.Errorf("encode gateway hello acknowledgement: %w", err)
+	}
 	if err := s.replace(result); err != nil {
 		_ = s.registry.CloseConnection(context.Background(), connection)
 		result.closeNow()

@@ -583,6 +583,40 @@ func TestGatewayWireRejectsOversizedMessages(t *testing.T) {
 	}
 }
 
+func TestGatewayWireRejectsOversizedRecoveryPayload(t *testing.T) {
+	cursors := make([]WireCursor, hosts.MaxResumeCursorCount)
+	for i := range cursors {
+		cursors[i] = WireCursor{
+			SessionID:     "session",
+			Value:         strings.Repeat(`\`, 1024),
+			ObservedAt:    "2026-10-24T00:00:00Z",
+			RetainedUntil: "2026-10-25T00:00:00Z",
+		}
+	}
+	message := Message{
+		Type:       MessageHelloAck,
+		HostID:     "host_test",
+		Generation: 1,
+		Cursors:    cursors,
+	}
+	if _, err := encodeMessage(message, DefaultMaxFrame); err == nil || !strings.Contains(err.Error(), "recovery payload") {
+		t.Fatalf("encodeMessage() error = %v, want recovery payload rejection", err)
+	}
+}
+
+func TestGatewayWireRejectsOversizedCursorIDs(t *testing.T) {
+	cursor := WireCursor{
+		SessionID:     strings.Repeat("s", hosts.MaxCursorIDBytes+1),
+		Value:         "cursor",
+		ObservedAt:    "2026-10-24T00:00:00Z",
+		RetainedUntil: "2026-10-25T00:00:00Z",
+	}
+	message := Message{Type: MessageHelloAck, HostID: "host_test", Generation: 1, Cursors: []WireCursor{cursor}}
+	if _, err := encodeMessage(message, DefaultMaxFrame); err == nil || !strings.Contains(err.Error(), "session id") {
+		t.Fatalf("encodeMessage() error = %v, want cursor session id rejection", err)
+	}
+}
+
 func newTestClient(t *testing.T, server *httptest.Server, hostID, token string) *Client {
 	t.Helper()
 	url := strings.Replace(server.URL, "https://", "wss://", 1)

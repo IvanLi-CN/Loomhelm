@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,14 +20,17 @@ import (
 )
 
 var (
-	ErrInvalid             = errors.New("invalid host request")
-	ErrNotFound            = errors.New("host resource not found")
-	ErrCredentialRevoked   = errors.New("host credential is revoked")
-	ErrUnauthenticated     = errors.New("host credential is not valid")
-	ErrConnectionStale     = errors.New("host connection generation is stale")
-	ErrCursorExpired       = errors.New("host reconnect cursor is expired")
-	ErrAlreadyRegistered   = errors.New("the configured host is already registered")
-	ErrCommandNotDelivered = errors.New("host command was not delivered")
+	ErrInvalid                = errors.New("invalid host request")
+	ErrNotFound               = errors.New("host resource not found")
+	ErrCredentialRevoked      = errors.New("host credential is revoked")
+	ErrUnauthenticated        = errors.New("host credential is not valid")
+	ErrConnectionStale        = errors.New("host connection generation is stale")
+	ErrCursorExpired          = errors.New("host reconnect cursor is expired")
+	ErrCursorLimit            = errors.New("host reconnect cursor limit exceeded")
+	ErrCursorRecoveryTooLarge = errors.New("host reconnect recovery payload is too large")
+	ErrCursorStateInvalid     = errors.New("host reconnect cursor state is invalid")
+	ErrAlreadyRegistered      = errors.New("the configured host is already registered")
+	ErrCommandNotDelivered    = errors.New("host command was not delivered")
 )
 
 type Status string
@@ -37,10 +41,13 @@ const (
 )
 
 const (
-	defaultCursorRetention = 24 * time.Hour
-	maxCursorLength        = 2048
-	maxHostNameLength      = 128
-	maxCredentialName      = 128
+	defaultCursorRetention  = 24 * time.Hour
+	MaxCursorIDBytes        = 256
+	MaxCursorValueBytes     = 2048
+	MaxResumeCursorCount    = 1024
+	MaxRecoveryPayloadBytes = 1 << 20
+	maxHostNameLength       = 128
+	maxCredentialName       = 128
 )
 
 type Config struct {
@@ -401,7 +408,8 @@ func (s *Service) ProcessEvent(ctx context.Context, connection Connection, curso
 		return fmt.Errorf("begin host event processing: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := lockActiveConnection(ctx, tx, connection); err != nil {
+	admission, err := s.admitCursor(ctx, tx, connection, cursor)
+	if err != nil {
 		return err
 	}
 	if handler != nil {
@@ -409,15 +417,13 @@ func (s *Service) ProcessEvent(ctx context.Context, connection Connection, curso
 			return err
 		}
 	}
-	now := s.now()
 	if _, err := tx.Exec(ctx, `
 		UPDATE host_connections
 		SET last_seen_at = $2
 		WHERE host_id = $1 AND credential_id = $3 AND generation = $4
-	`, connection.HostID, now, connection.CredentialID, connection.Generation); err != nil {
+	`, connection.HostID, admission.now, connection.CredentialID, connection.Generation); err != nil {
 		return fmt.Errorf("touch host event connection: %w", err)
 	}
-	retainedUntil := now.Add(s.cursorRetention)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -425,7 +431,7 @@ func (s *Service) ProcessEvent(ctx context.Context, connection Connection, curso
 		SET cursor = EXCLUDED.cursor,
 		    observed_at = EXCLUDED.observed_at,
 		    cursor_retained_until = EXCLUDED.cursor_retained_until
-	`, connection.HostID, cursor.SessionID, cursor.RunID, cursor.Value, now, retainedUntil); err != nil {
+	`, connection.HostID, cursor.SessionID, cursor.RunID, cursor.Value, admission.now, admission.retainedUntil); err != nil {
 		return fmt.Errorf("store host event cursor: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -441,14 +447,13 @@ func (s *Service) Checkpoint(ctx context.Context, connection Connection, cursor 
 	if err := validateCursor(cursor); err != nil {
 		return err
 	}
-	now := s.now()
-	retainedUntil := now.Add(s.cursorRetention)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin host cursor checkpoint: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := lockActiveConnection(ctx, tx, connection); err != nil {
+	admission, err := s.admitCursor(ctx, tx, connection, cursor)
+	if err != nil {
 		return err
 	}
 	result, err := tx.Exec(ctx, `
@@ -460,7 +465,7 @@ func (s *Service) Checkpoint(ctx context.Context, connection Connection, cursor 
 		  AND active.generation = $3
 		  AND credential.id = active.credential_id
 		  AND credential.revoked_at IS NULL
-	`, connection.HostID, connection.CredentialID, connection.Generation, now)
+	`, connection.HostID, connection.CredentialID, connection.Generation, admission.now)
 	if err != nil {
 		return fmt.Errorf("validate host cursor connection: %w", err)
 	}
@@ -474,7 +479,7 @@ func (s *Service) Checkpoint(ctx context.Context, connection Connection, cursor 
 		SET cursor = EXCLUDED.cursor,
 		    observed_at = EXCLUDED.observed_at,
 		    cursor_retained_until = EXCLUDED.cursor_retained_until
-	`, connection.HostID, cursor.SessionID, cursor.RunID, cursor.Value, now, retainedUntil)
+	`, connection.HostID, cursor.SessionID, cursor.RunID, cursor.Value, admission.now, admission.retainedUntil)
 	if err != nil {
 		return fmt.Errorf("store host cursor checkpoint: %w", err)
 	}
@@ -621,13 +626,65 @@ type cursorQueryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
+type cursorAdmission struct {
+	now           time.Time
+	retainedUntil time.Time
+}
+
+// admitCursor holds the host row lock while it removes expired positions and
+// checks the complete post-write recovery payload. ProcessEvent calls this
+// before its handler so a rejected cursor cannot trigger an external effect.
+func (s *Service) admitCursor(ctx context.Context, tx pgx.Tx, connection Connection, cursor Cursor) (cursorAdmission, error) {
+	if err := lockActiveConnection(ctx, tx, connection); err != nil {
+		return cursorAdmission{}, err
+	}
+	now := s.now()
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM host_cursors
+		WHERE host_id = $1 AND cursor_retained_until <= $2
+	`, connection.HostID, now); err != nil {
+		return cursorAdmission{}, fmt.Errorf("expire host cursors: %w", err)
+	}
+	current, err := loadCursors(ctx, tx, connection.HostID, now)
+	if err != nil {
+		return cursorAdmission{}, err
+	}
+	retainedUntil := now.Add(s.cursorRetention)
+	candidate := cursor
+	candidate.ObservedAt = now
+	candidate.RetainedUntil = retainedUntil
+	next := make([]Cursor, 0, len(current)+1)
+	replaced := false
+	for _, existing := range current {
+		if existing.SessionID == cursor.SessionID && existing.RunID == cursor.RunID {
+			next = append(next, candidate)
+			replaced = true
+			continue
+		}
+		next = append(next, existing)
+	}
+	if !replaced {
+		if len(current) >= MaxResumeCursorCount {
+			return cursorAdmission{}, cursorStateError(ErrCursorLimit, "host %s already has %d unexpired recovery positions", connection.HostID, MaxResumeCursorCount)
+		}
+		next = append(next, candidate)
+	}
+	if size, err := recoveryPayloadSize(next); err != nil {
+		return cursorAdmission{}, fmt.Errorf("encode host cursor recovery payload: %w", err)
+	} else if size > MaxRecoveryPayloadBytes {
+		return cursorAdmission{}, cursorStateError(ErrCursorRecoveryTooLarge, "host %s recovery payload is %d bytes, maximum is %d", connection.HostID, size, MaxRecoveryPayloadBytes)
+	}
+	return cursorAdmission{now: now, retainedUntil: retainedUntil}, nil
+}
+
 func loadCursors(ctx context.Context, queryer cursorQueryer, hostID string, now time.Time) ([]Cursor, error) {
 	rows, err := queryer.Query(ctx, `
 		SELECT session_id, run_id, cursor, observed_at, cursor_retained_until
 		FROM host_cursors
 		WHERE host_id = $1 AND cursor_retained_until > $2
 		ORDER BY session_id, run_id
-	`, hostID, now)
+		LIMIT $3
+	`, hostID, now, MaxResumeCursorCount+1)
 	if err != nil {
 		return nil, err
 	}
@@ -643,6 +700,19 @@ func loadCursors(ctx context.Context, queryer cursorQueryer, hostID string, now 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if len(cursors) > MaxResumeCursorCount {
+		return nil, cursorStateError(ErrCursorLimit, "host %s has more than %d unexpired recovery positions", hostID, MaxResumeCursorCount)
+	}
+	for _, cursor := range cursors {
+		if err := validateCursor(cursor); err != nil {
+			return nil, cursorStateError(ErrCursorStateInvalid, "host %s contains an invalid stored recovery position: %v", hostID, err)
+		}
+	}
+	if size, err := recoveryPayloadSize(cursors); err != nil {
+		return nil, fmt.Errorf("encode host cursor recovery payload: %w", err)
+	} else if size > MaxRecoveryPayloadBytes {
+		return nil, cursorStateError(ErrCursorRecoveryTooLarge, "host %s recovery payload is %d bytes, maximum is %d", hostID, size, MaxRecoveryPayloadBytes)
+	}
 	return cursors, nil
 }
 
@@ -650,10 +720,46 @@ func validateCursor(cursor Cursor) error {
 	if strings.TrimSpace(cursor.SessionID) == "" {
 		return fmt.Errorf("%w: cursor session id is required", ErrInvalid)
 	}
-	if strings.TrimSpace(cursor.Value) == "" || len(cursor.Value) > maxCursorLength {
-		return fmt.Errorf("%w: reconnect cursor must be between 1 and %d bytes", ErrInvalid, maxCursorLength)
+	if len(cursor.SessionID) > MaxCursorIDBytes {
+		return fmt.Errorf("%w: cursor session id must be at most %d bytes", ErrInvalid, MaxCursorIDBytes)
+	}
+	if len(cursor.RunID) > MaxCursorIDBytes {
+		return fmt.Errorf("%w: cursor run id must be at most %d bytes", ErrInvalid, MaxCursorIDBytes)
+	}
+	if strings.TrimSpace(cursor.Value) == "" || len(cursor.Value) > MaxCursorValueBytes {
+		return fmt.Errorf("%w: reconnect cursor must be between 1 and %d bytes", ErrInvalid, MaxCursorValueBytes)
 	}
 	return nil
+}
+
+type encodedRecoveryCursor struct {
+	SessionID     string `json:"session_id"`
+	RunID         string `json:"run_id,omitempty"`
+	Value         string `json:"value"`
+	ObservedAt    string `json:"observed_at"`
+	RetainedUntil string `json:"retained_until"`
+}
+
+func recoveryPayloadSize(cursors []Cursor) (int, error) {
+	wire := make([]encodedRecoveryCursor, 0, len(cursors))
+	for _, cursor := range cursors {
+		wire = append(wire, encodedRecoveryCursor{
+			SessionID:     cursor.SessionID,
+			RunID:         cursor.RunID,
+			Value:         cursor.Value,
+			ObservedAt:    cursor.ObservedAt.UTC().Format(time.RFC3339Nano),
+			RetainedUntil: cursor.RetainedUntil.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	data, err := json.Marshal(wire)
+	if err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
+func cursorStateError(kind error, format string, args ...any) error {
+	return fmt.Errorf("%w: %w: %s", ErrInvalid, kind, fmt.Sprintf(format, args...))
 }
 
 func lockHost(ctx context.Context, tx pgx.Tx, hostID string) (int64, error) {
