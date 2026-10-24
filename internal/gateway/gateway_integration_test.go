@@ -21,7 +21,131 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/coder/websocket"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type delayedGatewayRegistry struct {
+	*hosts.Service
+	firstReturned     chan struct{}
+	releaseFirst      chan struct{}
+	firstReturnedOnce sync.Once
+}
+
+func newDelayedGatewayRegistry(service *hosts.Service) *delayedGatewayRegistry {
+	return &delayedGatewayRegistry{
+		Service:       service,
+		firstReturned: make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+	}
+}
+
+func (r *delayedGatewayRegistry) OpenConnectionWithPreflight(ctx context.Context, credential hosts.Credential, preflight hosts.ConnectionPreflight) (hosts.Connection, error) {
+	connection, err := r.Service.OpenConnectionWithPreflight(ctx, credential, preflight)
+	if err != nil {
+		return hosts.Connection{}, err
+	}
+	if connection.Generation == 1 {
+		r.firstReturnedOnce.Do(func() { close(r.firstReturned) })
+		<-r.releaseFirst
+	}
+	return connection, nil
+}
+
+func TestGatewayWithPostgresTLSWSSRejectsCrossInstanceLateOlderHandshakeAfterNewerRemoved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	db := openGatewayDatabase(t, ctx)
+	service := hosts.NewService(db.Pool())
+	registration, err := service.Register(ctx, hosts.RegisterRequest{
+		Name: "h01 gateway cross-instance handshake " + time.Now().UTC().Format("20060102T150405.000000000"),
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	delayedRegistry := newDelayedGatewayRegistry(service)
+	serverA, err := NewServer(delayedRegistry)
+	if err != nil {
+		t.Fatalf("NewServer(A) error = %v", err)
+	}
+	serverB, err := NewServer(service)
+	if err != nil {
+		t.Fatalf("NewServer(B) error = %v", err)
+	}
+	httpServerA := httptest.NewTLSServer(serverA)
+	t.Cleanup(httpServerA.Close)
+	httpServerB := httptest.NewTLSServer(serverB)
+	t.Cleanup(httpServerB.Close)
+	clientA, err := NewClient(ClientOptions{
+		URL:        strings.Replace(httpServerA.URL, "https://", "wss://", 1),
+		HostID:     registration.Host.ID,
+		Token:      registration.Token,
+		HTTPClient: httpServerA.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient(A) error = %v", err)
+	}
+	clientB, err := NewClient(ClientOptions{
+		URL:        strings.Replace(httpServerB.URL, "https://", "wss://", 1),
+		HostID:     registration.Host.ID,
+		Token:      registration.Token,
+		HTTPClient: httpServerB.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient(B) error = %v", err)
+	}
+
+	var releaseOnce sync.Once
+	releaseFirst := func() { releaseOnce.Do(func() { close(delayedRegistry.releaseFirst) }) }
+	t.Cleanup(releaseFirst)
+	firstResult := make(chan struct {
+		connection *ClientConnection
+		err        error
+	}, 1)
+	go func() {
+		connection, connectErr := clientA.Connect(ctx)
+		firstResult <- struct {
+			connection *ClientConnection
+			err        error
+		}{connection: connection, err: connectErr}
+	}()
+	select {
+	case <-delayedRegistry.firstReturned:
+	case <-ctx.Done():
+		t.Fatalf("older cross-instance handshake did not reach the post-open barrier: %v", ctx.Err())
+	}
+
+	newer, err := clientB.Connect(ctx)
+	if err != nil {
+		t.Fatalf("newer cross-instance Client.Connect() error = %v", err)
+	}
+	if got := newer.Generation(); got != 2 {
+		t.Fatalf("newer cross-instance generation = %d, want 2", got)
+	}
+	if err := newer.Close(); err != nil {
+		t.Fatalf("close newer cross-instance connection: %v", err)
+	}
+	waitForGatewayActiveConnection(t, ctx, db.Pool(), registration.Host.ID, false)
+	releaseFirst()
+
+	select {
+	case result := <-firstResult:
+		if result.connection != nil {
+			_ = result.connection.Close()
+		}
+		if result.err == nil {
+			t.Fatal("older cross-instance handshake succeeded after newer connection was removed")
+		}
+	case <-ctx.Done():
+		t.Fatalf("older cross-instance handshake did not finish after release: %v", ctx.Err())
+	}
+	var generation int64
+	if err := db.Pool().QueryRow(ctx, `SELECT connection_generation FROM host_registrations WHERE id = $1`, registration.Host.ID).Scan(&generation); err != nil {
+		t.Fatalf("read cross-instance generation: %v", err)
+	}
+	if generation != 2 {
+		t.Fatalf("cross-instance generation after stale rejection = %d, want 2", generation)
+	}
+}
 
 func TestGatewayWithPostgresTLSWSS(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -560,6 +684,26 @@ func openGatewayDatabase(t *testing.T, ctx context.Context) *database.DB {
 		t.Fatalf("database schema = %q, want %q", currentSchema, schema)
 	}
 	return db
+}
+
+func waitForGatewayActiveConnection(t *testing.T, ctx context.Context, pool *pgxpool.Pool, hostID string, want bool) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var active bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM host_connections WHERE host_id = $1)`, hostID).Scan(&active); err != nil {
+			t.Fatalf("check active gateway connection: %v", err)
+		}
+		if active == want {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("active gateway connection state for host %q = %t, want %t: %v", hostID, active, want, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func databaseURLWithSearchPath(rawURL, schema string) (string, error) {

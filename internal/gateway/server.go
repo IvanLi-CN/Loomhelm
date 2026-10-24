@@ -137,14 +137,6 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.remove(connection)
 		connection.closeNow()
 	}()
-	if err := connection.write(request.Context(), Message{
-		Type:       MessageHelloAck,
-		HostID:     connection.connection.HostID,
-		Generation: connection.connection.Generation,
-		Cursors:    resumeCursors(connection.connection.ResumeCursors),
-	}); err != nil {
-		return
-	}
 	connection.markReady()
 	if err := connection.readLoop(request.Context()); err != nil && !errors.Is(err, context.Canceled) {
 		connection.closeNow()
@@ -194,10 +186,20 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		result.closeNow()
 		return nil, fmt.Errorf("encode gateway hello acknowledgement: %w", err)
 	}
-	if err := s.replace(result); err != nil {
+	if err := s.registry.AuthorizeCommand(ctx, connection, func() error {
+		if err := s.replace(result); err != nil {
+			return err
+		}
+		if err := result.write(ctx, ack); err != nil {
+			s.remove(result)
+			return err
+		}
+		return nil
+	}); err != nil {
+		s.remove(result)
 		_ = s.registry.CloseConnection(context.Background(), connection)
 		result.closeNow()
-		return nil, err
+		return nil, fmt.Errorf("authorize host gateway connection: %w", err)
 	}
 	return result, nil
 }

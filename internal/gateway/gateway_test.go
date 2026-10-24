@@ -185,6 +185,8 @@ type helloAckGateRegistry struct {
 	authorizeStarted chan struct{}
 	openOnce         sync.Once
 	authorizeOnce    sync.Once
+	authorizeMu      sync.Mutex
+	authorizeCalls   int
 }
 
 func newHelloAckGateRegistry() *helloAckGateRegistry {
@@ -213,7 +215,13 @@ func (r *helloAckGateRegistry) OpenConnectionWithPreflight(ctx context.Context, 
 }
 
 func (r *helloAckGateRegistry) AuthorizeCommand(ctx context.Context, connection hosts.Connection, deliver func() error) error {
-	r.authorizeOnce.Do(func() { close(r.authorizeStarted) })
+	r.authorizeMu.Lock()
+	r.authorizeCalls++
+	commandAuthorization := r.authorizeCalls > 1
+	r.authorizeMu.Unlock()
+	if commandAuthorization {
+		r.authorizeOnce.Do(func() { close(r.authorizeStarted) })
+	}
 	return r.fakeRegistry.AuthorizeCommand(ctx, connection, deliver)
 }
 
@@ -296,6 +304,39 @@ func newOrderedOpenRegistry() *orderedOpenRegistry {
 		firstOpened:  make(chan struct{}),
 		releaseFirst: make(chan struct{}),
 	}
+}
+
+type crossInstanceOpenRegistry struct {
+	*fakeRegistry
+	firstReturned     chan struct{}
+	releaseFirst      chan struct{}
+	firstReturnedOnce sync.Once
+}
+
+func newCrossInstanceOpenRegistry() *crossInstanceOpenRegistry {
+	return &crossInstanceOpenRegistry{
+		fakeRegistry:  newFakeRegistry(),
+		firstReturned: make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+	}
+}
+
+func (r *crossInstanceOpenRegistry) OpenConnectionWithPreflight(ctx context.Context, credential hosts.Credential, preflight hosts.ConnectionPreflight) (hosts.Connection, error) {
+	connection, err := r.fakeRegistry.OpenConnection(ctx, credential)
+	if err != nil {
+		return hosts.Connection{}, err
+	}
+	if preflight != nil {
+		if err := preflight(connection); err != nil {
+			_ = r.fakeRegistry.CloseConnection(ctx, connection)
+			return hosts.Connection{}, err
+		}
+	}
+	if connection.Generation == 1 {
+		r.firstReturnedOnce.Do(func() { close(r.firstReturned) })
+		<-r.releaseFirst
+	}
+	return connection, nil
 }
 
 func (r *orderedOpenRegistry) OpenConnection(_ context.Context, credential hosts.Credential) (hosts.Connection, error) {
@@ -855,6 +896,86 @@ func TestGatewayRejectsLateOlderHandshakeAfterNewerRemoved(t *testing.T) {
 	}
 	if !closedOlder {
 		t.Fatalf("closed connections = %+v, want rejected generation 1", closed)
+	}
+}
+
+func TestGatewayRejectsCrossInstanceLateOlderHandshakeAfterNewerRemoved(t *testing.T) {
+	registry := newCrossInstanceOpenRegistry()
+	serverA, err := NewServer(registry)
+	if err != nil {
+		t.Fatalf("NewServer(A) error = %v", err)
+	}
+	serverB, err := NewServer(registry)
+	if err != nil {
+		t.Fatalf("NewServer(B) error = %v", err)
+	}
+	httpServerA := httptest.NewTLSServer(serverA)
+	t.Cleanup(httpServerA.Close)
+	httpServerB := httptest.NewTLSServer(serverB)
+	t.Cleanup(httpServerB.Close)
+	clientA := newTestClient(t, httpServerA, registry.credential.HostID, registry.token)
+	clientB := newTestClient(t, httpServerB, registry.credential.HostID, registry.token)
+
+	var releaseOnce sync.Once
+	releaseFirst := func() { releaseOnce.Do(func() { close(registry.releaseFirst) }) }
+	t.Cleanup(releaseFirst)
+	firstResult := make(chan struct {
+		connection *ClientConnection
+		err        error
+	}, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		connection, connectErr := clientA.Connect(ctx)
+		firstResult <- struct {
+			connection *ClientConnection
+			err        error
+		}{connection: connection, err: connectErr}
+	}()
+	select {
+	case <-registry.firstReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("older cross-instance handshake did not reach the post-open barrier")
+	}
+
+	newer := connectTestClient(t, clientB)
+	if got := newer.Generation(); got != 2 {
+		t.Fatalf("newer cross-instance generation = %d, want 2", got)
+	}
+	if err := newer.Close(); err != nil {
+		t.Fatalf("close newer cross-instance connection: %v", err)
+	}
+	waitForFakeRegistryRemoval(t, registry.fakeRegistry, registry.credential.HostID)
+	releaseFirst()
+
+	select {
+	case result := <-firstResult:
+		if result.connection != nil {
+			_ = result.connection.Close()
+		}
+		if result.err == nil {
+			t.Fatal("older cross-instance handshake succeeded after newer connection was removed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("older cross-instance handshake did not finish after release")
+	}
+
+	registry.mu.Lock()
+	current := registry.current
+	closed := append([]hosts.Connection(nil), registry.closed...)
+	registry.mu.Unlock()
+	if current != nil {
+		t.Fatalf("shared registry current connection = %+v, want none after newer removal", current)
+	}
+	var closedOlder bool
+	for _, connection := range closed {
+		if connection.HostID == registry.credential.HostID && connection.Generation == 1 {
+			closedOlder = true
+			break
+		}
+	}
+	if !closedOlder {
+		t.Fatalf("closed shared-registry connections = %+v, want rejected generation 1 cleanup", closed)
 	}
 }
 
@@ -1499,7 +1620,6 @@ func TestGatewayValidatesEvents(t *testing.T) {
 
 func TestGatewayDoesNotClassifyPreDeliveryFailureAsUnknown(t *testing.T) {
 	registry := newFakeRegistry()
-	registry.authorizeErr = hosts.ErrCommandNotDelivered
 	server, err := NewServer(registry)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -1509,6 +1629,10 @@ func TestGatewayDoesNotClassifyPreDeliveryFailureAsUnknown(t *testing.T) {
 	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
 	connection := connectTestClient(t, client)
 	defer connection.Close()
+	registry.mu.Lock()
+	registry.authorizeErr = hosts.ErrCommandNotDelivered
+	registry.deliverCalls = 0
+	registry.mu.Unlock()
 	_, err = server.SendCommand(context.Background(), registry.credential.HostID, protocol.Command{
 		CommandID: "command_not_delivered",
 		IssuedAt:  time.Now().UTC().Format(time.RFC3339Nano),
@@ -1524,6 +1648,27 @@ func TestGatewayDoesNotClassifyPreDeliveryFailureAsUnknown(t *testing.T) {
 	registry.mu.Unlock()
 	if deliverCalls != 0 {
 		t.Fatalf("pre-delivery command invoked deliver %d times", deliverCalls)
+	}
+}
+
+func waitForFakeRegistryRemoval(t *testing.T, registry *fakeRegistry, hostID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		registry.mu.Lock()
+		current := registry.current
+		registry.mu.Unlock()
+		if current == nil || current.HostID != hostID {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("shared registry connection for host %q was not removed: %v", hostID, ctx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 
