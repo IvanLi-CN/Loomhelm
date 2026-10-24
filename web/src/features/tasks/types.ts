@@ -147,10 +147,12 @@ export interface ProjectTaskSource {
   isPendingTaskCreationReady?: (noticeId: string) => boolean;
   acknowledgePendingProjectCreation?: (noticeId: string) => boolean;
   acknowledgePendingTaskCreation?: (noticeId: string) => boolean;
-  acknowledgeTaskReconciliation?: (taskId: string) => boolean;
-  isTaskReconciliationReady?: (taskId: string) => boolean;
-  acknowledgeProjectReconciliation?: (projectId: string) => boolean;
-  isProjectReconciliationReady?: (projectId: string) => boolean;
+  getTaskReconciliationToken?: (taskId: string) => string | undefined;
+  acknowledgeTaskReconciliation?: (taskId: string, expectedToken?: string) => boolean;
+  isTaskReconciliationReady?: (taskId: string, expectedToken?: string) => boolean;
+  getProjectReconciliationToken?: (projectId: string) => string | undefined;
+  acknowledgeProjectReconciliation?: (projectId: string, expectedToken?: string) => boolean;
+  isProjectReconciliationReady?: (projectId: string, expectedToken?: string) => boolean;
   isTaskRelationWritePending?: (taskId: string) => boolean;
   canCreateProjects: boolean;
   getProjectPermissions: (projectId: string | undefined) => ProjectPermissionSnapshot;

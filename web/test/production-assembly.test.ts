@@ -63,6 +63,10 @@ describe("cursor pagination", () => {
   test("fails closed when a server claims another page without advancing the cursor", async () => {
     await expect(readAllCursorPages("tasks", async () => ({ items: ["task-1"], has_more: true, next_cursor: "same" }), 200)).rejects.toThrow("tasks pagination did not return a new cursor");
   });
+
+  test("fails closed when a page omits its completeness fields", async () => {
+    await expect(readAllCursorPages("projects", async () => ({ items: [] } as never), 100)).rejects.toThrow("projects pagination response is incomplete");
+  });
 });
 
 describe("protected project/task reads", () => {

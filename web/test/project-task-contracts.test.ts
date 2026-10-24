@@ -14,6 +14,7 @@ import {
   mergeMutationNoticeChanges,
   mergePersistedMutationNoticeState,
   mergePersistedMutationNotices,
+  mutationNoticeContentToken,
   mutationNoticeRemovalScopes,
   projectTaskQueryKeys,
   readProjectMemberships,
@@ -201,7 +202,8 @@ describe("project/task write contracts", () => {
   test("requires every expected membership and relationship read", () => {
     expect(hasIncompleteProjectTaskRead({ items: { "project-1": [] }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, ["project-1", "project-2"])).toBe(true);
     expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: {}, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(true);
-    expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: { "task-1": {} }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(false);
+    expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: { "task-1": {} }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(true);
+    expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: { "task-1": { parents: [], children: [], prerequisites: [], dependents: [] } }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(false);
   });
 
   test("requires settled successful query state before clearing a refresh barrier", () => {
@@ -233,6 +235,14 @@ describe("project/task write contracts", () => {
     expect(mergePersistedMutationNoticeState([newer], { available: true, shared: true, notices: [] })).toEqual([newer]);
     expect(mergePersistedMutationNoticeState([newer], { available: true, shared: true, notices: [] }, [persisted])).toEqual([newer]);
     expect(mergePersistedMutationNoticeState([persisted], { available: true, shared: true, notices: [] }, [persisted])).toEqual([]);
+  });
+
+  test("changes the reconciliation token when a newer notice arrives", () => {
+    const first = [{ id: "task:one", message: "one", kind: "reconciliation" as const, taskId: "task-1" }];
+    const second = [...first, { id: "task:two", message: "two", kind: "reconciliation" as const, taskId: "task-1" }];
+
+    expect(mutationNoticeContentToken(first)).not.toBe(mutationNoticeContentToken(second));
+    expect(mutationNoticeContentToken([...first].reverse())).toBe(mutationNoticeContentToken(first));
   });
 
   test("keeps an in-memory notice when persisted state is unavailable", () => {
@@ -332,6 +342,13 @@ describe("project/task write contracts", () => {
     expect(result.failures).toHaveLength(1);
   });
 
+  test("treats malformed membership responses as incomplete reads", async () => {
+    const result = await readProjectMemberships({ listProjectMembers: async () => ({}) }, ["project-1"]);
+
+    expect(result.items).toEqual({});
+    expect(result.failures).toEqual(["读取项目 project-1 的成员失败：项目成员响应不完整。"]);
+  });
+
   test("hides a project whose membership read is no longer authorized", async () => {
     const result = await readProjectMemberships({
       listProjectMembers: async ({ project_id }) => {
@@ -361,6 +378,14 @@ describe("project/task write contracts", () => {
     expect(result.relationships["task-1"]).toBeDefined();
     expect(result.relationships["task-2"]).toBeUndefined();
     expect(result.failures).toHaveLength(1);
+  });
+
+  test("treats malformed relationship responses as incomplete reads", async () => {
+    const tasks = [{ created_at: "now", goal: "one", id: "task-1", project_id: "project-1", status: "todo", title: "Task one", updated_at: "now" }] as const satisfies readonly Task[];
+    const result = await readTaskRelationships({ getTaskRelationships: async () => ({ parents: [], children: [] }) }, tasks);
+
+    expect(result.relationships).toEqual({});
+    expect(result.failures).toEqual(["读取任务 task-1 的关系失败：任务关系响应不完整。"]);
   });
 
   test("hides a task whose relationship read is no longer authorized", async () => {

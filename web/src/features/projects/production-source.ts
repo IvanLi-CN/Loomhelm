@@ -141,6 +141,21 @@ export interface MutationNoticeStorageRead {
   notices: readonly MutationNotice[];
 }
 
+export function mutationNoticeContentToken(notices: readonly MutationNotice[]): string {
+  return JSON.stringify(notices
+    .map((notice) => ({
+      id: notice.id,
+      message: notice.message,
+      kind: notice.kind ?? null,
+      lockScope: notice.lockScope ?? null,
+      identityMismatch: notice.identityMismatch === true,
+      volatile: notice.volatile === true,
+      projectId: notice.projectId ?? null,
+      taskId: notice.taskId ?? null
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id)));
+}
+
 export function mergePersistedMutationNoticeState(
   current: readonly MutationNotice[],
   state: MutationNoticeStorageRead,
@@ -380,6 +395,20 @@ interface CursorPage<Item> {
   next_cursor?: string;
 }
 
+function isCursorPage<Item>(value: unknown): value is CursorPage<Item> {
+  if (!value || typeof value !== "object") return false;
+  const page = value as { has_more?: unknown; items?: unknown; next_cursor?: unknown };
+  return typeof page.has_more === "boolean"
+    && Array.isArray(page.items)
+    && (page.next_cursor === undefined || typeof page.next_cursor === "string");
+}
+
+function isTaskRelationshipPage(value: unknown): value is TaskRelationshipPage {
+  if (!value || typeof value !== "object") return false;
+  const page = value as Record<string, unknown>;
+  return ["parents", "children", "prerequisites", "dependents"].every((key) => Array.isArray(page[key]));
+}
+
 export async function readAllCursorPages<Item>(
   resource: string,
   readPage: (afterCursor?: string) => Promise<CursorPage<Item>>,
@@ -392,6 +421,7 @@ export async function readAllCursorPages<Item>(
 
   for (;;) {
     const page = await readPage(afterCursor);
+    if (!isCursorPage<Item>(page)) throw new Error(`${resource} pagination response is incomplete.`);
     items.push(...page.items);
     if (!page.has_more) return items;
     const nextCursor = page.next_cursor;
@@ -415,10 +445,11 @@ export async function readProjectMemberships(
   api: Pick<PublishedProjectTaskApi, "listProjectMembers">,
   projectIds: readonly string[]
 ): Promise<MembershipQueryData> {
-  const results = await Promise.allSettled(projectIds.map(async (projectId) => ({
-    projectId,
-    members: (await api.listProjectMembers({ project_id: projectId })).items
-  })));
+  const results = await Promise.allSettled(projectIds.map(async (projectId) => {
+    const response = await api.listProjectMembers({ project_id: projectId });
+    if (!response || typeof response !== "object" || !Array.isArray(response.items)) throw new Error("项目成员响应不完整。");
+    return { projectId, members: response.items };
+  }));
   const items: Record<string, readonly ProjectMember[]> = {};
   const deniedProjectIds: string[] = [];
   const failures: string[] = [];
@@ -438,10 +469,11 @@ export async function readTaskRelationships(
   api: Pick<PublishedProjectTaskApi, "getTaskRelationships">,
   tasks: readonly Task[]
 ): Promise<TaskQueryData> {
-  const results = await Promise.allSettled(tasks.map(async (task) => ({
-    taskId: task.id,
-    relationships: await api.getTaskRelationships({ task_id: task.id })
-  })));
+  const results = await Promise.allSettled(tasks.map(async (task) => {
+    const relationships = await api.getTaskRelationships({ task_id: task.id });
+    if (!isTaskRelationshipPage(relationships)) throw new Error("任务关系响应不完整。");
+    return { taskId: task.id, relationships };
+  }));
   const relationships: Record<string, TaskRelationshipPage> = {};
   const deniedTaskIds: string[] = [];
   const failures: string[] = [];
@@ -496,13 +528,13 @@ export function hasIncompleteProjectTaskRead(data: unknown, expectedProjectIds: 
   if (expectedProjectIds.length > 0) {
     if (!read.items || typeof read.items !== "object" || Array.isArray(read.items)) return true;
     const items = read.items as Record<string, unknown>;
-    if (expectedProjectIds.some((projectId) => !Object.prototype.hasOwnProperty.call(items, projectId))) return true;
+    if (expectedProjectIds.some((projectId) => !Object.prototype.hasOwnProperty.call(items, projectId) || !Array.isArray(items[projectId]))) return true;
   }
   if (expectedTaskIds.length > 0) {
     if (!Array.isArray(read.items) || !read.relationships || typeof read.relationships !== "object" || Array.isArray(read.relationships)) return true;
     const taskIds = new Set(read.items.flatMap((item) => item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string" ? [(item as { id: string }).id] : []));
     const relationships = read.relationships as Record<string, unknown>;
-    if (expectedTaskIds.some((taskId) => !taskIds.has(taskId) || !Object.prototype.hasOwnProperty.call(relationships, taskId))) return true;
+    if (expectedTaskIds.some((taskId) => !taskIds.has(taskId) || !Object.prototype.hasOwnProperty.call(relationships, taskId) || !isTaskRelationshipPage(relationships[taskId]))) return true;
   }
   return false;
 }
@@ -1492,13 +1524,27 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
 
     const currentMutationNotices = (): readonly MutationNotice[] => queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
-    const isTaskReconciliationReady = (taskId: string): boolean => {
-      const notices = currentMutationNotices().filter((notice) => mutationNoticeTaskId(notice) === taskId);
-      return notices.length > 0 && notices.every((notice) => notice.kind !== "in-flight" && (!notice.identityMismatch || tasks.some((task) => task.id === taskId)));
+    const taskReconciliationNotices = (taskId: string): readonly MutationNotice[] => currentMutationNotices().filter((notice) => mutationNoticeTaskId(notice) === taskId);
+    const projectReconciliationNotices = (projectId: string): readonly MutationNotice[] => currentMutationNotices().filter((notice) => mutationNoticeProjectId(notice) === projectId);
+    const getTaskReconciliationToken = (taskId: string): string | undefined => {
+      const notices = taskReconciliationNotices(taskId);
+      return notices.length ? mutationNoticeContentToken(notices) : undefined;
     };
-    const isProjectReconciliationReady = (projectId: string): boolean => {
-      const notices = currentMutationNotices().filter((notice) => mutationNoticeProjectId(notice) === projectId);
-      return notices.length > 0 && notices.every((notice) => notice.kind !== "in-flight" && (!notice.identityMismatch || projects.some((project) => project.id === projectId)));
+    const getProjectReconciliationToken = (projectId: string): string | undefined => {
+      const notices = projectReconciliationNotices(projectId);
+      return notices.length ? mutationNoticeContentToken(notices) : undefined;
+    };
+    const isTaskReconciliationReady = (taskId: string, expectedToken?: string): boolean => {
+      const notices = taskReconciliationNotices(taskId);
+      return notices.length > 0
+        && (expectedToken === undefined || mutationNoticeContentToken(notices) === expectedToken)
+        && notices.every((notice) => notice.kind !== "in-flight" && (!notice.identityMismatch || tasks.some((task) => task.id === taskId)));
+    };
+    const isProjectReconciliationReady = (projectId: string, expectedToken?: string): boolean => {
+      const notices = projectReconciliationNotices(projectId);
+      return notices.length > 0
+        && (expectedToken === undefined || mutationNoticeContentToken(notices) === expectedToken)
+        && notices.every((notice) => notice.kind !== "in-flight" && (!notice.identityMismatch || projects.some((project) => project.id === projectId)));
     };
     const isPendingProjectCreationReady = (noticeId: string): boolean => currentMutationNotices().some((notice) => notice.id === noticeId && isPendingProjectCreationNotice(notice) && notice.kind === "creation");
     const isPendingTaskCreationReady = (noticeId: string): boolean => currentMutationNotices().some((notice) => notice.id === noticeId && isPendingTaskCreationNotice(notice) && notice.kind === "creation");
@@ -1525,9 +1571,11 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       isPendingTaskCreationReady,
       acknowledgePendingProjectCreation: (noticeId: string) => acknowledgePendingNotice(noticeId, isPendingProjectCreationNotice),
       acknowledgePendingTaskCreation: (noticeId: string) => acknowledgePendingNotice(noticeId, isPendingTaskCreationNotice),
-      acknowledgeTaskReconciliation: (taskId: string) => isTaskReconciliationReady(taskId) && clearTaskMutationNotices(taskId),
+      getTaskReconciliationToken,
+      acknowledgeTaskReconciliation: (taskId: string, expectedToken?: string) => isTaskReconciliationReady(taskId, expectedToken) && clearTaskMutationNotices(taskId),
       isTaskReconciliationReady,
-      acknowledgeProjectReconciliation: (projectId: string) => isProjectReconciliationReady(projectId) && clearProjectMutationNotices(projectId),
+      getProjectReconciliationToken,
+      acknowledgeProjectReconciliation: (projectId: string, expectedToken?: string) => isProjectReconciliationReady(projectId, expectedToken) && clearProjectMutationNotices(projectId),
       isProjectReconciliationReady,
       isTaskRelationWritePending: (taskId: string) => relationMutationsPending.has(taskId),
       canCreateProjects: canCreateProjects && projectWriteReady,

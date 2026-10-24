@@ -80,6 +80,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const [pending, setPending] = useState(false);
   const [canAcknowledgePendingCreation, setCanAcknowledgePendingCreation] = useState(false);
   const [canAcknowledgeReconciliation, setCanAcknowledgeReconciliation] = useState(false);
+  const [reconciliationToken, setReconciliationToken] = useState<string | undefined>();
   const formRef = useRef<HTMLFormElement>(null);
   const restoreFocusAfterAcknowledgementRef = useRef(false);
   const targetProjectId = task?.projectId ?? projectId;
@@ -108,6 +109,9 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const lastTaskIdentityKeyRef = useRef<string | undefined>(undefined);
   const relationWritePending = mode === "edit" && task?.id ? source.isTaskRelationWritePending?.(task.id) === true : false;
   const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked || relationWritePending || (mode === "create" && source.pendingTaskCreation === true);
+  const reconciliationTargetId = mode === "edit" ? task?.id : source.pendingTaskCreationResourceId;
+  const canConfirmReconciliation = canAcknowledgeReconciliation
+    && Boolean(reconciliationTargetId && source.isTaskReconciliationReady?.(reconciliationTargetId, reconciliationToken));
 
   useEffect(() => {
     if (!restoreFocusAfterAcknowledgementRef.current) return;
@@ -126,6 +130,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     setBlockedByUnknown(false);
     setCanAcknowledgePendingCreation(false);
     setCanAcknowledgeReconciliation(false);
+    setReconciliationToken(undefined);
   }, [taskIdentityKey]);
 
   useEffect(() => {
@@ -156,24 +161,31 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       if (mode === "create") {
         const knownTaskId = source.pendingTaskCreationResourceId;
         if (knownTaskId) {
-          const ready = source.isTaskReconciliationReady?.(knownTaskId) === true;
+          const token = source.getTaskReconciliationToken?.(knownTaskId);
+          const ready = source.isTaskReconciliationReady?.(knownTaskId, token) === true;
           setBlockedByUnknown(!ready);
           setCanAcknowledgePendingCreation(false);
           setCanAcknowledgeReconciliation(ready);
+          setReconciliationToken(token);
           setFeedback({ message: ready ? "已刷新并核对预选任务，可以确认当前状态后解除阻塞。" : "列表已刷新，但预选任务写入仍在进行或尚未完成确认；请稍后再次刷新。", tone: "warning", reconcile: true, noticeId });
         } else {
           setBlockedByUnknown(true);
           setCanAcknowledgePendingCreation(Boolean(noticeId && source.pendingTaskCreationNoticeId === noticeId && source.isPendingTaskCreationReady?.(noticeId) === true));
           setCanAcknowledgeReconciliation(false);
+          setReconciliationToken(undefined);
           setFeedback({ message: "列表已刷新，但本次任务创建结果仍待确认；为避免重复创建，当前表单不会再次提交。", tone: "warning", reconcile: true, noticeId });
         }
       } else {
-        const ready = source.isTaskReconciliationReady?.(task?.id ?? "") === true;
+        const targetTaskId = task?.id ?? "";
+        const token = source.getTaskReconciliationToken?.(targetTaskId);
+        const ready = source.isTaskReconciliationReady?.(targetTaskId, token) === true;
         setBlockedByUnknown(!ready);
         setCanAcknowledgeReconciliation(ready);
+        setReconciliationToken(token);
         setFeedback({ message: ready ? "已刷新并核对任务列表，可以确认当前状态后解除阻塞。" : "列表已刷新，但任务写入仍在进行或尚未完成确认；请稍后再次刷新。", tone: "warning", reconcile: true });
       }
     } catch (error) {
+      setReconciliationToken(undefined);
       setFeedback({ message: error instanceof Error ? `刷新任务列表失败：${error.message}` : "刷新任务列表失败，请稍后重试。", tone: "warning", reconcile: true });
     } finally {
       setPending(false);
@@ -181,11 +193,11 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   };
 
   const acknowledgeReconciliation = (event?: MouseEvent<HTMLButtonElement>) => {
-    const targetTaskId = mode === "edit" ? task?.id : source.pendingTaskCreationResourceId;
-    if (!targetTaskId || !canAcknowledgeReconciliation || !source.acknowledgeTaskReconciliation?.(targetTaskId)) return;
+    if (!reconciliationTargetId || !canConfirmReconciliation || !source.acknowledgeTaskReconciliation?.(reconciliationTargetId, reconciliationToken)) return;
     if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgeReconciliation(false);
+    setReconciliationToken(undefined);
     setFeedback({ message: "已确认当前任务状态，可以继续操作。", tone: "success" });
   };
 
@@ -212,6 +224,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     if (effectiveBlocked) return;
     setPending(true);
     setFeedback(null);
+    setReconciliationToken(undefined);
     const baseline = baselineRef.current;
     const update: TaskUpdate = {};
     if (title.trim() !== baseline.title) update.title = title;
@@ -260,7 +273,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       {mode === "create" && source.pendingTaskCreation && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{source.pendingTaskCreationResourceId ? "任务创建结果已关联预选身份，仍待刷新核对；当前表单不会再次提交。" : "上一次任务创建结果仍待确认；请先检查任务列表，当前表单不会再次提交。"}<Link to="/tasks" className="inline-link ml-2">打开任务列表</Link></div>}
       {relationWritePending && !feedback && <div className="inline-state inline-state-warning" role="status"><span aria-hidden="true">!</span>任务关系保存中，普通编辑暂时不可用。</div>}
       {sourceRelationshipBlocked && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{sourceRelationshipNotice}</div>}
-      {(feedback?.reconcile || sourceRelationshipBlocked || (mode === "create" && source.pendingTaskCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{mode === "create" && canAcknowledgePendingCreation && (feedback?.noticeId ?? source.pendingTaskCreationNoticeId) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}{canAcknowledgeReconciliation && (sourceRelationshipBlocked || (mode === "create" && Boolean(source.pendingTaskCreationResourceId))) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}>{mode === "create" ? "确认当前任务状态，解除阻塞" : "确认当前关系，解除阻塞"}</Button>}</div>}
+      {(feedback?.reconcile || sourceRelationshipBlocked || (mode === "create" && source.pendingTaskCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{mode === "create" && canAcknowledgePendingCreation && (feedback?.noticeId ?? source.pendingTaskCreationNoticeId) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}{canConfirmReconciliation && (sourceRelationshipBlocked || (mode === "create" && Boolean(source.pendingTaskCreationResourceId))) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}>{mode === "create" ? "确认当前任务状态，解除阻塞" : "确认当前关系，解除阻塞"}</Button>}</div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}{feedback.taskId && <Link to="/tasks/$taskId" params={{ taskId: feedback.taskId }} className="inline-link ml-2">打开已创建任务</Link>}</div>}
       <div className="form-actions">
         <Button type="submit" className="button button-primary" disabled={!canWrite || pending || effectiveBlocked || !title.trim() || !goal.trim() || !projectId}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存任务"}</Button>
@@ -284,6 +297,7 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
   const [canAcknowledgeReconciliation, setCanAcknowledgeReconciliation] = useState(false);
+  const [reconciliationToken, setReconciliationToken] = useState<string | undefined>();
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
   const [deleted, setDeleted] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
@@ -309,6 +323,8 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
   const sourceRelationshipBlocked = Boolean(sourceRelationshipNotice);
   const relationWritePending = source.isTaskRelationWritePending?.(taskId) === true;
   const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked || relationWritePending;
+  const canConfirmReconciliation = canAcknowledgeReconciliation
+    && source.isTaskReconciliationReady?.(taskId, reconciliationToken) === true;
 
   if (editing) return <TaskForm source={source} mode="edit" task={task} onCancelled={finishEditing} onSaved={finishEditing} />;
 
@@ -335,11 +351,14 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
     setPending(true);
     try {
       await source.refresh();
-      const ready = source.isTaskReconciliationReady?.(taskId) === true;
+      const token = source.getTaskReconciliationToken?.(taskId);
+      const ready = source.isTaskReconciliationReady?.(taskId, token) === true;
       setBlockedByUnknown(!ready);
       setCanAcknowledgeReconciliation(ready);
+      setReconciliationToken(token);
       setFeedback({ message: ready ? "已刷新并核对任务列表，可以确认当前状态后解除阻塞。" : "列表已刷新，但任务写入仍在进行或尚未完成确认；请稍后再次刷新。", tone: "warning", reconcile: true });
     } catch (error) {
+      setReconciliationToken(undefined);
       setFeedback({ message: error instanceof Error ? `刷新任务列表失败：${error.message}` : "刷新任务列表失败，请稍后重试。", tone: "warning", reconcile: true });
     } finally {
       setPending(false);
@@ -347,10 +366,11 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
   };
 
   const acknowledgeReconciliation = (event: MouseEvent<HTMLButtonElement>) => {
-    if (!canAcknowledgeReconciliation || !source.acknowledgeTaskReconciliation?.(taskId)) return;
+    if (!canConfirmReconciliation || !source.acknowledgeTaskReconciliation?.(taskId, reconciliationToken)) return;
     if (event.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgeReconciliation(false);
+    setReconciliationToken(undefined);
     setFeedback({ message: "已确认当前关系状态，可以继续操作。", tone: "success" });
   };
 
@@ -361,7 +381,7 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
         <Button ref={editButtonRef} type="button" variant="secondary" className="button button-secondary" onClick={() => setEditing(true)} disabled={!canWrite || effectiveBlocked}><Pencil size={15} aria-hidden="true" />编辑任务</Button>
         <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={() => { void remove(); }} disabled={!canWrite || pending || effectiveBlocked}><Trash2 size={15} aria-hidden="true" />{pending ? "删除中…" : "删除任务"}</Button>
       </div>
-      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{sourceRelationshipBlocked && canAcknowledgeReconciliation && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}><Check size={15} aria-hidden="true" />确认当前关系，解除阻塞</Button>}</div>}
+      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{sourceRelationshipBlocked && canConfirmReconciliation && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}><Check size={15} aria-hidden="true" />确认当前关系，解除阻塞</Button>}</div>}
       {sourceRelationshipBlocked && !feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="alert">{sourceRelationshipNotice}</p>}
       {relationWritePending && !feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="status">任务关系保存中，编辑和删除暂时不可用。</p>}
       {feedback && <div ref={feedbackRef} tabIndex={-1} className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
