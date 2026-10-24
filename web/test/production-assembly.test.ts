@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { ApiClientError, type AuthenticatedApiClient } from "@loomhelm/api-client";
+import { QueryClient } from "@tanstack/react-query";
 
 import {
+  clearPrincipalQueries,
   createAuthenticatedProductionAssembly,
   createProductionAuthFailureAssembly,
   createUnauthenticatedProductionAssembly
@@ -13,6 +15,17 @@ import { mapTask } from "../src/features/projects/api";
 const client = {} as AuthenticatedApiClient;
 
 describe("production browser assembly", () => {
+  test("cancels and removes queries for the previous browser principal", async () => {
+    const client = new QueryClient();
+    client.setQueryData(["loomhelm", "user/a", "projects"], ["old"]);
+    client.setQueryData(["loomhelm", "user/b", "projects"], ["current"]);
+
+    await clearPrincipalQueries(client, "user/a");
+
+    expect(client.getQueryData(["loomhelm", "user/a", "projects"])).toBeUndefined();
+    expect(client.getQueryData(["loomhelm", "user/b", "projects"])).toEqual(["current"]);
+  });
+
   test("uses the bootstrapped browser principal for the production scope", () => {
     const assembly = createAuthenticatedProductionAssembly(client, { user_id: "user/browser", csrf_protection: "same_origin" });
 

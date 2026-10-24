@@ -1,5 +1,5 @@
 import { Check, Pencil, Save, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
@@ -80,6 +80,8 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const [pending, setPending] = useState(false);
   const [canAcknowledgePendingCreation, setCanAcknowledgePendingCreation] = useState(false);
   const [canAcknowledgeReconciliation, setCanAcknowledgeReconciliation] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const restoreFocusAfterAcknowledgementRef = useRef(false);
   const targetProjectId = task?.projectId ?? projectId;
   const canWrite = source.getProjectPermissions(targetProjectId).canWrite;
   const sourceRelationshipNotice = taskWriteBlockReason(task);
@@ -106,6 +108,12 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const lastTaskIdentityKeyRef = useRef<string | undefined>(undefined);
   const relationWritePending = mode === "edit" && task?.id ? source.isTaskRelationWritePending?.(task.id) === true : false;
   const effectiveBlocked = blockedByUnknown || sourceRelationshipBlocked || relationWritePending || (mode === "create" && source.pendingTaskCreation === true);
+
+  useEffect(() => {
+    if (!restoreFocusAfterAcknowledgementRef.current) return;
+    restoreFocusAfterAcknowledgementRef.current = false;
+    formRef.current?.focus({ preventScroll: true });
+  }, [canAcknowledgePendingCreation, canAcknowledgeReconciliation, feedback]);
 
   useEffect(() => {
     if (lastTaskIdentityKeyRef.current === undefined) {
@@ -172,22 +180,23 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     }
   };
 
-  const acknowledgePendingCreation = () => {
-    const noticeId = feedback?.noticeId ?? source.pendingTaskCreationNoticeId;
-    if (!noticeId || !canAcknowledgePendingCreation) return;
-    if (!source.acknowledgePendingTaskCreation?.(noticeId)) return;
-    setBlockedByUnknown(false);
-    setCanAcknowledgePendingCreation(false);
-    setFeedback({ message: "已确认任务列表中没有这次写入，可以重新提交。", tone: "success" });
-  };
-
-  const acknowledgeReconciliation = () => {
+  const acknowledgeReconciliation = (event?: MouseEvent<HTMLButtonElement>) => {
     const targetTaskId = mode === "edit" ? task?.id : source.pendingTaskCreationResourceId;
-    if (!targetTaskId || !canAcknowledgeReconciliation) return;
-    if (!source.acknowledgeTaskReconciliation?.(targetTaskId)) return;
+    if (!targetTaskId || !canAcknowledgeReconciliation || !source.acknowledgeTaskReconciliation?.(targetTaskId)) return;
+    if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgeReconciliation(false);
     setFeedback({ message: "已确认当前任务状态，可以继续操作。", tone: "success" });
+  };
+
+  const acknowledgePendingCreation = (event?: MouseEvent<HTMLButtonElement>) => {
+    const noticeId = feedback?.noticeId ?? source.pendingTaskCreationNoticeId;
+    if (!noticeId || !canAcknowledgePendingCreation) return;
+    if (!source.acknowledgePendingTaskCreation?.(noticeId)) return;
+    if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
+    setBlockedByUnknown(false);
+    setCanAcknowledgePendingCreation(false);
+    setFeedback({ message: "已确认任务列表中没有这次写入，可以重新提交。", tone: "success" });
   };
 
   const toggleDependency = (id: string) => {
@@ -235,7 +244,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   };
 
   return (
-    <form className="form-panel w-full max-w-3xl" aria-label={mode === "create" ? "创建任务" : "编辑任务"} onSubmit={(event) => { void submit(event); }}>
+    <form ref={formRef} tabIndex={-1} className="form-panel w-full max-w-3xl" aria-label={mode === "create" ? "创建任务" : "编辑任务"} onSubmit={(event) => { void submit(event); }}>
       <div className="mb-5">
         <span className="section-kicker">{mode === "create" ? "NEW TASK" : "TASK EDITOR"}</span>
         <h2 className="mt-1 text-lg font-semibold">{mode === "create" ? "创建任务" : "编辑任务"}</h2>
@@ -278,7 +287,14 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
   const [deleted, setDeleted] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
+  const feedbackRef = useRef<HTMLDivElement>(null);
+  const restoreFocusAfterAcknowledgementRef = useRef(false);
   const task = source.getTask(taskId) ?? fallbackTask;
+  useEffect(() => {
+    if (!restoreFocusAfterAcknowledgementRef.current) return;
+    restoreFocusAfterAcknowledgementRef.current = false;
+    feedbackRef.current?.focus({ preventScroll: true });
+  }, [canAcknowledgeReconciliation, feedback]);
   const finishEditing = () => {
     setEditing(false);
     requestAnimationFrame(() => editButtonRef.current?.focus());
@@ -330,6 +346,14 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
     }
   };
 
+  const acknowledgeReconciliation = (event: MouseEvent<HTMLButtonElement>) => {
+    if (!canAcknowledgeReconciliation || !source.acknowledgeTaskReconciliation?.(taskId)) return;
+    if (event.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
+    setBlockedByUnknown(false);
+    setCanAcknowledgeReconciliation(false);
+    setFeedback({ message: "已确认当前关系状态，可以继续操作。", tone: "success" });
+  };
+
   return (
     <section className="info-block" aria-label="任务操作">
       <span className="section-kicker">任务操作</span>
@@ -337,10 +361,10 @@ export function TaskEditor({ source, taskId, fallbackTask, onDeleteStarted, onDe
         <Button ref={editButtonRef} type="button" variant="secondary" className="button button-secondary" onClick={() => setEditing(true)} disabled={!canWrite || effectiveBlocked}><Pencil size={15} aria-hidden="true" />编辑任务</Button>
         <Button type="button" variant="ghost" className="button text-[var(--danger)]" onClick={() => { void remove(); }} disabled={!canWrite || pending || effectiveBlocked}><Trash2 size={15} aria-hidden="true" />{pending ? "删除中…" : "删除任务"}</Button>
       </div>
-      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{sourceRelationshipBlocked && canAcknowledgeReconciliation && <Button type="button" variant="ghost" className="button button-quiet" onClick={() => { if (!source.acknowledgeTaskReconciliation?.(taskId)) return; setCanAcknowledgeReconciliation(false); setFeedback({ message: "已确认当前关系状态，可以继续操作。", tone: "success" }); }}><Check size={15} aria-hidden="true" />确认当前关系，解除阻塞</Button>}</div>}
+      {(feedback?.reconcile || sourceRelationshipBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{sourceRelationshipBlocked && canAcknowledgeReconciliation && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}><Check size={15} aria-hidden="true" />确认当前关系，解除阻塞</Button>}</div>}
       {sourceRelationshipBlocked && !feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="alert">{sourceRelationshipNotice}</p>}
       {relationWritePending && !feedback && <p className="mt-3 text-xs leading-6 text-[var(--warning)]" role="status">任务关系保存中，编辑和删除暂时不可用。</p>}
-      {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
+      {feedback && <div ref={feedbackRef} tabIndex={-1} className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
     </section>
   );
 }

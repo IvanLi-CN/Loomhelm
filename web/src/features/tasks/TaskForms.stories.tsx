@@ -5,6 +5,7 @@ import { expect, userEvent, within } from "storybook/test";
 import { createStorySource, storyTasks } from "./story-source";
 import { TaskEditor, TaskForm } from "./TaskForm";
 import { TaskRelationshipEditor } from "./TaskRelations";
+import type { TaskRecord } from "./types";
 
 const meta = {
   title: "Product/TaskForms",
@@ -74,6 +75,7 @@ export const KnownCreationRecovery: Story = {
     expect(await canvas.findByText("已刷新并核对预选任务，可以确认当前状态后解除阻塞。")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "确认当前任务状态，解除阻塞" }));
     expect(await canvas.findByText("已确认当前任务状态，可以继续操作。")).toBeInTheDocument();
+    expect(canvas.getByRole("form", { name: "创建任务" })).toHaveFocus();
   }
 };
 
@@ -87,6 +89,7 @@ export const PendingCreationRecovery: Story = {
     expect(await canvas.findByText("列表已刷新，但本次任务创建结果仍待确认；为避免重复创建，当前表单不会再次提交。")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "确认未创建，允许重新提交" }));
     expect(await canvas.findByText("已确认任务列表中没有这次写入，可以重新提交。")).toBeInTheDocument();
+    expect(canvas.getByRole("form", { name: "创建任务" })).toHaveFocus();
   }
 };
 
@@ -131,8 +134,18 @@ export const ProtectedDelete: Story = {
 export const ReconciliationBlocked: Story = {
   args: { source: createStorySource(), mode: "edit" },
   render: () => {
-    const task = { ...storyTasks[0], relationshipsConfirmed: false, reconciliationNotice: "关系写入结果待核对；请先刷新列表。" };
-    const source = createStorySource({ tasks: [task, ...storyTasks.slice(1)], getTask: (id) => id === task.id ? task : storyTasks.find((item) => item.id === id) });
+    const task: TaskRecord = { ...storyTasks[0], relationshipsConfirmed: false, reconciliationNotice: "关系写入结果待核对；请先刷新列表。" };
+    const source = createStorySource({
+      tasks: [task, ...storyTasks.slice(1)],
+      getTask: (id) => id === task.id ? task : storyTasks.find((item) => item.id === id),
+      isTaskReconciliationReady: (id) => id === task.id,
+      acknowledgeTaskReconciliation: (id) => {
+        if (id !== task.id) return false;
+        task.relationshipsConfirmed = true;
+        task.reconciliationNotice = undefined;
+        return true;
+      }
+    });
     return <StoryFrame><TaskEditor source={source} taskId={task.id} /></StoryFrame>;
   },
   play: async ({ canvasElement }) => {
@@ -140,6 +153,34 @@ export const ReconciliationBlocked: Story = {
     expect(canvas.getByRole("alert")).toHaveTextContent("关系写入结果待核对");
     expect(canvas.getByRole("button", { name: "编辑任务" })).toBeDisabled();
     expect(canvas.getByRole("button", { name: "删除任务" })).toBeDisabled();
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务列表" }));
+    await userEvent.click(canvas.getByRole("button", { name: "确认当前关系，解除阻塞" }));
+    expect(await canvas.findByRole("status", { name: "已确认当前关系状态，可以继续操作。" })).toHaveFocus();
+  }
+};
+
+export const RelationshipReconciliationRecovery: Story = {
+  args: { source: createStorySource(), mode: "create" },
+  render: () => {
+    const task: TaskRecord = { ...storyTasks[1], relationshipsConfirmed: false, reconciliationNotice: "关系写入结果待核对；请先刷新列表。" };
+    const source = createStorySource({
+      tasks: [storyTasks[0], task],
+      getTask: (id) => id === task.id ? task : storyTasks.find((item) => item.id === id),
+      isTaskReconciliationReady: (id) => id === task.id,
+      acknowledgeTaskReconciliation: (id) => {
+        if (id !== task.id) return false;
+        task.relationshipsConfirmed = true;
+        task.reconciliationNotice = undefined;
+        return true;
+      }
+    });
+    return <StoryFrame><TaskRelationshipEditor source={source} taskId={task.id} /></StoryFrame>;
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务关系" }));
+    await userEvent.click(canvas.getByRole("button", { name: "确认当前关系，解除阻塞" }));
+    expect(await canvas.findByRole("status", { name: "已确认当前关系状态，可以继续操作。" })).toHaveFocus();
   }
 };
 

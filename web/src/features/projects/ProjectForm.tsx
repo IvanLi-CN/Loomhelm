@@ -1,5 +1,5 @@
 import { Check, Pencil, Save, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,8 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
   const [blockedByUnknown, setBlockedByUnknown] = useState(false);
   const [canAcknowledgePendingCreation, setCanAcknowledgePendingCreation] = useState(false);
   const [canAcknowledgeReconciliation, setCanAcknowledgeReconciliation] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const restoreFocusAfterAcknowledgementRef = useRef(false);
   const identityRef = useRef<{ mode: ProjectFormProps["mode"]; projectId?: string }>({ mode, projectId });
   const nameDirtyRef = useRef(false);
   const summaryDirtyRef = useRef(false);
@@ -43,6 +45,12 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
   const sourceProjectNotice = projectWriteBlockReason(project);
   const sourceProjectBlocked = Boolean(sourceProjectNotice);
   const effectiveBlocked = blockedByUnknown || sourceProjectBlocked || (mode === "create" && source.pendingProjectCreation === true);
+
+  useEffect(() => {
+    if (!restoreFocusAfterAcknowledgementRef.current) return;
+    restoreFocusAfterAcknowledgementRef.current = false;
+    formRef.current?.focus({ preventScroll: true });
+  }, [canAcknowledgePendingCreation, canAcknowledgeReconciliation, feedback]);
 
   useEffect(() => {
     const identityChanged = identityRef.current.mode !== mode || identityRef.current.projectId !== projectId;
@@ -94,19 +102,21 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
     }
   };
 
-  const acknowledgePendingCreation = () => {
+  const acknowledgePendingCreation = (event?: MouseEvent<HTMLButtonElement>) => {
     const noticeId = feedback?.noticeId ?? source.pendingProjectCreationNoticeId;
     if (!noticeId || !canAcknowledgePendingCreation) return;
     if (!source.acknowledgePendingProjectCreation?.(noticeId)) return;
+    if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgePendingCreation(false);
     setFeedback({ message: "已确认项目列表中没有这次写入，可以重新提交。", tone: "success" });
   };
 
-  const acknowledgeReconciliation = () => {
+  const acknowledgeReconciliation = (event?: MouseEvent<HTMLButtonElement>) => {
     const targetProjectId = mode === "edit" ? projectId : source.pendingProjectCreationResourceId;
     if (!targetProjectId || !canAcknowledgeReconciliation) return;
     if (!source.acknowledgeProjectReconciliation?.(targetProjectId)) return;
+    if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgeReconciliation(false);
     setFeedback({ message: "已确认当前项目状态，可以继续操作。", tone: "success" });
@@ -147,7 +157,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
   };
 
   return (
-    <form className="form-panel w-full max-w-2xl" aria-label={mode === "create" ? "创建项目" : "编辑项目"} onSubmit={(event) => { void submit(event); }}>
+    <form ref={formRef} tabIndex={-1} className="form-panel w-full max-w-2xl" aria-label={mode === "create" ? "创建项目" : "编辑项目"} onSubmit={(event) => { void submit(event); }}>
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
           <span className="section-kicker">{mode === "create" ? "NEW PROJECT" : "PROJECT SETTINGS"}</span>
@@ -188,7 +198,15 @@ export function ProjectActions({ source, projectId, fallbackProject, onDeleteSta
   const [canAcknowledgeReconciliation, setCanAcknowledgeReconciliation] = useState(false);
   const [deleted, setDeleted] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
+  const feedbackRef = useRef<HTMLDivElement>(null);
+  const restoreFocusAfterAcknowledgementRef = useRef(false);
   const project = source.getProject(projectId) ?? fallbackProject;
+
+  useEffect(() => {
+    if (!restoreFocusAfterAcknowledgementRef.current) return;
+    restoreFocusAfterAcknowledgementRef.current = false;
+    feedbackRef.current?.focus({ preventScroll: true });
+  }, [canAcknowledgeReconciliation, feedback]);
 
   if (deleted) {
     return <div className="grid gap-3"><div className="inline-state inline-state-success" role="status"><Check size={15} aria-hidden="true" />项目已删除。</div><div className="form-actions"><Button asChild type="button" variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></div></div>;
@@ -238,8 +256,9 @@ export function ProjectActions({ source, projectId, fallbackProject, onDeleteSta
     }
   };
 
-  const acknowledgeReconciliation = () => {
+  const acknowledgeReconciliation = (event: MouseEvent<HTMLButtonElement>) => {
     if (!canAcknowledgeReconciliation || !source.acknowledgeProjectReconciliation?.(projectId)) return;
+    if (event.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgeReconciliation(false);
     setFeedback({ message: "已确认当前项目状态，可以继续操作。", tone: "success" });
@@ -253,7 +272,7 @@ export function ProjectActions({ source, projectId, fallbackProject, onDeleteSta
       </div>
       {sourceProjectBlocked && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{sourceProjectNotice}</div>}
       {(feedback?.reconcile || sourceProjectBlocked) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button>{sourceProjectBlocked && canAcknowledgeReconciliation && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}>确认当前项目状态，解除阻塞</Button>}</div>}
-      {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
+      {feedback && <div ref={feedbackRef} tabIndex={-1} className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><span aria-hidden="true">!</span>{feedback.message}</div>}
     </div>
   );
 }

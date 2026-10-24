@@ -65,6 +65,33 @@ func TestTaskHTTPCRUDRelationshipsAndRequiredGoal(t *testing.T) {
 	taskIDs = append(taskIDs, first.ID)
 	second := createHTTPTask(t, router, project.ID, "HTTP child", "child goal")
 	taskIDs = append(taskIDs, second.ID)
+	exactTaskID := "task_" + fmt.Sprintf("%032x", time.Now().UnixNano())
+	exactTaskResponse := taskHTTPRequest(router, http.MethodPost, "/tasks", fmt.Sprintf(`{"id":%q,"project_id":%q,"title":"Exact HTTP task","goal":"exact goal"}`, exactTaskID, project.ID))
+	requireTaskHTTPStatus(t, exactTaskResponse, http.StatusCreated)
+	var exactTaskBody struct {
+		Task tasks.Task `json:"task"`
+	}
+	decodeTaskHTTPJSON(t, exactTaskResponse, &exactTaskBody)
+	if exactTaskBody.Task.ID != exactTaskID || exactTaskBody.Task.Title != "Exact HTTP task" {
+		t.Fatalf("exact task response = %+v", exactTaskBody.Task)
+	}
+	taskIDs = append(taskIDs, exactTaskID)
+	duplicateTaskResponse := taskHTTPRequest(router, http.MethodPost, "/tasks", fmt.Sprintf(`{"id":%q,"project_id":%q,"title":"Must not overwrite","goal":"changed goal"}`, exactTaskID, project.ID))
+	requireTaskHTTPStatus(t, duplicateTaskResponse, http.StatusConflict)
+	exactTaskGet := taskHTTPRequest(router, http.MethodGet, "/tasks/"+exactTaskID, "")
+	requireTaskHTTPStatus(t, exactTaskGet, http.StatusOK)
+	decodeTaskHTTPJSON(t, exactTaskGet, &exactTaskBody)
+	if exactTaskBody.Task.Title != "Exact HTTP task" || exactTaskBody.Task.Goal != "exact goal" {
+		t.Fatalf("duplicate task changed stored task = %+v", exactTaskBody.Task)
+	}
+	for _, payload := range []string{
+		fmt.Sprintf(`{"id":null,"project_id":%q,"title":"Null task","goal":"goal"}`, project.ID),
+		fmt.Sprintf(`{"id":"","project_id":%q,"title":"Empty task","goal":"goal"}`, project.ID),
+		fmt.Sprintf(`{"id":"task_not-a-valid-id","project_id":%q,"title":"Malformed task","goal":"goal"}`, project.ID),
+	} {
+		response := taskHTTPRequest(router, http.MethodPost, "/tasks", payload)
+		requireTaskHTTPStatus(t, response, http.StatusBadRequest)
+	}
 
 	getResponse := taskHTTPRequest(router, http.MethodGet, "/tasks/"+first.ID, "")
 	requireTaskHTTPStatus(t, getResponse, http.StatusOK)

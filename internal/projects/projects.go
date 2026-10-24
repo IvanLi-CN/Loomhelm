@@ -2,8 +2,10 @@
 package projects
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -676,11 +678,26 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 }
 
 func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
-	var body CreateRequest
+	var body struct {
+		ID          json.RawMessage `json:"id"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+	}
 	if err := auth.DecodeJSON(request, &body); err != nil {
 		return CreateRequest{}, err
 	}
-	return body, nil
+	var id *string
+	if body.ID != nil {
+		if bytes.Equal(bytes.TrimSpace(body.ID), []byte("null")) {
+			return CreateRequest{}, fmt.Errorf("%w: project id cannot be null", auth.ErrInvalid)
+		}
+		var value string
+		if err := json.Unmarshal(body.ID, &value); err != nil {
+			return CreateRequest{}, fmt.Errorf("%w: project id must be a string", auth.ErrInvalid)
+		}
+		id = &value
+	}
+	return CreateRequest{ID: id, Name: body.Name, Description: body.Description}, nil
 }
 
 func (s *Service) handleGet(writer http.ResponseWriter, request *http.Request) {

@@ -3,9 +3,11 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -526,11 +528,11 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 
 func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
 	var body struct {
-		ID        *string `json:"id,omitempty"`
-		ProjectID string  `json:"project_id"`
-		Title     string  `json:"title"`
-		Goal      *string `json:"goal"`
-		Status    *Status `json:"status,omitempty"`
+		ID        json.RawMessage `json:"id"`
+		ProjectID string          `json:"project_id"`
+		Title     string          `json:"title"`
+		Goal      *string         `json:"goal"`
+		Status    *Status         `json:"status,omitempty"`
 	}
 	if err := auth.DecodeJSON(request, &body); err != nil {
 		return CreateRequest{}, err
@@ -538,7 +540,18 @@ func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
 	if body.Goal == nil {
 		return CreateRequest{}, fmt.Errorf("%w: goal is required", auth.ErrInvalid)
 	}
-	return CreateRequest{ID: body.ID, ProjectID: body.ProjectID, Title: body.Title, Goal: *body.Goal, Status: body.Status}, nil
+	var id *string
+	if body.ID != nil {
+		if bytes.Equal(bytes.TrimSpace(body.ID), []byte("null")) {
+			return CreateRequest{}, fmt.Errorf("%w: task id cannot be null", auth.ErrInvalid)
+		}
+		var value string
+		if err := json.Unmarshal(body.ID, &value); err != nil {
+			return CreateRequest{}, fmt.Errorf("%w: task id must be a string", auth.ErrInvalid)
+		}
+		id = &value
+	}
+	return CreateRequest{ID: id, ProjectID: body.ProjectID, Title: body.Title, Goal: *body.Goal, Status: body.Status}, nil
 }
 
 func (s *Service) handleGet(writer http.ResponseWriter, request *http.Request) {

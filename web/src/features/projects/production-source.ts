@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiClientConfigurationError, ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
@@ -60,11 +60,22 @@ export interface MutationNotice {
 export function mergeMutationNoticeChanges(
   current: readonly MutationNotice[],
   added: readonly MutationNotice[],
-  removed: readonly string[]
+  removed: readonly string[],
+  removedNotices: readonly MutationNotice[] = []
 ): readonly MutationNotice[] {
   const notices = new Map(current.map((notice) => [notice.id, notice] as const));
-  removed.forEach((id) => notices.delete(id));
-  added.forEach((notice) => notices.set(notice.id, notice));
+  const removedById = new Map(removedNotices.map((notice) => [notice.id, notice] as const));
+  removed.forEach((id) => {
+    const currentNotice = notices.get(id);
+    const removedNotice = removedById.get(id);
+    if (currentNotice?.volatile && (!removedNotice || !sameMutationNoticeContent(currentNotice, removedNotice))) return;
+    notices.delete(id);
+  });
+  added.forEach((notice) => {
+    const currentNotice = notices.get(notice.id);
+    if (currentNotice?.volatile && !sameMutationNoticeContent(currentNotice, notice)) return;
+    notices.set(notice.id, notice);
+  });
   return [...notices.values()];
 }
 
@@ -124,10 +135,21 @@ function parseSerializedMutationNotice(value: string | null): MutationNotice | u
   }
 }
 
-interface MutationNoticeStorageRead {
+export interface MutationNoticeStorageRead {
   available: boolean;
   shared: boolean;
   notices: readonly MutationNotice[];
+}
+
+export function mergePersistedMutationNoticeState(
+  current: readonly MutationNotice[],
+  state: MutationNoticeStorageRead,
+  confirmedRemovedNotices: readonly MutationNotice[] = []
+): readonly MutationNotice[] {
+  if (!state.available) return current;
+  const merged = mergePersistedMutationNotices(current, state.notices, true);
+  if (!confirmedRemovedNotices.length) return merged;
+  return mergeMutationNoticeChanges(merged, [], confirmedRemovedNotices.map((notice) => notice.id), confirmedRemovedNotices);
 }
 
 interface MutationNoticeUpdateResult {
@@ -269,6 +291,27 @@ export function mutationNoticeRemovalScopes(current: readonly MutationNotice[], 
     return result;
   });
   return [...new Set(scopes.filter((scope): scope is string => Boolean(scope)))];
+}
+
+export function markMutationRefreshScopes(
+  barriers: Map<string, number>,
+  scopes: readonly string[],
+  nextRevision: number
+): { revisions: ReadonlyMap<string, number>; nextRevision: number } {
+  let revision = nextRevision;
+  const revisions = new Map<string, number>();
+  for (const scope of new Set(scopes)) {
+    revision += 1;
+    barriers.set(scope, revision);
+    revisions.set(scope, revision);
+  }
+  return { revisions, nextRevision: revision };
+}
+
+export function releaseMutationRefreshScopes(barriers: Map<string, number>, revisions: ReadonlyMap<string, number>): void {
+  for (const [scope, revision] of revisions) {
+    if (barriers.get(scope) === revision) barriers.delete(scope);
+  }
 }
 
 export function createClientResourceId(kind: "project" | "task"): string | undefined {
@@ -440,10 +483,44 @@ export function isProjectTaskQueryForPrincipal(query: { queryKey: readonly unkno
   return query.queryKey[0] === "loomhelm" && query.queryKey[1] === principalId;
 }
 
-export function hasIncompleteProjectTaskRead(data: unknown): boolean {
-  if (!data || typeof data !== "object") return false;
-  const read = data as { failures?: readonly unknown[]; deniedProjectIds?: readonly unknown[]; deniedTaskIds?: readonly unknown[] };
-  return Boolean(read.failures?.length || read.deniedProjectIds?.length || read.deniedTaskIds?.length);
+export function hasIncompleteProjectTaskRead(data: unknown, expectedProjectIds: readonly string[] = [], expectedTaskIds: readonly string[] = []): boolean {
+  if (!data || typeof data !== "object") return true;
+  const read = data as {
+    failures?: readonly unknown[];
+    deniedProjectIds?: readonly unknown[];
+    deniedTaskIds?: readonly unknown[];
+    items?: unknown;
+    relationships?: unknown;
+  };
+  if (read.failures?.length || read.deniedProjectIds?.length || read.deniedTaskIds?.length) return true;
+  if (expectedProjectIds.length > 0) {
+    if (!read.items || typeof read.items !== "object" || Array.isArray(read.items)) return true;
+    const items = read.items as Record<string, unknown>;
+    if (expectedProjectIds.some((projectId) => !Object.prototype.hasOwnProperty.call(items, projectId))) return true;
+  }
+  if (expectedTaskIds.length > 0) {
+    if (!Array.isArray(read.items) || !read.relationships || typeof read.relationships !== "object" || Array.isArray(read.relationships)) return true;
+    const taskIds = new Set(read.items.flatMap((item) => item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string" ? [(item as { id: string }).id] : []));
+    const relationships = read.relationships as Record<string, unknown>;
+    if (expectedTaskIds.some((taskId) => !taskIds.has(taskId) || !Object.prototype.hasOwnProperty.call(relationships, taskId))) return true;
+  }
+  return false;
+}
+
+export interface ProjectTaskRefreshQuerySnapshot {
+  state: {
+    status: string;
+    fetchStatus: string;
+    data: unknown;
+  };
+}
+
+export function isCompleteProjectTaskQuery(query: ProjectTaskRefreshQuerySnapshot | undefined, complete: boolean): boolean {
+  return Boolean(query
+    && query.state.status === "success"
+    && query.state.fetchStatus === "idle"
+    && query.state.data !== undefined
+    && complete);
 }
 
 const emptyProjectPermissions: ProjectPermissionSnapshot = {
@@ -647,7 +724,9 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   const queryClient = useQueryClient();
   const subjectId = principalId ?? "anonymous";
   const sessionIdentityRef = useRef({ principalId: subjectId, sessionGeneration });
-  sessionIdentityRef.current = { principalId: subjectId, sessionGeneration };
+  useLayoutEffect(() => {
+    sessionIdentityRef.current = { principalId: subjectId, sessionGeneration };
+  }, [sessionGeneration, subjectId]);
   const isCurrentSession = useCallback(() => sessionIdentityRef.current.principalId === subjectId && sessionIdentityRef.current.sessionGeneration === sessionGeneration, [sessionGeneration, subjectId]);
   const queryEnabled = enabled && Boolean(principalId);
   const projectsQuery = useQuery({
@@ -709,7 +788,11 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
 
   const mutationNoticeKey = useMemo(() => projectTaskQueryKeys.mutationNotice(subjectId), [subjectId]);
   const mutationNoticeStoragePrefixValue = useMemo(() => mutationNoticeStoragePrefix(subjectId), [subjectId]);
-  const remoteRefreshScopesRef = useRef(new Set<string>());
+  const remoteRefreshScopesRef = useRef(new Map<string, number>());
+  const remoteRefreshRevisionRef = useRef(0);
+  useLayoutEffect(() => {
+    remoteRefreshScopesRef.current.clear();
+  }, [sessionGeneration, subjectId]);
   const mutationNoticeQuery = useQuery<readonly MutationNotice[]>({
     queryKey: mutationNoticeKey,
     queryFn: async () => readPersistedMutationNotices(subjectId),
@@ -718,6 +801,53 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     staleTime: Infinity,
     gcTime: Infinity
   });
+  const refreshProjectTaskQueries = useCallback(async () => {
+    const projectsKey = projectTaskQueryKeys.projects(subjectId, sessionGeneration);
+    await Promise.all([
+      queryClient.cancelQueries({ queryKey: projectsKey, exact: true }),
+      queryClient.cancelQueries({ queryKey: ["loomhelm", subjectId, sessionGeneration, "memberships"] }),
+      queryClient.cancelQueries({ queryKey: ["loomhelm", subjectId, sessionGeneration, "tasks"] })
+    ]);
+    if (!isCurrentSession()) throw new Error("登录身份已变化，刷新结果不能应用。");
+    const refreshedProjects = await queryClient.fetchQuery<readonly Project[]>({
+      queryKey: projectsKey,
+      queryFn: () => listAllProjects(api),
+      staleTime: 0,
+      retry: false
+    });
+    if (!Array.isArray(refreshedProjects)) throw new Error("项目列表刷新不完整，待确认结果仍然保留。");
+    if (!isCurrentSession()) throw new Error("登录身份已变化，刷新结果不能应用。");
+
+    const refreshedProjectIds = [...new Set(refreshedProjects.map((project) => project.id))].sort();
+    const membershipsKey = projectTaskQueryKeys.memberships(subjectId, refreshedProjectIds, sessionGeneration);
+    const refreshedMemberships = await queryClient.fetchQuery<MembershipQueryData>({
+      queryKey: membershipsKey,
+      queryFn: () => readProjectMemberships(api, refreshedProjectIds),
+      staleTime: 0,
+      retry: false
+    });
+    if (!isCurrentSession()) throw new Error("登录身份已变化，刷新结果不能应用。");
+    const tasksKey = projectTaskQueryKeys.tasks(subjectId, sessionGeneration);
+    const refreshedTasks = await queryClient.fetchQuery<TaskQueryData>({
+      queryKey: tasksKey,
+      queryFn: async () => {
+        const items = await listAllTasks(api);
+        return readTaskRelationships(api, items);
+      },
+      staleTime: 0,
+      retry: false
+    });
+    if (!isCurrentSession()) throw new Error("登录身份已变化，刷新结果不能应用。");
+    const expectedTaskIds = refreshedTasks.items.map((task) => task.id);
+    const refreshedQueries = [projectsKey, membershipsKey, tasksKey].map((queryKey) => queryClient.getQueryCache().find({ queryKey, exact: true }));
+    const [projectsQuery, membershipsQuery, tasksQuery] = refreshedQueries;
+    if (!isCompleteProjectTaskQuery(projectsQuery, true)
+      || !isCompleteProjectTaskQuery(membershipsQuery, !hasIncompleteProjectTaskRead(refreshedMemberships, refreshedProjectIds))
+      || !isCompleteProjectTaskQuery(tasksQuery, !hasIncompleteProjectTaskRead(refreshedTasks, [], expectedTaskIds))) {
+      throw new Error("项目、成员、任务或关系列表刷新不完整，待确认结果仍然保留。");
+    }
+    return { projects: refreshedProjects, memberships: refreshedMemberships, tasks: refreshedTasks };
+  }, [api, isCurrentSession, queryClient, sessionGeneration, subjectId]);
   useEffect(() => {
     if (!queryEnabled || typeof window === "undefined") return;
     const apply = (state: MutationNoticeStorageRead, preserveVolatile = false) => {
@@ -726,39 +856,24 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         return;
       }
       const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
-      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergePersistedMutationNotices(current, state.notices, !state.shared));
+      queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergePersistedMutationNoticeState(current, state));
     };
     const refreshAfterRemoteRemoval = async (removedNotices: readonly MutationNotice[], removedIds: readonly string[]) => {
       const scopes = mutationNoticeRemovalScopes(removedNotices, removedIds);
-      scopes.forEach((scope) => remoteRefreshScopesRef.current.add(scope));
       if (!scopes.length) return;
+      const marked = markMutationRefreshScopes(remoteRefreshScopesRef.current, scopes, remoteRefreshRevisionRef.current);
+      remoteRefreshRevisionRef.current = marked.nextRevision;
       let refreshed = false;
       try {
-        const projectsKey = projectTaskQueryKeys.projects(subjectId, sessionGeneration);
-        await queryClient.refetchQueries({ queryKey: projectsKey, exact: true });
-        const refreshedProjects = queryClient.getQueryData<readonly Project[]>(projectsKey) ?? [];
-        const membershipsKey = projectTaskQueryKeys.memberships(subjectId, [...new Set(refreshedProjects.map((project) => project.id))].sort(), sessionGeneration);
-        const tasksKey = projectTaskQueryKeys.tasks(subjectId, sessionGeneration);
-        await Promise.all([
-          queryClient.refetchQueries({ queryKey: membershipsKey, exact: true }),
-          queryClient.refetchQueries({ queryKey: tasksKey, exact: true })
-        ]);
-        const refreshedQueries = [projectsKey, membershipsKey, tasksKey].flatMap((queryKey) => {
-          const query = queryClient.getQueryCache().find({ queryKey, exact: true });
-          return query ? [query] : [];
-        });
-        if (refreshedQueries.length !== 3 || refreshedQueries.some((query) => query.state.status !== "success" || query.state.fetchStatus !== "idle" || query.state.data === undefined || hasIncompleteProjectTaskRead(query.state.data))) {
-          throw new Error("项目、任务或关系列表刷新不完整，待确认结果仍然保留。");
-        }
+        await refreshProjectTaskQueries();
         const persistedState = readPersistedMutationNoticeState(subjectId);
-        const stillPersisted = new Set(persistedState.notices.map((notice) => notice.id));
-        const confirmedRemovedIds = removedIds.filter((id) => !stillPersisted.has(id));
-        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, (current = []) => mergeMutationNoticeChanges(current, persistedState.notices, confirmedRemovedIds));
+        if (!persistedState.available) throw new Error("待确认状态无法读取，刷新结果不能解除写入屏障。");
+        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, (current = []) => mergePersistedMutationNoticeState(current, persistedState, removedNotices));
         refreshed = true;
       } catch {
         // Keep the existing notice and refreshing barrier so a failed read cannot unlock a stale write.
       } finally {
-        if (refreshed) scopes.forEach((scope) => remoteRefreshScopesRef.current.delete(scope));
+        if (refreshed) releaseMutationRefreshScopes(remoteRefreshScopesRef.current, marked.revisions);
       }
     };
     apply(readPersistedMutationNoticeState(subjectId), true);
@@ -768,7 +883,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       if (removedNotice) {
         const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
         const persisted = readPersistedMutationNoticeState(subjectId);
-        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, persisted.notices, []));
+        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, persisted.notices, [removedNotice.id], [removedNotice]));
         void refreshAfterRemoteRemoval([removedNotice], [removedNotice.id]);
         return;
       }
@@ -783,7 +898,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const removedNotices = Array.isArray(signal.removedNotices) ? signal.removedNotices.map(parseMutationNotice).filter((notice): notice is MutationNotice => Boolean(notice)) : [];
       const added = Array.isArray(signal.added) ? signal.added.map(parseMutationNotice).filter((notice): notice is MutationNotice => Boolean(notice)) : [];
       if (removed.length) {
-        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, added, []));
+        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, added, removed, removedNotices));
         void refreshAfterRemoteRemoval([...current, ...removedNotices], removed);
         return;
       }
@@ -800,7 +915,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       channel?.removeEventListener("message", handleBroadcast);
       channel?.close();
     };
-  }, [mutationNoticeKey, mutationNoticeStoragePrefixValue, queryClient, queryEnabled, remoteRefreshScopesRef, sessionGeneration, subjectId]);
+  }, [mutationNoticeKey, mutationNoticeStoragePrefixValue, queryClient, queryEnabled, refreshProjectTaskQueries, remoteRefreshScopesRef, subjectId]);
   const applyMutationNoticeUpdate = useCallback((update: (current: readonly MutationNotice[]) => readonly MutationNotice[], allowLocalFallback = false): MutationNoticeUpdateResult => {
     const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
     const next = update(current);
@@ -1325,23 +1440,14 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       });
     };
     const refresh = async (): Promise<void> => {
-      const projectsKey = projectTaskQueryKeys.projects(subjectId, sessionGeneration);
-      await queryClient.refetchQueries({ queryKey: projectsKey, exact: true });
-      const refreshedProjects = queryClient.getQueryData<readonly Project[]>(projectsKey) ?? [];
-      const refreshedProjectIds = [...new Set(refreshedProjects.map((project) => project.id))].sort();
-      const membershipsKey = projectTaskQueryKeys.memberships(subjectId, refreshedProjectIds, sessionGeneration);
-      const tasksKey = projectTaskQueryKeys.tasks(subjectId, sessionGeneration);
-      await Promise.all([
-        queryClient.refetchQueries({ queryKey: membershipsKey, exact: true }),
-        queryClient.refetchQueries({ queryKey: tasksKey, exact: true })
-      ]);
-      const refreshedQueries = [projectsKey, membershipsKey, tasksKey].flatMap((queryKey) => {
-        const query = queryClient.getQueryCache().find({ queryKey, exact: true });
-        return query ? [query] : [];
-      });
-      const failedQuery = refreshedQueries.find((query) => query.state.status === "error");
-      const incompleteQuery = refreshedQueries.find((query) => hasIncompleteProjectTaskRead(query.state.data));
-      if (failedQuery || incompleteQuery) throw new Error("项目、任务或关系列表刷新不完整，待确认结果仍然保留。");
+      const remoteRefreshScopes = new Map(remoteRefreshScopesRef.current);
+      await refreshProjectTaskQueries();
+      const persistedState = readPersistedMutationNoticeState(subjectId);
+      const currentNotices = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
+      if (!persistedState.available && (remoteRefreshScopes.size > 0 || currentNotices.length > 0)) throw new Error("待确认状态无法读取，刷新结果不能解除写入屏障。");
+      if (persistedState.available) {
+        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, () => mergePersistedMutationNoticeState(currentNotices, persistedState));
+      }
       const notices = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
       for (const notice of notices) {
         if (!isInFlightMutationNotice(notice)) continue;
@@ -1359,7 +1465,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           const persistedNotices = mergePersistedMutationNotices(
             queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [],
             persistedState.notices,
-            !persistedState.shared
+            true
           );
           queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, persistedNotices);
           const persistedNotice = persistedNotices.find((currentNotice) => currentNotice.id === notice.id);
@@ -1382,6 +1488,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         });
         if (result === "failed") throw new Error("写入结果确认状态无法保存，待确认结果仍然保留。");
       }
+      releaseMutationRefreshScopes(remoteRefreshScopesRef.current, remoteRefreshScopes);
     };
 
     const currentMutationNotices = (): readonly MutationNotice[] => queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
@@ -1440,5 +1547,5 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       refresh,
       notice: [readNotice, ...mutationNoticeQuery.data.map((notice) => notice.message)].filter(Boolean).join(" ") || undefined
     } satisfies ProjectTaskSource;
-  }, [api, canCreateProjects, clearMutationNotice, clearProjectMutationNotices, clearTaskMutationNotices, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, invalidatePermissionScope, isCurrentSession, mutationNoticeKey, mutationNoticeQuery.data, pendingProjectCreation, pendingProjectCreationNoticeId, pendingProjectCreationResourceId, pendingTaskCreation, pendingTaskCreationNoticeId, pendingTaskCreationResourceId, permissionChanged, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, recordMutationNoticeWithFallback, relationshipsByTaskId, relationMutationsPending, sessionGeneration, setRelationMutationPending, setTaskView, subjectId, taskViews, tasks, updateMutationNotices, updateProjectMutation, updateTaskMutation]);
+  }, [api, canCreateProjects, clearMutationNotice, clearProjectMutationNotices, clearTaskMutationNotices, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, invalidatePermissionScope, isCurrentSession, mutationNoticeKey, mutationNoticeQuery.data, pendingProjectCreation, pendingProjectCreationNoticeId, pendingProjectCreationResourceId, pendingTaskCreation, pendingTaskCreationNoticeId, pendingTaskCreationResourceId, permissionChanged, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, recordMutationNoticeWithFallback, refreshProjectTaskQueries, relationshipsByTaskId, relationMutationsPending, remoteRefreshScopesRef, sessionGeneration, setRelationMutationPending, setTaskView, subjectId, taskViews, tasks, updateMutationNotices, updateProjectMutation, updateTaskMutation]);
 }

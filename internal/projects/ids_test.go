@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -43,6 +44,10 @@ func TestDecodeCreateRequestDistinguishesMissingAndEmptyID(t *testing.T) {
 	}
 	if empty.ID == nil || *empty.ID != "" {
 		t.Fatalf("empty id = %#v, want pointer to empty string", empty.ID)
+	}
+
+	if _, err := decodeCreateRequest(httptest.NewRequest("POST", "/projects", strings.NewReader(`{"id":null,"name":"Project"}`))); !errors.Is(err, auth.ErrInvalid) {
+		t.Fatalf("null id error = %v, want ErrInvalid", err)
 	}
 }
 

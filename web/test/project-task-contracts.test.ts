@@ -1,20 +1,25 @@
 import { describe, expect, test } from "bun:test";
 
 import { ApiClientConfigurationError, ApiClientError } from "@loomhelm/api-client";
+import { QueryClient } from "@tanstack/react-query";
 
 import {
   isAmbiguousWriteError,
+  isCompleteProjectTaskQuery,
   createClientResourceId,
   filterTaskRelationships,
   filterTasksToVisibleProjects,
   hasIncompleteProjectTaskRead,
+  markMutationRefreshScopes,
   mergeMutationNoticeChanges,
+  mergePersistedMutationNoticeState,
   mergePersistedMutationNotices,
   mutationNoticeRemovalScopes,
   projectTaskQueryKeys,
   readProjectMemberships,
   readTaskRelationships,
   relationWriteBlockReason,
+  releaseMutationRefreshScopes,
   stableBlockedWriteMessage,
   syncTaskRelations,
   toProjectUpdateRequest,
@@ -193,6 +198,21 @@ describe("project/task write contracts", () => {
     expect(hasIncompleteProjectTaskRead({ failures: [], deniedProjectIds: [], deniedTaskIds: [] })).toBe(false);
   });
 
+  test("requires every expected membership and relationship read", () => {
+    expect(hasIncompleteProjectTaskRead({ items: { "project-1": [] }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, ["project-1", "project-2"])).toBe(true);
+    expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: {}, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(true);
+    expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: { "task-1": {} }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(false);
+  });
+
+  test("requires settled successful query state before clearing a refresh barrier", () => {
+    expect(isCompleteProjectTaskQuery(undefined, true)).toBe(false);
+    expect(isCompleteProjectTaskQuery({ state: { status: "pending", fetchStatus: "fetching", data: [] } }, true)).toBe(false);
+    expect(isCompleteProjectTaskQuery({ state: { status: "success", fetchStatus: "fetching", data: [] } }, true)).toBe(false);
+    expect(isCompleteProjectTaskQuery({ state: { status: "success", fetchStatus: "idle", data: undefined } }, true)).toBe(false);
+    expect(isCompleteProjectTaskQuery({ state: { status: "success", fetchStatus: "idle", data: [] } }, false)).toBe(false);
+    expect(isCompleteProjectTaskQuery({ state: { status: "success", fetchStatus: "idle", data: [] } }, true)).toBe(true);
+  });
+
   test("merges cross-tab mutation notice deltas without replacing unrelated barriers", () => {
     const first = { id: "task:one", message: "one" };
     const second = { id: "task:two", message: "two" };
@@ -200,6 +220,62 @@ describe("project/task write contracts", () => {
     expect(mergeMutationNoticeChanges([], [first], [])).toEqual([first]);
     expect(mergeMutationNoticeChanges([first], [second], [])).toEqual([first, second]);
     expect(mergeMutationNoticeChanges([first, second], [], [first.id])).toEqual([second]);
+  });
+
+  test("does not let a stale same-ID signal replace or remove a newer volatile notice", () => {
+    const persisted = { id: "task:one", message: "old", kind: "in-flight" as const, lockScope: "task:one" };
+    const newer = { ...persisted, message: "new", kind: "reconciliation" as const, volatile: true };
+
+    expect(mergeMutationNoticeChanges([newer], [persisted], [])).toEqual([newer]);
+    expect(mergeMutationNoticeChanges([newer], [], [persisted.id], [persisted])).toEqual([newer]);
+    expect(mergeMutationNoticeChanges([newer], [], [persisted.id])).toEqual([newer]);
+    expect(mergeMutationNoticeChanges([persisted], [], [persisted.id], [persisted])).toEqual([]);
+    expect(mergePersistedMutationNoticeState([newer], { available: true, shared: true, notices: [] })).toEqual([newer]);
+    expect(mergePersistedMutationNoticeState([newer], { available: true, shared: true, notices: [] }, [persisted])).toEqual([newer]);
+    expect(mergePersistedMutationNoticeState([persisted], { available: true, shared: true, notices: [] }, [persisted])).toEqual([]);
+  });
+
+  test("keeps an in-memory notice when persisted state is unavailable", () => {
+    const notice = { id: "task:pending", message: "pending", kind: "reconciliation" as const };
+
+    expect(mergePersistedMutationNoticeState([notice], { available: false, shared: false, notices: [] })).toEqual([notice]);
+    expect(mergePersistedMutationNoticeState([notice], { available: true, shared: true, notices: [] })).toEqual([]);
+  });
+
+  test("releases only the revision that created a refresh barrier", () => {
+    const barriers = new Map<string, number>();
+    const first = markMutationRefreshScopes(barriers, ["task:one"], 0);
+    const second = markMutationRefreshScopes(barriers, ["task:one"], first.nextRevision);
+
+    releaseMutationRefreshScopes(barriers, first.revisions);
+    expect(barriers.get("task:one")).toBe(second.revisions.get("task:one"));
+    releaseMutationRefreshScopes(barriers, second.revisions);
+    expect(barriers.has("task:one")).toBe(false);
+  });
+
+  test("cancels an in-flight query before a complete refresh read starts", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let calls = 0;
+    let firstStarted!: () => void;
+    const firstStartedPromise = new Promise<void>((resolve) => { firstStarted = resolve; });
+    const first = queryClient.fetchQuery({
+      queryKey: ["refresh-proof"],
+      queryFn: ({ signal }) => {
+        calls += 1;
+        firstStarted();
+        return new Promise<string>((resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          void resolve;
+        });
+      }
+    }).catch(() => undefined);
+
+    await firstStartedPromise;
+    await queryClient.cancelQueries({ queryKey: ["refresh-proof"], exact: true });
+    await expect(queryClient.fetchQuery({ queryKey: ["refresh-proof"], queryFn: async () => { calls += 1; return "after"; }, staleTime: 0, retry: false })).resolves.toBe("after");
+    await first;
+    expect(calls).toBe(2);
+    queryClient.clear();
   });
 
   test("creates browser resource IDs with the server-owned shape", () => {

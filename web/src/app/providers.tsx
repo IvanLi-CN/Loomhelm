@@ -76,8 +76,14 @@ const defaultAuthActions: ProductionAuthActions = {
 
 const ProductionAuthContext = createContext<ProductionAuthActions>(defaultAuthActions);
 
-function isPrincipalQuery(query: { queryKey: readonly unknown[] }, principalId: string): boolean {
+export function isPrincipalQuery(query: { queryKey: readonly unknown[] }, principalId: string): boolean {
   return query.queryKey[0] === "loomhelm" && query.queryKey[1] === principalId;
+}
+
+export async function clearPrincipalQueries(client: QueryClient, principalId: string): Promise<void> {
+  const predicate = (query: { queryKey: readonly unknown[] }) => isPrincipalQuery(query, principalId);
+  await client.cancelQueries({ predicate });
+  client.removeQueries({ predicate });
 }
 
 function errorMessage(error: unknown, operation: string): string {
@@ -150,27 +156,23 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
   const lastResumeValidationRef = useRef(0);
   const seenInvalidationSignalsRef = useRef(new Set<string>());
 
-  const clearPrincipalQueries = useCallback((principalId: string) => {
-    void queryClient.cancelQueries({ predicate: (query) => isPrincipalQuery(query, principalId) }).then(() => {
-      queryClient.removeQueries({ predicate: (query) => isPrincipalQuery(query, principalId) });
-    });
-  }, []);
+  const clearPrincipalCache = useCallback((principalId: string) => clearPrincipalQueries(queryClient, principalId), []);
 
-  const commitAssembly = useCallback((next: ProductionApiAssembly) => {
+  const commitAssembly = useCallback(async (next: ProductionApiAssembly) => {
     const previousPrincipalId = assemblyRef.current?.auth.principalId;
-    if (previousPrincipalId && next.auth.principalId && previousPrincipalId !== next.auth.principalId) clearPrincipalQueries(previousPrincipalId);
+    if (previousPrincipalId && previousPrincipalId !== next.auth.principalId) await clearPrincipalCache(previousPrincipalId);
     assemblyRef.current = next;
     setProductionApi(next);
-  }, [clearPrincipalQueries]);
+  }, [clearPrincipalCache]);
 
   const bootstrapForGeneration = useCallback((generation: number) => {
     if (!productionClient) return;
     void productionClient.bootstrapBrowserSession()
       .then((session) => {
-        if (generation === sessionGenerationRef.current) commitAssembly(createAuthenticatedProductionAssembly(productionClient, session, generation));
+        if (generation === sessionGenerationRef.current) void commitAssembly(createAuthenticatedProductionAssembly(productionClient, session, generation));
       })
       .catch((error: unknown) => {
-        if (generation === sessionGenerationRef.current) commitAssembly(createProductionAuthFailureAssembly(productionClient, error, generation));
+        if (generation === sessionGenerationRef.current) void commitAssembly(createProductionAuthFailureAssembly(productionClient, error, generation));
       });
   }, [commitAssembly, productionClient]);
 
@@ -179,8 +181,9 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
     productionClient.invalidateBrowserSession();
     const generation = sessionGenerationRef.current + 1;
     sessionGenerationRef.current = generation;
-    commitAssembly(createLoadingProductionAssembly(productionClient, generation));
-    bootstrapForGeneration(generation);
+    void commitAssembly(createLoadingProductionAssembly(productionClient, generation)).then(() => {
+      if (generation === sessionGenerationRef.current) bootstrapForGeneration(generation);
+    });
   }, [bootstrapForGeneration, commitAssembly, productionClient]);
 
   useEffect(() => {
@@ -189,10 +192,10 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
     const generation = sessionGenerationRef.current;
     void productionClient.bootstrapBrowserSession()
       .then((session) => {
-        if (active && generation === sessionGenerationRef.current) commitAssembly(createAuthenticatedProductionAssembly(productionClient, session, generation));
+        if (active && generation === sessionGenerationRef.current) void commitAssembly(createAuthenticatedProductionAssembly(productionClient, session, generation));
       })
       .catch((error: unknown) => {
-        if (active && generation === sessionGenerationRef.current) commitAssembly(createProductionAuthFailureAssembly(productionClient, error, generation));
+        if (active && generation === sessionGenerationRef.current) void commitAssembly(createProductionAuthFailureAssembly(productionClient, error, generation));
       });
     return () => {
       active = false;
