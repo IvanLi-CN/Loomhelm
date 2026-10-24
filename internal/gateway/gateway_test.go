@@ -556,11 +556,41 @@ func TestGatewayValidatesEvents(t *testing.T) {
 	if _, err := decodeMessage([]byte(valid), DefaultMaxFrame); err != nil {
 		t.Fatalf("valid event error = %v", err)
 	}
+	for name, sequence := range map[string]int64{
+		"zero":     0,
+		"negative": -1,
+		"positive": 1,
+	} {
+		t.Run("direct sequence "+name, func(t *testing.T) {
+			event := protocol.Event{
+				Cursor:     "cursor_direct",
+				EventID:    "event_direct",
+				OccurredAt: "2026-10-22T12:00:00Z",
+				Payload:    json.RawMessage(`{"text":"hello"}`),
+				Sequence:   sequence,
+				SessionID:  "session_direct",
+				Source:     protocol.EventSourceHostObservation,
+				Type:       protocol.EventTypeMessageDelta,
+			}
+			err := (Message{Type: MessageEvent, Event: &event}).Validate()
+			if sequence > 0 {
+				if err != nil {
+					t.Fatalf("Message.Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "sequence must be positive") {
+				t.Fatalf("Message.Validate() error = %v, want positive sequence rejection", err)
+			}
+		})
+	}
 	for name, payload := range map[string]string{
-		"missing payload":  `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":1,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation"}}`,
-		"missing sequence": `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{}}}`,
-		"invalid sequence": `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":"one","session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{}}}`,
-		"invalid source":   `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":1,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"unknown","payload":{}}}`,
+		"missing payload":   `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":1,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation"}}`,
+		"missing sequence":  `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{}}}`,
+		"zero sequence":     `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":0,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{}}}`,
+		"negative sequence": `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":-1,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{}}}`,
+		"invalid sequence":  `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":"one","session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":{}}}`,
+		"invalid source":    `{"type":"event","event":{"event_id":"event_1","cursor":"cursor_1","sequence":1,"session_id":"session_1","type":"message.delta","occurred_at":"2026-10-22T12:00:00Z","source":"unknown","payload":{}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := decodeMessage([]byte(payload), DefaultMaxFrame); err == nil {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/coder/websocket"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -204,6 +206,121 @@ func TestGatewayWithPostgresTLSWSS(t *testing.T) {
 	}
 	if _, err := client.Connect(shutdownCtx); err == nil || !strings.Contains(err.Error(), "503") {
 		t.Fatalf("connection during drain error = %v, want HTTP 503", err)
+	}
+}
+
+func TestGatewayWithPostgresTLSWSSRejectsNonPositiveEventSequence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db := openGatewayDatabase(t, ctx)
+	service := hosts.NewService(db.Pool())
+	registration, err := service.Register(ctx, hosts.RegisterRequest{
+		Name: "h01 gateway event sequence " + time.Now().UTC().Format("20060102T150405.000000000"),
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	handlerCalls := 0
+	server, err := NewServer(service, ServerOptions{
+		EventHandler: func(context.Context, hosts.Connection, protocol.Event) error {
+			handlerCalls++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client, err := NewClient(ClientOptions{
+		URL:        strings.Replace(httpServer.URL, "https://", "wss://", 1),
+		HostID:     registration.Host.ID,
+		Token:      registration.Token,
+		HTTPClient: httpServer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	positiveConnection := connectTestClient(t, client)
+	positiveRunID := "run_positive_sequence"
+	positiveEvent := protocol.Event{
+		Cursor:     "cursor_positive_sequence",
+		EventID:    "event_positive_sequence",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Payload:    json.RawMessage(`{"delta":"positive"}`),
+		RunID:      &positiveRunID,
+		Sequence:   1,
+		SessionID:  "session_positive_sequence",
+		Source:     protocol.EventSourceHostObservation,
+		Type:       protocol.EventTypeMessageDelta,
+	}
+	if err := positiveConnection.SendEvent(ctx, positiveEvent); err != nil {
+		t.Fatalf("SendEvent(positive) error = %v", err)
+	}
+	if err := positiveConnection.SendHeartbeat(ctx, ""); err != nil {
+		t.Fatalf("SendHeartbeat(after positive event) error = %v", err)
+	}
+	positiveAck := readGatewayMessage(t, positiveConnection)
+	if positiveAck.Type != MessageHeartbeatAck {
+		t.Fatalf("positive event heartbeat acknowledgement = %+v, want heartbeat_ack", positiveAck)
+	}
+	if err := positiveConnection.Close(); err != nil {
+		t.Fatalf("close positive sequence connection: %v", err)
+	}
+
+	for _, sequence := range []int64{0, -1} {
+		connection := connectTestClient(t, client)
+		event := protocol.Event{
+			Cursor:     fmt.Sprintf("cursor_invalid_sequence_%d", sequence),
+			EventID:    fmt.Sprintf("event_invalid_sequence_%d", sequence),
+			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Payload:    json.RawMessage(`{"delta":"invalid"}`),
+			Sequence:   sequence,
+			SessionID:  fmt.Sprintf("session_invalid_sequence_%d", sequence),
+			Source:     protocol.EventSourceHostObservation,
+			Type:       protocol.EventTypeMessageDelta,
+		}
+		data, err := json.Marshal(Message{Type: MessageEvent, Event: &event})
+		if err != nil {
+			t.Fatalf("marshal event(sequence=%d) error = %v", sequence, err)
+		}
+		if err := connection.ws.Write(ctx, websocket.MessageText, data); err != nil {
+			t.Fatalf("write event(sequence=%d) error = %v", sequence, err)
+		}
+		readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
+		_, readErr := connection.Read(readCtx)
+		readCancel()
+		if readErr == nil {
+			t.Fatalf("sequence=%d was accepted, want gateway connection rejection", sequence)
+		}
+		_ = connection.Close()
+
+		var cursorCount int
+		if err := db.Pool().QueryRow(ctx, `
+			SELECT COUNT(*) FROM host_cursors
+			WHERE host_id = $1 AND session_id = $2
+		`, registration.Host.ID, event.SessionID).Scan(&cursorCount); err != nil {
+			t.Fatalf("count rejected sequence=%d cursor rows: %v", sequence, err)
+		}
+		if cursorCount != 0 {
+			t.Fatalf("sequence=%d persisted %d cursor rows, want 0", sequence, cursorCount)
+		}
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("event handler calls = %d, want only the positive event", handlerCalls)
+	}
+
+	var positiveCursorCount int
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT COUNT(*) FROM host_cursors
+		WHERE host_id = $1 AND session_id = $2 AND run_id = $3 AND cursor = $4
+	`, registration.Host.ID, positiveEvent.SessionID, positiveRunID, positiveEvent.Cursor).Scan(&positiveCursorCount); err != nil {
+		t.Fatalf("count positive event cursor rows: %v", err)
+	}
+	if positiveCursorCount != 1 {
+		t.Fatalf("positive event cursor rows = %d, want 1", positiveCursorCount)
 	}
 }
 

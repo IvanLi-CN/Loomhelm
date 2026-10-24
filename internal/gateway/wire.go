@@ -231,16 +231,16 @@ func decodeMessage(data []byte, maxFrame int64) (Message, error) {
 	if err := json.Unmarshal(data, &message); err != nil {
 		return Message{}, fmt.Errorf("decode gateway message: %w", err)
 	}
+	if message.Type == MessageEvent {
+		if err := validateEventEnvelope(data); err != nil {
+			return Message{}, err
+		}
+	}
 	if err := message.Validate(); err != nil {
 		return Message{}, err
 	}
 	if message.Type == MessageCommandAck {
 		if err := validateCommandAckEnvelope(data); err != nil {
-			return Message{}, err
-		}
-	}
-	if message.Type == MessageEvent {
-		if err := validateEventEnvelope(data); err != nil {
 			return Message{}, err
 		}
 	}
@@ -261,6 +261,9 @@ func validateEvent(event protocol.Event) error {
 	}
 	if strings.TrimSpace(event.EventID) == "" {
 		return errors.New("gateway event requires event id")
+	}
+	if event.Sequence <= 0 {
+		return errors.New("gateway event sequence must be positive")
 	}
 	if strings.TrimSpace(event.OccurredAt) == "" {
 		return errors.New("gateway event requires occurred time")
