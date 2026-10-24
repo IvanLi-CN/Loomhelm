@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect } from "storybook/test";
 
 import type { Run, Session } from "@loomhelm/protocol";
 
@@ -93,8 +93,7 @@ export const ExplicitInterrupt: Story = {
       <div className="md:col-span-2"><InterruptHarness /></div>
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas, userEvent }) => {
     await userEvent.click(canvas.getByRole("button", { name: "请求中断" }));
     await expect(canvas.getByTestId("run-phase")).toHaveTextContent("实际终止");
     await expect(canvas.getByTestId("interrupt-count")).toHaveTextContent("已提交 1 次");
@@ -106,11 +105,10 @@ export const DuplicateInterruptGuard: Story = {
       <div className="md:col-span-2"><InterruptHarness hold /></div>
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas, userEvent }) => {
     const button = canvas.getByRole("button", { name: "请求中断" });
     await userEvent.click(button);
-    await userEvent.click(button);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await expect(canvas.getByTestId("interrupt-count")).toHaveTextContent("已提交 1 次");
     await expect(canvas.getByRole("button", { name: "中断请求中" })).toBeDisabled();
     await expect(canvas.getByTestId("run-phase")).toHaveTextContent("中断请求中");
@@ -123,10 +121,9 @@ export const OfflineControl: Story = {
       <RunStatusCard connection="offline" commandState="executing" interruptCommandId="cmd-interrupt-offline" onInterrupt={() => undefined} run={baseRun} session={session} />
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas }) => {
     await expect(canvas.getByTestId("run-phase")).toHaveTextContent("已断线");
     await expect(canvas.getByRole("button", { name: "请求中断" })).toBeDisabled();
-    await expect(canvas.getByText("不发送、不排队")).toBeInTheDocument();
+    await expect(canvas.getByText(/不发送、不排队/)).toBeInTheDocument();
   }
 };

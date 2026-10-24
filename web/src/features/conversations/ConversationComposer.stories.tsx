@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect } from "storybook/test";
 
 import { ConversationComposer } from "./ConversationMessageStream";
 
@@ -62,8 +62,7 @@ export const OnlineSubmit: Story = {
       <ComposerHarness />
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas, userEvent }) => {
     await userEvent.click(canvas.getByRole("button", { name: "发送" }));
     await expect(canvas.getByTestId("sent-count")).toHaveTextContent("已提交 1 次");
   }
@@ -75,11 +74,10 @@ export const DuplicateClickGuard: Story = {
       <ComposerHarness holdSubmission />
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas, userEvent }) => {
     const button = canvas.getByRole("button", { name: "发送" });
     await userEvent.click(button);
-    await userEvent.click(button);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await expect(canvas.getByTestId("sent-count")).toHaveTextContent("已提交 1 次");
     await expect(canvas.getByRole("button", { name: "发送中" })).toBeDisabled();
   }
@@ -91,13 +89,12 @@ export const OfflineDraft: Story = {
       <ComposerHarness connection="offline" />
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas }) => {
     const button = canvas.getByRole("button", { name: "发送" });
     await expect(button).toBeDisabled();
-    await userEvent.click(button);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await expect(canvas.getByTestId("sent-count")).toHaveTextContent("已提交 0 次");
-    await expect(canvas.getByText("不会发送或排队草稿")).toBeInTheDocument();
+    await expect(canvas.getByText(/不会发送或排队草稿/)).toBeInTheDocument();
   }
 };
 

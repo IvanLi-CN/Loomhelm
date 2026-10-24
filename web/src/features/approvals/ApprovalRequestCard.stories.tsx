@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect } from "storybook/test";
 
 import type { ResolveApprovalParams } from "@loomhelm/api-client";
 import type { Approval } from "@loomhelm/protocol";
@@ -92,8 +92,7 @@ export const ExplicitDecision: Story = {
       <ApprovalHarness />
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas, userEvent }) => {
     await userEvent.click(canvas.getByRole("button", { name: "批准" }));
     await expect(canvas.getByTestId("approval-status")).toHaveTextContent("已批准");
     await expect(canvas.getByTestId("approval-count")).toHaveTextContent("已提交 1 次");
@@ -106,11 +105,10 @@ export const DuplicateDecisionGuard: Story = {
       <ApprovalHarness hold />
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas, userEvent }) => {
     const button = canvas.getByRole("button", { name: "批准" });
     await userEvent.click(button);
-    await userEvent.click(button);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await expect(canvas.getByTestId("approval-count")).toHaveTextContent("已提交 1 次");
     await expect(canvas.getByRole("button", { name: "正在批准" })).toBeDisabled();
   }
@@ -122,8 +120,7 @@ export const ExpiredCannotAct: Story = {
       <ApprovalRequestCard commandIds={{ approve: "cmd-expired-approve", deny: "cmd-expired-deny" }} request={{ ...request, approval: { ...baseApproval, revision: 3, status: "expired" } }} />
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas }) => {
     await expect(canvas.getByRole("button", { name: "批准" })).toBeDisabled();
     await expect(canvas.getByRole("button", { name: "拒绝" })).toBeDisabled();
     await expect(canvas.getByText("当前请求已过期，不能再次操作。")).toBeInTheDocument();
@@ -136,8 +133,7 @@ export const OfflineCannotQueue: Story = {
       <ApprovalRequestCard connection="offline" commandIds={{ approve: "cmd-offline-approve", deny: "cmd-offline-deny" }} onResolve={() => undefined} request={request} />
     </EvidenceFrame>
   ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+  play: async ({ canvas }) => {
     await expect(canvas.getByRole("button", { name: "批准" })).toBeDisabled();
     await expect(canvas.getByText("已断线，审批不会发送或排队。")).toBeInTheDocument();
   }
