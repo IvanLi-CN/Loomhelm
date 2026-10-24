@@ -67,7 +67,7 @@ type Story = StoryObj<typeof meta>;
 
 function EvidenceFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-[var(--canvas)] p-6 sm:p-8" data-visual-evidence-surface>
+    <div className="mx-auto w-full max-w-[832px] bg-[var(--canvas)] p-6 sm:p-8" data-visual-evidence-surface>
       <div className="mx-auto grid w-full max-w-3xl gap-5" data-visual-evidence-target>{children}</div>
     </div>
   );
