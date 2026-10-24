@@ -49,6 +49,7 @@ type serverConnection struct {
 
 	writeMu     sync.Mutex
 	done        chan struct{}
+	ready       chan struct{}
 	close       sync.Once
 	handlerDone chan struct{}
 
@@ -137,6 +138,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}); err != nil {
 		return
 	}
+	connection.markReady()
 	if err := connection.readLoop(request.Context()); err != nil && !errors.Is(err, context.Canceled) {
 		connection.closeNow()
 	}
@@ -175,6 +177,7 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		maxFrame:    s.options.MaxFrameBytes,
 		onEvent:     s.options.EventHandler,
 		done:        make(chan struct{}),
+		ready:       make(chan struct{}),
 		handlerDone: make(chan struct{}),
 		pending:     make(map[string]chan commandResponse),
 	}
@@ -240,6 +243,9 @@ func (s *Server) SendCommand(ctx context.Context, hostID string, command protoco
 	s.mu.RUnlock()
 	if connection == nil {
 		return protocol.CommandAck{}, ErrNoActiveConnection
+	}
+	if err := connection.waitReady(ctx); err != nil {
+		return protocol.CommandAck{}, err
 	}
 	return connection.sendCommand(ctx, command)
 }
@@ -487,6 +493,21 @@ func (c *serverConnection) writeData(ctx context.Context, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+func (c *serverConnection) markReady() {
+	close(c.ready)
+}
+
+func (c *serverConnection) waitReady(ctx context.Context) error {
+	select {
+	case <-c.ready:
+		return nil
+	case <-c.done:
+		return ErrConnectionClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *serverConnection) writeError(ctx context.Context, code, message string) error {

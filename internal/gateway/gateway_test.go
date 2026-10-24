@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -166,6 +167,107 @@ type orderedOpenRegistry struct {
 	releaseFirst chan struct{}
 }
 
+type helloAckGateRegistry struct {
+	*fakeRegistry
+	opened           chan struct{}
+	releaseOpen      chan struct{}
+	authorizeStarted chan struct{}
+	openOnce         sync.Once
+	authorizeOnce    sync.Once
+}
+
+func newHelloAckGateRegistry() *helloAckGateRegistry {
+	return &helloAckGateRegistry{
+		fakeRegistry:     newFakeRegistry(),
+		opened:           make(chan struct{}),
+		releaseOpen:      make(chan struct{}),
+		authorizeStarted: make(chan struct{}),
+	}
+}
+
+func (r *helloAckGateRegistry) OpenConnectionWithPreflight(ctx context.Context, credential hosts.Credential, preflight hosts.ConnectionPreflight) (hosts.Connection, error) {
+	connection, err := r.fakeRegistry.OpenConnection(ctx, credential)
+	if err != nil {
+		return hosts.Connection{}, err
+	}
+	if preflight != nil {
+		if err := preflight(connection); err != nil {
+			_ = r.fakeRegistry.CloseConnection(ctx, connection)
+			return hosts.Connection{}, err
+		}
+	}
+	r.openOnce.Do(func() { close(r.opened) })
+	<-r.releaseOpen
+	return connection, nil
+}
+
+func (r *helloAckGateRegistry) AuthorizeCommand(ctx context.Context, connection hosts.Connection, deliver func() error) error {
+	r.authorizeOnce.Do(func() { close(r.authorizeStarted) })
+	return r.fakeRegistry.AuthorizeCommand(ctx, connection, deliver)
+}
+
+type helloAckGateListener struct {
+	net.Listener
+	accepted chan *helloAckGateConn
+}
+
+func newHelloAckGateListener() *helloAckGateListener {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		panic(err)
+	}
+	return &helloAckGateListener{Listener: listener, accepted: make(chan *helloAckGateConn, 1)}
+}
+
+func (l *helloAckGateListener) Accept() (net.Conn, error) {
+	connection, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	wrapped := newHelloAckGateConn(connection)
+	l.accepted <- wrapped
+	return wrapped, nil
+}
+
+type helloAckGateConn struct {
+	net.Conn
+	mu           sync.Mutex
+	blocked      bool
+	release      chan struct{}
+	releaseOnce  sync.Once
+	blockedWrite chan struct{}
+	blockedOnce  sync.Once
+}
+
+func newHelloAckGateConn(connection net.Conn) *helloAckGateConn {
+	return &helloAckGateConn{
+		Conn:         connection,
+		release:      make(chan struct{}),
+		blockedWrite: make(chan struct{}),
+	}
+}
+
+func (c *helloAckGateConn) blockWrites() {
+	c.mu.Lock()
+	c.blocked = true
+	c.mu.Unlock()
+}
+
+func (c *helloAckGateConn) releaseWrites() {
+	c.releaseOnce.Do(func() { close(c.release) })
+}
+
+func (c *helloAckGateConn) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	blocked := c.blocked
+	c.mu.Unlock()
+	if blocked {
+		c.blockedOnce.Do(func() { close(c.blockedWrite) })
+		<-c.release
+	}
+	return c.Conn.Write(data)
+}
+
 func newOrderedOpenRegistry() *orderedOpenRegistry {
 	return &orderedOpenRegistry{
 		fakeRegistry: newFakeRegistry(),
@@ -270,6 +372,103 @@ func cloneCursors(cursor *hosts.Cursor) []hosts.Cursor {
 		return nil
 	}
 	return []hosts.Cursor{*cloneCursor(cursor)}
+}
+
+func TestGatewayDoesNotAuthorizeCommandBeforeHelloAck(t *testing.T) {
+	registry := newHelloAckGateRegistry()
+	server, err := NewServer(registry)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	listener := newHelloAckGateListener()
+	httpServer := httptest.NewUnstartedServer(server)
+	httpServer.Listener = listener
+	httpServer.StartTLS()
+	t.Cleanup(func() {
+		listener.Close()
+		httpServer.Close()
+	})
+
+	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
+	connectResult := make(chan struct {
+		connection *ClientConnection
+		err        error
+	}, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		connection, connectErr := client.Connect(ctx)
+		connectResult <- struct {
+			connection *ClientConnection
+			err        error
+		}{connection: connection, err: connectErr}
+	}()
+
+	var gate *helloAckGateConn
+	select {
+	case gate = <-listener.accepted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("gateway connection was not accepted")
+	}
+	select {
+	case <-registry.opened:
+	case <-time.After(2 * time.Second):
+		t.Fatal("gateway connection did not reach the registry preflight")
+	}
+	gate.blockWrites()
+	close(registry.releaseOpen)
+	select {
+	case <-gate.blockedWrite:
+	case <-time.After(2 * time.Second):
+		t.Fatal("gateway did not attempt the hello acknowledgement write")
+	}
+
+	command := protocol.Command{
+		CommandID: "cmd_hello_ack_gate",
+		IssuedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"text":"hello ack gate"}`),
+		SessionID: "session_hello_ack_gate",
+	}
+	commandCtx, cancelCommand := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelCommand()
+	commandResult := make(chan error, 1)
+	go func() {
+		_, sendErr := server.SendCommand(commandCtx, registry.credential.HostID, command)
+		commandResult <- sendErr
+	}()
+
+	select {
+	case <-registry.authorizeStarted:
+		gate.releaseWrites()
+		t.Fatal("SendCommand() authorized delivery before hello acknowledgement write completed")
+	case err := <-commandResult:
+		gate.releaseWrites()
+		t.Fatalf("SendCommand() returned before hello acknowledgement write completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	gate.releaseWrites()
+	select {
+	case result := <-connectResult:
+		if result.err != nil {
+			t.Fatalf("Client.Connect() error = %v", result.err)
+		}
+		defer result.connection.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("Client.Connect() did not complete after hello acknowledgement release")
+	}
+	select {
+	case <-registry.authorizeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SendCommand() did not become deliverable after hello acknowledgement write completed")
+	}
+	cancelCommand()
+	select {
+	case <-commandResult:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SendCommand() did not finish after its context was cancelled")
+	}
 }
 
 func TestGatewayWSSCommandEventAndResume(t *testing.T) {
