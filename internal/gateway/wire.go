@@ -4,6 +4,7 @@
 package gateway
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -87,6 +88,9 @@ func (m Message) Validate() error {
 	case MessageCommand:
 		if strings.TrimSpace(m.RequestID) == "" || m.Command == nil {
 			return errors.New("gateway command requires request id and command")
+		}
+		if err := validateCommandFrame(*m.Command); err != nil {
+			return err
 		}
 	case MessageCommandAck:
 		if strings.TrimSpace(m.RequestID) == "" || m.Ack == nil {
@@ -297,6 +301,42 @@ func validateEvent(event protocol.Event) error {
 		protocol.EventTypeUnknown:
 	default:
 		return fmt.Errorf("gateway event has unsupported type %q", event.Type)
+	}
+	return nil
+}
+
+func validateCommandFrame(command protocol.Command) error {
+	if err := protocol.ValidateCommand(command); err != nil {
+		return err
+	}
+	if strings.TrimSpace(command.CommandID) == "" {
+		return errors.New("gateway command id is required")
+	}
+	if strings.TrimSpace(command.SessionID) == "" {
+		return errors.New("gateway command session id is required")
+	}
+	if strings.TrimSpace(command.IssuedAt) == "" {
+		return errors.New("gateway command issued time is required")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, command.IssuedAt); err != nil {
+		return errors.New("gateway command issued time is malformed")
+	}
+	switch command.Kind {
+	case protocol.CommandKindSessionStart,
+		protocol.CommandKindSessionAttach,
+		protocol.CommandKindRunSend,
+		protocol.CommandKindRunApprove,
+		protocol.CommandKindRunDeny,
+		protocol.CommandKindRunInterrupt:
+	default:
+		return fmt.Errorf("gateway command has unsupported kind %q", command.Kind)
+	}
+	payload := bytes.TrimSpace(command.Payload)
+	if len(payload) == 0 || bytes.Equal(payload, []byte("null")) {
+		return errors.New("gateway command payload is required")
+	}
+	if !json.Valid(payload) {
+		return errors.New("gateway command payload must be valid JSON")
 	}
 	return nil
 }

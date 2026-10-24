@@ -104,8 +104,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	credential, err := s.registry.Authenticate(request.Context(), token)
 	if err != nil {
-		status := http.StatusUnauthorized
-		if errors.Is(err, hosts.ErrCredentialRevoked) {
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, hosts.ErrUnauthenticated) || errors.Is(err, hosts.ErrCredentialRevoked) {
 			status = http.StatusUnauthorized
 		}
 		http.Error(writer, http.StatusText(status), status)
@@ -232,7 +232,7 @@ func (s *Server) SendCommand(ctx context.Context, hostID string, command protoco
 	if ctx == nil {
 		return protocol.CommandAck{}, errors.New("gateway command context must not be nil")
 	}
-	if err := protocol.ValidateCommand(command); err != nil {
+	if err := validateCommandFrame(command); err != nil {
 		return protocol.CommandAck{}, err
 	}
 	s.mu.RLock()

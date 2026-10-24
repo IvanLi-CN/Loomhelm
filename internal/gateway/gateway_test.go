@@ -15,17 +15,18 @@ import (
 )
 
 type fakeRegistry struct {
-	mu           sync.Mutex
-	credential   hosts.Credential
-	token        string
-	revoked      bool
-	generation   int64
-	current      *hosts.Connection
-	closed       []hosts.Connection
-	cursor       *hosts.Cursor
-	touches      int
-	authorizeErr error
-	deliverCalls int
+	mu              sync.Mutex
+	credential      hosts.Credential
+	token           string
+	revoked         bool
+	authenticateErr error
+	generation      int64
+	current         *hosts.Connection
+	closed          []hosts.Connection
+	cursor          *hosts.Cursor
+	touches         int
+	authorizeErr    error
+	deliverCalls    int
 }
 
 func newFakeRegistry() *fakeRegistry {
@@ -49,6 +50,9 @@ func (r *fakeRegistry) Authenticate(_ context.Context, token string) (hosts.Cred
 	}
 	if r.revoked {
 		return hosts.Credential{}, hosts.ErrCredentialRevoked
+	}
+	if r.authenticateErr != nil {
+		return hosts.Credential{}, r.authenticateErr
 	}
 	return r.credential, nil
 }
@@ -216,6 +220,37 @@ func (r *fakeRegistry) revoke() {
 
 func (r *fakeRegistry) matchesLocked(connection hosts.Connection) bool {
 	return !r.revoked && r.current != nil && sameConnection(*r.current, connection)
+}
+
+type unlockedEventRegistry struct {
+	*fakeRegistry
+}
+
+func (r *unlockedEventRegistry) ProcessEvent(ctx context.Context, connection hosts.Connection, cursor hosts.Cursor, handler func(context.Context) error) error {
+	r.mu.Lock()
+	if !r.matchesLocked(connection) {
+		r.mu.Unlock()
+		return hosts.ErrConnectionStale
+	}
+	r.mu.Unlock()
+	if handler != nil {
+		if err := handler(ctx); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.matchesLocked(connection) {
+		return hosts.ErrConnectionStale
+	}
+	r.cursor = cloneCursor(&cursor)
+	if r.cursor.ObservedAt.IsZero() {
+		r.cursor.ObservedAt = time.Now().UTC()
+	}
+	if r.cursor.RetainedUntil.IsZero() {
+		r.cursor.RetainedUntil = time.Now().UTC().Add(time.Hour)
+	}
+	return nil
 }
 
 func sameConnection(left, right hosts.Connection) bool {
@@ -609,6 +644,118 @@ func TestGatewayShutdownDrainsAndRejectsNewConnections(t *testing.T) {
 	_ = connection.Close()
 }
 
+func TestGatewayAuthenticationErrorsUseSafeStatus(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		token            string
+		revoked          bool
+		authenticateErr  error
+		wantStatus       int
+		wantBodyContains string
+		wantBodyExcludes string
+	}{
+		{name: "invalid credential", token: "invalid", wantStatus: 401},
+		{name: "revoked credential", token: "token_test", revoked: true, wantStatus: 401},
+		{
+			name:             "dependency failure",
+			token:            "token_test",
+			authenticateErr:  errors.New("database connection failed: internal credential details"),
+			wantStatus:       503,
+			wantBodyContains: "Service Unavailable",
+			wantBodyExcludes: "internal credential details",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := newFakeRegistry()
+			registry.revoked = test.revoked
+			registry.authenticateErr = test.authenticateErr
+			server, err := NewServer(registry)
+			if err != nil {
+				t.Fatalf("NewServer() error = %v", err)
+			}
+			request := httptest.NewRequest("GET", "https://gateway.test/gateway", nil)
+			request.Header.Set("Authorization", "Bearer "+test.token)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("ServeHTTP() status = %d, want %d; body = %q", response.Code, test.wantStatus, response.Body.String())
+			}
+			if test.wantBodyContains != "" && !strings.Contains(response.Body.String(), test.wantBodyContains) {
+				t.Fatalf("ServeHTTP() body = %q, want %q", response.Body.String(), test.wantBodyContains)
+			}
+			if test.wantBodyExcludes != "" && strings.Contains(response.Body.String(), test.wantBodyExcludes) {
+				t.Fatalf("ServeHTTP() leaked authentication error details in body %q", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestGatewayShutdownWaitsForInFlightEventHandler(t *testing.T) {
+	registry := &unlockedEventRegistry{fakeRegistry: newFakeRegistry()}
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	var startOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseHandler) }) }
+	t.Cleanup(release)
+	server, err := NewServer(registry, ServerOptions{
+		EventHandler: func(ctx context.Context, _ hosts.Connection, _ protocol.Event) error {
+			startOnce.Do(func() { close(handlerStarted) })
+			select {
+			case <-releaseHandler:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
+	connection := connectTestClient(t, client)
+	t.Cleanup(func() { _ = connection.Close() })
+	event := protocol.Event{
+		Cursor:     "cursor_shutdown_inflight",
+		EventID:    "event_shutdown_inflight",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Payload:    json.RawMessage(`{"delta":"blocking"}`),
+		Sequence:   1,
+		SessionID:  "session_shutdown_inflight",
+		Source:     protocol.EventSourceHostObservation,
+		Type:       protocol.EventTypeMessageDelta,
+	}
+	if err := connection.SendEvent(context.Background(), event); err != nil {
+		t.Fatalf("SendEvent() error = %v", err)
+	}
+	select {
+	case <-handlerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event handler did not enter its controlled in-flight state")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- server.Shutdown(shutdownCtx) }()
+	select {
+	case err := <-shutdown:
+		t.Fatalf("Shutdown() returned before in-flight event handler completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-shutdown:
+		if err != nil {
+			t.Fatalf("Shutdown() after event handler completion error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown() did not complete after in-flight event handler was released")
+	}
+}
+
 func TestGatewayShutdownWaitsForHandshake(t *testing.T) {
 	server, err := NewServer(newFakeRegistry())
 	if err != nil {
@@ -647,6 +794,61 @@ func TestGatewayValidatesCommandAcknowledgements(t *testing.T) {
 				t.Fatal("decodeMessage() accepted malformed command acknowledgement")
 			}
 		})
+	}
+}
+
+func TestGatewayValidatesCommandFrames(t *testing.T) {
+	validCommand := protocol.Command{
+		CommandID: "command_1",
+		IssuedAt:  "2026-10-22T12:00:00Z",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"hello"}`),
+		SessionID: "session_1",
+	}
+	validMessage := Message{Type: MessageCommand, RequestID: "request_1", Command: &validCommand}
+	data, err := encodeMessage(validMessage, DefaultMaxFrame)
+	if err != nil {
+		t.Fatalf("encodeMessage(valid command) error = %v", err)
+	}
+	if _, err := decodeMessage(data, DefaultMaxFrame); err != nil {
+		t.Fatalf("decodeMessage(valid command) error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name    string
+		command protocol.Command
+	}{
+		{name: "missing command id", command: func() protocol.Command { command := validCommand; command.CommandID = ""; return command }()},
+		{name: "missing kind", command: func() protocol.Command { command := validCommand; command.Kind = ""; return command }()},
+		{name: "unsupported kind", command: func() protocol.Command { command := validCommand; command.Kind = "run.unknown"; return command }()},
+		{name: "missing session id", command: func() protocol.Command { command := validCommand; command.SessionID = ""; return command }()},
+		{name: "missing issued time", command: func() protocol.Command { command := validCommand; command.IssuedAt = ""; return command }()},
+		{name: "malformed issued time", command: func() protocol.Command { command := validCommand; command.IssuedAt = "not-a-time"; return command }()},
+		{name: "missing payload", command: func() protocol.Command { command := validCommand; command.Payload = nil; return command }()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			message := Message{Type: MessageCommand, RequestID: "request_1", Command: &test.command}
+			if _, err := encodeMessage(message, DefaultMaxFrame); err == nil {
+				t.Fatal("encodeMessage() accepted malformed command")
+			}
+			data, err := json.Marshal(message)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			if _, err := decodeMessage(data, DefaultMaxFrame); err == nil {
+				t.Fatal("decodeMessage() accepted malformed command")
+			}
+		})
+	}
+
+	server, err := NewServer(newFakeRegistry())
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	invalidSend := validCommand
+	invalidSend.IssuedAt = "not-a-time"
+	if _, err := server.SendCommand(context.Background(), "host_test", invalidSend); err == nil || errors.Is(err, ErrNoActiveConnection) {
+		t.Fatalf("SendCommand() error = %v, want command validation before connection lookup", err)
 	}
 }
 
