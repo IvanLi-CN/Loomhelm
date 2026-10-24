@@ -159,7 +159,12 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 	if hello.Type != MessageHello || hello.HostID != credential.HostID || hello.Protocol != ProtocolVersion {
 		return nil, errors.New("gateway hello does not match the authenticated host")
 	}
-	connection, err := s.registry.OpenConnection(ctx, credential)
+	connection, err := s.registry.OpenConnectionWithPreflight(ctx, credential, func(connection hosts.Connection) error {
+		if _, err := encodeMessage(helloAckMessage(connection), s.options.MaxFrameBytes); err != nil {
+			return fmt.Errorf("encode gateway hello acknowledgement: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open host gateway connection: %w", err)
 	}
@@ -173,12 +178,7 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		handlerDone: make(chan struct{}),
 		pending:     make(map[string]chan commandResponse),
 	}
-	ack := Message{
-		Type:       MessageHelloAck,
-		HostID:     connection.HostID,
-		Generation: connection.Generation,
-		Cursors:    resumeCursors(connection.ResumeCursors),
-	}
+	ack := helloAckMessage(connection)
 	if _, err := encodeMessage(ack, s.options.MaxFrameBytes); err != nil {
 		_ = s.registry.CloseConnection(context.Background(), connection)
 		result.closeNow()
@@ -190,6 +190,15 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		return nil, err
 	}
 	return result, nil
+}
+
+func helloAckMessage(connection hosts.Connection) Message {
+	return Message{
+		Type:       MessageHelloAck,
+		HostID:     connection.HostID,
+		Generation: connection.Generation,
+		Cursors:    resumeCursors(connection.ResumeCursors),
+	}
 }
 
 func (s *Server) replace(connection *serverConnection) error {

@@ -320,6 +320,166 @@ func TestServiceCursorAdmissionIsAtomicAtHostLimit(t *testing.T) {
 	}
 }
 
+func TestServiceCursorAdmissionReclaimsExpiredPositions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	now := time.Date(2026, time.October, 24, 0, 0, 0, 0, time.UTC)
+	service := NewService(testDB.db.Pool(), Config{Now: func() time.Time { return now }})
+	registration, err := service.Register(ctx, RegisterRequest{Name: "h01 cursor expiry capacity " + now.Format("20060102T150405")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	if _, err := testDB.db.Pool().Exec(ctx, `
+		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
+		SELECT $1, 'expired_' || g::text, '', 'cursor', $2, $3
+		FROM generate_series(1, $4) AS g
+	`, registration.Host.ID, now, now.Add(-time.Second), MaxResumeCursorCount); err != nil {
+		t.Fatalf("seed expired host cursors: %v", err)
+	}
+	if err := service.Checkpoint(ctx, connection, Cursor{SessionID: "reclaimed", Value: "cursor"}); err != nil {
+		t.Fatalf("Checkpoint() after expiry cleanup error = %v", err)
+	}
+	var count int
+	if err := testDB.db.Pool().QueryRow(ctx, `SELECT count(*) FROM host_cursors WHERE host_id = $1`, registration.Host.ID).Scan(&count); err != nil {
+		t.Fatalf("count reclaimed host cursors: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("cursor count after expiry cleanup = %d, want 1", count)
+	}
+}
+
+func TestServiceCursorAdmissionRejectsEscapedRecoveryOverflow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	now := time.Date(2026, time.October, 24, 0, 0, 0, 0, time.UTC)
+	service := NewService(testDB.db.Pool(), Config{Now: func() time.Time { return now }})
+	registration, err := service.Register(ctx, RegisterRequest{Name: "h01 cursor escaped budget " + now.Format("20060102T150405")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	retainedUntil := now.Add(time.Hour)
+	var seed []Cursor
+	var candidate Cursor
+	found := false
+	buildSeed := func(valueLength int) []Cursor {
+		seed = make([]Cursor, MaxResumeCursorCount-1)
+		for index := range seed {
+			seed[index] = Cursor{
+				SessionID:     fmt.Sprintf("seed_%d", index+1),
+				Value:         strings.Repeat("x", valueLength),
+				ObservedAt:    now,
+				RetainedUntil: retainedUntil,
+			}
+		}
+		return seed
+	}
+	low, high := 1, MaxCursorValueBytes
+	for low <= high {
+		valueLength := low + (high-low)/2
+		seed = buildSeed(valueLength)
+		candidate = Cursor{
+			SessionID:     "escaped_candidate",
+			Value:         strings.Repeat(`\`, MaxCursorValueBytes),
+			ObservedAt:    now,
+			RetainedUntil: retainedUntil,
+		}
+		currentSize, sizeErr := recoveryPayloadSize(seed)
+		if sizeErr != nil {
+			t.Fatalf("recoveryPayloadSize(seed) error = %v", sizeErr)
+		}
+		withCandidate := make([]Cursor, len(seed)+1)
+		copy(withCandidate, seed)
+		withCandidate[len(seed)] = candidate
+		nextSize, sizeErr := recoveryPayloadSize(withCandidate)
+		if sizeErr != nil {
+			t.Fatalf("recoveryPayloadSize(candidate) error = %v", sizeErr)
+		}
+		if currentSize <= MaxRecoveryPayloadBytes && nextSize > MaxRecoveryPayloadBytes {
+			found = true
+			break
+		}
+		if currentSize > MaxRecoveryPayloadBytes {
+			high = valueLength - 1
+		} else {
+			low = valueLength + 1
+		}
+	}
+	if !found {
+		t.Fatal("could not construct a recovery payload just below the escaped-size budget")
+	}
+	if _, err := testDB.db.Pool().Exec(ctx, `
+		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
+		SELECT $1, 'seed_' || g::text, '', $2, $3, $4
+		FROM generate_series(1, $5) AS g
+	`, registration.Host.ID, seed[0].Value, now, retainedUntil, MaxResumeCursorCount-1); err != nil {
+		t.Fatalf("seed escaped-size host cursors: %v", err)
+	}
+	if err := service.Checkpoint(ctx, connection, candidate); !errors.Is(err, ErrCursorRecoveryTooLarge) {
+		t.Fatalf("Checkpoint(escaped recovery overflow) error = %v, want ErrCursorRecoveryTooLarge", err)
+	}
+	var candidateCount int
+	if err := testDB.db.Pool().QueryRow(ctx, `SELECT count(*) FROM host_cursors WHERE host_id = $1 AND session_id = $2`, registration.Host.ID, candidate.SessionID).Scan(&candidateCount); err != nil {
+		t.Fatalf("count rejected escaped cursor: %v", err)
+	}
+	if candidateCount != 0 {
+		t.Fatalf("rejected escaped cursor rows = %d, want 0", candidateCount)
+	}
+}
+
+func TestServiceRejectsLegacyOversizedRecoveryFieldsBeforeMaterializing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	testDB := openHostDatabase(t, ctx)
+	now := time.Date(2026, time.October, 24, 0, 0, 0, 0, time.UTC)
+	service := NewService(testDB.db.Pool(), Config{Now: func() time.Time { return now }})
+	registration, err := service.Register(ctx, RegisterRequest{Name: "h01 cursor legacy field bound " + now.Format("20060102T150405")})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	credential, err := service.Authenticate(ctx, registration.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	connection, err := service.OpenConnection(ctx, credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	if _, err := testDB.db.Pool().Exec(ctx, `
+		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
+		VALUES ($1, $2, '', 'cursor', $3, $4)
+	`, registration.Host.ID, strings.Repeat("s", MaxCursorIDBytes+1), now, now.Add(time.Hour)); err != nil {
+		t.Fatalf("seed legacy oversized cursor field: %v", err)
+	}
+	if _, err := service.OpenConnection(ctx, credential); !errors.Is(err, ErrCursorStateInvalid) {
+		t.Fatalf("OpenConnection(legacy oversized field) error = %v, want ErrCursorStateInvalid", err)
+	}
+	var generation int64
+	if err := testDB.db.Pool().QueryRow(ctx, `SELECT connection_generation FROM host_registrations WHERE id = $1`, registration.Host.ID).Scan(&generation); err != nil {
+		t.Fatalf("read host generation: %v", err)
+	}
+	if generation != connection.Generation {
+		t.Fatalf("host generation after legacy oversized field rejection = %d, want %d", generation, connection.Generation)
+	}
+}
+
 func TestServiceRejectsOverfullStoredRecoveryState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

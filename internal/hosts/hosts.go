@@ -107,6 +107,10 @@ type Connection struct {
 	ResumeCursors []Cursor  `json:"resume_cursors,omitempty"`
 }
 
+// ConnectionPreflight runs while the host row is locked and before the
+// connection generation is committed. It must be side-effect free.
+type ConnectionPreflight func(Connection) error
+
 func NewService(pool *pgxpool.Pool, configs ...Config) *Service {
 	cfg := Config{CursorRetention: defaultCursorRetention, Now: time.Now}
 	if len(configs) > 0 {
@@ -221,6 +225,14 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Credential, e
 }
 
 func (s *Service) OpenConnection(ctx context.Context, credential Credential) (Connection, error) {
+	return s.openConnection(ctx, credential, nil)
+}
+
+func (s *Service) OpenConnectionWithPreflight(ctx context.Context, credential Credential, preflight ConnectionPreflight) (Connection, error) {
+	return s.openConnection(ctx, credential, preflight)
+}
+
+func (s *Service) openConnection(ctx context.Context, credential Credential, preflight ConnectionPreflight) (Connection, error) {
 	if err := s.ready(ctx); err != nil {
 		return Connection{}, err
 	}
@@ -295,15 +307,20 @@ func (s *Service) OpenConnection(ctx context.Context, credential Credential) (Co
 	if result.RowsAffected() != 1 {
 		return Connection{}, ErrCredentialRevoked
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return Connection{}, fmt.Errorf("commit host connection: %w", err)
-	}
 	connection := Connection{
 		HostID:        host.ID,
 		CredentialID:  credential.ID,
 		Generation:    generation,
 		ConnectedAt:   now,
 		ResumeCursors: resumeCursors,
+	}
+	if preflight != nil {
+		if err := preflight(connection); err != nil {
+			return Connection{}, fmt.Errorf("preflight host connection: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Connection{}, fmt.Errorf("commit host connection: %w", err)
 	}
 	return connection, nil
 }
@@ -678,13 +695,43 @@ func (s *Service) admitCursor(ctx context.Context, tx pgx.Tx, connection Connect
 }
 
 func loadCursors(ctx context.Context, queryer cursorQueryer, hostID string, now time.Time) ([]Cursor, error) {
+	invalid, err := cursorStateHasRow(ctx, queryer, `
+		SELECT 1
+		FROM host_cursors
+		WHERE host_id = $1 AND cursor_retained_until > $2
+		  AND (octet_length(session_id) > $3
+		       OR octet_length(run_id) > $3
+		       OR octet_length(cursor) > $4)
+		LIMIT 1
+	`, hostID, now, MaxCursorIDBytes, MaxCursorValueBytes)
+	if err != nil {
+		return nil, fmt.Errorf("check stored cursor bounds: %w", err)
+	}
+	if invalid {
+		return nil, cursorStateError(ErrCursorStateInvalid, "host %s contains a recovery position exceeding the stored field limits", hostID)
+	}
+	overfull, err := cursorStateHasRow(ctx, queryer, `
+		SELECT 1
+		FROM host_cursors
+		WHERE host_id = $1 AND cursor_retained_until > $2
+		OFFSET $3 LIMIT 1
+	`, hostID, now, MaxResumeCursorCount)
+	if err != nil {
+		return nil, fmt.Errorf("count stored cursors: %w", err)
+	}
+	if overfull {
+		return nil, cursorStateError(ErrCursorLimit, "host %s has more than %d unexpired recovery positions", hostID, MaxResumeCursorCount)
+	}
 	rows, err := queryer.Query(ctx, `
-		SELECT session_id, run_id, cursor, observed_at, cursor_retained_until
+		SELECT CASE WHEN octet_length(session_id) <= $3 THEN session_id ELSE repeat('x', $3 + 1) END,
+		       CASE WHEN octet_length(run_id) <= $3 THEN run_id ELSE repeat('x', $3 + 1) END,
+		       CASE WHEN octet_length(cursor) <= $4 THEN cursor ELSE repeat('x', $4 + 1) END,
+		       observed_at, cursor_retained_until
 		FROM host_cursors
 		WHERE host_id = $1 AND cursor_retained_until > $2
 		ORDER BY session_id, run_id
-		LIMIT $3
-	`, hostID, now, MaxResumeCursorCount+1)
+		LIMIT $5
+	`, hostID, now, MaxCursorIDBytes, MaxCursorValueBytes, MaxResumeCursorCount+1)
 	if err != nil {
 		return nil, err
 	}
@@ -714,6 +761,22 @@ func loadCursors(ctx context.Context, queryer cursorQueryer, hostID string, now 
 		return nil, cursorStateError(ErrCursorRecoveryTooLarge, "host %s recovery payload is %d bytes, maximum is %d", hostID, size, MaxRecoveryPayloadBytes)
 	}
 	return cursors, nil
+}
+
+func cursorStateHasRow(ctx context.Context, queryer cursorQueryer, query string, args ...any) (bool, error) {
+	rows, err := queryer.Query(ctx, query, args...)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, rows.Err()
+	}
+	var marker int
+	if err := rows.Scan(&marker); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func validateCursor(cursor Cursor) error {

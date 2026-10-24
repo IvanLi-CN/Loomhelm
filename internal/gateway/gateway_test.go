@@ -72,6 +72,20 @@ func (r *fakeRegistry) OpenConnection(_ context.Context, credential hosts.Creden
 	return connection, nil
 }
 
+func (r *fakeRegistry) OpenConnectionWithPreflight(ctx context.Context, credential hosts.Credential, preflight hosts.ConnectionPreflight) (hosts.Connection, error) {
+	connection, err := r.OpenConnection(ctx, credential)
+	if err != nil {
+		return hosts.Connection{}, err
+	}
+	if preflight != nil {
+		if err := preflight(connection); err != nil {
+			_ = r.CloseConnection(ctx, connection)
+			return hosts.Connection{}, err
+		}
+	}
+	return connection, nil
+}
+
 func (r *fakeRegistry) Touch(_ context.Context, connection hosts.Connection) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -176,6 +190,20 @@ func (r *orderedOpenRegistry) OpenConnection(_ context.Context, credential hosts
 	if generation == 1 {
 		close(r.firstOpened)
 		<-r.releaseFirst
+	}
+	return connection, nil
+}
+
+func (r *orderedOpenRegistry) OpenConnectionWithPreflight(ctx context.Context, credential hosts.Credential, preflight hosts.ConnectionPreflight) (hosts.Connection, error) {
+	connection, err := r.OpenConnection(ctx, credential)
+	if err != nil {
+		return hosts.Connection{}, err
+	}
+	if preflight != nil {
+		if err := preflight(connection); err != nil {
+			_ = r.CloseConnection(ctx, connection)
+			return hosts.Connection{}, err
+		}
 	}
 	return connection, nil
 }

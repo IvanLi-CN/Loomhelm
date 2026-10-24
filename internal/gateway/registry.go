@@ -14,6 +14,7 @@ import (
 type Registry interface {
 	Authenticate(context.Context, string) (hosts.Credential, error)
 	OpenConnection(context.Context, hosts.Credential) (hosts.Connection, error)
+	OpenConnectionWithPreflight(context.Context, hosts.Credential, hosts.ConnectionPreflight) (hosts.Connection, error)
 	Touch(context.Context, hosts.Connection) error
 	Checkpoint(context.Context, hosts.Connection, hosts.Cursor) error
 	AuthorizeCommand(context.Context, hosts.Connection, func() error) error

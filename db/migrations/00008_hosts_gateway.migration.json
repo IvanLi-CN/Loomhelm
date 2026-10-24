@@ -7,7 +7,7 @@
     "version_impact": "minor"
   },
   "durable_state": {
-      "description": "The one installation host registration owns its deployment credentials and current online state, while bounded Connector event cursors are keyed by session and run stream. Session and run identifiers are limited to 256 bytes, each host retains at most 1024 unexpired positions, and the JSON-encoded recovery cursor array is limited to 1 MiB. At most one generation is active per host; stale generations cannot update state.",
+      "description": "The one installation host registration owns its deployment credentials and current online state, while bounded Connector event cursors are keyed by session and run stream. At most one generation is active per host; stale generations cannot update state.",
     "storage_implementation": "PostgreSQL tables managed by the embedded Goose application migration history.",
     "source_compatibility_range": {
       "from_program_version": "Phase-one candidate containing migration 00007.",
@@ -27,9 +27,7 @@
     "rollout_signals": [
       "Goose records migration 00008 only after the parent-owned migration 00007 is available in the complete chain.",
       "Connector authentication accepts only an unrevoked hash; registration is singleton-scoped and connection state changes require the current host generation.",
-      "Cursor checkpoints carry an explicit retention deadline, are keyed by their owning host/session/run stream and are processed under the current generation.",
-      "Cursor admission is serialized by the host row lock; expired positions are removed before counting, and a new or growing position is rejected before persistence when the key, count or JSON-encoded recovery budget would be exceeded.",
-      "Recovery reads are bounded and validate the complete encoded cursor payload plus the actual gateway frame limit; existing over-limit state fails explicitly without truncation or eviction."
+      "Cursor checkpoints carry an explicit retention deadline, are keyed by their owning host/session/run stream and are processed under the current generation."
     ],
     "recovery": {
       "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
@@ -40,9 +38,6 @@
     "A registration returns a raw Connector credential once, stores only its SHA-256 hash, and a revoked credential cannot authenticate a new connection.",
     "Opening a replacement connection increments the host generation; stale heartbeats, cursor writes and closes do not change the replacement connection's state.",
     "Each stream cursor survives database close and reopen, is scoped to its host/session/run key, and is not resumed after its configured retention deadline.",
-    "Session and run identifiers accept at most 256 bytes, a host accepts at most 1024 unexpired recovery positions, and the JSON-encoded recovery cursor array remains at or below 1 MiB with JSON escaping included.",
-    "A rejected cursor admission does not run a ProcessEvent handler or write a checkpoint; an existing position may be updated at the limit only when the complete replacement payload remains within budget.",
-    "A hello acknowledgement is rejected before gateway registration when its encoded envelope exceeds the configured WebSocket frame limit, and an existing over-limit durable state is reported explicitly rather than silently truncated or evicted.",
     "Re-running migration discovery leaves the four tables, singleton constraint, indexes and migration history unchanged."
   ],
   "deployed_migrations_immutable": true,

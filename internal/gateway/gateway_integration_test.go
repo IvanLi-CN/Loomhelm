@@ -259,24 +259,6 @@ func TestGatewayWithPostgresTLSWSSRejectsRecoveryFrameOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	credential, err := service.Authenticate(ctx, registration.Token)
-	if err != nil {
-		t.Fatalf("Authenticate() error = %v", err)
-	}
-	connection, err := service.OpenConnection(ctx, credential)
-	if err != nil {
-		t.Fatalf("OpenConnection() error = %v", err)
-	}
-	if err := service.Checkpoint(ctx, connection, hosts.Cursor{
-		SessionID: "frame_session",
-		Value:     strings.Repeat("v", 700),
-	}); err != nil {
-		t.Fatalf("Checkpoint() error = %v", err)
-	}
-	if err := service.CloseConnection(ctx, connection); err != nil {
-		t.Fatalf("CloseConnection() error = %v", err)
-	}
-
 	const maxFrameBytes = 512
 	server, err := NewServer(service, ServerOptions{MaxFrameBytes: maxFrameBytes})
 	if err != nil {
@@ -289,20 +271,46 @@ func TestGatewayWithPostgresTLSWSSRejectsRecoveryFrameOverflow(t *testing.T) {
 		HostID:        registration.Host.ID,
 		Token:         registration.Token,
 		HTTPClient:    httpServer.Client(),
-		MaxFrameBytes: maxFrameBytes,
+		MaxFrameBytes: maxFrameBytes * 8,
 	})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
+	connection, err := client.Connect(ctx)
+	if err != nil {
+		t.Fatalf("initial Client.Connect() error = %v", err)
+	}
+	defer connection.Close()
+	now := time.Now().UTC()
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
+		VALUES ($1, 'frame_session', '', $2, $3, $4)
+	`, registration.Host.ID, strings.Repeat("v", 700), now, now.Add(time.Hour)); err != nil {
+		t.Fatalf("seed frame-overflow cursor: %v", err)
+	}
 	if _, err := client.Connect(ctx); err == nil {
 		t.Fatal("Client.Connect() accepted a hello acknowledgement above the configured frame limit")
+	}
+	if err := connection.SendHeartbeat(ctx, ""); err != nil {
+		t.Fatalf("active connection heartbeat error = %v", err)
+	}
+	heartbeat := readGatewayMessage(t, connection)
+	if heartbeat.Type != MessageHeartbeatAck || heartbeat.Generation != connection.Generation() {
+		t.Fatalf("active connection heartbeat acknowledgement = %+v, want generation %d", heartbeat, connection.Generation())
 	}
 	var active bool
 	if err := db.Pool().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM host_connections WHERE host_id = $1)`, registration.Host.ID).Scan(&active); err != nil {
 		t.Fatalf("check active gateway connection: %v", err)
 	}
-	if active {
-		t.Fatal("frame-overflow handshake left an active host connection")
+	if !active {
+		t.Fatal("frame-overflow handshake removed the existing active host connection")
+	}
+	var generation int64
+	if err := db.Pool().QueryRow(ctx, `SELECT connection_generation FROM host_registrations WHERE id = $1`, registration.Host.ID).Scan(&generation); err != nil {
+		t.Fatalf("read active gateway generation: %v", err)
+	}
+	if generation != connection.Generation() {
+		t.Fatalf("generation after rejected frame-overflow handshake = %d, want %d", generation, connection.Generation())
 	}
 }
 
