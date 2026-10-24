@@ -395,24 +395,81 @@ interface CursorPage<Item> {
   next_cursor?: string;
 }
 
-function isCursorPage<Item>(value: unknown): value is CursorPage<Item> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isProject(value: unknown): value is Project {
+  return isRecord(value)
+    && typeof value.created_at === "string"
+    && (value.description === undefined || typeof value.description === "string")
+    && typeof value.id === "string"
+    && typeof value.name === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isTask(value: unknown): value is Task {
+  return isRecord(value)
+    && typeof value.created_at === "string"
+    && typeof value.goal === "string"
+    && typeof value.id === "string"
+    && typeof value.project_id === "string"
+    && (value.session_id === undefined || typeof value.session_id === "string")
+    && (value.status === "todo" || value.status === "in_progress" || value.status === "blocked" || value.status === "done" || value.status === "cancelled")
+    && typeof value.title === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isProjectMember(value: unknown): value is ProjectMember {
+  return isRecord(value)
+    && typeof value.created_at === "string"
+    && typeof value.project_id === "string"
+    && (value.role === "viewer" || value.role === "operator" || value.role === "owner")
+    && typeof value.user_id === "string";
+}
+
+function isTaskContainment(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.child_task_id === "string"
+    && typeof value.created_at === "string"
+    && typeof value.kind === "string"
+    && typeof value.parent_task_id === "string";
+}
+
+function isTaskDependency(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.created_at === "string"
+    && typeof value.dependent_task_id === "string"
+    && typeof value.kind === "string"
+    && typeof value.prerequisite_task_id === "string";
+}
+
+function isTaskRelationshipPage(value: unknown): value is TaskRelationshipPage {
+  if (!isRecord(value)) return false;
+  return Array.isArray(value.parents)
+    && value.parents.every(isTaskContainment)
+    && Array.isArray(value.children)
+    && value.children.every(isTaskContainment)
+    && Array.isArray(value.prerequisites)
+    && value.prerequisites.every(isTaskDependency)
+    && Array.isArray(value.dependents)
+    && value.dependents.every(isTaskDependency);
+}
+
+function isCursorPage<Item>(value: unknown, isItem: (item: unknown) => item is Item): value is CursorPage<Item> {
   if (!value || typeof value !== "object") return false;
   const page = value as { has_more?: unknown; items?: unknown; next_cursor?: unknown };
   return typeof page.has_more === "boolean"
     && Array.isArray(page.items)
+    && page.items.every(isItem)
     && (page.next_cursor === undefined || typeof page.next_cursor === "string");
-}
-
-function isTaskRelationshipPage(value: unknown): value is TaskRelationshipPage {
-  if (!value || typeof value !== "object") return false;
-  const page = value as Record<string, unknown>;
-  return ["parents", "children", "prerequisites", "dependents"].every((key) => Array.isArray(page[key]));
 }
 
 export async function readAllCursorPages<Item>(
   resource: string,
   readPage: (afterCursor?: string) => Promise<CursorPage<Item>>,
-  limit: number
+  limit: number,
+  isItem: (item: unknown) => item is Item
 ): Promise<readonly Item[]> {
   if (limit <= 0) throw new Error(`${resource} pagination limit must be positive.`);
   const items: Item[] = [];
@@ -421,7 +478,7 @@ export async function readAllCursorPages<Item>(
 
   for (;;) {
     const page = await readPage(afterCursor);
-    if (!isCursorPage<Item>(page)) throw new Error(`${resource} pagination response is incomplete.`);
+    if (!isCursorPage<Item>(page, isItem)) throw new Error(`${resource} pagination response is incomplete.`);
     items.push(...page.items);
     if (!page.has_more) return items;
     const nextCursor = page.next_cursor;
@@ -434,11 +491,11 @@ export async function readAllCursorPages<Item>(
 }
 
 export function listAllProjects(api: Pick<PublishedProjectTaskApi, "listProjects">): Promise<readonly Project[]> {
-  return readAllCursorPages("projects", (after_cursor) => api.listProjects({ after_cursor, limit: PROJECT_PAGE_LIMIT }), PROJECT_PAGE_LIMIT);
+  return readAllCursorPages("projects", (after_cursor) => api.listProjects({ after_cursor, limit: PROJECT_PAGE_LIMIT }), PROJECT_PAGE_LIMIT, isProject);
 }
 
 export function listAllTasks(api: Pick<PublishedProjectTaskApi, "listTasks">): Promise<readonly Task[]> {
-  return readAllCursorPages("tasks", (after_cursor) => api.listTasks({ after_cursor, limit: TASK_PAGE_LIMIT }), TASK_PAGE_LIMIT);
+  return readAllCursorPages("tasks", (after_cursor) => api.listTasks({ after_cursor, limit: TASK_PAGE_LIMIT }), TASK_PAGE_LIMIT, isTask);
 }
 
 export async function readProjectMemberships(
@@ -447,7 +504,7 @@ export async function readProjectMemberships(
 ): Promise<MembershipQueryData> {
   const results = await Promise.allSettled(projectIds.map(async (projectId) => {
     const response = await api.listProjectMembers({ project_id: projectId });
-    if (!response || typeof response !== "object" || !Array.isArray(response.items)) throw new Error("项目成员响应不完整。");
+    if (!response || typeof response !== "object" || !Array.isArray(response.items) || !response.items.every(isProjectMember)) throw new Error("项目成员响应不完整。");
     return { projectId, members: response.items };
   }));
   const items: Record<string, readonly ProjectMember[]> = {};
@@ -528,11 +585,11 @@ export function hasIncompleteProjectTaskRead(data: unknown, expectedProjectIds: 
   if (expectedProjectIds.length > 0) {
     if (!read.items || typeof read.items !== "object" || Array.isArray(read.items)) return true;
     const items = read.items as Record<string, unknown>;
-    if (expectedProjectIds.some((projectId) => !Object.prototype.hasOwnProperty.call(items, projectId) || !Array.isArray(items[projectId]))) return true;
+    if (expectedProjectIds.some((projectId) => !Object.prototype.hasOwnProperty.call(items, projectId) || !Array.isArray(items[projectId]) || !items[projectId].every(isProjectMember))) return true;
   }
   if (expectedTaskIds.length > 0) {
-    if (!Array.isArray(read.items) || !read.relationships || typeof read.relationships !== "object" || Array.isArray(read.relationships)) return true;
-    const taskIds = new Set(read.items.flatMap((item) => item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string" ? [(item as { id: string }).id] : []));
+    if (!Array.isArray(read.items) || !read.items.every(isTask) || !read.relationships || typeof read.relationships !== "object" || Array.isArray(read.relationships)) return true;
+    const taskIds = new Set(read.items.map((item) => item.id));
     const relationships = read.relationships as Record<string, unknown>;
     if (expectedTaskIds.some((taskId) => !taskIds.has(taskId) || !Object.prototype.hasOwnProperty.call(relationships, taskId) || !isTaskRelationshipPage(relationships[taskId]))) return true;
   }

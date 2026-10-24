@@ -54,18 +54,22 @@ describe("cursor pagination", () => {
       if (!afterCursor) return { items: ["project-1"], has_more: true, next_cursor: "cursor-1" };
       if (afterCursor === "cursor-1") return { items: ["project-2"], has_more: true, next_cursor: "cursor-2" };
       return { items: ["project-3"], has_more: false };
-    }, 100);
+    }, 100, (item): item is string => typeof item === "string");
 
     expect(items).toEqual(["project-1", "project-2", "project-3"]);
     expect(cursors).toEqual([undefined, "cursor-1", "cursor-2"]);
   });
 
   test("fails closed when a server claims another page without advancing the cursor", async () => {
-    await expect(readAllCursorPages("tasks", async () => ({ items: ["task-1"], has_more: true, next_cursor: "same" }), 200)).rejects.toThrow("tasks pagination did not return a new cursor");
+    await expect(readAllCursorPages("tasks", async () => ({ items: ["task-1"], has_more: true, next_cursor: "same" }), 200, (item): item is string => typeof item === "string")).rejects.toThrow("tasks pagination did not return a new cursor");
   });
 
   test("fails closed when a page omits its completeness fields", async () => {
-    await expect(readAllCursorPages("projects", async () => ({ items: [] } as never), 100)).rejects.toThrow("projects pagination response is incomplete");
+    await expect(readAllCursorPages("projects", async () => ({ items: [] } as never), 100, (item): item is string => typeof item === "string")).rejects.toThrow("projects pagination response is incomplete");
+  });
+
+  test("fails closed when a page contains an invalid item", async () => {
+    await expect(readAllCursorPages("projects", async () => ({ items: [null], has_more: false } as never), 100, (item): item is { id: string } => Boolean(item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string"))).rejects.toThrow("projects pagination response is incomplete");
   });
 });
 

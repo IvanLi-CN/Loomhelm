@@ -45,6 +45,18 @@ function task(id: string, dependsOn: string[] = []): TaskRecord {
   };
 }
 
+function protocolTask(id = "task-1"): Task {
+  return {
+    created_at: "now",
+    goal: "goal",
+    id,
+    project_id: "project-1",
+    status: "todo",
+    title: id,
+    updated_at: "now"
+  };
+}
+
 describe("project/task write contracts", () => {
   test("calculates only explicit relation edge changes", () => {
     expect(calculateTaskRelationChanges(["parent-1", "parent-2"], ["parent-2", "parent-3"], ["task-1"], ["task-1", "task-2"])).toEqual({
@@ -201,9 +213,11 @@ describe("project/task write contracts", () => {
 
   test("requires every expected membership and relationship read", () => {
     expect(hasIncompleteProjectTaskRead({ items: { "project-1": [] }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, ["project-1", "project-2"])).toBe(true);
-    expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: {}, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(true);
-    expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: { "task-1": {} }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(true);
-    expect(hasIncompleteProjectTaskRead({ items: [{ id: "task-1" }], relationships: { "task-1": { parents: [], children: [], prerequisites: [], dependents: [] } }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(false);
+    expect(hasIncompleteProjectTaskRead({ items: { "project-1": [null] }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, ["project-1"])).toBe(true);
+    expect(hasIncompleteProjectTaskRead({ items: [protocolTask()], relationships: {}, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(true);
+    expect(hasIncompleteProjectTaskRead({ items: [protocolTask()], relationships: { "task-1": {} }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(true);
+    expect(hasIncompleteProjectTaskRead({ items: [protocolTask()], relationships: { "task-1": { parents: [], children: [], prerequisites: [], dependents: [] } }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(false);
+    expect(hasIncompleteProjectTaskRead({ items: [protocolTask()], relationships: { "task-1": { parents: [null], children: [], prerequisites: [], dependents: [] } }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], ["task-1"])).toBe(true);
   });
 
   test("requires settled successful query state before clearing a refresh barrier", () => {
@@ -347,6 +361,16 @@ describe("project/task write contracts", () => {
 
     expect(result.items).toEqual({});
     expect(result.failures).toEqual(["读取项目 project-1 的成员失败：项目成员响应不完整。"]);
+  });
+
+  test("treats malformed membership and relationship elements as incomplete reads", async () => {
+    const membership = await readProjectMemberships({ listProjectMembers: async () => ({ items: [null] } as never) }, ["project-1"]);
+    const relationship = await readTaskRelationships({ getTaskRelationships: async () => ({ parents: [null], children: [], prerequisites: [], dependents: [] } as never) }, [protocolTask()]);
+
+    expect(membership.items).toEqual({});
+    expect(membership.failures).toEqual(["读取项目 project-1 的成员失败：项目成员响应不完整。"]);
+    expect(relationship.relationships).toEqual({});
+    expect(relationship.failures).toEqual(["读取任务 task-1 的关系失败：任务关系响应不完整。"]);
   });
 
   test("hides a project whose membership read is no longer authorized", async () => {
