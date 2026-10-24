@@ -23,6 +23,11 @@ var (
 	ErrEventHandlerUnavailable = errors.New("gateway event handler is not configured")
 )
 
+const (
+	gatewayHeartbeatErrorMessage = "gateway heartbeat rejected"
+	gatewayEventErrorMessage     = "gateway event rejected"
+)
+
 type ServerOptions struct {
 	MaxFrameBytes    int64
 	HandshakeTimeout time.Duration
@@ -349,7 +354,7 @@ func (c *serverConnection) handleHeartbeat(ctx context.Context, message Message)
 		err = c.registry.Touch(ctx, c.connection)
 	}
 	if err != nil {
-		_ = c.writeError(ctx, connectionErrorCode(err, "heartbeat_rejected"), err.Error())
+		_ = c.writeError(ctx, connectionErrorCode(err, "heartbeat_rejected"), gatewayHeartbeatErrorMessage)
 		return err
 	}
 	return c.write(ctx, Message{Type: MessageHeartbeatAck, RequestID: message.RequestID, Generation: c.connection.Generation})
@@ -358,7 +363,7 @@ func (c *serverConnection) handleHeartbeat(ctx context.Context, message Message)
 func (c *serverConnection) handleEvent(ctx context.Context, message Message) error {
 	if c.onEvent == nil {
 		err := ErrEventHandlerUnavailable
-		_ = c.writeError(ctx, connectionErrorCode(err, "event_rejected"), err.Error())
+		_ = c.writeError(ctx, connectionErrorCode(err, "event_rejected"), gatewayEventErrorMessage)
 		return err
 	}
 	event := *message.Event
@@ -370,7 +375,7 @@ func (c *serverConnection) handleEvent(ctx context.Context, message Message) err
 		return c.onEvent(handlerCtx, c.connection, event)
 	})
 	if err != nil {
-		_ = c.writeError(ctx, connectionErrorCode(err, "event_rejected"), err.Error())
+		_ = c.writeError(ctx, connectionErrorCode(err, "event_rejected"), gatewayEventErrorMessage)
 		return err
 	}
 	return nil

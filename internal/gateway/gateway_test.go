@@ -29,6 +29,8 @@ type fakeRegistry struct {
 	cursor          *hosts.Cursor
 	touches         int
 	authorizeErr    error
+	touchErr        error
+	processEventErr error
 	deliverCalls    int
 }
 
@@ -99,6 +101,9 @@ func (r *fakeRegistry) Touch(_ context.Context, connection hosts.Connection) err
 	if !r.matchesLocked(connection) {
 		return hosts.ErrConnectionStale
 	}
+	if r.touchErr != nil {
+		return r.touchErr
+	}
 	r.touches++
 	return nil
 }
@@ -137,6 +142,9 @@ func (r *fakeRegistry) ProcessEvent(ctx context.Context, connection hosts.Connec
 	defer r.mu.Unlock()
 	if !r.matchesLocked(connection) {
 		return hosts.ErrConnectionStale
+	}
+	if r.processEventErr != nil {
+		return r.processEventErr
 	}
 	if handler != nil {
 		if err := handler(ctx); err != nil {
@@ -942,6 +950,81 @@ func TestGatewayRejectsEventsWithoutHandler(t *testing.T) {
 	defer resumed.Close()
 	if got := resumed.ResumeCursors(); len(got) != 0 {
 		t.Fatalf("unhandled event resume cursors = %+v, want none", got)
+	}
+}
+
+func TestGatewayWSSRejectsInternalErrorDetails(t *testing.T) {
+	const marker = "private path=/srv/loomhelm/secrets credential=credential-secret raw-envelope={\"token\":\"raw-secret\"}"
+	for _, test := range []struct {
+		name        string
+		configure   func(*fakeRegistry)
+		send        func(*ClientConnection) error
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name: "heartbeat",
+			configure: func(registry *fakeRegistry) {
+				registry.touchErr = errors.New(marker)
+			},
+			send: func(connection *ClientConnection) error {
+				return connection.SendHeartbeat(context.Background(), "")
+			},
+			wantCode:    "heartbeat_rejected",
+			wantMessage: "gateway heartbeat rejected",
+		},
+		{
+			name: "event",
+			configure: func(registry *fakeRegistry) {
+				registry.processEventErr = errors.New(marker)
+			},
+			send: func(connection *ClientConnection) error {
+				return connection.SendEvent(context.Background(), protocol.Event{
+					Cursor:     "cursor_error_details",
+					EventID:    "event_error_details",
+					OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+					Payload:    json.RawMessage("{\"raw\":\"error details\"}"),
+					Sequence:   1,
+					SessionID:  "session_error_details",
+					Source:     protocol.EventSourceHostObservation,
+					Type:       protocol.EventTypeMessageDelta,
+				})
+			},
+			wantCode:    "event_rejected",
+			wantMessage: "gateway event rejected",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := newFakeRegistry()
+			test.configure(registry)
+			server, err := NewServer(registry)
+			if err != nil {
+				t.Fatalf("NewServer() error = %v", err)
+			}
+			httpServer := httptest.NewTLSServer(server)
+			t.Cleanup(httpServer.Close)
+			connection := connectTestClient(t, newTestClient(t, httpServer, registry.credential.HostID, registry.token))
+			t.Cleanup(func() { _ = connection.Close() })
+
+			if err := test.send(connection); err != nil {
+				t.Fatalf("send %s error = %v", test.name, err)
+			}
+			errorMessage := readGatewayMessage(t, connection)
+			if errorMessage.Type != MessageError || errorMessage.Error == nil {
+				t.Fatalf("error frame = %+v, want MessageError", errorMessage)
+			}
+			if errorMessage.Error.Code != test.wantCode {
+				t.Fatalf("error frame code = %q, want %q", errorMessage.Error.Code, test.wantCode)
+			}
+			if errorMessage.Error.Message != test.wantMessage {
+				t.Fatalf("error frame message = %q, want fixed safe message %q", errorMessage.Error.Message, test.wantMessage)
+			}
+			for _, fragment := range []string{"/srv/loomhelm/secrets", "credential-secret", "raw-envelope", "raw-secret"} {
+				if strings.Contains(errorMessage.Error.Message, fragment) {
+					t.Fatalf("error frame leaked internal detail %q: %q", fragment, errorMessage.Error.Message)
+				}
+			}
+		})
 	}
 }
 
