@@ -756,6 +756,102 @@ func TestGatewayShutdownWaitsForInFlightEventHandler(t *testing.T) {
 	}
 }
 
+func TestGatewayShutdownReportsDeadlineWhileEventHandlerRemainsInFlight(t *testing.T) {
+	registry := &unlockedEventRegistry{fakeRegistry: newFakeRegistry()}
+	handlerStarted := make(chan struct{})
+	handlerFinished := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	var startOnce sync.Once
+	var finishOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseHandler) }) }
+	t.Cleanup(release)
+	server, err := NewServer(registry, ServerOptions{
+		EventHandler: func(ctx context.Context, _ hosts.Connection, _ protocol.Event) error {
+			startOnce.Do(func() { close(handlerStarted) })
+			defer finishOnce.Do(func() { close(handlerFinished) })
+			select {
+			case <-releaseHandler:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
+	connection := connectTestClient(t, client)
+	t.Cleanup(func() { _ = connection.Close() })
+	event := protocol.Event{
+		Cursor:     "cursor_shutdown_deadline",
+		EventID:    "event_shutdown_deadline",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Payload:    json.RawMessage(`{"delta":"deadline"}`),
+		Sequence:   1,
+		SessionID:  "session_shutdown_deadline",
+		Source:     protocol.EventSourceHostObservation,
+		Type:       protocol.EventTypeMessageDelta,
+	}
+	if err := connection.SendEvent(context.Background(), event); err != nil {
+		t.Fatalf("SendEvent() error = %v", err)
+	}
+	select {
+	case <-handlerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event handler did not enter its controlled in-flight state")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	shutdown := make(chan error, 1)
+	shutdownStarted := time.Now()
+	go func() { shutdown <- server.Shutdown(shutdownCtx) }()
+	var shutdownErr error
+	select {
+	case shutdownErr = <-shutdown:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown() did not return within the bounded deadline test window")
+	}
+	if shutdownErr == nil || !errors.Is(shutdownErr, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown() error = %v, want context deadline exceeded", shutdownErr)
+	}
+	if elapsed := time.Since(shutdownStarted); elapsed > time.Second {
+		t.Fatalf("Shutdown() elapsed %s, want bounded return", elapsed)
+	}
+	select {
+	case <-handlerFinished:
+		t.Fatal("Shutdown() cancelled the in-flight event handler before release")
+	default:
+	}
+
+	release()
+	select {
+	case <-handlerFinished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event handler did not finish after release")
+	}
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		registry.mu.Lock()
+		closedConnections := len(registry.closed)
+		registry.mu.Unlock()
+		if closedConnections >= 2 {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline:
+			t.Fatalf("registry cleanup calls = %d, want ServeHTTP cleanup after release", closedConnections)
+		}
+	}
+}
+
 func TestGatewayShutdownWaitsForHandshake(t *testing.T) {
 	server, err := NewServer(newFakeRegistry())
 	if err != nil {
