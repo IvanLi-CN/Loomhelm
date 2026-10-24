@@ -64,7 +64,9 @@ export const StateGallery: Story = {
       <ApprovalRequestCard request={{ ...request, approval: { ...baseApproval, status: "approved" } }} />
       <ApprovalRequestCard request={{ ...request, approval: { ...baseApproval, status: "denied" } }} />
       <ApprovalRequestCard request={{ ...request, approval: { ...baseApproval, revision: 5, status: "expired" } }} />
-      <ApprovalRequestCard commandIds={{ approve: "cmd-approve-readonly", deny: "cmd-deny-readonly" }} readOnly onResolve={() => undefined} request={{ ...request, approval: { ...baseApproval, id: "approval-readonly" } }} />
+      <div className="lg:col-span-2">
+        <ApprovalRequestCard commandIds={{ approve: "cmd-approve-readonly", deny: "cmd-deny-readonly" }} readOnly onResolve={() => undefined} request={{ ...request, approval: { ...baseApproval, id: "approval-readonly" } }} />
+      </div>
     </EvidenceFrame>
   )
 };
