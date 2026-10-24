@@ -3,6 +3,7 @@ module github.com/IvanLi-CN/Loomhelm
 go 1.27.2
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pressly/goose/v3 v3.28.0
