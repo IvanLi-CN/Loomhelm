@@ -3,6 +3,7 @@
 package approvals
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,6 +27,9 @@ type Approval struct {
 	SessionID           string
 	Generation          string
 	ResolvedByCommandID string
+	Context             json.RawMessage
+	RequestedEventID    string
+	ResolvedAt          string
 }
 
 type NewInput struct {

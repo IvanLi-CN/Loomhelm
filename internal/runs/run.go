@@ -34,6 +34,10 @@ type Run struct {
 	Interrupt      InterruptState
 	LastCursor     string
 	TerminalReason string
+	CreatedAt      string
+	StartedAt      string
+	FinishedAt     string
+	UpdatedAt      string
 }
 
 type NewRunInput struct {

@@ -24,7 +24,9 @@ var (
 
 type Session struct {
 	protocol.Session
-	Generation string
+	Generation     string
+	LastCursor     string
+	TerminalReason string
 }
 
 type NewInput struct {

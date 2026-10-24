@@ -33,13 +33,15 @@ type CommandIntent struct {
 }
 
 type CommandRecord struct {
-	Intent      CommandIntent
-	Digest      string
-	State       protocol.CommandState
-	ReceivedAt  string
-	OperationID string
-	Result      json.RawMessage
-	Error       *protocol.ApiError
+	Intent              CommandIntent
+	Digest              string
+	State               protocol.CommandState
+	ReceivedAt          string
+	OperationID         string
+	EventCursor         string
+	ReconciliationState protocol.ReconciliationState
+	Result              json.RawMessage
+	Error               *protocol.ApiError
 }
 
 type AcceptResult struct {
@@ -51,6 +53,7 @@ type CommandObservation struct {
 	State          protocol.CommandState
 	Reconciliation protocol.ReconciliationState
 	OperationID    string
+	EventCursor    string
 	Result         json.RawMessage
 	Error          *protocol.ApiError
 }
@@ -313,7 +316,9 @@ func (l *Ledger) Reconcile(commandID, generation string, observation CommandObse
 		return CommandRecord{}, fmt.Errorf("%w: unknown -> %s", ErrCommandTransition, observation.State)
 	}
 	record.State = observation.State
+	record.ReconciliationState = observation.Reconciliation
 	record.OperationID = observation.OperationID
+	record.EventCursor = observation.EventCursor
 	record.Result = append(json.RawMessage(nil), observation.Result...)
 	record.Error = cloneAPIError(observation.Error)
 	l.records[commandID] = record
@@ -355,6 +360,7 @@ func (record CommandRecord) Ack() protocol.CommandAck {
 		CommandID:   record.Intent.Command.CommandID,
 		ReceivedAt:  record.ReceivedAt,
 		OperationID: optionalString(record.OperationID),
+		EventCursor: optionalString(record.EventCursor),
 		RunID:       cloneStringPointer(record.Intent.Command.RunID),
 		Result:      append(json.RawMessage(nil), record.Result...),
 		State:       record.State,

@@ -1,0 +1,293 @@
+package runs
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+const defaultControlLeaseTTL = 30 * time.Second
+
+type DurableLeaseIdentity struct {
+	LeaseKey           string
+	SessionID          string
+	RunID              string
+	Generation         string
+	OwnerID            string
+	CandidateSourceSHA string
+	ArtifactDigest     string
+}
+
+type ControlLease struct {
+	DurableLeaseIdentity
+	AcquiredAt  time.Time
+	HeartbeatAt time.Time
+	ExpiresAt   time.Time
+}
+
+type LeaseStoreConfig struct {
+	TTL time.Duration
+}
+
+// AcquireLease serializes replacement decisions on the lease row. A newer
+// numeric generation or an expired lease may replace an older owner; an
+// active lease can only be reacquired by the exact same execution identity.
+func (s *Store) AcquireLease(ctx context.Context, identity DurableLeaseIdentity, configs ...LeaseStoreConfig) (ControlLease, error) {
+	if err := s.ready(ctx); err != nil {
+		return ControlLease{}, err
+	}
+	if err := validateLeaseIdentity(identity); err != nil {
+		return ControlLease{}, err
+	}
+	ttl := defaultControlLeaseTTL
+	if len(configs) > 0 && configs[0].TTL != 0 {
+		ttl = configs[0].TTL
+	}
+	if ttl <= 0 {
+		return ControlLease{}, fmt.Errorf("%w: lease TTL must be positive", ErrInvalidLease)
+	}
+	currentGeneration, err := parseLeaseGeneration(identity.Generation)
+	if err != nil {
+		return ControlLease{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ControlLease{}, fmt.Errorf("begin control lease acquisition: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, identity.LeaseKey); err != nil {
+		return ControlLease{}, fmt.Errorf("serialize control lease acquisition: %w", err)
+	}
+	current, found, err := lockLease(ctx, tx, identity.LeaseKey)
+	if err != nil {
+		return ControlLease{}, err
+	}
+	if found {
+		storedGeneration, parseErr := parseLeaseGeneration(current.Generation)
+		if parseErr != nil {
+			return ControlLease{}, fmt.Errorf("read persisted control lease generation: %w", parseErr)
+		}
+		if current.ExpiresAt.After(time.Now().UTC()) && storedGeneration > currentGeneration {
+			return ControlLease{}, fmt.Errorf("%w: lease %q is owned by generation %q", ErrLeaseHeld, identity.LeaseKey, current.Generation)
+		}
+		if current.ExpiresAt.After(time.Now().UTC()) && storedGeneration == currentGeneration && !sameLeaseIdentity(current.DurableLeaseIdentity, identity) {
+			return ControlLease{}, fmt.Errorf("%w: lease %q is owned by another identity", ErrLeaseHeld, identity.LeaseKey)
+		}
+	}
+	lease, err := writeLease(ctx, tx, identity, ttl)
+	if err != nil {
+		return ControlLease{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ControlLease{}, fmt.Errorf("commit control lease acquisition: %w", err)
+	}
+	return lease, nil
+}
+
+func (s *Store) RenewLease(ctx context.Context, identity DurableLeaseIdentity, configs ...LeaseStoreConfig) (ControlLease, error) {
+	if err := s.ready(ctx); err != nil {
+		return ControlLease{}, err
+	}
+	if err := validateLeaseIdentity(identity); err != nil {
+		return ControlLease{}, err
+	}
+	ttl := defaultControlLeaseTTL
+	if len(configs) > 0 && configs[0].TTL != 0 {
+		ttl = configs[0].TTL
+	}
+	if ttl <= 0 {
+		return ControlLease{}, fmt.Errorf("%w: lease TTL must be positive", ErrInvalidLease)
+	}
+	var lease ControlLease
+	err := s.pool.QueryRow(ctx, `
+		UPDATE execution_control_leases
+		SET heartbeat_at = CURRENT_TIMESTAMP,
+			 expires_at = CURRENT_TIMESTAMP + $8 * INTERVAL '1 second'
+		WHERE lease_key = $1
+		  AND session_id = $2
+		  AND run_id = $3
+		  AND generation = $4
+		  AND owner_id = $5
+		  AND candidate_source_sha = $6
+		  AND artifact_digest = $7
+		  AND expires_at > CURRENT_TIMESTAMP
+		RETURNING lease_key, session_id, run_id, generation, owner_id,
+		          candidate_source_sha, artifact_digest, acquired_at,
+		          heartbeat_at, expires_at
+	`, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest, ttl.Seconds()).Scan(
+		&lease.LeaseKey, &lease.SessionID, &lease.RunID, &lease.Generation,
+		&lease.OwnerID, &lease.CandidateSourceSHA, &lease.ArtifactDigest,
+		&lease.AcquiredAt, &lease.HeartbeatAt, &lease.ExpiresAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ControlLease{}, ErrLeaseLost
+	}
+	if err != nil {
+		return ControlLease{}, fmt.Errorf("renew control lease: %w", err)
+	}
+	return lease, nil
+}
+
+func (s *Store) CheckLease(ctx context.Context, identity DurableLeaseIdentity) (ControlLease, error) {
+	if err := s.ready(ctx); err != nil {
+		return ControlLease{}, err
+	}
+	if err := validateLeaseIdentity(identity); err != nil {
+		return ControlLease{}, err
+	}
+	var lease ControlLease
+	err := s.pool.QueryRow(ctx, `
+		SELECT lease_key, session_id, run_id, generation, owner_id,
+		       candidate_source_sha, artifact_digest, acquired_at,
+		       heartbeat_at, expires_at
+		FROM execution_control_leases
+		WHERE lease_key = $1
+		  AND session_id = $2
+		  AND run_id = $3
+		  AND generation = $4
+		  AND owner_id = $5
+		  AND candidate_source_sha = $6
+		  AND artifact_digest = $7
+		  AND expires_at > CURRENT_TIMESTAMP
+	`, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest).Scan(
+		&lease.LeaseKey, &lease.SessionID, &lease.RunID, &lease.Generation,
+		&lease.OwnerID, &lease.CandidateSourceSHA, &lease.ArtifactDigest,
+		&lease.AcquiredAt, &lease.HeartbeatAt, &lease.ExpiresAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ControlLease{}, ErrLeaseLost
+	}
+	if err != nil {
+		return ControlLease{}, fmt.Errorf("check control lease: %w", err)
+	}
+	return lease, nil
+}
+
+func (s *Store) ReleaseLease(ctx context.Context, identity DurableLeaseIdentity) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
+	if err := validateLeaseIdentity(identity); err != nil {
+		return err
+	}
+	result, err := s.pool.Exec(ctx, `
+		DELETE FROM execution_control_leases
+		WHERE lease_key = $1
+		  AND session_id = $2
+		  AND run_id = $3
+		  AND generation = $4
+		  AND owner_id = $5
+		  AND candidate_source_sha = $6
+		  AND artifact_digest = $7
+	`, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest)
+	if err != nil {
+		return fmt.Errorf("release control lease: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+var ErrInvalidLease = errors.New("control lease is invalid")
+
+func validateLeaseIdentity(identity DurableLeaseIdentity) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{"lease key", identity.LeaseKey},
+		{"session id", identity.SessionID},
+		{"run id", identity.RunID},
+		{"generation", identity.Generation},
+		{"owner id", identity.OwnerID},
+		{"candidate source SHA", identity.CandidateSourceSHA},
+		{"artifact digest", identity.ArtifactDigest},
+	}
+	for _, field := range fields {
+		if strings.TrimSpace(field.value) == "" || field.value != strings.TrimSpace(field.value) {
+			return fmt.Errorf("%w: %s is required and must not have surrounding whitespace", ErrInvalidLease, field.name)
+		}
+	}
+	if _, err := parseLeaseGeneration(identity.Generation); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parseLeaseGeneration(value string) (int64, error) {
+	parsed, err := strconv.ParseUint(value, 10, 63)
+	if err != nil || parsed == 0 || parsed > math.MaxInt64 {
+		return 0, fmt.Errorf("%w: generation must be a positive signed integer, got %q", ErrInvalidLease, value)
+	}
+	return int64(parsed), nil
+}
+
+func sameLeaseIdentity(left, right DurableLeaseIdentity) bool {
+	return left == right
+}
+
+func lockLease(ctx context.Context, tx pgx.Tx, key string) (ControlLease, bool, error) {
+	var lease ControlLease
+	err := tx.QueryRow(ctx, `
+		SELECT lease_key, session_id, run_id, generation, owner_id,
+		       candidate_source_sha, artifact_digest, acquired_at,
+		       heartbeat_at, expires_at
+		FROM execution_control_leases
+		WHERE lease_key = $1
+		FOR UPDATE
+	`, key).Scan(
+		&lease.LeaseKey, &lease.SessionID, &lease.RunID, &lease.Generation,
+		&lease.OwnerID, &lease.CandidateSourceSHA, &lease.ArtifactDigest,
+		&lease.AcquiredAt, &lease.HeartbeatAt, &lease.ExpiresAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ControlLease{}, false, nil
+	}
+	if err != nil {
+		return ControlLease{}, false, fmt.Errorf("lock control lease: %w", err)
+	}
+	return lease, true, nil
+}
+
+func writeLease(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity, ttl time.Duration) (ControlLease, error) {
+	var lease ControlLease
+	query := `
+		INSERT INTO execution_control_leases (
+			lease_key, session_id, run_id, generation, owner_id,
+			candidate_source_sha, artifact_digest, acquired_at,
+			heartbeat_at, expires_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP,
+		        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + $8 * INTERVAL '1 second')
+		ON CONFLICT (lease_key) DO UPDATE SET
+			session_id = EXCLUDED.session_id,
+			run_id = EXCLUDED.run_id,
+			generation = EXCLUDED.generation,
+			owner_id = EXCLUDED.owner_id,
+			candidate_source_sha = EXCLUDED.candidate_source_sha,
+			artifact_digest = EXCLUDED.artifact_digest,
+			acquired_at = CURRENT_TIMESTAMP,
+			heartbeat_at = CURRENT_TIMESTAMP,
+			expires_at = EXCLUDED.expires_at
+		RETURNING lease_key, session_id, run_id, generation, owner_id,
+		          candidate_source_sha, artifact_digest, acquired_at,
+		          heartbeat_at, expires_at
+	`
+	err := tx.QueryRow(ctx, query, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest, ttl.Seconds()).Scan(
+		&lease.LeaseKey, &lease.SessionID, &lease.RunID, &lease.Generation,
+		&lease.OwnerID, &lease.CandidateSourceSHA, &lease.ArtifactDigest,
+		&lease.AcquiredAt, &lease.HeartbeatAt, &lease.ExpiresAt,
+	)
+	if err != nil {
+		return ControlLease{}, fmt.Errorf("persist control lease: %w", err)
+	}
+	return lease, nil
+}
