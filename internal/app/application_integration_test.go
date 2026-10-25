@@ -266,12 +266,49 @@ func isolatedApplicationDatabase(t *testing.T) string {
 			t.Errorf("drop owned application test schema: %v", err)
 		}
 	})
-	connection, err := pgx.ParseConfig(cfg.URL)
+	connectionURL, err := applicationDatabaseWithSchema(cfg.URL, schema)
 	if err != nil {
-		t.Fatal("parse test database configuration")
+		t.Fatal(err)
 	}
-	connection.RuntimeParams["search_path"] = schema
-	return connection.ConnString()
+	probe, err := database.Open(ctx, database.Config{URL: connectionURL, MaxConns: 1})
+	if err != nil {
+		t.Fatal("open isolated application test connection")
+	}
+	defer probe.Close()
+	var actualSchema string
+	if err := probe.Pool().QueryRow(ctx, "SELECT current_schema()").Scan(&actualSchema); err != nil {
+		t.Fatal("verify application test schema")
+	}
+	if actualSchema != schema {
+		t.Fatal("application test connection escaped its owned schema")
+	}
+	return connectionURL
+}
+
+// pgx.ConnConfig.ConnString returns its original input; changing RuntimeParams
+// does not change that string. Encode the owned schema into the actual DSN
+// used by every production connection opened during this exercise.
+func applicationDatabaseWithSchema(raw, schema string) (string, error) {
+	if schema == "" || strings.Trim(schema, "abcdefghijklmnopqrstuvwxyz0123456789_") != "" || (schema[0] >= '0' && schema[0] <= '9') {
+		return "", fmt.Errorf("invalid owned application test schema")
+	}
+	raw = strings.TrimSpace(raw)
+	if _, err := pgx.ParseConfig(raw); err != nil {
+		return "", fmt.Errorf("invalid application test database configuration")
+	}
+	if strings.HasPrefix(raw, "postgres://") || strings.HasPrefix(raw, "postgresql://") {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid application test database URL")
+		}
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		return parsed.String(), nil
+	}
+	// Schema is restricted above to an owned, unquoted PostgreSQL identifier.
+	// A final keyword replaces an earlier search_path in a keyword/value DSN.
+	return raw + " search_path='" + schema + "'", nil
 }
 
 func startApplicationTestServer(t *testing.T, cfg platform.Config) (string, func()) {

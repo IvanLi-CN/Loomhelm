@@ -11,6 +11,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/IvanLi-CN/Loomhelm/internal/tasks"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,6 +44,7 @@ func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform
 	identity.MountAPI(router)
 	projectService.Mount(router)
 	taskService.Mount(router)
+	(&sessionService{principal: identity, projects: projectService, records: sessions.NewStore(pool)}).mount(router)
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
 		principal, err := identity.ResolvePrincipal(request.Context(), request)
 		if err != nil || principal.UserID == "" || principal.CredentialID != "" {
