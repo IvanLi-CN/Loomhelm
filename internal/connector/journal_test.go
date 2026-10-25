@@ -457,8 +457,8 @@ func TestJournalWritesCurrentFormatAndCommandIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(data, []byte("\"format_version\":2")) || !bytes.Contains(data, []byte("\"command_id\":\"current-format-id\"")) {
-		t.Fatalf("current journal record did not include v2 identity: %s", data)
+	if !bytes.Contains(data, []byte("\"format_version\":3")) || !bytes.Contains(data, []byte("\"command_id\":\"current-format-id\"")) {
+		t.Fatalf("current journal record did not include v3 identity: %s", data)
 	}
 }
 
@@ -554,7 +554,7 @@ func TestJournalRejectsOversizedAppendWithoutPoisoning(t *testing.T) {
 
 func TestJournalRejectsUnsupportedFormatVersion(t *testing.T) {
 	path := filepath.Join(privateTestDir(t), "unsupported-format.jsonl")
-	if err := os.WriteFile(path, []byte(`{"format_version":3,"type":"session"}`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"format_version":4,"type":"session"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := OpenJournal(path); !errors.Is(err, ErrJournalCorrupt) {

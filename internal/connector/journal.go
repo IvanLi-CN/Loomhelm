@@ -20,11 +20,12 @@ import (
 )
 
 const (
-	legacyJournalFormatVersion = 1
-	journalFormatVersion       = 2
-	maxJournalBytes            = int64(256 << 20)
-	maxJournalRecordBytes      = 8 << 20
-	maxJournalEvents           = 1_000_000
+	legacyJournalFormatVersion   = 1
+	previousJournalFormatVersion = 2
+	journalFormatVersion         = 3
+	maxJournalBytes              = int64(256 << 20)
+	maxJournalRecordBytes        = 8 << 20
+	maxJournalEvents             = 1_000_000
 )
 
 const approvalResolutionCleared = "cleared"
@@ -48,6 +49,9 @@ type journalRecord struct {
 	Event          *protocol.Event          `json:"event,omitempty"`
 	Session        *journalSession          `json:"session,omitempty"`
 	SessionStart   *sessionStartIntent      `json:"session_start,omitempty"`
+	SessionAlias   *SessionAlias            `json:"session_alias,omitempty"`
+	RunBinding     *RunBinding              `json:"run_binding,omitempty"`
+	ObservedEvent  *journalObservedEvent    `json:"observed_event,omitempty"`
 	Reconciliation *protocol.Reconciliation `json:"reconciliation,omitempty"`
 	ApprovalClaim  *approvalClaimRecord     `json:"approval_claim,omitempty"`
 }
@@ -83,13 +87,22 @@ type Journal struct {
 	file     *os.File
 	fatalErr error
 
-	commands           map[string]commandEntry
-	events             []protocol.Event
-	eventIDs           map[string]struct{}
-	eventIndexByCursor map[string]int
-	reconciliations    map[string]protocol.Reconciliation
-	sessions           map[string]journalSession
-	sessionStarts      map[string]sessionStartIntent
+	commands                    map[string]commandEntry
+	events                      []protocol.Event
+	eventIDs                    map[string]struct{}
+	eventIndexByID              map[string]int
+	eventIndexByCursor          map[string]int
+	reconciliations             map[string]protocol.Reconciliation
+	sessions                    map[string]journalSession
+	sessionStarts               map[string]sessionStartIntent
+	legacySessionFacts          map[string]SessionAlias
+	sessionAliases              map[string]SessionAlias
+	sessionAliasByAdapter       map[string]string
+	runBindings                 map[string]RunBinding
+	runBindingByCommand         map[string]string
+	runBindingByNativeTurn      map[string]string
+	runBindingByNativeOperation map[string]string
+	observedEvents              map[string]journalObservedEvent
 
 	sequenceBySession map[string]int64
 	pendingApprovals  map[string]PendingApproval
@@ -195,18 +208,27 @@ func OpenJournal(path string) (*Journal, error) {
 	}
 
 	journal := &Journal{
-		path:               absPath,
-		file:               file,
-		commands:           make(map[string]commandEntry),
-		eventIDs:           make(map[string]struct{}),
-		eventIndexByCursor: make(map[string]int),
-		reconciliations:    make(map[string]protocol.Reconciliation),
-		sessions:           make(map[string]journalSession),
-		sessionStarts:      make(map[string]sessionStartIntent),
-		sequenceBySession:  make(map[string]int64),
-		pendingApprovals:   make(map[string]PendingApproval),
-		approvalClaims:     make(map[string]approvalClaimRecord),
-		approvalResults:    make(map[string]string),
+		path:                        absPath,
+		file:                        file,
+		commands:                    make(map[string]commandEntry),
+		eventIDs:                    make(map[string]struct{}),
+		eventIndexByID:              make(map[string]int),
+		eventIndexByCursor:          make(map[string]int),
+		reconciliations:             make(map[string]protocol.Reconciliation),
+		sessions:                    make(map[string]journalSession),
+		sessionStarts:               make(map[string]sessionStartIntent),
+		legacySessionFacts:          make(map[string]SessionAlias),
+		sessionAliases:              make(map[string]SessionAlias),
+		sessionAliasByAdapter:       make(map[string]string),
+		runBindings:                 make(map[string]RunBinding),
+		runBindingByCommand:         make(map[string]string),
+		runBindingByNativeTurn:      make(map[string]string),
+		runBindingByNativeOperation: make(map[string]string),
+		observedEvents:              make(map[string]journalObservedEvent),
+		sequenceBySession:           make(map[string]int64),
+		pendingApprovals:            make(map[string]PendingApproval),
+		approvalClaims:              make(map[string]approvalClaimRecord),
+		approvalResults:             make(map[string]string),
 	}
 	if err := journal.load(); err != nil {
 		_ = unlockJournalFile(file)
@@ -462,6 +484,9 @@ func (j *Journal) AppendEvent(event protocol.Event) (protocol.Event, error) {
 		return protocol.Event{}, err
 	}
 	j.events = append(j.events, cloneEvent(event))
+	if _, exists := j.eventIndexByID[event.EventID]; !exists {
+		j.eventIndexByID[event.EventID] = len(j.events) - 1
+	}
 	if _, exists := j.eventIndexByCursor[event.Cursor]; !exists {
 		j.eventIndexByCursor[event.Cursor] = len(j.events) - 1
 	}
@@ -540,6 +565,12 @@ func (j *Journal) RecordSession(sessionID, externalThreadRef, generation string)
 		return err
 	}
 	j.sessions[sessionID] = record
+	j.legacySessionFacts[sessionID] = SessionAlias{
+		AdapterSessionID:  record.SessionID,
+		ExternalThreadRef: record.ExternalThreadRef,
+		Generation:        record.Generation,
+		UpdatedAt:         record.UpdatedAt,
+	}
 	return nil
 }
 
@@ -1032,7 +1063,7 @@ func readJournalRecord(reader *bufio.Reader) ([]byte, int64, bool, error) {
 }
 
 func (j *Journal) applyRecord(record journalRecord) error {
-	if record.FormatVersion != legacyJournalFormatVersion && record.FormatVersion != journalFormatVersion {
+	if record.FormatVersion != legacyJournalFormatVersion && record.FormatVersion != previousJournalFormatVersion && record.FormatVersion != journalFormatVersion {
 		return fmt.Errorf("%w: unsupported journal format version %d", ErrJournalCorrupt, record.FormatVersion)
 	}
 	switch record.Type {
@@ -1047,7 +1078,7 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if err != nil {
 			return fmt.Errorf("%w: normalize command digest: %v", ErrJournalCorrupt, err)
 		}
-		if record.FormatVersion == journalFormatVersion && record.Digest != digest {
+		if record.FormatVersion >= previousJournalFormatVersion && record.Digest != digest {
 			legacyDigest, legacyErr := commandDigestWithIssuedAt(*record.Command)
 			if legacyErr != nil || record.Digest != legacyDigest {
 				return fmt.Errorf("%w: command digest mismatch for %q", ErrJournalCorrupt, record.CommandID)
@@ -1095,6 +1126,9 @@ func (j *Journal) applyRecord(record journalRecord) error {
 			}
 		}
 		j.events = append(j.events, event)
+		if _, exists := j.eventIndexByID[event.EventID]; !exists {
+			j.eventIndexByID[event.EventID] = len(j.events) - 1
+		}
 		if _, exists := j.eventIndexByCursor[event.Cursor]; !exists {
 			j.eventIndexByCursor[event.Cursor] = len(j.events) - 1
 		}
@@ -1108,11 +1142,89 @@ func (j *Journal) applyRecord(record journalRecord) error {
 			return fmt.Errorf("%w: incomplete session record", ErrJournalCorrupt)
 		}
 		j.sessions[record.Session.SessionID] = *record.Session
+		j.legacySessionFacts[record.Session.SessionID] = SessionAlias{
+			AdapterSessionID:  record.Session.SessionID,
+			ExternalThreadRef: record.Session.ExternalThreadRef,
+			Generation:        record.Session.Generation,
+			UpdatedAt:         record.Session.UpdatedAt,
+		}
 		if record.SessionStart != nil {
 			if err := validateSessionStartIntent(*record.SessionStart, record.FormatVersion != legacyJournalFormatVersion); err != nil {
 				return err
 			}
 			j.sessionStarts[record.SessionStart.IntentID] = *record.SessionStart
+		}
+	case "session_alias":
+		if record.FormatVersion != journalFormatVersion {
+			return fmt.Errorf("%w: session alias requires journal format version %d", ErrJournalCorrupt, journalFormatVersion)
+		}
+		if record.SessionAlias == nil {
+			return fmt.Errorf("%w: incomplete session alias", ErrJournalCorrupt)
+		}
+		alias, err := normalizeSessionAlias(*record.SessionAlias)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrJournalCorrupt, err)
+		}
+		if err := j.applySessionAliasLoadedLocked(alias); err != nil {
+			return err
+		}
+	case "run_binding":
+		if record.FormatVersion != journalFormatVersion {
+			return fmt.Errorf("%w: run binding requires journal format version %d", ErrJournalCorrupt, journalFormatVersion)
+		}
+		if record.RunBinding == nil {
+			return fmt.Errorf("%w: incomplete run binding", ErrJournalCorrupt)
+		}
+		binding, err := normalizeRunBinding(*record.RunBinding)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrJournalCorrupt, err)
+		}
+		if err := j.applyRunBindingLoadedLocked(binding); err != nil {
+			return err
+		}
+	case "observed_event":
+		if record.FormatVersion != journalFormatVersion {
+			return fmt.Errorf("%w: observed event requires journal format version %d", ErrJournalCorrupt, journalFormatVersion)
+		}
+		if record.ObservedEvent == nil {
+			return fmt.Errorf("%w: incomplete observed event", ErrJournalCorrupt)
+		}
+		observed := *record.ObservedEvent
+		observation, err := normalizeEventObservation(observed.Observation)
+		if err != nil || observed.Event.SessionID == "" || observed.Event.EventID == "" || observed.Event.Cursor == "" || observed.Event.Sequence <= 0 {
+			if err == nil {
+				err = errors.New("observed event identity is incomplete")
+			}
+			return fmt.Errorf("%w: %v", ErrJournalCorrupt, err)
+		}
+		if observed.Event.RunID != nil && strings.TrimSpace(*observed.Event.RunID) != "" {
+			return fmt.Errorf("%w: observed event must not persist a platform run id", ErrJournalCorrupt)
+		}
+		if observation.AdapterSessionID != observed.Event.SessionID {
+			return fmt.Errorf("%w: observed event adapter session mismatch", ErrJournalCorrupt)
+		}
+		observed.Observation = observation
+		if existing, ok := j.observedEvents[observed.Event.EventID]; ok {
+			if !sameObservedEvent(existing, observed.Event, observed.Observation) {
+				return fmt.Errorf("%w: conflicting observed event %q", ErrJournalCorrupt, observed.Event.EventID)
+			}
+			return nil
+		}
+		if _, duplicate := j.eventIDs[observed.Event.EventID]; duplicate {
+			return fmt.Errorf("%w: observed event %q conflicts with an existing event", ErrJournalCorrupt, observed.Event.EventID)
+		}
+		if len(j.events) >= maxJournalEvents {
+			return fmt.Errorf("%w: event count exceeds %d", ErrJournalTooLarge, maxJournalEvents)
+		}
+		j.events = append(j.events, cloneEvent(observed.Event))
+		j.observedEvents[observed.Event.EventID] = observed
+		j.eventIndexByID[observed.Event.EventID] = len(j.events) - 1
+		if _, exists := j.eventIndexByCursor[observed.Event.Cursor]; !exists {
+			j.eventIndexByCursor[observed.Event.Cursor] = len(j.events) - 1
+		}
+		j.eventIDs[observed.Event.EventID] = struct{}{}
+		if observed.Event.Sequence > j.sequenceBySession[observed.Event.SessionID] {
+			j.sequenceBySession[observed.Event.SessionID] = observed.Event.Sequence
 		}
 	case "session_start":
 		if record.SessionStart == nil {

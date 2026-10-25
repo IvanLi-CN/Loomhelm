@@ -1,21 +1,32 @@
 {
   "schema_version": 1,
   "migration": {
-    "description": "Upgrade the host-local Connector journal with explicit session-creation identity and a forward-readable format boundary.",
-    "release_unit_description": "Phase-one Connector local journal format v2.",
+    "description": "Upgrade the host-local Connector journal with durable platform-to-adapter session/run identity correlation and a forward-readable format boundary.",
+    "release_unit_description": "Phase-one Connector local journal format v3.",
     "version_impact": "minor"
+  },
+  "compatibility_assessment": {
+    "public_api": {
+      "impact": "patch",
+      "scope": "No public schema, command kind or transport change is introduced by this slice."
+    },
+    "persistent_state": {
+      "impact": "minor",
+      "scope": "The candidate reads v1 and v2, writes v3, and older binaries are not supported readers for v3 state."
+    }
   },
   "durable_state": {
     "description": "Append-only JSONL records for commands, ACK updates, host-owned session identities, observed app-server events and reconciliation outcomes.",
     "storage_implementation": "Mode-0600 journal file inside a mode-0700 host-local directory.",
     "source_compatibility_range": {
-      "from_program_versions": "Phase-one Connector journal format v1.",
-      "to_program_version": "Phase-one Connector journal format v2.",
+      "from_program_versions": "Phase-one Connector journal formats v1 and v2.",
+      "to_program_version": "Phase-one Connector journal format v3.",
       "reader_accepts": [
         "v1",
-        "v2"
+        "v2",
+        "v3"
       ],
-      "writer_emits": "v2",
+      "writer_emits": "v3",
       "older_writer_can_read_new_state": false,
       "direct_major_skips_supported": false
     }
@@ -50,8 +61,16 @@
     "minor": {
       "required_test_evidence": [
         "v1 records round-trip through the journal reader",
+        "v2 records round-trip through the journal reader",
+        "v3 identity records append without rewriting v1 or v2 history",
         "v1 session-start records do not satisfy a new explicit creation identity",
         "v2 session-start records persist command_id and payload digest",
+        "session aliases and run bindings preserve separate platform, adapter, thread, generation, command and native identities",
+        "equal identity records are idempotent and conflicting associations fail closed",
+        "native turn and operation indexes require the complete adapter, thread and generation tuple",
+        "observed events retain their raw payload and remain undispatchable until exact binding",
+        "pending and unknown run bindings do not materialize events",
+        "restart rebuilds exact indexes and rejects orphan bindings",
         "unsupported journal format versions are rejected before state application",
         "a torn final write is truncated safely",
         "accepted and executing commands become unknown after restart",
@@ -63,7 +82,7 @@
         "approval resolution and item-completion events must match the pending turn identity",
         "journal startup and append paths enforce bounded 8 MiB record, event-count and file-size resources"
       ],
-      "note": "The candidate reads the immediately preceding v1 journal state; v1 binaries are not supported readers for v2 records."
+      "note": "The candidate reads the immediately preceding v1/v2 journal state; v1 and v2 binaries are not supported readers for v3 records."
     },
     "major": {
       "required_test_evidence": [],
