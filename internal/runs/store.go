@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/jackc/pgx/v5"
@@ -31,6 +32,13 @@ type Store struct {
 	pool   *pgxpool.Pool
 	now    func() time.Time
 	events *events.Store
+}
+
+// ApprovalTransactionResolver applies an approval CAS to a transaction owned
+// by the Run store. Keeping this interface narrow prevents the admission path
+// from depending on the approval store's connection-pool lifecycle.
+type ApprovalTransactionResolver interface {
+	ResolveTx(context.Context, pgx.Tx, approvals.ResolveRequest) (approvals.Resolution, error)
 }
 
 func NewStore(pool *pgxpool.Pool, configs ...StoreConfig) *Store {
@@ -65,6 +73,100 @@ func (s *Store) AcceptForGeneration(ctx context.Context, currentGeneration strin
 		return AcceptResult{}, err
 	}
 	return s.Accept(ctx, intent)
+}
+
+// AcceptInterrupt commits the interrupt command and the Run's interrupt
+// reservation together. A failed validation or commit rolls back both writes,
+// so a retry cannot observe a consumed interrupt without a command ledger row.
+func (s *Store) AcceptInterrupt(ctx context.Context, intent CommandIntent) (AcceptResult, error) {
+	if err := s.ready(ctx); err != nil {
+		return AcceptResult{}, err
+	}
+	if intent.Command.Kind != protocol.CommandKindRunInterrupt {
+		return AcceptResult{}, fmt.Errorf("%w: interrupt admission requires %q", ErrInvalidCommand, protocol.CommandKindRunInterrupt)
+	}
+	if intent.Command.RunID == nil || strings.TrimSpace(*intent.Command.RunID) == "" {
+		return AcceptResult{}, fmt.Errorf("%w: interrupt command requires run id", ErrInvalidCommand)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return AcceptResult{}, fmt.Errorf("begin interrupt acceptance: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	accepted, err := s.acceptTx(ctx, tx, intent)
+	if err != nil {
+		return AcceptResult{}, err
+	}
+	if accepted.Deduplicated {
+		if err := tx.Commit(ctx); err != nil {
+			return AcceptResult{}, fmt.Errorf("commit duplicate interrupt acceptance: %w", err)
+		}
+		return accepted, nil
+	}
+	runID := *intent.Command.RunID
+	current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, runID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AcceptResult{}, ErrRunNotFound
+	}
+	if err != nil {
+		return AcceptResult{}, fmt.Errorf("lock run for interrupt acceptance: %w", err)
+	}
+	if current.SessionID != intent.Command.SessionID {
+		return AcceptResult{}, fmt.Errorf("%w: run %q belongs to session %q", ErrRunConflict, current.ID, current.SessionID)
+	}
+	updated, err := current.RequestInterrupt(intent.Generation)
+	if err != nil {
+		return AcceptResult{}, err
+	}
+	updated.UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
+	if err := updateRunTx(ctx, tx, updated); err != nil {
+		return AcceptResult{}, err
+	}
+	if err := refreshTaskProtectionTx(ctx, tx, updated.SessionID); err != nil {
+		return AcceptResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AcceptResult{}, fmt.Errorf("commit command and interrupt acceptance: %w", err)
+	}
+	return accepted, nil
+}
+
+// AcceptApproval commits the approval command and its pending+revision CAS in
+// one transaction. The command row is locked before the approval row so races
+// on a shared command ID cannot consume a different approval.
+func (s *Store) AcceptApproval(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest) (AcceptResult, approvals.Resolution, error) {
+	if err := s.ready(ctx); err != nil {
+		return AcceptResult{}, approvals.Resolution{}, err
+	}
+	if resolver == nil {
+		return AcceptResult{}, approvals.Resolution{}, errors.New("approval transaction resolver is required")
+	}
+	if err := validateApprovalCommandIntent(intent, request); err != nil {
+		return AcceptResult{}, approvals.Resolution{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return AcceptResult{}, approvals.Resolution{}, fmt.Errorf("begin approval command acceptance: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	accepted, err := s.acceptTx(ctx, tx, intent)
+	if err != nil {
+		return AcceptResult{}, approvals.Resolution{}, err
+	}
+	if accepted.Deduplicated && accepted.Record.State == protocol.CommandStateUnknown {
+		if err := tx.Commit(ctx); err != nil {
+			return AcceptResult{}, approvals.Resolution{}, fmt.Errorf("commit unknown approval command lookup: %w", err)
+		}
+		return accepted, approvals.Resolution{}, nil
+	}
+	resolution, err := resolver.ResolveTx(ctx, tx, request)
+	if err != nil {
+		return AcceptResult{}, approvals.Resolution{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AcceptResult{}, approvals.Resolution{}, fmt.Errorf("commit approval command acceptance: %w", err)
+	}
+	return accepted, resolution, nil
 }
 
 // AcceptRun commits a command and its pending Run identity together. This is
@@ -818,6 +920,25 @@ func (s *Store) acceptTx(ctx context.Context, tx pgx.Tx, intent CommandIntent) (
 		return AcceptResult{}, fmt.Errorf("%w: command %q has a different payload or identity", protocol.ErrIdempotencyConflict, intent.Command.CommandID)
 	}
 	return AcceptResult{Record: record, Deduplicated: commandResult.RowsAffected() == 0}, nil
+}
+
+func validateApprovalCommandIntent(intent CommandIntent, request approvals.ResolveRequest) error {
+	if intent.Command.Kind != protocol.CommandKindRunApprove && intent.Command.Kind != protocol.CommandKindRunDeny {
+		return fmt.Errorf("%w: approval admission requires an approval command kind", ErrInvalidCommand)
+	}
+	if intent.Command.CommandID != request.Request.CommandID {
+		return fmt.Errorf("%w: command and approval identities do not match", ErrInvalidCommand)
+	}
+	if intent.Command.RunID == nil || strings.TrimSpace(*intent.Command.RunID) == "" || *intent.Command.RunID != request.RunID {
+		return fmt.Errorf("%w: command and approval run identities do not match", ErrInvalidCommand)
+	}
+	if intent.Command.SessionID != request.SessionID || intent.Generation != request.Generation {
+		return fmt.Errorf("%w: command and approval session identities do not match", ErrInvalidCommand)
+	}
+	if (intent.Command.Kind == protocol.CommandKindRunApprove) != (request.Request.Decision == protocol.ApprovalDecisionApprove) {
+		return fmt.Errorf("%w: command kind and approval decision do not match", ErrInvalidCommand)
+	}
+	return nil
 }
 
 func scanCommand(row interface{ Scan(...any) error }) (CommandRecord, error) {

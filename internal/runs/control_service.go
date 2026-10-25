@@ -115,9 +115,9 @@ func (s *ControlService) SubmitRun(ctx context.Context, principal auth.Principal
 	return protocol.CommandAckResponse{Ack: ack}, err
 }
 
-// InterruptRun admits one interruption command after reserving the existing
-// Run's interrupt state. A retry with the same command ID is delegated to the
-// Controller's durable command ledger and does not send a second command.
+// InterruptRun admits one interruption command through the atomic Run-control
+// boundary. A retry with the same command ID is delegated to the Controller's
+// durable command ledger and does not send a second command.
 func (s *ControlService) InterruptRun(ctx context.Context, principal auth.Principal, runID string, request protocol.InterruptRunRequest) (protocol.CommandAckResponse, error) {
 	if err := s.ready(ctx); err != nil {
 		return protocol.CommandAckResponse{}, err
@@ -144,28 +144,13 @@ func (s *ControlService) InterruptRun(ctx context.Context, principal auth.Princi
 		RunID:     stringPointer(run.ID),
 		SessionID: run.SessionID,
 	}
-	if ack, found, err := s.lookupExistingCommand(ctx, command); err != nil {
-		return protocol.CommandAckResponse{Ack: ack}, err
-	} else if found {
-		return protocol.CommandAckResponse{Ack: ack}, nil
-	}
-	if _, err := s.runs.RequestInterrupt(ctx, run.ID, run.Generation); err != nil {
-		if errors.Is(err, ErrInterruptRequested) {
-			if ack, found, lookupErr := s.lookupExistingCommand(ctx, command); lookupErr != nil {
-				return protocol.CommandAckResponse{Ack: ack}, lookupErr
-			} else if found {
-				return protocol.CommandAckResponse{Ack: ack}, nil
-			}
-		}
-		return protocol.CommandAckResponse{}, err
-	}
-	ack, err := s.controller.AcceptCommand(ctx, command)
+	ack, err := s.controller.AcceptInterruptCommand(ctx, command)
 	return protocol.CommandAckResponse{Ack: ack}, err
 }
 
-// ResolveApproval validates the URL-owned approval and Run, performs the
-// durable pending+revision CAS, then admits the matching Controller command.
-// A concurrent response that loses the CAS never crosses the transport edge.
+// ResolveApproval validates the URL-owned approval and Run, then admits the
+// matching command and approval CAS in one durable transaction. A concurrent
+// response that loses the CAS never crosses the transport edge.
 func (s *ControlService) ResolveApproval(ctx context.Context, principal auth.Principal, runID, approvalID string, request protocol.ResolveApprovalRequest) (protocol.CommandAckResponse, error) {
 	if err := s.ready(ctx); err != nil {
 		return protocol.CommandAckResponse{}, err
@@ -178,6 +163,10 @@ func (s *ControlService) ResolveApproval(ctx context.Context, principal auth.Pri
 	}
 	if err := validateResolveApprovalRequest(request); err != nil {
 		return protocol.CommandAckResponse{}, err
+	}
+	resolver, ok := s.approvals.(ApprovalTransactionResolver)
+	if !ok {
+		return protocol.CommandAckResponse{}, fmt.Errorf("%w: approval transaction resolver is required", ErrControlServiceUnavailable)
 	}
 	approval, err := s.approvals.Get(ctx, approvalID)
 	if err != nil {
@@ -214,35 +203,14 @@ func (s *ControlService) ResolveApproval(ctx context.Context, principal auth.Pri
 		RunID:     stringPointer(run.ID),
 		SessionID: run.SessionID,
 	}
-	if _, found, err := s.lookupCommand(ctx, command.CommandID); err != nil {
-		return protocol.CommandAckResponse{}, err
-	} else if found {
-		ack, err := s.controller.AcceptCommand(ctx, command)
-		if err != nil {
-			return protocol.CommandAckResponse{Ack: ack}, err
-		}
-		_, err = s.approvals.Resolve(ctx, approvals.ResolveRequest{
-			ApprovalID: approval.ID,
-			RunID:      run.ID,
-			SessionID:  run.SessionID,
-			Generation: run.Generation,
-			Request:    request,
-		})
-		if err != nil {
-			return protocol.CommandAckResponse{Ack: ack}, err
-		}
-		return protocol.CommandAckResponse{Ack: ack}, nil
-	}
-	if _, err := s.approvals.Resolve(ctx, approvals.ResolveRequest{
+	approvalRequest := approvals.ResolveRequest{
 		ApprovalID: approval.ID,
 		RunID:      run.ID,
 		SessionID:  run.SessionID,
 		Generation: run.Generation,
 		Request:    request,
-	}); err != nil {
-		return protocol.CommandAckResponse{}, err
 	}
-	ack, err := s.controller.AcceptCommand(ctx, command)
+	ack, err := s.controller.AcceptApprovalCommand(ctx, command, resolver, approvalRequest)
 	return protocol.CommandAckResponse{Ack: ack}, err
 }
 
@@ -307,29 +275,6 @@ func (s *ControlService) authorizedSession(ctx context.Context, principal auth.P
 		return sessions.Session{}, err
 	}
 	return session, nil
-}
-
-func (s *ControlService) lookupExistingCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, bool, error) {
-	ack, found, err := s.lookupCommand(ctx, command.CommandID)
-	if err != nil {
-		return protocol.CommandAck{}, false, err
-	}
-	if !found {
-		return protocol.CommandAck{}, false, nil
-	}
-	ack, err = s.controller.AcceptCommand(ctx, command)
-	return ack, true, err
-}
-
-func (s *ControlService) lookupCommand(ctx context.Context, commandID string) (protocol.CommandAck, bool, error) {
-	ack, err := s.controller.LookupCommand(ctx, commandID)
-	if errors.Is(err, ErrCommandNotFound) {
-		return protocol.CommandAck{}, false, nil
-	}
-	if err != nil {
-		return protocol.CommandAck{}, false, err
-	}
-	return ack, true, nil
 }
 
 func (s *ControlService) ready(ctx context.Context) error {

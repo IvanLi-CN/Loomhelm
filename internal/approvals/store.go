@@ -158,6 +158,26 @@ func (s *Store) Resolve(ctx context.Context, request ResolveRequest) (Resolution
 		return Resolution{}, fmt.Errorf("begin approval resolution: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	resolution, err := s.ResolveTx(ctx, tx, request)
+	if err != nil {
+		return Resolution{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Resolution{}, fmt.Errorf("commit approval resolution: %w", err)
+	}
+	return resolution, nil
+}
+
+// ResolveTx applies the approval lock and pending+revision CAS inside a
+// caller-owned transaction. The caller must commit only after every related
+// durable intent has been admitted, and must roll back on any later failure.
+func (s *Store) ResolveTx(ctx context.Context, tx pgx.Tx, request ResolveRequest) (Resolution, error) {
+	if err := s.ready(ctx); err != nil {
+		return Resolution{}, err
+	}
+	if tx == nil {
+		return Resolution{}, errors.New("approval transaction is required")
+	}
 	current, err := scanApproval(tx.QueryRow(ctx, approvalQuery+` WHERE approval.id = $1 FOR UPDATE`, request.ApprovalID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Resolution{}, ErrApprovalNotFound
@@ -184,9 +204,6 @@ func (s *Store) Resolve(ctx context.Context, request ResolveRequest) (Resolution
 			return Resolution{}, fmt.Errorf("persist approval resolution: %w", err)
 		}
 		resolution.Approval.ResolvedAt = s.now().UTC().Format(time.RFC3339Nano)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Resolution{}, fmt.Errorf("commit approval resolution: %w", err)
 	}
 	return resolution, nil
 }

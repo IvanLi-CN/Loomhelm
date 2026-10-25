@@ -155,6 +155,100 @@ func TestPersistentControlServiceInterruptUsesRunOwnerAndCommandIdentity(t *test
 	}
 }
 
+func TestPersistentControlServiceInterruptCommandConflictIsAtomic(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fixture := newControlFixture(t, db, 1)
+	control := newControlServiceFixture(t, db, fixture)
+	runStore := NewStore(db.Pool())
+	first, err := runStore.CreateRun(ctx, NewRunInput{
+		ID:         fixture.run + "-first",
+		SessionID:  fixture.sessionIDs[0],
+		CommandID:  fixture.command + "-first-run",
+		Generation: fixture.generation,
+	})
+	if err != nil {
+		t.Fatalf("create first conflict run: %v", err)
+	}
+	second, err := runStore.CreateRun(ctx, NewRunInput{
+		ID:         fixture.run + "-second",
+		SessionID:  fixture.sessionIDs[0],
+		CommandID:  fixture.command + "-second-run",
+		Generation: fixture.generation,
+	})
+	if err != nil {
+		t.Fatalf("create second conflict run: %v", err)
+	}
+	for _, run := range []Run{first, second} {
+		if _, err := runStore.Start(ctx, run.ID, fixture.generation, "cursor-started-"+run.ID); err != nil {
+			t.Fatalf("start conflict run %q: %v", run.ID, err)
+		}
+	}
+
+	principal := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}}}
+	request := protocol.InterruptRunRequest{CommandID: fixture.command + "-shared-interrupt"}
+	start := make(chan struct{})
+	results := make(chan struct {
+		runID string
+		ack   protocol.CommandAckResponse
+		err   error
+	}, 2)
+	var group sync.WaitGroup
+	for _, run := range []Run{first, second} {
+		run := run
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			ack, err := control.service.InterruptRun(ctx, principal, run.ID, request)
+			results <- struct {
+				runID string
+				ack   protocol.CommandAckResponse
+				err   error
+			}{runID: run.ID, ack: ack, err: err}
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+
+	var succeeded, conflicts int
+	for result := range results {
+		switch {
+		case result.err == nil:
+			succeeded++
+			if result.ack.Ack.State != protocol.CommandStateSucceeded {
+				t.Fatalf("successful interrupt ACK for %q = %+v", result.runID, result.ack.Ack)
+			}
+		case errors.Is(result.err, protocol.ErrIdempotencyConflict):
+			conflicts++
+		default:
+			t.Fatalf("interrupt conflict error for %q = %v", result.runID, result.err)
+		}
+	}
+	if succeeded != 1 || conflicts != 1 {
+		t.Fatalf("interrupt conflict results: succeeded=%d conflicts=%d", succeeded, conflicts)
+	}
+	if got := control.transport.sendCount(); got != 1 {
+		t.Fatalf("transport sends after interrupt conflict = %d, want 1", got)
+	}
+	reserved := 0
+	for _, run := range []Run{first, second} {
+		current, err := runStore.GetRun(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("re-read conflict run %q: %v", run.ID, err)
+		}
+		if current.Interrupt == InterruptRequested {
+			reserved++
+		}
+	}
+	if reserved != 1 {
+		t.Fatalf("interrupt reservations = %d, want 1", reserved)
+	}
+}
+
 func TestPersistentControlServiceApprovalCASAndRevisionBoundaries(t *testing.T) {
 	db := openExecutionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -279,6 +373,110 @@ func TestPersistentControlServiceApprovalCASAndRevisionBoundaries(t *testing.T) 
 	wrongRun := run.ID + "-wrong-url"
 	if _, err := control.service.ResolveApproval(ctx, principal, wrongRun, approval.ID, request); !errors.Is(err, approvals.ErrApprovalContext) {
 		t.Fatalf("approval URL run mismatch error = %v, want %v", err, approvals.ErrApprovalContext)
+	}
+}
+
+func TestPersistentControlServiceApprovalCommandConflictIsAtomic(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fixture := newControlFixture(t, db, 1)
+	control := newControlServiceFixture(t, db, fixture)
+	runStore := NewStore(db.Pool())
+	approvalStore := approvals.NewStore(db.Pool())
+	run, err := runStore.CreateRun(ctx, NewRunInput{
+		ID:         fixture.run,
+		SessionID:  fixture.sessionIDs[0],
+		CommandID:  fixture.command + "-approval-conflict-run",
+		Generation: fixture.generation,
+	})
+	if err != nil {
+		t.Fatalf("create approval conflict run: %v", err)
+	}
+	if _, err := runStore.Start(ctx, run.ID, fixture.generation, "cursor-started"); err != nil {
+		t.Fatalf("start approval conflict run: %v", err)
+	}
+	if _, err := runStore.WaitForApproval(ctx, run.ID, fixture.generation, "cursor-approval"); err != nil {
+		t.Fatalf("wait for approval conflict run: %v", err)
+	}
+	approvalsToResolve := make([]approvals.Approval, 0, 2)
+	for _, approvalID := range []string{fixture.approval + "-first", fixture.approval + "-second"} {
+		approval, err := approvalStore.Create(ctx, approvals.CreateRequest{
+			NewInput: approvals.NewInput{
+				ID:          approvalID,
+				RunID:       run.ID,
+				SessionID:   fixture.sessionIDs[0],
+				Generation:  fixture.generation,
+				Revision:    1,
+				Kind:        "command",
+				RequestedAt: "2026-10-25T00:00:00Z",
+			},
+			Context: json.RawMessage(`{"scope":"write"}`),
+		})
+		if err != nil {
+			t.Fatalf("create approval %q: %v", approvalID, err)
+		}
+		approvalsToResolve = append(approvalsToResolve, approval)
+	}
+
+	principal := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}}}
+	request := protocol.ResolveApprovalRequest{
+		CommandID: fixture.command + "-shared-approval",
+		Decision:  protocol.ApprovalDecisionApprove,
+		Revision:  1,
+	}
+	start := make(chan struct{})
+	results := make(chan error, len(approvalsToResolve))
+	var group sync.WaitGroup
+	for _, approval := range approvalsToResolve {
+		approval := approval
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			_, err := control.service.ResolveApproval(ctx, principal, run.ID, approval.ID, request)
+			results <- err
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+
+	var succeeded, conflicts int
+	for err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, protocol.ErrIdempotencyConflict):
+			conflicts++
+		default:
+			t.Fatalf("approval conflict error = %v", err)
+		}
+	}
+	if succeeded != 1 || conflicts != 1 {
+		t.Fatalf("approval conflict results: succeeded=%d conflicts=%d", succeeded, conflicts)
+	}
+	if got := control.transport.sendCount(); got != 1 {
+		t.Fatalf("transport sends after approval conflict = %d, want 1", got)
+	}
+	var approved, pending int
+	for _, approval := range approvalsToResolve {
+		stored, err := approvalStore.Get(ctx, approval.ID)
+		if err != nil {
+			t.Fatalf("read approval %q: %v", approval.ID, err)
+		}
+		switch stored.Status {
+		case protocol.ApprovalStatusApproved:
+			approved++
+		case protocol.ApprovalStatusPending:
+			pending++
+		default:
+			t.Fatalf("approval %q status = %q", approval.ID, stored.Status)
+		}
+	}
+	if approved != 1 || pending != 1 {
+		t.Fatalf("approval statuses: approved=%d pending=%d", approved, pending)
 	}
 }
 

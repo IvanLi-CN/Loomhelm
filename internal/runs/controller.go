@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
 
@@ -93,6 +94,62 @@ func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command
 		return c.dispatchAccepted(ctx, intent, accepted)
 	}
 	accepted, err := c.store.AcceptForGeneration(ctx, generation, intent)
+	if err != nil {
+		return protocol.CommandAck{}, err
+	}
+	return c.dispatchAccepted(ctx, intent, accepted)
+}
+
+// AcceptInterruptCommand admits an interrupt through the atomic Run-control
+// boundary. The command ledger row and the Run interrupt reservation commit
+// before transport delivery, preserving reconciliation across process exits.
+func (c *Controller) AcceptInterruptCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
+	if c == nil || c.store == nil || c.transport == nil {
+		return protocol.CommandAck{}, errors.New("run controller is not initialized")
+	}
+	if ctx == nil {
+		return protocol.CommandAck{}, errors.New("run controller context must not be nil")
+	}
+	if command.Kind != protocol.CommandKindRunInterrupt {
+		return protocol.CommandAck{}, fmt.Errorf("%w: interrupt admission requires %q", ErrInvalidCommand, protocol.CommandKindRunInterrupt)
+	}
+	if err := protocol.ValidateCommand(command); err != nil {
+		return protocol.CommandAck{}, err
+	}
+	generation, err := c.currentGeneration(ctx, command.SessionID)
+	if err != nil {
+		return protocol.CommandAck{}, err
+	}
+	intent := CommandIntent{Command: command, Generation: generation}
+	accepted, err := c.store.AcceptInterrupt(ctx, intent)
+	if err != nil {
+		return protocol.CommandAck{}, err
+	}
+	return c.dispatchAccepted(ctx, intent, accepted)
+}
+
+// AcceptApprovalCommand admits an approval through the atomic command and
+// approval transaction. Transport delivery starts only after both durable
+// writes commit, so a process exit leaves a command that can be reconciled.
+func (c *Controller) AcceptApprovalCommand(ctx context.Context, command protocol.Command, resolver ApprovalTransactionResolver, request approvals.ResolveRequest) (protocol.CommandAck, error) {
+	if c == nil || c.store == nil || c.transport == nil {
+		return protocol.CommandAck{}, errors.New("run controller is not initialized")
+	}
+	if ctx == nil {
+		return protocol.CommandAck{}, errors.New("run controller context must not be nil")
+	}
+	if command.Kind != protocol.CommandKindRunApprove && command.Kind != protocol.CommandKindRunDeny {
+		return protocol.CommandAck{}, fmt.Errorf("%w: approval admission requires an approval command kind", ErrInvalidCommand)
+	}
+	if err := protocol.ValidateCommand(command); err != nil {
+		return protocol.CommandAck{}, err
+	}
+	generation, err := c.currentGeneration(ctx, command.SessionID)
+	if err != nil {
+		return protocol.CommandAck{}, err
+	}
+	intent := CommandIntent{Command: command, Generation: generation}
+	accepted, _, err := c.store.AcceptApproval(ctx, resolver, intent, request)
 	if err != nil {
 		return protocol.CommandAck{}, err
 	}
