@@ -658,7 +658,18 @@ func (j *Journal) ReadMappedEvents(query protocol.EventQuery) (protocol.EventPag
 	page := protocol.EventPage{Events: make([]protocol.Event, 0)}
 	for index := start; index < len(j.events); index++ {
 		mapped, ok := j.mappedEventAtLocked(index)
-		if !ok || mapped.SessionID != query.SessionID || (query.RunID != "" && valueOrEmpty(mapped.RunID) != query.RunID) {
+		if !ok {
+			if query.RunID == "" && j.unresolvedEventBelongsToPlatformSessionLocked(j.events[index], query.SessionID) {
+				if len(page.Events) > 0 {
+					page.HasMore = true
+					last := page.Events[len(page.Events)-1].Cursor
+					page.NextCursor = &last
+				}
+				break
+			}
+			continue
+		}
+		if mapped.SessionID != query.SessionID || (query.RunID != "" && valueOrEmpty(mapped.RunID) != query.RunID) {
 			continue
 		}
 		if int64(len(page.Events)) >= limit {
@@ -672,6 +683,19 @@ func (j *Journal) ReadMappedEvents(query protocol.EventQuery) (protocol.EventPag
 		page.NextCursor = &last
 	}
 	return page, nil
+}
+
+func (j *Journal) unresolvedEventBelongsToPlatformSessionLocked(event protocol.Event, platformSessionID string) bool {
+	if observed, ok := j.observedEvents[event.EventID]; ok {
+		mappedPlatformSessionID, mapped := j.sessionAliasByAdapter[sessionAliasKeyFromObservation(observed.Observation)]
+		return mapped && mappedPlatformSessionID == platformSessionID
+	}
+	legacy, ok := j.legacySessionFacts[event.SessionID]
+	if !ok {
+		return false
+	}
+	mappedPlatformSessionID, mapped := j.sessionAliasByAdapter[sessionAliasKey(legacy)]
+	return mapped && mappedPlatformSessionID == platformSessionID
 }
 
 // MappedEvent resolves one raw event by its durable identity. A false result

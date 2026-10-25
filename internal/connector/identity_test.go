@@ -253,6 +253,75 @@ func TestJournalUnknownBindingDoesNotMaterializeUntilExactEvidence(t *testing.T)
 	}
 }
 
+func TestJournalSessionReplayDoesNotSkipPendingObservation(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-order",
+		AdapterSessionID:  "adapter-session-order",
+		ExternalThreadRef: "thread-order",
+		Generation:        "generation-order",
+		CommandID:         "create-order",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-order",
+		CommandID:         "run-order",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		State:             IdentityStateUnknown,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		id       string
+		cursor   string
+		turnID   string
+		sequence int64
+	}{
+		{id: "pending-order", cursor: "adapter-session-order:1", sequence: 1},
+		{id: "mapped-order", cursor: "adapter-session-order:2", turnID: "native-order", sequence: 2},
+	} {
+		if _, delivered, err := journal.AppendObservedEvent(protocol.Event{
+			EventID:   event.id,
+			Cursor:    event.cursor,
+			Sequence:  event.sequence,
+			SessionID: alias.AdapterSessionID,
+			Source:    protocol.EventSourceAppServer,
+			Type:      protocol.EventTypeMessageDelta,
+			Payload:   []byte(`{"event":"order"}`),
+		}, EventObservation{
+			AdapterSessionID:  alias.AdapterSessionID,
+			ExternalThreadRef: alias.ExternalThreadRef,
+			Generation:        alias.Generation,
+			NativeTurnID:      event.turnID,
+		}); err != nil || delivered {
+			t.Fatalf("append event %q delivered = %v, error = %v", event.id, delivered, err)
+		}
+	}
+	bound := binding
+	bound.NativeTurnID = "native-order"
+	bound.State = IdentityStateBound
+	if err := journal.RecordRunBinding(bound); err != nil {
+		t.Fatal(err)
+	}
+	page, err := journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 0 || page.HasMore || page.NextCursor != nil {
+		t.Fatalf("session replay skipped pending observation: %+v", page)
+	}
+	page, err = journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, RunID: bound.PlatformRunID})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "mapped-order" {
+		t.Fatalf("run replay = %+v, error = %v", page.Events, err)
+	}
+}
+
 func TestJournalReadsV2AndAppendsV3WithoutRewritingHistory(t *testing.T) {
 	path := filepath.Join(privateTestDir(t), "v2-journal.jsonl")
 	legacy := journalSession{

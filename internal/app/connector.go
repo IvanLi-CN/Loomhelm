@@ -26,8 +26,6 @@ const (
 	connectorDialTimeout           = 10 * time.Second
 )
 
-var errConnectorRunIdentityGap = errors.New("Connector event has no reliable platform Run ID mapping")
-
 type Connector struct {
 	cfg       platform.Config
 	logger    *slog.Logger
@@ -294,7 +292,7 @@ func (c *Connector) handleGatewayCommand(ctx context.Context, connection *gatewa
 		return errors.New("platform gateway command payload is missing")
 	}
 	command := *message.Command
-	ack, err := c.controller.AcceptCommand(ctx, command)
+	ack, err := c.acceptPlatformCommand(ctx, command)
 	if err != nil {
 		c.logger.Warn("connector command was not completed", "command_id", command.CommandID, "kind", command.Kind, "error", err)
 		if ack.CommandID == "" {
@@ -350,22 +348,15 @@ func (c *Connector) sendGatewayHeartbeats(ctx context.Context, connection *gatew
 func (c *Connector) deliverJournalEvents(ctx context.Context, connection *gateway.ClientConnection) error {
 	after := make(map[string]string)
 	for _, cursor := range connection.ResumeCursors() {
-		// This slice can only safely deliver session-level events. A run-level
-		// cursor belongs to a platform Run stream and must not advance the
-		// session-level replay position without an established identity mapping.
-		if strings.TrimSpace(cursor.RunID) != "" {
-			continue
-		}
 		current := after[cursor.SessionID]
 		if current == "" || connectorCursorBefore(cursor.Value, current) {
 			after[cursor.SessionID] = cursor.Value
 		}
 	}
-	blocked := make(map[string]string)
 	ticker := time.NewTicker(connectorEventPollInterval)
 	defer ticker.Stop()
 	for {
-		progressed, err := c.deliverJournalEventBatch(ctx, connection, after, blocked)
+		progressed, err := c.deliverJournalEventBatch(ctx, connection, after)
 		if err != nil {
 			return err
 		}
@@ -380,43 +371,33 @@ func (c *Connector) deliverJournalEvents(ctx context.Context, connection *gatewa
 	}
 }
 
-func (c *Connector) deliverJournalEventBatch(ctx context.Context, connection *gateway.ClientConnection, after, blocked map[string]string) (bool, error) {
+func (c *Connector) deliverJournalEventBatch(ctx context.Context, connection *gateway.ClientConnection, after map[string]string) (bool, error) {
 	progressed := false
-	for _, session := range c.journal.Sessions() {
+	for _, alias := range c.journal.SessionAliases() {
 		for {
-			page, err := c.journal.ReadEvents(protocol.EventQuery{
-				SessionID:   session.SessionID,
-				AfterCursor: after[session.SessionID],
+			page, err := c.journal.ReadMappedEvents(protocol.EventQuery{
+				SessionID:   alias.PlatformSessionID,
+				AfterCursor: after[alias.PlatformSessionID],
 				Limit:       1000,
 			})
 			if errors.Is(err, protocol.ErrCursorExpired) {
-				after[session.SessionID] = ""
+				after[alias.PlatformSessionID] = ""
 				continue
 			}
 			if err != nil {
-				return progressed, fmt.Errorf("read Connector journal events for session %q: %w", session.SessionID, err)
+				return progressed, fmt.Errorf("read mapped Connector events for platform session %q: %w", alias.PlatformSessionID, err)
 			}
 			if len(page.Events) == 0 {
 				break
 			}
-			blockedSession := false
 			for _, event := range page.Events {
-				if event.RunID != nil && strings.TrimSpace(*event.RunID) != "" {
-					if blocked[session.SessionID] != event.Cursor {
-						blocked[session.SessionID] = event.Cursor
-						c.logger.Warn("Connector event delivery is blocked by missing platform Run ID mapping", "session_id", event.SessionID, "event_id", event.EventID, "cursor", event.Cursor, "native_run_id", *event.RunID, "error", errConnectorRunIdentityGap)
-					}
-					blockedSession = true
-					break
-				}
 				if err := connection.SendEvent(ctx, event); err != nil {
 					return progressed, err
 				}
-				after[session.SessionID] = event.Cursor
-				delete(blocked, session.SessionID)
+				after[alias.PlatformSessionID] = event.Cursor
 				progressed = true
 			}
-			if blockedSession || !page.HasMore || page.NextCursor == nil || *page.NextCursor == "" {
+			if !page.HasMore || page.NextCursor == nil || *page.NextCursor == "" {
 				break
 			}
 		}
@@ -444,7 +425,20 @@ func connectorCursorSequence(cursor string) (int64, bool) {
 
 func (c *Connector) recoverJournalSessions(ctx context.Context) error {
 	var recoveryErrors []error
+	claimedAdapterSessions := make(map[string]struct{})
+	for _, alias := range c.journal.SessionAliases() {
+		claimedAdapterSessions[alias.AdapterSessionID] = struct{}{}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := c.recoverExplicitSession(ctx, alias); err != nil {
+			recoveryErrors = append(recoveryErrors, fmt.Errorf("recover Connector platform session %q: %w", alias.PlatformSessionID, err))
+		}
+	}
 	for _, session := range c.journal.Sessions() {
+		if _, claimed := claimedAdapterSessions[session.SessionID]; claimed {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -481,6 +475,50 @@ func (c *Connector) recoverJournalSessions(ctx context.Context) error {
 		}
 	}
 	return errors.Join(recoveryErrors...)
+}
+
+func (c *Connector) recoverExplicitSession(ctx context.Context, alias connectorruntime.SessionAlias) error {
+	recoveryCtx, cancel := context.WithTimeout(ctx, connectorDialTimeoutFor(c.cfg.ShutdownTimeout))
+	reconciliation, err := c.appGateway.ReconcileSession(recoveryCtx, alias.ExternalThreadRef)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if reconciliation.State != protocol.ReconciliationStateConfirmed {
+		note := "unknown"
+		if reconciliation.Note != nil {
+			note = *reconciliation.Note
+		}
+		return fmt.Errorf("reconciliation remains %s: %s", reconciliation.State, note)
+	}
+	recovered, err := c.appGateway.RecoveredSession(alias.ExternalThreadRef)
+	if err != nil {
+		return err
+	}
+	if err := validateRecoveredGatewaySession(alias, recovered); err != nil {
+		_ = c.appGateway.CloseSession(context.Background(), recovered)
+		return err
+	}
+	bound, err := c.adapter.BindRecoveredSession(ctx, recovered, alias.ExternalThreadRef)
+	if err != nil {
+		_ = c.appGateway.CloseSession(context.Background(), recovered)
+		return err
+	}
+	closeRecovered := true
+	defer func() {
+		if closeRecovered {
+			_ = c.adapter.CloseSession(context.Background(), bound)
+			_ = c.appGateway.CloseSession(context.Background(), recovered)
+		}
+	}()
+	if err := validateRecoveredSessionIdentity(alias, recovered, bound); err != nil {
+		return err
+	}
+	if err := c.BindSessionIdentity(alias.PlatformSessionID, alias.CommandID, recovered, bound); err != nil {
+		return err
+	}
+	closeRecovered = false
+	return nil
 }
 
 func (c *Connector) closeResources(ctx context.Context) error {
