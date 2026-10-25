@@ -193,12 +193,14 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   };
 
   const acknowledgeReconciliation = (event?: MouseEvent<HTMLButtonElement>) => {
-    if (!reconciliationTargetId || !canConfirmReconciliation || !source.acknowledgeTaskReconciliation?.(reconciliationTargetId, reconciliationToken)) return;
+    const recoveredTaskId = reconciliationTargetId;
+    if (!recoveredTaskId || !canConfirmReconciliation || !source.acknowledgeTaskReconciliation?.(recoveredTaskId, reconciliationToken)) return;
     if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgeReconciliation(false);
     setReconciliationToken(undefined);
     setFeedback({ message: "已确认当前任务状态，可以继续操作。", tone: "success" });
+    if (mode === "create") onSaved?.(recoveredTaskId);
   };
 
   const acknowledgePendingCreation = (event?: MouseEvent<HTMLButtonElement>) => {

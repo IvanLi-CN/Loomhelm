@@ -15,6 +15,7 @@ import {
   mergePersistedMutationNoticeState,
   mergePersistedMutationNotices,
   mutationNoticeContentToken,
+  mutationNoticeScopes,
   mutationNoticeRemovalScopes,
   projectTaskQueryKeys,
   readProjectMemberships,
@@ -332,6 +333,10 @@ describe("project/task write contracts", () => {
       "task:create",
       "task:task_0123456789abcdef0123456789abcdef"
     ]);
+    expect(mutationNoticeScopes(notice)).toEqual([
+      "task:create",
+      "task:task_0123456789abcdef0123456789abcdef"
+    ]);
   });
 
   test("preserves a newer volatile notice over a stale persisted version", () => {
@@ -371,6 +376,15 @@ describe("project/task write contracts", () => {
     expect(membership.failures).toEqual(["读取项目 project-1 的成员失败：项目成员响应不完整。"]);
     expect(relationship.relationships).toEqual({});
     expect(relationship.failures).toEqual(["读取任务 task-1 的关系失败：任务关系响应不完整或关系端点与任务不匹配。"]);
+  });
+
+  test("rejects membership rows that belong to another project", async () => {
+    const foreignMember = { created_at: "now", project_id: "project-other", role: "operator", user_id: "user-1" };
+    const membership = await readProjectMemberships({ listProjectMembers: async () => ({ items: [foreignMember] }) }, ["project-1"]);
+
+    expect(membership.items).toEqual({});
+    expect(membership.failures).toEqual(["读取项目 project-1 的成员失败：项目成员响应不完整。"]);
+    expect(hasIncompleteProjectTaskRead({ items: { "project-1": [foreignMember] }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, ["project-1"])).toBe(true);
   });
 
   test("rejects relationship kinds and endpoints that do not describe the requested task", async () => {

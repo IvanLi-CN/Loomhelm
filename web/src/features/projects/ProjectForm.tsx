@@ -124,13 +124,15 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
   };
 
   const acknowledgeReconciliation = (event?: MouseEvent<HTMLButtonElement>) => {
-    if (!reconciliationTargetId || !canConfirmReconciliation) return;
-    if (!source.acknowledgeProjectReconciliation?.(reconciliationTargetId, reconciliationToken)) return;
+    const recoveredProjectId = reconciliationTargetId;
+    if (!recoveredProjectId || !canConfirmReconciliation) return;
+    if (!source.acknowledgeProjectReconciliation?.(recoveredProjectId, reconciliationToken)) return;
     if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgeReconciliation(false);
     setReconciliationToken(undefined);
     setFeedback({ message: "已确认当前项目状态，可以继续操作。", tone: "success" });
+    if (mode === "create") onSaved?.(recoveredProjectId);
   };
 
   const submit = async (event?: FormEvent<HTMLFormElement>) => {

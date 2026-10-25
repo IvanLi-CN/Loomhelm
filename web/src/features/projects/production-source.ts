@@ -295,17 +295,19 @@ function mutationNoticeScope(notice: MutationNotice): string | undefined {
   return undefined;
 }
 
+export function mutationNoticeScopes(notice: MutationNotice): readonly string[] {
+  const projectId = mutationNoticeProjectId(notice);
+  const taskId = mutationNoticeTaskId(notice);
+  return [...new Set([
+    mutationNoticeScope(notice),
+    projectId ? `project:${projectId}` : undefined,
+    taskId ? `task:${taskId}` : undefined
+  ].filter((scope): scope is string => Boolean(scope)))];
+}
+
 export function mutationNoticeRemovalScopes(current: readonly MutationNotice[], removed: readonly string[]): readonly string[] {
   const removedIds = new Set(removed);
-  const scopes = current.filter((notice) => removedIds.has(notice.id)).flatMap((notice) => {
-    const result = [mutationNoticeScope(notice)];
-    const projectId = mutationNoticeProjectId(notice);
-    const taskId = mutationNoticeTaskId(notice);
-    if (projectId) result.push(`project:${projectId}`);
-    if (taskId) result.push(`task:${taskId}`);
-    return result;
-  });
-  return [...new Set(scopes.filter((scope): scope is string => Boolean(scope)))];
+  return [...new Set(current.filter((notice) => removedIds.has(notice.id)).flatMap(mutationNoticeScopes))];
 }
 
 export function markMutationRefreshScopes(
@@ -383,7 +385,7 @@ async function runWithTaskMutationLocks<T>(principalId: string, taskId: string, 
 }
 
 function hasPersistedMutationBarrier(principalId: string, scope: string): boolean {
-  return readPersistedMutationNotices(principalId).some((notice) => mutationNoticeScope(notice) === scope);
+  return readPersistedMutationNotices(principalId).some((notice) => mutationNoticeScopes(notice).includes(scope));
 }
 
 export const PROJECT_PAGE_LIMIT = 100;
@@ -426,6 +428,10 @@ function isProjectMember(value: unknown): value is ProjectMember {
     && typeof value.project_id === "string"
     && (value.role === "viewer" || value.role === "operator" || value.role === "owner")
     && typeof value.user_id === "string";
+}
+
+function isProjectMemberForProject(value: unknown, projectId: string): value is ProjectMember {
+  return isProjectMember(value) && value.project_id === projectId;
 }
 
 function isTaskContainment(value: unknown): boolean {
@@ -504,7 +510,7 @@ export async function readProjectMemberships(
 ): Promise<MembershipQueryData> {
   const results = await Promise.allSettled(projectIds.map(async (projectId) => {
     const response = await api.listProjectMembers({ project_id: projectId });
-    if (!response || typeof response !== "object" || !Array.isArray(response.items) || !response.items.every(isProjectMember)) throw new Error("项目成员响应不完整。");
+    if (!response || typeof response !== "object" || !Array.isArray(response.items) || !response.items.every((member) => isProjectMemberForProject(member, projectId))) throw new Error("项目成员响应不完整。");
     return { projectId, members: response.items };
   }));
   const items: Record<string, readonly ProjectMember[]> = {};
@@ -585,7 +591,7 @@ export function hasIncompleteProjectTaskRead(data: unknown, expectedProjectIds: 
   if (expectedProjectIds.length > 0) {
     if (!read.items || typeof read.items !== "object" || Array.isArray(read.items)) return true;
     const items = read.items as Record<string, unknown>;
-    if (expectedProjectIds.some((projectId) => !Object.prototype.hasOwnProperty.call(items, projectId) || !Array.isArray(items[projectId]) || !items[projectId].every(isProjectMember))) return true;
+    if (expectedProjectIds.some((projectId) => !Object.prototype.hasOwnProperty.call(items, projectId) || !Array.isArray(items[projectId]) || !items[projectId].every((member) => isProjectMemberForProject(member, projectId)))) return true;
   }
   if (expectedTaskIds.length > 0) {
     if (!Array.isArray(read.items) || !read.items.every(isTask) || !read.relationships || typeof read.relationships !== "object" || Array.isArray(read.relationships)) return true;

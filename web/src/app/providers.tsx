@@ -272,13 +272,14 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
         publishProductionAuthInvalidation();
         return { ok: true };
       } catch (error) {
+        invalidateAndRevalidate();
         return { ok: false, message: errorMessage(error, "退出登录") };
       } finally {
         setLogoutPending(false);
       }
     },
     logoutPending
-  }), [commitAssembly, logoutPending, productionClient]);
+  }), [invalidateAndRevalidate, logoutPending, productionClient]);
   const contextAssembly = productionClient ? productionApi : apiAssembly;
 
   return (

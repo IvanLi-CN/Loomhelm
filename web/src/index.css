@@ -2918,6 +2918,8 @@ pre {
   .workspace-tabs button,
   .workspace-tabs [data-slot="tabs-trigger"] {
     flex: 1;
+    min-width: var(--control-height-touch);
+    min-height: var(--control-height-touch);
   }
 
   .workspace-layout {

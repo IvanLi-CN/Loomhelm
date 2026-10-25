@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { ReactNode } from "react";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 
 import { createStorySource, storyTasks } from "./story-source";
 import { TaskEditor, TaskForm } from "./TaskForm";
@@ -67,14 +67,15 @@ export const Create: Story = {
 };
 
 export const KnownCreationRecovery: Story = {
-  args: { source: knownCreationSource(), mode: "create" },
+  args: { source: knownCreationSource(), mode: "create", onSaved: fn() },
   render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>,
-  play: async ({ canvasElement }) => {
+  play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务列表" }));
     expect(await canvas.findByText("已刷新并核对预选任务，可以确认当前状态后解除阻塞。")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "确认当前任务状态，解除阻塞" }));
     expect(await canvas.findByText("已确认当前任务状态，可以继续操作。")).toBeInTheDocument();
+    expect(args.onSaved).toHaveBeenCalledWith("task_0123456789abcdef0123456789abcdef");
     expect(canvas.getByRole("form", { name: "创建任务" })).toHaveFocus();
   }
 };

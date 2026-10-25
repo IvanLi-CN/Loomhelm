@@ -383,6 +383,28 @@ describe("authenticated client transport", () => {
     ]);
   });
 
+  test("clears the browser bootstrap when the logout response is lost", async () => {
+    const calls = [];
+    const session = { user_id: "user-browser", csrf_protection: "same_origin" };
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url) => {
+        calls.push({ path: url.pathname });
+        if (url.pathname.endsWith("/auth/session")) return Response.json(session);
+        throw new TypeError("socket closed before logout response");
+      }
+    });
+
+    await client.bootstrapBrowserSession();
+    await expect(client.logoutBrowserSession()).rejects.toThrow("socket closed before logout response");
+    await expect(client.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(calls).toEqual([
+      { path: "/api/v1/auth/session" },
+      { path: "/api/v1/auth/logout" }
+    ]);
+  });
+
   test("rejects an in-flight bootstrap after session invalidation", async () => {
     let release;
     let requests = 0;

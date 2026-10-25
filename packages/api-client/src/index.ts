@@ -204,9 +204,11 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   }
   const logoutBrowserSession = client.logoutBrowserSession.bind(client);
   client.logoutBrowserSession = async (request) => {
-    const result = await logoutBrowserSession(request);
-    invalidateBrowserSession();
-    return result;
+    try {
+      return await logoutBrowserSession(request);
+    } finally {
+      invalidateBrowserSession();
+    }
   };
 
   return Object.assign(client, { bootstrapBrowserSession, invalidateBrowserSession });
