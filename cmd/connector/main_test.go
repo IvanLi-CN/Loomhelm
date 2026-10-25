@@ -34,11 +34,18 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 		t.Fatalf("create log file: %v", err)
 	}
 	defer logFile.Close()
+	if err := os.Chmod(filepath.Dir(logPath), 0o700); err != nil {
+		t.Fatalf("secure connector test directory: %v", err)
+	}
 
 	command := exec.Command(binary)
 	command.Env = commandEnv(map[string]string{
-		"LOOMHELM_VERSION":              "test",
-		"LOOMHELM_CONNECTOR_SERVER_URL": "https://platform.example.test",
+		"LOOMHELM_VERSION":                      "test",
+		"LOOMHELM_CONNECTOR_SERVER_URL":         "https://platform.example.test",
+		"LOOMHELM_CONNECTOR_HOST_ID":            "host-test",
+		"LOOMHELM_CONNECTOR_TOKEN":              "token-test",
+		"LOOMHELM_CONNECTOR_JOURNAL_PATH":       filepath.Join(filepath.Dir(logPath), "connector.jsonl"),
+		"LOOMHELM_CONNECTOR_APP_SERVER_COMMAND": "/bin/true",
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile

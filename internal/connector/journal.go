@@ -772,6 +772,21 @@ func (j *Journal) Session(sessionID string) (protocol.AdapterSession, bool) {
 	return protocol.AdapterSession{SessionID: session.SessionID, ExternalThreadRef: session.ExternalThreadRef}, true
 }
 
+// Sessions returns the durable adapter session identities in stable order for
+// Connector startup and outbound event replay. It does not create or recover
+// an app-server session; those side effects remain owned by the composition
+// layer and the Gateway/Adapter pair.
+func (j *Journal) Sessions() []protocol.AdapterSession {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	values := make([]protocol.AdapterSession, 0, len(j.sessions))
+	for _, session := range j.sessions {
+		values = append(values, protocol.AdapterSession{SessionID: session.SessionID, ExternalThreadRef: session.ExternalThreadRef})
+	}
+	sort.Slice(values, func(i, k int) bool { return values[i].SessionID < values[k].SessionID })
+	return values
+}
+
 func (j *Journal) PendingApprovals(sessionID, runID string) []PendingApproval {
 	return j.PendingApprovalsForGeneration(sessionID, "", runID)
 }
