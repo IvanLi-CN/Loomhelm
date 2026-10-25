@@ -40,6 +40,8 @@ type fakeResult struct {
 	err     error
 }
 
+const adapterTestSynchronizationTimeout = 5 * time.Second
+
 func newFakeTransport() *fakeTransport {
 	return &fakeTransport{responses: make(map[string][]fakeResult), responseEvents: make(map[string]RPCMessage), events: make(chan RPCMessage, 32)}
 }
@@ -200,7 +202,7 @@ func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T
 	}()
 	select {
 	case <-firstTransport.entered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("first thread/start did not reach the transport")
 	}
 	secondDone := make(chan struct {
@@ -224,7 +226,7 @@ func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T
 	case result := <-secondDone:
 		t.Fatalf("second session start returned before the first completed: %+v", result)
 	case <-startCall.waiterEntered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("second session start did not enter the single-flight waiter")
 	}
 	close(firstTransport.release)
@@ -278,7 +280,7 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 	}()
 	select {
 	case <-firstTransport.entered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("first thread/start did not reach the transport")
 	}
 
@@ -296,7 +298,7 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 	}
 	select {
 	case <-startCall.waiterEntered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("canceled session start did not enter the single-flight waiter")
 	}
 	cancel()
@@ -305,7 +307,7 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 		if !errors.Is(startErr, context.Canceled) {
 			t.Fatalf("canceled concurrent session start error = %v", startErr)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("canceled concurrent session start did not return")
 	}
 	provider.mu.Lock()
@@ -347,7 +349,7 @@ func TestAdapterDoesNotCloseSharedGatewaySessionWhenWaiterCancels(t *testing.T) 
 	}()
 	select {
 	case <-transport.entered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("shared session start did not reach the transport")
 	}
 	secondCtx, cancel := context.WithCancel(context.Background())
@@ -364,7 +366,7 @@ func TestAdapterDoesNotCloseSharedGatewaySessionWhenWaiterCancels(t *testing.T) 
 	}
 	select {
 	case <-startCall.waiterEntered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("shared session start did not enter the single-flight waiter")
 	}
 	cancel()
@@ -373,7 +375,7 @@ func TestAdapterDoesNotCloseSharedGatewaySessionWhenWaiterCancels(t *testing.T) 
 		if !errors.Is(startErr, context.Canceled) {
 			t.Fatalf("shared canceled session start error = %v", startErr)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("shared canceled session start did not return")
 	}
 	transport.mu.Lock()

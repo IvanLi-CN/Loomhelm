@@ -126,12 +126,12 @@ func (l *workerLease) Renew(ctx context.Context) error {
 		return nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		l.valid.Store(false)
 		l.lastFailure.Store(ErrWorkerLeaseLost.Error())
+		l.valid.Store(false)
 		return ErrWorkerLeaseLost
 	}
-	l.valid.Store(false)
 	l.lastFailure.Store(err.Error())
+	l.valid.Store(false)
 	return fmt.Errorf("renew worker lease: %w", err)
 }
 
@@ -151,8 +151,8 @@ func (l *workerLease) Release(ctx context.Context) error {
 	`, l.key, l.generation, l.candidate, l.digest); err != nil {
 		return fmt.Errorf("release worker lease: %w", err)
 	}
-	l.valid.Store(false)
 	l.lastFailure.Store("")
+	l.valid.Store(false)
 	return nil
 }
 
@@ -182,8 +182,8 @@ func (l *workerLease) Check(ctx context.Context) error {
 		return nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		l.valid.Store(false)
 		l.lastFailure.Store(ErrWorkerLeaseLost.Error())
+		l.valid.Store(false)
 		return ErrWorkerLeaseLost
 	}
 	return fmt.Errorf("check worker lease: %w", err)
