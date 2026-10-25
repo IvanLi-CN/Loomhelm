@@ -1,4 +1,4 @@
-# ADR 0008: Durable execution identity correlation
+# ADR 0009: Durable execution identity correlation
 
 ## Context
 
