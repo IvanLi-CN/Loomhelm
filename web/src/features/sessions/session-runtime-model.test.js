@@ -75,6 +75,16 @@ describe("event stream identity and recovery", () => {
     expect(second.state.events.map(({ run_id }) => run_id)).toEqual(["run-1", "run-2"]);
   });
 
+  test("keeps the recovery cursor at the highest observed sequence for late events", () => {
+    const scope = { sessionId: "session-1", runId: "run-1" };
+    const afterSecond = applyEvent(createEventStreamState(scope), event({ event_id: "event-2", cursor: "cursor-2", sequence: 2 }));
+    const afterFirst = applyEvent(afterSecond.state, event({ event_id: "event-1", cursor: "cursor-1", sequence: 1 }));
+
+    expect(afterFirst.state.events.map(({ sequence }) => sequence)).toEqual([1, 2]);
+    expect(afterFirst.state.cursor).toBe("cursor-2");
+    expect(afterFirst.state.cursorSequence).toBe(2);
+  });
+
   test("advances a stream cursor only for events in its own page", () => {
     const scope = { sessionId: "session-1", runId: "run-1" };
     const page = {
@@ -96,12 +106,59 @@ describe("event stream identity and recovery", () => {
     expect(foreignPage.state.cursor).toBe("cursor-2");
   });
 
+  test("uses the highest event position when a page arrives out of order", () => {
+    const scope = { sessionId: "session-1", runId: "run-1" };
+    const applied = applyEventPage(createEventStreamState(scope), {
+      events: [event({ event_id: "event-2", cursor: "cursor-2", sequence: 2 }), event({ event_id: "event-1", cursor: "cursor-1", sequence: 1 })],
+      has_more: false,
+      next_cursor: "older-page-cursor",
+    });
+
+    expect(applied.state.cursor).toBe("cursor-2");
+    expect(applied.state.cursorSequence).toBe(2);
+  });
+
+  test("ignores empty, replayed, older, and foreign recovery pages", () => {
+    const subscription = { id: "conversation", scope: { sessionId: "session-1", runId: "run-1" } };
+    let state = createRecoveryCursorState();
+    state = advanceRecoveryCursor(state, subscription, { events: [], has_more: true, next_cursor: "empty-cursor" });
+    expect(getRecoveryCursor(state, subscription)).toBeUndefined();
+
+    state = advanceRecoveryCursor(state, subscription, {
+      events: [event({ event_id: "event-2", cursor: "cursor-2", sequence: 2 })],
+      has_more: false,
+      next_cursor: "cursor-2",
+    });
+    state = advanceRecoveryCursor(state, subscription, {
+      events: [event({ event_id: "event-1", cursor: "cursor-1", sequence: 1 })],
+      has_more: false,
+      next_cursor: "cursor-1",
+    });
+    expect(getRecoveryCursor(state, subscription)).toBe("cursor-2");
+
+    state = advanceRecoveryCursor(state, subscription, {
+      events: [event({ event_id: "event-2", cursor: "cursor-old", sequence: 2 })],
+      has_more: false,
+      next_cursor: "cursor-old",
+    });
+    state = advanceRecoveryCursor(state, subscription, {
+      events: [event({ event_id: "event-3", cursor: "cursor-3", sequence: 3 }), event({ event_id: "foreign", session_id: "session-2", cursor: "foreign-cursor", sequence: 4 })],
+      has_more: true,
+      next_cursor: "foreign-cursor",
+    });
+    expect(getRecoveryCursor(state, subscription)).toBe("cursor-2");
+  });
+
   test("keeps recovery cursors independent for subscriptions and streams", () => {
     const sessionSubscription = { id: "conversation", scope: { sessionId: "session-1" } };
     const runSubscription = { id: "conversation", scope: { sessionId: "session-1", runId: "run-1" } };
     let state = createRecoveryCursorState();
     state = rememberRecoveryCursor(state, sessionSubscription, "session-cursor");
-    state = advanceRecoveryCursor(state, runSubscription, { events: [], has_more: false, next_cursor: "run-cursor" });
+    state = advanceRecoveryCursor(state, runSubscription, {
+      events: [event({ event_id: "run-event", cursor: "run-cursor", sequence: 1 })],
+      has_more: false,
+      next_cursor: "run-cursor",
+    });
 
     expect(getRecoveryCursor(state, sessionSubscription)).toBe("session-cursor");
     expect(getRecoveryCursor(state, runSubscription)).toBe("run-cursor");
