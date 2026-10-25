@@ -13,7 +13,7 @@ import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import { TaskEditor } from "@/features/tasks/TaskForm";
 import { TaskRelationshipEditor } from "@/features/tasks/TaskRelations";
 import { taskWriteBlockReason } from "@/features/tasks/types";
-import { TaskStateBadge } from "@/components/product/TaskViews";
+import { TaskReadRecovery, TaskStateBadge } from "@/components/product/TaskViews";
 
 function WorkspaceHeader({ taskId, conversationId }: { taskId?: string; conversationId?: string }) {
   const runtime = useDemoRuntime();
@@ -125,7 +125,7 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
   const currentDeleteState = deleteState?.taskId === taskId ? deleteState.status : "idle";
 
   if (source?.status === "error" || source?.status === "permission-changed") {
-    return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><h1>任务当前不可用</h1><p>{source.notice ?? "项目权限或连接状态发生变化，页面保持 fail-closed。"}</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button></section>;
+    return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><TaskReadRecovery source={source} taskId={taskId} /></section>;
   }
 
   if (currentDeleteState === "success") {

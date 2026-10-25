@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
 import { expect, userEvent, within } from "storybook/test";
@@ -71,6 +72,7 @@ function ConsistencyHarness() {
 const meta = {
   title: "Product/TaskViews",
   component: TaskExplorer,
+  decorators: [(Story) => <QueryClientProvider client={new QueryClient()}><Story /></QueryClientProvider>],
   parameters: { layout: "fullscreen" },
   tags: ["autodocs"]
 } satisfies Meta<typeof TaskExplorer>;
@@ -132,7 +134,26 @@ export const Loading: Story = { render: () => <div className="min-h-screen bg-[v
 
 export const Empty: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ tasks: [], getTasksForScope: () => [] })} renderTaskLink={renderTaskLink} /></div> };
 
-export const Error: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ status: "error" })} renderTaskLink={renderTaskLink} /></div> };
+function ErrorRecoveryHarness() {
+  const [refreshCount, setRefreshCount] = useState(0);
+  const source = createSource({
+    status: "error",
+    notice: "任务关系写入结果待确认；请刷新后核对。",
+    getTaskReconciliationToken: () => "story-reconciliation",
+    refresh: async () => setRefreshCount((count) => count + 1)
+  });
+  return <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={source} renderTaskLink={renderTaskLink} /><output className="sr-only" data-testid="refresh-count">{refreshCount}</output></div>;
+}
+
+export const Error: Story = {
+  render: () => <ErrorRecoveryHarness />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务列表" }));
+    expect(canvas.getByText("刷新请求已完成；请确认当前任务和关系数据后再继续。")).toBeInTheDocument();
+    expect(canvas.getByTestId("refresh-count")).toHaveTextContent("1");
+  }
+};
 
 export const ReadOnly: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ getProjectPermissions: () => ({ role: "viewer", canWrite: false, canManageProjects: false, isReadOnly: true }), canCreateProjects: false, notice: "当前身份为只读，任务与关系写入已禁用。" })} renderTaskLink={renderTaskLink} /></div> };
 

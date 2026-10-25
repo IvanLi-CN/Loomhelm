@@ -27,6 +27,10 @@ import { DemoInspector, DemoNotice, DemoSceneBanner } from "./DemoInspector";
 
 type MobileCloseReason = "dismiss" | "navigate";
 
+export function MobileNavigationBackdrop({ onDismiss }: { onDismiss: () => void }) {
+  return <button type="button" className="mobile-backdrop" aria-label="关闭导航" onClick={onDismiss} />;
+}
+
 function useMobileDrawer(open: boolean, onClose: () => void) {
   const mobileQuery = "(max-width: 1199px)";
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -365,7 +369,7 @@ function ProductionShell() {
           <span><strong>{authenticated ? assembly?.auth.principalId : "浏览器会话"}</strong><small>{authenticated ? "当前登录身份" : "尚未登录"}</small></span>
         </div>
       </aside>
-      {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={() => closeDrawer("dismiss")} />}
+      {mobileOpen && <MobileNavigationBackdrop onDismiss={() => closeDrawer("dismiss")} />}
       <div ref={workAreaRef} className="product-work-area">
         <header className="product-header">
           <Button ref={triggerRef} type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" aria-controls="production-mobile-navigation" aria-expanded={mobileOpen} title="打开导航" onClick={openMobile}>
@@ -469,7 +473,7 @@ export function ProductShell({ children }: PropsWithChildren) {
           <span><strong>我的工作区</strong><small>个人工作空间</small></span>
         </div>
       </aside>
-      {mobileOpen && <Button type="button" variant="ghost" className="mobile-backdrop" aria-label="关闭导航" onClick={() => closeDrawer("dismiss")} />}
+      {mobileOpen && <MobileNavigationBackdrop onDismiss={() => closeDrawer("dismiss")} />}
       <div ref={workAreaRef} className="product-work-area">
         <header className="product-header">
           <Button ref={triggerRef} type="button" variant="ghost" size="icon" className="icon-button mobile-menu-button" aria-label="打开导航" aria-controls="demo-mobile-navigation" aria-expanded={mobileOpen} title="打开导航" onClick={openMobile}>

@@ -370,7 +370,34 @@ describe("project/task write contracts", () => {
     expect(membership.items).toEqual({});
     expect(membership.failures).toEqual(["读取项目 project-1 的成员失败：项目成员响应不完整。"]);
     expect(relationship.relationships).toEqual({});
-    expect(relationship.failures).toEqual(["读取任务 task-1 的关系失败：任务关系响应不完整。"]);
+    expect(relationship.failures).toEqual(["读取任务 task-1 的关系失败：任务关系响应不完整或关系端点与任务不匹配。"]);
+  });
+
+  test("rejects relationship kinds and endpoints that do not describe the requested task", async () => {
+    const task = protocolTask();
+    const validCrossProjectPage = {
+      parents: [{ kind: "parent_child", parent_task_id: "parent-project-2", child_task_id: task.id, created_at: "now" }],
+      children: [],
+      prerequisites: [],
+      dependents: []
+    };
+    const valid = await readTaskRelationships({ getTaskRelationships: async () => validCrossProjectPage as never }, [task]);
+    expect(valid.relationships[task.id]).toEqual(validCrossProjectPage);
+
+    const invalidPages = [
+      { parents: [{ kind: "wrong", parent_task_id: "parent-1", child_task_id: task.id, created_at: "now" }] },
+      { children: [{ kind: "parent_child", parent_task_id: "foreign-task", child_task_id: "child-1", created_at: "now" }] },
+      { prerequisites: [{ kind: "prerequisite", prerequisite_task_id: "dependency-1", dependent_task_id: "foreign-task", created_at: "now" }] },
+      { dependents: [{ kind: "prerequisite", prerequisite_task_id: "foreign-task", dependent_task_id: "dependent-1", created_at: "now" }] }
+    ] as const;
+
+    for (const partialPage of invalidPages) {
+      const page = { parents: [], children: [], prerequisites: [], dependents: [], ...partialPage };
+      const relationship = await readTaskRelationships({ getTaskRelationships: async () => page as never }, [task]);
+      expect(relationship.relationships).toEqual({});
+      expect(relationship.failures).toEqual(["读取任务 task-1 的关系失败：任务关系响应不完整或关系端点与任务不匹配。"]);
+      expect(hasIncompleteProjectTaskRead({ items: [task], relationships: { [task.id]: page }, failures: [], deniedProjectIds: [], deniedTaskIds: [] }, [], [task.id])).toBe(true);
+    }
   });
 
   test("hides a project whose membership read is no longer authorized", async () => {
@@ -409,7 +436,7 @@ describe("project/task write contracts", () => {
     const result = await readTaskRelationships({ getTaskRelationships: async () => ({ parents: [], children: [] }) }, tasks);
 
     expect(result.relationships).toEqual({});
-    expect(result.failures).toEqual(["读取任务 task-1 的关系失败：任务关系响应不完整。"]);
+    expect(result.failures).toEqual(["读取任务 task-1 的关系失败：任务关系响应不完整或关系端点与任务不匹配。"]);
   });
 
   test("hides a task whose relationship read is no longer authorized", async () => {

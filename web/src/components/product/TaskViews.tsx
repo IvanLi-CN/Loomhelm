@@ -30,6 +30,39 @@ export function ExecutionPill({ execution, className }: { execution: TaskRecord[
   return <span className={`execution-pill ${execution ? `execution-${execution}` : "execution-unavailable"}${className ? ` ${className}` : ""}`}>{label}</span>;
 }
 
+export function TaskReadRecovery({ source, taskId }: { source: ProjectTaskSource; taskId?: string }) {
+  const [pending, setPending] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const hasReconciliationBarrier = Boolean(taskId && source.getTaskReconciliationToken?.(taskId));
+
+  const refresh = async () => {
+    setPending(true);
+    setFeedback(null);
+    try {
+      await source.refresh();
+      setFeedback("刷新请求已完成；请确认当前任务和关系数据后再继续。");
+    } catch (error) {
+      setFeedback(error instanceof Error ? `刷新失败：${error.message}` : "刷新失败，请稍后重试。");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className="error-state task-read-recovery" role="alert" data-task-read-recovery>
+      <span className="empty-icon empty-icon-danger" aria-hidden="true">!</span>
+      <h2>暂时无法读取任务</h2>
+      {taskId && <p className="task-read-recovery-identity">任务 ID：<code>{taskId}</code></p>}
+      <p>{hasReconciliationBarrier ? "任务写入结果仍待核对；刷新并完成核对前，不会恢复编辑、关系修改或删除。" : "当前页面保持保护，不会显示未确认的项目或关系数据。"}</p>
+      <div className="form-actions task-read-recovery-actions">
+        <Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void refresh(); }} disabled={pending}>{pending ? "刷新中…" : taskId ? "刷新并核对任务" : "刷新并核对任务列表"}</Button>
+        <Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>
+      </div>
+      {feedback && <p className="task-read-recovery-feedback" role="status">{feedback}</p>}
+    </div>
+  );
+}
+
 interface TaskLinkOptions {
   style?: CSSProperties;
 }
@@ -148,7 +181,7 @@ export function TaskExplorer({ scope = "global", projectId, source: providedSour
     <div className="task-explorer" data-task-scope={scope}>
       {source.notice && <div className="inline-state inline-state-warning" role="status"><span aria-hidden="true">!</span>{source.notice}</div>}
       <div className="task-toolbar"><label className="search-field"><Search size={16} aria-hidden="true" /><span className="sr-only">搜索任务</span><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务、目标或编号" /></label><label className="filter-field"><SlidersHorizontal size={15} aria-hidden="true" /><span className="sr-only">任务状态筛选</span><Select value={filter} onValueChange={(value) => setFilter(value as TaskState | "all")}><SelectTrigger size="sm" className="task-filter-trigger" aria-label="任务状态筛选"><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="all">全部状态</SelectItem>{taskStates.map((state) => <SelectItem value={state} key={state}>{state}</SelectItem>)}</SelectGroup></SelectContent></Select></label><TaskViewSwitch source={source} scope={scope} value={view} /></div>
-      {source.status === "error" ? <div className="error-state"><span className="empty-icon empty-icon-danger" aria-hidden="true">!</span><h2>暂时无法读取任务</h2><p>当前页面保持 fail-closed，不会显示未确认的项目或关系数据。</p></div> : source.status === "loading" ? <div className="task-loading" aria-busy="true"><span /><span /><span /></div> : source.status === "permission-changed" && !sourceTasks.length ? <div className="empty-state"><h2>当前权限范围没有任务</h2><p>项目权限发生变化后，受保护任务及其关系不会保留在页面中。</p></div> : !tasks.length ? <div className="empty-state"><h2>{sourceTasks.length ? "没有符合条件的任务" : "还没有任务数据"}</h2><p>{sourceTasks.length ? "调整搜索或状态筛选后再查看。" : "从当前授权项目创建一项任务，或等待项目范围接入。"}</p></div> : view === "board" ? <TaskBoard source={source} tasks={tasks} renderTaskLink={renderTaskLink} /> : view === "graph" ? <TaskGraph source={source} tasks={tasks} projectId={projectId} renderTaskLink={renderTaskLink} /> : <TaskList source={source} tasks={tasks} renderTaskLink={renderTaskLink} />}
+      {source.status === "error" ? <TaskReadRecovery source={source} /> : source.status === "loading" ? <div className="task-loading" aria-busy="true"><span /><span /><span /></div> : source.status === "permission-changed" && !sourceTasks.length ? <TaskReadRecovery source={source} /> : !tasks.length ? <div className="empty-state"><h2>{sourceTasks.length ? "没有符合条件的任务" : "还没有任务数据"}</h2><p>{sourceTasks.length ? "调整搜索或状态筛选后再查看。" : "从当前授权项目创建一项任务，或等待项目范围接入。"}</p></div> : view === "board" ? <TaskBoard source={source} tasks={tasks} renderTaskLink={renderTaskLink} /> : view === "graph" ? <TaskGraph source={source} tasks={tasks} projectId={projectId} renderTaskLink={renderTaskLink} /> : <TaskList source={source} tasks={tasks} renderTaskLink={renderTaskLink} />}
     </div>
   );
 }

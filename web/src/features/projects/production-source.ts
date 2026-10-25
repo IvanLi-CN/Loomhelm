@@ -432,7 +432,7 @@ function isTaskContainment(value: unknown): boolean {
   return isRecord(value)
     && typeof value.child_task_id === "string"
     && typeof value.created_at === "string"
-    && typeof value.kind === "string"
+    && value.kind === "parent_child"
     && typeof value.parent_task_id === "string";
 }
 
@@ -440,20 +440,20 @@ function isTaskDependency(value: unknown): boolean {
   return isRecord(value)
     && typeof value.created_at === "string"
     && typeof value.dependent_task_id === "string"
-    && typeof value.kind === "string"
+    && value.kind === "prerequisite"
     && typeof value.prerequisite_task_id === "string";
 }
 
-function isTaskRelationshipPage(value: unknown): value is TaskRelationshipPage {
+function isTaskRelationshipPage(value: unknown, taskId?: string): value is TaskRelationshipPage {
   if (!isRecord(value)) return false;
   return Array.isArray(value.parents)
-    && value.parents.every(isTaskContainment)
+    && value.parents.every((relationship) => isTaskContainment(relationship) && (taskId === undefined || relationship.child_task_id === taskId))
     && Array.isArray(value.children)
-    && value.children.every(isTaskContainment)
+    && value.children.every((relationship) => isTaskContainment(relationship) && (taskId === undefined || relationship.parent_task_id === taskId))
     && Array.isArray(value.prerequisites)
-    && value.prerequisites.every(isTaskDependency)
+    && value.prerequisites.every((relationship) => isTaskDependency(relationship) && (taskId === undefined || relationship.dependent_task_id === taskId))
     && Array.isArray(value.dependents)
-    && value.dependents.every(isTaskDependency);
+    && value.dependents.every((relationship) => isTaskDependency(relationship) && (taskId === undefined || relationship.prerequisite_task_id === taskId));
 }
 
 function isCursorPage<Item>(value: unknown, isItem: (item: unknown) => item is Item): value is CursorPage<Item> {
@@ -528,7 +528,7 @@ export async function readTaskRelationships(
 ): Promise<TaskQueryData> {
   const results = await Promise.allSettled(tasks.map(async (task) => {
     const relationships = await api.getTaskRelationships({ task_id: task.id });
-    if (!isTaskRelationshipPage(relationships)) throw new Error("任务关系响应不完整。");
+    if (!isTaskRelationshipPage(relationships, task.id)) throw new Error("任务关系响应不完整或关系端点与任务不匹配。");
     return { taskId: task.id, relationships };
   }));
   const relationships: Record<string, TaskRelationshipPage> = {};
@@ -591,7 +591,7 @@ export function hasIncompleteProjectTaskRead(data: unknown, expectedProjectIds: 
     if (!Array.isArray(read.items) || !read.items.every(isTask) || !read.relationships || typeof read.relationships !== "object" || Array.isArray(read.relationships)) return true;
     const taskIds = new Set(read.items.map((item) => item.id));
     const relationships = read.relationships as Record<string, unknown>;
-    if (expectedTaskIds.some((taskId) => !taskIds.has(taskId) || !Object.prototype.hasOwnProperty.call(relationships, taskId) || !isTaskRelationshipPage(relationships[taskId]))) return true;
+    if (expectedTaskIds.some((taskId) => !taskIds.has(taskId) || !Object.prototype.hasOwnProperty.call(relationships, taskId) || !isTaskRelationshipPage(relationships[taskId], taskId))) return true;
   }
   return false;
 }
