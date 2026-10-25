@@ -38,6 +38,25 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
+func TestApplicationWorkerRegistrationFailure(t *testing.T) {
+	registrationErr := errors.New("application worker configuration is invalid")
+	runner := &Runner{cfg: Config{
+		RegisterWorkers: func(_ *river.Workers, environment WorkerEnvironment) error {
+			if err := environment.CheckLease(context.Background()); !errors.Is(err, ErrWorkerLeaseLost) {
+				t.Fatalf("unacquired worker lease check = %v, want ErrWorkerLeaseLost", err)
+			}
+			return registrationErr
+		},
+	}}
+	workers, err := runner.workers(staticGeneration{ctx: context.Background()}, nil)
+	if !errors.Is(err, registrationErr) {
+		t.Fatalf("worker registration error = %v, want original configuration error", err)
+	}
+	if workers != nil {
+		t.Fatal("invalid application registration exposed a partially configured worker pool")
+	}
+}
+
 func TestShortJobArgsKind(t *testing.T) {
 	if got := (ShortJobArgs{}).Kind(); got != ShortJobKind {
 		t.Fatalf("ShortJobArgs.Kind() = %q, want %q", got, ShortJobKind)

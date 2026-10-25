@@ -34,6 +34,18 @@ type Lifecycle interface {
 	Snapshot() platform.LifecycleSnapshot
 }
 
+// WorkerEnvironment exposes process fencing without coupling the platform job
+// runner to an application domain. Registrations are rebuilt after recovery.
+type WorkerEnvironment struct {
+	Generation         Generation
+	CheckLease         func(context.Context) error
+	LeaseKey           string
+	CandidateSourceSHA string
+	ArtifactDigest     string
+}
+
+type WorkerRegistration func(*river.Workers, WorkerEnvironment) error
+
 type Config struct {
 	Queue                  string
 	Schema                 string
@@ -44,6 +56,7 @@ type Config struct {
 	LeaseHeartbeatTimeout  time.Duration
 	CandidateSourceSHA     string
 	ArtifactDigest         string
+	RegisterWorkers        WorkerRegistration
 }
 
 func (c Config) withDefaults() Config {
@@ -195,12 +208,10 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 		return err
 	}
 
-	workers := river.NewWorkers()
-	river.AddWorker(workers, &shortJobWorker{
-		queries:    r.db.Queries(),
-		generation: generation,
-		lease:      lease,
-	})
+	workers, err := r.workers(generation, lease)
+	if err != nil {
+		return err
+	}
 	client, err := river.NewClient(riverpgxv5.New(r.db.Pool()), &river.Config{
 		Logger:          r.logger,
 		Schema:          r.cfg.Schema,
@@ -268,14 +279,23 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 }
 
 func (r *Runner) Enqueue(ctx context.Context, args ShortJobArgs) (int64, error) {
+	if err := validateGeneration(args.Generation); err != nil {
+		return 0, err
+	}
+	return r.EnqueueArgs(ctx, args, nil)
+}
+
+// EnqueueArgs retains the same readiness and durable worker lease checks as
+// platform jobs. Application workers must also fence execution on receipt.
+func (r *Runner) EnqueueArgs(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (int64, error) {
 	if r == nil {
 		return 0, errors.New("job runner is not initialized")
 	}
 	if ctx == nil {
 		return 0, errors.New("job context must not be nil")
 	}
-	if err := validateGeneration(args.Generation); err != nil {
-		return 0, err
+	if args == nil {
+		return 0, errors.New("job arguments must not be nil")
 	}
 	r.mu.Lock()
 	lease := r.lease
@@ -296,9 +316,19 @@ func (r *Runner) Enqueue(ctx context.Context, args ShortJobArgs) (int64, error) 
 	if client == nil {
 		return 0, errors.New("job runner is not started")
 	}
-	result, err := client.Insert(ctx, args, &river.InsertOpts{Queue: r.cfg.Queue})
+	if opts == nil {
+		opts = &river.InsertOpts{}
+	}
+	// Do not mutate caller-owned options or permit the enqueue path to escape
+	// the queue whose worker lease was checked above.
+	insertOpts := *opts
+	if insertOpts.Queue != "" && insertOpts.Queue != r.cfg.Queue {
+		return 0, errors.New("job queue must match the runner queue")
+	}
+	insertOpts.Queue = r.cfg.Queue
+	result, err := client.Insert(ctx, args, &insertOpts)
 	if err != nil {
-		return 0, fmt.Errorf("enqueue short job: %w", err)
+		return 0, fmt.Errorf("enqueue job: %w", err)
 	}
 	return result.Job.ID, nil
 }
@@ -518,15 +548,13 @@ func (r *Runner) restartClient(ctx context.Context, generation Generation) error
 	if ctx == nil || ctx.Err() != nil {
 		return ctx.Err()
 	}
-	workers := river.NewWorkers()
 	r.mu.Lock()
 	lease := r.lease
 	r.mu.Unlock()
-	river.AddWorker(workers, &shortJobWorker{
-		queries:    r.db.Queries(),
-		generation: generation,
-		lease:      lease,
-	})
+	workers, err := r.workers(generation, lease)
+	if err != nil {
+		return err
+	}
 	client, err := river.NewClient(riverpgxv5.New(r.db.Pool()), &river.Config{
 		Logger:          r.logger,
 		Schema:          r.cfg.Schema,
@@ -551,6 +579,29 @@ func (r *Runner) restartClient(ctx context.Context, generation Generation) error
 	r.client = client
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *Runner) workers(generation Generation, lease *workerLease) (*river.Workers, error) {
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &shortJobWorker{
+		queries: r.db.Queries(), generation: generation, lease: lease,
+	})
+	if register := r.cfg.RegisterWorkers; register != nil {
+		checkLease := func(ctx context.Context) error {
+			if lease == nil {
+				return ErrWorkerLeaseLost
+			}
+			return lease.Check(ctx)
+		}
+		if err := register(workers, WorkerEnvironment{
+			Generation: generation, CheckLease: checkLease,
+			LeaseKey: r.cfg.LeaseKey, CandidateSourceSHA: r.cfg.CandidateSourceSHA,
+			ArtifactDigest: r.cfg.ArtifactDigest,
+		}); err != nil {
+			return nil, fmt.Errorf("register application workers: %w", err)
+		}
+	}
+	return workers, nil
 }
 
 func (r *Runner) stopClient(ctx context.Context, cancel bool) error {
