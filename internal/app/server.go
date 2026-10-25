@@ -207,10 +207,11 @@ func (s *Server) serveAdmitted(ctx context.Context, listener net.Listener) error
 		return s.shutdownAndWait(server, tracked, serveResult, "HTTP drain request")
 	case err := <-serveResult:
 		s.BeginDrain("HTTP server stopped unexpectedly")
+		gatewayErr := s.shutdownGateway()
 		shutdownErr := s.shutdownHTTP(server)
 		closeErr := tracked.closeError()
 		s.lifecycle.Stop()
-		if combined := withListenerCloseError(combineServerErrors(err, shutdownErr), closeErr); combined != nil {
+		if combined := withListenerCloseError(combineServerErrors(err, errors.Join(gatewayErr, shutdownErr)), closeErr); combined != nil {
 			return combined
 		}
 		s.logger.Info("server stopped")
@@ -236,6 +237,7 @@ func (s *Server) BeginDrain(reason string) bool {
 
 func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener, serveResult <-chan error, reason string) error {
 	s.BeginDrain(reason)
+	gatewayErr := s.shutdownGateway()
 	shutdownErr := s.shutdownHTTP(server)
 	serveErr := <-serveResult
 	if errors.Is(serveErr, http.ErrServerClosed) {
@@ -243,7 +245,7 @@ func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener,
 	}
 	closeErr := listener.closeError()
 	s.lifecycle.Stop()
-	if combined := withListenerCloseError(combineServerErrors(serveErr, shutdownErr), closeErr); combined != nil {
+	if combined := withListenerCloseError(combineServerErrors(serveErr, errors.Join(gatewayErr, shutdownErr)), closeErr); combined != nil {
 		return combined
 	}
 	s.logger.Info("server stopped")
@@ -265,6 +267,22 @@ func (s *Server) shutdownHTTP(server *http.Server) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) shutdownGateway() error {
+	s.resourceMu.RLock()
+	resources := s.resources
+	s.resourceMu.RUnlock()
+	if resources == nil {
+		return nil
+	}
+	drainer, ok := resources.(interface{ ShutdownGateway(context.Context) error })
+	if !ok {
+		return nil
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
+	defer cancel()
+	return drainer.ShutdownGateway(shutdownCtx)
 }
 
 func combineServerErrors(serveErr, shutdownErr error) error {
@@ -293,11 +311,30 @@ func withListenerCloseError(base, closeErr error) error {
 
 func (s *Server) registerRoutes() {
 	s.router.Mount("/api/v1", http.HandlerFunc(s.handleApplication))
+	s.router.Handle(connectorGatewayPath, http.HandlerFunc(s.handleGateway))
 	s.router.Get("/livez", s.handleLive)
 	s.router.Get("/readyz", s.handleReady)
 	s.router.Get("/version", s.handleVersion)
 	s.router.Get("/-/drain", s.handleDrainStatus)
 	s.router.Post("/-/drain", s.handleDrain)
+}
+
+func (s *Server) handleGateway(writer http.ResponseWriter, request *http.Request) {
+	s.resourceMu.RLock()
+	var handler http.Handler
+	if runtime, ok := s.resources.(interface{ GatewayHandler() http.Handler }); ok {
+		handler = runtime.GatewayHandler()
+	}
+	s.resourceMu.RUnlock()
+	if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("Retry-After", "1")
+		http.Error(writer, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		return
+	}
+	// Connector authentication is a Host credential and intentionally bypasses
+	// browser session middleware and the public /api/v1 contract.
+	handler.ServeHTTP(writer, request)
 }
 
 type healthResponse struct {

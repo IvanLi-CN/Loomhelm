@@ -5,10 +5,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
+	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
+	"github.com/IvanLi-CN/Loomhelm/internal/runs"
+	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 )
 
 // processRuntime keeps resource ownership in the application composition layer.
@@ -26,9 +33,11 @@ type processRuntime interface {
 type runtimeFactory func(context.Context, platform.Config, *slog.Logger) (processRuntime, error)
 
 type databaseRuntime struct {
-	db     *database.DB
-	runner *jobs.Runner
-	api    http.Handler
+	db              *database.DB
+	runner          *jobs.Runner
+	api             http.Handler
+	gateway         *gateway.Server
+	shutdownTimeout time.Duration
 }
 
 func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.Logger) (processRuntime, error) {
@@ -59,18 +68,71 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		db.Close()
 		return nil, fmt.Errorf("prepare persistence: %w", err)
 	}
-	runtime := &databaseRuntime{db: db, runner: runner}
+	runtime := &databaseRuntime{db: db, runner: runner, shutdownTimeout: cfg.ShutdownTimeout}
 	if cfg.Component == platform.ComponentServer {
-		runtime.api, err = newApplicationHandler(ctx, db.Pool(), cfg.BrowserAuth)
+		sessionStore := sessions.NewStore(db.Pool())
+		runStore := runs.NewStore(db.Pool())
+		approvalStore := approvals.NewStore(db.Pool())
+		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth)
+		if serviceErr != nil {
+			db.Close()
+			return nil, serviceErr
+		}
+		transport := &gatewayExecutionTransport{
+			sessions: sessionStore,
+			runs:     runStore,
+			now:      time.Now,
+		}
+		hostRegistry := hosts.NewService(db.Pool())
+		runtime.gateway, err = gateway.NewServer(hostRegistry, gateway.ServerOptions{EventHandler: transport.HandleEvent})
 		if err != nil {
 			db.Close()
-			return nil, err
+			return nil, fmt.Errorf("initialize Connector gateway: %w", err)
 		}
+		transport.gateway = runtime.gateway
+		controller, controllerErr := runs.NewController(runStore, transport, runs.ControllerConfig{
+			ResolveGeneration: func(resolveCtx context.Context, sessionID string) (string, error) {
+				session, resolveErr := sessionStore.Get(resolveCtx, sessionID)
+				if resolveErr != nil {
+					return "", resolveErr
+				}
+				return session.Generation, nil
+			},
+		})
+		if controllerErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize run controller: %w", controllerErr)
+		}
+		authorizer := services.sessionAccess()
+		control, controlErr := runs.NewControlService(runs.ControlServiceConfig{
+			Controller: controller,
+			Sessions:   sessionStore,
+			Runs:       runStore,
+			Approvals:  approvalStore,
+			Authorize: func(authorizeCtx context.Context, principal auth.Principal, sessionID string, write bool) error {
+				_, authorizeErr := authorizer.authorize(authorizeCtx, principal, sessionID, write)
+				return authorizeErr
+			},
+		})
+		if controlErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize run control: %w", controlErr)
+		}
+		runtime.api = services.handler(control)
 	}
 	return runtime, nil
 }
 
 func (r *databaseRuntime) APIHandler() http.Handler { return r.api }
+
+func (r *databaseRuntime) GatewayHandler() http.Handler { return r.gateway }
+
+func (r *databaseRuntime) ShutdownGateway(ctx context.Context) error {
+	if r == nil || r.gateway == nil {
+		return nil
+	}
+	return r.gateway.Shutdown(ctx)
+}
 
 func (r *databaseRuntime) Ping(ctx context.Context) error { return r.db.Ping(ctx) }
 
@@ -88,4 +150,20 @@ func (r *databaseRuntime) StopAndCancel(ctx context.Context) error {
 
 func (r *databaseRuntime) WaitStopped(ctx context.Context) error { return r.runner.WaitStopped(ctx) }
 
-func (r *databaseRuntime) Close() { r.db.Close() }
+func (r *databaseRuntime) Close() {
+	if r == nil {
+		return
+	}
+	if r.gateway != nil {
+		timeout := r.shutdownTimeout
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		_ = r.gateway.Shutdown(ctx)
+		cancel()
+	}
+	if r.db != nil {
+		r.db.Close()
+	}
+}
