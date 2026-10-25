@@ -21,6 +21,13 @@ import (
 // Protection is applied here, before any session middleware or mutation, so a
 // browser capability response cannot outlive its actual enforcement boundary.
 func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig) (http.Handler, error) {
+	return newApplicationHandlerWithRunControl(ctx, pool, cfg, nil)
+}
+
+// The runtime supplies the real control service once its durable stores and
+// Host transport are ready. An absent dependency exposes explicit unavailable
+// responses, never a simulated command acknowledgement.
+func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, control runControlApplication) (http.Handler, error) {
 	var provider auth.Provider
 	if cfg.OIDCEnabled() {
 		configured, err := auth.NewOIDCProvider(ctx, auth.OIDCConfig{
@@ -45,6 +52,7 @@ func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform
 	projectService.Mount(router)
 	taskService.Mount(router)
 	(&sessionService{principal: identity, projects: projectService, records: sessions.NewStore(pool)}).mount(router)
+	(&runControlHTTP{principal: identity, service: control}).mount(router)
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
 		principal, err := identity.ResolvePrincipal(request.Context(), request)
 		if err != nil || principal.UserID == "" || principal.CredentialID != "" {
