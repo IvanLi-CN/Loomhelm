@@ -7,7 +7,7 @@ import { expect, userEvent, within } from "storybook/test";
 import { taskStates, type ExecutionState, type TaskState, type TaskView } from "@/demo/types";
 import type { ProjectTaskSource, TaskRecord } from "@/features/tasks/types";
 
-import { ExecutionPill, TaskExplorer, TaskStateBadge } from "./TaskViews";
+import { ExecutionPill, TaskExplorer, TaskReadRecovery, TaskStateBadge } from "./TaskViews";
 
 const projects = [
   { id: "loomhelm", name: "Loomhelm", summary: "产品工作台", updatedAt: "刚刚", conversationCount: 1 },
@@ -142,14 +142,14 @@ function ErrorRecoveryHarness() {
     getTaskReconciliationToken: () => "story-reconciliation",
     refresh: async () => setRefreshCount((count) => count + 1)
   });
-  return <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={source} renderTaskLink={renderTaskLink} /><output className="sr-only" data-testid="refresh-count">{refreshCount}</output></div>;
+  return <div className="w-full max-w-3xl mx-auto bg-[var(--canvas)] p-8" data-visual-evidence-surface><div className="w-full" data-visual-evidence-target><div className="mb-6"><span className="section-kicker">TASK READ RECOVERY</span><h1 className="mt-2 text-xl font-semibold">任务读取恢复</h1><p className="mt-2 text-sm text-[var(--muted)]">保留保护状态，先核对远端任务与关系数据。</p></div><TaskReadRecovery source={source} taskId="STORY-RECOVERY-42" /><output className="sr-only" data-testid="refresh-count">{refreshCount}</output></div></div>;
 }
 
 export const Error: Story = {
   render: () => <ErrorRecoveryHarness />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务列表" }));
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务" }));
     expect(canvas.getByText("刷新请求已完成；请确认当前任务和关系数据后再继续。")).toBeInTheDocument();
     expect(canvas.getByTestId("refresh-count")).toHaveTextContent("1");
   }
