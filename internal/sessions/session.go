@@ -4,6 +4,7 @@
 package sessions
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,14 +13,15 @@ import (
 )
 
 var (
-	ErrInvalidSession    = errors.New("session is invalid")
-	ErrSessionTransition = errors.New("session transition is invalid")
-	ErrSessionTerminal   = errors.New("session is already terminal")
-	ErrSessionBound      = errors.New("session is already bound to a task")
-	ErrTaskBound         = errors.New("task is already bound to a session")
-	ErrProjectMismatch   = errors.New("session and task belong to different projects")
-	ErrShareConfirmation = errors.New("projectless session requires explicit sharing confirmation")
-	ErrStaleGeneration   = errors.New("session generation is stale")
+	ErrInvalidSession     = errors.New("session is invalid")
+	ErrSessionTransition  = errors.New("session transition is invalid")
+	ErrSessionTerminal    = errors.New("session is already terminal")
+	ErrSessionBound       = errors.New("session is already bound to a task")
+	ErrTaskBound          = errors.New("task is already bound to a session")
+	ErrProjectMismatch    = errors.New("session and task belong to different projects")
+	ErrShareConfirmation  = errors.New("projectless session requires explicit sharing confirmation")
+	ErrStaleGeneration    = errors.New("session generation is stale")
+	ErrSessionUnconfirmed = errors.New("session creation intent is not confirmed")
 )
 
 type Session struct {
@@ -38,6 +40,90 @@ type NewInput struct {
 	Generation        string
 	CreatedAt         string
 	UpdatedAt         string
+}
+
+// IntentState distinguishes a durable creation attempt from a confirmed
+// Session. An intent never exposes an external thread reference until the
+// execution boundary confirms one.
+type IntentState string
+
+const (
+	IntentStatePending   IntentState = "pending"
+	IntentStateUnknown   IntentState = "unknown"
+	IntentStateConfirmed IntentState = "confirmed"
+)
+
+// CreationIntentInput contains authorization facts resolved by the caller's
+// application boundary. CreatorUserID and HostID are not public request
+// declarations; the caller must derive them from authenticated identity and
+// the configured host selection.
+type CreationIntentInput struct {
+	SessionID     string
+	CommandID     string
+	CreatorUserID string
+	HostID        string
+	Path          protocol.SessionPath
+	ProjectID     string
+	TaskID        string
+	Parameters    []byte
+	Summary       string
+	CreatedAt     string
+	UpdatedAt     string
+}
+
+type CreationIntent struct {
+	SessionID           string
+	CommandID           string
+	CreatorUserID       string
+	HostID              string
+	Path                protocol.SessionPath
+	ProjectID           string
+	TaskID              string
+	Parameters          []byte
+	Digest              string
+	Summary             string
+	UnknownReason       string
+	ExternalThreadRef   string
+	ExecutionGeneration string
+	State               IntentState
+	CreatedAt           string
+	UpdatedAt           string
+}
+
+// ActivationInput names the execution generation explicitly. Host WSS and
+// Worker generations are owned by their own boundaries and are intentionally
+// absent from this type.
+type ActivationInput struct {
+	SessionID           string
+	ExternalThreadRef   string
+	ExecutionGeneration string
+	UpdatedAt           string
+}
+
+type UnknownIntentInput struct {
+	SessionID string
+	Reason    string
+	UpdatedAt string
+}
+
+type SessionAccess struct {
+	SessionID     string
+	CreatorUserID string
+	HostID        string
+	ProjectID     string
+	IntentState   IntentState
+	Confirmed     bool
+}
+
+// CreationBoundary is the narrow internal persistence contract used by the
+// application coordinator. It deliberately does not expose the full Session
+// lifecycle store or any public REST schema.
+type CreationBoundary interface {
+	CreateIntent(context.Context, CreationIntentInput) (CreationIntent, error)
+	GetIntent(context.Context, string) (CreationIntent, error)
+	MarkIntentUnknown(context.Context, UnknownIntentInput) (CreationIntent, error)
+	ActivateIntent(context.Context, ActivationInput) (Session, error)
+	GetAccess(context.Context, string) (SessionAccess, error)
 }
 
 type BindRequest struct {
