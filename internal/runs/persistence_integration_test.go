@@ -227,14 +227,14 @@ func TestPersistentExecutionDomainRoundTripAndFencing(t *testing.T) {
 	if _, err := runStore.AcquireLease(ctx, otherOwner, LeaseStoreConfig{TTL: time.Minute}); !errors.Is(err, ErrLeaseHeld) {
 		t.Fatalf("same-generation lease replacement error = %v, want %v", err, ErrLeaseHeld)
 	}
-	higherGeneration := leaseIdentity
-	higherGeneration.Generation = "2"
-	higherGeneration.OwnerID = "owner-c"
-	if _, err := runStore.AcquireLease(ctx, higherGeneration, LeaseStoreConfig{TTL: time.Minute}); err != nil {
-		t.Fatalf("higher-generation lease replacement: %v", err)
+	differentGeneration := leaseIdentity
+	differentGeneration.Generation = "2"
+	differentGeneration.OwnerID = "owner-c"
+	if _, err := runStore.AcquireLease(ctx, differentGeneration, LeaseStoreConfig{TTL: time.Minute}); !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("different-generation lease replacement error = %v, want %v", err, ErrStaleGeneration)
 	}
-	if _, err := runStore.CheckLease(ctx, leaseIdentity); !errors.Is(err, ErrLeaseLost) {
-		t.Fatalf("old lease check = %v, want %v", err, ErrLeaseLost)
+	if _, err := runStore.CheckLease(ctx, leaseIdentity); err != nil {
+		t.Fatalf("current lease check after rejected replacement = %v", err)
 	}
 
 	db.Close()
@@ -260,6 +260,197 @@ func TestPersistentExecutionDomainRoundTripAndFencing(t *testing.T) {
 	}
 	if storedApproval.Status != protocol.ApprovalStatusApproved || string(storedApproval.Context) != `{"scope":"write"}` {
 		t.Fatalf("reopened approval = %+v", storedApproval)
+	}
+}
+
+func TestPersistentOpaqueLeaseBindsSessionAndRun(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	secondSessionID := ids.session + "-second"
+	secondRunID := ids.run + "-second"
+	mismatchRunID := ids.run + "-generation-mismatch"
+	t.Cleanup(func() {
+		if db == nil {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := (*db).Pool().Exec(cleanupCtx, `DELETE FROM execution_control_leases WHERE lease_key = $1`, ids.lease); err != nil {
+			t.Errorf("cleanup opaque lease: %v", err)
+		}
+		for _, runID := range []string{secondRunID, mismatchRunID} {
+			if _, err := (*db).Pool().Exec(cleanupCtx, `DELETE FROM execution_runs WHERE id = $1`, runID); err != nil {
+				t.Errorf("cleanup opaque lease run %q: %v", runID, err)
+			}
+		}
+		if _, err := (*db).Pool().Exec(cleanupCtx, `DELETE FROM execution_sessions WHERE id = $1`, secondSessionID); err != nil {
+			t.Errorf("cleanup opaque lease session: %v", err)
+		}
+	})
+
+	const firstGeneration = "generation-codex-1"
+	const secondGeneration = "generation-codex-2"
+	sessionStore := sessions.NewStore(db.Pool())
+	if _, err := sessionStore.Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        firstGeneration,
+	}); err != nil {
+		t.Fatalf("create first opaque-generation session: %v", err)
+	}
+	if _, err := NewStore(db.Pool()).CreateRun(ctx, NewRunInput{
+		ID:         ids.run,
+		SessionID:  ids.session,
+		CommandID:  ids.command,
+		Generation: firstGeneration,
+	}); err != nil {
+		t.Fatalf("create first opaque-generation run: %v", err)
+	}
+	if _, err := sessionStore.Create(ctx, sessions.NewInput{
+		ID:                secondSessionID,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread + "-second",
+		Generation:        secondGeneration,
+	}); err != nil {
+		t.Fatalf("create second opaque-generation session: %v", err)
+	}
+	if _, err := NewStore(db.Pool()).CreateRun(ctx, NewRunInput{
+		ID:         secondRunID,
+		SessionID:  secondSessionID,
+		CommandID:  ids.command + "-second",
+		Generation: secondGeneration,
+	}); err != nil {
+		t.Fatalf("create second opaque-generation run: %v", err)
+	}
+	if _, err := NewStore(db.Pool()).CreateRun(ctx, NewRunInput{
+		ID:         mismatchRunID,
+		SessionID:  ids.session,
+		CommandID:  ids.command + "-generation-mismatch",
+		Generation: secondGeneration,
+	}); err != nil {
+		t.Fatalf("create generation-mismatch run: %v", err)
+	}
+
+	store := NewStore(db.Pool())
+	firstIdentity := DurableLeaseIdentity{
+		LeaseKey:           ids.lease,
+		SessionID:          ids.session,
+		RunID:              ids.run,
+		Generation:         firstGeneration,
+		OwnerID:            "owner-first",
+		CandidateSourceSHA: "source-first",
+		ArtifactDigest:     "artifact-first",
+	}
+	if _, err := store.AcquireLease(ctx, firstIdentity, LeaseStoreConfig{TTL: time.Minute}); err != nil {
+		t.Fatalf("acquire first opaque lease: %v", err)
+	}
+	leaseBoundaryCases := []struct {
+		name      string
+		identity  DurableLeaseIdentity
+		wantError error
+	}{
+		{
+			name: "missing session",
+			identity: func() DurableLeaseIdentity {
+				identity := firstIdentity
+				identity.SessionID = ids.session + "-missing"
+				identity.OwnerID = "owner-missing-session"
+				return identity
+			}(),
+			wantError: ErrLeaseLost,
+		},
+		{
+			name: "missing run",
+			identity: func() DurableLeaseIdentity {
+				identity := firstIdentity
+				identity.RunID = ids.run + "-missing"
+				identity.OwnerID = "owner-missing-run"
+				return identity
+			}(),
+			wantError: ErrRunNotFound,
+		},
+		{
+			name: "run belongs to another session",
+			identity: func() DurableLeaseIdentity {
+				identity := firstIdentity
+				identity.RunID = secondRunID
+				identity.OwnerID = "owner-cross-session"
+				return identity
+			}(),
+			wantError: ErrInvalidLease,
+		},
+		{
+			name: "session generation mismatch",
+			identity: func() DurableLeaseIdentity {
+				identity := firstIdentity
+				identity.Generation = secondGeneration
+				identity.OwnerID = "owner-session-generation-mismatch"
+				return identity
+			}(),
+			wantError: ErrStaleGeneration,
+		},
+		{
+			name: "run generation mismatch",
+			identity: func() DurableLeaseIdentity {
+				identity := firstIdentity
+				identity.RunID = mismatchRunID
+				identity.OwnerID = "owner-run-generation-mismatch"
+				return identity
+			}(),
+			wantError: ErrStaleGeneration,
+		},
+	}
+	for _, testCase := range leaseBoundaryCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := store.AcquireLease(ctx, testCase.identity, LeaseStoreConfig{TTL: time.Minute}); !errors.Is(err, testCase.wantError) {
+				t.Fatalf("boundary error = %v, want %v", err, testCase.wantError)
+			}
+			if _, err := store.CheckLease(ctx, firstIdentity); err != nil {
+				t.Fatalf("original lease after rejected boundary case = %v", err)
+			}
+		})
+	}
+	secondIdentity := DurableLeaseIdentity{
+		LeaseKey:           ids.lease,
+		SessionID:          secondSessionID,
+		RunID:              secondRunID,
+		Generation:         secondGeneration,
+		OwnerID:            "owner-second",
+		CandidateSourceSHA: "source-second",
+		ArtifactDigest:     "artifact-second",
+	}
+	if _, err := store.AcquireLease(ctx, secondIdentity, LeaseStoreConfig{TTL: time.Minute}); !errors.Is(err, ErrLeaseHeld) {
+		t.Fatalf("active opaque-generation lease replacement error = %v, want %v", err, ErrLeaseHeld)
+	}
+	if _, err := store.RenewLease(ctx, firstIdentity, LeaseStoreConfig{TTL: time.Minute}); err != nil {
+		t.Fatalf("renew first opaque lease: %v", err)
+	}
+
+	if _, err := store.RenewLease(ctx, firstIdentity, LeaseStoreConfig{TTL: 20 * time.Millisecond}); err != nil {
+		t.Fatalf("shorten first opaque lease: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := store.CheckLease(ctx, firstIdentity); errors.Is(err, ErrLeaseLost) {
+			break
+		} else if err != nil {
+			t.Fatalf("check expiring first opaque lease: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first opaque lease did not expire")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := store.AcquireLease(ctx, secondIdentity, LeaseStoreConfig{TTL: time.Minute}); err != nil {
+		t.Fatalf("acquire second opaque lease after expiry: %v", err)
+	}
+	if _, err := store.CheckLease(ctx, secondIdentity); err != nil {
+		t.Fatalf("check second opaque lease after expiry: %v", err)
 	}
 }
 

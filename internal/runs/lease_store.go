@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,9 +33,10 @@ type LeaseStoreConfig struct {
 	TTL time.Duration
 }
 
-// AcquireLease serializes replacement decisions on the lease row. A newer
-// numeric generation or an expired lease may replace an older owner; an
-// active lease can only be reacquired by the exact same execution identity.
+// AcquireLease serializes replacement decisions on the lease row. The
+// execution generation is opaque and must belong to the persisted Session and
+// Run. An expired lease may be replaced; an active lease can only be reacquired
+// by the exact same execution identity.
 func (s *Store) AcquireLease(ctx context.Context, identity DurableLeaseIdentity, configs ...LeaseStoreConfig) (ControlLease, error) {
 	if err := s.ready(ctx); err != nil {
 		return ControlLease{}, err
@@ -52,10 +51,6 @@ func (s *Store) AcquireLease(ctx context.Context, identity DurableLeaseIdentity,
 	if ttl <= 0 {
 		return ControlLease{}, fmt.Errorf("%w: lease TTL must be positive", ErrInvalidLease)
 	}
-	currentGeneration, err := parseLeaseGeneration(identity.Generation)
-	if err != nil {
-		return ControlLease{}, err
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return ControlLease{}, fmt.Errorf("begin control lease acquisition: %w", err)
@@ -65,19 +60,15 @@ func (s *Store) AcquireLease(ctx context.Context, identity DurableLeaseIdentity,
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, identity.LeaseKey); err != nil {
 		return ControlLease{}, fmt.Errorf("serialize control lease acquisition: %w", err)
 	}
+	if err := lockLeaseBinding(ctx, tx, identity); err != nil {
+		return ControlLease{}, err
+	}
 	current, found, err := lockLease(ctx, tx, identity.LeaseKey)
 	if err != nil {
 		return ControlLease{}, err
 	}
 	if found {
-		storedGeneration, parseErr := parseLeaseGeneration(current.Generation)
-		if parseErr != nil {
-			return ControlLease{}, fmt.Errorf("read persisted control lease generation: %w", parseErr)
-		}
-		if current.ExpiresAt.After(time.Now().UTC()) && storedGeneration > currentGeneration {
-			return ControlLease{}, fmt.Errorf("%w: lease %q is owned by generation %q", ErrLeaseHeld, identity.LeaseKey, current.Generation)
-		}
-		if current.ExpiresAt.After(time.Now().UTC()) && storedGeneration == currentGeneration && !sameLeaseIdentity(current.DurableLeaseIdentity, identity) {
+		if current.ExpiresAt.After(time.Now().UTC()) && !sameLeaseIdentity(current.DurableLeaseIdentity, identity) {
 			return ControlLease{}, fmt.Errorf("%w: lease %q is owned by another identity", ErrLeaseHeld, identity.LeaseKey)
 		}
 	}
@@ -216,22 +207,54 @@ func validateLeaseIdentity(identity DurableLeaseIdentity) error {
 			return fmt.Errorf("%w: %s is required and must not have surrounding whitespace", ErrInvalidLease, field.name)
 		}
 	}
-	if _, err := parseLeaseGeneration(identity.Generation); err != nil {
-		return err
-	}
 	return nil
-}
-
-func parseLeaseGeneration(value string) (int64, error) {
-	parsed, err := strconv.ParseUint(value, 10, 63)
-	if err != nil || parsed == 0 || parsed > math.MaxInt64 {
-		return 0, fmt.Errorf("%w: generation must be a positive signed integer, got %q", ErrInvalidLease, value)
-	}
-	return int64(parsed), nil
 }
 
 func sameLeaseIdentity(left, right DurableLeaseIdentity) bool {
 	return left == right
+}
+
+// lockLeaseBinding establishes the durable identity boundary before the lease
+// row is inspected or written. The row locks intentionally follow
+// session -> run -> lease, matching ApplyEvent and the suffix of transitionRun.
+func lockLeaseBinding(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity) error {
+	var sessionGeneration string
+	err := tx.QueryRow(ctx, `
+		SELECT generation
+		FROM execution_sessions
+		WHERE id = $1
+		FOR UPDATE
+	`, identity.SessionID).Scan(&sessionGeneration)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: session %q is not persisted", ErrLeaseLost, identity.SessionID)
+	}
+	if err != nil {
+		return fmt.Errorf("lock session for control lease: %w", err)
+	}
+	if sessionGeneration != identity.Generation {
+		return fmt.Errorf("%w: session %q belongs to generation %q", ErrStaleGeneration, identity.SessionID, sessionGeneration)
+	}
+
+	var runSessionID, runGeneration string
+	err = tx.QueryRow(ctx, `
+		SELECT session_id, generation
+		FROM execution_runs
+		WHERE id = $1
+		FOR UPDATE
+	`, identity.RunID).Scan(&runSessionID, &runGeneration)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: run %q is not persisted", ErrRunNotFound, identity.RunID)
+	}
+	if err != nil {
+		return fmt.Errorf("lock run for control lease: %w", err)
+	}
+	if runSessionID != identity.SessionID {
+		return fmt.Errorf("%w: run %q belongs to session %q", ErrInvalidLease, identity.RunID, runSessionID)
+	}
+	if runGeneration != identity.Generation {
+		return fmt.Errorf("%w: run %q belongs to generation %q", ErrStaleGeneration, identity.RunID, runGeneration)
+	}
+	return nil
 }
 
 func lockLease(ctx context.Context, tx pgx.Tx, key string) (ControlLease, bool, error) {
