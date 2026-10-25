@@ -529,7 +529,7 @@ func TestPersistentControlServiceEventCursorIsRunScoped(t *testing.T) {
 		t.Fatalf("append independent event: %v", err)
 	}
 
-	principal := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}}}
+	principal := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}, fixture.projectB: {}}}
 	limit := int64(1)
 	page, err := control.service.ListRunEvents(ctx, principal, first.ID, protocol.ListRunEventsQuery{Limit: &limit})
 	if err != nil {
@@ -549,7 +549,8 @@ func TestPersistentControlServiceEventCursorIsRunScoped(t *testing.T) {
 	if _, err := control.service.ListRunEvents(ctx, principal, second.ID, protocol.ListRunEventsQuery{AfterCursor: &otherCursor}); !errors.Is(err, protocol.ErrCursorExpired) {
 		t.Fatalf("cross-run cursor error = %v, want %v", err, protocol.ErrCursorExpired)
 	}
-	if _, err := control.service.ListRunEvents(ctx, principal, second.ID, protocol.ListRunEventsQuery{}); !errors.Is(err, auth.ErrForbidden) {
+	unauthorized := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}}}
+	if _, err := control.service.ListRunEvents(ctx, unauthorized, second.ID, protocol.ListRunEventsQuery{}); !errors.Is(err, auth.ErrForbidden) {
 		t.Fatalf("unauthorized independent event read = %v, want %v", err, auth.ErrForbidden)
 	}
 }
@@ -673,7 +674,6 @@ func newControlServiceFixture(t *testing.T, db *database.DB, fixture controlFixt
 	if err != nil {
 		t.Fatalf("create run control service: %v", err)
 	}
-	authorizer.allowedProject = fixture.projectA
 	return controlServiceFixture{service: service, transport: transport, authorizer: authorizer}
 }
 
@@ -683,13 +683,12 @@ type authorizationCall struct {
 }
 
 type recordingAuthorizer struct {
-	sessionStore   *sessions.Store
-	allowedProject string
-	mu             sync.Mutex
-	records        []authorizationCall
+	sessionStore *sessions.Store
+	mu           sync.Mutex
+	records      []authorizationCall
 }
 
-func (a *recordingAuthorizer) Authorize(ctx context.Context, _ auth.Principal, sessionID string, write bool) error {
+func (a *recordingAuthorizer) Authorize(ctx context.Context, principal auth.Principal, sessionID string, write bool) error {
 	a.mu.Lock()
 	a.records = append(a.records, authorizationCall{sessionID: sessionID, write: write})
 	a.mu.Unlock()
@@ -697,7 +696,7 @@ func (a *recordingAuthorizer) Authorize(ctx context.Context, _ auth.Principal, s
 	if err != nil {
 		return err
 	}
-	if session.ProjectID == nil || *session.ProjectID != a.allowedProject {
+	if session.ProjectID == nil || !principal.HasProjectScope(*session.ProjectID) {
 		return auth.ErrForbidden
 	}
 	return nil
