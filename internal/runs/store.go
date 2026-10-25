@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	ErrRunNotFound = errors.New("run is not present in persistence")
-	ErrRunConflict = errors.New("run identity conflicts with persisted state")
+	ErrRunNotFound         = errors.New("run is not present in persistence")
+	ErrRunConflict         = errors.New("run identity conflicts with persisted state")
+	ErrStaleRunObservation = errors.New("run observation is stale")
 )
 
 type StoreConfig struct {
@@ -395,6 +396,18 @@ func (s *Store) ReconcileRun(ctx context.Context, runID, generation string, obse
 	})
 }
 
+func (s *Store) ReconcileRunWithLease(ctx context.Context, runID, generation string, observation Observation, lease DurableLeaseIdentity) (Run, error) {
+	return s.transitionRun(ctx, runID, &lease, func(current Run) (Run, error) {
+		return current.Reconcile(generation, observation)
+	})
+}
+
+func (s *Store) applyObservedRun(ctx context.Context, expected Run, generation string, observation Observation, lease *DurableLeaseIdentity) (Run, error) {
+	return s.transitionRunExpected(ctx, expected.ID, lease, &expected, func(current Run) (Run, error) {
+		return applyRunObservation(current, generation, observation)
+	})
+}
+
 // ApplyEvent appends a host observation and applies the Run state transition in
 // the same PostgreSQL transaction. A failed transition rolls back the event,
 // allowing the Gateway's cursor to remain replayable after reconnect.
@@ -481,6 +494,10 @@ func (s *Store) ReadEvents(ctx context.Context, query protocol.EventQuery) (prot
 }
 
 func (s *Store) transitionRun(ctx context.Context, runID string, lease *DurableLeaseIdentity, apply func(Run) (Run, error)) (Run, error) {
+	return s.transitionRunExpected(ctx, runID, lease, nil, apply)
+}
+
+func (s *Store) transitionRunExpected(ctx context.Context, runID string, lease *DurableLeaseIdentity, expected *Run, apply func(Run) (Run, error)) (Run, error) {
 	if err := s.ready(ctx); err != nil {
 		return Run{}, err
 	}
@@ -500,9 +517,15 @@ func (s *Store) transitionRun(ctx context.Context, runID string, lease *DurableL
 		return Run{}, fmt.Errorf("lock run for transition: %w", err)
 	}
 	if lease != nil {
+		if err := leaseMatchesRun(current, *lease); err != nil {
+			return Run{}, err
+		}
 		if err := checkLeaseTx(ctx, tx, *lease); err != nil {
 			return Run{}, err
 		}
+	}
+	if expected != nil && *expected != current {
+		return Run{}, fmt.Errorf("%w: run %q changed after observation", ErrStaleRunObservation, current.ID)
 	}
 	updated, err := apply(current)
 	if err != nil {
@@ -531,6 +554,16 @@ func (s *Store) transitionRun(ctx context.Context, runID string, lease *DurableL
 		return Run{}, fmt.Errorf("commit run transition: %w", err)
 	}
 	return updated, nil
+}
+
+func leaseMatchesRun(current Run, lease DurableLeaseIdentity) error {
+	if err := validateLeaseIdentity(lease); err != nil {
+		return err
+	}
+	if lease.RunID != current.ID || lease.SessionID != current.SessionID || lease.Generation != current.Generation {
+		return fmt.Errorf("%w: lease identity does not belong to run %q", ErrLeaseLost, current.ID)
+	}
+	return nil
 }
 
 func checkLeaseTx(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity) error {
@@ -584,6 +617,64 @@ func applyRunEvent(current Run, generation string, event protocol.Event) (Run, e
 		}
 		current.LastCursor = cursor
 		return current, nil
+	}
+}
+
+func applyRunObservation(current Run, generation string, observation Observation) (Run, error) {
+	if err := current.CheckGeneration(generation); err != nil {
+		return Run{}, err
+	}
+	switch observation.Reconciliation {
+	case protocol.ReconciliationStateUnknown:
+		if terminalRunStatus(current.Status) || current.Status == protocol.RunStatusUnknown {
+			return current, nil
+		}
+		return current.MarkUnknown(generation, observation.Cursor, firstNonEmpty(observation.Reason, "execution outcome is unknown"))
+	case protocol.ReconciliationStateNotFound:
+		if terminalRunStatus(current.Status) {
+			return current, nil
+		}
+		if current.Status == protocol.RunStatusUnknown {
+			return current.Reconcile(generation, observation)
+		}
+		if current.Status == protocol.RunStatusPending {
+			return Run{}, fmt.Errorf("%w: not_found cannot terminate a pending run", ErrInvalidObservation)
+		}
+		return current.ObserveTerminal(generation, protocol.RunStatusFailed, observation.Cursor, firstNonEmpty(observation.Reason, "execution was not found during observation"))
+	case protocol.ReconciliationStateConfirmed:
+		switch current.Status {
+		case protocol.RunStatusPending:
+			if observation.Status != protocol.RunStatusRunning {
+				return Run{}, fmt.Errorf("%w: pending run requires a running observation, got %q", ErrInvalidObservation, observation.Status)
+			}
+			return current.Start(generation, observation.Cursor)
+		case protocol.RunStatusRunning:
+			switch observation.Status {
+			case protocol.RunStatusRunning:
+				return current, nil
+			case protocol.RunStatusWaitingApproval:
+				return current.WaitForApproval(generation, observation.Cursor)
+			case protocol.RunStatusCompleted, protocol.RunStatusFailed, protocol.RunStatusInterrupted:
+				return current.ObserveTerminal(generation, observation.Status, observation.Cursor, observation.Reason)
+			default:
+				return Run{}, fmt.Errorf("%w: running run cannot become %q", ErrInvalidObservation, observation.Status)
+			}
+		case protocol.RunStatusWaitingApproval:
+			switch observation.Status {
+			case protocol.RunStatusWaitingApproval:
+				return current, nil
+			case protocol.RunStatusCompleted, protocol.RunStatusFailed, protocol.RunStatusInterrupted:
+				return current.ObserveTerminal(generation, observation.Status, observation.Cursor, observation.Reason)
+			default:
+				return Run{}, fmt.Errorf("%w: waiting-approval run cannot become %q", ErrInvalidObservation, observation.Status)
+			}
+		case protocol.RunStatusUnknown:
+			return current.Reconcile(generation, observation)
+		default:
+			return current, nil
+		}
+	default:
+		return Run{}, fmt.Errorf("%w: unsupported reconciliation state %q", ErrInvalidObservation, observation.Reconciliation)
 	}
 }
 

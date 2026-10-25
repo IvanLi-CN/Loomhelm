@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/jackc/pgx/v5"
@@ -13,6 +12,11 @@ import (
 )
 
 const RunJobKind = "execution_run"
+
+var (
+	ErrObserverUnavailable = errors.New("run observation is unavailable")
+	ErrInvalidObservation  = errors.New("run observation is invalid")
+)
 
 type RunJobArgs struct {
 	RunID              string `json:"run_id"`
@@ -52,31 +56,36 @@ func (args RunJobArgs) LeaseIdentity(sessionID string) (DurableLeaseIdentity, er
 	return identity, nil
 }
 
-type ExecutionResult struct {
-	Status protocol.RunStatus
-	Cursor string
-	Reason string
+// RunObservation is the read-only result returned by an observer. The
+// identity fields are part of the result so a stale or misrouted observation
+// cannot be applied to a different persisted Run.
+type RunObservation struct {
+	SessionID      string
+	RunID          string
+	Generation     string
+	Reconciliation protocol.ReconciliationState
+	Status         protocol.RunStatus
+	Cursor         string
+	Reason         string
 }
 
-type Executor interface {
-	Execute(context.Context, Run) (ExecutionResult, error)
+type Observer interface {
+	Observe(context.Context, Run) (RunObservation, error)
 }
 
-type ExecutorFunc func(context.Context, Run) (ExecutionResult, error)
+type ObserverFunc func(context.Context, Run) (RunObservation, error)
 
-func (f ExecutorFunc) Execute(ctx context.Context, run Run) (ExecutionResult, error) {
+func (f ObserverFunc) Observe(ctx context.Context, run Run) (RunObservation, error) {
 	return f(ctx, run)
 }
 
-// RunWorker is a River adapter for a durable Run. The executor is intentionally
-// injected: the parent composition owns the Gateway/Connector choice while
-// this worker owns fencing, unknown-outcome handling and terminal persistence.
+// RunWorker is a River adapter for a durable Run. It observes external state
+// and reconciles the persisted Run; command dispatch remains Server-owned.
 type RunWorker struct {
 	river.WorkerDefaults[RunJobArgs]
-	Store         *Store
-	Executor      Executor
-	RequireLease  bool
-	UnknownCommit time.Duration
+	Store        *Store
+	Observer     Observer
+	RequireLease bool
 }
 
 func (w *RunWorker) Work(ctx context.Context, job *river.Job[RunJobArgs]) error {
@@ -89,8 +98,8 @@ func (w *RunWorker) Work(ctx context.Context, job *river.Job[RunJobArgs]) error 
 	if w == nil || w.Store == nil {
 		return river.JobCancel(errors.New("run worker store is not configured"))
 	}
-	if w.Executor == nil {
-		return river.JobCancel(errors.New("run worker executor is not configured"))
+	if w.Observer == nil {
+		return river.JobCancel(errors.New("run worker observer is not configured"))
 	}
 	if err := validateRunJobArgs(job.Args); err != nil {
 		return river.JobCancel(err)
@@ -105,6 +114,9 @@ func (w *RunWorker) Work(ctx context.Context, job *river.Job[RunJobArgs]) error 
 	if err := run.CheckGeneration(job.Args.Generation); err != nil {
 		return river.JobCancel(err)
 	}
+	if terminalRunStatus(run.Status) {
+		return nil
+	}
 	lease, err := job.Args.LeaseIdentity(run.SessionID)
 	if err != nil {
 		return river.JobCancel(err)
@@ -117,124 +129,70 @@ func (w *RunWorker) Work(ctx context.Context, job *river.Job[RunJobArgs]) error 
 			return river.JobCancel(err)
 		}
 	}
-
-	switch run.Status {
-	case protocol.RunStatusPending:
-		if lease.LeaseKey != "" {
-			run, err = w.Store.StartWithLease(ctx, run.ID, run.Generation, run.LastCursor, lease)
-		} else {
-			run, err = w.Store.Start(ctx, run.ID, run.Generation, run.LastCursor)
-		}
-		if err != nil {
-			if errors.Is(err, ErrLeaseLost) || errors.Is(err, ErrRunUnknown) {
-				return river.JobCancel(err)
-			}
-			return err
-		}
-	case protocol.RunStatusRunning:
-	case protocol.RunStatusWaitingApproval:
-		return river.JobCancel(fmt.Errorf("%w: run is waiting for approval", ErrRunTransition))
-	case protocol.RunStatusUnknown:
-		return river.JobCancel(protocol.ErrUnknownCommandResult)
-	default:
-		if terminalRunStatus(run.Status) {
-			return nil
-		}
-		return river.JobCancel(fmt.Errorf("%w: unsupported persisted run status %q", ErrRunTransition, run.Status))
-	}
-
 	if err := ctx.Err(); err != nil {
-		return w.unknownAfterInterruption(job.Args, run, lease, err)
+		return river.JobCancel(err)
 	}
+	observation, observeErr := w.Observer.Observe(ctx, run)
+	if observeErr != nil {
+		if errors.Is(observeErr, context.Canceled) || errors.Is(observeErr, context.DeadlineExceeded) || errors.Is(observeErr, ErrLeaseLost) {
+			return river.JobCancel(observeErr)
+		}
+		return fmt.Errorf("%w: %v", ErrObserverUnavailable, observeErr)
+	}
+	if err := validateRunObservation(run, observation); err != nil {
+		return err
+	}
+	var leasePtr *DurableLeaseIdentity
 	if lease.LeaseKey != "" {
-		if _, err := w.Store.CheckLease(ctx, lease); err != nil {
-			return river.JobCancel(err)
-		}
+		leasePtr = &lease
 	}
-	result, executeErr := w.Executor.Execute(ctx, run)
-	if executeErr != nil {
-		if errors.Is(executeErr, protocol.ErrUnknownCommandResult) || errors.Is(executeErr, context.Canceled) || errors.Is(executeErr, context.DeadlineExceeded) {
-			return w.unknownAfterInterruption(job.Args, run, lease, executeErr)
-		}
-		if errors.Is(executeErr, ErrLeaseLost) {
-			return river.JobCancel(executeErr)
-		}
-		result = ExecutionResult{Status: protocol.RunStatusFailed, Cursor: result.Cursor, Reason: executeErr.Error()}
-	}
-	if err := ctx.Err(); err != nil {
-		return w.unknownAfterInterruption(job.Args, run, lease, err)
-	}
-	if lease.LeaseKey != "" {
-		if _, err := w.Store.CheckLease(ctx, lease); err != nil {
-			return river.JobCancel(err)
-		}
-	}
-	return w.persistExecutionResult(ctx, run, lease, result)
-}
-
-func (w *RunWorker) persistExecutionResult(ctx context.Context, run Run, lease DurableLeaseIdentity, result ExecutionResult) error {
-	status := result.Status
-	if status == "" {
-		status = protocol.RunStatusCompleted
-	}
-	switch status {
-	case protocol.RunStatusWaitingApproval:
-		var err error
-		if lease.LeaseKey != "" {
-			_, err = w.Store.WaitForApprovalWithLease(ctx, run.ID, run.Generation, result.Cursor, lease)
-		} else {
-			_, err = w.Store.WaitForApproval(ctx, run.ID, run.Generation, result.Cursor)
-		}
-		if err != nil {
-			if errors.Is(err, ErrLeaseLost) {
-				return river.JobCancel(err)
-			}
-			return err
-		}
-		return nil
-	case protocol.RunStatusCompleted, protocol.RunStatusFailed, protocol.RunStatusInterrupted:
-		var err error
-		if lease.LeaseKey != "" {
-			_, err = w.Store.ObserveTerminalWithLease(ctx, run.ID, run.Generation, status, result.Cursor, result.Reason, lease)
-		} else {
-			_, err = w.Store.ObserveTerminal(ctx, run.ID, run.Generation, status, result.Cursor, result.Reason)
-		}
-		if err != nil {
-			if errors.Is(err, ErrLeaseLost) {
-				return river.JobCancel(err)
-			}
-			return err
-		}
-		return nil
-	default:
-		return river.JobCancel(fmt.Errorf("%w: executor returned non-terminal status %q", ErrRunTransition, status))
-	}
-}
-
-func (w *RunWorker) unknownAfterInterruption(args RunJobArgs, run Run, lease DurableLeaseIdentity, cause error) error {
-	commitTimeout := w.UnknownCommit
-	if commitTimeout <= 0 {
-		commitTimeout = 2 * time.Second
-	}
-	commitCtx, cancel := context.WithTimeout(context.Background(), commitTimeout)
-	defer cancel()
-	reason := "execution outcome is unknown"
-	if cause != nil {
-		reason = cause.Error()
-	}
-	var err error
-	if lease.LeaseKey != "" {
-		_, err = w.Store.MarkRunUnknownWithLease(commitCtx, run.ID, args.Generation, run.LastCursor, reason, lease)
-	} else {
-		_, err = w.Store.MarkRunUnknown(commitCtx, run.ID, args.Generation, run.LastCursor, reason)
-	}
+	_, err = w.Store.applyObservedRun(ctx, run, job.Args.Generation, Observation{
+		Reconciliation: observation.Reconciliation,
+		Status:         observation.Status,
+		Cursor:         observation.Cursor,
+		Reason:         observation.Reason,
+	}, leasePtr)
 	if err != nil {
-		if errors.Is(err, ErrLeaseLost) {
+		if errors.Is(err, ErrLeaseLost) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return river.JobCancel(err)
 		}
-		return errors.Join(cause, fmt.Errorf("persist unknown run outcome: %w", err))
+		return err
 	}
-	return river.JobCancel(fmt.Errorf("%w: %s", protocol.ErrUnknownCommandResult, reason))
+	return nil
+}
+
+func validateRunObservation(run Run, observation RunObservation) error {
+	if observation.SessionID == "" && observation.RunID == "" && observation.Generation == "" && observation.Reconciliation == "" && observation.Status == "" && observation.Cursor == "" && observation.Reason == "" {
+		return ErrObserverUnavailable
+	}
+	if observation.SessionID == "" || observation.SessionID != strings.TrimSpace(observation.SessionID) || observation.SessionID != run.SessionID {
+		return fmt.Errorf("%w: observed session identity does not match run %q", ErrInvalidObservation, run.ID)
+	}
+	if observation.RunID == "" || observation.RunID != strings.TrimSpace(observation.RunID) || observation.RunID != run.ID {
+		return fmt.Errorf("%w: observed run identity does not match run %q", ErrInvalidObservation, run.ID)
+	}
+	if observation.Generation == "" || observation.Generation != strings.TrimSpace(observation.Generation) || observation.Generation != run.Generation {
+		return fmt.Errorf("%w: observed generation does not match run %q", ErrInvalidObservation, run.ID)
+	}
+	if observation.Cursor != strings.TrimSpace(observation.Cursor) {
+		return fmt.Errorf("%w: observation cursor must not have surrounding whitespace", ErrInvalidObservation)
+	}
+	switch observation.Reconciliation {
+	case protocol.ReconciliationStateConfirmed:
+		switch observation.Status {
+		case protocol.RunStatusRunning, protocol.RunStatusWaitingApproval, protocol.RunStatusCompleted, protocol.RunStatusFailed, protocol.RunStatusInterrupted:
+			return nil
+		default:
+			return fmt.Errorf("%w: confirmed observation has invalid status %q", ErrInvalidObservation, observation.Status)
+		}
+	case protocol.ReconciliationStateNotFound, protocol.ReconciliationStateUnknown:
+		if observation.Status != "" {
+			return fmt.Errorf("%w: %s observation must not include status %q", ErrInvalidObservation, observation.Reconciliation, observation.Status)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported reconciliation state %q", ErrInvalidObservation, observation.Reconciliation)
+	}
 }
 
 func validateRunJobArgs(args RunJobArgs) error {
