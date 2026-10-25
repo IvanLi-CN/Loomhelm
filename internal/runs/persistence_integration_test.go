@@ -263,6 +263,218 @@ func TestPersistentExecutionDomainRoundTripAndFencing(t *testing.T) {
 	}
 }
 
+func TestPersistentApprovalRequestedEventAtomicity(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	sessionStore := sessions.NewStore(db.Pool())
+	runStore := NewStore(db.Pool())
+	approvalStore := approvals.NewStore(db.Pool())
+	if _, err := sessionStore.Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        "1",
+	}); err != nil {
+		t.Fatalf("create approval event session: %v", err)
+	}
+	run, err := runStore.CreateRun(ctx, NewRunInput{
+		ID:         ids.run,
+		SessionID:  ids.session,
+		CommandID:  ids.command,
+		Generation: "1",
+	})
+	if err != nil {
+		t.Fatalf("create approval event run: %v", err)
+	}
+	if _, err := runStore.Start(ctx, run.ID, "1", "cursor-started"); err != nil {
+		t.Fatalf("start approval event run: %v", err)
+	}
+
+	runID := run.ID
+	event := protocol.Event{
+		Cursor:    ids.approval + "-cursor",
+		EventID:   ids.approval + "-event",
+		Payload:   json.RawMessage(`{"approval":{"kind":"command"},"unknown":{"keep":true}}`),
+		RunID:     &runID,
+		SessionID: ids.session,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeApprovalRequested,
+	}
+	request := approvals.CreateRequest{
+		NewInput: approvals.NewInput{
+			ID:          ids.approval,
+			RunID:       run.ID,
+			SessionID:   ids.session,
+			Generation:  "1",
+			Revision:    1,
+			Kind:        "command",
+			Summary:     "write approval",
+			RequestedAt: "2026-10-25T00:00:00Z",
+		},
+		Context:          json.RawMessage(`{"scope":"write","opaque":{"keep":true}}`),
+		RequestedEventID: event.EventID,
+	}
+	persistedEvent, approval, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", event, request)
+	if err != nil {
+		t.Fatalf("apply approval requested event: %v", err)
+	}
+	if persistedEvent.EventID != event.EventID || string(persistedEvent.Payload) != string(event.Payload) {
+		t.Fatalf("persisted approval event = %+v", persistedEvent)
+	}
+	if approval.ID != request.ID || approval.RequestedEventID != event.EventID {
+		t.Fatalf("created approval = %+v", approval)
+	}
+	storedRun, err := runStore.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("read waiting approval run: %v", err)
+	}
+	if storedRun.Status != protocol.RunStatusWaitingApproval || storedRun.LastCursor != event.Cursor {
+		t.Fatalf("waiting approval run = %+v", storedRun)
+	}
+	page, err := runStore.ReadEvents(ctx, protocol.EventQuery{SessionID: ids.session, RunID: run.ID, Limit: 10})
+	if err != nil {
+		t.Fatalf("read approval events: %v", err)
+	}
+	if len(page.Events) != 1 || string(page.Events[0].Payload) != string(event.Payload) {
+		t.Fatalf("approval event page = %+v", page)
+	}
+
+	duplicateEvent, duplicateApproval, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", event, request)
+	if err != nil {
+		t.Fatalf("duplicate approval requested event: %v", err)
+	}
+	if duplicateEvent.EventID != event.EventID || duplicateApproval.ID != approval.ID {
+		t.Fatalf("duplicate approval event = %+v, approval = %+v", duplicateEvent, duplicateApproval)
+	}
+	pending, err := approvalStore.Pending(ctx, ids.session, run.ID, "1")
+	if err != nil {
+		t.Fatalf("list pending approvals after duplicate: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != approval.ID {
+		t.Fatalf("pending approvals after duplicate = %+v", pending)
+	}
+	differentApproval := request
+	differentApproval.ID = ids.approval + "-duplicate-id"
+	if _, _, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", event, differentApproval); !errors.Is(err, approvals.ErrApprovalContext) {
+		t.Fatalf("duplicate event with different approval identity = %v, want %v", err, approvals.ErrApprovalContext)
+	}
+	pending, err = approvalStore.Pending(ctx, ids.session, run.ID, "1")
+	if err != nil {
+		t.Fatalf("list pending approvals after conflicting duplicate: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != approval.ID {
+		t.Fatalf("pending approvals after conflicting duplicate = %+v", pending)
+	}
+
+	rollbackRunID := ids.run + "-rollback"
+	rollbackRun, err := runStore.CreateRun(ctx, NewRunInput{
+		ID:         rollbackRunID,
+		SessionID:  ids.session,
+		CommandID:  ids.command + "-rollback",
+		Generation: "1",
+	})
+	if err != nil {
+		t.Fatalf("create rollback run: %v", err)
+	}
+	if _, err := runStore.Start(ctx, rollbackRun.ID, "1", "cursor-rollback-started"); err != nil {
+		t.Fatalf("start rollback run: %v", err)
+	}
+	rollbackRunIDCopy := rollbackRun.ID
+	rollbackEvent := event
+	rollbackEvent.EventID = ids.approval + "-rollback-event"
+	rollbackEvent.Cursor = ids.approval + "-rollback-cursor"
+	rollbackEvent.RunID = &rollbackRunIDCopy
+	rollbackRequest := request
+	rollbackRequest.NewInput.RunID = rollbackRun.ID
+	rollbackRequest.RequestedEventID = rollbackEvent.EventID
+	if _, _, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", rollbackEvent, rollbackRequest); !errors.Is(err, approvals.ErrApprovalContext) {
+		t.Fatalf("approval persistence conflict = %v, want %v", err, approvals.ErrApprovalContext)
+	}
+	rollbackStored, err := runStore.GetRun(ctx, rollbackRun.ID)
+	if err != nil {
+		t.Fatalf("read rollback run: %v", err)
+	}
+	if rollbackStored.Status != protocol.RunStatusRunning {
+		t.Fatalf("rollback run after rejected approval = %+v", rollbackStored)
+	}
+	rollbackPage, err := runStore.ReadEvents(ctx, protocol.EventQuery{SessionID: ids.session, RunID: rollbackRun.ID, Limit: 10})
+	if err != nil {
+		t.Fatalf("read rolled back approval events: %v", err)
+	}
+	if len(rollbackPage.Events) != 0 {
+		t.Fatalf("rolled back approval events = %+v", rollbackPage.Events)
+	}
+
+	staleEvent := event
+	staleEvent.EventID = ids.approval + "-stale-event"
+	staleEvent.Cursor = ids.approval + "-stale-cursor"
+	staleRequest := request
+	staleRequest.NewInput.ID = ids.approval + "-stale"
+	staleRequest.NewInput.Generation = "stale"
+	staleRequest.RequestedEventID = staleEvent.EventID
+	if _, _, err := runStore.ApplyApprovalRequestedEvent(ctx, "stale", staleEvent, staleRequest); !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("stale approval event generation = %v, want %v", err, ErrStaleGeneration)
+	}
+	stalePage, err := runStore.ReadEvents(ctx, protocol.EventQuery{SessionID: ids.session, RunID: run.ID, Limit: 10})
+	if err != nil {
+		t.Fatalf("read stale approval events: %v", err)
+	}
+	if len(stalePage.Events) != 1 {
+		t.Fatalf("stale approval events = %+v", stalePage.Events)
+	}
+
+	identityEvent := event
+	identityEvent.EventID = ids.approval + "-identity-event"
+	identityEvent.Cursor = ids.approval + "-identity-cursor"
+	identityRequest := request
+	identityRequest.NewInput.ID = ids.approval + "-identity"
+	identityRequest.NewInput.RunID = rollbackRun.ID
+	identityRequest.RequestedEventID = identityEvent.EventID
+	if _, _, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", identityEvent, identityRequest); !errors.Is(err, approvals.ErrApprovalContext) {
+		t.Fatalf("approval identity conflict = %v, want %v", err, approvals.ErrApprovalContext)
+	}
+
+	resolveStart := make(chan struct{})
+	resolveErrors := make(chan error, 2)
+	go func() {
+		<-resolveStart
+		_, _, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", event, request)
+		resolveErrors <- err
+	}()
+	go func() {
+		<-resolveStart
+		_, err := approvalStore.Resolve(ctx, approvals.ResolveRequest{
+			ApprovalID: approval.ID,
+			RunID:      run.ID,
+			SessionID:  ids.session,
+			Generation: "1",
+			Request: protocol.ResolveApprovalRequest{
+				CommandID: ids.approvalCommand,
+				Decision:  protocol.ApprovalDecisionApprove,
+				Revision:  1,
+			},
+		})
+		resolveErrors <- err
+	}()
+	close(resolveStart)
+	for range 2 {
+		if err := <-resolveErrors; err != nil {
+			t.Fatalf("concurrent approval event and resolve: %v", err)
+		}
+	}
+	resolved, err := approvalStore.Get(ctx, approval.ID)
+	if err != nil {
+		t.Fatalf("read concurrently resolved approval: %v", err)
+	}
+	if resolved.Status != protocol.ApprovalStatusApproved {
+		t.Fatalf("concurrently resolved approval = %+v", resolved)
+	}
+}
+
 func TestPersistentOpaqueLeaseBindsSessionAndRun(t *testing.T) {
 	db := openExecutionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

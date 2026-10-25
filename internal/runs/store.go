@@ -19,6 +19,7 @@ var (
 	ErrRunNotFound         = errors.New("run is not present in persistence")
 	ErrRunConflict         = errors.New("run identity conflicts with persisted state")
 	ErrStaleRunObservation = errors.New("run observation is stale")
+	ErrApprovalEvent       = errors.New("approval event is invalid")
 )
 
 type StoreConfig struct {
@@ -29,9 +30,10 @@ type StoreConfig struct {
 // before a caller crosses a Gateway or Connector side-effect boundary; event
 // application can then update the Run and task protection in the same commit.
 type Store struct {
-	pool   *pgxpool.Pool
-	now    func() time.Time
-	events *events.Store
+	pool          *pgxpool.Pool
+	now           func() time.Time
+	events        *events.Store
+	approvalStore *approvals.Store
 }
 
 // ApprovalTransactionResolver applies an approval CAS to a transaction owned
@@ -46,7 +48,7 @@ func NewStore(pool *pgxpool.Pool, configs ...StoreConfig) *Store {
 	if len(configs) > 0 && configs[0].Now != nil {
 		now = configs[0].Now
 	}
-	return &Store{pool: pool, now: now, events: events.NewStore(pool, events.StoreConfig{Now: now})}
+	return &Store{pool: pool, now: now, events: events.NewStore(pool, events.StoreConfig{Now: now}), approvalStore: approvals.NewStore(pool, approvals.StoreConfig{Now: now})}
 }
 
 func (s *Store) Accept(ctx context.Context, intent CommandIntent) (AcceptResult, error) {
@@ -586,6 +588,117 @@ func (s *Store) ApplyEvent(ctx context.Context, generation string, input protoco
 		return protocol.Event{}, fmt.Errorf("commit execution event application: %w", err)
 	}
 	return appended.Event, nil
+}
+
+// ApplyApprovalRequestedEvent appends an approval.requested event, moves the
+// Run to waiting_approval, and persists its normalized Approval in one
+// transaction. The payload remains opaque; callers provide the normalized
+// CreateRequest after interpreting the external event.
+//
+// Lock order is execution_sessions -> execution_runs -> execution_approvals.
+func (s *Store) ApplyApprovalRequestedEvent(ctx context.Context, generation string, input protocol.Event, request approvals.CreateRequest) (protocol.Event, approvals.Approval, error) {
+	if err := s.ready(ctx); err != nil {
+		return protocol.Event{}, approvals.Approval{}, err
+	}
+	if err := validateApprovalRequestedEvent(generation, input, request); err != nil {
+		return protocol.Event{}, approvals.Approval{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return protocol.Event{}, approvals.Approval{}, fmt.Errorf("begin approval event application: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var sessionGeneration string
+	if err := tx.QueryRow(ctx, `
+		SELECT generation
+		FROM execution_sessions
+		WHERE id = $1
+		FOR UPDATE
+	`, input.SessionID).Scan(&sessionGeneration); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.Event{}, approvals.Approval{}, events.ErrEventSessionNotFound
+	} else if err != nil {
+		return protocol.Event{}, approvals.Approval{}, fmt.Errorf("lock approval event session generation: %w", err)
+	}
+	if sessionGeneration != generation {
+		return protocol.Event{}, approvals.Approval{}, fmt.Errorf("%w: event belongs to generation %q", ErrStaleGeneration, sessionGeneration)
+	}
+	appended, err := events.AppendTx(ctx, tx, input, s.now)
+	if err != nil {
+		return protocol.Event{}, approvals.Approval{}, err
+	}
+	if appended.Event.EventID != request.RequestedEventID {
+		return protocol.Event{}, approvals.Approval{}, fmt.Errorf("%w: requested event id %q does not match event %q", approvals.ErrApprovalContext, request.RequestedEventID, appended.Event.EventID)
+	}
+	runID := *input.RunID
+	current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, runID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return protocol.Event{}, approvals.Approval{}, ErrRunNotFound
+	}
+	if err != nil {
+		return protocol.Event{}, approvals.Approval{}, fmt.Errorf("lock run for approval event application: %w", err)
+	}
+	if current.SessionID != input.SessionID {
+		return protocol.Event{}, approvals.Approval{}, fmt.Errorf("%w: run %q belongs to session %q", ErrRunConflict, current.ID, current.SessionID)
+	}
+	if err := current.CheckGeneration(generation); err != nil {
+		return protocol.Event{}, approvals.Approval{}, err
+	}
+	if !appended.Deduplicated {
+		updated, applyErr := applyRunEvent(current, generation, appended.Event)
+		if applyErr != nil {
+			return protocol.Event{}, approvals.Approval{}, applyErr
+		}
+		if updated != current {
+			if updated.UpdatedAt == "" {
+				updated.UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
+			}
+			if updated.Status == protocol.RunStatusRunning && current.StartedAt == "" {
+				updated.StartedAt = updated.UpdatedAt
+			}
+			if terminalRunStatus(updated.Status) && current.FinishedAt == "" {
+				updated.FinishedAt = updated.UpdatedAt
+			}
+			if err := updateRunTx(ctx, tx, updated); err != nil {
+				return protocol.Event{}, approvals.Approval{}, err
+			}
+			if err := refreshTaskProtectionTx(ctx, tx, updated.SessionID); err != nil {
+				return protocol.Event{}, approvals.Approval{}, err
+			}
+		}
+	}
+	created, err := s.approvalStore.CreateTx(ctx, tx, request)
+	if err != nil {
+		return protocol.Event{}, approvals.Approval{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return protocol.Event{}, approvals.Approval{}, fmt.Errorf("commit approval event application: %w", err)
+	}
+	return appended.Event, created, nil
+}
+
+func validateApprovalRequestedEvent(generation string, input protocol.Event, request approvals.CreateRequest) error {
+	if strings.TrimSpace(generation) == "" {
+		return fmt.Errorf("%w: event generation is required", ErrStaleGeneration)
+	}
+	if input.Type != protocol.EventTypeApprovalRequested {
+		return fmt.Errorf("%w: got event type %q", ErrApprovalEvent, input.Type)
+	}
+	if input.RunID == nil || strings.TrimSpace(*input.RunID) == "" {
+		return fmt.Errorf("%w: run id is required", ErrApprovalEvent)
+	}
+	if strings.TrimSpace(request.RequestedEventID) == "" {
+		return fmt.Errorf("%w: requested event id is required", approvals.ErrInvalidApproval)
+	}
+	if request.NewInput.SessionID != input.SessionID || request.NewInput.RunID != *input.RunID {
+		return fmt.Errorf("%w: approval and event identities differ", approvals.ErrApprovalContext)
+	}
+	if request.NewInput.Generation != generation {
+		return fmt.Errorf("%w: got %q, want %q", approvals.ErrApprovalGeneration, request.NewInput.Generation, generation)
+	}
+	if input.EventID != "" && request.RequestedEventID != input.EventID {
+		return fmt.Errorf("%w: requested event id %q does not match event %q", approvals.ErrApprovalContext, request.RequestedEventID, input.EventID)
+	}
+	return nil
 }
 
 func (s *Store) ReadEvents(ctx context.Context, query protocol.EventQuery) (protocol.EventPage, error) {

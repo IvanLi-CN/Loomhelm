@@ -44,6 +44,32 @@ func (s *Store) Create(ctx context.Context, request CreateRequest) (Approval, er
 	if err := s.ready(ctx); err != nil {
 		return Approval{}, err
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Approval{}, fmt.Errorf("begin approval creation: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	created, err := s.CreateTx(ctx, tx, request)
+	if err != nil {
+		return Approval{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Approval{}, fmt.Errorf("commit approval creation: %w", err)
+	}
+	return created, nil
+}
+
+// CreateTx persists or idempotently reads an approval in a caller-owned
+// transaction. A non-empty RequestedEventID is also an idempotency key for
+// the approval.requested event, so retries cannot create a second approval
+// with a different approval ID.
+func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, request CreateRequest) (Approval, error) {
+	if err := s.ready(ctx); err != nil {
+		return Approval{}, err
+	}
+	if tx == nil {
+		return Approval{}, errors.New("approval transaction is required")
+	}
 	if request.RequestedAt == "" {
 		request.RequestedAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
@@ -58,7 +84,19 @@ func (s *Store) Create(ctx context.Context, request CreateRequest) (Approval, er
 	if !json.Valid(contextPayload) {
 		return Approval{}, fmt.Errorf("%w: context must be valid JSON", ErrInvalidApproval)
 	}
-	if _, err := s.pool.Exec(ctx, `
+	candidate.Context = append(json.RawMessage(nil), contextPayload...)
+	candidate.RequestedEventID = request.RequestedEventID
+	if strings.TrimSpace(request.RequestedEventID) != "" {
+		if existing, found, err := findByRequestedEventIDTx(ctx, tx, request.RequestedEventID); err != nil {
+			return Approval{}, err
+		} else if found {
+			if !sameCreateIdentity(candidate, existing) {
+				return Approval{}, fmt.Errorf("%w: approval requested event %q", ErrApprovalContext, request.RequestedEventID)
+			}
+			return existing, nil
+		}
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO execution_approvals (
 			id, session_id, run_id, generation, kind, requested_at, revision,
 			status, summary, context, requested_event_id
@@ -68,11 +106,14 @@ func (s *Store) Create(ctx context.Context, request CreateRequest) (Approval, er
 	`, candidate.ID, candidate.SessionID, candidate.RunID, candidate.Generation, candidate.Kind, candidate.RequestedAt, candidate.Revision, candidate.Status, candidate.Summary, []byte(contextPayload), request.RequestedEventID); err != nil {
 		return Approval{}, fmt.Errorf("persist approval: %w", err)
 	}
-	stored, err := s.Get(ctx, candidate.ID)
+	stored, err := scanApproval(tx.QueryRow(ctx, approvalQuery+` WHERE approval.id = $1 FOR UPDATE`, candidate.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Approval{}, ErrApprovalNotFound
+	}
 	if err != nil {
 		return Approval{}, err
 	}
-	if stored.SessionID != candidate.SessionID || stored.RunID != candidate.RunID || stored.Generation != candidate.Generation || stored.Revision != candidate.Revision || stored.Kind != candidate.Kind {
+	if !sameCreateIdentity(candidate, stored) {
 		return Approval{}, fmt.Errorf("%w: approval %q", ErrApprovalContext, candidate.ID)
 	}
 	return stored, nil
@@ -251,6 +292,23 @@ const approvalQuery = `
 	       approval.requested_event_id, approval.resolved_at
 	FROM execution_approvals AS approval
 `
+
+func findByRequestedEventIDTx(ctx context.Context, tx pgx.Tx, requestedEventID string) (Approval, bool, error) {
+	approval, err := scanApproval(tx.QueryRow(ctx, approvalQuery+` WHERE approval.requested_event_id = $1 LIMIT 1 FOR UPDATE`, requestedEventID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Approval{}, false, nil
+	} else if err != nil {
+		return Approval{}, false, fmt.Errorf("read approval requested event: %w", err)
+	}
+	return approval, true, nil
+}
+
+func sameCreateIdentity(candidate, stored Approval) bool {
+	if candidate.ID != stored.ID || candidate.SessionID != stored.SessionID || candidate.RunID != stored.RunID || candidate.Generation != stored.Generation || candidate.Revision != stored.Revision || candidate.Kind != stored.Kind {
+		return false
+	}
+	return candidate.RequestedEventID == "" || candidate.RequestedEventID == stored.RequestedEventID
+}
 
 func scanApproval(row interface{ Scan(...any) error }) (Approval, error) {
 	var approval Approval
