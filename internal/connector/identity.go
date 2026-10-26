@@ -37,6 +37,7 @@ type SessionAlias struct {
 	Generation        string `json:"generation"`
 	CommandID         string `json:"command_id"`
 	UpdatedAt         string `json:"updated_at"`
+	Revision          int64  `json:"revision"`
 }
 
 // RunBinding is the private, durable relationship between a platform run and
@@ -79,6 +80,12 @@ func normalizeSessionAlias(alias SessionAlias) (SessionAlias, error) {
 	alias.CommandID = normalizeIdentityPart(alias.CommandID)
 	if err := requireIdentityParts("session alias", alias.PlatformSessionID, alias.AdapterSessionID, alias.ExternalThreadRef, alias.Generation, alias.CommandID); err != nil {
 		return SessionAlias{}, err
+	}
+	if alias.Revision < 0 {
+		return SessionAlias{}, errors.New("session alias revision must not be negative")
+	}
+	if alias.Revision == 0 {
+		alias.Revision = 1
 	}
 	if alias.UpdatedAt == "" {
 		alias.UpdatedAt = now()
@@ -185,11 +192,23 @@ func runBindingNativeOperationKey(binding RunBinding) string {
 }
 
 func sameSessionAlias(left, right SessionAlias) bool {
+	return sameSessionAliasIdentity(left, right) &&
+		sessionAliasRevision(left) == sessionAliasRevision(right)
+}
+
+func sameSessionAliasIdentity(left, right SessionAlias) bool {
 	return left.PlatformSessionID == right.PlatformSessionID &&
 		left.AdapterSessionID == right.AdapterSessionID &&
 		left.ExternalThreadRef == right.ExternalThreadRef &&
 		left.Generation == right.Generation &&
 		left.CommandID == right.CommandID
+}
+
+func sessionAliasRevision(alias SessionAlias) int64 {
+	if alias.Revision == 0 {
+		return 1
+	}
+	return alias.Revision
 }
 
 func sameRunBindingBase(left, right RunBinding) bool {
@@ -271,6 +290,52 @@ func (j *Journal) recordSessionAliasLocked(alias SessionAlias) error {
 		}
 		return ErrIdentityConflict
 	}
+	if alias.Revision != 1 {
+		return fmt.Errorf("%w: initial session alias revision must be 1", ErrIdentityConflict)
+	}
+	if existingPlatform, ok := j.sessionAliasByAdapter[sessionAliasKey(alias)]; ok && existingPlatform != alias.PlatformSessionID {
+		return ErrIdentityConflict
+	}
+	if err := j.appendLocked(journalRecord{
+		FormatVersion: journalFormatVersion,
+		Type:          "session_alias",
+		At:            alias.UpdatedAt,
+		SessionAlias:  &alias,
+	}); err != nil {
+		return err
+	}
+	j.indexSessionAliasLocked(alias)
+	return nil
+}
+
+// RotateSessionAlias records a confirmed cold-recovery generation for an
+// existing platform session. Historical aliases remain indexed so old runs
+// and observations continue to resolve against their original generation.
+func (j *Journal) RotateSessionAlias(alias SessionAlias) error {
+	alias, err := normalizeSessionAlias(alias)
+	if err != nil {
+		return err
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	existing, ok := j.sessionAliases[alias.PlatformSessionID]
+	if !ok {
+		return fmt.Errorf("%w: session alias %q", ErrIdentityNotFound, alias.PlatformSessionID)
+	}
+	if alias.AdapterSessionID != existing.AdapterSessionID || alias.ExternalThreadRef != existing.ExternalThreadRef || alias.CommandID != existing.CommandID {
+		return ErrIdentityConflict
+	}
+	if alias.Generation == existing.Generation {
+		if sameSessionAliasIdentity(existing, alias) {
+			return nil
+		}
+		return ErrIdentityConflict
+	}
+	if alias.Revision == 1 {
+		alias.Revision = existing.Revision + 1
+	} else if alias.Revision != existing.Revision+1 {
+		return fmt.Errorf("%w: expected session alias revision %d, got %d", ErrIdentityConflict, existing.Revision+1, alias.Revision)
+	}
 	if existingPlatform, ok := j.sessionAliasByAdapter[sessionAliasKey(alias)]; ok && existingPlatform != alias.PlatformSessionID {
 		return ErrIdentityConflict
 	}
@@ -289,14 +354,22 @@ func (j *Journal) recordSessionAliasLocked(alias SessionAlias) error {
 func (j *Journal) indexSessionAliasLocked(alias SessionAlias) {
 	j.sessionAliases[alias.PlatformSessionID] = alias
 	j.sessionAliasByAdapter[sessionAliasKey(alias)] = alias.PlatformSessionID
+	j.sessionAliasByTuple[sessionAliasKey(alias)] = alias
 }
 
 func (j *Journal) applySessionAliasLoadedLocked(alias SessionAlias) error {
-	if existing, ok := j.sessionAliases[alias.PlatformSessionID]; ok {
+	if existing, ok := j.sessionAliasByTuple[sessionAliasKey(alias)]; ok {
 		if sameSessionAlias(existing, alias) {
 			return nil
 		}
-		return fmt.Errorf("%w: conflicting session alias %q", ErrJournalCorrupt, alias.PlatformSessionID)
+		return fmt.Errorf("%w: conflicting session alias tuple %q", ErrJournalCorrupt, sessionAliasKey(alias))
+	}
+	if current, ok := j.sessionAliases[alias.PlatformSessionID]; ok {
+		if alias.Revision != current.Revision+1 || alias.AdapterSessionID != current.AdapterSessionID || alias.ExternalThreadRef != current.ExternalThreadRef || alias.CommandID != current.CommandID || alias.Generation == current.Generation {
+			return fmt.Errorf("%w: invalid session alias revision %d for %q", ErrJournalCorrupt, alias.Revision, alias.PlatformSessionID)
+		}
+	} else if alias.Revision != 1 {
+		return fmt.Errorf("%w: initial session alias revision must be 1", ErrJournalCorrupt)
 	}
 	if existingPlatform, ok := j.sessionAliasByAdapter[sessionAliasKey(alias)]; ok && existingPlatform != alias.PlatformSessionID {
 		return fmt.Errorf("%w: adapter session identity maps to multiple platform sessions", ErrJournalCorrupt)
@@ -336,8 +409,32 @@ func (j *Journal) SessionAliasForAdapter(adapterSessionID, externalThreadRef, ge
 	if !ok {
 		return SessionAlias{}, false
 	}
-	alias, ok := j.sessionAliases[platformSessionID]
+	alias, ok := j.sessionAliasByTuple[key]
+	if !ok || alias.PlatformSessionID != platformSessionID {
+		return SessionAlias{}, false
+	}
 	return cloneSessionAlias(alias), ok
+}
+
+// SessionAliasForAdapterSession resolves the current platform mapping for a
+// stable adapter session and thread when a recovery path no longer has the old
+// generation available as an input.
+func (j *Journal) SessionAliasForAdapterSession(adapterSessionID, externalThreadRef string) (SessionAlias, bool) {
+	adapterSessionID = normalizeIdentityPart(adapterSessionID)
+	externalThreadRef = normalizeIdentityPart(externalThreadRef)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var found SessionAlias
+	for _, alias := range j.sessionAliases {
+		if alias.AdapterSessionID != adapterSessionID || alias.ExternalThreadRef != externalThreadRef {
+			continue
+		}
+		if found.PlatformSessionID != "" && found.PlatformSessionID != alias.PlatformSessionID {
+			return SessionAlias{}, false
+		}
+		found = alias
+	}
+	return cloneSessionAlias(found), found.PlatformSessionID != ""
 }
 
 // LegacySessionFacts exposes only the facts recoverable from old session
@@ -369,11 +466,11 @@ func (j *Journal) RecordRunBinding(binding RunBinding) error {
 }
 
 func (j *Journal) recordRunBindingLocked(binding RunBinding) error {
-	alias, ok := j.sessionAliases[binding.PlatformSessionID]
+	alias, ok := j.sessionAliasByTuple[sessionAliasKeyFromRunBinding(binding)]
 	if !ok {
 		return fmt.Errorf("%w: session alias %q", ErrIdentityNotFound, binding.PlatformSessionID)
 	}
-	if alias.AdapterSessionID != binding.AdapterSessionID || alias.ExternalThreadRef != binding.ExternalThreadRef || alias.Generation != binding.Generation {
+	if alias.PlatformSessionID != binding.PlatformSessionID {
 		return ErrIdentityConflict
 	}
 	platformKey := runBindingPlatformKey(binding)
@@ -445,11 +542,11 @@ func (j *Journal) indexRunBindingLocked(binding RunBinding) {
 }
 
 func (j *Journal) applyRunBindingLoadedLocked(binding RunBinding) error {
-	alias, ok := j.sessionAliases[binding.PlatformSessionID]
+	alias, ok := j.sessionAliasByTuple[sessionAliasKeyFromRunBinding(binding)]
 	if !ok {
 		return fmt.Errorf("%w: run binding %q has no session alias", ErrJournalCorrupt, runBindingPlatformKey(binding))
 	}
-	if alias.AdapterSessionID != binding.AdapterSessionID || alias.ExternalThreadRef != binding.ExternalThreadRef || alias.Generation != binding.Generation {
+	if alias.PlatformSessionID != binding.PlatformSessionID {
 		return fmt.Errorf("%w: run binding %q disagrees with session alias", ErrJournalCorrupt, runBindingPlatformKey(binding))
 	}
 	platformKey := runBindingPlatformKey(binding)
@@ -559,21 +656,45 @@ func (j *Journal) RunBindings() []RunBinding {
 // SessionAlias and, when needed, RunBinding are present. The original payload
 // is never rewritten or discarded.
 func (j *Journal) AppendObservedEvent(event protocol.Event, observation EventObservation) (protocol.Event, bool, error) {
-	if event.SessionID == "" {
-		return protocol.Event{}, false, errors.New("event adapter session id must not be empty")
-	}
-	observation, err := normalizeEventObservation(observation)
+	_, mapped, delivered, err := j.appendObservedEvent(event, observation)
+	return mapped, delivered, err
+}
+
+// AppendObservedEventWithRecord is the adapter-facing variant of
+// AppendObservedEvent. It returns the durable raw record while identity
+// materialization is pending, allowing ACKs to carry the journal cursor
+// without exposing an unmapped public event.
+func (j *Journal) AppendObservedEventWithRecord(event protocol.Event, observation EventObservation) (protocol.Event, bool, error) {
+	raw, mapped, delivered, err := j.appendObservedEvent(event, observation)
 	if err != nil {
 		return protocol.Event{}, false, err
 	}
+	if delivered {
+		return mapped, true, nil
+	}
+	return raw, false, nil
+}
+
+func (j *Journal) appendObservedEvent(event protocol.Event, observation EventObservation) (protocol.Event, protocol.Event, bool, error) {
+	if event.SessionID == "" {
+		return protocol.Event{}, protocol.Event{}, false, errors.New("event adapter session id must not be empty")
+	}
+	observation, err := normalizeEventObservation(observation)
+	if err != nil {
+		return protocol.Event{}, protocol.Event{}, false, err
+	}
 	if observation.AdapterSessionID != strings.TrimSpace(event.SessionID) {
-		return protocol.Event{}, false, ErrIdentityConflict
+		return protocol.Event{}, protocol.Event{}, false, ErrIdentityConflict
 	}
 	if event.RunID != nil && strings.TrimSpace(*event.RunID) != "" {
 		if observation.NativeTurnID != "" && observation.NativeTurnID != strings.TrimSpace(*event.RunID) {
-			return protocol.Event{}, false, ErrIdentityConflict
+			return protocol.Event{}, protocol.Event{}, false, ErrIdentityConflict
 		}
 		observation.NativeTurnID = strings.TrimSpace(*event.RunID)
+	}
+	approvalEvent := cloneEvent(event)
+	if observation.NativeTurnID != "" {
+		approvalEvent.RunID = stringPointer(observation.NativeTurnID)
 	}
 	event.RunID = nil
 
@@ -582,17 +703,17 @@ func (j *Journal) AppendObservedEvent(event protocol.Event, observation EventObs
 	if event.EventID != "" {
 		if existing, ok := j.observedEvents[event.EventID]; ok {
 			if !sameObservedEvent(existing, event, observation) {
-				return protocol.Event{}, false, ErrIdentityConflict
+				return protocol.Event{}, protocol.Event{}, false, ErrIdentityConflict
 			}
 			mapped, delivered := j.materializedObservedEventLocked(existing)
-			return mapped, delivered, nil
+			return cloneEvent(existing.Event), mapped, delivered, nil
 		}
 		if _, exists := j.eventIDs[event.EventID]; exists {
-			return protocol.Event{}, false, ErrIdentityConflict
+			return protocol.Event{}, protocol.Event{}, false, ErrIdentityConflict
 		}
 	}
 	if len(j.events) >= maxJournalEvents {
-		return protocol.Event{}, false, fmt.Errorf("%w: event count exceeds %d", ErrJournalTooLarge, maxJournalEvents)
+		return protocol.Event{}, protocol.Event{}, false, fmt.Errorf("%w: event count exceeds %d", ErrJournalTooLarge, maxJournalEvents)
 	}
 	if event.OccurredAt == "" {
 		event.OccurredAt = now()
@@ -613,7 +734,7 @@ func (j *Journal) AppendObservedEvent(event protocol.Event, observation EventObs
 		At:            event.OccurredAt,
 		ObservedEvent: &observed,
 	}); err != nil {
-		return protocol.Event{}, false, err
+		return protocol.Event{}, protocol.Event{}, false, err
 	}
 	j.events = append(j.events, cloneEvent(event))
 	j.observedEvents[event.EventID] = observed
@@ -625,8 +746,14 @@ func (j *Journal) AppendObservedEvent(event protocol.Event, observation EventObs
 	if event.Sequence > j.sequenceBySession[event.SessionID] {
 		j.sequenceBySession[event.SessionID] = event.Sequence
 	}
+	if approvalEvent.Type == protocol.EventTypeApprovalResolved && (approvalEvent.RunID == nil || strings.TrimSpace(*approvalEvent.RunID) == "") {
+		if runID := j.approvalRunIDLocked(approvalEvent); runID != "" {
+			approvalEvent.RunID = &runID
+		}
+	}
+	j.updatePendingApprovalLocked(approvalEvent)
 	mapped, delivered := j.materializedObservedEventLocked(observed)
-	return mapped, delivered, nil
+	return cloneEvent(event), mapped, delivered, nil
 }
 
 // ReadMappedEvents is the identity-safe event read seam. It excludes all raw
@@ -731,9 +858,6 @@ func (j *Journal) materializedObservedEventLocked(observed journalObservedEvent)
 	if !ok {
 		return protocol.Event{}, false
 	}
-	if alias.AdapterSessionID != observed.Observation.AdapterSessionID || alias.ExternalThreadRef != observed.Observation.ExternalThreadRef || alias.Generation != observed.Observation.Generation {
-		return protocol.Event{}, false
-	}
 	event := cloneEvent(observed.Event)
 	event.SessionID = alias.PlatformSessionID
 	if eventRequiresNativeIdentity(event.Type) && observed.Observation.NativeTurnID == "" && observed.Observation.NativeOperationID == "" {
@@ -793,6 +917,10 @@ func (j *Journal) bindingForObservationLocked(observation EventObservation) (Run
 
 func sessionAliasKeyFromObservation(observation EventObservation) string {
 	return identityTupleKey(observation.AdapterSessionID, observation.ExternalThreadRef, observation.Generation)
+}
+
+func sessionAliasKeyFromRunBinding(binding RunBinding) string {
+	return identityTupleKey(binding.AdapterSessionID, binding.ExternalThreadRef, binding.Generation)
 }
 
 func sameObservedEvent(existing journalObservedEvent, event protocol.Event, observation EventObservation) bool {

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "migration": {
-    "description": "Upgrade the host-local Connector journal with durable platform-to-adapter session/run identity correlation and a forward-readable format boundary.",
+    "description": "Upgrade the host-local Connector journal with durable platform-to-adapter session/run identity correlation, revisioned cold-recovery generation rotation and a forward-readable format boundary.",
     "release_unit_description": "Phase-one Connector local journal format v3.",
     "version_impact": "minor"
   },
@@ -66,6 +66,7 @@
         "v1 session-start records do not satisfy a new explicit creation identity",
         "v2 session-start records persist command_id and payload digest",
         "session aliases and run bindings preserve separate platform, adapter, thread, generation, command and native identities",
+        "cold recovery appends a generation revision while historical aliases, run bindings and observations remain replayable",
         "equal identity records are idempotent and conflicting associations fail closed",
         "native turn and operation indexes require the complete adapter, thread and generation tuple",
         "observed events retain their raw payload and remain undispatchable until exact binding",

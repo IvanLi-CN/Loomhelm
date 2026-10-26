@@ -106,10 +106,24 @@ func (c *Controller) ensureAdapterSession(ctx context.Context, session protocol.
 	if err != nil {
 		return err
 	}
-	_, err = c.adapter.bindRecoveredSessionLocked(recoveredGatewaySession, session.ExternalThreadRef, "thread/resume", c.adapter.recoveredSessionResult(session.ExternalThreadRef), transport)
-	if err == nil {
-		bound = true
+	boundSession, err := c.adapter.bindRecoveredSessionLocked(recoveredGatewaySession, session.ExternalThreadRef, "thread/resume", c.adapter.recoveredSessionResult(session.ExternalThreadRef), transport)
+	if err != nil {
+		return err
 	}
+	if alias, ok := c.journal.SessionAliasForAdapterSession(session.SessionID, session.ExternalThreadRef); ok {
+		err = c.journal.RotateSessionAlias(SessionAlias{
+			PlatformSessionID: alias.PlatformSessionID,
+			AdapterSessionID:  boundSession.SessionID,
+			ExternalThreadRef: boundSession.ExternalThreadRef,
+			Generation:        recoveredGatewaySession.Generation,
+			CommandID:         alias.CommandID,
+		})
+		if err != nil {
+			_ = c.adapter.CloseSession(ctx, boundSession)
+			return err
+		}
+	}
+	bound = true
 	return err
 }
 

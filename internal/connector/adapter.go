@@ -1098,7 +1098,7 @@ func (a *Adapter) appendRPCResponseCorrelation(state *adapterSessionState, opera
 			payload = mustRawJSON(object)
 		}
 	}
-	correlation, err := a.appendObservedEventFromSource(state, protocol.EventTypeUnknown, protocol.EventSourceHostObservation, "rpc/response", payload, runID)
+	correlation, err := a.appendObservedEventFromSourceWithIdentity(state, protocol.EventTypeUnknown, protocol.EventSourceHostObservation, "rpc/response", payload, runID, operationID)
 	if err != nil {
 		return observed, err
 	}
@@ -1246,6 +1246,13 @@ func (a *Adapter) appendObservedEvent(state *adapterSessionState, eventType prot
 }
 
 func (a *Adapter) appendObservedEventFromSource(state *adapterSessionState, eventType protocol.EventType, source protocol.EventSource, method string, payload json.RawMessage, runID string) (protocol.Event, error) {
+	return a.appendObservedEventFromSourceWithIdentity(state, eventType, source, method, payload, runID, "")
+}
+
+func (a *Adapter) appendObservedEventFromSourceWithIdentity(state *adapterSessionState, eventType protocol.EventType, source protocol.EventSource, method string, payload json.RawMessage, runID, operationID string) (protocol.Event, error) {
+	if state == nil {
+		return protocol.Event{}, errors.New("adapter session state is required")
+	}
 	if len(payload) == 0 {
 		payload = mustRawJSON(map[string]any{"method": method})
 	}
@@ -1270,7 +1277,15 @@ func (a *Adapter) appendObservedEventFromSource(state *adapterSessionState, even
 	if runID != "" {
 		event.RunID = &runID
 	}
-	return a.journal.AppendEvent(event)
+	observation := EventObservation{
+		AdapterSessionID:  state.session.SessionID,
+		ExternalThreadRef: state.session.ExternalThreadRef,
+		Generation:        state.gatewaySession.Generation,
+		NativeTurnID:      runID,
+		NativeOperationID: operationID,
+	}
+	recorded, _, err := a.journal.AppendObservedEventWithRecord(event, observation)
+	return recorded, err
 }
 
 func (a *Adapter) threadStartParams(request protocol.NewSessionRequest) map[string]any {

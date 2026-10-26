@@ -116,8 +116,18 @@ func TestConnectorIdentityRejectsMismatchedRecoveryAndGatewayThread(t *testing.T
 	if err := validateRecoveredSessionIdentity(alias, protocol.GatewaySession{
 		Generation:        "generation-new",
 		ExternalThreadRef: alias.ExternalThreadRef,
-	}, protocol.AdapterSession{SessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef}); !errors.Is(err, connectorruntime.ErrIdentityConflict) {
-		t.Fatalf("recovery generation mismatch error = %v, want identity conflict", err)
+	}, protocol.AdapterSession{SessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef}); err != nil {
+		t.Fatalf("cold recovery generation rotation was rejected: %v", err)
+	}
+	if err := connector.RotateSessionIdentity(alias.PlatformSessionID, alias.CommandID, protocol.GatewaySession{
+		Generation:        "generation-new",
+		ExternalThreadRef: alias.ExternalThreadRef,
+	}, protocol.AdapterSession{SessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef}); err != nil {
+		t.Fatalf("cold recovery generation rotation error = %v", err)
+	}
+	rotated, ok := journal.SessionAlias(alias.PlatformSessionID)
+	if !ok || rotated.Generation != "generation-new" || rotated.Revision != 2 {
+		t.Fatalf("rotated alias = %+v, found = %v", rotated, ok)
 	}
 }
 

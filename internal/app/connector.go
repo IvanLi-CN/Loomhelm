@@ -514,7 +514,7 @@ func (c *Connector) recoverExplicitSession(ctx context.Context, alias connectorr
 	if err := validateRecoveredSessionIdentity(alias, recovered, bound); err != nil {
 		return err
 	}
-	if err := c.BindSessionIdentity(alias.PlatformSessionID, alias.CommandID, recovered, bound); err != nil {
+	if err := c.RotateSessionIdentity(alias.PlatformSessionID, alias.CommandID, recovered, bound); err != nil {
 		return err
 	}
 	closeRecovered = false

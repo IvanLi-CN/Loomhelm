@@ -445,6 +445,93 @@ func TestJournalReplaysEqualIdentityRecordsAndRejectsConflictingReplay(t *testin
 	}
 }
 
+func TestJournalSessionAliasRotationPreservesHistoricalBindings(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "rotation.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAlias := SessionAlias{
+		PlatformSessionID: "platform-rotation",
+		AdapterSessionID:  "adapter-rotation",
+		ExternalThreadRef: "thread-rotation",
+		Generation:        "generation-old",
+		CommandID:         "create-rotation",
+	}
+	if err := first.RecordSessionAlias(oldAlias); err != nil {
+		t.Fatal(err)
+	}
+	oldBinding := RunBinding{
+		PlatformSessionID: oldAlias.PlatformSessionID,
+		PlatformRunID:     "platform-run-old",
+		CommandID:         "run-old",
+		AdapterSessionID:  oldAlias.AdapterSessionID,
+		ExternalThreadRef: oldAlias.ExternalThreadRef,
+		Generation:        oldAlias.Generation,
+		NativeTurnID:      "native-turn-old",
+		State:             IdentityStateBound,
+	}
+	if err := first.RecordRunBinding(oldBinding); err != nil {
+		t.Fatal(err)
+	}
+	oldEvent := protocol.Event{EventID: "rotation-old-event", Cursor: "adapter-rotation:1", Sequence: 1, SessionID: oldAlias.AdapterSessionID, Type: protocol.EventTypeMessageDelta, Source: protocol.EventSourceAppServer, Payload: json.RawMessage(`{"delta":"old"}`)}
+	if mapped, delivered, err := first.AppendObservedEvent(oldEvent, EventObservation{AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: oldAlias.Generation, NativeTurnID: oldBinding.NativeTurnID}); err != nil || !delivered || mapped.SessionID != oldAlias.PlatformSessionID || valueOrEmpty(mapped.RunID) != oldBinding.PlatformRunID {
+		t.Fatalf("old generation mapping = %+v, delivered = %v, error = %v", mapped, delivered, err)
+	}
+
+	if err := first.RotateSessionAlias(SessionAlias{PlatformSessionID: oldAlias.PlatformSessionID, AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: "generation-new", CommandID: oldAlias.CommandID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.RotateSessionAlias(SessionAlias{PlatformSessionID: oldAlias.PlatformSessionID, AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: "generation-new", CommandID: oldAlias.CommandID}); err != nil {
+		t.Fatalf("repeated generation rotation was not idempotent: %v", err)
+	}
+	rotated, ok := first.SessionAlias(oldAlias.PlatformSessionID)
+	if !ok || rotated.Generation != "generation-new" || rotated.Revision != 2 {
+		t.Fatalf("current rotated alias = %+v, found = %v", rotated, ok)
+	}
+	newBinding := RunBinding{
+		PlatformSessionID: oldAlias.PlatformSessionID,
+		PlatformRunID:     "platform-run-new",
+		CommandID:         "run-new",
+		AdapterSessionID:  oldAlias.AdapterSessionID,
+		ExternalThreadRef: oldAlias.ExternalThreadRef,
+		Generation:        "generation-new",
+		NativeTurnID:      "native-turn-new",
+		State:             IdentityStateBound,
+	}
+	if err := first.RecordRunBinding(newBinding); err != nil {
+		t.Fatal(err)
+	}
+	newEvent := protocol.Event{EventID: "rotation-new-event", Cursor: "adapter-rotation:2", Sequence: 2, SessionID: oldAlias.AdapterSessionID, Type: protocol.EventTypeMessageDelta, Source: protocol.EventSourceAppServer, Payload: json.RawMessage(`{"delta":"new"}`)}
+	if mapped, delivered, err := first.AppendObservedEvent(newEvent, EventObservation{AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: "generation-new", NativeTurnID: newBinding.NativeTurnID}); err != nil || !delivered || mapped.SessionID != oldAlias.PlatformSessionID || valueOrEmpty(mapped.RunID) != newBinding.PlatformRunID {
+		t.Fatalf("new generation mapping = %+v, delivered = %v, error = %v", mapped, delivered, err)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	oldRecovered, ok := second.SessionAliasForAdapter(oldAlias.AdapterSessionID, oldAlias.ExternalThreadRef, oldAlias.Generation)
+	if !ok || oldRecovered.Generation != oldAlias.Generation || oldRecovered.Revision != 1 {
+		t.Fatalf("historical alias = %+v, found = %v", oldRecovered, ok)
+	}
+	newRecovered, ok := second.SessionAliasForAdapter(oldAlias.AdapterSessionID, oldAlias.ExternalThreadRef, "generation-new")
+	if !ok || newRecovered.Generation != "generation-new" || newRecovered.Revision != 2 {
+		t.Fatalf("current alias tuple = %+v, found = %v", newRecovered, ok)
+	}
+	if binding, ok := second.RunBinding(oldAlias.PlatformSessionID, oldBinding.PlatformRunID); !ok || binding.Generation != oldAlias.Generation {
+		t.Fatalf("historical run binding = %+v, found = %v", binding, ok)
+	}
+	page, err := second.ReadMappedEvents(protocol.EventQuery{SessionID: oldAlias.PlatformSessionID})
+	if err != nil || len(page.Events) != 2 || valueOrEmpty(page.Events[0].RunID) != oldBinding.PlatformRunID || valueOrEmpty(page.Events[1].RunID) != newBinding.PlatformRunID {
+		t.Fatalf("rotated mapped events = %+v, error = %v", page.Events, err)
+	}
+}
+
 func writeJournalRecords(t *testing.T, path string, records []journalRecord) {
 	t.Helper()
 	var data []byte

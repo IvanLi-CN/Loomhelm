@@ -96,6 +96,18 @@ func TestOpenSessionKeepsR01PathsSeparate(t *testing.T) {
 	}
 }
 
+func TestOpenSessionWithIdentityRetainsGatewayResult(t *testing.T) {
+	gateway := &fakeGateway{}
+	adapter := &fakeAdapter{}
+	opened, err := OpenSessionWithIdentity(context.Background(), gateway, adapter, CreateSessionRequest{CommandID: "create-with-identity", Path: SessionPathNew})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.GatewaySession.Handle != "new" || opened.GatewaySession.Path != SessionPathNew || opened.AdapterSession.SessionID != "new-session" {
+		t.Fatalf("opened session = %+v, want gateway and adapter identities", opened)
+	}
+}
+
 func TestOpenSessionRejectsMissingCreationIdentityBeforeSideEffects(t *testing.T) {
 	for _, id := range []string{"", " \t\n"} {
 		gateway := &fakeGateway{}

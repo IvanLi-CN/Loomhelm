@@ -1557,8 +1557,9 @@ func TestAdapterPreservesRawAppServerResponseEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := &adapterSessionState{
-		session:   protocol.AdapterSession{SessionID: "session-raw"},
-		transport: transport,
+		session:        protocol.AdapterSession{SessionID: "session-raw", ExternalThreadRef: "thread-raw"},
+		gatewaySession: protocol.GatewaySession{Generation: "generation-raw"},
+		transport:      transport,
 	}
 	raw := json.RawMessage(`{"jsonrpc":"2.0","id":7,"result":{"thread":{"id":"thread-raw"}}}`)
 	event, err := adapter.appendObservedEventFromSource(state, protocol.EventTypeSessionCreated, protocol.EventSourceAppServer, "thread/start", raw, "")

@@ -98,6 +98,7 @@ type Journal struct {
 	legacySessionFacts          map[string]SessionAlias
 	sessionAliases              map[string]SessionAlias
 	sessionAliasByAdapter       map[string]string
+	sessionAliasByTuple         map[string]SessionAlias
 	runBindings                 map[string]RunBinding
 	runBindingByCommand         map[string]string
 	runBindingByNativeTurn      map[string]string
@@ -220,6 +221,7 @@ func OpenJournal(path string) (*Journal, error) {
 		legacySessionFacts:          make(map[string]SessionAlias),
 		sessionAliases:              make(map[string]SessionAlias),
 		sessionAliasByAdapter:       make(map[string]string),
+		sessionAliasByTuple:         make(map[string]SessionAlias),
 		runBindings:                 make(map[string]RunBinding),
 		runBindingByCommand:         make(map[string]string),
 		runBindingByNativeTurn:      make(map[string]string),

@@ -12,6 +12,41 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
 
+// OpenPlatformSession is the app-owned result returned after the selected
+// Gateway/Adapter path has completed and the explicit platform alias is
+// durable. U03 can activate its session store from these two execution facts.
+type OpenPlatformSession struct {
+	GatewaySession protocol.GatewaySession
+	AdapterSession protocol.AdapterSession
+}
+
+// OpenSession selects the existing private session path and binds its result
+// to the caller-provided platform session identity before returning success.
+func (c *Connector) OpenSession(ctx context.Context, platformSessionID string, request protocol.CreateSessionRequest) (OpenPlatformSession, error) {
+	if c == nil || c.journal == nil || c.appGateway == nil || c.adapter == nil {
+		return OpenPlatformSession{}, errors.New("connector session assembly is unavailable")
+	}
+	platformSessionID = strings.TrimSpace(platformSessionID)
+	if platformSessionID == "" {
+		return OpenPlatformSession{}, errors.New("platform session identity is required")
+	}
+	opened, err := protocol.OpenSessionWithIdentity(ctx, c.appGateway, c.adapter, request)
+	if err != nil {
+		return OpenPlatformSession{}, err
+	}
+	gatewaySession := opened.GatewaySession
+	if gatewaySession.ExternalThreadRef == "" {
+		gatewaySession.ExternalThreadRef = opened.AdapterSession.ExternalThreadRef
+	}
+	if err := c.BindSessionIdentity(platformSessionID, request.CommandID, gatewaySession, opened.AdapterSession); err != nil {
+		cleanupCtx := context.WithoutCancel(ctx)
+		_ = c.adapter.CloseSession(cleanupCtx, opened.AdapterSession)
+		_ = c.appGateway.CloseSession(cleanupCtx, gatewaySession)
+		return OpenPlatformSession{}, err
+	}
+	return OpenPlatformSession{GatewaySession: gatewaySession, AdapterSession: opened.AdapterSession}, nil
+}
+
 // BindSessionIdentity records the explicit platform-to-host session
 // relationship after the gateway and adapter have both resolved it. The
 // platform session ID is supplied by the session creation assembly; it is
@@ -35,6 +70,35 @@ func (c *Connector) BindSessionIdentity(platformSessionID, commandID string, gat
 		return connectorruntime.ErrIdentityConflict
 	}
 	return c.journal.RecordSessionAlias(connectorruntime.SessionAlias{
+		PlatformSessionID: platformSessionID,
+		AdapterSessionID:  strings.TrimSpace(adapterSession.SessionID),
+		ExternalThreadRef: strings.TrimSpace(adapterSession.ExternalThreadRef),
+		Generation:        strings.TrimSpace(gatewaySession.Generation),
+		CommandID:         commandID,
+	})
+}
+
+// RotateSessionIdentity advances one platform session to the fresh Gateway
+// generation produced by cold recovery while preserving historical mappings.
+func (c *Connector) RotateSessionIdentity(platformSessionID, commandID string, gatewaySession protocol.GatewaySession, adapterSession protocol.AdapterSession) error {
+	if c == nil || c.journal == nil {
+		return errors.New("connector identity journal is unavailable")
+	}
+	platformSessionID = strings.TrimSpace(platformSessionID)
+	commandID = strings.TrimSpace(commandID)
+	if platformSessionID == "" || commandID == "" {
+		return errors.New("platform session and creation command identities are required")
+	}
+	if strings.TrimSpace(adapterSession.SessionID) == "" || strings.TrimSpace(adapterSession.ExternalThreadRef) == "" {
+		return errors.New("adapter session identity is incomplete")
+	}
+	if strings.TrimSpace(gatewaySession.Generation) == "" {
+		return errors.New("gateway session generation is required")
+	}
+	if gatewaySession.ExternalThreadRef != "" && gatewaySession.ExternalThreadRef != adapterSession.ExternalThreadRef {
+		return connectorruntime.ErrIdentityConflict
+	}
+	return c.journal.RotateSessionAlias(connectorruntime.SessionAlias{
 		PlatformSessionID: platformSessionID,
 		AdapterSessionID:  strings.TrimSpace(adapterSession.SessionID),
 		ExternalThreadRef: strings.TrimSpace(adapterSession.ExternalThreadRef),
@@ -382,8 +446,8 @@ func validateRecoveredGatewaySession(alias connectorruntime.SessionAlias, gatewa
 	if gatewaySession.ExternalThreadRef != "" && gatewaySession.ExternalThreadRef != alias.ExternalThreadRef {
 		return connectorruntime.ErrIdentityConflict
 	}
-	if gatewaySession.Generation != alias.Generation {
-		return fmt.Errorf("%w: recovered generation %q does not match immutable alias generation %q", connectorruntime.ErrIdentityConflict, gatewaySession.Generation, alias.Generation)
+	if strings.TrimSpace(gatewaySession.Generation) == "" {
+		return fmt.Errorf("%w: recovered generation is empty", connectorruntime.ErrIdentityConflict)
 	}
 	return nil
 }
