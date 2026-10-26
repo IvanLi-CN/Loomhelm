@@ -170,6 +170,11 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
+	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
 
 	command := realC01ReconcileCommand(sessionID, commandID)
 	beforeCursor := latestRealEventCursor(journal, sessionID)
@@ -199,24 +204,19 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		ThreadID:          threadID,
 		UnknownAckState:   ack.State,
 	}
-	observedRun, err := waitForRealEventValueAfter(ctx, journal, sessionID, protocol.EventTypeUnknown, "", beforeCursor, func(event protocol.Event) bool {
-		return event.RunID != nil && *event.RunID != "" && realEventOperationID(event) == strings.TrimSpace(*ack.OperationID)
+	observedRun, err := waitForRealObservedOperationAfter(ctx, journal, sessionID, threadID, recoveredGatewaySession.Generation, strings.TrimSpace(*ack.OperationID), beforeCursor, func(event protocol.Event) bool {
+		return realEventOperationID(event) == strings.TrimSpace(*ack.OperationID)
 	})
 	if err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
-	result.ReconciledRunID = valueOrEmpty(observedRun.RunID)
-	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
-	if err != nil {
-		_ = journal.Close()
-		return realC01ProcessResult{}, err
-	}
+	result.ReconciledRunID = realC01ObservedNativeTurn(journal, observedRun)
 	if err := gateway.CloseSession(context.Background(), recoveredGatewaySession); err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
-	if err := waitForRealEvent(ctx, journal, sessionID, protocol.EventTypeReconciliationRequired, ""); err != nil {
+	if err := waitForRealObservedEvent(ctx, journal, sessionID, threadID, recoveredGatewaySession.Generation, protocol.EventTypeReconciliationRequired, ""); err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
@@ -280,7 +280,12 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
-	if err := waitForRealEventAfter(ctx, journal, sessionID, beforeCursor, protocol.EventTypeReconciliationCompleted, "thread/resume"); err != nil {
+	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
+	if err != nil {
+		_ = journal.Close()
+		return realC01ProcessResult{}, err
+	}
+	if err := waitForRealObservedEventAfter(ctx, journal, sessionID, threadID, recoveredGatewaySession.Generation, beforeCursor, protocol.EventTypeReconciliationCompleted, "thread/resume"); err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
@@ -300,11 +305,6 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 		ReconciliationNote:    valueOrEmpty(reconciliation.Note),
 		FinalAckState:         finalAck.State,
 		RecoveryEventObserved: true,
-	}
-	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
-	if err != nil {
-		_ = journal.Close()
-		return realC01ProcessResult{}, err
 	}
 	if err := gateway.CloseSession(context.Background(), recoveredGatewaySession); err != nil {
 		_ = journal.Close()
@@ -619,7 +619,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	approvalEvidence.RunID = valueOrEmpty(approvalAck.RunID)
-	approval, err := waitForRealApproval(ctx, journal, activeSession.SessionID)
+	approval, err := waitForRealApproval(ctx, journal, activeSession.SessionID, gatewaySession.Generation, valueOrEmpty(approvalAck.RunID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +637,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if decisionAck.State != protocol.CommandStateSucceeded {
 		t.Fatalf("approval decision ACK = %+v", decisionAck)
 	}
-	itemEvent, err := waitForRealItemStatus(ctx, journal, activeSession.SessionID, valueOrEmpty(approvalAck.RunID), "completed")
+	itemEvent, err := waitForRealItemStatus(ctx, journal, activeSession.SessionID, activeSession.ExternalThreadRef, gatewaySession.Generation, valueOrEmpty(approvalAck.RunID), approval.ItemID, "completed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +650,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if !approvalEvidence.CommandMatchesExpected || !approvalEvidence.OutputMarkerObserved {
 		t.Fatal("accepted command did not match the fixed allowlist and output marker")
 	}
-	terminalEvent, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, valueOrEmpty(approvalAck.RunID), protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed)
+	terminalEvent, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, activeSession.ExternalThreadRef, gatewaySession.Generation, valueOrEmpty(approvalAck.RunID), protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +669,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	denialEvidence.RunID = valueOrEmpty(denialAck.RunID)
-	denialApproval, err := waitForRealApproval(ctx, journal, activeSession.SessionID)
+	denialApproval, err := waitForRealApproval(ctx, journal, activeSession.SessionID, gatewaySession.Generation, valueOrEmpty(denialAck.RunID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +687,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if denialDecisionAck.State != protocol.CommandStateSucceeded {
 		t.Fatalf("denial decision ACK = %+v", denialDecisionAck)
 	}
-	denialItem, err := waitForRealItemStatus(ctx, journal, activeSession.SessionID, valueOrEmpty(denialAck.RunID), "declined")
+	denialItem, err := waitForRealItemStatus(ctx, journal, activeSession.SessionID, activeSession.ExternalThreadRef, gatewaySession.Generation, valueOrEmpty(denialAck.RunID), denialApproval.ItemID, "declined")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,7 +700,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if !denialEvidence.CommandMatchesExpected || !denialEvidence.OutputEmpty {
 		t.Fatal("denied command did not match the fixed allowlist or produced output")
 	}
-	denialTerminal, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, valueOrEmpty(denialAck.RunID), protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed)
+	denialTerminal, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, activeSession.ExternalThreadRef, gatewaySession.Generation, valueOrEmpty(denialAck.RunID), protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +719,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	interruptEvidence.RunID = valueOrEmpty(interruptAck.RunID)
-	interruptApproval, err := waitForRealApproval(ctx, journal, activeSession.SessionID)
+	interruptApproval, err := waitForRealApproval(ctx, journal, activeSession.SessionID, gatewaySession.Generation, valueOrEmpty(interruptAck.RunID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,7 +737,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if interruptDecisionAck.State != protocol.CommandStateSucceeded {
 		t.Fatalf("interrupt approval ACK = %+v", interruptDecisionAck)
 	}
-	interruptStarted, err := waitForRealItemStarted(ctx, journal, activeSession.SessionID, valueOrEmpty(interruptAck.RunID))
+	interruptStarted, err := waitForRealItemStarted(ctx, journal, activeSession.SessionID, activeSession.ExternalThreadRef, gatewaySession.Generation, valueOrEmpty(interruptAck.RunID), interruptApproval.ItemID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -761,7 +761,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if interruptControlAck.State != protocol.CommandStateSucceeded {
 		t.Fatalf("interrupt control ACK = %+v", interruptControlAck)
 	}
-	interruptTerminal, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, valueOrEmpty(interruptAck.RunID), protocol.EventTypeRunInterrupted, protocol.EventTypeRunFailed)
+	interruptTerminal, err := waitForRealTerminalEvent(ctx, journal, activeSession.SessionID, activeSession.ExternalThreadRef, gatewaySession.Generation, valueOrEmpty(interruptAck.RunID), protocol.EventTypeRunInterrupted, protocol.EventTypeRunFailed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -946,10 +946,10 @@ func realApprovalCommand(id string, kind protocol.CommandKind, sessionID string,
 	return protocol.Command{CommandID: id, IssuedAt: now(), Kind: kind, Payload: payload, RunID: stringPointer(approval.TurnID), SessionID: sessionID}
 }
 
-func waitForRealApproval(ctx context.Context, journal *Journal, sessionID string) (PendingApproval, error) {
+func waitForRealApproval(ctx context.Context, journal *Journal, sessionID, generation, runID string) (PendingApproval, error) {
 	var approval PendingApproval
 	err := waitForRealCondition(ctx, func() bool {
-		values := journal.PendingApprovals(sessionID, "")
+		values := journal.PendingApprovalsForGeneration(sessionID, generation, runID)
 		if len(values) != 1 {
 			return false
 		}
@@ -959,8 +959,15 @@ func waitForRealApproval(ctx context.Context, journal *Journal, sessionID string
 	return approval, err
 }
 
-func waitForRealItemStarted(ctx context.Context, journal *Journal, sessionID, runID string) (protocol.Event, error) {
-	return waitForRealEventValue(ctx, journal, sessionID, protocol.EventTypeItemStarted, runID, func(event protocol.Event) bool {
+func waitForRealItemStarted(ctx context.Context, journal *Journal, sessionID, threadID, generation, runID, itemID string) (protocol.Event, error) {
+	return waitForRealObservedEventValue(ctx, journal, realC01ObservedQuery{
+		AdapterSessionID:  sessionID,
+		ExternalThreadRef: threadID,
+		Generation:        generation,
+		NativeTurnID:      runID,
+		EventType:         protocol.EventTypeItemStarted,
+		ItemID:            itemID,
+	}, func(event protocol.Event) bool {
 		var payload struct {
 			Params struct {
 				Item struct {
@@ -972,25 +979,42 @@ func waitForRealItemStarted(ctx context.Context, journal *Journal, sessionID, ru
 	})
 }
 
-func waitForRealItemStatus(ctx context.Context, journal *Journal, sessionID, runID, want string) (protocol.Event, error) {
-	return waitForRealEventValue(ctx, journal, sessionID, protocol.EventTypeItemCompleted, runID, func(event protocol.Event) bool {
+func waitForRealItemStatus(ctx context.Context, journal *Journal, sessionID, threadID, generation, runID, itemID, want string) (protocol.Event, error) {
+	return waitForRealObservedEventValue(ctx, journal, realC01ObservedQuery{
+		AdapterSessionID:  sessionID,
+		ExternalThreadRef: threadID,
+		Generation:        generation,
+		NativeTurnID:      runID,
+		EventType:         protocol.EventTypeItemCompleted,
+		ItemID:            itemID,
+	}, func(event protocol.Event) bool {
 		return itemType(event) == "commandExecution" && itemStatus(event) == want
 	})
 }
 
-func waitForRealTerminalEvent(ctx context.Context, journal *Journal, sessionID, runID string, types ...protocol.EventType) (protocol.Event, error) {
+func waitForRealTerminalEvent(ctx context.Context, journal *Journal, sessionID, threadID, generation, runID string, types ...protocol.EventType) (protocol.Event, error) {
 	wanted := make(map[protocol.EventType]struct{}, len(types))
 	for _, eventType := range types {
 		wanted[eventType] = struct{}{}
 	}
-	return waitForRealEventValue(ctx, journal, sessionID, "", runID, func(event protocol.Event) bool {
+	return waitForRealObservedEventValue(ctx, journal, realC01ObservedQuery{
+		AdapterSessionID:  sessionID,
+		ExternalThreadRef: threadID,
+		Generation:        generation,
+		NativeTurnID:      runID,
+	}, func(event protocol.Event) bool {
 		_, ok := wanted[event.Type]
 		return ok
 	})
 }
 
-func waitForRealEvent(ctx context.Context, journal *Journal, sessionID string, eventType protocol.EventType, method string) error {
-	_, err := waitForRealEventValueAfter(ctx, journal, sessionID, eventType, "", "", func(event protocol.Event) bool {
+func waitForRealObservedEvent(ctx context.Context, journal *Journal, sessionID, threadID, generation string, eventType protocol.EventType, method string) error {
+	_, err := waitForRealObservedEventValue(ctx, journal, realC01ObservedQuery{
+		AdapterSessionID:  sessionID,
+		ExternalThreadRef: threadID,
+		Generation:        generation,
+		EventType:         eventType,
+	}, func(event protocol.Event) bool {
 		if method == "" {
 			return true
 		}
@@ -1002,8 +1026,14 @@ func waitForRealEvent(ctx context.Context, journal *Journal, sessionID string, e
 	return err
 }
 
-func waitForRealEventAfter(ctx context.Context, journal *Journal, sessionID, afterCursor string, eventType protocol.EventType, method string) error {
-	_, err := waitForRealEventValueAfter(ctx, journal, sessionID, eventType, "", afterCursor, func(event protocol.Event) bool {
+func waitForRealObservedEventAfter(ctx context.Context, journal *Journal, sessionID, threadID, generation, afterCursor string, eventType protocol.EventType, method string) error {
+	_, err := waitForRealObservedEventValueAfter(ctx, journal, realC01ObservedQuery{
+		AdapterSessionID:  sessionID,
+		ExternalThreadRef: threadID,
+		Generation:        generation,
+		AfterCursor:       afterCursor,
+		EventType:         eventType,
+	}, func(event protocol.Event) bool {
 		if method == "" {
 			return true
 		}
@@ -1015,19 +1045,44 @@ func waitForRealEventAfter(ctx context.Context, journal *Journal, sessionID, aft
 	return err
 }
 
-func waitForRealEventValue(ctx context.Context, journal *Journal, sessionID string, eventType protocol.EventType, runID string, predicate func(protocol.Event) bool) (protocol.Event, error) {
-	return waitForRealEventValueAfter(ctx, journal, sessionID, eventType, runID, "", predicate)
+func waitForRealObservedOperationAfter(ctx context.Context, journal *Journal, sessionID, threadID, generation, operationID, afterCursor string, predicate func(protocol.Event) bool) (protocol.Event, error) {
+	return waitForRealObservedEventValueAfter(ctx, journal, realC01ObservedQuery{
+		AdapterSessionID:  sessionID,
+		ExternalThreadRef: threadID,
+		Generation:        generation,
+		NativeOperationID: operationID,
+		AfterCursor:       afterCursor,
+		EventType:         protocol.EventTypeUnknown,
+	}, predicate)
 }
 
-func waitForRealEventValueAfter(ctx context.Context, journal *Journal, sessionID string, eventType protocol.EventType, runID, afterCursor string, predicate func(protocol.Event) bool) (protocol.Event, error) {
+type realC01ObservedQuery struct {
+	AdapterSessionID  string
+	ExternalThreadRef string
+	Generation        string
+	NativeTurnID      string
+	NativeOperationID string
+	AfterCursor       string
+	EventType         protocol.EventType
+	ItemID            string
+	Limit             int
+}
+
+func waitForRealObservedEventValue(ctx context.Context, journal *Journal, query realC01ObservedQuery, predicate func(protocol.Event) bool) (protocol.Event, error) {
+	return waitForRealObservedEventValueAfter(ctx, journal, query, predicate)
+}
+
+func waitForRealObservedEventValueAfter(ctx context.Context, journal *Journal, query realC01ObservedQuery, predicate func(protocol.Event) bool) (protocol.Event, error) {
 	var found protocol.Event
+	var queryErr error
 	err := waitForRealCondition(ctx, func() bool {
-		page, err := journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, RunID: runID, AfterCursor: afterCursor, Limit: 1000})
+		page, err := readRealC01ObservedEvents(journal, query)
 		if err != nil {
-			return false
+			queryErr = err
+			return true
 		}
 		for _, event := range page.Events {
-			if eventType != "" && event.Type != eventType {
+			if query.EventType != "" && event.Type != query.EventType {
 				continue
 			}
 			if predicate(event) {
@@ -1037,7 +1092,229 @@ func waitForRealEventValueAfter(ctx context.Context, journal *Journal, sessionID
 		}
 		return false
 	})
-	return found, err
+	if err != nil {
+		return found, err
+	}
+	return found, queryErr
+}
+
+func readRealC01ObservedEvents(journal *Journal, query realC01ObservedQuery) (protocol.EventPage, error) {
+	if journal == nil {
+		return protocol.EventPage{}, errors.New("real C01 observed-event journal is required")
+	}
+	if query.AdapterSessionID == "" || query.ExternalThreadRef == "" || query.Generation == "" {
+		return protocol.EventPage{}, errors.New("real C01 observed-event identity is incomplete")
+	}
+	limit := query.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	start := 0
+	if query.AfterCursor != "" {
+		index, found := journal.eventIndexByCursor[query.AfterCursor]
+		if !found || index < 0 || index >= len(journal.events) {
+			return protocol.EventPage{}, protocol.ErrCursorExpired
+		}
+		boundary := journal.events[index]
+		observed, found := journal.observedEvents[boundary.EventID]
+		if !found || observed.Observation.AdapterSessionID != query.AdapterSessionID || observed.Observation.ExternalThreadRef != query.ExternalThreadRef {
+			return protocol.EventPage{}, protocol.ErrCursorExpired
+		}
+		start = index + 1
+	}
+
+	page := protocol.EventPage{Events: make([]protocol.Event, 0, limit)}
+	for index := start; index < len(journal.events); index++ {
+		event := journal.events[index]
+		observed, found := journal.observedEvents[event.EventID]
+		if !found {
+			continue
+		}
+		identity := observed.Observation
+		if identity.AdapterSessionID != query.AdapterSessionID || identity.ExternalThreadRef != query.ExternalThreadRef || identity.Generation != query.Generation {
+			continue
+		}
+		if query.NativeTurnID != "" && identity.NativeTurnID != query.NativeTurnID {
+			continue
+		}
+		if query.NativeOperationID != "" && identity.NativeOperationID != query.NativeOperationID {
+			continue
+		}
+		if query.EventType != "" && event.Type != query.EventType {
+			continue
+		}
+		if query.ItemID != "" && realC01ObservedItemID(event) != query.ItemID {
+			continue
+		}
+		if int64(len(page.Events)) >= int64(limit) {
+			page.HasMore = true
+			page.NextCursor = stringPointer(page.Events[len(page.Events)-1].Cursor)
+			break
+		}
+		page.Events = append(page.Events, cloneEvent(event))
+	}
+	return page, nil
+}
+
+func realC01ObservedItemID(event protocol.Event) string {
+	var payload struct {
+		Params struct {
+			ItemID string `json:"itemId"`
+			Item   struct {
+				ID string `json:"id"`
+			} `json:"item"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(event.Payload, &payload) != nil {
+		return ""
+	}
+	if payload.Params.Item.ID != "" {
+		return payload.Params.Item.ID
+	}
+	return payload.Params.ItemID
+}
+
+func realC01ObservedNativeTurn(journal *Journal, event protocol.Event) string {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	observed, ok := journal.observedEvents[event.EventID]
+	if !ok {
+		return ""
+	}
+	return observed.Observation.NativeTurnID
+}
+
+func TestRealC01ObservedEventQueryRequiresExactIdentity(t *testing.T) {
+	journal, err := OpenJournal(filepath.Join(privateTestDir(t), "connector.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+
+	appendObserved := func(eventID, cursor, sessionID, threadID, generation, turnID, operationID, itemID string, eventType protocol.EventType, sequence int64) {
+		t.Helper()
+		payload := fmt.Sprintf(`{"method":"item/completed","params":{"threadId":%q,"turnId":%q,"item":{"id":%q,"type":"commandExecution","status":"completed"}}}`, threadID, turnID, itemID)
+		if eventType == protocol.EventTypeUnknown {
+			payload = `{"jsonrpc":"2.0","id":7,"result":{"ok":true}}`
+		}
+		_, _, err := journal.AppendObservedEventWithRecord(protocol.Event{
+			EventID:   eventID,
+			Cursor:    cursor,
+			Sequence:  sequence,
+			SessionID: sessionID,
+			Source:    protocol.EventSourceAppServer,
+			Type:      eventType,
+			Payload:   json.RawMessage(payload),
+		}, EventObservation{
+			AdapterSessionID:  sessionID,
+			ExternalThreadRef: threadID,
+			Generation:        generation,
+			NativeTurnID:      turnID,
+			NativeOperationID: operationID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	appendObserved("event-1", "cursor-1", "adapter-1", "thread-1", "generation-1", "turn-1", "", "item-1", protocol.EventTypeItemCompleted, 1)
+	appendObserved("event-2", "cursor-2", "adapter-1", "thread-1", "generation-1", "turn-1", "", "item-2", protocol.EventTypeItemCompleted, 2)
+	appendObserved("event-3", "cursor-3", "adapter-1", "thread-1", "generation-2", "turn-2", "", "item-3", protocol.EventTypeItemCompleted, 3)
+	appendObserved("event-operation", "cursor-operation", "adapter-1", "thread-1", "generation-2", "", "operation-1", "", protocol.EventTypeUnknown, 4)
+	appendObserved("event-foreign", "cursor-foreign", "adapter-foreign", "thread-foreign", "generation-foreign", "turn-foreign", "", "item-foreign", protocol.EventTypeItemCompleted, 1)
+
+	base := realC01ObservedQuery{
+		AdapterSessionID:  "adapter-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "turn-1",
+		EventType:         protocol.EventTypeItemCompleted,
+		ItemID:            "item-1",
+	}
+	page, err := readRealC01ObservedEvents(journal, base)
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "event-1" {
+		t.Fatalf("exact observed event query = %+v, err=%v", page, err)
+	}
+	if got := realC01ObservedNativeTurn(journal, page.Events[0]); got != "turn-1" {
+		t.Fatalf("native turn = %q, want turn-1", got)
+	}
+
+	for name, query := range map[string]realC01ObservedQuery{
+		"wrong adapter session": func() realC01ObservedQuery { value := base; value.AdapterSessionID = "adapter-other"; return value }(),
+		"wrong thread":          func() realC01ObservedQuery { value := base; value.ExternalThreadRef = "thread-other"; return value }(),
+		"wrong generation":      func() realC01ObservedQuery { value := base; value.Generation = "generation-2"; return value }(),
+		"wrong native turn":     func() realC01ObservedQuery { value := base; value.NativeTurnID = "turn-other"; return value }(),
+		"wrong item identity":   func() realC01ObservedQuery { value := base; value.ItemID = "item-other"; return value }(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			page, err := readRealC01ObservedEvents(journal, query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Events) != 0 {
+				t.Fatalf("wrong identity matched %d events", len(page.Events))
+			}
+		})
+	}
+
+	page, err = readRealC01ObservedEvents(journal, realC01ObservedQuery{
+		AdapterSessionID:  "adapter-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "turn-1",
+		EventType:         protocol.EventTypeItemCompleted,
+		Limit:             1,
+	})
+	if err != nil || len(page.Events) != 1 || !page.HasMore || page.NextCursor == nil || page.Events[0].EventID != "event-1" {
+		t.Fatalf("paginated generation-1 page = %+v, err=%v", page, err)
+	}
+	page, err = readRealC01ObservedEvents(journal, realC01ObservedQuery{
+		AdapterSessionID:  "adapter-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "turn-1",
+		AfterCursor:       *page.NextCursor,
+		EventType:         protocol.EventTypeItemCompleted,
+	})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "event-2" {
+		t.Fatalf("paginated generation-1 continuation = %+v, err=%v", page, err)
+	}
+
+	page, err = readRealC01ObservedEvents(journal, realC01ObservedQuery{
+		AdapterSessionID:  "adapter-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-2",
+		NativeTurnID:      "turn-2",
+		AfterCursor:       "cursor-2",
+		EventType:         protocol.EventTypeItemCompleted,
+	})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "event-3" {
+		t.Fatalf("reconnected after-cursor page = %+v, err=%v", page, err)
+	}
+
+	page, err = readRealC01ObservedEvents(journal, realC01ObservedQuery{
+		AdapterSessionID:  "adapter-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-2",
+		NativeOperationID: "operation-1",
+		EventType:         protocol.EventTypeUnknown,
+	})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "event-operation" {
+		t.Fatalf("operation identity query = %+v, err=%v", page, err)
+	}
+
+	_, err = readRealC01ObservedEvents(journal, realC01ObservedQuery{
+		AdapterSessionID:  "adapter-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-2",
+		AfterCursor:       "cursor-foreign",
+	})
+	if !errors.Is(err, protocol.ErrCursorExpired) {
+		t.Fatalf("foreign after-cursor error = %v, want %v", err, protocol.ErrCursorExpired)
+	}
 }
 
 func latestRealEventCursor(journal *Journal, sessionID string) string {
