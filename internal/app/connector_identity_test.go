@@ -1,10 +1,12 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	connectorruntime "github.com/IvanLi-CN/Loomhelm/internal/connector"
@@ -131,6 +133,57 @@ func TestConnectorIdentityRejectsMismatchedRecoveryAndGatewayThread(t *testing.T
 	}
 }
 
+func TestConnectorSessionStartUsesExplicitIdentityAndDoesNotSynthesizeInitialRun(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	transport := &connectorSessionTransport{threadID: "thread-explicit"}
+	appGateway, err := connectorruntime.NewGateway(connectorruntime.GatewayConfig{
+		TransportFactory: func(context.Context) (connectorruntime.RPCTransport, error) { return transport, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := connectorruntime.NewAdapter(appGateway, journal, connectorruntime.AdapterConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector := &Connector{journal: journal, appGateway: appGateway, adapter: adapter}
+	request := protocol.CreateSessionRequest{CommandID: "session-command-1", Path: protocol.SessionPathNew, Prompt: stringPointer("must become a real run")}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{CommandID: request.CommandID, Kind: protocol.CommandKindSessionStart, Payload: payload, SessionID: "platform-session-1"}
+
+	ack, err := connector.acceptSessionCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.State != protocol.CommandStateSucceeded || len(ack.Result) == 0 {
+		t.Fatalf("session command ACK = %+v", ack)
+	}
+	alias, ok := journal.SessionAlias(command.SessionID)
+	if !ok || alias.ExternalThreadRef != "thread-explicit" || alias.CommandID != request.CommandID {
+		t.Fatalf("session alias = %+v, found = %v", alias, ok)
+	}
+	if calls := transport.methods(); calls["turn/start"] != 0 || calls["thread/start"] != 1 {
+		t.Fatalf("session open calls = %+v, want no synthetic turn/start", calls)
+	}
+
+	retry, err := connector.acceptSessionCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Deduplicated || retry.Result == nil || string(retry.Result) != string(ack.Result) {
+		t.Fatalf("deduplicated session ACK = %+v", retry)
+	}
+	if calls := transport.methods(); calls["thread/start"] != 1 || calls["turn/start"] != 0 {
+		t.Fatalf("duplicate session open crossed adapter boundary: %+v", calls)
+	}
+	_ = adapter.CloseSession(context.Background(), protocol.AdapterSession{SessionID: alias.AdapterSessionID})
+	_ = appGateway.CloseSession(context.Background(), protocol.GatewaySession{Handle: alias.AdapterSessionID})
+}
+
 func openConnectorIdentityJournal(t *testing.T) *connectorruntime.Journal {
 	t.Helper()
 	directory := filepath.Join(t.TempDir(), "journal")
@@ -142,4 +195,61 @@ func openConnectorIdentityJournal(t *testing.T) *connectorruntime.Journal {
 		t.Fatal(err)
 	}
 	return journal
+}
+
+type connectorSessionTransport struct {
+	mu       sync.Mutex
+	threadID string
+	calls    []string
+	events   chan connectorruntime.RPCMessage
+	closed   bool
+}
+
+func (t *connectorSessionTransport) Call(_ context.Context, method string, _ json.RawMessage) (connectorruntime.RPCMessage, error) {
+	t.mu.Lock()
+	t.calls = append(t.calls, method)
+	t.mu.Unlock()
+	if method == "thread/start" {
+		return connectorruntime.RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-explicit"}}`)}, nil
+	}
+	return connectorruntime.RPCMessage{Result: json.RawMessage(`{}`)}, nil
+}
+
+func (t *connectorSessionTransport) Notify(context.Context, string, json.RawMessage) error {
+	return nil
+}
+
+func (t *connectorSessionTransport) Respond(context.Context, json.RawMessage, json.RawMessage) error {
+	return nil
+}
+
+func (t *connectorSessionTransport) Events() <-chan connectorruntime.RPCMessage {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.events == nil {
+		t.events = make(chan connectorruntime.RPCMessage)
+	}
+	return t.events
+}
+
+func (t *connectorSessionTransport) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.closed {
+		t.closed = true
+		if t.events != nil {
+			close(t.events)
+		}
+	}
+	return nil
+}
+
+func (t *connectorSessionTransport) methods() map[string]int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	result := make(map[string]int)
+	for _, method := range t.calls {
+		result[method]++
+	}
+	return result
 }

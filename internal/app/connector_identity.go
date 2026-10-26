@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -30,13 +32,25 @@ func (c *Connector) OpenSession(ctx context.Context, platformSessionID string, r
 	if platformSessionID == "" {
 		return OpenPlatformSession{}, errors.New("platform session identity is required")
 	}
-	opened, err := protocol.OpenSessionWithIdentity(ctx, c.appGateway, c.adapter, request)
+	// The public creation payload may carry an initial prompt, but opening the
+	// host session must not synthesize a run before the server has created its
+	// durable Run identity. The application boundary submits that prompt after
+	// activation through the ordinary run controller.
+	openRequest := request
+	openRequest.Prompt = nil
+	opened, err := protocol.OpenSessionWithIdentity(ctx, c.appGateway, c.adapter, openRequest)
 	if err != nil {
 		return OpenPlatformSession{}, err
 	}
 	gatewaySession := opened.GatewaySession
 	if gatewaySession.ExternalThreadRef == "" {
 		gatewaySession.ExternalThreadRef = opened.AdapterSession.ExternalThreadRef
+	}
+	if err := c.appGateway.SetExternalThreadRef(gatewaySession, gatewaySession.ExternalThreadRef); err != nil {
+		cleanupCtx := context.WithoutCancel(ctx)
+		_ = c.adapter.CloseSession(cleanupCtx, opened.AdapterSession)
+		_ = c.appGateway.CloseSession(cleanupCtx, gatewaySession)
+		return OpenPlatformSession{}, err
 	}
 	if err := c.BindSessionIdentity(platformSessionID, request.CommandID, gatewaySession, opened.AdapterSession); err != nil {
 		cleanupCtx := context.WithoutCancel(ctx)
@@ -289,6 +303,9 @@ func (c *Connector) ObserveCommandIdentity(command protocol.Command, ack protoco
 }
 
 func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
+	if command.Kind == protocol.CommandKindSessionStart || command.Kind == protocol.CommandKindSessionAttach {
+		return c.acceptSessionCommand(ctx, command)
+	}
 	prepared, err := c.PreparePlatformCommand(command)
 	if err != nil {
 		return protocol.CommandAck{}, err
@@ -304,6 +321,87 @@ func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.
 	ack, acceptErr := c.controller.AcceptCommand(ctx, prepared)
 	observeErr := c.ObserveCommandIdentity(command, ack)
 	return ack, errors.Join(acceptErr, observeErr)
+}
+
+func (c *Connector) acceptSessionCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
+	if c == nil || c.journal == nil {
+		return protocol.CommandAck{}, errors.New("connector session command journal is unavailable")
+	}
+	ack, deduplicated, err := c.journal.BeginCommand(command)
+	if err != nil {
+		return ack, err
+	}
+	if deduplicated {
+		if ack.State == protocol.CommandStateUnknown {
+			return ack, protocol.ErrUnknownCommandResult
+		}
+		return ack, nil
+	}
+	if command.Kind == protocol.CommandKindSessionAttach {
+		return c.rejectSessionCommand(command, ack, protocol.ErrUnsupportedSessionPath)
+	}
+	request, err := decodeSessionCommand(command.Payload)
+	if err != nil {
+		return c.rejectSessionCommand(command, ack, err)
+	}
+	if request.CommandID != command.CommandID {
+		return c.rejectSessionCommand(command, ack, protocol.ErrIdempotencyConflict)
+	}
+	if request.Path != protocol.SessionPathNew {
+		return c.rejectSessionCommand(command, ack, protocol.ErrUnsupportedSessionPath)
+	}
+	opened, err := c.OpenSession(ctx, command.SessionID, request)
+	if err != nil {
+		if errors.Is(err, protocol.ErrUnknownCommandResult) || errors.Is(err, connectorruntime.ErrUnknownOutcome) {
+			ack.State = protocol.CommandStateUnknown
+			ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "session opening outcome is unknown", RequestID: command.CommandID}
+			if updateErr := c.journal.UpdateCommand(command.CommandID, ack); updateErr != nil {
+				return ack, errors.Join(err, updateErr)
+			}
+			return ack, err
+		}
+		return c.rejectSessionCommand(command, ack, err)
+	}
+	result, err := json.Marshal(sessionOpenResult{
+		ExternalThreadRef: opened.AdapterSession.ExternalThreadRef,
+		Generation:        opened.GatewaySession.Generation,
+	})
+	if err != nil {
+		return c.rejectSessionCommand(command, ack, err)
+	}
+	ack.State = protocol.CommandStateSucceeded
+	ack.Error = nil
+	ack.Result = result
+	if err := c.journal.UpdateCommand(command.CommandID, ack); err != nil {
+		return ack, err
+	}
+	return ack, nil
+}
+
+func (c *Connector) rejectSessionCommand(command protocol.Command, ack protocol.CommandAck, cause error) (protocol.CommandAck, error) {
+	ack.State = protocol.CommandStateRejected
+	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeInvalidRequest, Message: "session command was rejected", RequestID: command.CommandID}
+	if err := c.journal.UpdateCommand(command.CommandID, ack); err != nil {
+		return ack, errors.Join(cause, err)
+	}
+	return ack, cause
+}
+
+func decodeSessionCommand(payload json.RawMessage) (protocol.CreateSessionRequest, error) {
+	if len(bytes.TrimSpace(payload)) == 0 || bytes.Equal(bytes.TrimSpace(payload), []byte("null")) {
+		return protocol.CreateSessionRequest{}, errors.New("session command payload is required")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var request protocol.CreateSessionRequest
+	if err := decoder.Decode(&request); err != nil {
+		return protocol.CreateSessionRequest{}, fmt.Errorf("decode session command payload: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return protocol.CreateSessionRequest{}, errors.New("session command payload must contain one JSON object")
+	}
+	return request, nil
 }
 
 func (c *Connector) boundRunIdentity(platformSessionID, platformRunID string) (connectorruntime.RunBinding, error) {

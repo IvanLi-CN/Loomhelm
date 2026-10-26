@@ -213,6 +213,264 @@ func TestServerGatewayRunControlTLSWSSRoundTrip(t *testing.T) {
 	}
 }
 
+func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
+	databaseURL := isolatedApplicationDatabase(t)
+	issuer := applicationTestIssuer(t)
+	cfg := platform.Config{
+		Component:        platform.ComponentServer,
+		Version:          "session-creation-integration",
+		DrainToken:       "session-creation-test-drain",
+		ShutdownTimeout:  5 * time.Second,
+		StartupTimeout:   30 * time.Second,
+		DatabaseURL:      databaseURL,
+		DatabaseMaxConns: 8,
+		BrowserAuth: platform.BrowserAuthConfig{
+			OIDCIssuerURL: issuer.URL,
+			OIDCClientID:  "loomhelm-test",
+			SecureCookies: false,
+		},
+	}
+	baseURL, stop := startApplicationTLSTestServer(t, cfg)
+	defer stop()
+	alice := applicationBrowser(t)
+	alice.Transport = insecureTestHTTPClient().Transport
+	loginApplicationBrowser(t, alice, baseURL, "session-creation-alice")
+	var identity protocol.BrowserSessionResponse
+	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusOK), &identity)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	persistence, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 8})
+	if err != nil {
+		t.Fatalf("open fixture persistence: %v", err)
+	}
+	t.Cleanup(persistence.Close)
+	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+		Name:           "h01 session creation integration",
+		CredentialName: "session-creation-fixture",
+	})
+	if err != nil {
+		t.Fatalf("register fixture host: %v", err)
+	}
+	client, err := gateway.NewClient(gateway.ClientOptions{
+		URL:        strings.Replace(baseURL, "https://", "wss://", 1) + connectorGatewayPath,
+		HostID:     hostRegistration.Host.ID,
+		Token:      hostRegistration.Token,
+		HTTPClient: insecureTestHTTPClient(),
+	})
+	if err != nil {
+		t.Fatalf("create gateway client: %v", err)
+	}
+	connection, err := client.Connect(ctx)
+	if err != nil {
+		t.Fatalf("connect fixture gateway: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+
+	prompt := "run through the normal durable path"
+	createRequest := protocol.CreateSessionRequest{CommandID: "create-session-round-trip", Path: protocol.SessionPathNew, Prompt: &prompt}
+	responseCh := make(chan struct {
+		response *http.Response
+		err      error
+	}, 1)
+	go func() {
+		body, marshalErr := json.Marshal(createRequest)
+		if marshalErr != nil {
+			responseCh <- struct {
+				response *http.Response
+				err      error
+			}{err: marshalErr}
+			return
+		}
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/v1/sessions", strings.NewReader(string(body)))
+		if requestErr != nil {
+			responseCh <- struct {
+				response *http.Response
+				err      error
+			}{err: requestErr}
+			return
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", baseURL)
+		response, requestErr := alice.Do(request)
+		responseCh <- struct {
+			response *http.Response
+			err      error
+		}{response: response, err: requestErr}
+	}()
+
+	startMessage, err := connection.Read(ctx)
+	if err != nil {
+		t.Fatalf("read session creation command: %v", err)
+	}
+	if startMessage.Type != gateway.MessageCommand || startMessage.Command == nil {
+		t.Fatalf("session creation gateway message = %+v", startMessage)
+	}
+	startCommand := *startMessage.Command
+	if startCommand.Kind != protocol.CommandKindSessionStart || startCommand.CommandID != createRequest.CommandID || startCommand.SessionID == "" {
+		t.Fatalf("session creation command = %+v", startCommand)
+	}
+	var forwardedRequest protocol.CreateSessionRequest
+	if err := json.Unmarshal(startCommand.Payload, &forwardedRequest); err != nil {
+		t.Fatalf("decode forwarded session request: %v", err)
+	}
+	if forwardedRequest.Prompt == nil || *forwardedRequest.Prompt != prompt {
+		t.Fatalf("forwarded session prompt = %+v", forwardedRequest.Prompt)
+	}
+	if err := connection.Acknowledge(ctx, startMessage.RequestID, protocol.CommandAck{
+		CommandID:  startCommand.CommandID,
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateSucceeded,
+		Result:     json.RawMessage(`{"external_thread_ref":"thread-session-round-trip","generation":"execution-session-round-trip"}`),
+	}); err != nil {
+		t.Fatalf("acknowledge session creation command: %v", err)
+	}
+
+	runMessage, err := connection.Read(ctx)
+	if err != nil {
+		t.Fatalf("read durable initial run command: %v", err)
+	}
+	if runMessage.Command == nil || runMessage.Command.Kind != protocol.CommandKindRunSend || runMessage.Command.CommandID != createRequest.CommandID+":initial" || runMessage.Command.RunID == nil {
+		t.Fatalf("initial run command = %+v", runMessage.Command)
+	}
+	if err := connection.Acknowledge(ctx, runMessage.RequestID, protocol.CommandAck{
+		CommandID:  runMessage.Command.CommandID,
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateAccepted,
+	}); err != nil {
+		t.Fatalf("acknowledge initial run command: %v", err)
+	}
+	result := <-responseCh
+	if result.err != nil {
+		t.Fatalf("create session request: %v", result.err)
+	}
+	defer result.response.Body.Close()
+	if result.response.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want %d", result.response.StatusCode, http.StatusCreated)
+	}
+	var created protocol.SessionResponse
+	if err := json.NewDecoder(result.response.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created session response: %v", err)
+	}
+	if created.Session.ID != startCommand.SessionID || created.Session.ExternalThreadRef != "thread-session-round-trip" || created.Session.State != protocol.SessionStateActive {
+		t.Fatalf("created session = %+v", created.Session)
+	}
+	store := sessions.NewStore(persistence.Pool())
+	access, err := store.GetAccess(ctx, created.Session.ID)
+	if err != nil {
+		t.Fatalf("read activated session access: %v", err)
+	}
+	if !access.Confirmed || access.CreatorUserID != identity.UserID || access.HostID != hostRegistration.Host.ID {
+		t.Fatalf("activated session access = %+v", access)
+	}
+
+	var retry protocol.SessionResponse
+	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/sessions", createRequest, map[string]string{"Origin": baseURL}, http.StatusCreated), &retry)
+	if retry.Session != created.Session {
+		t.Fatalf("idempotent session retry = %+v, first = %+v", retry.Session, created.Session)
+	}
+	conflict := createRequest
+	otherPrompt := "changed payload"
+	conflict.Prompt = &otherPrompt
+	conflictResponse := applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/sessions", conflict, map[string]string{"Origin": baseURL}, http.StatusConflict)
+	var conflictError protocol.ApiError
+	decodeApplicationResponse(t, conflictResponse, &conflictError)
+	if conflictError.Code != protocol.ErrorCodeIdempotencyConflict {
+		t.Fatalf("creation conflict code = %q", conflictError.Code)
+	}
+
+	postSession := func(request protocol.CreateSessionRequest) <-chan struct {
+		response *http.Response
+		err      error
+	} {
+		resultCh := make(chan struct {
+			response *http.Response
+			err      error
+		}, 1)
+		go func() {
+			body, marshalErr := json.Marshal(request)
+			if marshalErr != nil {
+				resultCh <- struct {
+					response *http.Response
+					err      error
+				}{err: marshalErr}
+				return
+			}
+			httpRequest, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/v1/sessions", strings.NewReader(string(body)))
+			if requestErr != nil {
+				resultCh <- struct {
+					response *http.Response
+					err      error
+				}{err: requestErr}
+				return
+			}
+			httpRequest.Header.Set("Content-Type", "application/json")
+			httpRequest.Header.Set("Origin", baseURL)
+			response, requestErr := alice.Do(httpRequest)
+			resultCh <- struct {
+				response *http.Response
+				err      error
+			}{response: response, err: requestErr}
+		}()
+		return resultCh
+	}
+	unknownRequest := protocol.CreateSessionRequest{CommandID: "create-session-unknown", Path: protocol.SessionPathNew}
+	unknownResultCh := postSession(unknownRequest)
+	unknownMessage, err := connection.Read(ctx)
+	if err != nil || unknownMessage.Command == nil || unknownMessage.Command.CommandID != unknownRequest.CommandID {
+		t.Fatalf("read unknown session command: message=%+v error=%v", unknownMessage, err)
+	}
+	if err := connection.Acknowledge(ctx, unknownMessage.RequestID, protocol.CommandAck{
+		CommandID:  unknownRequest.CommandID,
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateUnknown,
+	}); err != nil {
+		t.Fatalf("acknowledge unknown session command: %v", err)
+	}
+	unknownResult := <-unknownResultCh
+	if unknownResult.err != nil {
+		t.Fatalf("unknown session request: %v", unknownResult.err)
+	}
+	if unknownResult.response.StatusCode != http.StatusConflict {
+		t.Fatalf("unknown session status = %d, want %d", unknownResult.response.StatusCode, http.StatusConflict)
+	}
+	unknownResult.response.Body.Close()
+	var unknownSessionID string
+	if err := persistence.Pool().QueryRow(ctx, `SELECT id FROM execution_sessions WHERE creation_command_id = $1`, unknownRequest.CommandID).Scan(&unknownSessionID); err != nil {
+		t.Fatalf("find unknown creation intent: %v", err)
+	}
+	unknownAccess, err := store.GetAccess(ctx, unknownSessionID)
+	if err != nil || unknownAccess.IntentState != sessions.IntentStateUnknown || unknownAccess.Confirmed {
+		t.Fatalf("unknown creation access = %+v, error = %v", unknownAccess, err)
+	}
+
+	lostRequest := protocol.CreateSessionRequest{CommandID: "create-session-ack-loss", Path: protocol.SessionPathNew}
+	lostResultCh := postSession(lostRequest)
+	lostMessage, err := connection.Read(ctx)
+	if err != nil || lostMessage.Command == nil || lostMessage.Command.CommandID != lostRequest.CommandID {
+		t.Fatalf("read ACK-loss session command: message=%+v error=%v", lostMessage, err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("close gateway during ACK-loss simulation: %v", err)
+	}
+	lostResult := <-lostResultCh
+	if lostResult.err != nil {
+		t.Fatalf("ACK-loss session request: %v", lostResult.err)
+	}
+	if lostResult.response.StatusCode != http.StatusConflict {
+		t.Fatalf("ACK-loss session status = %d, want %d", lostResult.response.StatusCode, http.StatusConflict)
+	}
+	lostResult.response.Body.Close()
+	var lostSessionID string
+	if err := persistence.Pool().QueryRow(ctx, `SELECT id FROM execution_sessions WHERE creation_command_id = $1`, lostRequest.CommandID).Scan(&lostSessionID); err != nil {
+		t.Fatalf("find ACK-loss creation intent: %v", err)
+	}
+	lostAccess, err := store.GetAccess(ctx, lostSessionID)
+	if err != nil || lostAccess.IntentState != sessions.IntentStateUnknown || lostAccess.Confirmed {
+		t.Fatalf("ACK-loss creation access = %+v, error = %v", lostAccess, err)
+	}
+}
+
 func startApplicationTLSTestServer(t *testing.T, cfg platform.Config) (string, func()) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

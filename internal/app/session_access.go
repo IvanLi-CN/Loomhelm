@@ -9,7 +9,10 @@ import (
 	"net/http"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
+	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/go-chi/chi/v5"
 )
@@ -30,6 +33,7 @@ type sessionService struct {
 	principal auth.PrincipalResolver
 	projects  sessionProjectAccess
 	records   sessionRecords
+	creation  sessionCreationApplication
 }
 
 func (s *sessionService) authorize(ctx context.Context, principal auth.Principal, sessionID string, write bool) (sessions.SessionAccess, error) {
@@ -91,7 +95,38 @@ func (s *sessionService) GetSession(ctx context.Context, principal auth.Principa
 }
 
 func (s *sessionService) mount(router chi.Router) {
+	router.Post("/sessions", s.handleCreate)
 	router.Get("/sessions/{session_id}", s.handleGet)
+}
+
+func (s *sessionService) handleCreate(writer http.ResponseWriter, request *http.Request) {
+	if s.principal == nil {
+		auth.WriteError(writer, request, http.StatusServiceUnavailable, runs.ErrControlServiceUnavailable, "session creation is temporarily unavailable")
+		return
+	}
+	principal, err := s.principal.ResolvePrincipal(request.Context(), request)
+	if err == nil && principal.UserID == "" {
+		err = auth.ErrUnauthenticated
+	}
+	if err != nil {
+		writeSessionCreationError(writer, request, err)
+		return
+	}
+	if s.creation == nil {
+		writeSessionCreationError(writer, request, runs.ErrControlServiceUnavailable)
+		return
+	}
+	var body protocol.CreateSessionRequest
+	if err := auth.DecodeJSON(request, &body); err != nil {
+		writeSessionCreationError(writer, request, err)
+		return
+	}
+	session, err := s.creation.CreateSession(request.Context(), principal, body)
+	if err != nil {
+		writeSessionCreationError(writer, request, err)
+		return
+	}
+	auth.WriteJSON(writer, http.StatusCreated, protocol.SessionResponse{Session: session})
 }
 
 func (s *sessionService) handleGet(writer http.ResponseWriter, request *http.Request) {
@@ -127,4 +162,38 @@ func (s *sessionService) handleGet(writer http.ResponseWriter, request *http.Req
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(writer).Encode(protocol.SessionResponse{Session: session})
+}
+
+func writeSessionCreationError(writer http.ResponseWriter, request *http.Request, err error) {
+	status := http.StatusServiceUnavailable
+	code := protocol.ErrorCodeInvalidRequest
+	message := "session creation is temporarily unavailable"
+	switch {
+	case errors.Is(err, auth.ErrUnauthenticated):
+		status, code, message = http.StatusUnauthorized, protocol.ErrorCodeUnauthorized, "authentication required"
+	case errors.Is(err, auth.ErrForbidden):
+		status, code, message = http.StatusForbidden, protocol.ErrorCodeUnauthorized, "operation is not authorized"
+	case errors.Is(err, auth.ErrNotFound):
+		status, code, message = http.StatusNotFound, protocol.ErrorCodeNotFound, "session resource is unavailable"
+	case errors.Is(err, protocol.ErrUnsupportedSessionPath):
+		status, code, message = http.StatusBadRequest, protocol.ErrorCodeUnsupportedPath, "requested session path is unsupported"
+	case errors.Is(err, protocol.ErrUnknownCommandResult):
+		status, code, message = http.StatusConflict, protocol.ErrorCodeUnknownResult, "session creation outcome requires reconciliation"
+	case errors.Is(err, protocol.ErrIdempotencyConflict):
+		status, code, message = http.StatusConflict, protocol.ErrorCodeIdempotencyConflict, "command identity conflicts with an existing request"
+	case errors.Is(err, auth.ErrInvalid), errors.Is(err, sessions.ErrInvalidSession):
+		status, code, message = http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid session creation request"
+	case errors.Is(err, sessions.ErrTaskBound), errors.Is(err, sessions.ErrProjectMismatch), errors.Is(err, sessions.ErrSessionConflict), errors.Is(err, sessions.ErrSessionTransition):
+		status, code, message = http.StatusConflict, protocol.ErrorCodeConflict, "session creation conflicts with persisted state"
+	case errors.Is(err, hosts.ErrNotFound), errors.Is(err, hosts.ErrCommandNotDelivered), errors.Is(err, gateway.ErrNoActiveConnection):
+		status, code, message = http.StatusServiceUnavailable, protocol.ErrorCodeConflict, "execution host is not ready"
+	}
+	requestID := request.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = "req_" + rand.Text()
+	}
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(protocol.ApiError{Code: code, Message: message, RequestID: requestID})
 }

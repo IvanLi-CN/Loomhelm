@@ -62,6 +62,13 @@ func TestServicePersistsCredentialsGenerationsAndCursorRecovery(t *testing.T) {
 		CursorRetention: time.Hour,
 		Now:             func() time.Time { return clock },
 	})
+	configured, err := service.ConfiguredHost(ctx)
+	if err != nil {
+		t.Fatalf("ConfiguredHost() error = %v", err)
+	}
+	if configured.ID != registration.Host.ID {
+		t.Fatalf("ConfiguredHost() = %q, want %q", configured.ID, registration.Host.ID)
+	}
 	credential, err := service.Authenticate(ctx, registration.Token)
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)

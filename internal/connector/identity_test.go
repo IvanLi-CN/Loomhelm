@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -479,11 +480,22 @@ func TestJournalSessionAliasRotationPreservesHistoricalBindings(t *testing.T) {
 		t.Fatalf("old generation mapping = %+v, delivered = %v, error = %v", mapped, delivered, err)
 	}
 
-	if err := first.RotateSessionAlias(SessionAlias{PlatformSessionID: oldAlias.PlatformSessionID, AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: "generation-new", CommandID: oldAlias.CommandID}); err != nil {
-		t.Fatal(err)
+	rotatedAlias := SessionAlias{PlatformSessionID: oldAlias.PlatformSessionID, AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: "generation-new", CommandID: oldAlias.CommandID}
+	var rotationGroup sync.WaitGroup
+	rotationErrors := make(chan error, 8)
+	for index := 0; index < 8; index++ {
+		rotationGroup.Add(1)
+		go func() {
+			defer rotationGroup.Done()
+			rotationErrors <- first.RotateSessionAlias(rotatedAlias)
+		}()
 	}
-	if err := first.RotateSessionAlias(SessionAlias{PlatformSessionID: oldAlias.PlatformSessionID, AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: "generation-new", CommandID: oldAlias.CommandID}); err != nil {
-		t.Fatalf("repeated generation rotation was not idempotent: %v", err)
+	rotationGroup.Wait()
+	close(rotationErrors)
+	for rotationErr := range rotationErrors {
+		if rotationErr != nil {
+			t.Fatalf("concurrent generation rotation was not idempotent: %v", rotationErr)
+		}
 	}
 	rotated, ok := first.SessionAlias(oldAlias.PlatformSessionID)
 	if !ok || rotated.Generation != "generation-new" || rotated.Revision != 2 {

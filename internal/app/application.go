@@ -18,10 +18,11 @@ import (
 )
 
 type applicationServices struct {
-	identity *auth.Service
-	projects *projects.Service
-	tasks    *tasks.Service
-	sessions *sessions.Store
+	identity        *auth.Service
+	projects        *projects.Service
+	tasks           *tasks.Service
+	sessions        *sessions.Store
+	sessionCreation sessionCreationApplication
 }
 
 // newApplicationHandler returns relative routes for Server's /api/v1 mount.
@@ -112,7 +113,7 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 }
 
 func (s *applicationServices) sessionAccess() *sessionService {
-	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions}
+	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions, creation: s.sessionCreation}
 }
 
 func writeApplicationError(writer http.ResponseWriter, request *http.Request, status int, message string) {

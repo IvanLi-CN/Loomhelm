@@ -45,6 +45,16 @@ func (t *gatewayExecutionTransport) SendCommand(ctx context.Context, command pro
 	return t.gateway.SendCommand(ctx, access.HostID, command)
 }
 
+// SendSessionCommand is the pre-activation command path. It uses the host
+// selected for the durable creation intent because the Session has no
+// confirmed access row yet.
+func (t *gatewayExecutionTransport) SendSessionCommand(ctx context.Context, hostID string, command protocol.Command) (protocol.CommandAck, error) {
+	if t == nil || t.gateway == nil || strings.TrimSpace(hostID) == "" {
+		return protocol.CommandAck{}, runs.ErrControlServiceUnavailable
+	}
+	return t.gateway.SendCommand(ctx, hostID, command)
+}
+
 // ReconcileCommand is deliberately explicit: the Connector WSS protocol has
 // no command-reconciliation frame. Reconciliation must therefore remain
 // unknown until a later Connector contract supplies a durable observation.
