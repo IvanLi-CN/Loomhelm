@@ -253,7 +253,7 @@ func TestCreationIntentConcurrentSameCommandConverges(t *testing.T) {
 	}
 }
 
-func TestSessionIntentMigrationReentryAndAtomicRollback(t *testing.T) {
+func TestSessionIntentMigrationReentry(t *testing.T) {
 	db := openSessionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -290,35 +290,6 @@ func TestSessionIntentMigrationReentryAndAtomicRollback(t *testing.T) {
 		t.Fatalf("session intent index count = %d, want 4", intentIndexCount)
 	}
 
-	probe := fmt.Sprintf("e01_session_schema_atomic_probe_%d", time.Now().UnixNano())
-	quotedProbe := quoteSessionTestIdentifier(probe)
-	tx, err := db.Pool().Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin atomic schema probe: %v", err)
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "CREATE TABLE "+quotedProbe+" (id TEXT PRIMARY KEY)"); err != nil {
-		t.Fatalf("create atomic schema probe: %v", err)
-	}
-	if _, err := tx.Exec(ctx, "ALTER TABLE "+quotedProbe+" ADD COLUMN creation_state TEXT"); err != nil {
-		t.Fatalf("extend atomic schema probe: %v", err)
-	}
-	if _, err := tx.Exec(ctx, "CREATE INDEX "+quoteSessionTestIdentifier(probe+"_idx")+" ON "+quotedProbe+" (creation_state)"); err != nil {
-		t.Fatalf("index atomic schema probe: %v", err)
-	}
-	if _, err := tx.Exec(ctx, "ALTER TABLE "+quotedProbe+" ADD COLUMN invalid_state e01_missing_type"); err == nil {
-		t.Fatal("failing atomic schema probe unexpectedly succeeded")
-	}
-	if err := tx.Rollback(ctx); err != nil {
-		t.Fatalf("rollback atomic schema probe: %v", err)
-	}
-	var probeExists bool
-	if err := db.Pool().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1)`, probe).Scan(&probeExists); err != nil {
-		t.Fatalf("check rolled back schema probe: %v", err)
-	}
-	if probeExists {
-		t.Fatalf("rolled back schema probe %q still exists", probe)
-	}
 }
 
 func TestSessionIntentMigrationFrom00009(t *testing.T) {
@@ -355,40 +326,83 @@ func TestSessionIntentMigrationFrom00009(t *testing.T) {
 		t.Fatalf("open scoped migration fixture database: %v", err)
 	}
 	defer scoped.Close()
-	if err := scoped.Migrate(ctx); err != nil {
-		t.Fatalf("apply 00009 to 00011 migration fixture: %v", err)
+	sqlDB := stdlib.OpenDBFromPool(scoped.Pool())
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("create session intent migration provider: %v", err)
 	}
-	var appliedCount int
+	defer provider.Close()
+	if _, err := provider.UpTo(ctx, 9); err != nil {
+		t.Fatalf("apply migration fixture through 00009: %v", err)
+	}
+	const (
+		legacyID         = "e01-migration-legacy-00009"
+		legacyThread     = "e01-migration-legacy-thread"
+		legacyGeneration = "e01-migration-legacy-generation"
+	)
+	if _, err := scoped.Pool().Exec(ctx, `
+		INSERT INTO execution_sessions (id, external_thread_ref, path, state, project_id, generation, last_cursor, terminal_reason)
+		VALUES ($1, $2, 'new', 'active', NULL, $3, '', '')
+	`, legacyID, legacyThread, legacyGeneration); err != nil {
+		t.Fatalf("seed pre-00010 legacy session row: %v", err)
+	}
+	if _, err := scoped.Pool().Exec(ctx, `CREATE INDEX execution_sessions_creator_command_idx ON execution_sessions (id)`); err != nil {
+		t.Fatalf("create deliberate 00010 migration collision: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 10); err == nil {
+		t.Fatal("00010 migration collision unexpectedly succeeded")
+	}
+	var applied10 int
+	if err := scoped.Pool().QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 10 AND is_applied`).Scan(&applied10); err != nil {
+		t.Fatalf("read failed 00010 migration history: %v", err)
+	}
+	if applied10 != 0 {
+		t.Fatalf("failed 00010 migration recorded as applied: %d", applied10)
+	}
+	var creationStateColumns int
 	if err := scoped.Pool().QueryRow(ctx, `
 		SELECT count(*)
-		FROM goose_db_version
-		WHERE version_id IN (9, 10, 11) AND is_applied
-	`).Scan(&appliedCount); err != nil {
-		t.Fatalf("read fresh migration fixture history: %v", err)
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'execution_sessions' AND column_name = 'creation_state'
+	`).Scan(&creationStateColumns); err != nil {
+		t.Fatalf("read rolled-back 00010 columns: %v", err)
 	}
-	if appliedCount != 3 {
-		t.Fatalf("fresh migration fixture applied 00009/00010/00011 records = %d, want 3", appliedCount)
+	if creationStateColumns != 0 {
+		t.Fatalf("rolled-back 00010 left creation_state column count = %d", creationStateColumns)
 	}
-
-	legacy, err := NewStore(scoped.Pool()).Create(ctx, NewInput{
-		ID:                "e01-migration-legacy-" + fmt.Sprintf("%d", time.Now().UnixNano()),
-		Path:              protocol.SessionPathNew,
-		ExternalThreadRef: "e01-migration-legacy-thread",
-		Generation:        "e01-migration-legacy-generation",
-	})
-	if err != nil {
-		t.Fatalf("create legacy row after 00009 to 00011 migration: %v", err)
+	var externalThread, generation string
+	if err := scoped.Pool().QueryRow(ctx, `SELECT external_thread_ref, generation FROM execution_sessions WHERE id = $1`, legacyID).Scan(&externalThread, &generation); err != nil {
+		t.Fatalf("read legacy row after failed 00010: %v", err)
 	}
-	legacyAccess, err := NewStore(scoped.Pool()).GetAccess(ctx, legacy.ID)
-	if err != nil {
-		t.Fatalf("read migrated legacy access facts: %v", err)
+	if externalThread != legacyThread || generation != legacyGeneration {
+		t.Fatalf("legacy row changed after failed 00010: thread=%q generation=%q", externalThread, generation)
 	}
-	if legacyAccess.CreatorUserID != `` || legacyAccess.HostID != `` || !legacyAccess.Confirmed {
-		t.Fatalf("migrated legacy access facts = %+v", legacyAccess)
+	if _, err := scoped.Pool().Exec(ctx, `DROP INDEX execution_sessions_creator_command_idx`); err != nil {
+		t.Fatalf("remove deliberate 00010 migration collision: %v", err)
 	}
-
-	if err := scoped.Migrate(ctx); err != nil {
-		t.Fatalf("re-enter scoped 00011 migration: %v", err)
+	if _, err := provider.UpTo(ctx, 10); err != nil {
+		t.Fatalf("re-enter 00010 migration after cleanup: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 10); err != nil {
+		t.Fatalf("repeat 00010 migration: %v", err)
+	}
+	if err := scoped.Pool().QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 10 AND is_applied`).Scan(&applied10); err != nil {
+		t.Fatalf("read successful 00010 migration history: %v", err)
+	}
+	if applied10 != 1 {
+		t.Fatalf("successful 00010 migration records = %d, want 1", applied10)
+	}
+	var migratedState string
+	var creatorUserID, hostID, commandID *string
+	if err := scoped.Pool().QueryRow(ctx, `
+		SELECT external_thread_ref, generation, creation_state, creator_user_id, host_id, creation_command_id
+		FROM execution_sessions WHERE id = $1
+	`, legacyID).Scan(&externalThread, &generation, &migratedState, &creatorUserID, &hostID, &commandID); err != nil {
+		t.Fatalf("read legacy row after successful 00010: %v", err)
+	}
+	if externalThread != legacyThread || generation != legacyGeneration || migratedState != "confirmed" || creatorUserID != nil || hostID != nil || commandID != nil {
+		t.Fatalf("migrated legacy row = thread %q generation %q state %q creator %v host %v command %v", externalThread, generation, migratedState, creatorUserID, hostID, commandID)
 	}
 }
 

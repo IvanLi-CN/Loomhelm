@@ -514,12 +514,37 @@ func TestJournalReadsV2AndAppendsV3WithoutRewritingHistory(t *testing.T) {
 		Generation:        "generation-v2",
 		UpdatedAt:         "2026-10-21T00:00:00Z",
 	}
-	record := journalRecord{FormatVersion: previousJournalFormatVersion, Type: "session", At: legacy.UpdatedAt, Session: &legacy}
-	encoded, err := json.Marshal(record)
+	v2Request := protocol.NewSessionRequest{CommandID: "create-v2", ProjectID: "project-v2", TaskID: "task-v2", Prompt: "v2 prompt"}
+	v2Digest, err := sessionStartPayloadDigest(v2Request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, append(encoded, '\n'), 0o600); err != nil {
+	v2Intent := sessionStartIntent{
+		IntentID:          "generation-v2-intent",
+		GatewayHandle:     "gateway-v2-intent",
+		Generation:        "generation-v2-intent",
+		CommandID:         v2Request.CommandID,
+		RequestDigest:     v2Digest,
+		State:             "resolved",
+		ExternalThreadRef: "thread-v2-intent",
+		UpdatedAt:         legacy.UpdatedAt,
+	}
+	records := []journalRecord{
+		{FormatVersion: previousJournalFormatVersion, Type: "session", At: legacy.UpdatedAt, Session: &legacy},
+		{FormatVersion: previousJournalFormatVersion, Type: "session_start", At: v2Intent.UpdatedAt, SessionStart: &v2Intent},
+	}
+	encoded, err := json.Marshal(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := json.Marshal(records[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = append(encoded, '\n')
+	encoded = append(encoded, second...)
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := OpenJournal(path)
@@ -529,6 +554,12 @@ func TestJournalReadsV2AndAppendsV3WithoutRewritingHistory(t *testing.T) {
 	defer journal.Close()
 	if facts := journal.LegacySessionFacts(); len(facts) != 1 || facts[0].PlatformSessionID != "" || facts[0].CommandID != "" || facts[0].AdapterSessionID != legacy.SessionID {
 		t.Fatalf("legacy session facts = %+v", facts)
+	}
+	if resolved, ok, err := journal.ResolvedSessionStart(v2Request); err != nil || !ok || resolved.ExternalThreadRef != v2Intent.ExternalThreadRef {
+		t.Fatalf("v2 session-start intent = %+v, found = %v, error = %v", resolved, ok, err)
+	}
+	if intentID, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-v2-retry", Generation: "generation-v2-retry"}, v2Request); err != nil || intentID != v2Intent.IntentID {
+		t.Fatalf("v2 resolved session-start retry = %q, error = %v", intentID, err)
 	}
 	if err := journal.RecordSessionAlias(SessionAlias{
 		PlatformSessionID: "platform-v3",

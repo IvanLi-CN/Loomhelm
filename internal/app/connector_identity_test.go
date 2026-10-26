@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -323,6 +325,196 @@ func TestConnectorSessionStartUsesExplicitIdentityAndDoesNotSynthesizeInitialRun
 	}
 	_ = adapter.CloseSession(context.Background(), protocol.AdapterSession{SessionID: alias.AdapterSessionID})
 	_ = appGateway.CloseSession(context.Background(), protocol.GatewaySession{Handle: alias.AdapterSessionID})
+}
+
+func TestConnectorRecoversCachedRunAckAfterRestartWithoutNativeReplay(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	journalPath := journal.Path()
+	connector := &Connector{journal: journal}
+	if err := connector.BindSessionIdentity("platform-session-run-recovery", "create-run-recovery", protocol.GatewaySession{Generation: "generation-run-recovery"}, protocol.AdapterSession{SessionID: "adapter-run-recovery", ExternalThreadRef: "thread-run-recovery"}); err != nil {
+		t.Fatal(err)
+	}
+	runID := "platform-run-recovery"
+	command := protocol.Command{
+		CommandID: "run-recovery-cached",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"recover the cached ACK"}`),
+		RunID:     &runID,
+		SessionID: "platform-session-run-recovery",
+	}
+	prepared, err := connector.PreparePlatformCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, deduplicated, err := journal.BeginCommand(prepared); err != nil || deduplicated {
+		t.Fatalf("seed cached run command = deduplicated %v, error %v", deduplicated, err)
+	}
+	nativeTurnID := "native-turn-recovery"
+	nativeOperationID := "generation-run-recovery\x00rpc-recovery"
+	seedAck := protocol.CommandAck{
+		CommandID:   prepared.CommandID,
+		State:       protocol.CommandStateSucceeded,
+		OperationID: &nativeOperationID,
+		Result:      json.RawMessage(`{"ok":true}`),
+		RunID:       &nativeTurnID,
+	}
+	if err := journal.UpdateCommand(prepared.CommandID, seedAck); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveredJournal, err := connectorruntime.OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recoveredJournal.Close()
+	recoveredConnector := &Connector{journal: recoveredJournal}
+	retry, err := recoveredConnector.acceptPlatformCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded || string(retry.Result) != string(seedAck.Result) {
+		t.Fatalf("recovered cached run ACK = %+v, want the persisted success", retry)
+	}
+	binding, ok := recoveredJournal.RunBindingForCommand(command.CommandID)
+	if !ok || binding.State != connectorruntime.IdentityStateBound || binding.Generation != "generation-run-recovery" || binding.NativeTurnID != nativeTurnID || binding.NativeOperationID != nativeOperationID {
+		t.Fatalf("recovered run binding = %+v, found = %v", binding, ok)
+	}
+	storedCommand, _, err := recoveredJournal.Command(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(storedCommand.Payload) != string(prepared.Payload) {
+		t.Fatalf("recovered command payload changed: %s", storedCommand.Payload)
+	}
+}
+
+func TestConnectorLeavesCachedRunAckUnknownWithoutExactNativeFacts(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	connector := &Connector{journal: journal}
+	if err := connector.BindSessionIdentity("platform-session-run-unknown", "create-run-unknown", protocol.GatewaySession{Generation: "generation-run-unknown"}, protocol.AdapterSession{SessionID: "adapter-run-unknown", ExternalThreadRef: "thread-run-unknown"}); err != nil {
+		t.Fatal(err)
+	}
+	runID := "platform-run-unknown"
+	command := protocol.Command{CommandID: "run-unknown-cached", Kind: protocol.CommandKindRunSend, Payload: json.RawMessage(`{"prompt":"insufficient evidence"}`), RunID: &runID, SessionID: "platform-session-run-unknown"}
+	prepared, err := connector.PreparePlatformCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.BeginCommand(prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommand(prepared.CommandID, protocol.CommandAck{CommandID: prepared.CommandID, State: protocol.CommandStateSucceeded, Result: json.RawMessage(`{"ok":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := connector.acceptPlatformCommand(context.Background(), command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("insufficient run evidence error = %v, want unknown result", err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateUnknown || retry.Error == nil || retry.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("insufficient run evidence ACK = %+v", retry)
+	}
+	binding, ok := journal.RunBindingForCommand(command.CommandID)
+	if !ok || binding.State != connectorruntime.IdentityStateUnknown || binding.NativeTurnID != "" || binding.NativeOperationID != "" {
+		t.Fatalf("insufficient run evidence binding = %+v, found = %v", binding, ok)
+	}
+}
+
+func TestConnectorRecoversCachedSessionStartFromExactIntentAfterRestart(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	journalPath := journal.Path()
+	commandID := "session-recovery-cached"
+	threadID := "thread-session-recovery"
+	request := protocol.CreateSessionRequest{CommandID: commandID, Path: protocol.SessionPathNew, ProjectID: stringPointer("project-session-recovery"), Prompt: stringPointer("initial prompt is outside native session creation")}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{CommandID: commandID, Kind: protocol.CommandKindSessionStart, Payload: payload, SessionID: "platform-session-session-recovery"}
+	if _, deduplicated, err := journal.BeginCommand(command); err != nil || deduplicated {
+		t.Fatalf("seed cached session command = deduplicated %v, error %v", deduplicated, err)
+	}
+	nativeRequest := protocol.NewSessionRequest{CommandID: commandID, ProjectID: "project-session-recovery"}
+	gatewaySession := protocol.GatewaySession{Handle: "gateway-session-recovery", Generation: "generation-session-recovery"}
+	intentID, err := journal.BeginSessionStart(gatewaySession, nativeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeSessionID := sessionRecoveryStableID(threadID)
+	if err := journal.ResolveSessionStart(intentID, nativeSessionID, threadID, gatewaySession.Generation); err != nil {
+		t.Fatal(err)
+	}
+	connector := &Connector{journal: journal}
+	if err := connector.BindSessionIdentity(command.SessionID, command.CommandID, gatewaySession, protocol.AdapterSession{SessionID: nativeSessionID, ExternalThreadRef: threadID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommand(command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateUnknown, Error: &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "simulated crash after alias persistence", RequestID: command.CommandID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveredJournal, err := connectorruntime.OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recoveredJournal.Close()
+	recoveredConnector := &Connector{journal: recoveredJournal}
+	retry, err := recoveredConnector.acceptSessionCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded {
+		t.Fatalf("recovered session ACK = %+v", retry)
+	}
+	var opened sessionOpenResult
+	if err := json.Unmarshal(retry.Result, &opened); err != nil {
+		t.Fatal(err)
+	}
+	if opened.ExternalThreadRef != threadID || opened.Generation != gatewaySession.Generation {
+		t.Fatalf("recovered session result = %+v", opened)
+	}
+	aliases := recoveredJournal.SessionAliases()
+	if len(aliases) != 1 || aliases[0].AdapterSessionID != nativeSessionID {
+		t.Fatalf("recovered session aliases = %+v", aliases)
+	}
+}
+
+func TestConnectorRejectsCachedSessionStartWithConflictingAlias(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	commandID := "session-conflicting-alias"
+	request := protocol.CreateSessionRequest{CommandID: commandID, Path: protocol.SessionPathNew}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{CommandID: commandID, Kind: protocol.CommandKindSessionStart, Payload: payload, SessionID: "platform-session-conflicting-alias"}
+	if _, _, err := journal.BeginCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordSessionAlias(connectorruntime.SessionAlias{PlatformSessionID: command.SessionID, AdapterSessionID: "adapter-conflicting-alias", ExternalThreadRef: "thread-conflicting-alias", Generation: "generation-conflicting-alias", CommandID: "another-creation-command"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommand(command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := (&Connector{journal: journal}).acceptSessionCommand(context.Background(), command)
+	if !errors.Is(err, connectorruntime.ErrIdentityConflict) {
+		t.Fatalf("conflicting session alias error = %v, want identity conflict", err)
+	}
+	if retry.State != protocol.CommandStateRejected {
+		t.Fatalf("conflicting session alias ACK = %+v, want rejected", retry)
+	}
+}
+
+func sessionRecoveryStableID(externalThreadRef string) string {
+	sum := sha256.Sum256([]byte(externalThreadRef))
+	return "session-" + hex.EncodeToString(sum[:])[:24]
 }
 
 func openConnectorIdentityJournal(t *testing.T) *connectorruntime.Journal {

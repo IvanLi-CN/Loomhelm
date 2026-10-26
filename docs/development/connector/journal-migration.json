@@ -62,6 +62,7 @@
       "required_test_evidence": [
         "v1 records round-trip through the journal reader",
         "v2 records round-trip through the journal reader",
+        "a v2 session_start record with command_id and request_digest is read, its exact resolved intent is returned, and a retry appends v3 without rewriting the v2 bytes",
         "v3 identity records append without rewriting v1 or v2 history",
         "v1 session-start records do not satisfy a new explicit creation identity",
         "v2 session-start records persist command_id and payload digest",
@@ -76,6 +77,8 @@
         "a torn final write is truncated safely",
         "accepted and executing commands become unknown after restart",
         "unknown outcomes require explicit reconciliation and are never replayed",
+        "a duplicate run.send after restart reconciles the exact persisted native ACK into the original generation binding before returning success, while missing native evidence remains unknown and no native command is replayed",
+        "a duplicate session.start after restart requires the unchanged command digest, the resolved session-start intent and the durable alias to agree before returning the same Session; missing or ambiguous facts remain unknown and never create a second native session",
         "generation-qualified persisted RPC observations disambiguate reused JSON-RPC IDs without rewriting raw response events",
         "approval claims from another session generation cannot apply a decision to the current pending request",
         "approval resolution events retain the pending run identity when the app-server omits turnId",

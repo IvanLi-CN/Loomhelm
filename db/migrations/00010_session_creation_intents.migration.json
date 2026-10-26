@@ -35,8 +35,8 @@
       "ddl-00010-session-intent-schema"
     ],
     "progress_signals": [
-      "A fresh PostgreSQL schema is migrated through 00009 and 00010, and DB.Migrate records migration 00010 only after the complete schema transaction commits; TestSessionIntentMigrationFrom00009 verifies both applied records and legacy-row readability.",
-      "A repeated DB.Migrate leaves the migration history and all four creation-intent indexes unchanged; TestSessionIntentMigrationReentryAndAtomicRollback verifies re-entry.",
+      "A fresh PostgreSQL schema is migrated through 00009, a real 00009-shaped execution_sessions row is stored, and migration 00010 is re-entered after an actual index-collision failure; TestSessionIntentMigrationFrom00009 verifies rollback leaves version 10 unapplied and the pre-migration row unchanged before cleanup and successful re-entry.",
+      "A repeated DB.Migrate leaves the migration history and all four creation-intent indexes unchanged; TestSessionIntentMigrationReentry verifies re-entry on the deployed schema.",
       "Existing 00009 rows remain confirmed legacy rows with nullable owner, host and command facts; TestCreationIntentLifecycleAndCompatibility verifies that no owner is inferred.",
       "CreateIntent commits the creator-scoped command identity and creation payload before the caller performs a Gateway or Connector side effect.",
       "Concurrent identical retries converge on one Session ID; a changed payload, summary, host or target under the same creator command identity returns an idempotency conflict.",
@@ -58,8 +58,8 @@
   "validation": {
     "minor": {
       "required_test_evidence": [
-        "The PostgreSQL migration path from a fresh 00009 schema to 00010 is exercised by TestSessionIntentMigrationFrom00009; the focused re-entry test confirms both migration records and the complete index set after a second migration pass.",
-        "A failed PostgreSQL schema-unit transaction rolls back its created table, columns and index, demonstrating the atomic DDL boundary used by 00010; migration re-entry then remains successful.",
+        "The PostgreSQL migration path from a fresh 00009 schema to 00010 is exercised by TestSessionIntentMigrationFrom00009 with a real pre-stored 00009 execution_sessions row; the focused re-entry test confirms the complete index set after a second migration pass.",
+        "A deliberate collision inside the actual 00010 Goose migration rolls back the preceding ALTER statements and leaves version 10 unapplied; removing only the deliberate conflict permits the same migration to re-enter successfully, proving the deployed DDL unit is atomic.",
         "Existing 00009 confirmed Create/Get records remain readable without public REST or protocol schema changes, and no historical owner, host or command value is inferred.",
         "A same-command concurrent intent race commits one durable Session ID, while changed payload, summary, host and task target values conflict and same payload retries do not create another row.",
         "Projectless intents retain the authenticated creator and selected host, and unknown intent state is queryable without an external thread reference.",

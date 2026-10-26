@@ -261,10 +261,23 @@ func (c *Connector) ObserveCommandIdentity(command protocol.Command, ack protoco
 	if !found {
 		return fmt.Errorf("%w: platform run %q has no durable binding", protocol.ErrUnknownCommandResult, platformRunID)
 	}
+	bindingAlias := alias
+	if existingBinding.Generation != alias.Generation || existingBinding.AdapterSessionID != alias.AdapterSessionID || existingBinding.ExternalThreadRef != alias.ExternalThreadRef {
+		bindingAlias = connectorruntime.SessionAlias{
+			PlatformSessionID: alias.PlatformSessionID,
+			AdapterSessionID:  existingBinding.AdapterSessionID,
+			ExternalThreadRef: existingBinding.ExternalThreadRef,
+			Generation:        existingBinding.Generation,
+			CommandID:         alias.CommandID,
+		}
+	}
 	nativeTurnID := ackString(ack.RunID)
 	nativeOperationID := ackString(ack.OperationID)
 	if isUnqualifiedOperationIdentity(nativeOperationID) {
 		nativeOperationID = ""
+	}
+	if generation := qualifiedOperationGeneration(nativeOperationID); generation != "" && generation != existingBinding.Generation {
+		return connectorruntime.ErrIdentityConflict
 	}
 	if command.Kind != protocol.CommandKindRunSend {
 		if nativeTurnID != "" && nativeTurnID != existingBinding.NativeTurnID {
@@ -296,12 +309,12 @@ func (c *Connector) ObserveCommandIdentity(command protocol.Command, ack protoco
 		commandID = existingBinding.CommandID
 	}
 	return c.journal.RecordRunBinding(connectorruntime.RunBinding{
-		PlatformSessionID: alias.PlatformSessionID,
+		PlatformSessionID: bindingAlias.PlatformSessionID,
 		PlatformRunID:     platformRunID,
 		CommandID:         commandID,
-		AdapterSessionID:  alias.AdapterSessionID,
-		ExternalThreadRef: alias.ExternalThreadRef,
-		Generation:        alias.Generation,
+		AdapterSessionID:  bindingAlias.AdapterSessionID,
+		ExternalThreadRef: bindingAlias.ExternalThreadRef,
+		Generation:        bindingAlias.Generation,
 		NativeTurnID:      nativeTurnID,
 		NativeOperationID: nativeOperationID,
 		State:             state,
@@ -319,6 +332,9 @@ func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.
 	if ack, found, err := c.journal.LookupCommandForRequest(prepared); err != nil {
 		return ack, err
 	} else if found {
+		if command.Kind == protocol.CommandKindRunSend {
+			return c.reconcileCachedRunCommand(ctx, command, prepared, ack)
+		}
 		if ack.State == protocol.CommandStateUnknown {
 			return ack, protocol.ErrUnknownCommandResult
 		}
@@ -346,6 +362,16 @@ func (c *Connector) acceptSessionCommand(ctx context.Context, command protocol.C
 		return ack, err
 	}
 	if deduplicated {
+		if command.Kind == protocol.CommandKindSessionStart && ack.State != protocol.CommandStateFailed && ack.State != protocol.CommandStateRejected {
+			request, decodeErr := decodeSessionCommand(command.Payload)
+			if decodeErr != nil {
+				return c.persistUnknownCommand(command.CommandID, ack, decodeErr)
+			}
+			if request.CommandID != command.CommandID || request.Path != protocol.SessionPathNew {
+				return c.rejectSessionCommand(command, ack, protocol.ErrIdempotencyConflict)
+			}
+			return c.reconcileCachedSessionStart(command, request, ack)
+		}
 		if ack.State == protocol.CommandStateUnknown {
 			return ack, protocol.ErrUnknownCommandResult
 		}
@@ -392,12 +418,187 @@ func (c *Connector) acceptSessionCommand(ctx context.Context, command protocol.C
 	return ack, nil
 }
 
+// reconcileCachedRunCommand proves a cached run.send ACK against its durable
+// native identity before the platform sees success. The path only reconciles
+// existing journal facts; it never submits the native command again.
+func (c *Connector) reconcileCachedRunCommand(ctx context.Context, command, prepared protocol.Command, ack protocol.CommandAck) (protocol.CommandAck, error) {
+	if ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+		return ack, nil
+	}
+	platformRunID, err := platformCommandRunID(command)
+	if err != nil {
+		return ack, err
+	}
+	binding, found := c.journal.RunBindingForCommand(command.CommandID)
+	if found {
+		if binding.PlatformSessionID != command.SessionID || binding.PlatformRunID != platformRunID || binding.CommandID != command.CommandID {
+			return c.persistUnknownCommand(prepared.CommandID, ack, connectorruntime.ErrIdentityConflict)
+		}
+		if err := validateRunAckAgainstBinding(binding, ack); err != nil {
+			return c.persistUnknownCommand(prepared.CommandID, ack, err)
+		}
+	} else if err := c.ensureRunIdentityForRecovery(command, ack); err != nil {
+		return c.persistUnknownCommand(prepared.CommandID, ack, err)
+	}
+
+	var reconcileErr error
+	if ack.State != protocol.CommandStateSucceeded && ack.State != protocol.CommandStateFailed && ack.State != protocol.CommandStateRejected {
+		if c.controller == nil {
+			reconcileErr = errors.New("connector command controller is unavailable for durable reconciliation")
+		} else {
+			_, reconcileErr = c.controller.ReconcileCommand(ctx, prepared.CommandID)
+		}
+		latest, lookupErr := c.journal.LookupCommand(prepared.CommandID)
+		if lookupErr != nil {
+			return c.persistUnknownCommand(prepared.CommandID, ack, errors.Join(reconcileErr, lookupErr))
+		}
+		ack = latest
+	}
+
+	if err := c.ObserveCommandIdentity(command, ack); err != nil {
+		return c.persistUnknownCommand(prepared.CommandID, ack, errors.Join(reconcileErr, err))
+	}
+	latest, err := c.journal.LookupCommand(prepared.CommandID)
+	if err != nil {
+		return c.persistUnknownCommand(prepared.CommandID, ack, errors.Join(reconcileErr, err))
+	}
+	ack = latest
+	binding, found = c.journal.RunBindingForCommand(command.CommandID)
+	if err := validateRunAckAgainstBinding(binding, ack); err != nil || !found || binding.State != connectorruntime.IdentityStateBound || binding.NativeTurnID == "" || ack.State != protocol.CommandStateSucceeded {
+		if err == nil {
+			err = protocol.ErrUnknownCommandResult
+		}
+		return c.persistUnknownCommand(prepared.CommandID, ack, errors.Join(reconcileErr, err))
+	}
+	ack.Deduplicated = true
+	return ack, nil
+}
+
+func (c *Connector) ensureRunIdentityForRecovery(command protocol.Command, ack protocol.CommandAck) error {
+	if _, found := c.journal.RunBindingForCommand(command.CommandID); found {
+		return nil
+	}
+	platformRunID, err := platformCommandRunID(command)
+	if err != nil {
+		return err
+	}
+	alias, ok := c.journal.SessionAlias(command.SessionID)
+	if !ok {
+		return connectorruntime.ErrIdentityNotFound
+	}
+	operationID := ackString(ack.OperationID)
+	if isUnqualifiedOperationIdentity(operationID) {
+		operationID = ""
+	}
+	if generation := qualifiedOperationGeneration(operationID); generation != "" && generation != alias.Generation {
+		historical, historicalOK := c.journal.SessionAliasForAdapter(alias.AdapterSessionID, alias.ExternalThreadRef, generation)
+		if !historicalOK || historical.PlatformSessionID != alias.PlatformSessionID {
+			return connectorruntime.ErrIdentityConflict
+		}
+		alias = historical
+	}
+	return c.journal.RecordRunBinding(connectorruntime.RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     platformRunID,
+		CommandID:         command.CommandID,
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		State:             connectorruntime.IdentityStateUnknown,
+	})
+}
+
+func validateRunAckAgainstBinding(binding connectorruntime.RunBinding, ack protocol.CommandAck) error {
+	if binding.PlatformSessionID == "" || binding.PlatformRunID == "" || binding.CommandID == "" {
+		return protocol.ErrUnknownCommandResult
+	}
+	if nativeTurnID := ackString(ack.RunID); nativeTurnID != "" && binding.NativeTurnID != "" && nativeTurnID != binding.NativeTurnID {
+		return connectorruntime.ErrIdentityConflict
+	}
+	operationID := ackString(ack.OperationID)
+	if isUnqualifiedOperationIdentity(operationID) {
+		operationID = ""
+	}
+	if operationID != "" && binding.NativeOperationID != "" && operationID != binding.NativeOperationID {
+		return connectorruntime.ErrIdentityConflict
+	}
+	if generation := qualifiedOperationGeneration(operationID); generation != "" && generation != binding.Generation {
+		return connectorruntime.ErrIdentityConflict
+	}
+	return nil
+}
+
+func qualifiedOperationGeneration(operationID string) string {
+	separator := strings.IndexByte(operationID, '\x00')
+	if separator <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(operationID[:separator])
+}
+
+func (c *Connector) reconcileCachedSessionStart(command protocol.Command, request protocol.CreateSessionRequest, ack protocol.CommandAck) (protocol.CommandAck, error) {
+	alias, ok := c.journal.SessionAlias(command.SessionID)
+	if !ok {
+		return c.persistUnknownCommand(command.CommandID, ack, connectorruntime.ErrIdentityNotFound)
+	}
+	if alias.PlatformSessionID != command.SessionID || alias.CommandID != command.CommandID {
+		return c.rejectSessionCommand(command, ack, connectorruntime.ErrIdentityConflict)
+	}
+	resolved, found, err := c.journal.ResolvedSessionStart(protocol.NewSessionRequest{
+		CommandID: command.CommandID,
+		ProjectID: optionalIdentityValue(request.ProjectID),
+		TaskID:    optionalIdentityValue(request.TaskID),
+		// OpenSession intentionally removes the optional initial prompt before
+		// crossing the native session-start boundary. The command journal digest
+		// still covers the original payload, while this lookup matches the exact
+		// native creation intent that was persisted before the side effect.
+		Prompt: "",
+	})
+	if err != nil {
+		return c.rejectSessionCommand(command, ack, err)
+	}
+	if !found || resolved.SessionID != alias.AdapterSessionID || resolved.ExternalThreadRef != alias.ExternalThreadRef {
+		return c.persistUnknownCommand(command.CommandID, ack, protocol.ErrUnknownCommandResult)
+	}
+	result, err := json.Marshal(sessionOpenResult{
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+	})
+	if err != nil {
+		return c.persistUnknownCommand(command.CommandID, ack, err)
+	}
+	durable := ack
+	durable.Deduplicated = false
+	durable.State = protocol.CommandStateSucceeded
+	durable.Error = nil
+	durable.Result = result
+	if err := c.journal.UpdateCommand(command.CommandID, durable); err != nil {
+		return ack, err
+	}
+	durable.Deduplicated = true
+	return durable, nil
+}
+
+func (c *Connector) persistUnknownCommand(commandID string, ack protocol.CommandAck, cause error) (protocol.CommandAck, error) {
+	durable := ack
+	durable.Deduplicated = false
+	durable.State = protocol.CommandStateUnknown
+	durable.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "command outcome is unknown", RequestID: commandID}
+	updateErr := c.journal.UpdateCommand(commandID, durable)
+	durable.Deduplicated = true
+	return durable, errors.Join(protocol.ErrUnknownCommandResult, cause, updateErr)
+}
+
 func (c *Connector) rejectSessionCommand(command protocol.Command, ack protocol.CommandAck, cause error) (protocol.CommandAck, error) {
+	deduplicated := ack.Deduplicated
 	ack.State = protocol.CommandStateRejected
 	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeInvalidRequest, Message: "session command was rejected", RequestID: command.CommandID}
-	if err := c.journal.UpdateCommand(command.CommandID, ack); err != nil {
+	durable := ack
+	durable.Deduplicated = false
+	if err := c.journal.UpdateCommand(command.CommandID, durable); err != nil {
 		return ack, errors.Join(cause, err)
 	}
+	ack.Deduplicated = deduplicated
 	return ack, cause
 }
 
@@ -532,6 +733,13 @@ func ackString(value *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*value)
+}
+
+func optionalIdentityValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func identityStringPointer(value string) *string {
