@@ -42,11 +42,6 @@ func TestArtifactProcessHelper(t *testing.T) {
 		fmt.Fprintf(os.Stderr, "open helper database: %v\n", err)
 		os.Exit(2)
 	}
-	if err := db.Migrate(ctx); err != nil {
-		cancel()
-		fmt.Fprintf(os.Stderr, "migrate helper database: %v\n", err)
-		os.Exit(2)
-	}
 	faults := &faultHooks{}
 	if mode == "crash" {
 		crash := func() { os.Exit(91) }
@@ -680,10 +675,6 @@ func openStoreAtRoot(t *testing.T, root string) (*database.DB, *Store, context.C
 		t.Fatalf("open integration database: %v", err)
 	}
 	t.Cleanup(db.Close)
-	if err := db.Migrate(ctx); err != nil {
-		db.Close()
-		t.Fatalf("migrate integration database: %v", err)
-	}
 	store, err := NewStore(db.Pool(), Config{Root: root, Authorizer: allowAllAuthorizer{}})
 	if err != nil {
 		db.Close()
