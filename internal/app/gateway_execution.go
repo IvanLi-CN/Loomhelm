@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -151,9 +153,35 @@ type gatewayApprovalPayload struct {
 	TurnID      string          `json:"turn_id"`
 }
 
+type gatewayNativeApprovalPayload struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
+}
+
+type gatewayNativeApprovalParams struct {
+	ThreadID  string          `json:"threadId"`
+	TurnID    string          `json:"turnId"`
+	RequestID json.RawMessage `json:"requestId"`
+	Revision  int64           `json:"revision"`
+	Command   string          `json:"command"`
+	Item      struct {
+		ID      string `json:"id"`
+		Type    string `json:"type"`
+		Command string `json:"command"`
+	} `json:"item"`
+}
+
 func normalizeGatewayApproval(event protocol.Event, generation string) (approvals.CreateRequest, error) {
 	if event.RunID == nil || strings.TrimSpace(*event.RunID) == "" {
 		return approvals.CreateRequest{}, fmt.Errorf("%w: %w", errGatewayApprovalPayload, hosts.ErrInvalid)
+	}
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &shape); err != nil {
+		return approvals.CreateRequest{}, fmt.Errorf("%w: %v: %w", errGatewayApprovalPayload, err, hosts.ErrInvalid)
+	}
+	if _, native := shape["method"]; native {
+		return normalizeNativeGatewayApproval(event, generation)
 	}
 	var payload gatewayApprovalPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -197,6 +225,89 @@ func normalizeGatewayApproval(event protocol.Event, generation string) (approval
 		Context:          append(json.RawMessage(nil), contextPayload...),
 		RequestedEventID: event.EventID,
 	}, nil
+}
+
+func normalizeNativeGatewayApproval(event protocol.Event, generation string) (approvals.CreateRequest, error) {
+	var payload gatewayNativeApprovalPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return approvals.CreateRequest{}, fmt.Errorf("%w: %v: %w", errGatewayApprovalPayload, err, hosts.ErrInvalid)
+	}
+	if payload.Method != "item/commandExecution/requestApproval" && payload.Method != "item/fileChange/requestApproval" {
+		return approvals.CreateRequest{}, fmt.Errorf("%w: unsupported native approval method %q: %w", errGatewayApprovalPayload, payload.Method, hosts.ErrInvalid)
+	}
+	var params gatewayNativeApprovalParams
+	if err := json.Unmarshal(payload.Params, &params); err != nil {
+		return approvals.CreateRequest{}, fmt.Errorf("%w: native approval params are malformed: %v: %w", errGatewayApprovalPayload, err, hosts.ErrInvalid)
+	}
+	var paramsShape map[string]json.RawMessage
+	if err := json.Unmarshal(payload.Params, &paramsShape); err != nil || paramsShape == nil {
+		return approvals.CreateRequest{}, fmt.Errorf("%w: native approval params must be an object: %w", errGatewayApprovalPayload, hosts.ErrInvalid)
+	}
+	requestID := payload.ID
+	if len(bytes.TrimSpace(requestID)) == 0 || bytes.Equal(bytes.TrimSpace(requestID), []byte("null")) {
+		requestID = params.RequestID
+	}
+	approvalID, err := nativeApprovalID(requestID)
+	if err != nil {
+		return approvals.CreateRequest{}, fmt.Errorf("%w: %v: %w", errGatewayApprovalPayload, err, hosts.ErrInvalid)
+	}
+	revision := params.Revision
+	if revision <= 0 {
+		revision = 1
+	}
+	kind := "command"
+	if payload.Method == "item/fileChange/requestApproval" || params.Item.Type == "fileChange" {
+		kind = "file_change"
+	}
+	summary := strings.TrimSpace(params.Command)
+	if summary == "" {
+		summary = strings.TrimSpace(params.Item.Command)
+	}
+	if summary == "" {
+		summary = kind + " approval"
+	}
+	contextPayload := json.RawMessage(`{}`)
+	if len(bytes.TrimSpace(payload.Params)) != 0 {
+		contextPayload = append(json.RawMessage(nil), payload.Params...)
+	}
+	return approvals.CreateRequest{
+		NewInput: approvals.NewInput{
+			ID:          approvalID,
+			RunID:       *event.RunID,
+			SessionID:   event.SessionID,
+			Generation:  generation,
+			Revision:    revision,
+			Kind:        kind,
+			Summary:     summary,
+			RequestedAt: event.OccurredAt,
+		},
+		Context:          contextPayload,
+		RequestedEventID: event.EventID,
+	}, nil
+}
+
+func nativeApprovalID(raw json.RawMessage) (string, error) {
+	value := bytes.TrimSpace(raw)
+	if len(value) == 0 || bytes.Equal(value, []byte("null")) {
+		return "", errors.New("native approval request id is required")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return "", errors.New("native approval request id must be a non-empty string or number")
+	}
+	switch value := decoded.(type) {
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return "", errors.New("native approval request id must be a non-empty string or number")
+		}
+		return value, nil
+	case json.Number:
+		return value.String(), nil
+	default:
+		return "", errors.New("native approval request id must be a non-empty string or number")
+	}
 }
 
 var _ runs.CommandTransport = (*gatewayExecutionTransport)(nil)

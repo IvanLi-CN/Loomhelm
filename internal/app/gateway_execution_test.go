@@ -50,6 +50,47 @@ func TestNormalizeGatewayApprovalRejectsExternalTurnIdentity(t *testing.T) {
 	}
 }
 
+func TestNormalizeGatewayApprovalAcceptsNativeApprovalPayload(t *testing.T) {
+	runID := "run-platform-native"
+	event := protocol.Event{
+		EventID:    "event-approval-native",
+		OccurredAt: "2026-10-25T06:00:00Z",
+		Payload:    json.RawMessage(`{"jsonrpc":"2.0","id":41,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","item":{"id":"item-native","type":"commandExecution","command":"/bin/zsh -lc 'printf ok'"}}}`),
+		RunID:      &runID,
+		SessionID:  "session-native",
+		Type:       protocol.EventTypeApprovalRequested,
+	}
+
+	request, err := normalizeGatewayApproval(event, "generation-native")
+	if err != nil {
+		t.Fatalf("normalizeGatewayApproval() error = %v", err)
+	}
+	if request.ID != "41" || request.RunID != runID || request.SessionID != event.SessionID || request.Generation != "generation-native" {
+		t.Fatalf("normalized native approval identity = %+v", request.NewInput)
+	}
+	if request.Kind != "command" || request.Revision != 1 || request.Summary != "/bin/zsh -lc 'printf ok'" {
+		t.Fatalf("normalized native approval metadata = %+v", request.NewInput)
+	}
+	var contextPayload map[string]json.RawMessage
+	if err := json.Unmarshal(request.Context, &contextPayload); err != nil || contextPayload["turnId"] == nil {
+		t.Fatalf("native approval context = %s, error = %v", request.Context, err)
+	}
+}
+
+func TestNativeApprovalIDRejectsNonScalarValues(t *testing.T) {
+	for _, raw := range []string{`true`, `[]`, `{}`, `null`, `""`} {
+		if _, err := nativeApprovalID(json.RawMessage(raw)); err == nil {
+			t.Fatalf("nativeApprovalID(%s) unexpectedly succeeded", raw)
+		}
+	}
+	for _, raw := range []string{`41`, `"41"`} {
+		got, err := nativeApprovalID(json.RawMessage(raw))
+		if err != nil || got != "41" {
+			t.Fatalf("nativeApprovalID(%s) = %q, error = %v", raw, got, err)
+		}
+	}
+}
+
 func TestGatewayExecutionReconcileIsExplicitlyUnknown(t *testing.T) {
 	observedAt := time.Date(2026, 10, 25, 6, 0, 0, 0, time.UTC)
 	transport := &gatewayExecutionTransport{now: func() time.Time { return observedAt }}

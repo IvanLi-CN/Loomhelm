@@ -1,8 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -78,7 +80,7 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		ConnectorAppServerCommand: cli,
 	}
 	newConnector := func() (*Connector, error) {
-		connector, connectorErr := NewConnector(connectorConfig, nil)
+		connector, connectorErr := NewConnector(connectorConfig, platform.NewLogger(os.Stderr, connectorConfig.Component, connectorConfig.Version))
 		if connectorErr != nil {
 			return nil, connectorErr
 		}
@@ -182,12 +184,37 @@ type realPlatformApproval struct {
 
 func submitRealPlatformRun(t *testing.T, browser *http.Client, baseURL, sessionID, commandID, prompt string) string {
 	t.Helper()
-	response := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/sessions/"+sessionID+"/runs", protocol.SubmitRunRequest{
+	body, err := json.Marshal(protocol.SubmitRunRequest{
 		CommandID: commandID,
 		Prompt:    prompt,
-	}, map[string]string{"Origin": baseURL}, http.StatusOK)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/sessions/"+sessionID+"/runs", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", baseURL)
+	response, err := browser.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseBody, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		var failure protocol.ApiError
+		_ = json.Unmarshal(responseBody, &failure)
+		t.Fatalf("submit platform run returned %d: code=%q message=%q", response.StatusCode, failure.Code, failure.Message)
+	}
 	var result protocol.CommandAckResponse
-	decodeApplicationResponse(t, response, &result)
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		t.Fatal(err)
+	}
 	if result.Ack.State != protocol.CommandStateSucceeded || result.Ack.RunID == nil || strings.TrimSpace(*result.Ack.RunID) == "" {
 		t.Fatalf("platform run ACK = %+v", result.Ack)
 	}
