@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -30,6 +31,12 @@ type CreateRequest struct {
 	NewInput
 	Context          json.RawMessage
 	RequestedEventID string
+}
+
+type ListPage struct {
+	Items      []Approval
+	NextCursor *Cursor
+	HasMore    bool
 }
 
 func NewStore(pool *pgxpool.Pool, configs ...StoreConfig) *Store {
@@ -169,6 +176,61 @@ func (s *Store) Pending(ctx context.Context, sessionID, runID, generation string
 	return result, nil
 }
 
+// ListByRun reads every durable approval revision for one run. It deliberately
+// does not filter by status or current session generation: historical approval
+// rows remain readable while Resolve keeps the write-side generation fence.
+func (s *Store) ListByRun(ctx context.Context, runID string, after *Cursor, limit int) (ListPage, error) {
+	if err := s.ready(ctx); err != nil {
+		return ListPage{}, err
+	}
+	if strings.TrimSpace(runID) == "" {
+		return ListPage{}, fmt.Errorf("%w: run id is required", ErrInvalidApproval)
+	}
+	if limit <= 0 {
+		limit = DefaultPageSize
+	}
+	if limit > MaxPageSize {
+		limit = MaxPageSize
+	}
+	if after != nil && after.RunID != runID {
+		return ListPage{}, fmt.Errorf("%w: approval cursor belongs to another run", auth.ErrInvalid)
+	}
+
+	args := []any{runID}
+	where := "approval.run_id = $1"
+	if after != nil {
+		args = append(args, after.CreatedAt, after.ID)
+		where += fmt.Sprintf(" AND (approval.created_at, approval.id) > ($%d, $%d)", len(args)-1, len(args))
+	}
+	args = append(args, limit+1)
+	query := approvalListQuery + fmt.Sprintf(" WHERE %s ORDER BY approval.created_at, approval.id LIMIT $%d", where, len(args))
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return ListPage{}, fmt.Errorf("list approvals by run: %w", err)
+	}
+	defer rows.Close()
+
+	page := ListPage{Items: make([]Approval, 0, limit)}
+	var last Cursor
+	for rows.Next() {
+		approval, createdAt, err := scanApprovalWithCreatedAt(rows)
+		if err != nil {
+			return ListPage{}, fmt.Errorf("scan approval list: %w", err)
+		}
+		if len(page.Items) == limit {
+			page.HasMore = true
+			page.NextCursor = &last
+			break
+		}
+		page.Items = append(page.Items, approval)
+		last = Cursor{RunID: runID, CreatedAt: createdAt, ID: approval.ID}
+	}
+	if err := rows.Err(); err != nil {
+		return ListPage{}, fmt.Errorf("read approval list: %w", err)
+	}
+	return page, nil
+}
+
 func (s *Store) AdvanceRevision(ctx context.Context, approvalID, generation string, revision int64, summary, requestedAt string) (Approval, error) {
 	return s.transition(ctx, approvalID, func(current Approval) (Approval, error) {
 		if current.Generation != generation {
@@ -285,12 +347,18 @@ func (s *Store) transition(ctx context.Context, approvalID string, apply func(Ap
 	return updated, nil
 }
 
-const approvalQuery = `
-	SELECT approval.id, approval.session_id, approval.run_id, approval.generation,
-	       approval.kind, approval.requested_at, approval.revision, approval.status,
-	       approval.summary, approval.context, approval.resolved_by_command_id,
-	       approval.requested_event_id, approval.resolved_at
-	FROM execution_approvals AS approval
+const approvalColumns = `
+	approval.id, approval.session_id, approval.run_id, approval.generation,
+	approval.kind, approval.requested_at, approval.revision, approval.status,
+	approval.summary, approval.context, approval.resolved_by_command_id,
+	approval.requested_event_id, approval.resolved_at
+`
+
+const approvalQuery = `SELECT` + approvalColumns + `FROM execution_approvals AS approval
+`
+
+const approvalListQuery = `SELECT` + approvalColumns + `, approval.created_at
+FROM execution_approvals AS approval
 `
 
 func findByRequestedEventIDTx(ctx context.Context, tx pgx.Tx, requestedEventID string) (Approval, bool, error) {
@@ -327,6 +395,26 @@ func scanApproval(row interface{ Scan(...any) error }) (Approval, error) {
 		approval.ResolvedAt = resolvedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return approval, nil
+}
+
+func scanApprovalWithCreatedAt(row interface{ Scan(...any) error }) (Approval, time.Time, error) {
+	var approval Approval
+	var contextPayload []byte
+	var resolvedAt *time.Time
+	var createdAt time.Time
+	if err := row.Scan(
+		&approval.ID, &approval.SessionID, &approval.RunID, &approval.Generation,
+		&approval.Kind, &approval.RequestedAt, &approval.Revision, &approval.Status,
+		&approval.Summary, &contextPayload, &approval.ResolvedByCommandID,
+		&approval.RequestedEventID, &resolvedAt, &createdAt,
+	); err != nil {
+		return Approval{}, time.Time{}, err
+	}
+	approval.Context = append(json.RawMessage(nil), contextPayload...)
+	if resolvedAt != nil {
+		approval.ResolvedAt = resolvedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return approval, createdAt, nil
 }
 
 func (s *Store) ready(ctx context.Context) error {

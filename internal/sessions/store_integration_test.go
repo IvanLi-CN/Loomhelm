@@ -11,10 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/db/migrations"
+	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 func TestCreationIntentLifecycleAndCompatibility(t *testing.T) {
@@ -261,12 +265,12 @@ func TestSessionIntentMigrationReentryAndAtomicRollback(t *testing.T) {
 	if err := db.Pool().QueryRow(ctx, `
 		SELECT count(*)
 		FROM goose_db_version
-		WHERE version_id IN (9, 10) AND is_applied
+		WHERE version_id IN (9, 10, 11) AND is_applied
 	`).Scan(&appliedCount); err != nil {
 		t.Fatalf("read applied migration versions: %v", err)
 	}
-	if appliedCount != 2 {
-		t.Fatalf("applied 00009/00010 migration records = %d, want 2", appliedCount)
+	if appliedCount != 3 {
+		t.Fatalf("applied 00009/00010/00011 migration records = %d, want 3", appliedCount)
 	}
 	var intentIndexCount int
 	if err := db.Pool().QueryRow(ctx, `
@@ -352,18 +356,18 @@ func TestSessionIntentMigrationFrom00009(t *testing.T) {
 	}
 	defer scoped.Close()
 	if err := scoped.Migrate(ctx); err != nil {
-		t.Fatalf("apply 00009 to 00010 migration fixture: %v", err)
+		t.Fatalf("apply 00009 to 00011 migration fixture: %v", err)
 	}
 	var appliedCount int
 	if err := scoped.Pool().QueryRow(ctx, `
 		SELECT count(*)
 		FROM goose_db_version
-		WHERE version_id IN (9, 10) AND is_applied
+		WHERE version_id IN (9, 10, 11) AND is_applied
 	`).Scan(&appliedCount); err != nil {
 		t.Fatalf("read fresh migration fixture history: %v", err)
 	}
-	if appliedCount != 2 {
-		t.Fatalf("fresh migration fixture applied 00009/00010 records = %d, want 2", appliedCount)
+	if appliedCount != 3 {
+		t.Fatalf("fresh migration fixture applied 00009/00010/00011 records = %d, want 3", appliedCount)
 	}
 
 	legacy, err := NewStore(scoped.Pool()).Create(ctx, NewInput{
@@ -373,7 +377,7 @@ func TestSessionIntentMigrationFrom00009(t *testing.T) {
 		Generation:        "e01-migration-legacy-generation",
 	})
 	if err != nil {
-		t.Fatalf("create legacy row after 00009 to 00010 migration: %v", err)
+		t.Fatalf("create legacy row after 00009 to 00011 migration: %v", err)
 	}
 	legacyAccess, err := NewStore(scoped.Pool()).GetAccess(ctx, legacy.ID)
 	if err != nil {
@@ -384,7 +388,127 @@ func TestSessionIntentMigrationFrom00009(t *testing.T) {
 	}
 
 	if err := scoped.Migrate(ctx); err != nil {
-		t.Fatalf("re-enter scoped 00010 migration: %v", err)
+		t.Fatalf("re-enter scoped 00011 migration: %v", err)
+	}
+}
+
+func TestApprovalHistoryMigrationFrom00010SupportsFailureReentry(t *testing.T) {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == `` {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+
+	config := sessionTestDatabaseConfig(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	root, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		t.Fatalf("open approval migration fixture database: %v", err)
+	}
+	defer root.Close()
+
+	schema := fmt.Sprintf("e01_approval_migration_%d", time.Now().UnixNano())
+	if _, err := root.Pool().Exec(ctx, "CREATE SCHEMA "+quoteSessionTestIdentifier(schema)); err != nil {
+		t.Fatalf("create approval migration fixture schema: %v", err)
+	}
+	defer func() {
+		if _, err := root.Pool().Exec(context.Background(), "DROP SCHEMA "+quoteSessionTestIdentifier(schema)+" CASCADE"); err != nil {
+			t.Errorf("drop approval migration fixture schema: %v", err)
+		}
+	}()
+
+	scopedURL, err := sessionURLWithSearchPath(config.URL, schema)
+	if err != nil {
+		t.Fatalf("scope approval migration fixture database URL: %v", err)
+	}
+	scoped, err := database.Open(ctx, database.Config{URL: scopedURL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		t.Fatalf("open scoped approval migration fixture database: %v", err)
+	}
+	defer scoped.Close()
+
+	sqlDB := stdlib.OpenDBFromPool(scoped.Pool())
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("create approval migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 10); err != nil {
+		t.Fatalf("apply approval migration fixture through 00010: %v", err)
+	}
+	const (
+		sessionID  = "e01-approval-migration-session"
+		runID      = "e01-approval-migration-run"
+		commandID  = "e01-approval-migration-command"
+		approvalID = "e01-approval-migration-approval"
+	)
+	if _, err := scoped.Pool().Exec(ctx, `
+		INSERT INTO execution_sessions (id, external_thread_ref, path, generation)
+		VALUES ($1, $2, 'new', $3)
+	`, sessionID, "e01-approval-migration-thread", "e01-approval-migration-generation"); err != nil {
+		t.Fatalf("seed pre-00011 session: %v", err)
+	}
+	if _, err := scoped.Pool().Exec(ctx, `
+		INSERT INTO execution_runs (id, session_id, command_id, generation)
+		VALUES ($1, $2, $3, $4)
+	`, runID, sessionID, commandID, "e01-approval-migration-generation"); err != nil {
+		t.Fatalf("seed pre-00011 run: %v", err)
+	}
+	legacyContext := []byte(`{"legacy":true,"unknown_field":"retained"}`)
+	if _, err := scoped.Pool().Exec(ctx, `
+		INSERT INTO execution_approvals (id, session_id, run_id, generation, kind, requested_at, revision, status, summary, context, requested_event_id)
+		VALUES ($1, $2, $3, $4, 'command', $5, 7, 'pending', 'legacy approval', $6, $7)
+	`, approvalID, sessionID, runID, "e01-approval-migration-generation", "2026-10-25T00:00:00Z", legacyContext, "e01-approval-migration-event"); err != nil {
+		t.Fatalf("seed pre-00011 approval: %v", err)
+	}
+
+	if _, err := scoped.Pool().Exec(ctx, `CREATE INDEX execution_approvals_run_created_idx ON execution_approvals (id)`); err != nil {
+		t.Fatalf("create deliberate migration collision: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 11); err == nil {
+		t.Fatal("00011 migration collision unexpectedly succeeded")
+	}
+	var applied11 int
+	if err := scoped.Pool().QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 11 AND is_applied`).Scan(&applied11); err != nil {
+		t.Fatalf("read failed 00011 history: %v", err)
+	}
+	if applied11 != 0 {
+		t.Fatalf("failed 00011 migration recorded as applied: %d", applied11)
+	}
+	if _, err := scoped.Pool().Exec(ctx, `DROP INDEX execution_approvals_run_created_idx`); err != nil {
+		t.Fatalf("remove deliberate migration collision: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 11); err != nil {
+		t.Fatalf("re-enter 00011 migration after forward cleanup: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 11); err != nil {
+		t.Fatalf("repeat 00011 migration: %v", err)
+	}
+
+	var indexCount, appliedCount int
+	if err := scoped.Pool().QueryRow(ctx, `
+		SELECT count(*)
+		FROM pg_indexes
+		WHERE schemaname = current_schema()
+		  AND indexname = 'execution_approvals_run_created_idx'
+	`).Scan(&indexCount); err != nil {
+		t.Fatalf("read approval history index: %v", err)
+	}
+	if indexCount != 1 {
+		t.Fatalf("approval history index count = %d, want 1", indexCount)
+	}
+	if err := scoped.Pool().QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 11 AND is_applied`).Scan(&appliedCount); err != nil {
+		t.Fatalf("read successful 00011 history: %v", err)
+	}
+	if appliedCount != 1 {
+		t.Fatalf("successful 00011 migration records = %d, want 1", appliedCount)
+	}
+	page, err := approvals.NewStore(scoped.Pool()).ListByRun(ctx, runID, nil, 10)
+	if err != nil {
+		t.Fatalf("read legacy approval after 00011: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != approvalID || page.Items[0].Revision != 7 || string(page.Items[0].Context) != string(legacyContext) || page.Items[0].RequestedEventID != "e01-approval-migration-event" {
+		t.Fatalf("legacy approval after 00011 = %+v", page.Items)
 	}
 }
 

@@ -35,6 +35,7 @@ type RunControlStore interface {
 
 type ApprovalControlStore interface {
 	Get(context.Context, string) (approvals.Approval, error)
+	ListByRun(context.Context, string, *approvals.Cursor, int) (approvals.ListPage, error)
 	Resolve(context.Context, approvals.ResolveRequest) (approvals.Resolution, error)
 }
 
@@ -214,6 +215,53 @@ func (s *ControlService) ResolveApproval(ctx context.Context, principal auth.Pri
 	return protocol.CommandAckResponse{Ack: ack}, err
 }
 
+func (s *ControlService) ListRunApprovals(ctx context.Context, principal auth.Principal, runID string, request protocol.ListRunApprovalsQuery) (protocol.ApprovalListResponse, error) {
+	if err := s.ready(ctx); err != nil {
+		return protocol.ApprovalListResponse{}, err
+	}
+	if err := validateIdentity(runID, "run id"); err != nil {
+		return protocol.ApprovalListResponse{}, err
+	}
+	run, _, err := s.authorizedRun(ctx, principal, runID, false)
+	if err != nil {
+		return protocol.ApprovalListResponse{}, err
+	}
+	limit := approvals.DefaultPageSize
+	if request.Limit != nil {
+		if *request.Limit < 1 || *request.Limit > approvals.MaxPageSize {
+			return protocol.ApprovalListResponse{}, fmt.Errorf("%w: approval list limit must be between 1 and %d", auth.ErrInvalid, approvals.MaxPageSize)
+		}
+		limit = int(*request.Limit)
+	}
+	var cursor *approvals.Cursor
+	if request.AfterCursor != nil {
+		decoded, err := approvals.DecodeCursor(*request.AfterCursor)
+		if err != nil {
+			return protocol.ApprovalListResponse{}, err
+		}
+		if decoded.RunID != run.ID {
+			return protocol.ApprovalListResponse{}, fmt.Errorf("%w: approval cursor belongs to another run", auth.ErrInvalid)
+		}
+		cursor = &decoded
+	}
+	page, err := s.approvals.ListByRun(ctx, run.ID, cursor, limit)
+	if err != nil {
+		return protocol.ApprovalListResponse{}, err
+	}
+	result := protocol.ApprovalListResponse{
+		Items:   make([]protocol.Approval, 0, len(page.Items)),
+		HasMore: page.HasMore,
+	}
+	for _, approval := range page.Items {
+		result.Items = append(result.Items, publicApproval(approval))
+	}
+	if page.NextCursor != nil {
+		next := approvals.EncodeCursor(*page.NextCursor)
+		result.NextCursor = &next
+	}
+	return result, nil
+}
+
 func (s *ControlService) ListRunEvents(ctx context.Context, principal auth.Principal, runID string, request protocol.ListRunEventsQuery) (protocol.EventPage, error) {
 	if err := s.ready(ctx); err != nil {
 		return protocol.EventPage{}, err
@@ -233,6 +281,16 @@ func (s *ControlService) ListRunEvents(ctx context.Context, principal auth.Princ
 		query.Limit = *request.Limit
 	}
 	return s.controller.ReadEvents(ctx, query)
+}
+
+func publicApproval(value approvals.Approval) protocol.Approval {
+	result := value.Approval
+	result.Context = append(json.RawMessage(nil), value.Context...)
+	if strings.TrimSpace(value.RequestedEventID) != "" {
+		requestedEventID := value.RequestedEventID
+		result.RequestedEventID = &requestedEventID
+	}
+	return result
 }
 
 type approvalCommandPayload struct {

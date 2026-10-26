@@ -173,14 +173,12 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 	connectorStopped = true
 	_, connectorCancel, connectorResult = startConnector()
 	connectorStopped = false
+	assertRealPlatformApprovalReadable(t, browser, baseURL, approveRun, approveApproval)
+	assertRealPlatformApprovalReadable(t, browser, baseURL, denyRun, denyApproval)
+	assertRealPlatformApprovalReadable(t, browser, baseURL, interruptRun, interruptApproval)
 	recoveredRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-recovered", "Reply exactly LOOMHELM_PLATFORM_C01_RECOVERED_OK and do not use tools.")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, recoveredRun, protocol.EventTypeRunCompleted)
 	t.Logf("real platform Connector closure passed: session=%s approve=%s deny=%s interrupt=%s recovered=%s", created.Session.ID, approveRun, denyRun, interruptRun, recoveredRun)
-}
-
-type realPlatformApproval struct {
-	ID       string `json:"approval_id"`
-	Revision int64  `json:"revision"`
 }
 
 func submitRealPlatformRun(t *testing.T, browser *http.Client, baseURL, sessionID, commandID, prompt string) string {
@@ -222,35 +220,71 @@ func submitRealPlatformRun(t *testing.T, browser *http.Client, baseURL, sessionI
 	return *result.Ack.RunID
 }
 
-func waitForRealPlatformApproval(t *testing.T, ctx context.Context, browser *http.Client, baseURL, runID string) realPlatformApproval {
+func waitForRealPlatformApproval(t *testing.T, ctx context.Context, browser *http.Client, baseURL, runID string) protocol.Approval {
 	t.Helper()
 	event := waitForRealPlatformEvent(t, ctx, browser, baseURL, runID, protocol.EventTypeApprovalRequested)
-	approval, err := decodeRealPlatformApproval(event)
-	if err != nil {
-		t.Fatalf("decode platform approval event: %v; payload=%s", err, event.Payload)
+	var native struct {
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
 	}
-	return approval
+	if err := json.Unmarshal(event.Payload, &native); err != nil {
+		t.Fatalf("decode raw platform approval event: %v; payload=%s", err, event.Payload)
+	}
+	if native.Method != "item/commandExecution/requestApproval" && native.Method != "item/fileChange/requestApproval" {
+		t.Fatalf("raw platform approval event method = %q; payload=%s", native.Method, event.Payload)
+	}
+	if len(native.Params) == 0 || !json.Valid(native.Params) {
+		t.Fatalf("raw platform approval event params are not valid JSON: %s", event.Payload)
+	}
+	return waitForRealPlatformApprovalRecord(t, ctx, browser, baseURL, runID, event)
 }
 
-func decodeRealPlatformApproval(event protocol.Event) (realPlatformApproval, error) {
-	var normalized realPlatformApproval
-	if err := json.Unmarshal(event.Payload, &normalized); err != nil {
-		return realPlatformApproval{}, err
-	}
-	if normalized.ID != "" {
-		if normalized.Revision <= 0 {
-			normalized.Revision = 1
+func waitForRealPlatformApprovalRecord(t *testing.T, ctx context.Context, browser *http.Client, baseURL, runID string, event protocol.Event) protocol.Approval {
+	t.Helper()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		response := applicationRequest(t, browser, http.MethodGet, baseURL+"/api/v1/runs/"+runID+"/approvals?limit=200", nil, nil, http.StatusOK)
+		var page protocol.ApprovalListResponse
+		decodeApplicationResponse(t, response, &page)
+		for _, approval := range page.Items {
+			if approval.RunID != runID || approval.RequestedEventID == nil || *approval.RequestedEventID != event.EventID {
+				continue
+			}
+			if approval.ID == "" || approval.Revision <= 0 || len(approval.Context) == 0 || !json.Valid(approval.Context) {
+				t.Fatalf("platform approval public record is incomplete: %+v", approval)
+			}
+			return approval
 		}
-		return normalized, nil
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-deadline.C:
+			t.Fatalf("run %q approval list did not link event %q", runID, event.EventID)
+		case <-ticker.C:
+		}
 	}
-	request, err := normalizeNativeGatewayApproval(event, "real-platform")
-	if err != nil {
-		return realPlatformApproval{}, err
-	}
-	return realPlatformApproval{ID: request.ID, Revision: request.Revision}, nil
 }
 
-func resolveRealPlatformApproval(t *testing.T, browser *http.Client, baseURL, runID string, approval realPlatformApproval, decision protocol.ApprovalDecision, commandID string) {
+func assertRealPlatformApprovalReadable(t *testing.T, browser *http.Client, baseURL, runID string, want protocol.Approval) {
+	t.Helper()
+	response := applicationRequest(t, browser, http.MethodGet, baseURL+"/api/v1/runs/"+runID+"/approvals?limit=200", nil, nil, http.StatusOK)
+	var page protocol.ApprovalListResponse
+	decodeApplicationResponse(t, response, &page)
+	for _, approval := range page.Items {
+		if approval.ID == want.ID {
+			if approval.Revision != want.Revision || approval.RunID != want.RunID || string(approval.Context) != string(want.Context) || approval.RequestedEventID == nil || want.RequestedEventID == nil || *approval.RequestedEventID != *want.RequestedEventID {
+				t.Fatalf("reconnected approval changed: got %+v want %+v", approval, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("reconnected approval %q was not returned", want.ID)
+}
+
+func resolveRealPlatformApproval(t *testing.T, browser *http.Client, baseURL, runID string, approval protocol.Approval, decision protocol.ApprovalDecision, commandID string) {
 	t.Helper()
 	response := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/runs/"+runID+"/approvals/"+approval.ID, protocol.ResolveApprovalRequest{
 		CommandID: commandID,

@@ -42,6 +42,11 @@ func (s *recordingRunControl) ResolveApproval(_ context.Context, p auth.Principa
 	return s.record(p, body, run, approval)
 }
 
+func (s *recordingRunControl) ListRunApprovals(_ context.Context, p auth.Principal, id string, query protocol.ListRunApprovalsQuery) (protocol.ApprovalListResponse, error) {
+	_, err := s.record(p, query, id)
+	return protocol.ApprovalListResponse{Items: []protocol.Approval{}, HasMore: false}, err
+}
+
 func (s *recordingRunControl) ListRunEvents(_ context.Context, p auth.Principal, id string, query protocol.ListRunEventsQuery) (protocol.EventPage, error) {
 	_, err := s.record(p, query, id)
 	return protocol.EventPage{Events: []protocol.Event{}}, err
@@ -115,6 +120,24 @@ func TestRunControlHTTPPreservesOpaqueCursorAndRejectsAmbiguousQuery(t *testing.
 		runControlRouter(service, nil).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/r/events?"+suffix, nil))
 		if response.Code != http.StatusBadRequest || service.calls != 0 {
 			t.Fatalf("query %q status=%d calls=%d", suffix, response.Code, service.calls)
+		}
+	}
+}
+
+func TestRunControlHTTPListsApprovalsWithBoundedQuery(t *testing.T) {
+	service := &recordingRunControl{}
+	response := httptest.NewRecorder()
+	runControlRouter(service, nil).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/r/approvals?after_cursor=opaque%2B%2F%3D%3Ax&limit=17", nil))
+	query, ok := service.body.(protocol.ListRunApprovalsQuery)
+	if response.Code != http.StatusOK || !ok || query.AfterCursor == nil || *query.AfterCursor != "opaque+/=:x" || query.Limit == nil || *query.Limit != 17 || service.ids[0] != "r" {
+		t.Fatalf("approval query changed: %+v response=%s", query, response.Body.String())
+	}
+	for _, suffix := range []string{"limit=0", "limit=-1", "limit=201", "limit=bad", "limit=1&limit=2", "after_cursor=a&after_cursor=b", "after_cursor=%XX"} {
+		service := &recordingRunControl{}
+		response := httptest.NewRecorder()
+		runControlRouter(service, nil).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/r/approvals?"+suffix, nil))
+		if response.Code != http.StatusBadRequest || service.calls != 0 {
+			t.Fatalf("approval query %q status=%d calls=%d", suffix, response.Code, service.calls)
 		}
 	}
 }

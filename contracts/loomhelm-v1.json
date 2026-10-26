@@ -220,7 +220,9 @@
         "kind": {"type": "string"},
         "summary": {"type": "string"},
         "status": {"$ref": "#/types/ApprovalStatus"},
-        "requested_at": {"type": "string", "format": "date-time"}
+        "requested_at": {"type": "string", "format": "date-time"},
+        "context": {"kind": "raw-json"},
+        "requested_event_id": {"type": "string"}
       }
     },
     "Artifact": {
@@ -295,6 +297,15 @@
       "required": ["events", "has_more"],
       "properties": {
         "events": {"type": "array", "items": {"$ref": "#/types/Event"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "ApprovalListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/Approval"}},
         "next_cursor": {"type": "string"},
         "has_more": {"type": "boolean"}
       }
@@ -503,6 +514,13 @@
       }
     },
     "ListRunEventsQuery": {
+      "type": "object",
+      "properties": {
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "ListRunApprovalsQuery": {
       "type": "object",
       "properties": {
         "after_cursor": {"type": "string"},
@@ -750,6 +768,16 @@
         "response_type": "CommandAckResponse",
         "summary": "Submit a run command",
         "mcp_tool": {"name": "loomhelm.submit_run", "description": "Submit one idempotent run command."}
+      },
+      {
+        "operation_id": "listRunApprovals",
+        "method": "GET",
+        "path": "/runs/{run_id}/approvals",
+        "path_params": {"run_id": "string"},
+        "query_type": "ListRunApprovalsQuery",
+        "response_type": "ApprovalListResponse",
+        "summary": "Read all authorized approval revisions for a run after an opaque cursor",
+        "mcp_tool": {"name": "loomhelm.list_run_approvals", "description": "Read all authorized approval revisions for a run without constructing approval identities."}
       },
       {
         "operation_id": "resolveApproval",

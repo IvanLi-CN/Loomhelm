@@ -91,6 +91,10 @@ func (controlServiceApprovalStore) Get(context.Context, string) (approvals.Appro
 	return approvals.Approval{}, nil
 }
 
+func (controlServiceApprovalStore) ListByRun(context.Context, string, *approvals.Cursor, int) (approvals.ListPage, error) {
+	return approvals.ListPage{}, nil
+}
+
 func (controlServiceApprovalStore) Resolve(context.Context, approvals.ResolveRequest) (approvals.Resolution, error) {
 	return approvals.Resolution{}, nil
 }

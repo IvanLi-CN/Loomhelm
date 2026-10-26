@@ -25,6 +25,7 @@ type runControlApplication interface {
 	SubmitRun(context.Context, auth.Principal, string, protocol.SubmitRunRequest) (protocol.CommandAckResponse, error)
 	InterruptRun(context.Context, auth.Principal, string, protocol.InterruptRunRequest) (protocol.CommandAckResponse, error)
 	ResolveApproval(context.Context, auth.Principal, string, string, protocol.ResolveApprovalRequest) (protocol.CommandAckResponse, error)
+	ListRunApprovals(context.Context, auth.Principal, string, protocol.ListRunApprovalsQuery) (protocol.ApprovalListResponse, error)
 	ListRunEvents(context.Context, auth.Principal, string, protocol.ListRunEventsQuery) (protocol.EventPage, error)
 }
 
@@ -37,6 +38,7 @@ func (h *runControlHTTP) mount(router chi.Router) {
 	router.Post("/sessions/{session_id}/runs", h.submit)
 	router.Post("/runs/{run_id}/interrupt", h.interrupt)
 	router.Post("/runs/{run_id}/approvals/{approval_id}", h.resolve)
+	router.Get("/runs/{run_id}/approvals", h.approvals)
 	router.Get("/runs/{run_id}/events", h.events)
 }
 
@@ -97,6 +99,40 @@ func (h *runControlHTTP) resolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.service.ResolveApproval(r.Context(), p, chi.URLParam(r, "run_id"), chi.URLParam(r, "approval_id"), body)
+	writeRunControlResult(w, r, result, err)
+}
+
+func (h *runControlHTTP) approvals(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.resolvePrincipal(w, r)
+	if !ok {
+		return
+	}
+	query := protocol.ListRunApprovalsQuery{}
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeRunControlError(w, r, auth.ErrInvalid)
+		return
+	}
+	for _, key := range []string{"after_cursor", "limit"} {
+		if len(values[key]) > 1 {
+			writeRunControlError(w, r, auth.ErrInvalid)
+			return
+		}
+	}
+	if values.Has("after_cursor") {
+		cursor := values.Get("after_cursor")
+		query.AfterCursor = &cursor
+	}
+	if values.Has("limit") {
+		var limit int64
+		limit, err = strconv.ParseInt(values.Get("limit"), 10, 64)
+		if err != nil || limit < 1 || limit > approvals.MaxPageSize {
+			writeRunControlError(w, r, auth.ErrInvalid)
+			return
+		}
+		query.Limit = &limit
+	}
+	result, err := h.service.ListRunApprovals(r.Context(), p, chi.URLParam(r, "run_id"), query)
 	writeRunControlResult(w, r, result, err)
 }
 

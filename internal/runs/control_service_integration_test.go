@@ -555,6 +555,112 @@ func TestPersistentControlServiceEventCursorIsRunScoped(t *testing.T) {
 	}
 }
 
+func TestPersistentControlServiceApprovalListIsHistoricalAndRunScoped(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fixture := newControlFixture(t, db, 2)
+	control := newControlServiceFixture(t, db, fixture)
+	runStore := NewStore(db.Pool())
+	approvalStore := approvals.NewStore(db.Pool())
+	historicalGeneration := "historical-" + fixture.generation
+	first, err := runStore.CreateRun(ctx, NewRunInput{
+		ID:         fixture.run,
+		SessionID:  fixture.sessionIDs[0],
+		CommandID:  fixture.command + "-historical-run",
+		Generation: historicalGeneration,
+	})
+	if err != nil {
+		t.Fatalf("create historical approval run: %v", err)
+	}
+	second, err := runStore.CreateRun(ctx, NewRunInput{
+		ID:         fixture.run + "-other",
+		SessionID:  fixture.sessionIDs[1],
+		CommandID:  fixture.command + "-other-run",
+		Generation: fixture.generation,
+	})
+	if err != nil {
+		t.Fatalf("create independent approval run: %v", err)
+	}
+
+	createdAt := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	approvalIDs := []string{fixture.approval + "-a", fixture.approval + "-b", fixture.approval + "-c"}
+	eventIDs := []string{fixture.command + "-event-a", fixture.command + "-event-b", fixture.command + "-event-c"}
+	for index, approvalID := range approvalIDs {
+		approval, createErr := approvalStore.Create(ctx, approvals.CreateRequest{
+			NewInput: approvals.NewInput{
+				ID:          approvalID,
+				RunID:       first.ID,
+				SessionID:   first.SessionID,
+				Generation:  historicalGeneration,
+				Revision:    int64(index + 1),
+				Kind:        "command",
+				RequestedAt: createdAt.Add(time.Duration(index) * time.Second).Format(time.RFC3339Nano),
+			},
+			Context:          json.RawMessage(fmt.Sprintf(`{"index":%d}`, index)),
+			RequestedEventID: eventIDs[index],
+		})
+		if createErr != nil {
+			t.Fatalf("create approval %q: %v", approvalID, createErr)
+		}
+		if _, updateErr := db.Pool().Exec(ctx, `UPDATE execution_approvals SET created_at = $2, updated_at = $2 WHERE id = $1`, approval.ID, createdAt.Add(time.Duration(index)*time.Second)); updateErr != nil {
+			t.Fatalf("set deterministic approval timestamp %q: %v", approvalID, updateErr)
+		}
+	}
+	if _, err := approvalStore.Resolve(ctx, approvals.ResolveRequest{
+		ApprovalID: approvalIDs[1],
+		RunID:      first.ID,
+		SessionID:  first.SessionID,
+		Generation: historicalGeneration,
+		Request: protocol.ResolveApprovalRequest{
+			CommandID: fixture.command + "-approve-history",
+			Decision:  protocol.ApprovalDecisionApprove,
+			Revision:  2,
+		},
+	}); err != nil {
+		t.Fatalf("resolve historical approval: %v", err)
+	}
+	if _, err := approvalStore.Expire(ctx, approvalIDs[2], historicalGeneration); err != nil {
+		t.Fatalf("expire historical approval: %v", err)
+	}
+
+	principal := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}, fixture.projectB: {}}}
+	limit := int64(2)
+	page, err := control.service.ListRunApprovals(ctx, principal, first.ID, protocol.ListRunApprovalsQuery{Limit: &limit})
+	if err != nil {
+		t.Fatalf("list first approval page: %v", err)
+	}
+	if len(page.Items) != 2 || !page.HasMore || page.NextCursor == nil {
+		t.Fatalf("first approval page = %+v", page)
+	}
+	if page.Items[0].ID != approvalIDs[0] || page.Items[0].Status != protocol.ApprovalStatusPending || string(page.Items[0].Context) != `{"index":0}` || page.Items[0].RequestedEventID == nil || *page.Items[0].RequestedEventID != eventIDs[0] {
+		t.Fatalf("first public approval = %+v", page.Items[0])
+	}
+	if page.Items[1].ID != approvalIDs[1] || page.Items[1].Status != protocol.ApprovalStatusApproved || string(page.Items[1].Context) != `{"index":1}` || page.Items[1].RequestedEventID == nil || *page.Items[1].RequestedEventID != eventIDs[1] {
+		t.Fatalf("second public approval = %+v", page.Items[1])
+	}
+
+	page, err = control.service.ListRunApprovals(ctx, principal, first.ID, protocol.ListRunApprovalsQuery{AfterCursor: page.NextCursor})
+	if err != nil {
+		t.Fatalf("list second approval page: %v", err)
+	}
+	if len(page.Items) != 1 || page.HasMore || page.NextCursor != nil || page.Items[0].ID != approvalIDs[2] || page.Items[0].Status != protocol.ApprovalStatusExpired {
+		t.Fatalf("second approval page = %+v", page)
+	}
+	crossRunCursor := approvals.EncodeCursor(approvals.Cursor{RunID: first.ID, CreatedAt: createdAt, ID: approvalIDs[0]})
+	if _, err := control.service.ListRunApprovals(ctx, principal, second.ID, protocol.ListRunApprovalsQuery{AfterCursor: &crossRunCursor}); !errors.Is(err, auth.ErrInvalid) {
+		t.Fatalf("cross-run approval cursor error = %v, want %v", err, auth.ErrInvalid)
+	}
+	unauthorized := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}}}
+	if _, err := control.service.ListRunApprovals(ctx, unauthorized, second.ID, protocol.ListRunApprovalsQuery{}); !errors.Is(err, auth.ErrForbidden) {
+		t.Fatalf("unauthorized independent approval read = %v, want %v", err, auth.ErrForbidden)
+	}
+	if _, err := control.service.ResolveApproval(ctx, principal, first.ID, approvalIDs[0], protocol.ResolveApprovalRequest{CommandID: fixture.command + "-stale-history", Decision: protocol.ApprovalDecisionApprove, Revision: 1}); !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("historical approval resolve error = %v, want %v", err, ErrStaleGeneration)
+	}
+}
+
 type controlFixture struct {
 	userID     string
 	projectA   string

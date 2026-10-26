@@ -39,6 +39,8 @@ The system MUST support creating a Codex session in the installation's configure
 
 An authorized user MUST be able to associate at most one direct session with a task, send input, observe streamed execution, approve or deny a pending request and interrupt a run. These conversation operations MUST also work without prior Task or Project association. Supported sub-agent activity MUST be inspectable within the conversation using actual available events. Stale or repeated approval responses MUST NOT authorize additional execution.
 
+Authenticated REST and MCP MUST expose every persisted approval revision for an authorized Run, including pending, approved, denied and expired states, with the actual durable `id`, `revision`, raw `context` and optional `requested_event_id`; the latter MUST identify the matching `approval.requested` event while the public event payload remains unchanged. Approval history reads MUST use an opaque Run-bound keyset cursor over `(created_at, id)`, default to 50 items and reject explicit limits outside 1..200, duplicate or malformed parameters and cross-Run cursors. Read authorization MUST be rechecked on every page, historical rows from an older execution generation MUST remain readable, and approval resolution MUST retain exact current Run/generation/revision/CAS checks so stale or repeated responses cannot authorize another execution.
+
 ### REQ-LH-004
 
 The system MUST persist command identity and ordered events across connection loss and Server, Worker or Connector restart. It MUST distinguish accepted, executing and finished work, deduplicate repeated delivery, and expose an explicit unknown result when an external side effect cannot yet be established. Recovery MUST reconcile before repeating an ambiguous operation.
@@ -198,6 +200,12 @@ The current U02 Task Evidence Set contains six owner-confirmed mock-only capture
 The sixth capture is `assets/task-graph-storybook-desktop.png`, rendered from candidate `0723f90af49582bd816e0a762e06c3234b37f2b2` against base `5666655ab69980265166e8ef8df46a9493f60568` using Storybook story `product-taskviews--explorer-consistency` after switching to its final graph view. It is a `1425x1061` full source-managed surface capture from a `1440x1000` CSS viewport, with 40px target-to-surface margins, no pixel trim and SHA-256 `d1360aac95bb0fd15d1bc2ff00b2ddcac043b17a2ca9cd7272a2c5c19a75ad25`. The exact destination is absent at the locked base, so its comparison is `current-only`; the owner confirmed the displayed image as accurate.
 
 The TaskGraph image documents the current component presentation and does not establish authenticated production UI, backend authorization, relationship persistence or complete product UI approval. Its source-managed DOM preflight and exact-path comparison remain recorded in the external candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/batch16-0723f90`.
+
+### VER-LH-012
+
+- Method: real authenticated HTTP/MCP approval-history reads for a native approval request, ordered event reads, reconnect and Connector restart, then approve/deny, duplicate/old-revision/resolved/old-generation response attempts, permission/error and cache-header checks.
+- covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-008`, `REQ-LH-011`
+- Pass condition: the approval list returns the actual persisted ID, revision, status, raw context and event link for every status; the matching public event retains the native raw payload; reconnect returns the same approval identity; exact current-generation approval resolution admits one response only; historical old-generation reads succeed while writes fail; read authorization, 401/404/400/409/503 mappings, no-store headers, cursor bounds and duplicate parameters hold without client- or database-ID construction in the test helper.
 
 ## Related ADRs
 
