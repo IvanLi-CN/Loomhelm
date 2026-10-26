@@ -2387,6 +2387,26 @@ pre {
   font-weight: 400;
 }
 
+.form-field textarea {
+  font-size: 14px;
+  line-height: 21px;
+}
+
+.task-form .task-relation-picker-trigger {
+  height: var(--control-height-form);
+  min-height: var(--control-height-form);
+  padding-block: 0;
+  padding-inline: 12px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 21px;
+}
+
+.task-form .task-relation-picker-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
 .back-link {
   display: inline-flex;
   align-items: center;
@@ -2922,6 +2942,19 @@ pre {
   }
 
   [data-slot="input"] {
+    font-size: 16px;
+    line-height: 24px;
+  }
+
+  .form-field [data-slot="select-trigger"][data-size="default"],
+  .form-field textarea {
+    font-size: 16px;
+    line-height: 24px;
+  }
+
+  .task-form .task-relation-picker-trigger {
+    height: var(--control-height-touch);
+    min-height: var(--control-height-touch);
     font-size: 16px;
     line-height: 24px;
   }

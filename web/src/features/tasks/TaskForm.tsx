@@ -279,7 +279,7 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   };
 
   return (
-    <form ref={formRef} tabIndex={-1} className="form-panel w-full max-w-3xl" aria-label={mode === "create" ? "创建任务" : "编辑任务"} onSubmit={(event) => { void submit(event); }}>
+    <form ref={formRef} tabIndex={-1} className="form-panel task-form w-full max-w-3xl" aria-label={mode === "create" ? "创建任务" : "编辑任务"} onSubmit={(event) => { void submit(event); }}>
       <div className="mb-5">
         <span className="section-kicker">{mode === "create" ? "NEW TASK" : "TASK EDITOR"}</span>
         <h2 className="mt-1 text-lg font-semibold">{mode === "create" ? "创建任务" : "编辑任务"}</h2>
