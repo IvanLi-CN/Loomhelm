@@ -62,7 +62,11 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		t.Fatalf("register acceptance host: %v", err)
 	}
 
-	journalPath := filepath.Join(t.TempDir(), "connector.jsonl")
+	journalDir := filepath.Join(t.TempDir(), "journal")
+	if err := os.Mkdir(journalDir, 0o700); err != nil {
+		t.Fatalf("create secure connector journal directory: %v", err)
+	}
+	journalPath := filepath.Join(journalDir, "connector.jsonl")
 	connectorConfig := platform.Config{
 		Component:                 platform.ComponentConnector,
 		Version:                   "real-platform-c01",
