@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState, type ReactNode } from "react";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 
 import { TaskRelationPicker, type TaskRelationCandidate } from "./TaskRelationPicker";
 
@@ -60,7 +60,7 @@ export const SearchAndCloseDoNotWrite: Story = {
     await userEvent.type(canvas.getByRole("searchbox", { name: "搜索任务 ID、标题或项目" }), "不存在的任务");
     expect(canvas.getByRole("status", { name: "未找到匹配任务。" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
-    expect(canvas.getByRole("button", { name: "添加父任务" })).toHaveFocus();
+    await waitFor(() => expect(canvas.getByText("添加父任务").closest("summary")).toHaveFocus());
     expect(args.onChange).not.toHaveBeenCalled();
   }
 };
@@ -84,6 +84,6 @@ export const PermissionAndPending: Story = {
     const canvas = within(canvasElement);
     expect(canvas.getByRole("status", { name: "关系保存中，暂时不能修改。" })).toBeInTheDocument();
     expect(canvas.getByRole("button", { name: "移除前置依赖 TASK-0001" })).toBeDisabled();
-    expect(canvas.getByRole("button", { name: "添加前置依赖" })).toHaveAttribute("aria-disabled", "true");
+    expect(canvas.getByText("添加前置依赖").closest("summary")).toHaveAttribute("aria-disabled", "true");
   }
 };
