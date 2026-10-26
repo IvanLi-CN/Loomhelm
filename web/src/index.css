@@ -3178,6 +3178,10 @@ pre {
     align-items: flex-end;
   }
 
+  .product-shell[data-inspector-mode] .composer-footer {
+    padding-right: calc(var(--control-height-touch) + 12px);
+  }
+
   .composer-footer small {
     max-width: 220px;
   }
