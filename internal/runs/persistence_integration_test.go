@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -734,10 +735,214 @@ func TestPersistentControllerDeduplicatesAndFreezesUnknownDelivery(t *testing.T)
 	}
 }
 
+func TestPersistentControllerReconcilesOrphanedAdmissionAfterRestart(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        "1",
+	}); err != nil {
+		t.Fatalf("create controller session: %v", err)
+	}
+
+	command := protocol.Command{
+		CommandID: ids.command,
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"orphaned admission"}`),
+		SessionID: ids.session,
+	}
+	runID := ids.run
+	command.RunID = &runID
+	store := NewStore(db.Pool())
+	if _, _, err := store.AcceptRun(ctx, CommandIntent{Command: command, Generation: "1"}, NewRunInput{
+		ID:         runID,
+		SessionID:  ids.session,
+		CommandID:  ids.command,
+		Generation: "1",
+	}); err != nil {
+		t.Fatalf("persist admitted command: %v", err)
+	}
+
+	transport := &integrationCommandTransport{}
+	controller, err := NewController(NewStore(db.Pool()), transport, ControllerConfig{Generation: "1"})
+	if err != nil {
+		t.Fatalf("create recovery controller: %v", err)
+	}
+	ack, err := controller.AcceptCommand(ctx, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("orphaned admission error = %v, want unknown result", err)
+	}
+	if ack.State != protocol.CommandStateUnknown || !ack.Deduplicated {
+		t.Fatalf("orphaned admission ACK = %+v", ack)
+	}
+	if transport.calls != 0 {
+		t.Fatalf("orphaned admission sent %d native commands, want 0", transport.calls)
+	}
+	record, err := store.Lookup(ctx, command.CommandID)
+	if err != nil {
+		t.Fatalf("lookup recovered command: %v", err)
+	}
+	if record.State != protocol.CommandStateUnknown {
+		t.Fatalf("recovered command = %+v, want unknown", record)
+	}
+	run, err := store.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("lookup recovered run: %v", err)
+	}
+	if run.Status != protocol.RunStatusUnknown {
+		t.Fatalf("recovered run = %+v, want unknown", run)
+	}
+
+	executingCommand := command
+	executingCommand.CommandID = ids.command + "-executing"
+	executingRunID := ids.run + "-executing"
+	executingCommand.RunID = &executingRunID
+	if _, _, err := store.AcceptRun(ctx, CommandIntent{Command: executingCommand, Generation: "1"}, NewRunInput{
+		ID:         executingRunID,
+		SessionID:  ids.session,
+		CommandID:  executingCommand.CommandID,
+		Generation: "1",
+	}); err != nil {
+		t.Fatalf("persist executing command: %v", err)
+	}
+	if _, err := store.Transition(ctx, executingCommand.CommandID, "1", protocol.CommandStateExecuting, "", nil, nil); err != nil {
+		t.Fatalf("persist executing state: %v", err)
+	}
+	executingAck, err := controller.AcceptCommand(ctx, executingCommand)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("orphaned executing error = %v, want unknown result", err)
+	}
+	if executingAck.State != protocol.CommandStateUnknown || !executingAck.Deduplicated {
+		t.Fatalf("orphaned executing ACK = %+v", executingAck)
+	}
+	if transport.calls != 0 {
+		t.Fatalf("orphaned executing sent %d native commands, want 0", transport.calls)
+	}
+	executingRun, err := store.GetRun(ctx, executingRunID)
+	if err != nil {
+		t.Fatalf("lookup executing recovery run: %v", err)
+	}
+	if executingRun.Status != protocol.RunStatusUnknown {
+		t.Fatalf("executing recovery run = %+v, want unknown", executingRun)
+	}
+}
+
+func TestPersistentControllerPreservesActiveConcurrentDuplicate(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        "1",
+	}); err != nil {
+		t.Fatalf("create concurrent session: %v", err)
+	}
+	transport := newBlockingIntegrationCommandTransport()
+	controller, err := NewController(NewStore(db.Pool()), transport, ControllerConfig{Generation: "1"})
+	if err != nil {
+		t.Fatalf("create concurrent controller: %v", err)
+	}
+	command := protocol.Command{
+		CommandID: ids.command,
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"concurrent duplicate"}`),
+		SessionID: ids.session,
+	}
+	type result struct {
+		ack protocol.CommandAck
+		err error
+	}
+	firstDone := make(chan result, 1)
+	go func() {
+		ack, err := controller.AcceptCommand(ctx, command)
+		firstDone <- result{ack: ack, err: err}
+	}()
+	select {
+	case <-transport.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first command did not reach transport")
+	}
+
+	secondDone := make(chan result, 1)
+	go func() {
+		ack, err := controller.AcceptCommand(ctx, command)
+		secondDone <- result{ack: ack, err: err}
+	}()
+	select {
+	case second := <-secondDone:
+		if second.err != nil || second.ack.State != protocol.CommandStateExecuting || !second.ack.Deduplicated {
+			t.Fatalf("active duplicate = %+v, want executing deduplicated ACK", second)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("active duplicate did not return while original delivery was in flight")
+	}
+	if got := transport.sendCount(); got != 1 {
+		t.Fatalf("active duplicate send count = %d, want 1", got)
+	}
+	close(transport.release)
+	first := <-firstDone
+	if first.err != nil || first.ack.State != protocol.CommandStateSucceeded {
+		t.Fatalf("first command = %+v, want succeeded ACK", first)
+	}
+	third, err := controller.AcceptCommand(ctx, command)
+	if err != nil || third.State != protocol.CommandStateSucceeded || !third.Deduplicated {
+		t.Fatalf("post-delivery duplicate = %+v, error = %v", third, err)
+	}
+	if got := transport.sendCount(); got != 1 {
+		t.Fatalf("post-delivery duplicate send count = %d, want 1", got)
+	}
+}
+
 type integrationCommandTransport struct {
 	ack     protocol.CommandAck
 	sendErr error
 	calls   int
+}
+
+type blockingIntegrationCommandTransport struct {
+	entered   chan struct{}
+	release   chan struct{}
+	enteredMu sync.Once
+	mu        sync.Mutex
+	calls     int
+}
+
+func newBlockingIntegrationCommandTransport() *blockingIntegrationCommandTransport {
+	return &blockingIntegrationCommandTransport{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (t *blockingIntegrationCommandTransport) SendCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
+	t.mu.Lock()
+	t.calls++
+	t.mu.Unlock()
+	t.enteredMu.Do(func() { close(t.entered) })
+	select {
+	case <-t.release:
+		return protocol.CommandAck{CommandID: command.CommandID, RunID: command.RunID, State: protocol.CommandStateSucceeded}, nil
+	case <-ctx.Done():
+		return protocol.CommandAck{}, ctx.Err()
+	}
+}
+
+func (t *blockingIntegrationCommandTransport) ReconcileCommand(context.Context, protocol.Command) (protocol.Reconciliation, error) {
+	return protocol.Reconciliation{State: protocol.ReconciliationStateUnknown}, nil
+}
+
+func (t *blockingIntegrationCommandTransport) sendCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.calls
 }
 
 func (t *integrationCommandTransport) SendCommand(_ context.Context, command protocol.Command) (protocol.CommandAck, error) {

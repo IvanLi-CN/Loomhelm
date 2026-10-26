@@ -508,12 +508,6 @@ func TestJournalMappedReplaySkipsStaleNativeTokenTelemetry(t *testing.T) {
 
 func TestJournalReadsV2AndAppendsV3WithoutRewritingHistory(t *testing.T) {
 	path := filepath.Join(privateTestDir(t), "v2-journal.jsonl")
-	legacy := journalSession{
-		SessionID:         "adapter-v2",
-		ExternalThreadRef: "thread-v2",
-		Generation:        "generation-v2",
-		UpdatedAt:         "2026-10-21T00:00:00Z",
-	}
 	v2Request := protocol.NewSessionRequest{CommandID: "create-v2", ProjectID: "project-v2", TaskID: "task-v2", Prompt: "v2 prompt"}
 	v2Digest, err := sessionStartPayloadDigest(v2Request)
 	if err != nil {
@@ -527,22 +521,21 @@ func TestJournalReadsV2AndAppendsV3WithoutRewritingHistory(t *testing.T) {
 		RequestDigest:     v2Digest,
 		State:             "resolved",
 		ExternalThreadRef: "thread-v2-intent",
-		UpdatedAt:         legacy.UpdatedAt,
+		UpdatedAt:         "2026-10-21T00:00:00Z",
+	}
+	v2Session := journalSession{
+		SessionID:         "adapter-v2",
+		ExternalThreadRef: v2Intent.ExternalThreadRef,
+		Generation:        v2Intent.Generation,
+		UpdatedAt:         v2Intent.UpdatedAt,
 	}
 	records := []journalRecord{
-		{FormatVersion: previousJournalFormatVersion, Type: "session", At: legacy.UpdatedAt, Session: &legacy},
-		{FormatVersion: previousJournalFormatVersion, Type: "session_start", At: v2Intent.UpdatedAt, SessionStart: &v2Intent},
+		{FormatVersion: previousJournalFormatVersion, Type: "session", At: v2Intent.UpdatedAt, Session: &v2Session, SessionStart: &v2Intent},
 	}
 	encoded, err := json.Marshal(records[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := json.Marshal(records[1])
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded = append(encoded, '\n')
-	encoded = append(encoded, second...)
 	encoded = append(encoded, '\n')
 	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
@@ -552,7 +545,7 @@ func TestJournalReadsV2AndAppendsV3WithoutRewritingHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer journal.Close()
-	if facts := journal.LegacySessionFacts(); len(facts) != 1 || facts[0].PlatformSessionID != "" || facts[0].CommandID != "" || facts[0].AdapterSessionID != legacy.SessionID {
+	if facts := journal.LegacySessionFacts(); len(facts) != 1 || facts[0].PlatformSessionID != "" || facts[0].CommandID != "" || facts[0].AdapterSessionID != v2Session.SessionID {
 		t.Fatalf("legacy session facts = %+v", facts)
 	}
 	if resolved, ok, err := journal.ResolvedSessionStart(v2Request); err != nil || !ok || resolved.ExternalThreadRef != v2Intent.ExternalThreadRef {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -34,6 +35,8 @@ type Controller struct {
 	generation        string
 	resolveGeneration GenerationResolver
 	runID             func(protocol.Command, string) string
+	activeMu          sync.Mutex
+	activeCommands    map[string]int
 }
 
 func NewController(store *Store, transport CommandTransport, config ControllerConfig) (*Controller, error) {
@@ -56,6 +59,7 @@ func NewController(store *Store, transport CommandTransport, config ControllerCo
 		generation:        config.Generation,
 		resolveGeneration: config.ResolveGeneration,
 		runID:             runID,
+		activeCommands:    make(map[string]int),
 	}, nil
 }
 
@@ -69,6 +73,8 @@ func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command
 	if err := protocol.ValidateCommand(command); err != nil {
 		return protocol.CommandAck{}, err
 	}
+	release := c.trackActiveCommand(command.CommandID)
+	defer release()
 	generation, err := c.currentGeneration(ctx, command.SessionID)
 	if err != nil {
 		return protocol.CommandAck{}, err
@@ -116,6 +122,8 @@ func (c *Controller) AcceptInterruptCommand(ctx context.Context, command protoco
 	if err := protocol.ValidateCommand(command); err != nil {
 		return protocol.CommandAck{}, err
 	}
+	release := c.trackActiveCommand(command.CommandID)
+	defer release()
 	generation, err := c.currentGeneration(ctx, command.SessionID)
 	if err != nil {
 		return protocol.CommandAck{}, err
@@ -144,6 +152,8 @@ func (c *Controller) AcceptApprovalCommand(ctx context.Context, command protocol
 	if err := protocol.ValidateCommand(command); err != nil {
 		return protocol.CommandAck{}, err
 	}
+	release := c.trackActiveCommand(command.CommandID)
+	defer release()
 	generation, err := c.currentGeneration(ctx, command.SessionID)
 	if err != nil {
 		return protocol.CommandAck{}, err
@@ -194,6 +204,11 @@ func (c *Controller) ReconcileCommand(ctx context.Context, commandID string) (pr
 	if record.State != protocol.CommandStateUnknown {
 		if _, err := c.store.MarkUnknown(ctx, commandID, record.Intent.Generation); err != nil {
 			return protocol.Reconciliation{}, err
+		}
+		if runID := optionalStringValue(record.Intent.Command.RunID); runID != "" {
+			if _, err := c.store.MarkRunUnknown(ctx, runID, record.Intent.Generation, "", "command delivery outcome is unknown"); err != nil {
+				return protocol.Reconciliation{}, err
+			}
 		}
 		record, err = c.store.Lookup(ctx, commandID)
 		if err != nil {
@@ -248,6 +263,12 @@ func (c *Controller) dispatchAccepted(ctx context.Context, intent CommandIntent,
 		if accepted.Record.State == protocol.CommandStateUnknown {
 			return ack, protocol.ErrUnknownCommandResult
 		}
+		if accepted.Record.State == protocol.CommandStateAccepted || accepted.Record.State == protocol.CommandStateExecuting {
+			if c.hasOtherActiveCommand(intent.Command.CommandID) {
+				return ack, nil
+			}
+			return c.reconcileOrphanedCommand(ctx, accepted.Record)
+		}
 		return ack, nil
 	}
 	if accepted.Record.State != protocol.CommandStateAccepted {
@@ -285,7 +306,57 @@ func (c *Controller) dispatchAccepted(ctx context.Context, intent CommandIntent,
 			return c.markCommandUnknown(ctx, intent, ack, err)
 		}
 	}
+	if record.State == protocol.CommandStateExecuting {
+		// The transport accepted an in-flight operation. Keep this process-local
+		// owner so a same-process retry does not mistake active work for an
+		// orphan; a new Controller instance has no owner and must reconcile.
+		c.retainActiveCommand(intent.Command.CommandID)
+	}
 	return record.Ack(), nil
+}
+
+func (c *Controller) reconcileOrphanedCommand(ctx context.Context, record CommandRecord) (protocol.CommandAck, error) {
+	_, reconcileErr := c.ReconcileCommand(ctx, record.Intent.Command.CommandID)
+	latest, lookupErr := c.store.Lookup(ctx, record.Intent.Command.CommandID)
+	if lookupErr != nil {
+		return record.Ack(), errors.Join(protocol.ErrUnknownCommandResult, reconcileErr, lookupErr)
+	}
+	ack := latest.Ack()
+	ack.Deduplicated = true
+	return ack, reconcileErr
+}
+
+func (c *Controller) trackActiveCommand(commandID string) func() {
+	c.activeMu.Lock()
+	if c.activeCommands == nil {
+		c.activeCommands = make(map[string]int)
+	}
+	c.activeCommands[commandID]++
+	c.activeMu.Unlock()
+	return func() {
+		c.activeMu.Lock()
+		if count := c.activeCommands[commandID]; count <= 1 {
+			delete(c.activeCommands, commandID)
+		} else {
+			c.activeCommands[commandID] = count - 1
+		}
+		c.activeMu.Unlock()
+	}
+}
+
+func (c *Controller) retainActiveCommand(commandID string) {
+	c.activeMu.Lock()
+	if c.activeCommands == nil {
+		c.activeCommands = make(map[string]int)
+	}
+	c.activeCommands[commandID]++
+	c.activeMu.Unlock()
+}
+
+func (c *Controller) hasOtherActiveCommand(commandID string) bool {
+	c.activeMu.Lock()
+	defer c.activeMu.Unlock()
+	return c.activeCommands[commandID] > 1
 }
 
 func (c *Controller) markCommandUnknown(ctx context.Context, intent CommandIntent, fallback protocol.CommandAck, cause error) (protocol.CommandAck, error) {

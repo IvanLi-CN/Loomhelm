@@ -128,7 +128,10 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 	case sessions.IntentStateConfirmed:
 		return s.finishConfirmedSession(ctx, principal, normalized, intent.SessionID)
 	case sessions.IntentStateUnknown:
-		return protocol.Session{}, protocol.ErrUnknownCommandResult
+		// An unchanged caller retry may reconcile the exact durable creation
+		// command. The Connector owns the command journal and will return the
+		// cached native session proof without issuing a second session/start.
+		return s.openPendingSession(ctx, principal, normalized, intent)
 	case sessions.IntentStatePending:
 		return s.openPendingSession(ctx, principal, normalized, intent)
 	default:

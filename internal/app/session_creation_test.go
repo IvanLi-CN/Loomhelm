@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -200,6 +201,48 @@ func TestSessionCreationKeepsUnknownOutcomeUnknown(t *testing.T) {
 	}
 	if records.unknown != 1 || records.intents["session-unknown"].State != sessions.IntentStateUnknown {
 		t.Fatalf("unknown intent state = %+v, mark count = %d", records.intents["session-unknown"], records.unknown)
+	}
+}
+
+func TestSessionCreationRetriesUnknownIntentThroughExactCommand(t *testing.T) {
+	request := protocol.CreateSessionRequest{CommandID: "create-session-retry", Path: protocol.SessionPathNew}
+	parameters, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := &fakeSessionCreationRecords{
+		intents: map[string]sessions.CreationIntent{
+			"session-existing-unknown": {
+				SessionID:     "session-existing-unknown",
+				CommandID:     request.CommandID,
+				CreatorUserID: "user-1",
+				HostID:        "host-1",
+				Path:          protocol.SessionPathNew,
+				Parameters:    parameters,
+				State:         sessions.IntentStateUnknown,
+			},
+		},
+	}
+	transport := &fakeSessionCreationTransport{ack: protocol.CommandAck{
+		State:  protocol.CommandStateSucceeded,
+		Result: []byte(`{"external_thread_ref":"thread-recovered","generation":"generation-recovered"}`),
+	}}
+	host := &fakeSessionCreationHost{host: hosts.Host{ID: "host-1"}}
+	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, host, transport, nil)
+	service.newID = func() (string, error) { return "new-session-id-must-not-be-used", nil }
+
+	created, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "session-existing-unknown" || created.ExternalThreadRef != "thread-recovered" {
+		t.Fatalf("reconciled session = %+v", created)
+	}
+	if len(transport.commands) != 1 || transport.commands[0].CommandID != request.CommandID || transport.commands[0].SessionID != "session-existing-unknown" {
+		t.Fatalf("reconciliation commands = %+v", transport.commands)
+	}
+	if records.unknown != 0 || records.intents["session-existing-unknown"].State != sessions.IntentStateConfirmed {
+		t.Fatalf("reconciled intent = %+v, mark count = %d", records.intents["session-existing-unknown"], records.unknown)
 	}
 }
 

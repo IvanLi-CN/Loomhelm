@@ -349,8 +349,18 @@ func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.
 		return protocol.CommandAck{}, errors.New("connector command controller is unavailable")
 	}
 	ack, acceptErr := c.controller.AcceptCommand(ctx, prepared)
+	return c.completePlatformCommand(command, ack, acceptErr)
+}
+
+func (c *Connector) completePlatformCommand(command protocol.Command, ack protocol.CommandAck, acceptErr error) (protocol.CommandAck, error) {
 	observeErr := c.ObserveCommandIdentity(command, ack)
-	return ack, errors.Join(acceptErr, observeErr)
+	combinedErr := errors.Join(acceptErr, observeErr)
+	if ack.State == protocol.CommandStateSucceeded && combinedErr != nil {
+		unknown, unknownErr := c.persistUnknownCommand(command.CommandID, ack, combinedErr)
+		unknown.Deduplicated = false
+		return unknown, unknownErr
+	}
+	return ack, combinedErr
 }
 
 func (c *Connector) acceptSessionCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {

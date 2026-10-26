@@ -391,6 +391,71 @@ func TestConnectorRecoversCachedRunAckAfterRestartWithoutNativeReplay(t *testing
 	}
 }
 
+func TestConnectorWithholdsSuccessWhenRunBindingPersistenceFails(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	journalPath := journal.Path()
+	connector := &Connector{journal: journal}
+	if err := connector.BindSessionIdentity("platform-session-binding-failure", "create-binding-failure", protocol.GatewaySession{Generation: "generation-binding-failure"}, protocol.AdapterSession{SessionID: "adapter-binding-failure", ExternalThreadRef: "thread-binding-failure"}); err != nil {
+		t.Fatal(err)
+	}
+	runID := "platform-run-binding-failure"
+	command := protocol.Command{
+		CommandID: "run-binding-failure",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"preserve native proof"}`),
+		RunID:     &runID,
+		SessionID: "platform-session-binding-failure",
+	}
+	prepared, err := connector.PreparePlatformCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, deduplicated, err := journal.BeginCommand(prepared); err != nil || deduplicated {
+		t.Fatalf("seed command = deduplicated %v, error %v", deduplicated, err)
+	}
+	nativeTurnID := "native-turn-binding-failure"
+	nativeOperationID := "generation-binding-failure\x00rpc-binding-failure"
+	nativeAck := protocol.CommandAck{
+		CommandID:   prepared.CommandID,
+		State:       protocol.CommandStateSucceeded,
+		RunID:       &nativeTurnID,
+		OperationID: &nativeOperationID,
+		Result:      json.RawMessage(`{"ok":true}`),
+	}
+	if err := journal.UpdateCommand(prepared.CommandID, nativeAck); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	unknown, err := connector.completePlatformCommand(command, nativeAck, nil)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("binding persistence error = %v, want unknown result", err)
+	}
+	if unknown.State != protocol.CommandStateUnknown || unknown.Deduplicated || unknown.RunID == nil || *unknown.RunID != nativeTurnID || unknown.OperationID == nil || *unknown.OperationID != nativeOperationID {
+		t.Fatalf("safe unknown ACK = %+v", unknown)
+	}
+
+	recoveredJournal, err := connectorruntime.OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recoveredJournal.Close()
+	recoveredConnector := &Connector{journal: recoveredJournal}
+	retry, err := recoveredConnector.acceptPlatformCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded || retry.RunID == nil || *retry.RunID != nativeTurnID {
+		t.Fatalf("exact duplicate recovery ACK = %+v", retry)
+	}
+	binding, ok := recoveredJournal.RunBindingForCommand(command.CommandID)
+	if !ok || binding.State != connectorruntime.IdentityStateBound || binding.NativeTurnID != nativeTurnID || binding.NativeOperationID != nativeOperationID {
+		t.Fatalf("recovered binding = %+v, found = %v", binding, ok)
+	}
+}
+
 func TestConnectorLeavesCachedRunAckUnknownWithoutExactNativeFacts(t *testing.T) {
 	journal := openConnectorIdentityJournal(t)
 	defer journal.Close()
