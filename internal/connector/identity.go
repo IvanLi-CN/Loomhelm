@@ -675,6 +675,21 @@ func (j *Journal) AppendObservedEventWithRecord(event protocol.Event, observatio
 	return raw, false, nil
 }
 
+// observedEventObservation returns the durable adapter-side identity for one
+// raw observed event without materializing a public platform event.
+func (j *Journal) observedEventObservation(eventID string) (EventObservation, bool) {
+	if j == nil || strings.TrimSpace(eventID) == "" {
+		return EventObservation{}, false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	observed, ok := j.observedEvents[eventID]
+	if !ok {
+		return EventObservation{}, false
+	}
+	return observed.Observation, true
+}
+
 func (j *Journal) appendObservedEvent(event protocol.Event, observation EventObservation) (protocol.Event, protocol.Event, bool, error) {
 	if event.SessionID == "" {
 		return protocol.Event{}, protocol.Event{}, false, errors.New("event adapter session id must not be empty")

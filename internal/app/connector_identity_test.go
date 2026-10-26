@@ -94,6 +94,58 @@ func TestConnectorIdentityMapsPlatformCommandsToNativeIdentity(t *testing.T) {
 	}
 }
 
+func TestConnectorIdentityBindsRecoveredAdapterAckAfterJournalRestart(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	journalPath := journal.Path()
+	connector := &Connector{journal: journal}
+	adapterSession := protocol.AdapterSession{SessionID: "adapter-recovered", ExternalThreadRef: "thread-recovered"}
+	if err := connector.BindSessionIdentity("platform-session-recovered", "create-recovered", protocol.GatewaySession{Generation: "generation-recovered"}, adapterSession); err != nil {
+		t.Fatal(err)
+	}
+	platformRunID := "platform-run-recovered"
+	command := protocol.Command{
+		CommandID: "run-recovered",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"recover native identity"}`),
+		RunID:     &platformRunID,
+		SessionID: "platform-session-recovered",
+	}
+	if _, err := connector.BeginRunIdentity(command); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveredJournal, err := connectorruntime.OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recoveredJournal.Close()
+	recoveredConnector := &Connector{journal: recoveredJournal}
+	nativeTurnID := "native-turn-recovered"
+	nativeOperationID := "generation-recovered\x00rpc-recovered"
+	if err := recoveredConnector.ObserveCommandIdentity(command, protocol.CommandAck{RunID: &nativeTurnID, OperationID: &nativeOperationID}); err != nil {
+		t.Fatal(err)
+	}
+	bound, ok := recoveredJournal.RunBinding(command.SessionID, platformRunID)
+	if !ok || bound.State != connectorruntime.IdentityStateBound || bound.NativeTurnID != nativeTurnID || bound.NativeOperationID != nativeOperationID {
+		t.Fatalf("recovered run binding = %+v, found = %v", bound, ok)
+	}
+
+	interrupt := command
+	interrupt.CommandID = "interrupt-recovered"
+	interrupt.Kind = protocol.CommandKindRunInterrupt
+	interrupt.Payload = json.RawMessage(`{"reason":"stop"}`)
+	prepared, err := recoveredConnector.PreparePlatformCommand(interrupt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.SessionID != adapterSession.SessionID || prepared.RunID == nil || *prepared.RunID != nativeTurnID {
+		t.Fatalf("recovered control command = %+v, want native turn identity", prepared)
+	}
+}
+
 func TestConnectorIdentityRejectsMismatchedRecoveryAndGatewayThread(t *testing.T) {
 	journal := openConnectorIdentityJournal(t)
 	defer journal.Close()

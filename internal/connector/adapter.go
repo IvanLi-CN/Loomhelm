@@ -698,7 +698,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 		}
 		return value, nil
 	}
-	if updated, bound, err := a.bindPersistedOperation(commandID, session.SessionID, ack); err != nil {
+	if updated, bound, err := a.bindPersistedOperation(commandID, session, ack); err != nil {
 		return protocol.Reconciliation{}, err
 	} else {
 		ack = updated
@@ -1622,7 +1622,8 @@ func commandTargetTurnID(command protocol.Command) string {
 	}
 }
 
-func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protocol.CommandAck) (protocol.CommandAck, bool, error) {
+func (a *Adapter) bindPersistedOperation(commandID string, session protocol.AdapterSession, ack protocol.CommandAck) (protocol.CommandAck, bool, error) {
+	sessionID := session.SessionID
 	operationID := valueOrEmpty(ack.OperationID)
 	rawOperationID := rpcOperationRawID(operationID)
 	var exactMatched *protocol.Event
@@ -1700,11 +1701,27 @@ func (a *Adapter) bindPersistedOperation(commandID, sessionID string, ack protoc
 	if matched == nil {
 		return ack, false, nil
 	}
-	ack.EventCursor = &matched.Cursor
-	if matched.RunID != nil && strings.TrimSpace(*matched.RunID) != "" {
+	if persistedCommandID := rpcEnvelopeCommandID(matched.Payload); persistedCommandID != "" && persistedCommandID != commandID {
+		return ack, false, nil
+	}
+	if matched.Source == protocol.EventSourceHostObservation {
+		observation, found := a.journal.observedEventObservation(matched.EventID)
+		if found {
+			if !persistedOperationObservationMatches(observation, session, operationID) {
+				return ack, false, nil
+			}
+			if nativeTurnID := strings.TrimSpace(observation.NativeTurnID); nativeTurnID != "" {
+				ack.RunID = &nativeTurnID
+			}
+		} else if matched.RunID != nil && strings.TrimSpace(*matched.RunID) != "" {
+			runID := *matched.RunID
+			ack.RunID = &runID
+		}
+	} else if matched.RunID != nil && strings.TrimSpace(*matched.RunID) != "" {
 		runID := *matched.RunID
 		ack.RunID = &runID
 	}
+	ack.EventCursor = &matched.Cursor
 	if rpcEnvelopeError(matched.Payload) {
 		ack.State = protocol.CommandStateFailed
 		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server operation failed", RequestID: commandID}
@@ -1863,6 +1880,26 @@ func rpcOperationRawID(operationID string) string {
 		return operationID[separator+1:]
 	}
 	return operationID
+}
+
+func rpcOperationGeneration(operationID string) string {
+	if separator := strings.IndexByte(operationID, 0); separator > 0 {
+		return operationID[:separator]
+	}
+	return ""
+}
+
+func persistedOperationObservationMatches(observation EventObservation, session protocol.AdapterSession, operationID string) bool {
+	if observation.AdapterSessionID != session.SessionID || observation.ExternalThreadRef != session.ExternalThreadRef {
+		return false
+	}
+	if generation := rpcOperationGeneration(operationID); generation != "" && observation.Generation != generation {
+		return false
+	}
+	if observation.NativeOperationID != "" && observation.NativeOperationID != operationID {
+		return false
+	}
+	return true
 }
 
 func turnProvidesCommandEvidence(turn appServerTurn) bool {

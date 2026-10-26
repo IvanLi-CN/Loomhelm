@@ -885,13 +885,87 @@ func TestAdapterBindsPersistedOperationWhenAckLostItsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, bound, err := adapter.bindPersistedOperation(command.CommandID, session.SessionID, stored)
+	updated, bound, err := adapter.bindPersistedOperation(command.CommandID, session, stored)
 	if err != nil || !bound {
 		t.Fatalf("persisted correlation binding = %+v, bound = %v, error = %v", updated, bound, err)
 	}
 	wantOperationID := rpcOperationIdentity("generation-operation-ack-loss", json.RawMessage(`41`))
-	if updated.OperationID == nil || *updated.OperationID != wantOperationID || updated.EventCursor == nil {
+	if updated.OperationID == nil || *updated.OperationID != wantOperationID || updated.RunID == nil || *updated.RunID != "turn-operation-ack-loss" || updated.EventCursor == nil {
 		t.Fatalf("recovered operation identity = %+v, want %q and event cursor", updated, wantOperationID)
+	}
+}
+
+func TestAdapterRejectsMismatchedPersistedOperationObservation(t *testing.T) {
+	operationID := rpcOperationIdentity("generation-operation-scope", json.RawMessage(`41`))
+	cases := []struct {
+		name             string
+		threadID         string
+		generation       string
+		nativeOperation  string
+		payloadCommandID string
+	}{
+		{name: "thread", threadID: "thread-foreign", generation: "generation-operation-scope", nativeOperation: operationID, payloadCommandID: "operation-scope-command"},
+		{name: "generation", threadID: "thread-operation-scope", generation: "generation-foreign", nativeOperation: operationID, payloadCommandID: "operation-scope-command"},
+		{name: "operation", threadID: "thread-operation-scope", generation: "generation-operation-scope", nativeOperation: rpcOperationIdentity("generation-foreign", json.RawMessage(`41`)), payloadCommandID: "operation-scope-command"},
+		{name: "command", threadID: "thread-operation-scope", generation: "generation-operation-scope", nativeOperation: operationID, payloadCommandID: "foreign-command"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			journal := openTestJournal(t)
+			defer journal.Close()
+			adapter, err := NewAdapter(fakeProvider{transport: newFakeTransport()}, journal, AdapterConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			session := protocol.AdapterSession{SessionID: "adapter-operation-scope", ExternalThreadRef: "thread-operation-scope"}
+			command := testCommand("operation-scope-command", `{"prompt":"recover exact operation"}`)
+			command.SessionID = session.SessionID
+			if _, _, err := journal.BeginCommand(command); err != nil {
+				t.Fatal(err)
+			}
+			ack, err := journal.LookupCommand(command.CommandID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ack.State = protocol.CommandStateUnknown
+			ack.OperationID = &operationID
+			if err := journal.UpdateCommand(command.CommandID, ack); err != nil {
+				t.Fatal(err)
+			}
+			payload := mustRawJSON(map[string]any{
+				"generation":         "generation-operation-scope",
+				"method":             "turn/start",
+				"operation_id":       operationID,
+				"command_id":         testCase.payloadCommandID,
+				"response_succeeded": true,
+			})
+			_, _, err = journal.AppendObservedEventWithRecord(protocol.Event{
+				EventID:   "operation-scope-" + testCase.name,
+				Cursor:    "operation-scope-" + testCase.name,
+				Sequence:  1,
+				SessionID: session.SessionID,
+				Source:    protocol.EventSourceHostObservation,
+				Type:      protocol.EventTypeUnknown,
+				Payload:   payload,
+			}, EventObservation{
+				AdapterSessionID:  session.SessionID,
+				ExternalThreadRef: testCase.threadID,
+				Generation:        testCase.generation,
+				NativeTurnID:      "native-operation-scope",
+				NativeOperationID: testCase.nativeOperation,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated, bound, err := adapter.bindPersistedOperation(command.CommandID, session, ack)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bound || updated.RunID != nil || updated.EventCursor != nil || updated.State != protocol.CommandStateUnknown {
+				t.Fatalf("mismatched observation was bound: updated=%+v bound=%v", updated, bound)
+			}
+		})
 	}
 }
 

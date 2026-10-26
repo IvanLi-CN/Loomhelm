@@ -61,7 +61,8 @@ type realC01ScenarioEvidence struct {
 	UnknownAckState           protocol.CommandState        `json:"unknown_ack_state,omitempty"`
 	ReconciliationState       protocol.ReconciliationState `json:"reconciliation_state,omitempty"`
 	ReconciliationNote        string                       `json:"reconciliation_note,omitempty"`
-	ReconciledRunID           string                       `json:"reconciled_run_id,omitempty"`
+	NativeTurnID              string                       `json:"native_turn_id,omitempty"`
+	NativeOperationID         string                       `json:"native_operation_id,omitempty"`
 	RecoveryThreadID          string                       `json:"recovery_thread_id,omitempty"`
 	RecoveryEventObserved     bool                         `json:"recovery_event_observed"`
 	IndependentProcessRestart bool                         `json:"independent_process_restart,omitempty"`
@@ -75,7 +76,8 @@ type realC01ProcessResult struct {
 	SessionID             string                       `json:"session_id"`
 	ThreadID              string                       `json:"thread_id"`
 	UnknownAckState       protocol.CommandState        `json:"unknown_ack_state,omitempty"`
-	ReconciledRunID       string                       `json:"reconciled_run_id,omitempty"`
+	NativeTurnID          string                       `json:"native_turn_id,omitempty"`
+	NativeOperationID     string                       `json:"native_operation_id,omitempty"`
 	ReconciliationState   protocol.ReconciliationState `json:"reconciliation_state,omitempty"`
 	ReconciliationNote    string                       `json:"reconciliation_note,omitempty"`
 	FinalAckState         protocol.CommandState        `json:"final_ack_state,omitempty"`
@@ -203,6 +205,7 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		SessionID:         sessionID,
 		ThreadID:          threadID,
 		UnknownAckState:   ack.State,
+		NativeOperationID: valueOrEmpty(ack.OperationID),
 	}
 	observedRun, err := waitForRealObservedOperationAfter(ctx, journal, sessionID, threadID, recoveredGatewaySession.Generation, strings.TrimSpace(*ack.OperationID), beforeCursor, func(event protocol.Event) bool {
 		return realEventOperationID(event) == strings.TrimSpace(*ack.OperationID)
@@ -211,7 +214,7 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
-	result.ReconciledRunID = realC01ObservedNativeTurn(journal, observedRun)
+	result.NativeTurnID = realC01ObservedNativeTurn(journal, observedRun)
 	if err := gateway.CloseSession(context.Background(), recoveredGatewaySession); err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
@@ -300,7 +303,8 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 		ProcessStartToken:     realC01ProcessToken(),
 		SessionID:             sessionID,
 		ThreadID:              threadID,
-		ReconciledRunID:       valueOrEmpty(finalAck.RunID),
+		NativeTurnID:          valueOrEmpty(finalAck.RunID),
+		NativeOperationID:     valueOrEmpty(finalAck.OperationID),
 		ReconciliationState:   reconciliation.State,
 		ReconciliationNote:    valueOrEmpty(reconciliation.Note),
 		FinalAckState:         finalAck.State,
@@ -798,11 +802,12 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if seedResult.UnknownAckState != protocol.CommandStateUnknown {
 		t.Fatalf("seed helper ACK state = %q", seedResult.UnknownAckState)
 	}
-	if seedResult.ReconciledRunID == "" {
+	if seedResult.NativeTurnID == "" || seedResult.NativeOperationID == "" {
 		t.Fatal("seed helper did not observe a run identity for the unknown command")
 	}
 	recoveryEvidence.UnknownAckState = seedResult.UnknownAckState
-	recoveryEvidence.ReconciledRunID = seedResult.ReconciledRunID
+	recoveryEvidence.NativeTurnID = seedResult.NativeTurnID
+	recoveryEvidence.NativeOperationID = seedResult.NativeOperationID
 	recoveryEvidence.ConnectorProcessIDs = []int{seedResult.ProcessID}
 	recoveryResult := runRealC01Helper(ctx, t, "recover", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-recovery-result.json"))
 	if recoveryResult.ProcessID == os.Getpid() || recoveryResult.ProcessID == seedResult.ProcessID || recoveryResult.ProcessID == 0 {
@@ -835,10 +840,14 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recoveryResult.ReconciledRunID != seedResult.ReconciledRunID || valueOrEmpty(finalAck.RunID) != seedResult.ReconciledRunID {
-		t.Fatalf("reconciled run identity changed across restart: seed = %q, helper = %q, final ACK = %q", seedResult.ReconciledRunID, recoveryResult.ReconciledRunID, valueOrEmpty(finalAck.RunID))
+	if recoveryResult.NativeOperationID != seedResult.NativeOperationID || valueOrEmpty(finalAck.OperationID) != seedResult.NativeOperationID {
+		t.Fatalf("native operation identity changed across restart: seed = %q, helper = %q, final ACK = %q", seedResult.NativeOperationID, recoveryResult.NativeOperationID, valueOrEmpty(finalAck.OperationID))
 	}
-	recoveryEvidence.ReconciledRunID = seedResult.ReconciledRunID
+	if recoveryResult.NativeTurnID != seedResult.NativeTurnID || valueOrEmpty(finalAck.RunID) != seedResult.NativeTurnID {
+		t.Fatalf("native turn identity changed across restart: seed = %q, helper = %q, final ACK = %q", seedResult.NativeTurnID, recoveryResult.NativeTurnID, valueOrEmpty(finalAck.RunID))
+	}
+	recoveryEvidence.NativeTurnID = seedResult.NativeTurnID
+	recoveryEvidence.NativeOperationID = seedResult.NativeOperationID
 	if recoveryResult.ReconciliationState != protocol.ReconciliationStateConfirmed || (finalAck.State != protocol.CommandStateSucceeded && finalAck.State != protocol.CommandStateFailed) {
 		t.Fatalf("command reconciliation = %+v, final ACK = %+v", recoveryResult, finalAck)
 	}
@@ -893,7 +902,8 @@ func redactC01Acceptance(value realC01Acceptance) realC01Acceptance {
 		scenario := &value.Scenarios[index]
 		scenario.RunID = redactC01Ref(scenario.RunID)
 		scenario.ApprovalRequestID = redactC01Ref(scenario.ApprovalRequestID)
-		scenario.ReconciledRunID = redactC01Ref(scenario.ReconciledRunID)
+		scenario.NativeTurnID = redactC01Ref(scenario.NativeTurnID)
+		scenario.NativeOperationID = redactC01Ref(scenario.NativeOperationID)
 		scenario.RecoveryThreadID = redactC01Ref(scenario.RecoveryThreadID)
 		scenario.TerminalCursor = redactC01Ref(scenario.TerminalCursor)
 		if scenario.ItemCommand != "" {
