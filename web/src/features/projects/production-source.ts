@@ -79,7 +79,7 @@ export function mergeMutationNoticeChanges(
   return [...notices.values()];
 }
 
-function sameMutationNoticeContent(left: MutationNotice, right: MutationNotice): boolean {
+export function sameMutationNoticeContent(left: MutationNotice, right: MutationNotice): boolean {
   return left.id === right.id
     && left.message === right.message
     && left.kind === right.kind
@@ -112,6 +112,15 @@ function mutationNoticeStoragePrefix(principalId: string): string {
 
 function mutationNoticeStorageKey(principalId: string, id: string): string {
   return `${mutationNoticeStoragePrefix(principalId)}${encodeURIComponent(id)}`;
+}
+
+function mutationNoticeIdFromStorageKey(prefix: string, key: string): string | undefined {
+  if (!key.startsWith(prefix)) return undefined;
+  try {
+    return decodeURIComponent(key.slice(prefix.length));
+  } catch {
+    return undefined;
+  }
 }
 
 function parseMutationNotice(value: unknown): MutationNotice | undefined {
@@ -159,12 +168,18 @@ export function mutationNoticeContentToken(notices: readonly MutationNotice[]): 
 export function mergePersistedMutationNoticeState(
   current: readonly MutationNotice[],
   state: MutationNoticeStorageRead,
-  confirmedRemovedNotices: readonly MutationNotice[] = []
+  confirmedRemovedNotices: readonly MutationNotice[] = [],
+  preserveUnconfirmed = false
 ): readonly MutationNotice[] {
   if (!state.available) return mergeMutationNoticeChanges(current, state.notices, []);
   const merged = mergePersistedMutationNotices(current, state.notices, true);
-  if (!confirmedRemovedNotices.length) return merged;
-  return mergeMutationNoticeChanges(merged, [], confirmedRemovedNotices.map((notice) => notice.id), confirmedRemovedNotices);
+  const confirmedIds = new Set(confirmedRemovedNotices.map((notice) => notice.id));
+  const persistedIds = new Set(state.notices.map((notice) => notice.id));
+  const withUnconfirmed = preserveUnconfirmed
+    ? mergeKnownMutationNotices(merged, current.filter((notice) => !persistedIds.has(notice.id) && !confirmedIds.has(notice.id)))
+    : merged;
+  if (!confirmedRemovedNotices.length) return withUnconfirmed;
+  return mergeMutationNoticeChanges(withUnconfirmed, [], [...confirmedIds], confirmedRemovedNotices);
 }
 
 interface MutationNoticeUpdateResult {
@@ -285,6 +300,14 @@ function isPendingTaskCreationNotice(notice: Pick<MutationNotice, "id" | "taskId
   return !notice.taskId && (notice.id === "task:create" || notice.id.startsWith("task:create:"));
 }
 
+function isKnownProjectCreationNotice(notice: Pick<MutationNotice, "id" | "projectId">): boolean {
+  return Boolean(notice.projectId) && (notice.id === "project:create" || notice.id.startsWith("project:create:"));
+}
+
+function isKnownTaskCreationNotice(notice: Pick<MutationNotice, "id" | "taskId">): boolean {
+  return Boolean(notice.taskId) && (notice.id === "task:create" || notice.id.startsWith("task:create:"));
+}
+
 function isInFlightMutationNotice(notice: MutationNotice): boolean {
   return notice.kind === "in-flight";
 }
@@ -344,6 +367,36 @@ export function mutationNoticeScopes(notice: MutationNotice): readonly string[] 
 export function mutationNoticeRemovalScopes(current: readonly MutationNotice[], removed: readonly string[]): readonly string[] {
   const removedIds = new Set(removed);
   return [...new Set(current.filter((notice) => removedIds.has(notice.id)).flatMap(mutationNoticeScopes))];
+}
+
+export function mutationNoticeBlocksScope(notices: readonly MutationNotice[], scope: string): boolean {
+  return notices.some((notice) => mutationNoticeScopes(notice).includes(scope));
+}
+
+export type MutationWriteAdmission = "refreshing" | "notice" | "storage";
+
+export function mutationWriteAdmission(
+  scope: string,
+  currentNotices: readonly MutationNotice[],
+  refreshingScopes: { has: (scope: string) => boolean },
+  persistedState: MutationNoticeStorageRead
+): MutationWriteAdmission | undefined {
+  if (refreshingScopes.has(scope)) return "refreshing";
+  if (mutationNoticeBlocksScope(currentNotices, scope)) return "notice";
+  if (!persistedState.available || mutationNoticeBlocksScope(persistedState.notices, scope)) return "storage";
+  return undefined;
+}
+
+export function isMutationNoticeReconciliationReady(
+  notices: readonly MutationNotice[],
+  kind: "project" | "task",
+  resourceExists: boolean,
+  expectedToken?: string
+): boolean {
+  return notices.length > 0
+    && (expectedToken === undefined || mutationNoticeContentToken(notices) === expectedToken)
+    && notices.every((notice) => notice.kind !== "in-flight"
+      && (!((kind === "project" && isKnownProjectCreationNotice(notice)) || (kind === "task" && isKnownTaskCreationNotice(notice)) || notice.identityMismatch) || resourceExists));
 }
 
 export function markMutationRefreshScopes(
@@ -418,12 +471,6 @@ async function runWithBrowserMutationLock<T>(principalId: string, scope: string,
 
 async function runWithTaskMutationLocks<T>(principalId: string, taskId: string, operation: () => Promise<WriteResult<T>>): Promise<WriteResult<T>> {
   return runWithBrowserMutationLock(principalId, "task:create", () => runWithBrowserMutationLock(principalId, `task:${taskId}`, operation));
-}
-
-function hasPersistedMutationBarrier(principalId: string, scope: string): boolean {
-  if (typeof window === "undefined") return false;
-  const state = readPersistedMutationNoticeState(principalId);
-  return !state.available || state.notices.some((notice) => mutationNoticeScopes(notice).includes(scope));
 }
 
 export const PROJECT_PAGE_LIMIT = 100;
@@ -991,9 +1038,14 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
       queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergePersistedMutationNoticeState(current, state));
     };
-    const refreshAfterRemoteRemoval = async (removedNotices: readonly MutationNotice[], removedIds: readonly string[]) => {
-      const scopes = mutationNoticeRemovalScopes(removedNotices, removedIds);
-      if (!scopes.length) return;
+    const refreshAfterRemoteRemoval = async (
+      affectedNotices: readonly MutationNotice[],
+      affectedIds: readonly string[],
+      confirmedRemovedNotices: readonly MutationNotice[] = affectedNotices,
+      forceRefresh = false
+    ) => {
+      const scopes = mutationNoticeRemovalScopes(affectedNotices, affectedIds);
+      if (!scopes.length && !forceRefresh) return;
       const marked = markMutationRefreshScopes(remoteRefreshScopesRef.current, scopes, remoteRefreshRevisionRef.current);
       remoteRefreshRevisionRef.current = marked.nextRevision;
       let refreshed = false;
@@ -1001,7 +1053,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         await refreshProjectTaskQueries();
         const persistedState = readPersistedMutationNoticeState(subjectId);
         if (!persistedState.available) throw new Error("待确认状态无法读取，刷新结果不能解除写入屏障。");
-        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, (current = []) => mergePersistedMutationNoticeState(current, persistedState, removedNotices));
+        const confirmed = confirmedRemovedNotices.filter((notice) => !persistedState.notices.some((persisted) => persisted.id === notice.id));
+        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, (current = []) => mergePersistedMutationNoticeState(current, persistedState, confirmed, confirmedRemovedNotices.length === 0));
         refreshed = true;
       } catch {
         // Keep the existing notice and refreshing barrier so a failed read cannot unlock a stale write.
@@ -1011,10 +1064,15 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     apply(readPersistedMutationNoticeState(subjectId), true);
     const handleStorage = (event: StorageEvent) => {
-      if (!event.key?.startsWith(mutationNoticeStoragePrefixValue)) return;
+      const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
+      if (event.key === null) {
+        if (current.length) void refreshAfterRemoteRemoval(current, current.map((notice) => notice.id), [], true);
+        else void refreshAfterRemoteRemoval([], [], [], true);
+        return;
+      }
+      if (!event.key.startsWith(mutationNoticeStoragePrefixValue)) return;
       const removedNotice = event.newValue === null ? parseSerializedMutationNotice(event.oldValue) : undefined;
       if (removedNotice) {
-        const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
         const persisted = readPersistedMutationNoticeState(subjectId);
         if (!persisted.available) {
           queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, persisted.notices, []));
@@ -1023,6 +1081,20 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         }
         queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, persisted.notices, [removedNotice.id], [removedNotice]));
         void refreshAfterRemoteRemoval([removedNotice], [removedNotice.id]);
+        return;
+      }
+      if (event.newValue === null) {
+        const removedId = mutationNoticeIdFromStorageKey(mutationNoticeStoragePrefixValue, event.key);
+        const affected = removedId ? current.filter((notice) => notice.id === removedId) : current;
+        const affectedIds = removedId ? [removedId] : current.map((notice) => notice.id);
+        void refreshAfterRemoteRemoval(affected, affectedIds, [], true);
+        return;
+      }
+      if (!parseSerializedMutationNotice(event.newValue)) {
+        const affectedId = mutationNoticeIdFromStorageKey(mutationNoticeStoragePrefixValue, event.key);
+        const affected = affectedId ? current.filter((notice) => notice.id === affectedId) : current;
+        const affectedIds = affectedId ? [affectedId] : current.map((notice) => notice.id);
+        void refreshAfterRemoteRemoval(affected, affectedIds, [], true);
         return;
       }
       apply(readPersistedMutationNoticeState(subjectId), true);
@@ -1037,13 +1109,15 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const added = Array.isArray(signal.added) ? signal.added.map(parseMutationNotice).filter((notice): notice is MutationNotice => Boolean(notice)) : [];
       if (removed.length) {
         const persisted = readPersistedMutationNoticeState(subjectId);
+        const confirmedRemovedNotices = removedNotices.filter((notice) => removed.includes(notice.id));
+        const affectedNotices = mergeKnownMutationNotices([...current, ...removedNotices, ...persisted.notices]);
         if (!persisted.available) {
           queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, [...persisted.notices, ...added], []));
-          void refreshAfterRemoteRemoval([...current, ...removedNotices, ...persisted.notices], removed);
+          void refreshAfterRemoteRemoval(affectedNotices, removed, confirmedRemovedNotices, confirmedRemovedNotices.length === 0);
           return;
         }
-        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, added, removed, removedNotices));
-        void refreshAfterRemoteRemoval([...current, ...removedNotices], removed);
+        queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, mergeMutationNoticeChanges(current, added, confirmedRemovedNotices.map((notice) => notice.id), confirmedRemovedNotices));
+        void refreshAfterRemoteRemoval(affectedNotices, removed, confirmedRemovedNotices, confirmedRemovedNotices.length === 0);
         return;
       }
       apply({ available: false, shared: false, notices: mergeMutationNoticeChanges(current, added, []) });
@@ -1256,8 +1330,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       ? result
       : blocked(`${operation}失败，但结果确认状态无法保存；请刷新后核对。`);
     const mutationBarrier = <T,>(scope: string, operation: string): WriteResult<T> | undefined => {
-      if (remoteRefreshScopesRef.current.has(scope)) return blocked(`${operation}已有结果待确认，请先刷新并核对后再试。`);
-      if (hasPersistedMutationBarrier(subjectId, scope)) return blocked(`${operation}的待确认状态无法读取或尚未核对，写入没有执行。请先刷新并核对后再试。`);
+      const admission = mutationWriteAdmission(scope, mutationNoticeQuery.data, remoteRefreshScopesRef.current, readPersistedMutationNoticeState(subjectId));
+      if (admission === "refreshing") return blocked(`${operation}已有结果待确认，请先刷新并核对后再试。`);
+      if (admission === "notice") return blocked(`${operation}的待确认状态尚未核对，写入没有执行。请先刷新并核对后再试。`);
+      if (admission === "storage") return blocked(`${operation}的待确认状态无法读取或尚未核对，写入没有执行。请先刷新并核对后再试。`);
       return undefined;
     };
     const relationMutationBarrier = <T,>(taskId: string, changes: TaskRelationChanges, operation: string): WriteResult<T> | undefined => {
@@ -1684,25 +1760,35 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const isTaskReconciliationReady = (taskId: string, expectedToken?: string): boolean => {
       const notices = taskReconciliationNotices(taskId);
-      return notices.length > 0
-        && (expectedToken === undefined || mutationNoticeContentToken(notices) === expectedToken)
-        && notices.every((notice) => notice.kind !== "in-flight" && (!notice.identityMismatch || tasks.some((task) => task.id === taskId)));
+      return isMutationNoticeReconciliationReady(notices, "task", tasks.some((task) => task.id === taskId), expectedToken);
     };
     const isProjectReconciliationReady = (projectId: string, expectedToken?: string): boolean => {
       const notices = projectReconciliationNotices(projectId);
-      return notices.length > 0
-        && (expectedToken === undefined || mutationNoticeContentToken(notices) === expectedToken)
-        && notices.every((notice) => notice.kind !== "in-flight" && (!notice.identityMismatch || projects.some((project) => project.id === projectId)));
+      return isMutationNoticeReconciliationReady(notices, "project", projects.some((project) => project.id === projectId), expectedToken);
     };
     const isPendingProjectCreationReady = (noticeId: string): boolean => currentMutationNotices().some((notice) => notice.id === noticeId && isPendingProjectCreationNotice(notice) && notice.kind === "creation");
     const isPendingTaskCreationReady = (noticeId: string): boolean => currentMutationNotices().some((notice) => notice.id === noticeId && isPendingTaskCreationNotice(notice) && notice.kind === "creation");
-    const acknowledgePendingNotice = (noticeId: string, pending: (notice: MutationNotice) => boolean): boolean => {
-      let found = false;
-      const persisted = updateMutationNotices((notices) => {
-        found = notices.some((notice) => notice.id === noticeId && pending(notice) && notice.kind === "creation");
-        return found ? notices.filter((notice) => notice.id !== noticeId) : notices;
+    const acknowledgePendingNotice = async (
+      noticeId: string,
+      pending: (notice: MutationNotice) => boolean,
+      lockScope: "project:create" | "task:create"
+    ): Promise<boolean> => {
+      const expected = currentMutationNotices().find((notice) => notice.id === noticeId && pending(notice) && notice.kind === "creation");
+      if (!expected) return false;
+      return withAvailableBrowserMutationLock(subjectId, lockScope, false, async () => {
+        const persistedState = readPersistedMutationNoticeState(subjectId);
+        if (!persistedState.available || !persistedState.shared) return false;
+        const persisted = persistedState.notices.find((notice) => notice.id === noticeId);
+        if (!persisted || persisted.kind !== "creation" || !pending(persisted) || !sameMutationNoticeContent(persisted, expected)) return false;
+        let removed = false;
+        const persistedUpdate = updateMutationNotices((notices) => {
+          const current = notices.find((notice) => notice.id === noticeId);
+          if (!current || current.kind !== "creation" || !pending(current) || !sameMutationNoticeContent(current, expected)) return notices;
+          removed = true;
+          return notices.filter((notice) => notice.id !== noticeId);
+        });
+        return removed && persistedUpdate;
       });
-      return found && persisted;
     };
 
     return {
@@ -1717,8 +1803,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       pendingTaskCreationNoticeId,
       isPendingProjectCreationReady,
       isPendingTaskCreationReady,
-      acknowledgePendingProjectCreation: (noticeId: string) => acknowledgePendingNotice(noticeId, isPendingProjectCreationNotice),
-      acknowledgePendingTaskCreation: (noticeId: string) => acknowledgePendingNotice(noticeId, isPendingTaskCreationNotice),
+      acknowledgePendingProjectCreation: (noticeId: string) => acknowledgePendingNotice(noticeId, isPendingProjectCreationNotice, "project:create"),
+      acknowledgePendingTaskCreation: (noticeId: string) => acknowledgePendingNotice(noticeId, isPendingTaskCreationNotice, "task:create"),
       getTaskReconciliationToken,
       acknowledgeTaskReconciliation: (taskId: string, expectedToken?: string) => isTaskReconciliationReady(taskId, expectedToken) && clearTaskMutationNotices(taskId),
       isTaskReconciliationReady,

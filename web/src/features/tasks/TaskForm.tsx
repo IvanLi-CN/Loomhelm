@@ -231,11 +231,20 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     if (mode === "create") onSaved?.(recoveredTaskId);
   };
 
-  const acknowledgePendingCreation = (event?: MouseEvent<HTMLButtonElement>) => {
+  const acknowledgePendingCreation = async (event?: MouseEvent<HTMLButtonElement>) => {
     const noticeId = feedback?.noticeId ?? source.pendingTaskCreationNoticeId;
     if (!noticeId || !canAcknowledgePendingCreation) return;
-    if (!source.acknowledgePendingTaskCreation?.(noticeId)) return;
-    if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
+    const target = event?.currentTarget;
+    setPending(true);
+    const acknowledged = await source.acknowledgePendingTaskCreation?.(noticeId);
+    setPending(false);
+    if (!acknowledged) {
+      setBlockedByUnknown(true);
+      setCanAcknowledgePendingCreation(false);
+      setFeedback({ message: "确认状态已被其他标签页更新或当前共享状态不可用，请刷新并核对后再试。", tone: "warning", reconcile: true, noticeId });
+      return;
+    }
+    if (target === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgePendingCreation(false);
     setFeedback({ message: "已确认任务列表中没有这次写入，可以重新提交。", tone: "success" });
@@ -289,8 +298,8 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       <label className="form-field"><span>任务标题</span><Input name="title" required maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="这项任务要完成什么" disabled={!canWrite || pending || effectiveBlocked} autoFocus={mode === "edit"} /></label>
       <label className="form-field"><span>目标与上下文</span><Textarea name="goal" required rows={5} maxLength={800} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="说明期望结果，以及需要保留的约束" disabled={!canWrite || pending || effectiveBlocked} /></label>
       {mode === "edit" && <label className="form-field"><span>任务业务状态</span><Select value={state} onValueChange={(value) => setState(value as typeof state)} disabled={!canWrite || pending || effectiveBlocked}><SelectTrigger aria-label="任务业务状态"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{taskStates.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectGroup></SelectContent></Select></label>}
-      <TaskRelationPicker label="父任务" candidates={relationCandidates} selectedIds={parentIds} selectedCandidates={selectedRelationCandidates(parentIds, "父任务")} onChange={setParentIds} disabled={!canWrite || pending || effectiveBlocked} disabledMessage={relationDisabledMessage} emptyMessage="当前范围没有可选的父任务。" />
-      <TaskRelationPicker label="前置依赖" candidates={relationCandidates} selectedIds={dependsOn} selectedCandidates={selectedRelationCandidates(dependsOn, "前置依赖")} onChange={setDependsOn} disabled={!canWrite || pending || effectiveBlocked} disabledMessage={relationDisabledMessage} emptyMessage="当前范围没有可选的前置任务。" />
+      <TaskRelationPicker density="form" label="父任务" candidates={relationCandidates} selectedIds={parentIds} selectedCandidates={selectedRelationCandidates(parentIds, "父任务")} onChange={setParentIds} disabled={!canWrite || pending || effectiveBlocked} disabledMessage={relationDisabledMessage} emptyMessage="当前范围没有可选的父任务。" />
+      <TaskRelationPicker density="form" label="前置依赖" candidates={relationCandidates} selectedIds={dependsOn} selectedCandidates={selectedRelationCandidates(dependsOn, "前置依赖")} onChange={setDependsOn} disabled={!canWrite || pending || effectiveBlocked} disabledMessage={relationDisabledMessage} emptyMessage="当前范围没有可选的前置任务。" />
       {!canWrite && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>当前项目成员权限为只读，创建和编辑动作保持禁用。</div>}
       {mode === "create" && source.pendingTaskCreation && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{source.pendingTaskCreationResourceId ? "任务创建结果已关联预选身份，仍待刷新核对；当前表单不会再次提交。" : "上一次任务创建结果仍待确认；请先检查任务列表，当前表单不会再次提交。"}<Link to="/tasks" className="inline-link ml-2">打开任务列表</Link></div>}
       {relationWritePending && !feedback && <div className="inline-state inline-state-warning" role="status"><span aria-hidden="true">!</span>任务关系保存中，普通编辑暂时不可用。</div>}
@@ -298,8 +307,8 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       {(feedback?.reconcile || sourceRelationshipBlocked || (mode === "create" && source.pendingTaskCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对任务列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>{mode === "create" && canAcknowledgePendingCreation && (feedback?.noticeId ?? source.pendingTaskCreationNoticeId) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}{canConfirmReconciliation && (sourceRelationshipBlocked || (mode === "create" && Boolean(source.pendingTaskCreationResourceId))) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}>{mode === "create" ? "确认当前任务状态，解除阻塞" : "确认当前关系，解除阻塞"}</Button>}</div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}{feedback.taskId && <Link to="/tasks/$taskId" params={{ taskId: feedback.taskId }} className="inline-link ml-2">打开已创建任务</Link>}</div>}
       <div className="form-actions">
-        <Button type="submit" className="button button-primary" disabled={!canWrite || pending || effectiveBlocked || !title.trim() || !goal.trim() || !projectId}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存任务"}</Button>
-        {onCancelled && <Button type="button" variant="secondary" className="button button-secondary" onClick={onCancelled}><X size={15} aria-hidden="true" />取消</Button>}
+        <Button type="submit" size="lg" className="button button-primary" disabled={!canWrite || pending || effectiveBlocked || !title.trim() || !goal.trim() || !projectId}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存任务"}</Button>
+        {onCancelled && <Button type="button" size="lg" variant="secondary" className="button button-secondary" onClick={onCancelled}><X size={15} aria-hidden="true" />取消</Button>}
       </div>
     </form>
   );

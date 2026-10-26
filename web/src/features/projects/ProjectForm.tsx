@@ -113,11 +113,20 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
     }
   };
 
-  const acknowledgePendingCreation = (event?: MouseEvent<HTMLButtonElement>) => {
+  const acknowledgePendingCreation = async (event?: MouseEvent<HTMLButtonElement>) => {
     const noticeId = feedback?.noticeId ?? source.pendingProjectCreationNoticeId;
     if (!noticeId || !canAcknowledgePendingCreation) return;
-    if (!source.acknowledgePendingProjectCreation?.(noticeId)) return;
-    if (event?.currentTarget === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
+    const target = event?.currentTarget;
+    setPending(true);
+    const acknowledged = await source.acknowledgePendingProjectCreation?.(noticeId);
+    setPending(false);
+    if (!acknowledged) {
+      setBlockedByUnknown(true);
+      setCanAcknowledgePendingCreation(false);
+      setFeedback({ message: "确认状态已被其他标签页更新或当前共享状态不可用，请刷新并核对后再试。", tone: "warning", reconcile: true, noticeId });
+      return;
+    }
+    if (target === document.activeElement) restoreFocusAfterAcknowledgementRef.current = true;
     setBlockedByUnknown(false);
     setCanAcknowledgePendingCreation(false);
     setFeedback({ message: "已确认项目列表中没有这次写入，可以重新提交。", tone: "success" });
@@ -188,8 +197,8 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
       {(feedback?.reconcile || sourceProjectBlocked || (mode === "create" && source.pendingProjectCreation)) && <div className="form-actions"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void reconcile(); }} disabled={pending}>刷新并核对项目列表</Button><Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往项目列表核对</Link></Button>{mode === "create" && canAcknowledgePendingCreation && (feedback?.noticeId ?? source.pendingProjectCreationNoticeId) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgePendingCreation}>确认未创建，允许重新提交</Button>}{canConfirmReconciliation && (mode === "edit" ? sourceProjectBlocked : Boolean(source.pendingProjectCreationResourceId)) && <Button type="button" variant="ghost" className="button button-quiet" onClick={acknowledgeReconciliation}>确认当前项目状态，解除阻塞</Button>}</div>}
       {feedback && <div className={`inline-state ${feedback.tone === "success" ? "inline-state-success" : "inline-state-warning"}`} role="status"><Check size={15} aria-hidden="true" />{feedback.message}</div>}
       <div className="form-actions">
-        <Button type="submit" className="button button-primary" disabled={!canManageProject || pending || effectiveBlocked || !name.trim()}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存项目"}</Button>
-        {onCancelled && <Button type="button" variant="secondary" className="button button-secondary" onClick={onCancelled}><X size={15} aria-hidden="true" />取消</Button>}
+        <Button type="submit" size="lg" className="button button-primary" disabled={!canManageProject || pending || effectiveBlocked || !name.trim()}><Save size={15} aria-hidden="true" />{pending ? "保存中…" : "保存项目"}</Button>
+        {onCancelled && <Button type="button" size="lg" variant="secondary" className="button button-secondary" onClick={onCancelled}><X size={15} aria-hidden="true" />取消</Button>}
       </div>
     </form>
   );

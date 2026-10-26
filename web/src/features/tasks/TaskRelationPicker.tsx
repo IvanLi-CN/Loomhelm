@@ -16,6 +16,7 @@ export interface TaskRelationPickerProps {
   candidates: readonly TaskRelationCandidate[];
   selectedIds: readonly string[];
   selectedCandidates?: readonly TaskRelationCandidate[];
+  density?: "compact" | "form";
   onChange: (nextIds: string[]) => void;
   disabled?: boolean;
   disabledMessage?: string;
@@ -39,6 +40,7 @@ export function TaskRelationPicker({
   candidates,
   selectedIds,
   selectedCandidates = [],
+  density = "compact",
   onChange,
   disabled = false,
   disabledMessage,
@@ -91,10 +93,11 @@ export function TaskRelationPicker({
   const removeCandidate = (candidate: TaskRelationCandidate) => {
     if (disabled || candidate.disabled) return;
     onChange(selectedIds.filter((id) => id !== candidate.id));
+    requestAnimationFrame(() => summaryRef.current?.focus());
   };
 
   return (
-    <div className="task-relation-picker">
+    <div className="task-relation-picker" data-density={density}>
       <div className="task-relation-picker-heading">
         <span>{label}</span>
         <span className="task-relation-picker-count" aria-live="polite">{selectedItems.length ? `已选 ${selectedItems.length}` : "未选择"}</span>

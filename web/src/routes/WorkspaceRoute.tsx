@@ -120,6 +120,7 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
   const [deleteState, setDeleteState] = useState<{ taskId: string; status: "idle" | "pending" | "success" } | null>(null);
   const lastTaskRef = useRef<{ taskId: string; task: typeof task } | undefined>(undefined);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const deleteResultHeadingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (task) lastTaskRef.current = { taskId, task };
   }, [task, taskId]);
@@ -130,13 +131,18 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
     const frame = requestAnimationFrame(() => headingRef.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
   }, [displayedTask?.id]);
+  useEffect(() => {
+    if (currentDeleteState !== "success") return;
+    const frame = requestAnimationFrame(() => deleteResultHeadingRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [currentDeleteState]);
 
   if (source?.status === "error" || source?.status === "permission-changed") {
     return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><TaskReadRecovery source={source} taskId={taskId} /></section>;
   }
 
   if (currentDeleteState === "success") {
-    return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><h1>任务已删除</h1><div className="inline-state inline-state-success" role="status">任务已删除。</div><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></section>;
+    return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><h1 ref={deleteResultHeadingRef} tabIndex={-1}>任务已删除</h1><div className="inline-state inline-state-success" role="status">任务已删除。</div><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></section>;
   }
 
   if (!source || (source.status === "loading" && currentDeleteState === "idle")) {

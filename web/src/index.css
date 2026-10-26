@@ -2392,7 +2392,7 @@ pre {
   line-height: 21px;
 }
 
-.task-form .task-relation-picker-trigger {
+.task-relation-picker[data-density="form"] .task-relation-picker-trigger {
   height: var(--control-height-form);
   min-height: var(--control-height-form);
   padding-block: 0;
@@ -2402,7 +2402,7 @@ pre {
   line-height: 21px;
 }
 
-.task-form .task-relation-picker-trigger svg {
+.task-relation-picker[data-density="form"] .task-relation-picker-trigger svg {
   width: 16px;
   height: 16px;
 }
@@ -2952,7 +2952,7 @@ pre {
     line-height: 24px;
   }
 
-  .task-form .task-relation-picker-trigger {
+  .task-relation-picker[data-density="form"] .task-relation-picker-trigger {
     height: var(--control-height-touch);
     min-height: var(--control-height-touch);
     font-size: 16px;

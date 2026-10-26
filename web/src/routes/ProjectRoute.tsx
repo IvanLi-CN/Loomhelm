@@ -21,11 +21,17 @@ export function ProjectRoute() {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const project = source ? source.getProject(projectId) : runtime ? getDemoProject(runtime.fixtures, projectId) : undefined;
   const lastProjectRef = useRef<{ projectId: string; project: typeof project } | undefined>(undefined);
+  const deleteResultHeadingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (project) lastProjectRef.current = { projectId, project };
   }, [project, projectId]);
   const currentDeleteState = deleteState?.projectId === projectId ? deleteState.status : "idle";
   const displayedProject = project ?? (currentDeleteState === "pending" && lastProjectRef.current?.projectId === projectId ? lastProjectRef.current.project : undefined);
+  useEffect(() => {
+    if (currentDeleteState !== "success") return;
+    const frame = requestAnimationFrame(() => deleteResultHeadingRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [currentDeleteState]);
   const conversations = runtime?.fixtures.conversations.filter((conversation) => conversation.projectId === projectId) ?? [];
   const localTaskCount = source?.tasks.filter((task) => task.projectId === projectId).length ?? runtime?.fixtures.tasks.filter((task) => task.projectId === projectId).length ?? 0;
   const selectPanel = (nextPanel: ProjectPanel, focus = false) => {
@@ -53,7 +59,7 @@ export function ProjectRoute() {
   }
 
   if (currentDeleteState === "success") {
-    return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT</span><h1>项目已删除</h1><div className="inline-state inline-state-success" role="status">项目已删除。</div><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></section>;
+    return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT</span><h1 ref={deleteResultHeadingRef} tabIndex={-1}>项目已删除</h1><div className="inline-state inline-state-success" role="status">项目已删除。</div><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></section>;
   }
 
   if (source?.status === "loading" && currentDeleteState === "idle") {

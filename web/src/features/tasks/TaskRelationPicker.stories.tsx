@@ -65,6 +65,11 @@ export const SearchAndCloseDoNotWrite: Story = {
   }
 };
 
+export const FormDensity: Story = {
+  args: { ...storyArgs, label: "父任务", density: "form" },
+  render: (args) => <StoryFrame><TaskRelationPicker {...args} /></StoryFrame>
+};
+
 export const LongListIsBounded: Story = {
   args: storyArgs,
   render: () => <StoryFrame><InteractivePicker /></StoryFrame>,
