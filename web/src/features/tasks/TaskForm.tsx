@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Textarea } from "@/components/ui/textarea";
 import { taskStates } from "@/demo/types";
 
+import { TaskRelationPicker, type TaskRelationCandidate } from "./TaskRelationPicker";
 import { calculateTaskRelationChanges, taskWriteBlockReason, type ProjectTaskSource, type TaskRecord, type TaskUpdate } from "./types";
 
 type Feedback = { message: string; tone: "success" | "warning"; reconcile?: boolean; taskId?: string; noticeId?: string };
@@ -112,6 +113,33 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
   const reconciliationTargetId = mode === "edit" ? task?.id : source.pendingTaskCreationResourceId;
   const canConfirmReconciliation = canAcknowledgeReconciliation
     && Boolean(reconciliationTargetId && source.isTaskReconciliationReady?.(reconciliationTargetId, reconciliationToken));
+  const relationCandidates = useMemo<TaskRelationCandidate[]>(() => candidates.map((candidate) => {
+    const candidateCanWrite = source.getProjectPermissions(candidate.projectId).canWrite;
+    return {
+      id: candidate.id,
+      title: candidate.title,
+      projectName: source.getProject(candidate.projectId)?.name,
+      disabled: !candidateCanWrite,
+      disabledReason: candidateCanWrite ? undefined : "当前任务只读，关系不可修改"
+    };
+  }), [candidates, source]);
+  const selectedRelationCandidates = (ids: readonly string[], relationName: string) => ids.map((id) => relationCandidates.find((candidate) => candidate.id === id) ?? {
+    id,
+    title: "当前无权查看",
+    disabled: true,
+    disabledReason: `当前${relationName}任务不可见`
+  });
+  const relationDisabledMessage = !canWrite
+    ? "当前项目只读，关系不能修改。"
+    : sourceRelationshipBlocked
+      ? "关系状态待核对，暂时不能修改。"
+      : relationWritePending
+        ? "关系保存中，暂时不能修改。"
+        : effectiveBlocked
+          ? "当前写入状态待确认，暂时不能修改。"
+          : pending
+            ? "任务保存中，暂时不能修改。"
+            : undefined;
 
   useEffect(() => {
     if (!restoreFocusAfterAcknowledgementRef.current) return;
@@ -213,14 +241,6 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
     setFeedback({ message: "已确认任务列表中没有这次写入，可以重新提交。", tone: "success" });
   };
 
-  const toggleDependency = (id: string) => {
-    setDependsOn((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
-  };
-
-  const toggleParent = (id: string) => {
-    setParentIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
-  };
-
   const submit = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     if (effectiveBlocked) return;
@@ -269,8 +289,8 @@ export function TaskForm({ source, mode, task, defaultProjectId, onSaved, onCanc
       <label className="form-field"><span>任务标题</span><Input name="title" required maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="这项任务要完成什么" disabled={!canWrite || pending || effectiveBlocked} autoFocus={mode === "edit"} /></label>
       <label className="form-field"><span>目标与上下文</span><Textarea name="goal" required rows={5} maxLength={800} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="说明期望结果，以及需要保留的约束" disabled={!canWrite || pending || effectiveBlocked} /></label>
       {mode === "edit" && <label className="form-field"><span>任务业务状态</span><Select value={state} onValueChange={(value) => setState(value as typeof state)} disabled={!canWrite || pending || effectiveBlocked}><SelectTrigger aria-label="任务业务状态"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{taskStates.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectGroup></SelectContent></Select></label>}
-      <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)] task-relation-options" disabled={!canWrite || pending || effectiveBlocked}><legend>父任务 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => { const candidateCanWrite = source.getProjectPermissions(candidate.projectId).canWrite; return <label className={`task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]${candidateCanWrite ? "" : " opacity-70"}`} key={candidate.id} title={candidateCanWrite ? undefined : "当前父任务只读，关系不可修改"}><input type="checkbox" checked={parentIds.includes(candidate.id)} onChange={() => toggleParent(candidate.id)} disabled={!candidateCanWrite} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title} · {source.getProject(candidate.projectId)?.name}{candidateCanWrite ? "" : " · 只读"}</span></label>; })}</div> : <p className="font-normal">当前范围没有可选的父任务。</p>}</fieldset>
-      <fieldset className="mb-[18px] grid gap-2 text-xs font-semibold text-[var(--muted)]" disabled={!canWrite || pending || effectiveBlocked}><legend>前置依赖 <small className="font-normal">（可多选）</small></legend>{candidates.length ? <div className="grid gap-2 sm:grid-cols-2">{candidates.map((candidate) => { const candidateCanWrite = source.getProjectPermissions(candidate.projectId).canWrite; return <label className={`task-relation-option flex items-center gap-2 rounded-md border border-[var(--line)] px-3 py-2 font-normal text-[var(--ink)] hover:bg-[var(--selected)]${candidateCanWrite ? "" : " opacity-70"}`} key={candidate.id} title={candidateCanWrite ? undefined : "当前前置任务只读，关系不可修改"}><input type="checkbox" checked={dependsOn.includes(candidate.id)} onChange={() => toggleDependency(candidate.id)} disabled={!candidateCanWrite} /> <span className="min-w-0 truncate">{candidate.id} · {candidate.title}{candidateCanWrite ? "" : " · 只读"}</span></label>; })}</div> : <p className="font-normal">当前范围没有可选的前置任务。</p>}</fieldset>
+      <TaskRelationPicker label="父任务" candidates={relationCandidates} selectedIds={parentIds} selectedCandidates={selectedRelationCandidates(parentIds, "父任务")} onChange={setParentIds} disabled={!canWrite || pending || effectiveBlocked} disabledMessage={relationDisabledMessage} emptyMessage="当前范围没有可选的父任务。" />
+      <TaskRelationPicker label="前置依赖" candidates={relationCandidates} selectedIds={dependsOn} selectedCandidates={selectedRelationCandidates(dependsOn, "前置依赖")} onChange={setDependsOn} disabled={!canWrite || pending || effectiveBlocked} disabledMessage={relationDisabledMessage} emptyMessage="当前范围没有可选的前置任务。" />
       {!canWrite && <div className="inline-state inline-state-warning"><span aria-hidden="true">!</span>当前项目成员权限为只读，创建和编辑动作保持禁用。</div>}
       {mode === "create" && source.pendingTaskCreation && !feedback && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{source.pendingTaskCreationResourceId ? "任务创建结果已关联预选身份，仍待刷新核对；当前表单不会再次提交。" : "上一次任务创建结果仍待确认；请先检查任务列表，当前表单不会再次提交。"}<Link to="/tasks" className="inline-link ml-2">打开任务列表</Link></div>}
       {relationWritePending && !feedback && <div className="inline-state inline-state-warning" role="status"><span aria-hidden="true">!</span>任务关系保存中，普通编辑暂时不可用。</div>}
