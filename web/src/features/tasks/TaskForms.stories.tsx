@@ -118,6 +118,15 @@ export const KnownCreationRefreshFailure: Story = {
 
 export const Edit: Story = { args: { source: createStorySource(), mode: "edit", task: createStorySource().getTask("STORY-01") }, render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame> };
 
+export const EditWithRelations: Story = {
+  args: {
+    source: createStorySource(),
+    mode: "edit",
+    task: { ...storyTasks[1], parentIds: ["STORY-01"], dependsOn: ["STORY-01"] }
+  },
+  render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>
+};
+
 export const ReadOnly: Story = { args: { source: createStorySource({ getProjectPermissions: () => ({ role: "viewer", canWrite: false, canManageProjects: false, isReadOnly: true }), canCreateProjects: false }), mode: "create" }, render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame> };
 
 export const Relations: Story = { args: { source: createStorySource(), mode: "create" }, render: () => <StoryFrame><div className="rounded-lg border border-[var(--line)] bg-[var(--surface)] p-5"><TaskRelationshipEditor source={createStorySource()} taskId="STORY-02" /></div></StoryFrame> };

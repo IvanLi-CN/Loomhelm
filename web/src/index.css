@@ -230,7 +230,11 @@ textarea:focus-visible {
   height: var(--control-height-form);
   min-height: var(--control-height-form);
   border-radius: var(--radius-sm);
+  gap: 8px;
   padding-block: 0;
+  padding-inline: 16px;
+  font-size: 14px;
+  line-height: 21px;
 }
 
 [data-slot="input"] {
@@ -2922,6 +2926,12 @@ pre {
   [data-slot="button"][data-size="icon-lg"] {
     height: var(--control-height-touch);
     min-height: var(--control-height-touch);
+  }
+
+  [data-slot="button"][data-size="lg"] {
+    padding-inline: 16px;
+    font-size: 16px;
+    line-height: 24px;
   }
 
   [data-slot="button"][data-size="icon-lg"] {
