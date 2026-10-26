@@ -1775,6 +1775,14 @@ pre {
   gap: 8px;
 }
 
+.task-relation-picker-selected-item,
+.task-relation-picker-option,
+.task-relation-picker-trigger,
+.task-relation-picker-search {
+  box-sizing: border-box;
+  min-height: var(--control-height-compact);
+}
+
 .task-relation-picker-count,
 .task-relation-picker-state {
   color: var(--muted);
@@ -1804,7 +1812,13 @@ pre {
 }
 
 .task-relation-picker-selected-item {
-  min-height: 38px;
+  padding-block: 0;
+}
+
+.task-relation-picker-selected-item > [data-slot="button"][data-size="icon-sm"] {
+  height: var(--control-height-compact);
+  min-height: var(--control-height-compact);
+  margin-block: -1px;
 }
 
 .task-relation-picker-option {
@@ -3188,7 +3202,13 @@ pre {
 
   .task-relation-picker-option,
   .task-relation-picker-selected-item,
-  .task-relation-picker-trigger {
+  .task-relation-picker-trigger,
+  .task-relation-picker-search {
+    min-height: var(--control-height-touch);
+  }
+
+  .task-relation-picker-selected-item > [data-slot="button"][data-size="icon-sm"] {
+    height: var(--control-height-touch);
     min-height: var(--control-height-touch);
   }
 
