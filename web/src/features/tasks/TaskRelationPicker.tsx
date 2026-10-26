@@ -129,7 +129,7 @@ export function TaskRelationPicker({
           <label className="task-relation-picker-search">
             <Search size={14} aria-hidden="true" />
             <span className="sr-only">搜索{label}任务</span>
-            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务 ID、标题或项目" aria-label="搜索任务 ID、标题或项目" disabled={disabled} />
+            <input type="search" value={search} onInput={(event) => setSearch(event.currentTarget.value)} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务 ID、标题或项目" aria-label="搜索任务 ID、标题或项目" disabled={disabled} />
           </label>
           {!candidates.length ? <p className="task-relation-picker-state">{emptyMessage}</p> : !filteredCandidates.length ? <p className="task-relation-picker-state" role="status" aria-label={noMatchMessage}>{noMatchMessage}</p> : <>
             <fieldset className="task-relation-picker-results" disabled={disabled}>

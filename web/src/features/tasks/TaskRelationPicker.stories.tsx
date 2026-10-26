@@ -42,8 +42,9 @@ export const SearchSelectRemove: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByText("添加前置依赖"));
     const search = canvas.getByRole("searchbox", { name: "搜索任务 ID、标题或项目" });
-    await userEvent.type(search, "TASK-0118");
-    await userEvent.click(canvas.getByRole("checkbox", { name: /TASK-0118/ }));
+    await userEvent.click(search);
+    await userEvent.keyboard("TASK-0118");
+    await userEvent.click(await canvas.findByRole("checkbox", { name: /TASK-0118/ }));
     expect(canvas.getByRole("list", { name: "前置依赖已选任务" })).toHaveTextContent("TASK-0118");
     await userEvent.click(canvas.getByRole("button", { name: "移除前置依赖 TASK-0118" }));
     expect(canvas.getByRole("list", { name: "前置依赖已选任务" })).not.toHaveTextContent("TASK-0118");
