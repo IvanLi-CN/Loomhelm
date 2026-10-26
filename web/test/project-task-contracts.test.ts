@@ -15,6 +15,8 @@ import {
   mergePersistedMutationNoticeState,
   mergePersistedMutationNotices,
   mutationNoticeContentToken,
+  readMutationNoticesFromStorage,
+  readMutationNoticeStateFromStorage,
   mutationNoticeScopes,
   mutationNoticeRemovalScopes,
   projectTaskQueryKeys,
@@ -346,6 +348,48 @@ describe("project/task write contracts", () => {
     expect(mergePersistedMutationNotices([volatile], [persisted])).toEqual([volatile]);
     expect(mergePersistedMutationNotices([volatile], [], false)).toEqual([]);
     expect(mergePersistedMutationNotices([], [persisted])).toEqual([persisted]);
+  });
+
+  test("keeps a known task reconciliation notice out of the shared creation barrier", () => {
+    const notice = {
+      id: "task:create:one",
+      message: "relation result pending",
+      kind: "reconciliation" as const,
+      taskId: "task-1",
+      lockScope: "task:task-1"
+    };
+
+    expect(mutationNoticeScopes(notice)).toEqual(["task:task-1"]);
+  });
+
+  test("fails closed when shared notice storage is malformed or unreadable", () => {
+    const prefix = "loomhelm.notice.";
+    const malformed = {
+      length: 1,
+      key: () => `${prefix}bad`,
+      getItem: () => "{not-json"
+    } as unknown as Storage;
+    const emptyTab = {
+      length: 0,
+      key: () => null,
+      getItem: () => null
+    } as unknown as Storage;
+    const unreadable = {
+      length: 1,
+      key: () => `${prefix}unreadable`,
+      getItem: () => { throw new Error("storage blocked"); }
+    } as unknown as Storage;
+    const notice = { id: "task:one", message: "still pending", kind: "reconciliation" as const, taskId: "task-1", lockScope: "task:task-1" };
+    const tabOnly = {
+      length: 1,
+      key: () => `${prefix}task-one`,
+      getItem: () => JSON.stringify(notice)
+    } as unknown as Storage;
+
+    expect(readMutationNoticesFromStorage(malformed, prefix)).toMatchObject({ available: false, notices: [] });
+    expect(readMutationNoticeStateFromStorage(malformed, emptyTab, prefix)).toMatchObject({ available: false, shared: false, notices: [] });
+    expect(readMutationNoticeStateFromStorage(unreadable, tabOnly, prefix)).toMatchObject({ available: false, shared: false, notices: [notice] });
+    expect(mergePersistedMutationNoticeState([notice], readMutationNoticeStateFromStorage(unreadable, emptyTab, prefix))).toEqual([notice]);
   });
 
   test("keeps successful project memberships when one scoped read fails", async () => {

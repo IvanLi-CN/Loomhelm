@@ -272,7 +272,8 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
         publishProductionAuthInvalidation();
         return { ok: true };
       } catch (error) {
-        invalidateAndRevalidate();
+        // A completed server logout can still lose its response. Reconcile every tab before another principal can reuse protected cache.
+        publishProductionAuthInvalidation();
         return { ok: false, message: errorMessage(error, "退出登录") };
       } finally {
         setLogoutPending(false);

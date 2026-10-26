@@ -119,10 +119,17 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
   const task = source?.getTask(taskId);
   const [deleteState, setDeleteState] = useState<{ taskId: string; status: "idle" | "pending" | "success" } | null>(null);
   const lastTaskRef = useRef<{ taskId: string; task: typeof task } | undefined>(undefined);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (task) lastTaskRef.current = { taskId, task };
   }, [task, taskId]);
   const currentDeleteState = deleteState?.taskId === taskId ? deleteState.status : "idle";
+  const displayedTask = task ?? (currentDeleteState === "pending" && lastTaskRef.current?.taskId === taskId ? lastTaskRef.current.task : undefined);
+  useEffect(() => {
+    if (!displayedTask) return;
+    const frame = requestAnimationFrame(() => headingRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [displayedTask?.id]);
 
   if (source?.status === "error" || source?.status === "permission-changed") {
     return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><TaskReadRecovery source={source} taskId={taskId} /></section>;
@@ -131,8 +138,6 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
   if (currentDeleteState === "success") {
     return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><h1>任务已删除</h1><div className="inline-state inline-state-success" role="status">任务已删除。</div><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></section>;
   }
-
-  const displayedTask = task ?? (currentDeleteState === "pending" && lastTaskRef.current?.taskId === taskId ? lastTaskRef.current.task : undefined);
 
   if (!source || (source.status === "loading" && currentDeleteState === "idle")) {
     return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">TASK WORKSPACE</span><h1>正在读取任务</h1><p>任务工作区会在真实授权数据加载完成后显示，不会使用 Demo 夹具替代项目或任务信息。</p></section>;
@@ -146,7 +151,7 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
   return (
     <section className="workspace-page">
       <header className="workspace-heading">
-        <div><span className="workspace-context">{project?.name ?? "当前无权查看项目"} / {displayedTask.id}</span><h1>{displayedTask.title}</h1><div className="workspace-meta"><span className="execution-pill execution-dot">执行服务未接通</span><span className="inline-flex items-center gap-1">任务业务状态：<TaskStateBadge state={displayedTask.state} /></span></div></div>
+        <div><span className="workspace-context">{project?.name ?? "当前无权查看项目"} / {displayedTask.id}</span><h1 ref={headingRef} tabIndex={-1}>{displayedTask.title}</h1><div className="workspace-meta"><span className="execution-pill execution-dot">执行服务未接通</span><span className="inline-flex items-center gap-1">任务业务状态：<TaskStateBadge state={displayedTask.state} /></span></div></div>
       </header>
       <div className="workspace-layout workspace-panel-info">
         <section className="chat-panel" aria-label="任务工作区">
