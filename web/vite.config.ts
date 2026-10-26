@@ -43,6 +43,9 @@ export default defineConfig(({ mode }) => {
                   }
                 ]
               },
+              workbox: {
+                navigateFallbackDenylist: [/^\/api(?:\/|\?|$)/]
+              },
               devOptions: {
                 enabled: false
               }
