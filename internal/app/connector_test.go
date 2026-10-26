@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -52,5 +53,25 @@ func TestConnectorReconnectBounds(t *testing.T) {
 	}
 	if got := connectorDialTimeoutFor(30 * time.Second); got != connectorDialTimeout {
 		t.Fatalf("connectorDialTimeoutFor(30s) = %s, want %s", got, connectorDialTimeout)
+	}
+}
+
+func TestPlatformOperationIDEncodesInternalNULSeparator(t *testing.T) {
+	raw := "generation-1\x00rpc-41"
+	value := platformOperationID(&raw)
+	if value == nil || strings.ContainsRune(*value, '\x00') || !strings.HasPrefix(*value, "loomhelm-op-") {
+		t.Fatalf("platformOperationID(%q) = %v", raw, value)
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(*value, "loomhelm-op-"))
+	if err != nil || string(decoded) != raw {
+		t.Fatalf("encoded operation id = %q, decoded = %q, error = %v", *value, decoded, err)
+	}
+}
+
+func TestPlatformOperationIDKeepsSafeValue(t *testing.T) {
+	raw := "rpc-41"
+	value := platformOperationID(&raw)
+	if value == nil || *value != raw {
+		t.Fatalf("platformOperationID(%q) = %v, want original value", raw, value)
 	}
 }

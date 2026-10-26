@@ -1204,6 +1204,9 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error 
 	}
 	eventType := eventTypeForMethod(message.Method, message)
 	runID := runIDFromMessage(message)
+	if runID == "" && isTerminalEventType(eventType) {
+		runID = a.activeTurn(state, "")
+	}
 	if eventType == protocol.EventTypeApprovalResolved && runID == "" {
 		runID = a.approvalRunID(state, message)
 	}
@@ -2106,6 +2109,15 @@ func eventTypeForMethod(method string, message RPCMessage) protocol.EventType {
 		return protocol.EventTypeRunFailed
 	default:
 		return protocol.EventTypeUnknown
+	}
+}
+
+func isTerminalEventType(eventType protocol.EventType) bool {
+	switch eventType {
+	case protocol.EventTypeRunCompleted, protocol.EventTypeRunFailed, protocol.EventTypeRunInterrupted:
+		return true
+	default:
+		return false
 	}
 }
 

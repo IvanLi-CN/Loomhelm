@@ -85,6 +85,9 @@ func (t *gatewayExecutionTransport) HandleEvent(ctx context.Context, connection 
 	if err != nil {
 		return fmt.Errorf("resolve gateway event session access: %w", err)
 	}
+	if acknowledgePendingSessionCreated(access, connection, event) {
+		return nil
+	}
 	if !access.Confirmed || access.HostID == "" || access.HostID != connection.HostID {
 		return fmt.Errorf("%w: %w", errGatewaySessionOwnership, hosts.ErrInvalid)
 	}
@@ -95,6 +98,10 @@ func (t *gatewayExecutionTransport) HandleEvent(ctx context.Context, connection 
 	if err := validateGatewayEventRun(session, t.runs, ctx, event); err != nil {
 		return err
 	}
+	// Connector sequence values describe the adapter observation stream, which
+	// can include telemetry or control events that this boundary acknowledges
+	// without persisting. The event store owns the public session sequence.
+	event.Sequence = 0
 	if event.Type == protocol.EventTypeApprovalRequested {
 		request, err := normalizeGatewayApproval(event, session.Generation)
 		if err != nil {
@@ -107,6 +114,14 @@ func (t *gatewayExecutionTransport) HandleEvent(ctx context.Context, connection 
 		return err
 	}
 	return nil
+}
+
+func acknowledgePendingSessionCreated(access sessions.SessionAccess, connection hosts.Connection, event protocol.Event) bool {
+	return event.Type == protocol.EventTypeSessionCreated &&
+		access.IntentState == sessions.IntentStatePending &&
+		!access.Confirmed &&
+		strings.TrimSpace(access.HostID) != "" &&
+		access.HostID == connection.HostID
 }
 
 func validateGatewayEventRun(session sessions.Session, store *runs.Store, ctx context.Context, event protocol.Event) error {
@@ -135,7 +150,7 @@ func validateGatewayEventRun(session sessions.Session, store *runs.Store, ctx co
 
 func gatewayEventRequiresRun(eventType protocol.EventType) bool {
 	switch eventType {
-	case protocol.EventTypeSessionCreated, protocol.EventTypeSessionAttached:
+	case protocol.EventTypeSessionCreated, protocol.EventTypeSessionAttached, protocol.EventTypeReconciliationRequired, protocol.EventTypeReconciliationCompleted:
 		return false
 	default:
 		return true

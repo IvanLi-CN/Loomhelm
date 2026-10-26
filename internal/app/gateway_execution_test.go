@@ -10,6 +10,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 )
 
 func TestNormalizeGatewayApprovalUsesPlatformRunIdentity(t *testing.T) {
@@ -103,5 +104,69 @@ func TestGatewayExecutionReconcileIsExplicitlyUnknown(t *testing.T) {
 	}
 	if reconciliation.ObservedAt != observedAt.Format(time.RFC3339Nano) {
 		t.Fatalf("reconciliation observed_at = %q", reconciliation.ObservedAt)
+	}
+}
+
+func TestAcknowledgePendingSessionCreatedRequiresMatchingPendingHost(t *testing.T) {
+	event := protocol.Event{Type: protocol.EventTypeSessionCreated}
+	connection := hosts.Connection{HostID: "host-1"}
+	tests := []struct {
+		name   string
+		access sessions.SessionAccess
+		want   bool
+	}{
+		{
+			name: "matching pending host",
+			access: sessions.SessionAccess{
+				HostID:      "host-1",
+				IntentState: sessions.IntentStatePending,
+			},
+			want: true,
+		},
+		{
+			name: "different host",
+			access: sessions.SessionAccess{
+				HostID:      "host-2",
+				IntentState: sessions.IntentStatePending,
+			},
+		},
+		{
+			name: "confirmed session",
+			access: sessions.SessionAccess{
+				HostID:      "host-1",
+				IntentState: sessions.IntentStateConfirmed,
+				Confirmed:   true,
+			},
+		},
+		{
+			name: "unknown intent",
+			access: sessions.SessionAccess{
+				HostID:      "host-1",
+				IntentState: sessions.IntentStateUnknown,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := acknowledgePendingSessionCreated(test.access, connection, event); got != test.want {
+				t.Fatalf("acknowledgePendingSessionCreated() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestGatewayEventRunRequirementAllowsSessionLifecycleEvents(t *testing.T) {
+	for _, eventType := range []protocol.EventType{
+		protocol.EventTypeSessionCreated,
+		protocol.EventTypeSessionAttached,
+		protocol.EventTypeReconciliationRequired,
+		protocol.EventTypeReconciliationCompleted,
+	} {
+		if gatewayEventRequiresRun(eventType) {
+			t.Fatalf("gateway event %q unexpectedly requires a platform run", eventType)
+		}
+	}
+	if !gatewayEventRequiresRun(protocol.EventTypeRunStarted) {
+		t.Fatal("run.started did not require a platform run")
 	}
 }

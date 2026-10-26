@@ -1459,6 +1459,48 @@ func TestAdapterRebuildsActiveTurnOnColdRecovery(t *testing.T) {
 	}
 }
 
+func TestAdapterAssociatesTerminalEventWithOnlyActiveTurn(t *testing.T) {
+	journal := openTestJournal(t)
+	adapterSession := protocol.AdapterSession{SessionID: "session-terminal-fallback"}
+	state := &adapterSessionState{
+		session:        adapterSession,
+		gatewaySession: protocol.GatewaySession{ExternalThreadRef: "thread-terminal-fallback", Generation: "generation-terminal-fallback"},
+		activeTurns:    map[string]string{"turn-terminal-fallback": "turn-terminal-fallback"},
+	}
+	state.session.ExternalThreadRef = state.gatewaySession.ExternalThreadRef
+	adapter := &Adapter{
+		journal:  journal,
+		sessions: map[string]*adapterSessionState{adapterSession.SessionID: state},
+	}
+
+	message := RPCMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"turn":{"status":"interrupted"}}`),
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"interrupted"}}}`),
+	}
+	if err := adapter.observe(state, message); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: adapterSession.SessionID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("terminal events = %+v, want one event", page.Events)
+	}
+	observation, ok := journal.observedEventObservation(page.Events[0].EventID)
+	if !ok || observation.NativeTurnID != "turn-terminal-fallback" {
+		t.Fatalf("terminal event observation = %+v, found = %v, want turn-terminal-fallback", observation, ok)
+	}
+	if page.Events[0].Type != protocol.EventTypeRunInterrupted {
+		t.Fatalf("terminal event = %+v, want interrupted", page.Events[0])
+	}
+	if _, ok := state.activeTurns["turn-terminal-fallback"]; ok {
+		t.Fatal("terminal turn remained active")
+	}
+}
+
 func TestAdapterLeavesInFlightCommandUnknownDuringReconciliation(t *testing.T) {
 	transport := newFakeTransport()
 	journal := openTestJournal(t)

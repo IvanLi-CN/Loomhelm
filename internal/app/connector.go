@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -327,7 +328,19 @@ func (c *Connector) handleGatewayCommand(ctx context.Context, connection *gatewa
 		runID := *command.RunID
 		ack.RunID = &runID
 	}
+	ack.OperationID = platformOperationID(ack.OperationID)
 	return connection.Acknowledge(ctx, message.RequestID, ack)
+}
+
+// Adapter operation identities may use NUL as an internal generation
+// separator. The public Gateway ACK is persisted in PostgreSQL TEXT, so keep
+// the exact identity while encoding the boundary value as safe ASCII.
+func platformOperationID(value *string) *string {
+	if value == nil || !strings.ContainsRune(*value, '\x00') {
+		return value
+	}
+	encoded := "loomhelm-op-" + base64.RawURLEncoding.EncodeToString([]byte(*value))
+	return &encoded
 }
 
 func (c *Connector) sendGatewayHeartbeats(ctx context.Context, connection *gateway.ClientConnection) error {
@@ -388,6 +401,15 @@ func (c *Connector) deliverJournalEventBatch(ctx context.Context, connection *ga
 				return progressed, fmt.Errorf("read mapped Connector events for platform session %q: %w", alias.PlatformSessionID, err)
 			}
 			if len(page.Events) == 0 {
+				if page.HasMore && page.NextCursor != nil && *page.NextCursor != "" {
+					cursor := *page.NextCursor
+					if err := connection.SendHeartbeatForStream(ctx, alias.PlatformSessionID, "", cursor); err != nil {
+						return progressed, err
+					}
+					after[alias.PlatformSessionID] = cursor
+					progressed = true
+					continue
+				}
 				break
 			}
 			for _, event := range page.Events {
@@ -395,6 +417,14 @@ func (c *Connector) deliverJournalEventBatch(ctx context.Context, connection *ga
 					return progressed, err
 				}
 				after[alias.PlatformSessionID] = event.Cursor
+				progressed = true
+			}
+			if page.HasMore && page.NextCursor != nil && *page.NextCursor != "" && *page.NextCursor != after[alias.PlatformSessionID] {
+				cursor := *page.NextCursor
+				if err := connection.SendHeartbeatForStream(ctx, alias.PlatformSessionID, "", cursor); err != nil {
+					return progressed, err
+				}
+				after[alias.PlatformSessionID] = cursor
 				progressed = true
 			}
 			if !page.HasMore || page.NextCursor == nil || *page.NextCursor == "" {

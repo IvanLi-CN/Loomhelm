@@ -692,6 +692,27 @@ func TestJournalReadsOrderedEventsAndRebuildsPendingApproval(t *testing.T) {
 	}
 }
 
+func TestJournalUsesNativeApprovalParamsRequestIDWhenTopLevelIDIsAbsent(t *testing.T) {
+	journal := openTestJournal(t)
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: "session-native-approval-id",
+		RunID:     stringPointer("turn-native-approval-id"),
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"item/commandExecution/requestApproval","params":{"requestId":43,"turnId":"turn-native-approval-id","itemId":"item-native-approval-id"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := journal.FindPendingApproval("session-native-approval-id", "turn-native-approval-id", []byte("43"))
+	if err != nil || string(pending.RequestID) != "43" {
+		t.Fatalf("native approval pending = %+v, error = %v", pending, err)
+	}
+	pending, err = journal.FindPendingApproval("session-native-approval-id", "turn-native-approval-id", []byte(`"43"`))
+	if err != nil || string(pending.RequestID) != "43" {
+		t.Fatalf("stringified native approval pending = %+v, error = %v", pending, err)
+	}
+}
+
 func TestJournalScopesApprovalRequestsBySessionAndRevision(t *testing.T) {
 	journal := openTestJournal(t)
 	for _, sessionID := range []string{"session-a", "session-b"} {

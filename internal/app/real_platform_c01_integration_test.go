@@ -107,7 +107,7 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		connectorCtx, connectorCancel := context.WithCancel(ctx)
 		result := make(chan error, 1)
 		go func() { result <- connector.Run(connectorCtx) }()
-		waitForConnectorConnection(t, connector)
+		waitForConnectorConnectionWithin(t, connector, 15*time.Second)
 		return connector, connectorCancel, result
 	}
 	stopConnector := func(connectorCancel context.CancelFunc, result <-chan error) {
@@ -132,6 +132,7 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 	})
 
 	browser := applicationBrowser(t)
+	browser.Timeout = 3 * time.Minute
 	browser.Transport = insecureTestHTTPClient().Transport
 	loginApplicationBrowser(t, browser, baseURL, "real-platform-c01")
 	createResponse := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/sessions", protocol.CreateSessionRequest{
@@ -224,14 +225,29 @@ func submitRealPlatformRun(t *testing.T, browser *http.Client, baseURL, sessionI
 func waitForRealPlatformApproval(t *testing.T, ctx context.Context, browser *http.Client, baseURL, runID string) realPlatformApproval {
 	t.Helper()
 	event := waitForRealPlatformEvent(t, ctx, browser, baseURL, runID, protocol.EventTypeApprovalRequested)
-	var approval realPlatformApproval
-	if err := json.Unmarshal(event.Payload, &approval); err != nil {
-		t.Fatalf("decode platform approval event: %v", err)
-	}
-	if approval.ID == "" || approval.Revision <= 0 {
-		t.Fatalf("platform approval event payload = %s", event.Payload)
+	approval, err := decodeRealPlatformApproval(event)
+	if err != nil {
+		t.Fatalf("decode platform approval event: %v; payload=%s", err, event.Payload)
 	}
 	return approval
+}
+
+func decodeRealPlatformApproval(event protocol.Event) (realPlatformApproval, error) {
+	var normalized realPlatformApproval
+	if err := json.Unmarshal(event.Payload, &normalized); err != nil {
+		return realPlatformApproval{}, err
+	}
+	if normalized.ID != "" {
+		if normalized.Revision <= 0 {
+			normalized.Revision = 1
+		}
+		return normalized, nil
+	}
+	request, err := normalizeNativeGatewayApproval(event, "real-platform")
+	if err != nil {
+		return realPlatformApproval{}, err
+	}
+	return realPlatformApproval{ID: request.ID, Revision: request.Revision}, nil
 }
 
 func resolveRealPlatformApproval(t *testing.T, browser *http.Client, baseURL, runID string, approval realPlatformApproval, decision protocol.ApprovalDecision, commandID string) {

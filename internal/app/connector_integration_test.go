@@ -200,8 +200,12 @@ func sameConnectorConnection(left, right hosts.Connection) bool {
 }
 
 func waitForConnectorConnection(t *testing.T, connector *Connector) {
+	waitForConnectorConnectionWithin(t, connector, 2*time.Second)
+}
+
+func waitForConnectorConnectionWithin(t *testing.T, connector *Connector, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		connector.connectionMu.Lock()
 		connected := connector.connection != nil

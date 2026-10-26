@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -788,20 +789,31 @@ func (j *Journal) ReadMappedEvents(query protocol.EventQuery) (protocol.EventPag
 			return protocol.EventPage{}, protocol.ErrCursorExpired
 		}
 		mapped, ok := j.mappedEventAtLocked(index)
-		if !ok || mapped.SessionID != query.SessionID || (query.RunID != "" && valueOrEmpty(mapped.RunID) != query.RunID) {
+		if !ok {
+			if query.RunID != "" || !j.unresolvedEventIsSkippableMappedTelemetryLocked(j.events[index], query.SessionID) {
+				return protocol.EventPage{}, protocol.ErrCursorExpired
+			}
+		} else if mapped.SessionID != query.SessionID || (query.RunID != "" && valueOrEmpty(mapped.RunID) != query.RunID) {
 			return protocol.EventPage{}, protocol.ErrCursorExpired
 		}
 		start = index + 1
 	}
+	mappedSequence := j.mappedEventCountBeforeLocked(start, query.SessionID)
 	limit := query.Limit
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
 	page := protocol.EventPage{Events: make([]protocol.Event, 0)}
 	for index := start; index < len(j.events); index++ {
-		mapped, ok := j.mappedEventAtLocked(index)
+		mapped, ok := j.mappedEventWithoutSequenceAtLocked(index)
 		if !ok {
-			if query.RunID == "" && j.unresolvedEventBelongsToPlatformSessionLocked(j.events[index], query.SessionID) {
+			if query.RunID == "" && j.unresolvedEventIsSkippableMappedTelemetryLocked(j.events[index], query.SessionID) {
+				page.HasMore = true
+				next := j.events[index].Cursor
+				page.NextCursor = &next
+				break
+			}
+			if query.RunID == "" && j.unresolvedEventBlocksMappedDeliveryLocked(j.events[index], query.SessionID) {
 				if len(page.Events) > 0 {
 					page.HasMore = true
 					last := page.Events[len(page.Events)-1].Cursor
@@ -812,19 +824,67 @@ func (j *Journal) ReadMappedEvents(query protocol.EventQuery) (protocol.EventPag
 			continue
 		}
 		if mapped.SessionID != query.SessionID || (query.RunID != "" && valueOrEmpty(mapped.RunID) != query.RunID) {
+			if mapped.SessionID == query.SessionID {
+				mappedSequence++
+			}
 			continue
 		}
 		if int64(len(page.Events)) >= limit {
 			page.HasMore = true
 			break
 		}
+		mappedSequence++
+		mapped.Sequence = mappedSequence
 		page.Events = append(page.Events, mapped)
 	}
-	if len(page.Events) > 0 && page.HasMore {
+	if len(page.Events) > 0 && page.HasMore && page.NextCursor == nil {
 		last := page.Events[len(page.Events)-1].Cursor
 		page.NextCursor = &last
 	}
 	return page, nil
+}
+
+func (j *Journal) unresolvedEventIsSkippableMappedTelemetryLocked(event protocol.Event, platformSessionID string) bool {
+	if event.Type != protocol.EventTypeUnknown || !j.unresolvedEventBelongsToPlatformSessionLocked(event, platformSessionID) {
+		return false
+	}
+	observed, ok := j.observedEvents[event.EventID]
+	if !ok {
+		return false
+	}
+	if observed.Observation.NativeTurnID == "" && observed.Observation.NativeOperationID == "" {
+		return true
+	}
+	return event.Source == protocol.EventSourceAppServer && isSkippableMappedTelemetry(event.Payload)
+}
+
+func isSkippableMappedTelemetry(payload json.RawMessage) bool {
+	var envelope struct {
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil {
+		return false
+	}
+	switch envelope.Method {
+	case "thread/tokenUsage/updated":
+		return true
+	default:
+		return false
+	}
+}
+
+func (j *Journal) unresolvedEventBlocksMappedDeliveryLocked(event protocol.Event, platformSessionID string) bool {
+	if !j.unresolvedEventBelongsToPlatformSessionLocked(event, platformSessionID) {
+		return false
+	}
+	if event.Type != protocol.EventTypeUnknown {
+		return true
+	}
+	observed, ok := j.observedEvents[event.EventID]
+	if !ok {
+		return true
+	}
+	return observed.Observation.NativeTurnID != "" || observed.Observation.NativeOperationID != ""
 }
 
 func (j *Journal) unresolvedEventBelongsToPlatformSessionLocked(event protocol.Event, platformSessionID string) bool {
@@ -853,6 +913,15 @@ func (j *Journal) MappedEvent(eventID string) (protocol.Event, bool) {
 }
 
 func (j *Journal) mappedEventAtLocked(index int) (protocol.Event, bool) {
+	event, ok := j.mappedEventWithoutSequenceAtLocked(index)
+	if !ok {
+		return protocol.Event{}, false
+	}
+	event.Sequence = j.mappedEventCountThroughLocked(index, event.SessionID)
+	return event, true
+}
+
+func (j *Journal) mappedEventWithoutSequenceAtLocked(index int) (protocol.Event, bool) {
 	if index < 0 || index >= len(j.events) {
 		return protocol.Event{}, false
 	}
@@ -862,6 +931,27 @@ func (j *Journal) mappedEventAtLocked(index int) (protocol.Event, bool) {
 		return protocol.Event{}, false
 	}
 	return j.materializedObservedEventLocked(observed)
+}
+
+func (j *Journal) mappedEventCountBeforeLocked(index int, platformSessionID string) int64 {
+	if index < 0 {
+		return 0
+	}
+	if index > len(j.events) {
+		index = len(j.events)
+	}
+	var count int64
+	for current := 0; current < index; current++ {
+		mapped, ok := j.mappedEventWithoutSequenceAtLocked(current)
+		if ok && mapped.SessionID == platformSessionID {
+			count++
+		}
+	}
+	return count
+}
+
+func (j *Journal) mappedEventCountThroughLocked(index int, platformSessionID string) int64 {
+	return j.mappedEventCountBeforeLocked(index+1, platformSessionID)
 }
 
 func (j *Journal) materializedObservedEventLocked(observed journalObservedEvent) (protocol.Event, bool) {
@@ -900,16 +990,22 @@ func eventRequiresNativeIdentity(eventType protocol.EventType) bool {
 
 func (j *Journal) bindingForObservationLocked(observation EventObservation) (RunBinding, bool) {
 	var platformKey string
+	operationBound := false
 	if observation.NativeTurnID != "" {
 		platformKey = j.runBindingByNativeTurn[identityTupleKey(observation.AdapterSessionID, observation.ExternalThreadRef, observation.Generation, observation.NativeTurnID)]
 	}
 	if observation.NativeOperationID != "" {
 		operationKey := identityTupleKey(observation.AdapterSessionID, observation.ExternalThreadRef, observation.Generation, observation.NativeOperationID)
 		operationPlatformKey := j.runBindingByNativeOperation[operationKey]
-		if platformKey != "" && platformKey != operationPlatformKey {
+		if operationPlatformKey != "" {
+			if platformKey != "" && platformKey != operationPlatformKey {
+				return RunBinding{}, false
+			}
+			platformKey = operationPlatformKey
+			operationBound = true
+		} else if platformKey == "" {
 			return RunBinding{}, false
 		}
-		platformKey = operationPlatformKey
 	}
 	if platformKey == "" {
 		return RunBinding{}, false
@@ -924,7 +1020,7 @@ func (j *Journal) bindingForObservationLocked(observation EventObservation) (Run
 	if observation.NativeTurnID != "" && binding.NativeTurnID != observation.NativeTurnID {
 		return RunBinding{}, false
 	}
-	if observation.NativeOperationID != "" && binding.NativeOperationID != observation.NativeOperationID {
+	if operationBound && observation.NativeOperationID != "" && binding.NativeOperationID != observation.NativeOperationID {
 		return RunBinding{}, false
 	}
 	return binding, true

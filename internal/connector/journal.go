@@ -926,23 +926,38 @@ func (j *Journal) FindPendingApproval(sessionID, runID string, requestID json.Ra
 
 func (j *Journal) FindPendingApprovalForGeneration(sessionID, generation, runID string, requestID json.RawMessage) (PendingApproval, error) {
 	wanted := approvalIDIdentity(requestID)
+	wantedText := approvalIDText(requestID)
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	var found *PendingApproval
+	var exact, textual *PendingApproval
 	for _, approval := range j.pendingApprovals {
-		if approval.SessionID != sessionID || (generation != "" && approval.Generation != generation) || (runID != "" && approval.RunID != runID) || approvalIDIdentity(approval.RequestID) != wanted {
+		if approval.SessionID != sessionID || (generation != "" && approval.Generation != generation) || (runID != "" && approval.RunID != runID) {
 			continue
 		}
-		if found != nil {
+		if approvalIDIdentity(approval.RequestID) == wanted {
+			if exact != nil {
+				return PendingApproval{}, fmt.Errorf("approval id %q is ambiguous", approvalIDText(requestID))
+			}
+			value := cloneApproval(approval)
+			exact = &value
+			continue
+		}
+		if wantedText == "" || approvalIDText(approval.RequestID) != wantedText {
+			continue
+		}
+		if textual != nil {
 			return PendingApproval{}, fmt.Errorf("approval id %q is ambiguous", approvalIDText(requestID))
 		}
 		value := cloneApproval(approval)
-		found = &value
+		textual = &value
 	}
-	if found == nil {
+	if exact != nil {
+		return *exact, nil
+	}
+	if textual == nil {
 		return PendingApproval{}, ErrApprovalNotFound
 	}
-	return *found, nil
+	return *textual, nil
 }
 
 func (j *Journal) ApprovalResult(commandID string) (string, bool) {
@@ -1385,6 +1400,9 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		return
 	}
 	requestID := message.ID
+	if event.Type == protocol.EventTypeApprovalRequested && (len(bytes.TrimSpace(requestID)) == 0 || bytes.Equal(bytes.TrimSpace(requestID), []byte("null"))) {
+		requestID = message.Params.RequestID
+	}
 	if event.Type == protocol.EventTypeApprovalResolved && len(bytes.TrimSpace(message.Params.RequestID)) > 0 {
 		requestID = message.Params.RequestID
 	}

@@ -118,6 +118,56 @@ func TestJournalPersistsExactSessionAndRunIdentityBeforeMaterializingEvents(t *t
 	}
 }
 
+func TestJournalMapsControlOperationByNativeTurn(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-control",
+		AdapterSessionID:  "adapter-session-control",
+		ExternalThreadRef: "thread-control",
+		Generation:        "generation-control",
+		CommandID:         "create-control",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-control",
+		CommandID:         "run-control",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-turn-control",
+		NativeOperationID: "native-start-operation",
+		State:             IdentityStateBound,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	event := protocol.Event{
+		EventID:   "control-operation-event",
+		Cursor:    alias.AdapterSessionID + ":1",
+		Sequence:  1,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceHostObservation,
+		Type:      protocol.EventTypeUnknown,
+		Payload:   []byte(`{"method":"rpc/response","operation_id":"native-control-operation"}`),
+	}
+	if _, _, err := journal.AppendObservedEvent(event, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      binding.NativeTurnID,
+		NativeOperationID: "native-control-operation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mapped, delivered := journal.MappedEvent(event.EventID)
+	if !delivered || mapped.RunID == nil || *mapped.RunID != binding.PlatformRunID {
+		t.Fatalf("control operation mapping = %+v, delivered = %v", mapped, delivered)
+	}
+}
+
 func TestJournalIdentityBindingsAreIdempotentAndRejectConflicts(t *testing.T) {
 	journal := openTestJournal(t)
 	alias := SessionAlias{
@@ -320,6 +370,139 @@ func TestJournalSessionReplayDoesNotSkipPendingObservation(t *testing.T) {
 	page, err = journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, RunID: bound.PlatformRunID})
 	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "mapped-order" {
 		t.Fatalf("run replay = %+v, error = %v", page.Events, err)
+	}
+}
+
+func TestJournalMappedReplaySkipsUnboundSessionTelemetry(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-telemetry",
+		AdapterSessionID:  "adapter-session-telemetry",
+		ExternalThreadRef: "thread-telemetry",
+		Generation:        "generation-telemetry",
+		CommandID:         "create-telemetry",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-telemetry",
+		CommandID:         "run-telemetry",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-telemetry-turn",
+		State:             IdentityStateBound,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "telemetry-event",
+		Cursor:    alias.AdapterSessionID + ":1",
+		Sequence:  1,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeUnknown,
+		Payload:   []byte(`{"method":"mcpServer/startupStatus/updated"}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "run-event-after-telemetry",
+		Cursor:    alias.AdapterSessionID + ":2",
+		Sequence:  2,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeRunStarted,
+		Payload:   []byte(`{"method":"turn/started"}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      binding.NativeTurnID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID})
+	if err != nil || len(page.Events) != 0 || !page.HasMore || page.NextCursor == nil || *page.NextCursor != alias.AdapterSessionID+":1" {
+		t.Fatalf("mapped replay before telemetry checkpoint = %+v, error = %v", page, err)
+	}
+	page, err = journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, AfterCursor: alias.AdapterSessionID + ":1"})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "run-event-after-telemetry" || page.Events[0].Sequence != 1 {
+		t.Fatalf("mapped replay after telemetry checkpoint = %+v, error = %v", page.Events, err)
+	}
+}
+
+func TestJournalMappedReplaySkipsStaleNativeTokenTelemetry(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-token-telemetry",
+		AdapterSessionID:  "adapter-session-token-telemetry",
+		ExternalThreadRef: "thread-token-telemetry",
+		Generation:        "generation-token-telemetry",
+		CommandID:         "create-token-telemetry",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-token-telemetry",
+		CommandID:         "run-token-telemetry",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-current-turn",
+		State:             IdentityStateBound,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "stale-token-telemetry",
+		Cursor:    alias.AdapterSessionID + ":1",
+		Sequence:  1,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeUnknown,
+		Payload:   []byte(`{"method":"thread/tokenUsage/updated","params":{"turnId":"native-stale-turn"}}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-stale-turn",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "current-run-event-after-telemetry",
+		Cursor:    alias.AdapterSessionID + ":2",
+		Sequence:  2,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeRunStarted,
+		Payload:   []byte(`{"method":"turn/started","params":{"turnId":"native-current-turn"}}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      binding.NativeTurnID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID})
+	if err != nil || len(page.Events) != 0 || !page.HasMore || page.NextCursor == nil || *page.NextCursor != alias.AdapterSessionID+":1" {
+		t.Fatalf("mapped replay before stale token telemetry checkpoint = %+v, error = %v", page, err)
+	}
+	page, err = journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, AfterCursor: alias.AdapterSessionID + ":1"})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "current-run-event-after-telemetry" || page.Events[0].Sequence != 1 {
+		t.Fatalf("mapped replay after stale token telemetry checkpoint = %+v, error = %v", page.Events, err)
 	}
 }
 
