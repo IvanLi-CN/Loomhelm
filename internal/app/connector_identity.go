@@ -143,6 +143,12 @@ func (c *Connector) BeginRunIdentity(command protocol.Command) (connectorruntime
 	if !ok {
 		return connectorruntime.RunBinding{}, fmt.Errorf("%w: platform session %q has no explicit adapter alias", connectorruntime.ErrIdentityNotFound, command.SessionID)
 	}
+	if existing, found := c.journal.RunBinding(alias.PlatformSessionID, platformRunID); found {
+		if existing.CommandID != commandID {
+			return connectorruntime.RunBinding{}, connectorruntime.ErrIdentityConflict
+		}
+		return existing, nil
+	}
 	binding := connectorruntime.RunBinding{
 		PlatformSessionID: alias.PlatformSessionID,
 		PlatformRunID:     platformRunID,
@@ -195,7 +201,7 @@ func (c *Connector) PreparePlatformCommand(command protocol.Command) (protocol.C
 			return protocol.Command{}, err
 		}
 		if steer {
-			binding, err := c.boundRunIdentity(alias.PlatformSessionID, platformRunID)
+			binding, err := c.boundRunIdentity(alias, platformRunID)
 			if err != nil {
 				return protocol.Command{}, err
 			}
@@ -213,7 +219,7 @@ func (c *Connector) PreparePlatformCommand(command protocol.Command) (protocol.C
 		if err != nil {
 			return protocol.Command{}, err
 		}
-		binding, err := c.boundRunIdentity(alias.PlatformSessionID, platformRunID)
+		binding, err := c.boundRunIdentity(alias, platformRunID)
 		if err != nil {
 			return protocol.Command{}, err
 		}
@@ -310,6 +316,14 @@ func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.
 	if err != nil {
 		return protocol.CommandAck{}, err
 	}
+	if ack, found, err := c.journal.LookupCommandForRequest(prepared); err != nil {
+		return ack, err
+	} else if found {
+		if ack.State == protocol.CommandStateUnknown {
+			return ack, protocol.ErrUnknownCommandResult
+		}
+		return ack, nil
+	}
 	if command.Kind == protocol.CommandKindRunSend {
 		if _, err := c.BeginRunIdentity(command); err != nil {
 			return protocol.CommandAck{}, err
@@ -404,10 +418,13 @@ func decodeSessionCommand(payload json.RawMessage) (protocol.CreateSessionReques
 	return request, nil
 }
 
-func (c *Connector) boundRunIdentity(platformSessionID, platformRunID string) (connectorruntime.RunBinding, error) {
-	binding, ok := c.journal.RunBinding(platformSessionID, platformRunID)
+func (c *Connector) boundRunIdentity(alias connectorruntime.SessionAlias, platformRunID string) (connectorruntime.RunBinding, error) {
+	binding, ok := c.journal.RunBinding(alias.PlatformSessionID, platformRunID)
 	if !ok {
 		return connectorruntime.RunBinding{}, fmt.Errorf("%w: platform run %q is not durably bound", protocol.ErrUnknownCommandResult, platformRunID)
+	}
+	if binding.Generation != alias.Generation || binding.AdapterSessionID != alias.AdapterSessionID || binding.ExternalThreadRef != alias.ExternalThreadRef {
+		return connectorruntime.RunBinding{}, fmt.Errorf("%w: platform run %q belongs to a historical session generation", protocol.ErrUnknownCommandResult, platformRunID)
 	}
 	if binding.State != connectorruntime.IdentityStateBound || binding.NativeTurnID == "" {
 		return connectorruntime.RunBinding{}, fmt.Errorf("%w: platform run %q has no exact native turn", protocol.ErrUnknownCommandResult, platformRunID)

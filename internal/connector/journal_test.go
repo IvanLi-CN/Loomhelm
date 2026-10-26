@@ -957,6 +957,71 @@ func TestJournalReplaysLegacyApprovalResolutionWithPendingRunIdentity(t *testing
 	}
 }
 
+func TestJournalReplaysObservedApprovalAndClaimIdentity(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "observed-approval-replay.jsonl")
+	session := journalSession{
+		SessionID:         "observed-approval-session",
+		ExternalThreadRef: "observed-approval-thread",
+		Generation:        "observed-approval-generation",
+		UpdatedAt:         "2026-10-21T00:00:00Z",
+	}
+	event := protocol.Event{
+		SessionID: session.SessionID,
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   []byte(`{"jsonrpc":"2.0","id":11,"method":"item/commandExecution/requestApproval","params":{"threadId":"observed-approval-thread","turnId":"observed-approval-turn","revision":2,"itemId":"observed-approval-item"}}`),
+		Cursor:    session.SessionID + ":1",
+		EventID:   "observed-approval-request",
+		Sequence:  1,
+	}
+	claim := approvalClaimRecord{
+		SessionID: session.SessionID,
+		RequestID: json.RawMessage(`11`),
+		Revision:  2,
+		CommandID: "observed-approval-command",
+		Decision:  "approve",
+	}
+	observed := journalObservedEvent{
+		Event: event,
+		Observation: EventObservation{
+			AdapterSessionID:  session.SessionID,
+			ExternalThreadRef: session.ExternalThreadRef,
+			Generation:        session.Generation,
+			NativeTurnID:      "observed-approval-turn",
+		},
+	}
+	records := []journalRecord{
+		{FormatVersion: journalFormatVersion, Type: "session", At: session.UpdatedAt, Session: &session},
+		{FormatVersion: journalFormatVersion, Type: "approval_claim", At: session.UpdatedAt, ApprovalClaim: &claim},
+		{FormatVersion: journalFormatVersion, Type: "observed_event", At: session.UpdatedAt, ObservedEvent: &observed},
+	}
+	var data []byte
+	for _, record := range records {
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, encoded...)
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	pending := journal.PendingApprovals(session.SessionID, "observed-approval-turn")
+	if len(pending) != 1 || pending[0].Generation != session.Generation || pending[0].TurnID != "observed-approval-turn" || pending[0].Revision != 2 {
+		t.Fatalf("replayed observed approval = %+v", pending)
+	}
+	if _, already, err := journal.ClaimApproval(session.SessionID, json.RawMessage(`11`), 2, claim.CommandID, claim.Decision); err != nil || !already {
+		t.Fatalf("replayed approval claim = already %v, error %v", already, err)
+	}
+}
+
 func TestJournalWaitsForItemStatusWhenApprovalResolutionIsEmpty(t *testing.T) {
 	journal := openTestJournal(t)
 	if _, err := journal.AppendEvent(protocol.Event{

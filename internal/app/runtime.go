@@ -9,6 +9,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -79,9 +80,10 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			return nil, serviceErr
 		}
 		transport := &gatewayExecutionTransport{
-			sessions: sessionStore,
-			runs:     runStore,
-			now:      time.Now,
+			sessions:   sessionStore,
+			runs:       runStore,
+			eventStore: events.NewStore(db.Pool()),
+			now:        time.Now,
 		}
 		hostRegistry := hosts.NewService(db.Pool())
 		runtime.gateway, err = gateway.NewServer(hostRegistry, gateway.ServerOptions{EventHandler: transport.HandleEvent})

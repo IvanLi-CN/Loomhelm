@@ -94,6 +94,95 @@ func TestConnectorIdentityMapsPlatformCommandsToNativeIdentity(t *testing.T) {
 	}
 }
 
+func TestConnectorIdentityFencesHistoricalGenerationControls(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	connector := &Connector{journal: journal}
+	if err := connector.BindSessionIdentity("platform-session-generation", "create-generation", protocol.GatewaySession{Generation: "generation-old"}, protocol.AdapterSession{SessionID: "adapter-generation", ExternalThreadRef: "thread-generation"}); err != nil {
+		t.Fatal(err)
+	}
+	runID := "platform-run-old"
+	command := protocol.Command{CommandID: "run-generation-old", Kind: protocol.CommandKindRunSend, Payload: json.RawMessage(`{"prompt":"old"}`), RunID: &runID, SessionID: "platform-session-generation"}
+	if _, err := connector.BeginRunIdentity(command); err != nil {
+		t.Fatal(err)
+	}
+	nativeTurnID := "native-turn-reused"
+	nativeOperationID := "generation-old\x00rpc-old"
+	if err := connector.ObserveCommandIdentity(command, protocol.CommandAck{RunID: &nativeTurnID, OperationID: &nativeOperationID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := connector.RotateSessionIdentity("platform-session-generation", "create-generation", protocol.GatewaySession{Generation: "generation-new"}, protocol.AdapterSession{SessionID: "adapter-generation", ExternalThreadRef: "thread-generation"}); err != nil {
+		t.Fatal(err)
+	}
+	interrupt := protocol.Command{CommandID: "interrupt-old-generation", Kind: protocol.CommandKindRunInterrupt, Payload: json.RawMessage(`{"reason":"stop"}`), RunID: &runID, SessionID: "platform-session-generation"}
+	if _, err := connector.PreparePlatformCommand(interrupt); !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("historical generation control error = %v, want unknown result", err)
+	}
+
+	newRunID := "platform-run-new"
+	newCommand := protocol.Command{CommandID: "run-generation-new", Kind: protocol.CommandKindRunSend, Payload: json.RawMessage(`{"prompt":"new"}`), RunID: &newRunID, SessionID: "platform-session-generation"}
+	if _, err := connector.BeginRunIdentity(newCommand); err != nil {
+		t.Fatal(err)
+	}
+	newOperationID := "generation-new\x00rpc-new"
+	if err := connector.ObserveCommandIdentity(newCommand, protocol.CommandAck{RunID: &nativeTurnID, OperationID: &newOperationID}); err != nil {
+		t.Fatal(err)
+	}
+	currentInterrupt := interrupt
+	currentInterrupt.CommandID = "interrupt-current-generation"
+	currentInterrupt.RunID = &newRunID
+	prepared, err := connector.PreparePlatformCommand(currentInterrupt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.RunID == nil || *prepared.RunID != nativeTurnID {
+		t.Fatalf("current generation control = %+v, want native turn identity", prepared)
+	}
+}
+
+func TestConnectorIdentityRedeliversDurableBoundCommandWithoutRebinding(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	connector := &Connector{journal: journal}
+	if err := connector.BindSessionIdentity("platform-session-dedup", "create-dedup", protocol.GatewaySession{Generation: "generation-dedup"}, protocol.AdapterSession{SessionID: "adapter-dedup", ExternalThreadRef: "thread-dedup"}); err != nil {
+		t.Fatal(err)
+	}
+	runID := "platform-run-dedup"
+	command := protocol.Command{CommandID: "run-dedup", Kind: protocol.CommandKindRunSend, Payload: json.RawMessage(`{"prompt":"same"}`), RunID: &runID, SessionID: "platform-session-dedup"}
+	if _, err := connector.BeginRunIdentity(command); err != nil {
+		t.Fatal(err)
+	}
+	nativeTurnID := "native-turn-dedup"
+	nativeOperationID := "generation-dedup\x00rpc-dedup"
+	if err := connector.ObserveCommandIdentity(command, protocol.CommandAck{RunID: &nativeTurnID, OperationID: &nativeOperationID}); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := connector.PreparePlatformCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack := protocol.CommandAck{CommandID: prepared.CommandID, State: protocol.CommandStateSucceeded, RunID: &nativeTurnID, Result: json.RawMessage(`{"ok":true}`)}
+	if _, _, err := journal.BeginCommand(prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommand(prepared.CommandID, ack); err != nil {
+		t.Fatal(err)
+	}
+	connector.controller = nil
+	retry, err := connector.acceptPlatformCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded || string(retry.Result) != string(ack.Result) {
+		t.Fatalf("durable bound retry = %+v, want the persisted ACK", retry)
+	}
+	conflict := command
+	conflict.Payload = json.RawMessage(`{"prompt":"changed"}`)
+	if _, err := connector.acceptPlatformCommand(context.Background(), conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("conflicting retry error = %v, want idempotency conflict", err)
+	}
+}
+
 func TestConnectorIdentityBindsRecoveredAdapterAckAfterJournalRestart(t *testing.T) {
 	journal := openConnectorIdentityJournal(t)
 	journalPath := journal.Path()

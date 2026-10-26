@@ -132,6 +132,7 @@ func TestRunControlHTTPFailClosedAndSafeErrorCodes(t *testing.T) {
 		{"approval revision", approvals.ErrRevisionStale, http.StatusConflict, protocol.ErrorCodeConflict},
 		{"stale generation", runs.ErrStaleGeneration, http.StatusConflict, protocol.ErrorCodeConflict},
 		{"missing", auth.ErrNotFound, http.StatusNotFound, protocol.ErrorCodeNotFound},
+		{"missing approval", approvals.ErrApprovalNotFound, http.StatusNotFound, protocol.ErrorCodeNotFound},
 		{"revoked", auth.ErrForbidden, http.StatusForbidden, protocol.ErrorCodeUnauthorized},
 		{"invalid", runs.ErrInvalidControlRequest, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest},
 		{"dependency", errors.New("/private/secret token=hidden raw-content"), http.StatusServiceUnavailable, protocol.ErrorCodeInvalidRequest},

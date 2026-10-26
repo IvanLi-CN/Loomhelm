@@ -1459,13 +1459,13 @@ func TestAdapterRebuildsActiveTurnOnColdRecovery(t *testing.T) {
 	}
 }
 
-func TestAdapterAssociatesTerminalEventWithOnlyActiveTurn(t *testing.T) {
+func TestAdapterLeavesIDLessTerminalEventUnresolved(t *testing.T) {
 	journal := openTestJournal(t)
 	adapterSession := protocol.AdapterSession{SessionID: "session-terminal-fallback"}
 	state := &adapterSessionState{
 		session:        adapterSession,
 		gatewaySession: protocol.GatewaySession{ExternalThreadRef: "thread-terminal-fallback", Generation: "generation-terminal-fallback"},
-		activeTurns:    map[string]string{"turn-terminal-fallback": "turn-terminal-fallback"},
+		activeTurns:    map[string]string{"turn-terminal-fallback": "turn-terminal-fallback", "turn-other": "turn-other"},
 	}
 	state.session.ExternalThreadRef = state.gatewaySession.ExternalThreadRef
 	adapter := &Adapter{
@@ -1490,14 +1490,87 @@ func TestAdapterAssociatesTerminalEventWithOnlyActiveTurn(t *testing.T) {
 		t.Fatalf("terminal events = %+v, want one event", page.Events)
 	}
 	observation, ok := journal.observedEventObservation(page.Events[0].EventID)
-	if !ok || observation.NativeTurnID != "turn-terminal-fallback" {
-		t.Fatalf("terminal event observation = %+v, found = %v, want turn-terminal-fallback", observation, ok)
+	if !ok || observation.NativeTurnID != "" {
+		t.Fatalf("terminal event observation = %+v, found = %v, want no native turn", observation, ok)
 	}
 	if page.Events[0].Type != protocol.EventTypeRunInterrupted {
 		t.Fatalf("terminal event = %+v, want interrupted", page.Events[0])
 	}
-	if _, ok := state.activeTurns["turn-terminal-fallback"]; ok {
-		t.Fatal("terminal turn remained active")
+	if _, ok := state.activeTurns["turn-terminal-fallback"]; !ok {
+		t.Fatal("ID-less terminal event removed the active turn")
+	}
+	if _, ok := state.activeTurns["turn-other"]; !ok {
+		t.Fatal("ID-less terminal event removed another active turn")
+	}
+}
+
+func TestAdapterAssociatesTerminalEventWithExplicitNativeTurnID(t *testing.T) {
+	journal := openTestJournal(t)
+	adapterSession := protocol.AdapterSession{SessionID: "session-terminal-explicit"}
+	state := &adapterSessionState{
+		session:        adapterSession,
+		gatewaySession: protocol.GatewaySession{ExternalThreadRef: "thread-terminal-explicit", Generation: "generation-terminal-explicit"},
+		activeTurns:    map[string]string{"turn-terminal-explicit": "turn-terminal-explicit", "turn-other-explicit": "turn-other-explicit"},
+	}
+	state.session.ExternalThreadRef = state.gatewaySession.ExternalThreadRef
+	adapter := &Adapter{
+		journal:  journal,
+		sessions: map[string]*adapterSessionState{adapterSession.SessionID: state},
+	}
+
+	message := RPCMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"turn":{"id":"turn-terminal-explicit","status":"completed"}}`),
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-terminal-explicit","status":"completed"}}}`),
+	}
+	if err := adapter.observe(state, message); err != nil {
+		t.Fatal(err)
+	}
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: adapterSession.SessionID, Limit: 10})
+	if err != nil || len(page.Events) != 1 {
+		t.Fatalf("explicit terminal events = %+v, error = %v", page.Events, err)
+	}
+	observation, ok := journal.observedEventObservation(page.Events[0].EventID)
+	if !ok || observation.NativeTurnID != "turn-terminal-explicit" {
+		t.Fatalf("explicit terminal observation = %+v, found = %v", observation, ok)
+	}
+	if _, ok := state.activeTurns["turn-terminal-explicit"]; ok {
+		t.Fatal("explicit terminal turn remained active")
+	}
+	if _, ok := state.activeTurns["turn-other-explicit"]; !ok {
+		t.Fatal("explicit terminal event removed an unrelated active turn")
+	}
+}
+
+func TestAdapterReversesScopedApprovalIDToExactNativeRequest(t *testing.T) {
+	journal := openTestJournal(t)
+	if err := journal.RecordSessionAlias(SessionAlias{
+		PlatformSessionID: "platform-approval-scope",
+		AdapterSessionID:  "adapter-approval-scope",
+		ExternalThreadRef: "thread-approval-scope",
+		Generation:        "generation-approval-scope",
+		CommandID:         "create-approval-scope",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state := &adapterSessionState{
+		session:        protocol.AdapterSession{SessionID: "adapter-approval-scope", ExternalThreadRef: "thread-approval-scope"},
+		gatewaySession: protocol.GatewaySession{Generation: "generation-approval-scope"},
+	}
+	adapter := &Adapter{journal: journal}
+	scoped, err := ScopedNativeApprovalID("platform-approval-scope", "generation-approval-scope", json.RawMessage(`41`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(scoped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.resolveScopedApprovalRequestID(state, encoded); string(got) != "41" {
+		t.Fatalf("scoped approval native request = %s, want 41", got)
+	}
+	if got := adapter.resolveScopedApprovalRequestID(state, json.RawMessage(`"41"`)); string(got) != `"41"` {
+		t.Fatalf("unscoped approval request changed = %s", got)
 	}
 }
 

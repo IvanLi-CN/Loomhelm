@@ -176,7 +176,7 @@ func writeRunControlError(w http.ResponseWriter, r *http.Request, err error) {
 		status, code, message = http.StatusUnauthorized, protocol.ErrorCodeUnauthorized, "authentication required"
 	case errors.Is(err, auth.ErrForbidden):
 		status, code, message = http.StatusForbidden, protocol.ErrorCodeUnauthorized, "operation is not authorized"
-	case errors.Is(err, auth.ErrNotFound), errors.Is(err, runs.ErrRunNotFound), errors.Is(err, sessions.ErrSessionNotFound):
+	case errors.Is(err, auth.ErrNotFound), errors.Is(err, runs.ErrRunNotFound), errors.Is(err, sessions.ErrSessionNotFound), errors.Is(err, approvals.ErrApprovalNotFound):
 		status, code, message = http.StatusNotFound, protocol.ErrorCodeNotFound, "run resource is unavailable"
 	case errors.Is(err, protocol.ErrUnknownCommandResult), errors.Is(err, runs.ErrRunUnknown):
 		status, code, message = http.StatusConflict, protocol.ErrorCodeUnknownResult, "command result requires reconciliation"

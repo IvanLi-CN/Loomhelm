@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	connectorruntime "github.com/IvanLi-CN/Loomhelm/internal/connector"
+	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
@@ -66,8 +68,12 @@ func TestNormalizeGatewayApprovalAcceptsNativeApprovalPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeGatewayApproval() error = %v", err)
 	}
-	if request.ID != "41" || request.RunID != runID || request.SessionID != event.SessionID || request.Generation != "generation-native" {
+	if request.ID == "41" || request.RunID != runID || request.SessionID != event.SessionID || request.Generation != "generation-native" {
 		t.Fatalf("normalized native approval identity = %+v", request.NewInput)
+	}
+	nativeRequestID, ok := connectorruntime.DecodeScopedNativeApprovalID(request.ID, event.SessionID, "generation-native")
+	if !ok || string(nativeRequestID) != "41" {
+		t.Fatalf("normalized native approval scope = %q, decoded = %s, found = %v", request.ID, nativeRequestID, ok)
 	}
 	if request.Kind != "command" || request.Revision != 1 || request.Summary != "/bin/zsh -lc 'printf ok'" {
 		t.Fatalf("normalized native approval metadata = %+v", request.NewInput)
@@ -75,6 +81,42 @@ func TestNormalizeGatewayApprovalAcceptsNativeApprovalPayload(t *testing.T) {
 	var contextPayload map[string]json.RawMessage
 	if err := json.Unmarshal(request.Context, &contextPayload); err != nil || contextPayload["turnId"] == nil {
 		t.Fatalf("native approval context = %s, error = %v", request.Context, err)
+	}
+}
+
+func TestNormalizeNativeApprovalScopesSessionGenerationAndJSONType(t *testing.T) {
+	runID := "run-platform-native-scope"
+	base := protocol.Event{
+		EventID:    "event-approval-native-scope",
+		OccurredAt: "2026-10-25T06:00:00Z",
+		SessionID:  "session-native-scope",
+		RunID:      &runID,
+		Type:       protocol.EventTypeApprovalRequested,
+	}
+	makeEvent := func(eventID, session, rawID string) protocol.Event {
+		event := base
+		event.EventID = eventID
+		event.SessionID = session
+		event.Payload = json.RawMessage(`{"jsonrpc":"2.0","id":` + rawID + `,"method":"item/commandExecution/requestApproval","params":{"turnId":"turn-native-scope","item":{"type":"commandExecution"}}}`)
+		return event
+	}
+	numeric, err := normalizeGatewayApproval(makeEvent("numeric", "session-native-scope", "41"), "generation-native-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stringID, err := normalizeGatewayApproval(makeEvent("string", "session-native-scope", `"41"`), "generation-native-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSession, err := normalizeGatewayApproval(makeEvent("other-session", "session-other", "41"), "generation-native-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if numeric.ID == stringID.ID || numeric.ID == otherSession.ID || stringID.ID == otherSession.ID {
+		t.Fatalf("scoped approval IDs collided: numeric=%q string=%q other_session=%q", numeric.ID, stringID.ID, otherSession.ID)
+	}
+	if decoded, ok := connectorruntime.DecodeScopedNativeApprovalID(numeric.ID, "session-native-scope", "generation-native-scope"); !ok || string(decoded) != "41" {
+		t.Fatalf("numeric native request reverse mapping = %s, found = %v", decoded, ok)
 	}
 }
 
@@ -152,6 +194,36 @@ func TestAcknowledgePendingSessionCreatedRequiresMatchingPendingHost(t *testing.
 				t.Fatalf("acknowledgePendingSessionCreated() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+type recordingGatewayEventAppender struct {
+	event events.AppendResult
+	calls int
+	err   error
+}
+
+func (a *recordingGatewayEventAppender) Append(_ context.Context, event protocol.Event) (events.AppendResult, error) {
+	a.calls++
+	a.event.Event = event
+	return a.event, a.err
+}
+
+func TestPersistPendingSessionCreatedBeforeHostCursorAck(t *testing.T) {
+	appender := &recordingGatewayEventAppender{}
+	event := protocol.Event{
+		EventID:   "session-created-before-ack",
+		SessionID: "pending-session",
+		Sequence:  41,
+		Cursor:    "adapter-cursor-41",
+		Type:      protocol.EventTypeSessionCreated,
+		Payload:   json.RawMessage(`{"thread":"native-thread"}`),
+	}
+	if err := persistPendingSessionCreated(context.Background(), appender, event); err != nil {
+		t.Fatal(err)
+	}
+	if appender.calls != 1 || appender.event.Event.Sequence != 0 || appender.event.Event.EventID != event.EventID || string(appender.event.Event.Payload) != string(event.Payload) {
+		t.Fatalf("pending session-created persistence = %+v, calls = %d", appender.event.Event, appender.calls)
 	}
 }
 

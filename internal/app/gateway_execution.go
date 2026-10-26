@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
+	connectorruntime "github.com/IvanLi-CN/Loomhelm/internal/connector"
+	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -27,10 +29,15 @@ var (
 )
 
 type gatewayExecutionTransport struct {
-	gateway  *gateway.Server
-	sessions *sessions.Store
-	runs     *runs.Store
-	now      func() time.Time
+	gateway    *gateway.Server
+	sessions   *sessions.Store
+	runs       *runs.Store
+	eventStore gatewayEventAppender
+	now        func() time.Time
+}
+
+type gatewayEventAppender interface {
+	Append(context.Context, protocol.Event) (events.AppendResult, error)
 }
 
 func (t *gatewayExecutionTransport) SendCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
@@ -86,6 +93,9 @@ func (t *gatewayExecutionTransport) HandleEvent(ctx context.Context, connection 
 		return fmt.Errorf("resolve gateway event session access: %w", err)
 	}
 	if acknowledgePendingSessionCreated(access, connection, event) {
+		if err := persistPendingSessionCreated(ctx, t.eventStore, event); err != nil {
+			return fmt.Errorf("persist pending session-created event: %w", err)
+		}
 		return nil
 	}
 	if !access.Confirmed || access.HostID == "" || access.HostID != connection.HostID {
@@ -114,6 +124,15 @@ func (t *gatewayExecutionTransport) HandleEvent(ctx context.Context, connection 
 		return err
 	}
 	return nil
+}
+
+func persistPendingSessionCreated(ctx context.Context, appender gatewayEventAppender, event protocol.Event) error {
+	if appender == nil {
+		return runs.ErrControlServiceUnavailable
+	}
+	event.Sequence = 0
+	_, err := appender.Append(ctx, event)
+	return err
 }
 
 func acknowledgePendingSessionCreated(access sessions.SessionAccess, connection hosts.Connection, event protocol.Event) bool {
@@ -262,7 +281,10 @@ func normalizeNativeGatewayApproval(event protocol.Event, generation string) (ap
 	if len(bytes.TrimSpace(requestID)) == 0 || bytes.Equal(bytes.TrimSpace(requestID), []byte("null")) {
 		requestID = params.RequestID
 	}
-	approvalID, err := nativeApprovalID(requestID)
+	if _, err := nativeApprovalID(requestID); err != nil {
+		return approvals.CreateRequest{}, fmt.Errorf("%w: %v: %w", errGatewayApprovalPayload, err, hosts.ErrInvalid)
+	}
+	approvalID, err := connectorruntime.ScopedNativeApprovalID(event.SessionID, generation, requestID)
 	if err != nil {
 		return approvals.CreateRequest{}, fmt.Errorf("%w: %v: %w", errGatewayApprovalPayload, err, hosts.ErrInvalid)
 	}

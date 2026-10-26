@@ -496,7 +496,7 @@ func (j *Journal) AppendEvent(event protocol.Event) (protocol.Event, error) {
 	if event.Sequence > j.sequenceBySession[event.SessionID] {
 		j.sequenceBySession[event.SessionID] = event.Sequence
 	}
-	j.updatePendingApprovalLocked(event)
+	j.updatePendingApprovalLocked(event, j.sessionGenerationLocked(event.SessionID))
 	return cloneEvent(event), nil
 }
 
@@ -1153,7 +1153,7 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if event.Sequence > j.sequenceBySession[event.SessionID] {
 			j.sequenceBySession[event.SessionID] = event.Sequence
 		}
-		j.updatePendingApprovalLocked(event)
+		j.updatePendingApprovalLocked(event, j.sessionGenerationLocked(event.SessionID))
 	case "session":
 		if record.Session == nil || record.Session.SessionID == "" || record.Session.ExternalThreadRef == "" {
 			return fmt.Errorf("%w: incomplete session record", ErrJournalCorrupt)
@@ -1243,6 +1243,16 @@ func (j *Journal) applyRecord(record journalRecord) error {
 		if observed.Event.Sequence > j.sequenceBySession[observed.Event.SessionID] {
 			j.sequenceBySession[observed.Event.SessionID] = observed.Event.Sequence
 		}
+		approvalEvent := cloneEvent(observed.Event)
+		if observed.Observation.NativeTurnID != "" {
+			approvalEvent.RunID = stringPointer(observed.Observation.NativeTurnID)
+		}
+		if approvalEvent.Type == protocol.EventTypeApprovalResolved && (approvalEvent.RunID == nil || strings.TrimSpace(*approvalEvent.RunID) == "") {
+			if runID := j.approvalRunIDLockedForGeneration(approvalEvent, observed.Observation.Generation); runID != "" {
+				approvalEvent.RunID = &runID
+			}
+		}
+		j.updatePendingApprovalLocked(approvalEvent, observed.Observation.Generation)
 	case "session_start":
 		if record.SessionStart == nil {
 			return fmt.Errorf("%w: incomplete session start intent", ErrJournalCorrupt)
@@ -1373,7 +1383,14 @@ func (j *Journal) poisonLocked(err error) error {
 	return fmt.Errorf("journal write path is unusable: %w", j.fatalErr)
 }
 
-func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
+func (j *Journal) sessionGenerationLocked(sessionID string) string {
+	if session, ok := j.sessions[sessionID]; ok {
+		return session.Generation
+	}
+	return ""
+}
+
+func (j *Journal) updatePendingApprovalLocked(event protocol.Event, generation string) {
 	if event.Type != protocol.EventTypeApprovalRequested && event.Type != protocol.EventTypeApprovalResolved && event.Type != protocol.EventTypeItemCompleted {
 		return
 	}
@@ -1411,10 +1428,6 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		return
 	}
 	if event.Type == protocol.EventTypeApprovalRequested {
-		generation := ""
-		if session, ok := j.sessions[event.SessionID]; ok {
-			generation = session.Generation
-		}
 		itemID := message.Params.Item.ID
 		if itemID == "" {
 			itemID = message.Params.ItemID
@@ -1454,7 +1467,7 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 			return
 		}
 		if claim, claimed := j.approvalClaims[key]; claimed {
-			if !approvalClaimMatches(claim, pending) || !approvalPendingMatchesCurrentGeneration(j.sessions, pending) {
+			if !approvalClaimMatches(claim, pending) || !approvalPendingMatchesGeneration(j.sessions, pending, generation) {
 				delete(j.pendingApprovals, key)
 				delete(j.approvalClaims, key)
 				return
@@ -1479,7 +1492,7 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 		for requestKey, approval := range j.pendingApprovals {
 			if approval.SessionID == event.SessionID && approval.ItemID != "" && approval.ItemID == message.Params.Item.ID && approvalEventMatchesPending(event, approval, message.Params.TurnID) {
 				if claim, claimed := j.approvalClaims[requestKey]; claimed {
-					if !approvalClaimMatches(claim, approval) || !approvalPendingMatchesCurrentGeneration(j.sessions, approval) {
+					if !approvalClaimMatches(claim, approval) || !approvalPendingMatchesGeneration(j.sessions, approval, generation) {
 						delete(j.pendingApprovals, requestKey)
 						delete(j.approvalClaims, requestKey)
 						continue
@@ -1501,13 +1514,17 @@ func (j *Journal) updatePendingApprovalLocked(event protocol.Event) {
 }
 
 func (j *Journal) approvalRunIDLocked(event protocol.Event) string {
+	return j.approvalRunIDLockedForGeneration(event, j.sessionGenerationLocked(event.SessionID))
+}
+
+func (j *Journal) approvalRunIDLockedForGeneration(event protocol.Event, generation string) string {
 	requestID := approvalRequestIDFromPayload(event.Payload)
 	key := approvalKey(event.SessionID, requestID)
 	if key == "" {
 		return ""
 	}
 	pending, ok := j.pendingApprovals[key]
-	if !ok || !approvalPendingMatchesCurrentGeneration(j.sessions, pending) {
+	if !ok || !approvalPendingMatchesGeneration(j.sessions, pending, generation) {
 		return ""
 	}
 	if pending.RunID != "" {
@@ -1532,7 +1549,7 @@ func approvalClaimMatches(claim approvalClaimRecord, pending PendingApproval) bo
 	if claim.SessionID != pending.SessionID || approvalIDIdentity(claim.RequestID) != approvalIDIdentity(pending.RequestID) {
 		return false
 	}
-	if pending.Generation != "" && claim.Generation != pending.Generation {
+	if claim.Generation != "" && pending.Generation != "" && claim.Generation != pending.Generation {
 		return false
 	}
 	if claim.RunID != "" && pending.RunID != "" && claim.RunID != pending.RunID {
@@ -1556,6 +1573,13 @@ func approvalPendingMatchesCurrentGeneration(sessions map[string]journalSession,
 		return false
 	}
 	return session.Generation == pending.Generation
+}
+
+func approvalPendingMatchesGeneration(sessions map[string]journalSession, pending PendingApproval, generation string) bool {
+	if strings.TrimSpace(generation) != "" {
+		return pending.Generation == "" || pending.Generation == generation
+	}
+	return approvalPendingMatchesCurrentGeneration(sessions, pending)
 }
 
 func approvalKey(sessionID string, requestID json.RawMessage) string {

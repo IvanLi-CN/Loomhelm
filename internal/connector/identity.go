@@ -1,9 +1,11 @@
 package connector
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -25,6 +27,83 @@ var (
 	ErrIdentityConflict = errors.New("durable execution identity conflicts with an existing binding")
 	ErrIdentityNotFound = errors.New("durable execution identity is not present")
 )
+
+const scopedNativeApprovalIDPrefix = "loomhelm-approval-v1-"
+
+type scopedNativeApprovalIdentity struct {
+	SessionID  string          `json:"session_id"`
+	Generation string          `json:"generation"`
+	RequestID  json.RawMessage `json:"request_id"`
+}
+
+// ScopedNativeApprovalID makes a platform approval identity opaque while
+// retaining the complete session, generation, and typed native request ID
+// needed to route a later decision back to the exact app-server request.
+func ScopedNativeApprovalID(sessionID, generation string, requestID json.RawMessage) (string, error) {
+	sessionID = normalizeIdentityPart(sessionID)
+	generation = normalizeIdentityPart(generation)
+	requestID = append(json.RawMessage(nil), requestID...)
+	if err := requireIdentityParts("scoped approval", sessionID, generation); err != nil {
+		return "", err
+	}
+	if !validNativeApprovalRequestID(requestID) {
+		return "", errors.New("scoped approval request id must be a non-empty string or number")
+	}
+	identity, err := json.Marshal(scopedNativeApprovalIdentity{
+		SessionID:  sessionID,
+		Generation: generation,
+		RequestID:  requestID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode scoped approval identity: %w", err)
+	}
+	return scopedNativeApprovalIDPrefix + base64.RawURLEncoding.EncodeToString(identity), nil
+}
+
+// DecodeScopedNativeApprovalID reverses ScopedNativeApprovalID only when the
+// supplied current adapter alias exactly matches the encoded platform scope.
+func DecodeScopedNativeApprovalID(value, sessionID, generation string) (json.RawMessage, bool) {
+	if !strings.HasPrefix(value, scopedNativeApprovalIDPrefix) {
+		return nil, false
+	}
+	encoded := strings.TrimPrefix(value, scopedNativeApprovalIDPrefix)
+	identityBytes, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, false
+	}
+	var identity scopedNativeApprovalIdentity
+	if err := json.Unmarshal(identityBytes, &identity); err != nil {
+		return nil, false
+	}
+	if identity.SessionID != normalizeIdentityPart(sessionID) || identity.Generation != normalizeIdentityPart(generation) || !validNativeApprovalRequestID(identity.RequestID) {
+		return nil, false
+	}
+	return append(json.RawMessage(nil), identity.RequestID...), true
+}
+
+func validNativeApprovalRequestID(requestID json.RawMessage) bool {
+	value := strings.TrimSpace(string(requestID))
+	if value == "" || value == "null" || !json.Valid(requestID) {
+		return false
+	}
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return false
+	}
+	switch value := decoded.(type) {
+	case string:
+		return strings.TrimSpace(value) != ""
+	case json.Number:
+		return value.String() != ""
+	default:
+		return false
+	}
+}
 
 // SessionAlias is the private, durable relationship between the platform
 // session and one host-owned adapter session. The two session identities are
@@ -763,11 +842,11 @@ func (j *Journal) appendObservedEvent(event protocol.Event, observation EventObs
 		j.sequenceBySession[event.SessionID] = event.Sequence
 	}
 	if approvalEvent.Type == protocol.EventTypeApprovalResolved && (approvalEvent.RunID == nil || strings.TrimSpace(*approvalEvent.RunID) == "") {
-		if runID := j.approvalRunIDLocked(approvalEvent); runID != "" {
+		if runID := j.approvalRunIDLockedForGeneration(approvalEvent, observation.Generation); runID != "" {
 			approvalEvent.RunID = &runID
 		}
 	}
-	j.updatePendingApprovalLocked(approvalEvent)
+	j.updatePendingApprovalLocked(approvalEvent, observation.Generation)
 	mapped, delivered := j.materializedObservedEventLocked(observed)
 	return cloneEvent(event), mapped, delivered, nil
 }

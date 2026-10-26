@@ -864,6 +864,7 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 		return a.rejectCommand(command, ack, err)
 	}
 	requestID := firstRaw(payload, "approval_id", "request_id", "server_request_id", "rpc_id")
+	requestID = a.resolveScopedApprovalRequestID(state, requestID)
 	runID := valueOrEmpty(command.RunID)
 	if runID == "" {
 		runID = firstString(payload, "run_id", "turn_id")
@@ -975,6 +976,25 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 		return ack, err
 	}
 	return ack, nil
+}
+
+func (a *Adapter) resolveScopedApprovalRequestID(state *adapterSessionState, requestID json.RawMessage) json.RawMessage {
+	if a == nil || a.journal == nil || state == nil || len(requestID) == 0 {
+		return requestID
+	}
+	var value string
+	if err := json.Unmarshal(requestID, &value); err != nil {
+		return requestID
+	}
+	alias, ok := a.journal.SessionAliasForAdapter(state.session.SessionID, state.session.ExternalThreadRef, state.gatewaySession.Generation)
+	if !ok {
+		return requestID
+	}
+	decoded, ok := DecodeScopedNativeApprovalID(value, alias.PlatformSessionID, alias.Generation)
+	if !ok {
+		return requestID
+	}
+	return decoded
 }
 
 func (a *Adapter) interruptRun(ctx context.Context, state *adapterSessionState, command protocol.Command, ack protocol.CommandAck) (protocol.CommandAck, error) {
@@ -1204,9 +1224,6 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error 
 	}
 	eventType := eventTypeForMethod(message.Method, message)
 	runID := runIDFromMessage(message)
-	if runID == "" && isTerminalEventType(eventType) {
-		runID = a.activeTurn(state, "")
-	}
 	if eventType == protocol.EventTypeApprovalResolved && runID == "" {
 		runID = a.approvalRunID(state, message)
 	}
