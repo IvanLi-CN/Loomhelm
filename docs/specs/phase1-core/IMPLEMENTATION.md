@@ -132,7 +132,11 @@ The current U02 Task Evidence Set is the owner-confirmed five-image task-form se
 
 ![Project tasks on the mobile viewport](assets/project-tasks-mobile-light.png)
 
-![Task read recovery with a reconciliation barrier](assets/task-read-recovery-error.png)
+The owner-confirmed U02 recovery evidence is bound to source commit `0a5fc9092fabaa246a54db327d2ed3a4fb886091` and `storybook_canvas` / `mock-only` element captures taken after refresh and explicit acknowledgement. Runtime proof remains bound to that source commit; this metadata-only registration does not claim a new runtime execution. The exact task and project captures are current-only against base `5666655ab69980265166e8ef8df46a9493f60568` because those destination assets were absent at that base, and the owner confirmed both current images as accurate.
+
+![Task read recovery after explicit acknowledgement](assets/task-read-recovery-error.png)
+
+![Project read recovery after explicit acknowledgement](assets/project-read-recovery-error.png)
 
 ## Rollout and Compatibility
 
