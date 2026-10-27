@@ -2,6 +2,7 @@ package runs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -112,6 +113,74 @@ func TestPersistentRunWorkerReconcilesExplicitObservations(t *testing.T) {
 	}
 	if afterDuplicate != terminal {
 		t.Fatalf("duplicate terminal job changed run: before=%+v after=%+v", terminal, afterDuplicate)
+	}
+}
+
+func TestPersistentRunWorkerDoesNotInferNativeStartFromCommandAck(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, commandState := range []protocol.CommandState{
+		protocol.CommandStateExecuting,
+		protocol.CommandStateSucceeded,
+	} {
+		ids := executionTestIDs()
+		cleanupExecutionRows(t, &db, ids)
+		generation := "worker-native-start-" + string(commandState)
+		if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+			ID:                ids.session,
+			Path:              protocol.SessionPathNew,
+			ExternalThreadRef: ids.thread,
+			Generation:        generation,
+		}); err != nil {
+			t.Fatalf("create %s session: %v", commandState, err)
+		}
+
+		runID := ids.run
+		command := protocol.Command{
+			CommandID: ids.command,
+			Kind:      protocol.CommandKindRunSend,
+			Payload:   json.RawMessage(`{"prompt":"ack without native start"}`),
+			RunID:     &runID,
+			SessionID: ids.session,
+		}
+		store := NewStore(db.Pool())
+		if _, _, err := store.AcceptRun(ctx, CommandIntent{Command: command, Generation: generation}, NewRunInput{
+			ID:         ids.run,
+			SessionID:  ids.session,
+			CommandID:  ids.command,
+			Generation: generation,
+		}); err != nil {
+			t.Fatalf("accept %s run: %v", commandState, err)
+		}
+		if _, err := store.RecordExactCommandAck(ctx, protocol.CommandAck{
+			CommandID: ids.command,
+			RunID:     &runID,
+			State:     commandState,
+		}); err != nil {
+			t.Fatalf("record %s command ACK: %v", commandState, err)
+		}
+
+		worker := &RunWorker{Store: store, Observer: NewDurableObserver(store)}
+		err := worker.Work(ctx, &river.Job[RunJobArgs]{Args: RunJobArgs{RunID: ids.run, Generation: generation}})
+		if !errors.Is(err, ErrObserverUnavailable) {
+			t.Fatalf("%s worker error = %v, want retryable observer unavailability", commandState, err)
+		}
+		current, err := store.GetRun(ctx, ids.run)
+		if err != nil {
+			t.Fatalf("read %s run after ACK-only observation: %v", commandState, err)
+		}
+		if current.Status != protocol.RunStatusPending || current.LastCursor != "" {
+			t.Fatalf("%s ACK-only observation changed run = %+v", commandState, current)
+		}
+		page, err := store.ReadEvents(ctx, protocol.EventQuery{SessionID: ids.session, RunID: ids.run, Limit: 10})
+		if err != nil {
+			t.Fatalf("read %s native events: %v", commandState, err)
+		}
+		if len(page.Events) != 0 {
+			t.Fatalf("%s ACK-only observation persisted native events = %+v", commandState, page.Events)
+		}
 	}
 }
 

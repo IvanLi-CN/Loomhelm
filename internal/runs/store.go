@@ -124,17 +124,19 @@ func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease
 		return accepted, nil
 	}
 	runID := *intent.Command.RunID
+	if lease != nil {
+		// acquireLeaseTx establishes session -> run -> lease order before the
+		// explicit run lock below.
+		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
+			return AcceptResult{}, err
+		}
+	}
 	current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, runID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AcceptResult{}, ErrRunNotFound
 	}
 	if err != nil {
 		return AcceptResult{}, fmt.Errorf("lock run for interrupt acceptance: %w", err)
-	}
-	if lease != nil {
-		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
-			return AcceptResult{}, err
-		}
 	}
 	if current.SessionID != intent.Command.SessionID {
 		return AcceptResult{}, fmt.Errorf("%w: run %q belongs to session %q", ErrRunConflict, current.ID, current.SessionID)
@@ -416,9 +418,6 @@ func (s *Store) transitionCommand(ctx context.Context, commandID, generation str
 		if err := leaseMatchesCommand(record, *lease); err != nil {
 			return CommandRecord{}, err
 		}
-		if err := checkLeaseTx(ctx, tx, *lease); err != nil {
-			return CommandRecord{}, err
-		}
 	}
 	if !validCommandState(next) {
 		return CommandRecord{}, fmt.Errorf("%w: unsupported command state %q", ErrCommandTransition, next)
@@ -545,13 +544,29 @@ func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generat
 	}
 
 	runID := optionalRunID(record.Intent.Command.RunID)
-	if runID != "" && !isTerminalCommandState(record.State) {
+	if runID != "" {
+		if lease != nil {
+			if err := lockLeaseBinding(ctx, tx, *lease); err != nil {
+				return CommandRecord{}, err
+			}
+		}
 		current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, runID))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return CommandRecord{}, ErrRunNotFound
 		}
 		if err != nil {
 			return CommandRecord{}, fmt.Errorf("lock associated run for unknown transition: %w", err)
+		}
+		if lease != nil {
+			if err := checkLeaseTx(ctx, tx, *lease); err != nil {
+				return CommandRecord{}, err
+			}
+		}
+		if isTerminalCommandState(record.State) {
+			if err := tx.Commit(ctx); err != nil {
+				return CommandRecord{}, fmt.Errorf("commit terminal command and run lookup: %w", err)
+			}
+			return record, nil
 		}
 		identityMatches := current.SessionID == record.Intent.Command.SessionID && current.Generation == record.Intent.Generation
 		if record.Intent.Command.Kind == protocol.CommandKindRunSend {
@@ -1013,6 +1028,13 @@ func (s *Store) transitionRunExpectedWithFence(ctx context.Context, runID string
 		return Run{}, fmt.Errorf("begin run transition: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if lease != nil {
+		// A leased transition participates in the same session -> run -> lease
+		// order as admission and event application.
+		if err := lockLeaseBinding(ctx, tx, *lease); err != nil {
+			return Run{}, err
+		}
+	}
 	current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, runID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrRunNotFound
@@ -1092,9 +1114,9 @@ func checkLeaseTx(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity)
 	if err := validateLeaseIdentity(identity); err != nil {
 		return err
 	}
-	var marker int
+	var expiresAt time.Time
 	err := tx.QueryRow(ctx, `
-		SELECT 1
+		SELECT expires_at
 		FROM execution_control_leases
 		WHERE lease_key = $1
 		  AND session_id = $2
@@ -1103,14 +1125,20 @@ func checkLeaseTx(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity)
 		  AND owner_id = $5
 		  AND candidate_source_sha = $6
 		  AND artifact_digest = $7
-		  AND expires_at > CURRENT_TIMESTAMP
 		FOR SHARE
-	`, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest).Scan(&marker)
+	`, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest).Scan(&expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrLeaseLost
 	}
 	if err != nil {
 		return fmt.Errorf("check control lease for run transition: %w", err)
+	}
+	now, err := databaseClock(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !expiresAt.After(now) {
+		return ErrLeaseLost
 	}
 	return nil
 }

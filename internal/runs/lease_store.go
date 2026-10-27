@@ -95,10 +95,14 @@ func acquireLeaseTx(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentit
 	if err != nil {
 		return ControlLease{}, err
 	}
-	if found && current.ExpiresAt.After(time.Now().UTC()) && !sameLeaseIdentity(current.DurableLeaseIdentity, identity) {
+	now, err := databaseClock(ctx, tx)
+	if err != nil {
+		return ControlLease{}, err
+	}
+	if found && current.ExpiresAt.After(now) && !sameLeaseIdentity(current.DurableLeaseIdentity, identity) {
 		return ControlLease{}, fmt.Errorf("%w: lease %q is owned by another identity", ErrLeaseHeld, identity.LeaseKey)
 	}
-	return writeLease(ctx, tx, identity, ttl)
+	return writeLease(ctx, tx, identity, ttl, now)
 }
 
 func (s *Store) RenewLease(ctx context.Context, identity DurableLeaseIdentity, configs ...LeaseStoreConfig) (ControlLease, error) {
@@ -115,11 +119,27 @@ func (s *Store) RenewLease(ctx context.Context, identity DurableLeaseIdentity, c
 	if ttl <= 0 {
 		return ControlLease{}, fmt.Errorf("%w: lease TTL must be positive", ErrInvalidLease)
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ControlLease{}, fmt.Errorf("begin control lease renewal: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	current, err := lockLeaseForIdentity(ctx, tx, identity, "FOR UPDATE")
+	if err != nil {
+		return ControlLease{}, err
+	}
+	now, err := databaseClock(ctx, tx)
+	if err != nil {
+		return ControlLease{}, err
+	}
+	if !current.ExpiresAt.After(now) {
+		return ControlLease{}, ErrLeaseLost
+	}
 	var lease ControlLease
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		UPDATE execution_control_leases
-		SET heartbeat_at = CURRENT_TIMESTAMP,
-			 expires_at = CURRENT_TIMESTAMP + $8 * INTERVAL '1 second'
+		SET heartbeat_at = $8::timestamptz,
+			expires_at = $8::timestamptz + $9 * INTERVAL '1 second'
 		WHERE lease_key = $1
 		  AND session_id = $2
 		  AND run_id = $3
@@ -127,11 +147,10 @@ func (s *Store) RenewLease(ctx context.Context, identity DurableLeaseIdentity, c
 		  AND owner_id = $5
 		  AND candidate_source_sha = $6
 		  AND artifact_digest = $7
-		  AND expires_at > CURRENT_TIMESTAMP
 		RETURNING lease_key, session_id, run_id, generation, owner_id,
 		          candidate_source_sha, artifact_digest, acquired_at,
 		          heartbeat_at, expires_at
-	`, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest, ttl.Seconds()).Scan(
+	`, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest, now, ttl.Seconds()).Scan(
 		&lease.LeaseKey, &lease.SessionID, &lease.RunID, &lease.Generation,
 		&lease.OwnerID, &lease.CandidateSourceSHA, &lease.ArtifactDigest,
 		&lease.AcquiredAt, &lease.HeartbeatAt, &lease.ExpiresAt,
@@ -141,6 +160,9 @@ func (s *Store) RenewLease(ctx context.Context, identity DurableLeaseIdentity, c
 	}
 	if err != nil {
 		return ControlLease{}, fmt.Errorf("renew control lease: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ControlLease{}, fmt.Errorf("commit control lease renewal: %w", err)
 	}
 	return lease, nil
 }
@@ -152,30 +174,27 @@ func (s *Store) CheckLease(ctx context.Context, identity DurableLeaseIdentity) (
 	if err := validateLeaseIdentity(identity); err != nil {
 		return ControlLease{}, err
 	}
-	var lease ControlLease
-	err := s.pool.QueryRow(ctx, `
-		SELECT lease_key, session_id, run_id, generation, owner_id,
-		       candidate_source_sha, artifact_digest, acquired_at,
-		       heartbeat_at, expires_at
-		FROM execution_control_leases
-		WHERE lease_key = $1
-		  AND session_id = $2
-		  AND run_id = $3
-		  AND generation = $4
-		  AND owner_id = $5
-		  AND candidate_source_sha = $6
-		  AND artifact_digest = $7
-		  AND expires_at > CURRENT_TIMESTAMP
-	`, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest).Scan(
-		&lease.LeaseKey, &lease.SessionID, &lease.RunID, &lease.Generation,
-		&lease.OwnerID, &lease.CandidateSourceSHA, &lease.ArtifactDigest,
-		&lease.AcquiredAt, &lease.HeartbeatAt, &lease.ExpiresAt,
-	)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ControlLease{}, fmt.Errorf("begin control lease check: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	lease, err := lockLeaseForIdentity(ctx, tx, identity, "FOR SHARE")
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ControlLease{}, ErrLeaseLost
 	}
 	if err != nil {
-		return ControlLease{}, fmt.Errorf("check control lease: %w", err)
+		return ControlLease{}, err
+	}
+	now, err := databaseClock(ctx, tx)
+	if err != nil {
+		return ControlLease{}, err
+	}
+	if !lease.ExpiresAt.After(now) {
+		return ControlLease{}, ErrLeaseLost
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ControlLease{}, fmt.Errorf("commit control lease check: %w", err)
 	}
 	return lease, nil
 }
@@ -299,7 +318,43 @@ func lockLease(ctx context.Context, tx pgx.Tx, key string) (ControlLease, bool, 
 	return lease, true, nil
 }
 
-func writeLease(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity, ttl time.Duration) (ControlLease, error) {
+func databaseClock(ctx context.Context, tx pgx.Tx) (time.Time, error) {
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return time.Time{}, fmt.Errorf("read database clock for control lease: %w", err)
+	}
+	return now.UTC(), nil
+}
+
+func lockLeaseForIdentity(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity, lockClause string) (ControlLease, error) {
+	var lease ControlLease
+	err := tx.QueryRow(ctx, `
+		SELECT lease_key, session_id, run_id, generation, owner_id,
+		       candidate_source_sha, artifact_digest, acquired_at,
+		       heartbeat_at, expires_at
+		FROM execution_control_leases
+		WHERE lease_key = $1
+		  AND session_id = $2
+		  AND run_id = $3
+		  AND generation = $4
+		  AND owner_id = $5
+		  AND candidate_source_sha = $6
+		  AND artifact_digest = $7
+		`+lockClause, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest).Scan(
+		&lease.LeaseKey, &lease.SessionID, &lease.RunID, &lease.Generation,
+		&lease.OwnerID, &lease.CandidateSourceSHA, &lease.ArtifactDigest,
+		&lease.AcquiredAt, &lease.HeartbeatAt, &lease.ExpiresAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ControlLease{}, ErrLeaseLost
+		}
+		return ControlLease{}, fmt.Errorf("lock control lease identity: %w", err)
+	}
+	return lease, nil
+}
+
+func writeLease(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity, ttl time.Duration, now time.Time) (ControlLease, error) {
 	var lease ControlLease
 	query := `
 		INSERT INTO execution_control_leases (
@@ -307,8 +362,8 @@ func writeLease(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity, t
 			candidate_source_sha, artifact_digest, acquired_at,
 			heartbeat_at, expires_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP,
-		        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + $8 * INTERVAL '1 second')
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz,
+		        $8::timestamptz, $8::timestamptz + $9 * INTERVAL '1 second')
 		ON CONFLICT (lease_key) DO UPDATE SET
 			session_id = EXCLUDED.session_id,
 			run_id = EXCLUDED.run_id,
@@ -316,14 +371,14 @@ func writeLease(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity, t
 			owner_id = EXCLUDED.owner_id,
 			candidate_source_sha = EXCLUDED.candidate_source_sha,
 			artifact_digest = EXCLUDED.artifact_digest,
-			acquired_at = CURRENT_TIMESTAMP,
-			heartbeat_at = CURRENT_TIMESTAMP,
+			acquired_at = EXCLUDED.acquired_at,
+			heartbeat_at = EXCLUDED.heartbeat_at,
 			expires_at = EXCLUDED.expires_at
 		RETURNING lease_key, session_id, run_id, generation, owner_id,
 		          candidate_source_sha, artifact_digest, acquired_at,
 		          heartbeat_at, expires_at
 	`
-	err := tx.QueryRow(ctx, query, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest, ttl.Seconds()).Scan(
+	err := tx.QueryRow(ctx, query, identity.LeaseKey, identity.SessionID, identity.RunID, identity.Generation, identity.OwnerID, identity.CandidateSourceSHA, identity.ArtifactDigest, now, ttl.Seconds()).Scan(
 		&lease.LeaseKey, &lease.SessionID, &lease.RunID, &lease.Generation,
 		&lease.OwnerID, &lease.CandidateSourceSHA, &lease.ArtifactDigest,
 		&lease.AcquiredAt, &lease.HeartbeatAt, &lease.ExpiresAt,

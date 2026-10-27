@@ -1,4 +1,4 @@
-# ADR 0008: Durable approval revision history and cursor compatibility
+# ADR 0011: Durable approval revision history and cursor compatibility
 
 ## Context
 

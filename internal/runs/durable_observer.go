@@ -99,11 +99,7 @@ func (o *DurableObserver) Observe(ctx context.Context, run Run) (RunObservation,
 	if commandErr == nil {
 		switch command.State {
 		case protocol.CommandStateExecuting, protocol.CommandStateSucceeded:
-			observation.Reconciliation = protocol.ReconciliationStateConfirmed
-			observation.Status = protocol.RunStatusRunning
-			observation.Cursor = firstNonEmpty(observation.Cursor, command.EventCursor)
-			observation.Reason = "durable command fact proves dispatch without terminal run evidence"
-			return observation, nil
+			return RunObservation{}, fmt.Errorf("%w: command %q has no durable native start evidence", ErrObserverUnavailable, run.CommandID)
 		}
 	} else if !errors.Is(commandErr, ErrCommandNotFound) {
 		return RunObservation{}, fmt.Errorf("read durable run command evidence: %w", commandErr)

@@ -16,6 +16,9 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestPersistentExecutionDomainRoundTripAndFencing(t *testing.T) {
@@ -665,6 +668,272 @@ func TestPersistentOpaqueLeaseBindsSessionAndRun(t *testing.T) {
 	if _, err := store.CheckLease(ctx, secondIdentity); err != nil {
 		t.Fatalf("check second opaque lease after expiry: %v", err)
 	}
+}
+
+func TestPersistentInterruptAdmissionAndEventUseSessionRunLockOrder(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	const generation = "lock-order-generation"
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        generation,
+	}); err != nil {
+		t.Fatalf("create lock-order session: %v", err)
+	}
+	store := NewStore(db.Pool())
+	runID := ids.run
+	if _, _, err := store.AcceptRun(ctx, CommandIntent{Command: protocol.Command{
+		CommandID: ids.command,
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"lock-order fixture"}`),
+		RunID:     &runID,
+		SessionID: ids.session,
+	}, Generation: generation}, NewRunInput{
+		ID:         ids.run,
+		SessionID:  ids.session,
+		CommandID:  ids.command,
+		Generation: generation,
+	}); err != nil {
+		t.Fatalf("accept lock-order run: %v", err)
+	}
+	if _, err := store.Start(ctx, ids.run, generation, "cursor-start"); err != nil {
+		t.Fatalf("start lock-order run: %v", err)
+	}
+	lease := DurableLeaseIdentity{
+		LeaseKey:           ids.lease,
+		SessionID:          ids.session,
+		RunID:              ids.run,
+		Generation:         generation,
+		OwnerID:            "lock-order-owner",
+		CandidateSourceSHA: "lock-order-source",
+		ArtifactDigest:     "lock-order-artifact",
+	}
+	interruptCommand := protocol.Command{
+		CommandID: ids.command + "-interrupt",
+		Kind:      protocol.CommandKindRunInterrupt,
+		Payload:   json.RawMessage(`{"reason":"lock-order overlap"}`),
+		RunID:     &runID,
+		SessionID: ids.session,
+	}
+
+	blocker, err := db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lock-order advisory blocker: %v", err)
+	}
+	defer blocker.Rollback(ctx)
+	if _, err := blocker.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lease.LeaseKey); err != nil {
+		t.Fatalf("hold lock-order advisory barrier: %v", err)
+	}
+
+	acceptDone := make(chan error, 1)
+	go func() {
+		_, err := store.AcceptInterruptWithLease(ctx, CommandIntent{Command: interruptCommand, Generation: generation}, lease)
+		acceptDone <- err
+	}()
+	if err := waitForExecutionAdvisoryWaiter(ctx, db.Pool()); err != nil {
+		t.Fatalf("interrupt admission did not reach advisory barrier: %v", err)
+	}
+
+	oldOrder := false
+	lockDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(lockDeadline) {
+		locked, err := tryExecutionRowLock(ctx, db.Pool(), `SELECT 1 FROM execution_runs WHERE id = $1 FOR UPDATE NOWAIT`, ids.run)
+		if err != nil {
+			t.Fatalf("probe run lock order: %v", err)
+		}
+		if locked {
+			oldOrder = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	eventDone := make(chan error, 1)
+	go func() {
+		_, err := store.ApplyEvent(ctx, generation, protocol.Event{
+			EventID:   ids.command + "-message",
+			Cursor:    "cursor-message",
+			SessionID: ids.session,
+			RunID:     &runID,
+			Type:      protocol.EventTypeMessageDelta,
+			Source:    protocol.EventSourceHostObservation,
+			Payload:   json.RawMessage(`{"delta":"overlap"}`),
+		})
+		eventDone <- err
+	}()
+	if oldOrder {
+		if err := waitForExecutionRowLock(ctx, db.Pool(), `SELECT 1 FROM execution_sessions WHERE id = $1 FOR UPDATE NOWAIT`, ids.session); err != nil {
+			t.Fatalf("event application did not hold session before waiting on run: %v", err)
+		}
+	} else {
+		select {
+		case err := <-eventDone:
+			if err != nil {
+				t.Fatalf("event application blocked before interrupt admission released: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("event application did not complete while interrupt admission waited on lease advisory lock")
+		}
+	}
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatalf("release lock-order advisory barrier: %v", err)
+	}
+	if err := <-acceptDone; err != nil {
+		t.Fatalf("interrupt admission after lock-order overlap: %v", err)
+	}
+	if oldOrder {
+		if err := <-eventDone; err != nil {
+			t.Fatalf("event application after lock-order overlap: %v", err)
+		}
+	}
+
+	current, err := store.GetRun(ctx, ids.run)
+	if err != nil {
+		t.Fatalf("read lock-order run: %v", err)
+	}
+	if current.Interrupt != InterruptRequested {
+		t.Fatalf("lock-order run interrupt state = %q, want %q", current.Interrupt, InterruptRequested)
+	}
+}
+
+func TestPersistentLeaseUsesDatabaseClockAfterLockWait(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	const generation = "database-clock-generation"
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        generation,
+	}); err != nil {
+		t.Fatalf("create database-clock session: %v", err)
+	}
+	if _, err := NewStore(db.Pool()).CreateRun(ctx, NewRunInput{
+		ID:         ids.run,
+		SessionID:  ids.session,
+		CommandID:  ids.command,
+		Generation: generation,
+	}); err != nil {
+		t.Fatalf("create database-clock run: %v", err)
+	}
+	identity := DurableLeaseIdentity{
+		LeaseKey:           ids.lease,
+		SessionID:          ids.session,
+		RunID:              ids.run,
+		Generation:         generation,
+		OwnerID:            "database-clock-owner",
+		CandidateSourceSHA: "database-clock-source",
+		ArtifactDigest:     "database-clock-artifact",
+	}
+	blocker, err := db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin database-clock advisory blocker: %v", err)
+	}
+	defer blocker.Rollback(ctx)
+	if _, err := blocker.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, identity.LeaseKey); err != nil {
+		t.Fatalf("hold database-clock advisory barrier: %v", err)
+	}
+
+	result := make(chan struct {
+		lease ControlLease
+		err   error
+	}, 1)
+	go func() {
+		lease, err := NewStore(db.Pool()).AcquireLease(ctx, identity, LeaseStoreConfig{TTL: 250 * time.Millisecond})
+		result <- struct {
+			lease ControlLease
+			err   error
+		}{lease: lease, err: err}
+	}()
+	if err := waitForExecutionAdvisoryWaiter(ctx, db.Pool()); err != nil {
+		t.Fatalf("lease acquisition did not reach advisory barrier: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatalf("release database-clock advisory barrier: %v", err)
+	}
+	acquired := <-result
+	if acquired.err != nil {
+		t.Fatalf("acquire lease after lock wait: %v", acquired.err)
+	}
+	var databaseNow time.Time
+	if err := db.Pool().QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
+		t.Fatalf("read database clock after lease acquisition: %v", err)
+	}
+	if !acquired.lease.ExpiresAt.After(databaseNow.Add(100 * time.Millisecond)) {
+		t.Fatalf("lease expiry = %s, database now = %s; expiry was not based on post-lock database time", acquired.lease.ExpiresAt, databaseNow)
+	}
+}
+
+func waitForExecutionAdvisoryWaiter(ctx context.Context, pool *pgxpool.Pool) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var count int
+		err := pool.QueryRow(waitCtx, `
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock'
+			  AND query ILIKE '%pg_advisory_xact_lock%'
+		`).Scan(&count)
+		if err == nil && count > 0 {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if err != nil {
+				return err
+			}
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForExecutionRowLock(ctx context.Context, pool *pgxpool.Pool, query, id string) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		locked, err := tryExecutionRowLock(waitCtx, pool, query, id)
+		if err != nil {
+			return err
+		}
+		if locked {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func tryExecutionRowLock(ctx context.Context, pool *pgxpool.Pool, query, id string) (bool, error) {
+	var marker int
+	err := pool.QueryRow(ctx, query, id).Scan(&marker)
+	if err == nil || errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) && pgError.Code == "55P03" {
+		return true, nil
+	}
+	return false, err
 }
 
 func TestPersistentControllerDeduplicatesAndFreezesUnknownDelivery(t *testing.T) {

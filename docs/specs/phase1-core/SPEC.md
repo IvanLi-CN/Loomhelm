@@ -212,7 +212,7 @@ The TaskGraph image documents the current component presentation and does not es
 - [Control plane and host execution](../../adr/0001-control-plane-and-host-execution.md)
 - [Immutable candidates and state-compatible blue-green](../../adr/0002-immutable-candidates-and-blue-green.md)
 - [Versioned public protocol and reconciliation boundary](../../adr/0003-public-protocol-and-reconciliation.md)
-- [Durable approval revision history and cursor compatibility](../../adr/0008-durable-approval-revision-history.md)
+- [Durable approval revision history and cursor compatibility](../../adr/0011-durable-approval-revision-history.md)
 - [Bounded file publication and content input](../../adr/0005-bounded-file-publication-and-content-input.md)
 - [Scoped credential administration](../../adr/0006-scoped-credential-administration.md)
 - [Explicit session creation identity](../../adr/0007-explicit-session-creation-identity.md)
