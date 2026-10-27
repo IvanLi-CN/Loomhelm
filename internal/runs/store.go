@@ -312,7 +312,9 @@ func (s *Store) Lookup(ctx context.Context, platformSessionID, commandID string)
 
 // RecordExactCommandAck persists a Connector ACK as a durable fact without
 // using the command transition state machine. This is the path for a late ACK
-// after in-memory delivery state has disappeared; it never changes the Run.
+// after in-memory delivery state has disappeared. A terminal approval ACK may
+// also converge a waiting Run from an already persisted native resolution;
+// the ACK alone never proves native approval progress.
 func (s *Store) RecordExactCommandAck(ctx context.Context, platformSessionID string, ack protocol.CommandAck) (CommandRecord, error) {
 	if err := s.ready(ctx); err != nil {
 		return CommandRecord{}, err
@@ -359,6 +361,9 @@ func (s *Store) RecordExactCommandAck(ctx context.Context, platformSessionID str
 		if err := tx.Commit(ctx); err != nil {
 			return CommandRecord{}, fmt.Errorf("commit duplicate exact command ACK: %w", err)
 		}
+		if err := s.reconcileApprovalResumeAfterCommandAck(ctx, record); err != nil {
+			return record, err
+		}
 		return record, nil
 	}
 	if record.State != protocol.CommandStateUnknown && !allowedCommandTransition(record.State, effectiveState) && record.State != effectiveState {
@@ -373,7 +378,98 @@ func (s *Store) RecordExactCommandAck(ctx context.Context, platformSessionID str
 	if err := tx.Commit(ctx); err != nil {
 		return CommandRecord{}, fmt.Errorf("commit exact command ACK: %w", err)
 	}
+	if err := s.reconcileApprovalResumeAfterCommandAck(ctx, incoming); err != nil {
+		return incoming, err
+	}
 	return incoming, nil
+}
+
+func (s *Store) reconcileApprovalResumeAfterCommandAck(ctx context.Context, record CommandRecord) error {
+	if !isTerminalCommandState(record.State) || (record.Intent.Command.Kind != protocol.CommandKindRunApprove && record.Intent.Command.Kind != protocol.CommandKindRunDeny) {
+		return nil
+	}
+	runID := optionalRunID(record.Intent.Command.RunID)
+	if runID == "" {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin approval projection after exact command ACK: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := lockSessionForRunAdmission(ctx, tx, record.Intent.Command.SessionID, record.Intent.Generation); err != nil {
+		return err
+	}
+	current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, runID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrRunNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock run for approval projection after exact command ACK: %w", err)
+	}
+	if current.SessionID != record.Intent.Command.SessionID {
+		return fmt.Errorf("%w: run %q belongs to session %q", ErrRunConflict, current.ID, current.SessionID)
+	}
+	if err := current.CheckGeneration(record.Intent.Generation); err != nil {
+		return err
+	}
+	if current.Status == protocol.RunStatusWaitingApproval {
+		var event protocol.Event
+		var eventRunID *string
+		var eventType, source string
+		var payload []byte
+		err := tx.QueryRow(ctx, `
+			SELECT event_id, session_id, run_id, sequence, cursor, type, source,
+			       occurred_at, payload
+			FROM execution_events
+			WHERE session_id = $1
+			  AND run_id = $2
+			  AND type = $3
+			ORDER BY sequence DESC, event_id DESC
+			LIMIT 1
+		`, current.SessionID, current.ID, protocol.EventTypeApprovalResolved).Scan(
+			&event.EventID, &event.SessionID, &eventRunID, &event.Sequence, &event.Cursor,
+			&eventType, &source, &event.OccurredAt, &payload,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if err := tx.Commit(ctx); err != nil {
+				return fmt.Errorf("commit approval projection lookup after exact command ACK: %w", err)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read persisted approval resolution after exact command ACK: %w", err)
+		}
+		event.Type = protocol.EventType(eventType)
+		event.Source = protocol.EventSource(source)
+		event.RunID = eventRunID
+		event.Payload = append(json.RawMessage(nil), payload...)
+		updated, err := s.resumeAfterApprovalEventTx(ctx, tx, current, record.Intent.Generation, event)
+		if err != nil {
+			return err
+		}
+		if updated != current {
+			if updated.UpdatedAt == "" {
+				updated.UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
+			}
+			if updated.Status == protocol.RunStatusRunning && current.StartedAt == "" {
+				updated.StartedAt = updated.UpdatedAt
+			}
+			if terminalRunStatus(updated.Status) && current.FinishedAt == "" {
+				updated.FinishedAt = updated.UpdatedAt
+			}
+			if err := updateRunTx(ctx, tx, updated); err != nil {
+				return err
+			}
+			if err := refreshTaskProtectionTx(ctx, tx, updated.SessionID); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit approval projection after exact command ACK: %w", err)
+	}
+	return nil
 }
 
 func commandFactPresent(record CommandRecord) bool {
@@ -823,8 +919,9 @@ func (s *Store) applyObservedRunWithFence(ctx context.Context, expected Run, gen
 }
 
 // ApplyEvent appends a host observation and applies the Run state transition in
-// the same PostgreSQL transaction. A failed transition rolls back the event,
-// allowing the Gateway's cursor to remain replayable after reconnect.
+// the same PostgreSQL transaction. Invalid transitions roll back the event,
+// while ErrRunUnknown preserves the authoritative fact without reopening the
+// uncertain Run.
 func (s *Store) ApplyEvent(ctx context.Context, generation string, input protocol.Event) (protocol.Event, error) {
 	if err := s.ready(ctx); err != nil {
 		return protocol.Event{}, err
@@ -874,7 +971,10 @@ func (s *Store) ApplyEvent(ctx context.Context, generation string, input protoco
 		}
 		updated, applyErr := applyRunEvent(current, generation, appended.Event)
 		if applyErr != nil {
-			return protocol.Event{}, applyErr
+			if !errors.Is(applyErr, ErrRunUnknown) {
+				return protocol.Event{}, applyErr
+			}
+			updated = current
 		}
 		if appended.Event.Type == protocol.EventTypeApprovalResolved {
 			updated, applyErr = s.resumeAfterApprovalEventTx(ctx, tx, updated, generation, appended.Event)
@@ -939,6 +1039,24 @@ func (s *Store) resumeAfterApprovalEventTx(ctx context.Context, tx pgx.Tx, curre
 	if pendingApprovals != 0 {
 		return current, nil
 	}
+	var unconfirmedApprovalResponses int64
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM execution_commands
+		WHERE session_id = $1
+		  AND run_id = $2
+		  AND generation = $3
+		  AND kind IN ($4, $5)
+		  AND state <> $6
+	`, current.SessionID, current.ID, generation,
+		string(protocol.CommandKindRunApprove), string(protocol.CommandKindRunDeny),
+		string(protocol.CommandStateSucceeded),
+	).Scan(&unconfirmedApprovalResponses); err != nil {
+		return Run{}, fmt.Errorf("check unconfirmed approval responses for approval resolution: %w", err)
+	}
+	if unconfirmedApprovalResponses != 0 {
+		return current, nil
+	}
 	return current.ResumeAfterApproval(generation, event.Cursor)
 }
 
@@ -998,7 +1116,10 @@ func (s *Store) ApplyApprovalRequestedEvent(ctx context.Context, generation stri
 	if !appended.Deduplicated {
 		updated, applyErr := applyRunEvent(current, generation, appended.Event)
 		if applyErr != nil {
-			return protocol.Event{}, approvals.Approval{}, applyErr
+			if !errors.Is(applyErr, ErrRunUnknown) {
+				return protocol.Event{}, approvals.Approval{}, applyErr
+			}
+			updated = current
 		}
 		if updated != current {
 			if updated.UpdatedAt == "" {

@@ -617,6 +617,57 @@ func TestApprovalHistoryMigratorAdoptsAtomic00012(t *testing.T) {
 	assertApprovalHistoryTriggerState(t, ctx, db, false, true)
 }
 
+func TestApprovalHistoryMigratorRejectsAtomicLayoutWithCaptureModes(t *testing.T) {
+	modes := []struct {
+		name  string
+		alter string
+		want  string
+	}{
+		{name: "origin", want: "O"},
+		{name: "always", alter: "ALTER TABLE execution_approvals ENABLE ALWAYS TRIGGER execution_approvals_history_capture", want: "A"},
+		{name: "replica", alter: "ALTER TABLE execution_approvals ENABLE REPLICA TRIGGER execution_approvals_history_capture", want: "R"},
+		{name: "disabled", alter: "ALTER TABLE execution_approvals DISABLE TRIGGER execution_approvals_history_capture", want: "D"},
+	}
+	for _, mode := range modes {
+		mode := mode
+		t.Run("adopt/"+mode.name, func(t *testing.T) {
+			db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+			installAtomicCaptureNearMiss(t, ctx, db, mode.alter)
+
+			assertApprovalHistoryTriggerState(t, ctx, db, true, true)
+			var triggerMode string
+			if err := db.Pool().QueryRow(ctx, `SELECT trigger_row.tgenabled
+				FROM pg_trigger AS trigger_row
+				JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
+				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				WHERE namespace.nspname = current_schema()
+				  AND relation.relname = 'execution_approvals'
+				  AND trigger_row.tgname = 'execution_approvals_history_capture'
+				  AND NOT trigger_row.tgisinternal`).Scan(&triggerMode); err != nil {
+				t.Fatalf("read %s capture trigger mode: %v", mode.name, err)
+			}
+			if triggerMode != mode.want {
+				t.Fatalf("%s capture trigger mode = %q, want %q", mode.name, triggerMode, mode.want)
+			}
+
+			migrator := database.NewApprovalHistoryMigrator(db.Pool())
+			if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); !errors.Is(err, database.ErrApprovalHistoryAtomicAdoption) {
+				t.Fatalf("%s-capture atomic layout error = %v, want ErrApprovalHistoryAtomicAdoption", mode.name, err)
+			}
+			var stateTable string
+			if err := db.Pool().QueryRow(ctx, `SELECT COALESCE(to_regclass(format('%I.%I', current_schema(), 'execution_approval_history_migrations'))::text, '')`).Scan(&stateTable); err != nil {
+				t.Fatalf("inspect %s-capture adoption state table: %v", mode.name, err)
+			}
+			if stateTable != "" {
+				t.Fatalf("%s-capture near miss created migration state table %q", mode.name, stateTable)
+			}
+		})
+	}
+}
+
 func TestApprovalHistoryGuardsRequireExactWriterTriggerShape(t *testing.T) {
 	shapes := []struct {
 		name       string
@@ -779,6 +830,26 @@ func applyAtomicApprovalHistoryFixture(t *testing.T, ctx context.Context, db *da
 	}
 	if _, err := db.Pool().Exec(ctx, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (12, true)`); err != nil {
 		t.Fatalf("record atomic goose version: %v", err)
+	}
+}
+
+func installAtomicCaptureNearMiss(t *testing.T, ctx context.Context, db *database.DB, alterSQL string) {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate capture near-miss fixture")
+	}
+	fixtureSQL, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "testdata", "atomic_00012_enabled_capture_near_miss.sql"))
+	if err != nil {
+		t.Fatalf("read capture near-miss fixture: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, string(fixtureSQL)); err != nil {
+		t.Fatalf("install capture near-miss fixture: %v", err)
+	}
+	if alterSQL != "" {
+		if _, err := db.Pool().Exec(ctx, alterSQL); err != nil {
+			t.Fatalf("set capture near-miss trigger mode with %q: %v", alterSQL, err)
+		}
 	}
 }
 

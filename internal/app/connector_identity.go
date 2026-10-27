@@ -416,6 +416,9 @@ func (c *Connector) reconcileCachedApprovalCommand(command, prepared protocol.Co
 	if !found {
 		return c.persistUnknownCommand(namespace, prepared.CommandID, ack, protocol.ErrUnknownCommandResult)
 	}
+	if resolution == "" || resolution == "unknown" {
+		return c.persistUnknownCommand(namespace, prepared.CommandID, ack, protocol.ErrUnknownCommandResult)
+	}
 	desired := "accept"
 	if command.Kind == protocol.CommandKindRunDeny {
 		desired = "decline"
@@ -644,6 +647,18 @@ func qualifiedOperationGeneration(operationID string) string {
 }
 
 func (c *Connector) reconcileCachedSessionStart(command protocol.Command, request protocol.CreateSessionRequest, ack protocol.CommandAck) (protocol.CommandAck, error) {
+	if ack.State == protocol.CommandStateSucceeded {
+		if alias, found := c.journal.SessionAlias(command.SessionID); found && alias.PlatformSessionID == command.SessionID && alias.CommandID == command.CommandID {
+			if link, linked, linkErr := c.journal.GatewaySessionLinkForPlatform(command.SessionID); linkErr == nil && linked &&
+				link.PlatformSessionID == alias.PlatformSessionID &&
+				link.AdapterSessionID == alias.AdapterSessionID &&
+				link.ExternalThreadRef == alias.ExternalThreadRef &&
+				link.Generation == alias.Generation &&
+				link.CommandID == alias.CommandID {
+				return ack, nil
+			}
+		}
+	}
 	namespace := connectorruntime.PlatformSessionCommandNamespace(command.SessionID)
 	nativeRequest := newSessionStartRequest(request)
 	// Recovery must resolve through the verified platform alias/link. A bare
@@ -669,6 +684,16 @@ func (c *Connector) reconcileCachedSessionStart(command protocol.Command, reques
 		ExternalThreadRef: proof.AdapterSession.ExternalThreadRef,
 		Generation:        proof.Generation,
 		Path:              protocol.SessionPathNew,
+	}
+	if c.appGateway != nil {
+		recovered, recoverErr := c.appGateway.RecoveredSession(proof.AdapterSession.ExternalThreadRef)
+		if recoverErr != nil {
+			return c.persistUnknownCommand(namespace, command.CommandID, ack, recoverErr)
+		}
+		if err := validateRecoveredGatewaySession(connectorruntime.SessionAlias{ExternalThreadRef: proof.AdapterSession.ExternalThreadRef}, recovered); err != nil {
+			return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
+		}
+		gatewaySession = recovered
 	}
 	if err := c.BindSessionIdentity(command.SessionID, command.CommandID, gatewaySession, proof.AdapterSession); err != nil {
 		return c.persistUnknownCommand(namespace, command.CommandID, ack, err)

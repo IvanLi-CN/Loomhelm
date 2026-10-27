@@ -695,6 +695,96 @@ func TestPersistentApprovalRequestedEventAtomicity(t *testing.T) {
 	}
 }
 
+func TestPersistentUnknownRunRetainsLateNativeFacts(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	runStore, approvalStore, runID := createApprovalResumeFixture(t, ctx, db, ids, false)
+	if _, err := runStore.MarkRunUnknown(ctx, runID, "1", ids.run+"-unknown-cursor", "connection closed after native start"); err != nil {
+		t.Fatalf("mark run unknown: %v", err)
+	}
+
+	runIDCopy := runID
+	lateStart := protocol.Event{
+		EventID:   ids.run + "-late-start-event",
+		Cursor:    ids.run + "-late-start-cursor",
+		Payload:   json.RawMessage(`{"threadId":"native-thread-late"}`),
+		RunID:     &runIDCopy,
+		SessionID: ids.session,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeRunStarted,
+	}
+	persistedStart, err := runStore.ApplyEvent(ctx, "1", lateStart)
+	if err != nil {
+		t.Fatalf("persist late native start: %v", err)
+	}
+	if persistedStart.EventID != lateStart.EventID {
+		t.Fatalf("persisted late start = %+v", persistedStart)
+	}
+
+	lateApproval := protocol.Event{
+		EventID:   ids.approval + "-late-requested-event",
+		Cursor:    ids.approval + "-late-requested-cursor",
+		Payload:   json.RawMessage(`{"approval":{"kind":"command","late":true}}`),
+		RunID:     &runIDCopy,
+		SessionID: ids.session,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeApprovalRequested,
+	}
+	approvalRequest := approvals.CreateRequest{
+		NewInput: approvals.NewInput{
+			ID:          ids.approval,
+			RunID:       runID,
+			SessionID:   ids.session,
+			Generation:  "1",
+			Revision:    1,
+			Kind:        "command",
+			Summary:     "late native approval",
+			RequestedAt: "2026-10-28T00:00:00Z",
+		},
+		Context:          json.RawMessage(`{"scope":"late-write"}`),
+		RequestedEventID: lateApproval.EventID,
+	}
+	persistedApprovalEvent, approval, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", lateApproval, approvalRequest)
+	if err != nil {
+		t.Fatalf("persist late approval request: %v", err)
+	}
+	if persistedApprovalEvent.EventID != lateApproval.EventID || approval.ID != approvalRequest.ID || approval.Status != protocol.ApprovalStatusPending {
+		t.Fatalf("persisted late approval = event=%+v approval=%+v", persistedApprovalEvent, approval)
+	}
+
+	if _, err := runStore.ApplyEvent(ctx, "1", lateStart); err != nil {
+		t.Fatalf("deduplicate late native start: %v", err)
+	}
+	if _, _, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", lateApproval, approvalRequest); err != nil {
+		t.Fatalf("deduplicate late approval request: %v", err)
+	}
+	storedRun, err := runStore.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("read unknown run after late facts: %v", err)
+	}
+	if storedRun.Status != protocol.RunStatusUnknown || storedRun.LastCursor != ids.run+"-unknown-cursor" {
+		t.Fatalf("late facts reopened run = %+v", storedRun)
+	}
+	storedApproval, err := approvalStore.Get(ctx, approval.ID)
+	if err != nil {
+		t.Fatalf("read late approval: %v", err)
+	}
+	if storedApproval.Status != protocol.ApprovalStatusPending || string(storedApproval.Context) != `{"scope":"late-write"}` {
+		t.Fatalf("late approval after replay = %+v", storedApproval)
+	}
+	eventsPage, err := runStore.ReadEvents(ctx, protocol.EventQuery{SessionID: ids.session, RunID: runID, Limit: 10})
+	if err != nil {
+		t.Fatalf("read late native facts: %v", err)
+	}
+	if len(eventsPage.Events) != 2 || eventsPage.Events[0].EventID != lateStart.EventID || eventsPage.Events[1].EventID != lateApproval.EventID {
+		t.Fatalf("late native facts = %+v", eventsPage.Events)
+	}
+}
+
 func TestPersistentApprovalResolvedResumesOnlyFromNativeEvidence(t *testing.T) {
 	t.Run("native running fact and no pending approvals", func(t *testing.T) {
 		db := openExecutionDatabase(t)
@@ -765,6 +855,195 @@ func TestPersistentApprovalResolvedResumesOnlyFromNativeEvidence(t *testing.T) {
 		}
 	})
 
+	t.Run("unconfirmed approval response keeps run waiting", func(t *testing.T) {
+		db := openExecutionDatabase(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ids := executionTestIDs()
+		cleanupExecutionRows(t, &db, ids)
+		secondApprovalID := ids.approval + "-second"
+		t.Cleanup(func() {
+			if db == nil {
+				return
+			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			if err := execApprovalProjectionMutation(cleanupCtx, db, `DELETE FROM execution_approvals WHERE id = $1`, secondApprovalID); err != nil {
+				t.Errorf("cleanup second unconfirmed approval: %v", err)
+			}
+		})
+		runStore, approvalStore, runID := createApprovalResumeFixture(t, ctx, db, ids, true)
+		first := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, ids.approval, ids.approval+"-first-requested")
+		second := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, secondApprovalID, ids.approval+"-second-requested")
+		firstCommand := acceptApprovalResumeCommand(t, ctx, runStore, approvalStore, first, ids.approvalCommand)
+		secondCommand := acceptApprovalResumeCommand(t, ctx, runStore, approvalStore, second, ids.approvalCommand+"-second")
+		if _, err := runStore.Transition(ctx, firstCommand.CommandID, "1", protocol.CommandStateSucceeded, "first-response-succeeded", nil, nil); err != nil {
+			t.Fatalf("record first native approval response: %v", err)
+		}
+		if _, err := runStore.MarkUnknown(ctx, secondCommand.CommandID, "1"); err != nil {
+			t.Fatalf("record second native approval response unknown: %v", err)
+		}
+
+		applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-first-resolved", "accept")
+		stored, err := runStore.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != protocol.RunStatusWaitingApproval {
+			t.Fatalf("run resumed with an unconfirmed approval response = %+v", stored)
+		}
+
+		if _, err := runStore.Reconcile(ctx, secondCommand.CommandID, "1", CommandObservation{
+			State:          protocol.CommandStateSucceeded,
+			Reconciliation: protocol.ReconciliationStateConfirmed,
+			EventCursor:    ids.approval + "-second-ack-cursor",
+		}); err != nil {
+			t.Fatalf("reconcile second native approval response: %v", err)
+		}
+		applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-second-resolved", "accept")
+		stored, err = runStore.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != protocol.RunStatusRunning || stored.LastCursor != ids.approval+"-second-resolved-cursor" {
+			t.Fatalf("run after both native approval responses = %+v", stored)
+		}
+	})
+
+	t.Run("native resolution before final approval ACK converges on the late ACK", func(t *testing.T) {
+		db := openExecutionDatabase(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ids := executionTestIDs()
+		cleanupExecutionRows(t, &db, ids)
+		secondApprovalID := ids.approval + "-second"
+		t.Cleanup(func() {
+			if db == nil {
+				return
+			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			if err := execApprovalProjectionMutation(cleanupCtx, db, `DELETE FROM execution_approvals WHERE id = $1`, secondApprovalID); err != nil {
+				t.Errorf("cleanup second late-ACK approval: %v", err)
+			}
+		})
+		runStore, approvalStore, runID := createApprovalResumeFixture(t, ctx, db, ids, true)
+		first := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, ids.approval, ids.approval+"-first-requested")
+		second := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, secondApprovalID, ids.approval+"-second-requested")
+		firstCommand := acceptApprovalResumeCommand(t, ctx, runStore, approvalStore, first, ids.approvalCommand)
+		secondCommand := acceptApprovalResumeCommand(t, ctx, runStore, approvalStore, second, ids.approvalCommand+"-second")
+		if _, err := runStore.Transition(ctx, firstCommand.CommandID, "1", protocol.CommandStateSucceeded, "first-response-succeeded", nil, nil); err != nil {
+			t.Fatalf("record first native approval response: %v", err)
+		}
+
+		applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-first-resolved", "accept")
+		applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-second-resolved", "accept")
+		waiting, err := runStore.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting.Status != protocol.RunStatusWaitingApproval {
+			t.Fatalf("run resumed before final approval ACK = %+v", waiting)
+		}
+		beforeAckEvents, err := runStore.ReadEvents(ctx, protocol.EventQuery{SessionID: ids.session, RunID: runID, Limit: 20})
+		if err != nil {
+			t.Fatalf("read events before final approval ACK: %v", err)
+		}
+
+		ackRunID := runID
+		ack, err := runStore.RecordExactCommandAck(ctx, ids.session, protocol.CommandAck{
+			CommandID: secondCommand.CommandID,
+			RunID:     &ackRunID,
+			State:     protocol.CommandStateSucceeded,
+			EventCursor: func() *string {
+				cursor := ids.approval + "-second-ack-cursor"
+				return &cursor
+			}(),
+		})
+		if err != nil {
+			t.Fatalf("record final approval ACK after native resolution: %v", err)
+		}
+		if ack.State != protocol.CommandStateSucceeded {
+			t.Fatalf("final approval ACK = %+v", ack)
+		}
+		resumed, err := runStore.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resumed.Status != protocol.RunStatusRunning || resumed.LastCursor != ids.approval+"-second-resolved-cursor" {
+			t.Fatalf("run after late final approval ACK = %+v", resumed)
+		}
+		afterAckEvents, err := runStore.ReadEvents(ctx, protocol.EventQuery{SessionID: ids.session, RunID: runID, Limit: 20})
+		if err != nil {
+			t.Fatalf("read events after final approval ACK: %v", err)
+		}
+		if len(afterAckEvents.Events) != len(beforeAckEvents.Events) {
+			t.Fatalf("late approval ACK changed event count from %d to %d", len(beforeAckEvents.Events), len(afterAckEvents.Events))
+		}
+		resolvedEvents := 0
+		for _, event := range afterAckEvents.Events {
+			if event.Type == protocol.EventTypeApprovalResolved {
+				resolvedEvents++
+			}
+		}
+		if resolvedEvents != 2 {
+			t.Fatalf("approval resolution event count after late ACK = %d, want 2", resolvedEvents)
+		}
+	})
+
+	t.Run("failed or rejected approval response does not prove native confirmation", func(t *testing.T) {
+		for _, responseState := range []protocol.CommandState{protocol.CommandStateFailed, protocol.CommandStateRejected} {
+			responseState := responseState
+			t.Run(string(responseState), func(t *testing.T) {
+				db := openExecutionDatabase(t)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				ids := executionTestIDs()
+				cleanupExecutionRows(t, &db, ids)
+				secondApprovalID := ids.approval + "-second"
+				t.Cleanup(func() {
+					if db == nil {
+						return
+					}
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cleanupCancel()
+					if err := execApprovalProjectionMutation(cleanupCtx, db, `DELETE FROM execution_approvals WHERE id = $1`, secondApprovalID); err != nil {
+						t.Errorf("cleanup second terminal approval: %v", err)
+					}
+				})
+				runStore, approvalStore, runID := createApprovalResumeFixture(t, ctx, db, ids, true)
+				first := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, ids.approval, ids.approval+"-first-requested")
+				second := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, secondApprovalID, ids.approval+"-second-requested")
+				firstCommand := acceptApprovalResumeCommand(t, ctx, runStore, approvalStore, first, ids.approvalCommand)
+				secondCommand := acceptApprovalResumeCommand(t, ctx, runStore, approvalStore, second, ids.approvalCommand+"-second")
+				if _, err := runStore.Transition(ctx, firstCommand.CommandID, "1", protocol.CommandStateSucceeded, "first-response-succeeded", nil, nil); err != nil {
+					t.Fatalf("record first native approval response: %v", err)
+				}
+				ackRunID := runID
+				ack, err := runStore.RecordExactCommandAck(ctx, ids.session, protocol.CommandAck{
+					CommandID: secondCommand.CommandID,
+					RunID:     &ackRunID,
+					State:     responseState,
+				})
+				if err != nil {
+					t.Fatalf("record %s approval response: %v", responseState, err)
+				}
+				if ack.State != responseState {
+					t.Fatalf("recorded %s approval response = %+v", responseState, ack)
+				}
+
+				applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-first-resolved", "accept")
+				stored, err := runStore.GetRun(ctx, runID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stored.Status != protocol.RunStatusWaitingApproval {
+					t.Fatalf("run resumed after %s ACK without native confirmation = %+v", responseState, stored)
+				}
+			})
+		}
+	})
+
 	t.Run("terminal run is not reopened", func(t *testing.T) {
 		db := openExecutionDatabase(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -828,6 +1107,37 @@ func resolveApprovalResumeFixture(t *testing.T, ctx context.Context, approvalSto
 	if err != nil {
 		t.Fatalf("resolve approval %q: %v", approvalID, err)
 	}
+}
+
+func acceptApprovalResumeCommand(t *testing.T, ctx context.Context, runStore *Store, approvalStore *approvals.Store, approval approvals.Approval, commandID string) protocol.Command {
+	t.Helper()
+	runID := approval.RunID
+	command := protocol.Command{
+		CommandID: commandID,
+		Kind:      protocol.CommandKindRunApprove,
+		Payload:   json.RawMessage(fmt.Sprintf(`{"approval_id":%q}`, approval.ID)),
+		RunID:     &runID,
+		SessionID: approval.SessionID,
+	}
+	request := approvals.ResolveRequest{
+		ApprovalID: approval.ID,
+		RunID:      approval.RunID,
+		SessionID:  approval.SessionID,
+		Generation: approval.Generation,
+		Request: protocol.ResolveApprovalRequest{
+			CommandID: commandID,
+			Decision:  protocol.ApprovalDecisionApprove,
+			Revision:  approval.Revision,
+		},
+	}
+	accepted, _, err := runStore.AcceptApproval(ctx, &countingApprovalResolver{store: approvalStore}, CommandIntent{Command: command, Generation: approval.Generation}, request)
+	if err != nil {
+		t.Fatalf("accept approval response %q: %v", commandID, err)
+	}
+	if accepted.Deduplicated || accepted.Record.State != protocol.CommandStateAccepted {
+		t.Fatalf("accepted approval response %q = %+v", commandID, accepted)
+	}
+	return command
 }
 
 func applyApprovalResolvedResumeEvent(t *testing.T, ctx context.Context, runStore *Store, sessionID, runID, eventPrefix, resolution string) {

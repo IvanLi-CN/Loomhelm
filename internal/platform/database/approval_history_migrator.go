@@ -1022,6 +1022,16 @@ func (m *ApprovalHistoryMigrator) recognizedAtomicLayout(ctx context.Context) (b
 				  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
 				  AND trigger_row.tgenabled = 'O'
 			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM pg_trigger AS trigger_row
+				JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
+				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				WHERE namespace.nspname = current_schema()
+				  AND relation.relname = 'execution_approvals'
+				  AND trigger_row.tgname = 'execution_approvals_history_capture'
+				  AND NOT trigger_row.tgisinternal
+			)
 	`).Scan(&recognized)
 	if err != nil {
 		return false, fmt.Errorf("inspect atomic approval history layout: %w", err)
