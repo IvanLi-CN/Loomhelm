@@ -16,6 +16,16 @@ export interface ControlGateInput {
 
 export type ControlBlockReason = "read_only" | "offline" | "reconnecting" | "unknown" | "session_unavailable" | "not_actionable" | "in_progress";
 
+export type ClientCommandState = "pending" | "succeeded" | "failed" | "unknown";
+export type ClientCommandReason = ControlBlockReason | "duplicate" | "stale_session" | "stale_response" | "transport" | "mismatched_response";
+
+export interface ClientCommandResult {
+  state: ClientCommandState;
+  commandId: string;
+  ack?: CommandAck;
+  reason?: ClientCommandReason;
+}
+
 export interface ControlGate {
   allowed: boolean;
   blockReason?: ControlBlockReason;
@@ -67,6 +77,13 @@ function operationIdentity(operation: ControlOperation): string {
 
 function commandIsInProgress(state: CommandAck["state"]): boolean {
   return state === "accepted" || state === "executing";
+}
+
+export function getClientCommandState(state: CommandAck["state"]): ClientCommandState {
+  if (commandIsInProgress(state)) return "pending";
+  if (state === "succeeded") return "succeeded";
+  if (state === "failed" || state === "rejected") return "failed";
+  return "unknown";
 }
 
 export class ControlOperationGuard {

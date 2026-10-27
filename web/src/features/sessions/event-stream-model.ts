@@ -57,8 +57,8 @@ export function getEventIdentityKey(event: Event, scope: EventStreamScope): stri
   return JSON.stringify([scopeKey(scope), event.session_id, event.run_id ?? null, event.event_id]);
 }
 
-export function createEventStreamState(scope: EventStreamScope, cursor?: string): EventStreamState {
-  return { scope, events: [], cursor, eventKeys: new Set<string>() };
+export function createEventStreamState(scope: EventStreamScope, cursor?: string, cursorSequence?: number): EventStreamState {
+  return { scope, events: [], cursor, cursorSequence, eventKeys: new Set<string>() };
 }
 
 function latestEvent(events: readonly Event[]): Event | undefined {
@@ -128,12 +128,17 @@ export function getRecoveryCursor(state: RecoveryCursorState, subscription: Even
   return state.entries.get(getEventSubscriptionKey(subscription));
 }
 
-export function rememberRecoveryCursor(state: RecoveryCursorState, subscription: EventSubscription, cursor: string): RecoveryCursorState {
+export function getRecoveryCursorSequence(state: RecoveryCursorState, subscription: EventSubscription): number | undefined {
+  return state.cursorSequences.get(getEventSubscriptionKey(subscription));
+}
+
+export function rememberRecoveryCursor(state: RecoveryCursorState, subscription: EventSubscription, cursor: string, sequence?: number): RecoveryCursorState {
   const key = getEventSubscriptionKey(subscription);
   const entries = new Map(state.entries);
   const cursorSequences = new Map(state.cursorSequences);
   entries.set(key, cursor);
-  cursorSequences.delete(key);
+  if (sequence === undefined) cursorSequences.delete(key);
+  else cursorSequences.set(key, sequence);
   return { entries, cursorSequences };
 }
 

@@ -20,6 +20,7 @@ export {
   getEventStreamKey,
   getEventSubscriptionKey,
   getRecoveryCursor,
+  getRecoveryCursorSequence,
   rememberRecoveryCursor
 } from "./event-stream-model";
 export type {
@@ -31,9 +32,12 @@ export type {
   EventSubscription,
   RecoveryCursorState
 } from "./event-stream-model";
-export { ControlOperationGuard, createControlOperationGuard, getControlGate } from "./control-operation-model";
+export { ControlOperationGuard, createControlOperationGuard, getClientCommandState, getControlGate } from "./control-operation-model";
 export type {
   BeginOperationResult,
+  ClientCommandReason,
+  ClientCommandResult,
+  ClientCommandState,
   CommandIdentity,
   ControlBlockReason,
   ControlGate,
@@ -42,3 +46,12 @@ export type {
   OperationResponseResult,
   OperationToken
 } from "./control-operation-model";
+export { SessionClientAdapter, SessionRequestFence } from "./session-client-adapter";
+export type {
+  SessionReadClient,
+  SessionReadReason,
+  SessionReadResult,
+  SessionReadState,
+  SessionRequestAdmission,
+  SessionRequestToken
+} from "./session-client-adapter";
