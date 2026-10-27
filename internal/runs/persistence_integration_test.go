@@ -670,6 +670,102 @@ func TestPersistentOpaqueLeaseBindsSessionAndRun(t *testing.T) {
 	}
 }
 
+func TestPersistentDistinctRunAdmissionLocksSessionBeforeForeignKeys(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	const generation = "distinct-admission-generation"
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        generation,
+	}); err != nil {
+		t.Fatalf("create distinct-admission session: %v", err)
+	}
+	store := NewStore(db.Pool())
+	firstRunID := ids.run + "-distinct-a"
+	secondRunID := ids.run + "-distinct-b"
+	firstCommandID := ids.command + "-distinct-a"
+	secondCommandID := ids.command + "-distinct-b"
+	firstLeaseKey := ids.lease + "-distinct-a"
+	secondLeaseKey := ids.lease + "-distinct-b"
+	for _, leaseKey := range []string{firstLeaseKey, secondLeaseKey} {
+		leaseKey := leaseKey
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			if _, err := db.Pool().Exec(cleanupCtx, `DELETE FROM execution_control_leases WHERE lease_key = $1`, leaseKey); err != nil {
+				t.Errorf("cleanup distinct-admission lease %q: %v", leaseKey, err)
+			}
+		})
+	}
+
+	blocker, err := db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin distinct-admission blocker: %v", err)
+	}
+	defer blocker.Rollback(ctx)
+	if _, err := blocker.Exec(ctx, `SELECT id FROM execution_sessions WHERE id = $1 FOR UPDATE`, ids.session); err != nil {
+		t.Fatalf("hold distinct-admission session lock: %v", err)
+	}
+
+	results := make(chan error, 2)
+	start := func(commandID, runID, leaseKey, prompt string) {
+		runIDCopy := runID
+		go func() {
+			_, _, err := store.AcceptRunWithLease(ctx, CommandIntent{Command: protocol.Command{
+				CommandID: commandID,
+				Kind:      protocol.CommandKindRunSend,
+				Payload:   json.RawMessage(fmt.Sprintf(`{"prompt":%q}`, prompt)),
+				RunID:     &runIDCopy,
+				SessionID: ids.session,
+			}, Generation: generation}, NewRunInput{
+				ID:         runIDCopy,
+				SessionID:  ids.session,
+				CommandID:  commandID,
+				Generation: generation,
+			}, DurableLeaseIdentity{
+				LeaseKey:           leaseKey,
+				SessionID:          ids.session,
+				RunID:              runIDCopy,
+				Generation:         generation,
+				OwnerID:            "distinct-admission-owner-" + prompt,
+				CandidateSourceSHA: "distinct-admission-source-" + prompt,
+				ArtifactDigest:     "distinct-admission-artifact-" + prompt,
+			})
+			results <- err
+		}()
+	}
+	start(firstCommandID, firstRunID, firstLeaseKey, "first")
+	start(secondCommandID, secondRunID, secondLeaseKey, "second")
+	if err := waitForDistinctRunAdmissionWaiters(ctx, db.Pool()); err != nil {
+		t.Fatalf("distinct admissions did not reach the session/FK lock barrier: %v", err)
+	}
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatalf("release distinct-admission session lock: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("distinct run admission %d: %v", i+1, err)
+		}
+	}
+
+	var runCount, commandCount int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM execution_runs WHERE session_id = $1`, ids.session).Scan(&runCount); err != nil {
+		t.Fatalf("count distinct-admission runs: %v", err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM execution_commands WHERE session_id = $1`, ids.session).Scan(&commandCount); err != nil {
+		t.Fatalf("count distinct-admission commands: %v", err)
+	}
+	if runCount != 2 || commandCount != 2 {
+		t.Fatalf("distinct-admission rows = runs %d, commands %d; want 2 and 2", runCount, commandCount)
+	}
+}
+
 func TestPersistentInterruptAdmissionAndEventUseSessionRunLockOrder(t *testing.T) {
 	db := openExecutionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -989,6 +1085,36 @@ func waitForExecutionAdvisoryWaiter(ctx context.Context, pool *pgxpool.Pool, lea
 			LIMIT 1
 		`, leaseKey).Scan(&pid)
 		if err == nil && pid > 0 {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if err != nil {
+				return err
+			}
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForDistinctRunAdmissionWaiters(ctx context.Context, pool *pgxpool.Pool) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiters int
+		err := pool.QueryRow(waitCtx, `
+			SELECT count(*)
+			FROM pg_stat_activity AS activity
+			WHERE activity.wait_event_type = 'Lock'
+			  AND (
+				activity.query ILIKE '%INSERT INTO execution_commands%'
+				OR activity.query ILIKE '%FROM execution_sessions%FOR UPDATE%'
+			  )
+		`).Scan(&waiters)
+		if err == nil && waiters >= 2 {
 			return nil
 		}
 		select {
@@ -1486,6 +1612,47 @@ func openExecutionDatabase(t *testing.T) *database.DB {
 	if err := db.Migrate(context.Background()); err != nil {
 		db.Close()
 		t.Fatalf("migrate execution database: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	migrator := database.NewApprovalHistoryMigrator(db.Pool(), database.ApprovalHistoryMigratorConfig{LeaseOwner: "runs-integration-test"})
+	options := database.ApprovalHistoryMigrationOptions{
+		BatchSize:          32,
+		WorkBudget:         10000,
+		PreDrainBatchSize:  32,
+		PreDrainWorkBudget: 10000,
+		FinalRowBudget:     100,
+		FinalWorkBudget:    300,
+	}
+	progress, err := migrator.Progress(ctx)
+	if err != nil {
+		if _, adoptErr := migrator.AdoptAtomic00012(ctx, options); adoptErr != nil && !errors.Is(adoptErr, database.ErrApprovalHistoryAtomicAdoption) {
+			db.Close()
+			t.Fatalf("adopt old atomic approval history fixture: %v", adoptErr)
+		}
+		progress, err = migrator.Progress(ctx)
+		if err != nil {
+			db.Close()
+			t.Fatalf("read adopted approval history fixture state: %v", err)
+		}
+	}
+	if progress.Phase != database.ApprovalHistoryPhaseCutoverComplete {
+		if _, err := migrator.RunBackfill(ctx, options); err != nil {
+			db.Close()
+			t.Fatalf("backfill execution database: %v", err)
+		}
+		if _, err := migrator.Validate(ctx, options); err != nil {
+			db.Close()
+			t.Fatalf("validate execution database: %v", err)
+		}
+		if _, err := migrator.BuildIndexes(ctx, options); err != nil {
+			db.Close()
+			t.Fatalf("build execution database indexes: %v", err)
+		}
+		if _, err := migrator.Cutover(ctx, options); err != nil {
+			db.Close()
+			t.Fatalf("cut over execution database: %v", err)
+		}
 	}
 	t.Cleanup(func() { db.Close() })
 	return db

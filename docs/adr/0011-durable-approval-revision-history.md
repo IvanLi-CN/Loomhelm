@@ -1,5 +1,7 @@
 # ADR 0011: Durable approval revision history and cursor compatibility
 
+> Superseded for rollout mechanics by [ADR 0012: Pauseable approval history rollout](0012-pauseable-approval-history-rollout.md); the durable approval and cursor contract recorded below remains the historical decision being refined.
+
 ## Context
 
 The execution approval row is a current compare-and-set projection keyed by the stable native request identity. A later approval.requested event can reuse that identity with a higher revision, but replacing the current row cannot expose the earlier status, raw context or requested-event identity. Migration 00011 added only a projection index, so it does not prove or preserve same-ID revision history.

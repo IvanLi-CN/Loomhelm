@@ -282,6 +282,30 @@ func isolatedApplicationDatabase(t *testing.T) string {
 	if actualSchema != schema {
 		t.Fatal("application test connection escaped its owned schema")
 	}
+	if err := probe.Migrate(ctx); err != nil {
+		t.Fatalf("migrate application test schema: %v", err)
+	}
+	migrator := database.NewApprovalHistoryMigrator(probe.Pool(), database.ApprovalHistoryMigratorConfig{LeaseOwner: "application-integration-test"})
+	options := database.ApprovalHistoryMigrationOptions{
+		BatchSize:          32,
+		WorkBudget:         10000,
+		PreDrainBatchSize:  32,
+		PreDrainWorkBudget: 10000,
+		FinalRowBudget:     100,
+		FinalWorkBudget:    300,
+	}
+	if _, err := migrator.RunBackfill(ctx, options); err != nil {
+		t.Fatalf("backfill application test schema: %v", err)
+	}
+	if _, err := migrator.Validate(ctx, options); err != nil {
+		t.Fatalf("validate application test schema: %v", err)
+	}
+	if _, err := migrator.BuildIndexes(ctx, options); err != nil {
+		t.Fatalf("build application test schema indexes: %v", err)
+	}
+	if _, err := migrator.Cutover(ctx, options); err != nil {
+		t.Fatalf("cut over application test schema: %v", err)
+	}
 	return connectionURL
 }
 

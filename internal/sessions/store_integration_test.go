@@ -253,6 +253,105 @@ func TestCreationIntentConcurrentSameCommandConverges(t *testing.T) {
 	}
 }
 
+func TestCreationIntentRetryRevalidatesCurrentTaskFacts(t *testing.T) {
+	db := openSessionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	ids := sessionIntegrationIDs{user: "e01-retry-user-" + suffix, project: "e01-retry-project-" + suffix, task: "e01-retry-task-" + suffix}
+	host := ensureSessionHost(t, ctx, db)
+	seedSessionIdentity(t, ctx, db, ids, host.ID)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupSessionIdentity(t, cleanupCtx, db, ids, host)
+	})
+
+	store := NewStore(db.Pool())
+	input := CreationIntentInput{
+		SessionID:     "e01-retry-session-" + suffix,
+		CommandID:     "e01-retry-command-" + suffix,
+		CreatorUserID: ids.user,
+		HostID:        host.ID,
+		Path:          protocol.SessionPathNew,
+		ProjectID:     ids.project,
+		TaskID:        ids.task,
+		Parameters:    []byte(`{"prompt":"retry current facts"}`),
+		Summary:       "retry current facts",
+	}
+	if _, err := store.CreateIntent(ctx, input); err != nil {
+		t.Fatalf("create retry intent: %v", err)
+	}
+
+	otherSessionID := "e01-retry-other-session-" + suffix
+	if _, err := store.Create(ctx, NewInput{
+		ID:                otherSessionID,
+		Path:              protocol.SessionPathNew,
+		ProjectID:         ids.project,
+		ExternalThreadRef: "e01-retry-other-thread-" + suffix,
+		Generation:        "e01-retry-other-generation-" + suffix,
+	}); err != nil {
+		t.Fatalf("create competing session: %v", err)
+	}
+	otherProjectID := "e01-retry-other-project-" + suffix
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO projects (id, name, created_by)
+		VALUES ($1, $2, $3)
+	`, otherProjectID, "E01 retry other project", ids.user); err != nil {
+		t.Fatalf("create competing project: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := db.Pool().Exec(cleanupCtx, `UPDATE tasks SET session_id = NULL, project_id = $2 WHERE id = $1`, ids.task, ids.project); err != nil {
+			t.Errorf("restore retry task facts: %v", err)
+		}
+		if _, err := db.Pool().Exec(cleanupCtx, `DELETE FROM execution_sessions WHERE id = $1`, otherSessionID); err != nil {
+			t.Errorf("cleanup competing session: %v", err)
+		}
+		if _, err := db.Pool().Exec(cleanupCtx, `DELETE FROM projects WHERE id = $1`, otherProjectID); err != nil {
+			t.Errorf("cleanup competing project: %v", err)
+		}
+	})
+
+	if _, err := db.Pool().Exec(ctx, `UPDATE tasks SET session_id = $2 WHERE id = $1`, ids.task, otherSessionID); err != nil {
+		t.Fatalf("bind task to competing session: %v", err)
+	}
+	if _, err := store.CreateIntent(ctx, input); !errors.Is(err, ErrTaskBound) {
+		t.Fatalf("retry against competing task binding error = %v, want %v", err, ErrTaskBound)
+	}
+
+	if _, err := db.Pool().Exec(ctx, `UPDATE tasks SET session_id = NULL, project_id = $2 WHERE id = $1`, ids.task, otherProjectID); err != nil {
+		t.Fatalf("change retry task project: %v", err)
+	}
+	if _, err := store.CreateIntent(ctx, input); !errors.Is(err, ErrProjectMismatch) {
+		t.Fatalf("retry against changed task project error = %v, want %v", err, ErrProjectMismatch)
+	}
+
+	if _, err := db.Pool().Exec(ctx, `UPDATE tasks SET project_id = $2 WHERE id = $1`, ids.task, ids.project); err != nil {
+		t.Fatalf("restore retry task project: %v", err)
+	}
+	active, err := store.ActivateIntent(ctx, ActivationInput{
+		SessionID:           input.SessionID,
+		ExternalThreadRef:   "e01-retry-confirmed-thread-" + suffix,
+		ExecutionGeneration: "e01-retry-confirmed-generation-" + suffix,
+	})
+	if err != nil {
+		t.Fatalf("activate retry intent: %v", err)
+	}
+	if active.TaskID == nil || *active.TaskID != ids.task {
+		t.Fatalf("activated retry session task = %v, want %q", active.TaskID, ids.task)
+	}
+	confirmed, err := store.CreateIntent(ctx, input)
+	if err != nil {
+		t.Fatalf("confirmed same-session retry: %v", err)
+	}
+	if confirmed.State != IntentStateConfirmed || confirmed.SessionID != input.SessionID {
+		t.Fatalf("confirmed same-session retry = %+v", confirmed)
+	}
+}
+
 func TestSessionIntentMigrationReentry(t *testing.T) {
 	db := openSessionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -501,6 +600,20 @@ func TestApprovalHistoryMigrationFrom00010SupportsFailureReentry(t *testing.T) {
 	if _, err := provider.UpTo(ctx, 12); err != nil {
 		t.Fatalf("apply 00012 approval revision history migration: %v", err)
 	}
+	migrator := database.NewApprovalHistoryMigrator(scoped.Pool(), database.ApprovalHistoryMigratorConfig{LeaseOwner: "sessions-00010-migration-test"})
+	options := database.ApprovalHistoryMigrationOptions{BatchSize: 32, WorkBudget: 10000, PreDrainBatchSize: 32, PreDrainWorkBudget: 10000, FinalRowBudget: 100, FinalWorkBudget: 300}
+	if _, err := migrator.RunBackfill(ctx, options); err != nil {
+		t.Fatalf("backfill approval history after 00010: %v", err)
+	}
+	if _, err := migrator.Validate(ctx, options); err != nil {
+		t.Fatalf("validate approval history after 00010: %v", err)
+	}
+	if _, err := migrator.BuildIndexes(ctx, options); err != nil {
+		t.Fatalf("build approval history indexes after 00010: %v", err)
+	}
+	if _, err := migrator.Cutover(ctx, options); err != nil {
+		t.Fatalf("cut over approval history after 00010: %v", err)
+	}
 
 	var indexCount, appliedCount int
 	if err := scoped.Pool().QueryRow(ctx, `
@@ -600,7 +713,7 @@ func TestApprovalRevisionHistoryMigrationFrom00011SupportsFailureReentry(t *test
 		t.Fatalf("seed approval revision projection: %v", err)
 	}
 
-	if _, err := scoped.Pool().Exec(ctx, `CREATE INDEX execution_approval_revisions_run_cursor_idx ON execution_approvals (id)`); err != nil {
+	if _, err := scoped.Pool().Exec(ctx, `CREATE TABLE execution_approval_revisions (id TEXT PRIMARY KEY)`); err != nil {
 		t.Fatalf("create deliberate 00012 migration collision: %v", err)
 	}
 	if _, err := provider.UpTo(ctx, 12); err == nil {
@@ -620,8 +733,19 @@ func TestApprovalRevisionHistoryMigrationFrom00011SupportsFailureReentry(t *test
 	`).Scan(&historyTableCount); err != nil {
 		t.Fatalf("read rolled-back history table: %v", err)
 	}
-	if historyTableCount != 0 {
-		t.Fatalf("rolled-back history table count = %d, want 0", historyTableCount)
+	if historyTableCount != 1 {
+		t.Fatalf("rolled-back history table count = %d, want preserved collision table", historyTableCount)
+	}
+	var historyColumnCount int
+	if err := scoped.Pool().QueryRow(ctx, `
+		SELECT count(*)
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'execution_approval_revisions'
+	`).Scan(&historyColumnCount); err != nil {
+		t.Fatalf("read rolled-back collision table columns: %v", err)
+	}
+	if historyColumnCount != 1 {
+		t.Fatalf("rolled-back collision table columns = %d, want 1", historyColumnCount)
 	}
 	if err := scoped.Pool().QueryRow(ctx, `SELECT count(*) FROM execution_approvals WHERE id = $1`, approvalID).Scan(&historyRowCount); err != nil {
 		t.Fatalf("read unchanged current projection: %v", err)
@@ -629,7 +753,7 @@ func TestApprovalRevisionHistoryMigrationFrom00011SupportsFailureReentry(t *test
 	if historyRowCount != 1 {
 		t.Fatalf("current projection row count after failed 00012 = %d, want 1", historyRowCount)
 	}
-	if _, err := scoped.Pool().Exec(ctx, `DROP INDEX execution_approval_revisions_run_cursor_idx`); err != nil {
+	if _, err := scoped.Pool().Exec(ctx, `DROP TABLE execution_approval_revisions`); err != nil {
 		t.Fatalf("remove deliberate 00012 migration collision: %v", err)
 	}
 	if _, err := provider.UpTo(ctx, 12); err != nil {
@@ -643,6 +767,20 @@ func TestApprovalRevisionHistoryMigrationFrom00011SupportsFailureReentry(t *test
 	}
 	if applied12 != 1 {
 		t.Fatalf("successful 00012 migration records = %d, want 1", applied12)
+	}
+	migrator := database.NewApprovalHistoryMigrator(scoped.Pool(), database.ApprovalHistoryMigratorConfig{LeaseOwner: "sessions-00011-migration-test"})
+	options := database.ApprovalHistoryMigrationOptions{BatchSize: 32, WorkBudget: 10000, PreDrainBatchSize: 32, PreDrainWorkBudget: 10000, FinalRowBudget: 100, FinalWorkBudget: 300}
+	if _, err := migrator.RunBackfill(ctx, options); err != nil {
+		t.Fatalf("backfill approval history after 00011: %v", err)
+	}
+	if _, err := migrator.Validate(ctx, options); err != nil {
+		t.Fatalf("validate approval history after 00011: %v", err)
+	}
+	if _, err := migrator.BuildIndexes(ctx, options); err != nil {
+		t.Fatalf("build approval history indexes after 00011: %v", err)
+	}
+	if _, err := migrator.Cutover(ctx, options); err != nil {
+		t.Fatalf("cut over approval history after 00011: %v", err)
 	}
 	if err := scoped.Pool().QueryRow(ctx, `
 		SELECT count(*) FROM execution_approval_revisions

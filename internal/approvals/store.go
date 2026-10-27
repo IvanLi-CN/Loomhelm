@@ -786,13 +786,24 @@ func (s *Store) ready(ctx context.Context) error {
 	return ensureHistoryReady(ctx, s.pool)
 }
 
-// CheckHistoryReadiness verifies the cutover schema, writer guard and every
-// current projection against its corresponding history snapshot.
+// CheckHistoryReadiness verifies durable cutover facts without scanning the
+// history volume. Full projection/history validation belongs to the explicit
+// migration operation.
 func (s *Store) CheckHistoryReadiness(ctx context.Context) error {
 	if err := s.readyBase(ctx); err != nil {
 		return err
 	}
 	return ensureHistoryReady(ctx, s.pool)
+}
+
+// CheckHistoryConsistency performs the history-volume audit used by the
+// migration operator and targeted repair checks. It is deliberately separate
+// from startup readiness.
+func (s *Store) CheckHistoryConsistency(ctx context.Context) error {
+	if err := s.readyBase(ctx); err != nil {
+		return err
+	}
+	return ensureHistoryConsistency(ctx, s.pool)
 }
 
 func ensureHistoryReadyTx(ctx context.Context, tx pgx.Tx) error {
@@ -803,6 +814,128 @@ func ensureHistoryReadyTx(ctx context.Context, tx pgx.Tx) error {
 }
 
 func ensureHistoryReady(ctx context.Context, queryer approvalReadinessQuerier) error {
+	var projectionExists, historyExists, schemaComplete, indexesComplete, writerGuardExists, cutoverComplete, dirtyEmpty bool
+	err := queryer.QueryRow(ctx, `
+		WITH required_columns(table_name, column_name) AS (
+			VALUES
+				('execution_approvals', 'id'),
+				('execution_approvals', 'session_id'),
+				('execution_approvals', 'run_id'),
+				('execution_approvals', 'generation'),
+				('execution_approvals', 'kind'),
+				('execution_approvals', 'requested_at'),
+				('execution_approvals', 'revision'),
+				('execution_approvals', 'status'),
+				('execution_approvals', 'summary'),
+				('execution_approvals', 'context'),
+				('execution_approvals', 'resolved_by_command_id'),
+				('execution_approvals', 'requested_event_id'),
+				('execution_approvals', 'resolved_at'),
+				('execution_approvals', 'created_at'),
+				('execution_approvals', 'updated_at'),
+				('execution_approval_revisions', 'id'),
+				('execution_approval_revisions', 'session_id'),
+				('execution_approval_revisions', 'run_id'),
+				('execution_approval_revisions', 'generation'),
+				('execution_approval_revisions', 'kind'),
+				('execution_approval_revisions', 'requested_at'),
+				('execution_approval_revisions', 'revision'),
+				('execution_approval_revisions', 'status'),
+				('execution_approval_revisions', 'summary'),
+				('execution_approval_revisions', 'context'),
+				('execution_approval_revisions', 'resolved_by_command_id'),
+				('execution_approval_revisions', 'requested_event_id'),
+				('execution_approval_revisions', 'resolved_at'),
+				('execution_approval_revisions', 'created_at'),
+				('execution_approval_revisions', 'updated_at')
+		)
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM pg_class AS relation
+				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				WHERE namespace.nspname = current_schema()
+				  AND relation.relname = 'execution_approvals'
+				  AND relation.relkind IN ('r', 'p')
+			),
+			EXISTS (
+				SELECT 1
+				FROM pg_class AS relation
+				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				WHERE namespace.nspname = current_schema()
+				  AND relation.relname = 'execution_approval_revisions'
+				  AND relation.relkind IN ('r', 'p')
+			),
+			NOT EXISTS (
+				SELECT 1
+				FROM required_columns AS required
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM pg_attribute AS attribute
+					JOIN pg_class AS relation ON relation.oid = attribute.attrelid
+					JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+					WHERE namespace.nspname = current_schema()
+					  AND relation.relname = required.table_name
+					  AND relation.relkind IN ('r', 'p')
+					  AND attribute.attname = required.column_name
+					  AND attribute.attnum > 0
+					  AND NOT attribute.attisdropped
+				)
+			),
+			NOT EXISTS (
+				SELECT 1
+				FROM unnest(ARRAY[
+					'execution_approval_revisions_pkey',
+					'execution_approval_revisions_run_cursor_idx',
+					'execution_approval_revisions_requested_event_idx'
+				]) AS required(index_name)
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM pg_class AS relation
+					JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+					JOIN pg_index AS index_row ON index_row.indexrelid = relation.oid
+					WHERE namespace.nspname = current_schema()
+					  AND relation.relname = required.index_name
+					  AND relation.relkind = 'i'
+					  AND index_row.indisvalid
+					  AND index_row.indisready
+				)
+			),
+			EXISTS (
+				SELECT 1
+				FROM pg_trigger AS trigger_row
+				JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
+				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+				JOIN pg_namespace AS function_namespace ON function_namespace.oid = function_row.pronamespace
+				WHERE namespace.nspname = current_schema()
+				  AND function_namespace.nspname = current_schema()
+				  AND relation.relname = 'execution_approvals'
+				  AND trigger_row.tgname = 'execution_approvals_history_writer_guard'
+				  AND NOT trigger_row.tgisinternal
+				  AND trigger_row.tgenabled = 'O'
+				  AND function_row.proname = 'loomhelm_require_approval_history_writer'
+				  AND pg_get_functiondef(function_row.oid) LIKE '%loomhelm.approval_writer_capability%'
+				  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
+			),
+			EXISTS (
+				SELECT 1
+				FROM execution_approval_history_migrations
+				WHERE migration_key = 'approval-revision-history'
+				  AND phase = 'cutover_complete'
+			),
+			NOT EXISTS (SELECT 1 FROM execution_approval_history_dirty)
+	`).Scan(&projectionExists, &historyExists, &schemaComplete, &indexesComplete, &writerGuardExists, &cutoverComplete, &dirtyEmpty)
+	if err != nil {
+		return fmt.Errorf("%w: inspect approval history readiness: %v", ErrApprovalHistoryUnavailable, err)
+	}
+	if !projectionExists || !historyExists || !schemaComplete || !indexesComplete || !writerGuardExists || !cutoverComplete || !dirtyEmpty {
+		return fmt.Errorf("%w: approval history cutover is incomplete", ErrApprovalHistoryUnavailable)
+	}
+	return nil
+}
+
+func ensureHistoryConsistency(ctx context.Context, queryer approvalReadinessQuerier) error {
 	var projectionExists, historyExists, schemaComplete, indexesComplete, writerGuardExists bool
 	err := queryer.QueryRow(ctx, `
 		WITH required_columns(table_name, column_name) AS (

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -115,6 +116,95 @@ func TestJournalPersistsExactSessionAndRunIdentityBeforeMaterializingEvents(t *t
 	}
 	if !bytes.Contains(data, []byte(`"type":"session_alias"`)) || !bytes.Contains(data, []byte(`"type":"run_binding"`)) || !bytes.Contains(data, []byte(`"type":"observed_event"`)) {
 		t.Fatalf("identity records missing from journal: %s", data)
+	}
+}
+
+func TestJournalPersistsObservedPayloadBytesLosslessly(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "raw-payload.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := SessionAlias{
+		PlatformSessionID: "platform-raw-payload",
+		AdapterSessionID:  "adapter-raw-payload",
+		ExternalThreadRef: "thread-raw-payload",
+		Generation:        "generation-raw-payload",
+		CommandID:         "create-raw-payload",
+	}
+	if err := first.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		payload json.RawMessage
+	}{
+		{name: "nil", payload: nil},
+		{name: "empty", payload: json.RawMessage{}},
+		{name: "whitespace", payload: json.RawMessage(" \n\t ")},
+		{name: "escaping-and-html", payload: json.RawMessage(" \n{\"html\":\"\\u003csection\\u003e<script>&\"} \t")},
+	}
+	for index, testCase := range cases {
+		event := protocol.Event{
+			EventID:   "raw-payload-" + testCase.name,
+			Cursor:    fmt.Sprintf("%s:%d", alias.AdapterSessionID, index+1),
+			Sequence:  int64(index + 1),
+			SessionID: alias.AdapterSessionID,
+			Source:    protocol.EventSourceAppServer,
+			Type:      protocol.EventTypeSessionCreated,
+			Payload:   testCase.payload,
+		}
+		observation := EventObservation{
+			AdapterSessionID:  alias.AdapterSessionID,
+			ExternalThreadRef: alias.ExternalThreadRef,
+			Generation:        alias.Generation,
+		}
+		mapped, delivered, err := first.AppendObservedEvent(event, observation)
+		if err != nil {
+			t.Fatalf("append %s payload: %v", testCase.name, err)
+		}
+		if !delivered || !bytes.Equal(mapped.Payload, testCase.payload) {
+			t.Fatalf("immediate mapped %s payload = %q, want %q; delivered = %v", testCase.name, mapped.Payload, testCase.payload, delivered)
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	beforeRestart, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	afterRestartOpen, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterRestartOpen, beforeRestart) {
+		t.Fatal("journal history changed while reopening observed payloads")
+	}
+	rawPage, err := second.ReadEvents(protocol.EventQuery{SessionID: alias.AdapterSessionID, Limit: int64(len(cases))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappedPage, err := second.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, Limit: int64(len(cases))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rawPage.Events) != len(cases) || len(mappedPage.Events) != len(cases) {
+		t.Fatalf("recovered event counts = raw %d, mapped %d, want %d", len(rawPage.Events), len(mappedPage.Events), len(cases))
+	}
+	for index, testCase := range cases {
+		if !bytes.Equal(rawPage.Events[index].Payload, testCase.payload) {
+			t.Fatalf("recovered raw %s payload = %q, want %q", testCase.name, rawPage.Events[index].Payload, testCase.payload)
+		}
+		if !bytes.Equal(mappedPage.Events[index].Payload, testCase.payload) {
+			t.Fatalf("recovered mapped %s payload = %q, want %q", testCase.name, mappedPage.Events[index].Payload, testCase.payload)
+		}
 	}
 }
 

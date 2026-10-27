@@ -132,6 +132,9 @@ func (s *Store) CreateIntent(ctx context.Context, input CreationIntentInput) (Cr
 		if err := compareCreationIntent(existing, normalized, digest, true); err != nil {
 			return CreationIntent{}, err
 		}
+		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
+			return CreationIntent{}, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return CreationIntent{}, fmt.Errorf("commit existing session creation intent: %w", err)
 		}
@@ -142,6 +145,9 @@ func (s *Store) CreateIntent(ctx context.Context, input CreationIntentInput) (Cr
 		return CreationIntent{}, err
 	} else if found {
 		if err := compareCreationIntent(existing, normalized, digest, false); err != nil {
+			return CreationIntent{}, err
+		}
+		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
 			return CreationIntent{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -513,6 +519,22 @@ func compareCreationIntent(existing intentRecord, input CreationIntentInput, dig
 }
 
 func validateCreationTask(ctx context.Context, tx pgx.Tx, projectID, taskID string) error {
+	return validateCreationTaskForSession(ctx, tx, projectID, taskID, "")
+}
+
+func validateExistingCreationIntentTarget(ctx context.Context, tx pgx.Tx, record intentRecord) error {
+	taskID := strings.TrimSpace(record.Intent.TaskID)
+	if taskID == "" {
+		return nil
+	}
+	allowedSessionID := ""
+	if record.Intent.State == IntentStateConfirmed {
+		allowedSessionID = record.Intent.SessionID
+	}
+	return validateCreationTaskForSession(ctx, tx, record.Intent.ProjectID, taskID, allowedSessionID)
+}
+
+func validateCreationTaskForSession(ctx context.Context, tx pgx.Tx, projectID, taskID, allowedSessionID string) error {
 	var taskProjectID string
 	var taskSessionID *string
 	err := tx.QueryRow(ctx, `
@@ -531,6 +553,9 @@ func validateCreationTask(ctx context.Context, tx pgx.Tx, projectID, taskID stri
 		return ErrProjectMismatch
 	}
 	if taskSessionID != nil && strings.TrimSpace(*taskSessionID) != "" {
+		if strings.TrimSpace(*taskSessionID) == allowedSessionID && allowedSessionID != "" {
+			return nil
+		}
 		return ErrTaskBound
 	}
 	return nil

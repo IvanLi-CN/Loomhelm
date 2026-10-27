@@ -28,11 +28,13 @@ func TestEnsureHistoryReadyFailsClosedWhenCutoverIsIncomplete(t *testing.T) {
 		name string
 		row  []any
 	}{
-		{name: "projection missing", row: []any{false, true, true, true, true}},
-		{name: "history missing", row: []any{true, false, true, true, true}},
-		{name: "required schema missing", row: []any{true, true, false, true, true}},
-		{name: "history indexes missing", row: []any{true, true, true, false, true}},
-		{name: "writer trigger missing", row: []any{true, true, true, true, false}},
+		{name: "projection missing", row: []any{false, true, true, true, true, true, true}},
+		{name: "history missing", row: []any{true, false, true, true, true, true, true}},
+		{name: "required schema missing", row: []any{true, true, false, true, true, true, true}},
+		{name: "history indexes missing", row: []any{true, true, true, false, true, true, true}},
+		{name: "writer trigger missing", row: []any{true, true, true, true, false, true, true}},
+		{name: "cutover incomplete", row: []any{true, true, true, true, true, false, true}},
+		{name: "dirty rows pending", row: []any{true, true, true, true, true, true, false}},
 	}
 
 	for _, testCase := range cases {
@@ -58,7 +60,7 @@ func TestEnsureHistoryReadyFailsClosedOnProjectionHistoryDrift(t *testing.T) {
 		readinessRow{values: []any{true}},
 	}}
 
-	err := ensureHistoryReady(context.Background(), querier)
+	err := ensureHistoryConsistency(context.Background(), querier)
 	if !errors.Is(err, ErrApprovalHistoryUnavailable) {
 		t.Fatalf("readiness error = %v, want ErrApprovalHistoryUnavailable", err)
 	}
@@ -69,15 +71,14 @@ func TestEnsureHistoryReadyFailsClosedOnProjectionHistoryDrift(t *testing.T) {
 
 func TestEnsureHistoryReadyAcceptsCompleteCutover(t *testing.T) {
 	querier := &readinessQuerierStub{rows: []pgx.Row{
-		readinessRow{values: []any{true, true, true, true, true}},
-		readinessRow{values: []any{false}},
+		readinessRow{values: []any{true, true, true, true, true, true, true}},
 	}}
 
 	if err := ensureHistoryReady(context.Background(), querier); err != nil {
 		t.Fatalf("complete cutover readiness error = %v", err)
 	}
-	if querier.calls != 2 {
-		t.Fatalf("readiness queries = %d, want 2 for complete cutover", querier.calls)
+	if querier.calls != 1 {
+		t.Fatalf("readiness queries = %d, want 1 for complete cutover", querier.calls)
 	}
 }
 

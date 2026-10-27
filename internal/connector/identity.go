@@ -148,8 +148,22 @@ type EventObservation struct {
 }
 
 type journalObservedEvent struct {
-	Event       protocol.Event   `json:"event"`
-	Observation EventObservation `json:"observation"`
+	Event       protocol.Event     `json:"event"`
+	Observation EventObservation   `json:"observation"`
+	RawPayload  *journalRawPayload `json:"raw_payload,omitempty"`
+}
+
+type journalRawPayload struct {
+	Bytes []byte `json:"bytes"`
+}
+
+func cloneRawPayload(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	cloned := make([]byte, len(value))
+	copy(cloned, value)
+	return cloned
 }
 
 func normalizeSessionAlias(alias SessionAlias) (SessionAlias, error) {
@@ -849,12 +863,20 @@ func (j *Journal) appendObservedEvent(event protocol.Event, observation EventObs
 	if event.EventID == "" {
 		event.EventID = digestString(event.SessionID + "\x00" + event.Cursor + "\x00" + string(event.Payload))
 	}
-	observed := journalObservedEvent{Event: cloneEvent(event), Observation: observation}
+	observed := journalObservedEvent{
+		Event:       cloneEvent(event),
+		Observation: observation,
+		RawPayload:  &journalRawPayload{Bytes: cloneRawPayload(event.Payload)},
+	}
+	persistedObserved := observed
+	if !json.Valid(persistedObserved.Event.Payload) {
+		persistedObserved.Event.Payload = json.RawMessage("null")
+	}
 	if err := j.appendLocked(journalRecord{
 		FormatVersion: journalFormatVersion,
 		Type:          "observed_event",
 		At:            event.OccurredAt,
-		ObservedEvent: &observed,
+		ObservedEvent: &persistedObserved,
 	}); err != nil {
 		return protocol.Event{}, protocol.Event{}, false, err
 	}

@@ -255,13 +255,13 @@ func TestApprovalHistoryRejectsProjectionOnlyWriterAndDetectsDrift(t *testing.T)
 	if _, err := db.Pool().Exec(ctx, `UPDATE execution_approval_revisions SET summary = 'drift' WHERE id = $1 AND revision = 1`, fixture.approvalID); err != nil {
 		t.Fatalf("create projection/history drift: %v", err)
 	}
-	if err := store.CheckHistoryReadiness(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
+	if err := store.CheckHistoryConsistency(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
 		t.Fatalf("drift readiness error = %v, want ErrApprovalHistoryUnavailable", err)
 	}
 	if _, err := db.Pool().Exec(ctx, `UPDATE execution_approval_revisions SET summary = $2 WHERE id = $1 AND revision = 1`, fixture.approvalID, created.Summary); err != nil {
 		t.Fatalf("repair projection/history drift: %v", err)
 	}
-	if err := store.CheckHistoryReadiness(ctx); err != nil {
+	if err := store.CheckHistoryConsistency(ctx); err != nil {
 		t.Fatalf("readiness after drift repair = %v", err)
 	}
 }
@@ -375,108 +375,77 @@ func TestApprovalHistoryTransactionRollbackLeavesNoHalfWrite(t *testing.T) {
 	}
 }
 
-func TestApprovalHistoryMigrationFencesQueuedProjectionWriter(t *testing.T) {
+func TestApprovalHistoryMigrationStagesAndFencesProjectionWriter(t *testing.T) {
 	db, provider := openApprovalFixtureDatabaseThrough(t, 11)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	fixture := seedApprovalFixture(t, ctx, db)
-	const legacySummary = "legacy projection before cutover"
+	const legacySummary = "legacy projection before staged cutover"
 	if _, err := db.Pool().Exec(ctx, `
 		INSERT INTO execution_approvals (id, session_id, run_id, generation, kind, requested_at, revision, status, summary, context, requested_event_id)
-		VALUES ($1, $2, $3, $4, 'command', '2026-10-27T04:30:00Z', 1, 'pending', $5, decode('7b7d', 'hex'), $6)
+		VALUES ($1, $2, $3, $4, 'command', '2026-10-27T04:30:00Z', 1, 'pending', $5, decode('7b226f6c64223a747275657d', 'hex'), $6)
 	`, fixture.approvalID, fixture.sessionID, fixture.runID, fixture.generation, legacySummary, fixture.approvalID+"-legacy-event"); err != nil {
 		t.Fatalf("seed pre-cutover projection: %v", err)
 	}
-
-	blockTx, err := db.Pool().Begin(ctx)
+	if _, err := provider.UpTo(ctx, 12); err != nil {
+		t.Fatalf("structural 00012 migration: %v", err)
+	}
+	migrator := database.NewApprovalHistoryMigrator(db.Pool())
+	pausedOptions := database.ApprovalHistoryMigrationOptions{BatchSize: 1, WorkBudget: 1, PreDrainBatchSize: 1, PreDrainWorkBudget: 10, FinalRowBudget: 10, FinalWorkBudget: 30}
+	paused, err := migrator.RunBackfill(ctx, pausedOptions)
 	if err != nil {
-		t.Fatalf("begin migration dependency blocker: %v", err)
+		t.Fatalf("pause approval history backfill: %v", err)
 	}
-	defer blockTx.Rollback(ctx)
-	if _, err := blockTx.Exec(ctx, `LOCK TABLE execution_sessions IN ACCESS EXCLUSIVE MODE`); err != nil {
-		t.Fatalf("hold migration dependency lock: %v", err)
+	if paused.Phase != database.ApprovalHistoryPhaseBackfillPaused || paused.RowsCopied != 1 {
+		t.Fatalf("paused backfill progress = %+v, want one copied row and backfill_paused", paused)
+	}
+	if _, err := db.Pool().Exec(ctx, `UPDATE execution_approvals SET summary = 'legacy projection during capture', context = decode('7b226e6577223a747275657d', 'hex') WHERE id = $1`, fixture.approvalID); err != nil {
+		t.Fatalf("capture legacy projection update: %v", err)
+	}
+	var capturedSummary string
+	var capturedContext []byte
+	if err := db.Pool().QueryRow(ctx, `SELECT summary, context FROM execution_approval_revisions WHERE id = $1 AND revision = 1`, fixture.approvalID).Scan(&capturedSummary, &capturedContext); err != nil {
+		t.Fatalf("read captured legacy projection update: %v", err)
+	}
+	if capturedSummary != "legacy projection during capture" || !bytes.Equal(capturedContext, []byte(`{"new":true}`)) {
+		t.Fatalf("captured projection = summary %q context %x, want updated values", capturedSummary, capturedContext)
+	}
+	resumedOptions := pausedOptions
+	resumedOptions.WorkBudget = 10
+	if _, err := migrator.RunBackfill(ctx, resumedOptions); err != nil {
+		t.Fatalf("resume approval history backfill: %v", err)
+	}
+	if _, err := migrator.Validate(ctx, resumedOptions); err != nil {
+		t.Fatalf("validate staged approval history: %v", err)
+	}
+	if _, err := migrator.BuildIndexes(ctx, resumedOptions); err != nil {
+		t.Fatalf("build staged approval history indexes: %v", err)
+	}
+	if _, err := migrator.Cutover(ctx, resumedOptions); err != nil {
+		t.Fatalf("cut over staged approval history: %v", err)
+	}
+	if err := migrator.Readiness(ctx); err != nil {
+		t.Fatalf("read staged approval history readiness: %v", err)
 	}
 
-	migrationDone := make(chan error, 1)
-	go func() {
-		_, migrationErr := provider.UpTo(ctx, 12)
-		migrationDone <- migrationErr
-	}()
-	if err := waitForApprovalRelationLock(ctx, db, "ShareLock", true); err != nil {
-		_ = blockTx.Rollback(ctx)
-		t.Fatalf("migration did not hold projection share lock: %v", err)
-	}
-
-	legacyTx, err := db.Pool().Begin(ctx)
-	if err != nil {
-		_ = blockTx.Rollback(ctx)
-		t.Fatalf("begin queued legacy writer: %v", err)
-	}
-	legacyDone := make(chan error, 1)
-	go func() {
-		_, legacyErr := legacyTx.Exec(ctx, `UPDATE execution_approvals SET summary = 'legacy writer after cutover' WHERE id = $1`, fixture.approvalID)
-		legacyDone <- legacyErr
-	}()
-	if err := waitForApprovalRelationLock(ctx, db, "RowExclusiveLock", false); err != nil {
-		_ = legacyTx.Rollback(ctx)
-		_ = blockTx.Rollback(ctx)
-		t.Fatalf("legacy writer did not queue behind migration lock: %v", err)
-	}
-	if err := blockTx.Commit(ctx); err != nil {
-		_ = legacyTx.Rollback(ctx)
-		t.Fatalf("release migration dependency lock: %v", err)
-	}
-	if err := <-migrationDone; err != nil {
-		_ = legacyTx.Rollback(ctx)
-		t.Fatalf("00012 migration: %v", err)
-	}
-	if err := <-legacyDone; err == nil {
-		t.Fatal("queued projection-only writer unexpectedly committed after cutover")
-	}
-	if err := legacyTx.Rollback(ctx); err != nil {
-		t.Fatalf("rollback rejected queued writer: %v", err)
+	_, err = db.Pool().Exec(ctx, `UPDATE execution_approvals SET summary = 'legacy writer after cutover' WHERE id = $1`, fixture.approvalID)
+	if err == nil {
+		t.Fatal("projection-only writer unexpectedly committed after cutover")
 	}
 
 	var summary string
 	if err := db.Pool().QueryRow(ctx, `SELECT summary FROM execution_approvals WHERE id = $1`, fixture.approvalID).Scan(&summary); err != nil {
-		t.Fatalf("read projection after queued writer rejection: %v", err)
+		t.Fatalf("read projection after writer rejection: %v", err)
 	}
-	if summary != legacySummary {
-		t.Fatalf("projection summary after queued writer = %q, want %q", summary, legacySummary)
+	if summary != "legacy projection during capture" {
+		t.Fatalf("projection summary after writer rejection = %q, want captured update", summary)
 	}
 	var historyCount int
 	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM execution_approval_revisions WHERE id = $1 AND revision = 1`, fixture.approvalID).Scan(&historyCount); err != nil {
-		t.Fatalf("read backfilled history after queued writer rejection: %v", err)
+		t.Fatalf("read history after writer rejection: %v", err)
 	}
 	if historyCount != 1 {
-		t.Fatalf("backfilled history rows = %d, want 1", historyCount)
-	}
-}
-
-func waitForApprovalRelationLock(ctx context.Context, db *database.DB, mode string, granted bool) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		var present bool
-		if err := db.Pool().QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM pg_locks
-				WHERE relation = to_regclass(current_schema() || '.execution_approvals')
-				  AND mode = $1
-				  AND granted = $2
-			)
-		`, mode, granted).Scan(&present); err != nil {
-			return err
-		}
-		if present {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
+		t.Fatalf("history rows = %d, want 1", historyCount)
 	}
 }
 
@@ -489,6 +458,22 @@ type approvalFixture struct {
 
 func openApprovalFixtureDatabase(t *testing.T) *database.DB {
 	db, _ := openApprovalFixtureDatabaseThrough(t, 12)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	migrator := database.NewApprovalHistoryMigrator(db.Pool())
+	options := database.ApprovalHistoryMigrationOptions{BatchSize: 32, WorkBudget: 10000, PreDrainBatchSize: 32, PreDrainWorkBudget: 10000, FinalRowBudget: 100, FinalWorkBudget: 300}
+	if _, err := migrator.RunBackfill(ctx, options); err != nil {
+		t.Fatalf("run approval history backfill: %v", err)
+	}
+	if _, err := migrator.Validate(ctx, options); err != nil {
+		t.Fatalf("validate approval history backfill: %v", err)
+	}
+	if _, err := migrator.BuildIndexes(ctx, options); err != nil {
+		t.Fatalf("build approval history indexes: %v", err)
+	}
+	if _, err := migrator.Cutover(ctx, options); err != nil {
+		t.Fatalf("cut over approval history: %v", err)
+	}
 	return db
 }
 

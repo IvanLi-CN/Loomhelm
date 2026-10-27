@@ -53,17 +53,6 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 	}
 	var enqueueRunJob runs.RunJobEnqueuer
 	var registerWorkers jobs.WorkerRegistration
-	if cfg.Component == platform.ComponentServer {
-		producer, producerErr := jobs.NewProducer(db, logger, jobs.ProducerConfig{})
-		if producerErr != nil {
-			db.Close()
-			return nil, fmt.Errorf("initialize job producer: %w", producerErr)
-		}
-		enqueueRunJob = func(enqueueCtx context.Context, tx pgx.Tx, args runs.RunJobArgs) error {
-			_, err := producer.EnqueueTx(enqueueCtx, tx, args, nil)
-			return err
-		}
-	}
 	if cfg.Component == platform.ComponentWorker {
 		workerRunStore := runs.NewStore(db.Pool())
 		workerObserver := runs.NewDurableObserver(workerRunStore)
@@ -114,15 +103,29 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		db.Close()
 		return nil, fmt.Errorf("prepare persistence: %w", err)
 	}
+	// River schema migration above does not start workers. Both components must
+	// pass the durable approval-history gate before creating writers or starting.
+	approvalHistoryMigrator := database.NewApprovalHistoryMigrator(db.Pool())
+	if err := approvalHistoryMigrator.Readiness(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("check approval history readiness: %w", err)
+	}
+	if cfg.Component == platform.ComponentServer {
+		producer, producerErr := jobs.NewProducer(db, logger, jobs.ProducerConfig{})
+		if producerErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize job producer: %w", producerErr)
+		}
+		enqueueRunJob = func(enqueueCtx context.Context, tx pgx.Tx, args runs.RunJobArgs) error {
+			_, err := producer.EnqueueTx(enqueueCtx, tx, args, nil)
+			return err
+		}
+	}
 	runtime := &databaseRuntime{db: db, runner: runner, shutdownTimeout: cfg.ShutdownTimeout}
 	if cfg.Component == platform.ComponentServer {
 		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
 		approvalStore := approvals.NewStore(db.Pool())
-		if err := approvalStore.CheckHistoryReadiness(ctx); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("check approval history readiness: %w", err)
-		}
 		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth)
 		if serviceErr != nil {
 			db.Close()

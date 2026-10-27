@@ -1,6 +1,4 @@
 -- +goose Up
-LOCK TABLE execution_approvals IN SHARE MODE;
-
 CREATE TABLE execution_approval_revisions (
     id TEXT NOT NULL CHECK (length(trim(id)) > 0),
     revision BIGINT NOT NULL CHECK (revision > 0),
@@ -20,52 +18,83 @@ CREATE TABLE execution_approval_revisions (
     PRIMARY KEY (id, revision)
 );
 
-INSERT INTO execution_approval_revisions (
-    id, revision, session_id, run_id, generation, kind, requested_at,
-    status, summary, context, resolved_by_command_id, requested_event_id,
-    resolved_at, created_at, updated_at
-)
-SELECT id, revision, session_id, run_id, generation, kind, requested_at,
-       status, summary, context, resolved_by_command_id, requested_event_id,
-       resolved_at, created_at, updated_at
-FROM execution_approvals
-ON CONFLICT (id, revision) DO NOTHING;
+CREATE TABLE execution_approval_history_migrations (
+    migration_key TEXT PRIMARY KEY CHECK (length(trim(migration_key)) > 0),
+    phase TEXT NOT NULL CHECK (phase IN (
+        'structure_ready',
+        'backfill_running',
+        'backfill_paused',
+        'backfill_complete',
+        'failed',
+        'validated',
+        'indexes_ready',
+        'cutover_requested',
+        'cutover_complete',
+        'repair_required'
+    )),
+    checkpoint_id TEXT NOT NULL DEFAULT '',
+    rows_scanned BIGINT NOT NULL DEFAULT 0 CHECK (rows_scanned >= 0),
+    rows_copied BIGINT NOT NULL DEFAULT 0 CHECK (rows_copied >= 0),
+    dirty_rows_reconciled BIGINT NOT NULL DEFAULT 0 CHECK (dirty_rows_reconciled >= 0),
+    lease_owner TEXT NOT NULL DEFAULT '',
+    lease_expires_at TIMESTAMPTZ,
+    last_error TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE execution_approval_history_dirty (
+    id TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
+    queued_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO execution_approval_history_migrations (migration_key, phase)
+VALUES ('approval-revision-history', 'structure_ready')
+ON CONFLICT (migration_key) DO NOTHING;
 
 -- +goose StatementBegin
-DO $$
-DECLARE
-    drift BOOLEAN;
+CREATE FUNCTION loomhelm_capture_approval_history()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
 BEGIN
-    SELECT EXISTS (
-        SELECT 1
-        FROM execution_approvals AS current
-        LEFT JOIN execution_approval_revisions AS history
-          ON history.id = current.id AND history.revision = current.revision
-        WHERE history.id IS NULL
-           OR history.session_id IS DISTINCT FROM current.session_id
-           OR history.run_id IS DISTINCT FROM current.run_id
-           OR history.generation IS DISTINCT FROM current.generation
-           OR history.kind IS DISTINCT FROM current.kind
-           OR history.requested_at IS DISTINCT FROM current.requested_at
-           OR history.status IS DISTINCT FROM current.status
-           OR history.summary IS DISTINCT FROM current.summary
-           OR history.context IS DISTINCT FROM current.context
-           OR history.resolved_by_command_id IS DISTINCT FROM current.resolved_by_command_id
-           OR history.requested_event_id IS DISTINCT FROM current.requested_event_id
-           OR history.resolved_at IS DISTINCT FROM current.resolved_at
-    ) INTO drift;
-    IF drift THEN
-        RAISE EXCEPTION 'execution approval projection/history backfill is inconsistent';
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'approval deletion is not supported while revision history capture is active'
+            USING ERRCODE = '55000';
     END IF;
+
+    INSERT INTO execution_approval_revisions (
+        id, revision, session_id, run_id, generation, kind, requested_at,
+        status, summary, context, resolved_by_command_id, requested_event_id,
+        resolved_at, created_at, updated_at
+    )
+    VALUES (
+        NEW.id, NEW.revision, NEW.session_id, NEW.run_id, NEW.generation,
+        NEW.kind, NEW.requested_at, NEW.status, NEW.summary, NEW.context,
+        NEW.resolved_by_command_id, NEW.requested_event_id, NEW.resolved_at,
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    )
+    ON CONFLICT (id, revision) DO UPDATE SET
+        session_id = EXCLUDED.session_id,
+        run_id = EXCLUDED.run_id,
+        generation = EXCLUDED.generation,
+        kind = EXCLUDED.kind,
+        requested_at = EXCLUDED.requested_at,
+        status = EXCLUDED.status,
+        summary = EXCLUDED.summary,
+        context = EXCLUDED.context,
+        resolved_by_command_id = EXCLUDED.resolved_by_command_id,
+        requested_event_id = EXCLUDED.requested_event_id,
+        resolved_at = EXCLUDED.resolved_at,
+        updated_at = CURRENT_TIMESTAMP;
+
+    INSERT INTO execution_approval_history_dirty (id, queued_at)
+    VALUES (NEW.id, CURRENT_TIMESTAMP)
+    ON CONFLICT (id) DO UPDATE SET queued_at = EXCLUDED.queued_at;
+
+    RETURN NEW;
 END
 $$;
 -- +goose StatementEnd
-
-CREATE INDEX execution_approval_revisions_run_cursor_idx
-    ON execution_approval_revisions (run_id, created_at, id, revision);
-CREATE INDEX execution_approval_revisions_requested_event_idx
-    ON execution_approval_revisions (requested_event_id)
-    WHERE requested_event_id <> '';
 
 -- +goose StatementBegin
 CREATE FUNCTION loomhelm_require_approval_history_writer()
@@ -86,14 +115,16 @@ END
 $$;
 -- +goose StatementEnd
 
-CREATE TRIGGER execution_approvals_history_writer_guard
-BEFORE INSERT OR UPDATE OR DELETE ON execution_approvals
+CREATE TRIGGER execution_approvals_history_capture
+AFTER INSERT OR UPDATE OR DELETE ON execution_approvals
 FOR EACH ROW
-EXECUTE FUNCTION loomhelm_require_approval_history_writer();
+EXECUTE FUNCTION loomhelm_capture_approval_history();
 
 -- +goose Down
 DROP TRIGGER IF EXISTS execution_approvals_history_writer_guard ON execution_approvals;
+DROP TRIGGER IF EXISTS execution_approvals_history_capture ON execution_approvals;
 DROP FUNCTION IF EXISTS loomhelm_require_approval_history_writer();
-DROP INDEX IF EXISTS execution_approval_revisions_requested_event_idx;
-DROP INDEX IF EXISTS execution_approval_revisions_run_cursor_idx;
+DROP FUNCTION IF EXISTS loomhelm_capture_approval_history();
+DROP TABLE IF EXISTS execution_approval_history_dirty;
+DROP TABLE IF EXISTS execution_approval_history_migrations;
 DROP TABLE IF EXISTS execution_approval_revisions;

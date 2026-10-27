@@ -259,6 +259,12 @@ func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRu
 			return AcceptResult{}, Run{}, err
 		}
 	}
+	if err := ValidateIntent(intent); err != nil {
+		return AcceptResult{}, Run{}, err
+	}
+	if err := lockSessionForRunAdmission(ctx, tx, intent.Command.SessionID, intent.Generation); err != nil {
+		return AcceptResult{}, Run{}, err
+	}
 	accepted, err := s.acceptTx(ctx, tx, intent)
 	if err != nil {
 		return AcceptResult{}, Run{}, err
@@ -1264,6 +1270,26 @@ func insertRunTx(ctx context.Context, tx pgx.Tx, candidate Run, now func() time.
 	`, candidate.ID, candidate.SessionID, candidate.CommandID, candidate.Generation, candidate.Status, candidate.Interrupt, candidate.LastCursor, candidate.TerminalReason, createdAt)
 	if err != nil {
 		return fmt.Errorf("persist run: %w", err)
+	}
+	return nil
+}
+
+func lockSessionForRunAdmission(ctx context.Context, tx pgx.Tx, sessionID, generation string) error {
+	var currentGeneration string
+	err := tx.QueryRow(ctx, `
+		SELECT generation
+		FROM execution_sessions
+		WHERE id = $1
+		FOR UPDATE
+	`, sessionID).Scan(&currentGeneration)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: session %q is not persisted", ErrRunConflict, sessionID)
+	}
+	if err != nil {
+		return fmt.Errorf("lock session for run admission: %w", err)
+	}
+	if currentGeneration != generation {
+		return fmt.Errorf("%w: session %q belongs to generation %q", ErrStaleGeneration, sessionID, currentGeneration)
 	}
 	return nil
 }

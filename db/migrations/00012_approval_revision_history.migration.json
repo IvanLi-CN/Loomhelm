@@ -2,123 +2,132 @@
   "schema_version": 1,
   "kind": "persistent-state-migration-record",
   "migration": {
-    "description": "Add immutable approval revision history beside the stable-ID current CAS projection and provide a versioned Run-bound keyset position.",
-    "release_unit_description": "Phase-one execution-domain candidate following migration 00011; this migration is reserved for the Server-side approval revision-history write and read boundary.",
+    "description": "Add pauseable approval revision history beside the stable-ID current CAS projection.",
+    "release_unit_description": "Phase-one execution-domain candidate following migration 00011; history transfer and writer cutover are explicit operations outside startup Goose migration.",
     "version_impact": "minor"
   },
   "compatibility_assessment": {
     "public_api": "minor",
     "persistent_state": "minor",
-    "reason": "Public approval IDs, response fields, limits, authorization and exact resolution CAS remain stable, while the opaque cursor gains an internal version and the additive history table makes newly written same-ID revisions unreadable as complete history to projection-only older writers/readers."
+    "reason": "Public approval IDs, response fields, limits, authorization and exact resolution CAS remain stable. The additive history table preserves only revisions actually observed by the durable projection and the opaque cursor remains Run-bound and versioned."
   },
   "durable_state": {
-    "description": "The current approval projection remains the exact write-side CAS row keyed by stable native request ID. Immutable history rows are keyed by (id, revision), retain raw context and requested-event identity, and remain readable across old execution generations.",
-    "storage_implementation": "PostgreSQL table, keyset indexes and an execution_approvals writer guard managed by the embedded Goose migration history. Existing execution_approvals rows are copied only as one provable snapshot at their current persisted revision.",
+    "description": "The current approval projection remains the write-side CAS row keyed by stable native request ID. History rows are keyed by (id, revision), retain raw context and requested-event identity, and remain readable across execution generations.",
+    "storage_implementation": "PostgreSQL tables and the capture/writer triggers are created by embedded Goose migration 00012. Checkpoint, lease, dirty-row and phase state are durable in PostgreSQL. Historical transfer, concurrent indexes and final cutover are executed by the explicit approval-history migrator.",
     "source_compatibility_range": {
       "from_program_versions": "Phase-one approval-history candidate containing migrations 00009 through 00011.",
-      "to_program_version": "Phase-one stable-ID approval revision-history candidate containing migration 00012.",
+      "to_program_version": "Phase-one stable-ID approval revision-history candidate after explicit cutover_complete.",
       "readable_earlier_state": true,
-      "older_program_can_read_new_state": false,
+      "older_program_can_read_new_state": true,
       "direct_major_skips_supported": false,
-      "compatibility_boundary": "Older projection-only writers/readers may participate only in the pre-cutover drain window. They must be fenced before any new revision is written; after that point switchback requires a history-capable candidate."
+      "compatibility_boundary": "Projection-only writers remain supported while capture is active. They are fenced only after the bounded cutover commits; after the first new history write, switchback requires a history-capable candidate."
     }
   },
   "database_migration": {
     "applicable": true,
     "ddl_structural_changes": [
       {
-        "id": "ddl-00012-approval-projection-lock",
-        "description": "Acquire a SHARE lock on execution_approvals before creating the history snapshot so existing projection writers drain and queued old writers cannot pass the cutover boundary.",
-        "order": 0,
-        "observable": true,
-        "pauseable": false
-      },
-      {
-        "id": "ddl-00012-approval-revision-history-table",
-        "description": "Create execution_approval_revisions with stable approval ID plus revision primary key, raw context/event linkage, state and resolution identity columns.",
+        "id": "ddl-00012-approval-history-structure",
+        "description": "Create the history table, durable migration state, dirty-row queue, capture function, writer-guard function and short-lived capture trigger. No projection table lock is held across data work.",
         "order": 1,
         "observable": true,
-        "pauseable": false
+        "pauseable": true
       },
       {
-        "id": "ddl-00012-approval-revision-history-indexes",
-        "description": "Create the Run-bound cursor index and requested-event lookup index after the backfill so a failure proves the complete table and backfill unit rolls back.",
-        "order": 3,
-        "observable": true,
-        "pauseable": false
-      },
-      {
-        "id": "ddl-00012-approval-writer-guard",
-        "description": "Install a trigger on execution_approvals after backfill and consistency validation; only a transaction-local revision-history-v1 capability may insert, update or delete the projection.",
+        "id": "ddl-approval-history-concurrent-indexes",
+        "description": "Build the Run cursor and requested-event indexes with CREATE INDEX CONCURRENTLY after validation. Invalid or incomplete indexes are detected and repaired forward.",
         "order": 4,
+        "depends_on": ["dml-approval-history-backfill", "dml-approval-history-validation"],
         "observable": true,
-        "pauseable": false
+        "pauseable": true
+      },
+      {
+        "id": "ddl-approval-history-writer-cutover",
+        "description": "Under a bounded execution_approvals SHARE lock, reconcile only the remaining dirty IDs within strict row/work budgets, install the writer guard, remove capture and commit cutover_complete.",
+        "order": 5,
+        "depends_on": ["ddl-approval-history-concurrent-indexes"],
+        "observable": true,
+        "pauseable": true
       }
     ],
     "dml_changes": [
       {
-        "id": "dml-00012-current-projection-snapshot",
-        "description": "Copy exactly one history row from each current execution_approvals row at its persisted (id, revision), preserving raw context, requested_event_id, status and timestamps. Missing older revisions are not synthesized.",
+        "id": "dml-approval-history-capture",
+        "description": "While capture is active, every supported projection insert or update writes or reconciles the same durable history snapshot and queues its ID in the same transaction. Approval deletion is rejected because the current product has no supported deletion semantics.",
         "order": 2,
+        "depends_on": ["ddl-00012-approval-history-structure"],
         "observable": true,
-        "pauseable": false
+        "pauseable": true
       },
       {
-        "id": "dml-00012-projection-history-consistency-check",
-        "description": "Verify every current projection row has a matching history row with an identical durable snapshot before the old-writer guard is installed.",
+        "id": "dml-approval-history-validation",
+        "description": "Run a bounded dirty-row pre-drain and a non-blocking projection/history consistency audit outside the final writer lock. A dirty queue that exceeds its budget leaves capture and old mode active.",
         "order": 3,
+        "depends_on": ["dml-approval-history-backfill"],
         "observable": true,
-        "pauseable": false
+        "pauseable": true
       }
     ],
     "historical_data_backfill_or_transformation": [
-      "No discarded approval revision is reconstructed.",
-      "A current projection row without a matching history snapshot after migration is a failed migration/compatibility state, not an empty history result."
+      {
+        "id": "dml-approval-history-backfill",
+        "description": "Copy one exact current snapshot per existing execution_approvals row in bounded keyset batches. The checkpoint and batch writes commit together; missing older revisions are not synthesized.",
+        "order": 3,
+        "depends_on": ["dml-approval-history-capture"],
+        "observable": true,
+        "pauseable": true
+      },
+      {
+        "id": "dml-approval-history-atomic-adoption",
+        "description": "For a previously applied atomic 00012 preview state, recognize the original table, valid indexes and revision-history writer guard, validate projection/history equality and register cutover_complete without changing Goose history or invoking Down.",
+        "order": 0,
+        "observable": true,
+        "pauseable": true
+      }
     ]
   },
   "rollout_observability": {
-    "operations_must_remain_separate": false,
+    "operations_must_remain_separate": true,
     "operation_sequence": [
-      "ddl-00012-approval-projection-lock",
-      "ddl-00012-approval-revision-history-table",
-      "dml-00012-current-projection-snapshot",
-      "dml-00012-projection-history-consistency-check",
-      "ddl-00012-approval-revision-history-indexes",
-      "ddl-00012-approval-writer-guard"
+      "ddl-00012-approval-history-structure",
+      "dml-approval-history-capture",
+      "dml-approval-history-backfill",
+      "dml-approval-history-validation",
+      "ddl-approval-history-concurrent-indexes",
+      "ddl-approval-history-writer-cutover"
     ],
     "progress_signals": [
-      "A fresh PostgreSQL schema is migrated through 00011 with a real current approval row, then 00012 backfills exactly one matching history row and records migration 00012 only after the full Goose transaction commits.",
-      "The embedded Goose provider parses and executes both PL/pgSQL blocks in 00012, applies the migration, and leaves the approval-history writer guard function and trigger installed.",
-      "A deliberate 00012 index-name collision fails after table creation and backfill, leaves version 12 unapplied and leaves no partial history table or rows; removing only the collision permits forward re-entry.",
-      "A repeated database migration leaves exactly one history table, one primary key, both named indexes and one applied 00012 history record.",
-      "The new writer checks the schema, writer guard and projection/history agreement before serving history reads or writing revision state, and old projection-only state drift fails closed instead of silently losing a page.",
-      "A projection writer already in flight before the migration lock is included in the backfill snapshot; a writer queued behind the lock is rejected by the trigger unless it sets the transaction-local revision-history-v1 capability, and no partial projection write is committed."
+      "The phase row exposes checkpoint_id, scanned/copied counts, dirty reconciliation count, lease ownership, expiry and last error.",
+      "Each backfill batch is a committed keyset transaction; cancel or process exit leaves the prior checkpoint recoverable and safe to re-enter.",
+      "The capture trigger makes concurrent projection-only writes visible in history and the dirty queue without a history-volume table lock.",
+      "Concurrent indexes are ready only when pg_index reports both indisvalid and indisready and the definition matches the required keyset or partial index.",
+      "Readiness is admitted only at cutover_complete with both indexes, the enabled writer guard and an empty dirty queue; startup does not repeat a full history scan."
     ],
     "pause_points": [
-      "Before applying 00012, verify the candidate source identity, the 00011 schema and PostgreSQL migration lock availability.",
-      "During 00012, hold the execution_approvals SHARE lock across table creation, snapshot, consistency validation and writer-guard installation.",
-      "After 00012 commits, verify one history row for every current projection row at its current (id, revision), the trigger is present, and the new writer's transaction-local capability is accepted before admitting approval revision writes.",
-      "Drain and fence all projection-only writers before accepting the first post-migration higher-revision approval request; a queued old writer must fail before projection DML.",
-      "If a projection/history guard fails, stop approval history traffic and repair forward; do not switch back to an older writer after new revision history exists."
+      "After the structural Goose migration commits and before the explicit transfer operation.",
+      "After any committed backfill batch or pre-drain batch.",
+      "Before and after concurrent index construction.",
+      "Before final cutover lock acquisition; lock_timeout, statement_timeout, final row budget and final work budget are mandatory.",
+      "A timeout, oversized dirty queue or validation failure rolls back cutover and retains capture plus the old projection mode."
     ]
   },
   "recovery": {
     "deployed_migrations_immutable": true,
     "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
-    "faulty_release_recovery": "forward-repair-by-a-new-program-version or a corrected re-entry after a rolled-back 00012 transaction; do not invent missing revisions or rewrite raw history",
+    "faulty_release_recovery": "A fresh unpublished 00012 may be reworked before release. A previously applied atomic 00012 is adopted only through explicit recognition and forward state registration. Interrupted staged work resumes from durable phase/checkpoint; unrecognized layouts fail closed.",
     "backup_restore_role": "separate-disaster-recovery"
   },
   "validation": {
     "minor": {
       "required_test_evidence": [
-        "The PostgreSQL path from 00011 to 00012 locks the projection before backfill, copies a current approval row exactly once, retains raw context and requested_event_id and leaves the current projection unchanged.",
-        "A real Goose Provider execution of 00012 parses both PL/pgSQL blocks, applies the migration, and verifies the writer guard function and trigger rather than executing the SQL as one pgx batch.",
-        "A deliberate 00012 index collision rolls back table creation and the backfill, leaves migration 00012 unapplied, and the same migration re-enters successfully after only the deliberate collision is removed.",
-        "Repeated migration discovery leaves one history table, the Run cursor index, requested-event index and applied migration record.",
-        "Same stable approval ID with revisions written at equal created_at values returns every revision through version-2 cursors without skips; current resolution changes only the matching history revision.",
-        "A legacy cursor is accepted only for a unique persisted (run_id, created_at, id) position and ambiguous, missing, malformed or cross-run positions fail closed.",
-        "A current projection with missing or divergent history is rejected by the read/write guard, and old projection-only writers are excluded from the post-cutover acceptance window.",
-        "A concurrent old projection writer that began before the migration lock is included in the snapshot, while a writer queued after the lock is rejected without a partial write; a new writer succeeds only with a transaction-local capability and projection/history writes commit together."
+        "Goose migration 00012 creates only structural state and capture; startup migration does not copy approval rows, build historical indexes or install the final writer guard.",
+        "Real PostgreSQL backfill preserves raw context bytes, requested_event_id, current status and timestamps, and does not invent discarded revisions.",
+        "Old projection-only insert/update transactions concurrent with backfill are captured atomically, and capture failures roll back the projection write.",
+        "Pause, cancellation, process restart and re-entry preserve checkpoint monotonicity and do not duplicate or lose history rows.",
+        "Concurrent index failure leaves no falsely ready index; invalid or incomplete index state is repaired forward.",
+        "A dirty queue exceeding the pre-drain or final cutover budget leaves old mode and capture active without holding an unbounded SHARE lock.",
+        "The exact previously applied atomic 00012 layout is adopted, while a near-miss layout is rejected without changing Goose history.",
+        "Server and Worker approval writers fail closed before cutover_complete, and readiness uses durable phase/index/guard facts without a startup full-table consistency scan."
       ]
     }
   },

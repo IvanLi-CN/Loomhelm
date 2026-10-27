@@ -1856,6 +1856,9 @@ func (j *Journal) applyRecord(record journalRecord) error {
 			return fmt.Errorf("%w: incomplete observed event", ErrJournalCorrupt)
 		}
 		observed := *record.ObservedEvent
+		if observed.RawPayload != nil {
+			observed.Event.Payload = json.RawMessage(cloneRawPayload(observed.RawPayload.Bytes))
+		}
 		observation, err := normalizeEventObservation(observed.Observation)
 		if err != nil || observed.Event.SessionID == "" || observed.Event.EventID == "" || observed.Event.Cursor == "" || observed.Event.Sequence <= 0 {
 			if err == nil {
