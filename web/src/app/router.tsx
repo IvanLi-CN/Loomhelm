@@ -24,7 +24,7 @@ function ProductionNotReadyRoute({ eyebrow, title, description, to = "/tasks", l
 
 function ProductionWorkbenchRoute() {
   const assembly = useOptionalProductionApi();
-  return <ProductionNotReadyRoute eyebrow="WORKBENCH" title="工作台等待会话接入" description={assembly?.auth.message ?? "当前 production 已接入浏览器身份与项目/任务数据；会话、审批和执行能力会在服务端合同接通后显示。"} />;
+  return <ProductionNotReadyRoute eyebrow="WORKBENCH" title="工作台等待会话接入" description={assembly?.auth.message ?? "当前已接入浏览器身份与项目、任务数据；会话、审批和执行能力将在服务可用后显示。"} />;
 }
 
 function RootRoute() {
@@ -34,13 +34,13 @@ function RootRoute() {
 function ConversationsEntryRoute() {
   return useOptionalDemoRuntime()
     ? <ConversationsRoute />
-    : <ProductionNotReadyRoute eyebrow="CONVERSATIONS" title="对话服务尚未接通" description="当前 production 只显示真实的项目和任务数据，不会虚构对话叶子或使用 Demo fallback。" />;
+    : <ProductionNotReadyRoute eyebrow="CONVERSATIONS" title="对话服务尚未接通" description="当前显示真实的项目和任务数据；对话功能将在服务可用后开放。" />;
 }
 
 function CreateConversationEntryRoute() {
   return useOptionalDemoRuntime()
     ? <CreateConversationRoute />
-    : <ProductionNotReadyRoute eyebrow="CONVERSATIONS" title="创建对话尚未接通" description="会话创建、历史共享和执行入口由后续会话服务接入；当前不会提交模拟对话。" to="/" linkLabel="返回工作台" />;
+    : <ProductionNotReadyRoute eyebrow="CONVERSATIONS" title="创建对话尚未接通" description="会话创建、历史共享和执行入口将在服务可用后开放。" to="/" linkLabel="返回工作台" />;
 }
 
 const rootRoute = createRootRoute({ component: AppShell });

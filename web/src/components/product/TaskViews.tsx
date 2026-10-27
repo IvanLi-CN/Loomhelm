@@ -174,7 +174,7 @@ export function TaskExplorer({ scope = "global", projectId, source: providedSour
   const sourceTasks = source?.getTasksForScope(projectId) ?? [];
   const tasks = useMemo(() => sourceTasks.filter((task) => { const matchesSearch = !search || `${task.id} ${task.title} ${task.goal}`.toLowerCase().includes(search.toLowerCase()); return matchesSearch && (filter === "all" || task.state === filter); }), [filter, search, sourceTasks]);
 
-  if (!source) return <div className="error-state"><span className="empty-icon empty-icon-danger" aria-hidden="true">!</span><h2>任务数据源尚未接入</h2><p>该渲染组件等待可授权的 ProjectTaskSource；不会绕过数据源调用临时接口。</p></div>;
+  if (!source) return <div className="error-state"><span className="empty-icon empty-icon-danger" aria-hidden="true">!</span><h2>任务暂不可用</h2><p>当前无法读取任务，请稍后再试。</p></div>;
   const view = source.getTaskView(scope);
 
   return (

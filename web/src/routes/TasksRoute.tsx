@@ -21,7 +21,7 @@ export function TasksRoute() {
     wasCreatingProjectRef.current = creatingProject;
   }, [creatingProject]);
 
-  if (!source) return <section className="page-section unavailable-page"><span className="eyebrow">TASKS</span><h1>任务数据源尚未接入</h1><p>页面组件已准备好 production adapter，当前 route 需要可授权的数据源。</p></section>;
+  if (!source) return <section className="page-section unavailable-page"><span className="eyebrow">TASKS</span><h1>任务暂不可用</h1><p>当前无法读取任务，请稍后再试。</p></section>;
   const canCreateTask = source.status === "ready" && source.projects.length > 0;
 
   return (

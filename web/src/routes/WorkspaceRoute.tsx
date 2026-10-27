@@ -146,7 +146,7 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
   }
 
   if (!source || (source.status === "loading" && currentDeleteState === "idle")) {
-    return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">TASK WORKSPACE</span><h1>正在读取任务</h1><p>任务工作区会在真实授权数据加载完成后显示，不会使用 Demo 夹具替代项目或任务信息。</p></section>;
+    return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">TASK WORKSPACE</span><h1>正在读取任务</h1><p>任务工作区正在加载，请稍候。</p></section>;
   }
   if (!displayedTask) {
     return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><h1>任务当前不可用</h1><p>任务不存在，或当前浏览器身份无权查看它的受保护信息。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button></section>;
@@ -182,7 +182,7 @@ export function TaskWorkspaceRoute() {
 export function ConversationWorkspaceRoute() {
   const { conversationId } = useParams({ from: "/conversations/$conversationId" });
   const runtime = useOptionalDemoRuntime();
-  if (!runtime) return <section className="page-section unavailable-page"><span className="eyebrow">CONVERSATION WORKSPACE</span><h1>对话服务尚未接通</h1><p>当前 production 不会在没有真实会话数据时调用 Demo 工作区或展示模拟历史。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">查看任务</Link></Button></section>;
+  if (!runtime) return <section className="page-section unavailable-page"><span className="eyebrow">CONVERSATION WORKSPACE</span><h1>对话服务尚未接通</h1><p>当前暂时无法打开对话工作区，请先查看任务列表。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">查看任务</Link></Button></section>;
   const conversation = getConversation(runtime.fixtures, conversationId);
   return <WorkspaceRoute taskId={conversation?.taskId} conversationId={conversationId} />;
 }
