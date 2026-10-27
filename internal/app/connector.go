@@ -185,7 +185,7 @@ func (c *Connector) connectionLoop(ctx context.Context) error {
 		connection, err := c.platform.Connect(dialCtx)
 		cancel()
 		if err != nil {
-			c.logger.Warn("connector platform gateway connect failed", "error", err, "retry_after", delay)
+			c.logger.Warn("connector platform gateway connect failed", "error_class", connectorGatewayErrorClass(err), "retry_after", delay)
 			if !waitConnectorRetry(ctx, delay) {
 				return ctx.Err()
 			}
@@ -198,10 +198,10 @@ func (c *Connector) connectionLoop(ctx context.Context) error {
 		err = c.serveConnection(ctx, connection)
 		c.clearConnection(connection)
 		if closeErr := connection.Close(); closeErr != nil && ctx.Err() == nil {
-			c.logger.Warn("connector platform gateway close failed", "error", closeErr)
+			c.logger.Warn("connector platform gateway close failed", "error_class", connectorGatewayErrorClass(closeErr))
 		}
 		if err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
-			c.logger.Warn("connector platform gateway disconnected", "error", err, "retry_after", delay)
+			c.logger.Warn("connector platform gateway disconnected", "error_class", connectorGatewayErrorClass(err), "retry_after", delay)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -347,6 +347,17 @@ func connectorRecoveryErrorClass(err error) string {
 		return "deadline_exceeded"
 	default:
 		return "recovery_failed"
+	}
+}
+
+func connectorGatewayErrorClass(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	default:
+		return "gateway_error"
 	}
 }
 

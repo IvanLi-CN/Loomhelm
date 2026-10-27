@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +18,12 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
+
+type failingGatewayRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f failingGatewayRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestConnectorGatewayCommandLogOmitsPrivateFailurePath(t *testing.T) {
 	registry := newConnectorGatewayRegistry()
@@ -82,5 +91,38 @@ func TestConnectorGatewayCommandLogOmitsPrivateFailurePath(t *testing.T) {
 	}
 	if !strings.Contains(output, command.CommandID) || !strings.Contains(output, string(command.Kind)) || !strings.Contains(output, "error=command_rejected") {
 		t.Fatalf("connector log omitted safe command context: %s", output)
+	}
+}
+
+func TestConnectorGatewayConnectionLogOmitsPrivateFailurePath(t *testing.T) {
+	privateURL := "wss://private.example/private/gateway/path"
+	client, err := gateway.NewClient(gateway.ClientOptions{
+		URL:    privateURL,
+		HostID: "connector-log-host",
+		Token:  "connector-log-token",
+		HTTPClient: &http.Client{Transport: failingGatewayRoundTripper(func(*http.Request) (*http.Response, error) {
+			return nil, &url.Error{Op: "dial", URL: privateURL, Err: errors.New("connection refused")}
+		})},
+	})
+	if err != nil {
+		t.Fatalf("gateway.NewClient() error = %v", err)
+	}
+	var logOutput bytes.Buffer
+	connector := &Connector{
+		cfg:      platform.Config{ShutdownTimeout: 20 * time.Millisecond},
+		logger:   slog.New(slog.NewTextHandler(&logOutput, nil)),
+		platform: client,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := connector.connectionLoop(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("connectionLoop() error = %v, want deadline exceeded", err)
+	}
+	output := logOutput.String()
+	if strings.Contains(output, "private.example") || strings.Contains(output, "/private/gateway/path") {
+		t.Fatalf("connector connection log exposed private gateway URL: %s", output)
+	}
+	if !strings.Contains(output, "error_class=gateway_error") {
+		t.Fatalf("connector connection log omitted safe error class: %s", output)
 	}
 }

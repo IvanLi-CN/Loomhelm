@@ -382,6 +382,9 @@ func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.
 		if command.Kind == protocol.CommandKindRunSend {
 			return c.reconcileCachedRunCommand(ctx, command, prepared, ack)
 		}
+		if command.Kind == protocol.CommandKindRunApprove || command.Kind == protocol.CommandKindRunDeny {
+			return c.reconcileCachedApprovalCommand(command, prepared, ack)
+		}
 		if ack.State == protocol.CommandStateUnknown {
 			return ack, protocol.ErrUnknownCommandResult
 		}
@@ -397,6 +400,52 @@ func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.
 	}
 	ack, acceptErr := c.controller.AcceptCommand(ctx, prepared)
 	return c.completePlatformCommand(command, prepared, ack, acceptErr)
+}
+
+// reconcileCachedApprovalCommand proves an unknown approval ACK from the
+// journal's exact durable resolution. It never replays the adapter response.
+func (c *Connector) reconcileCachedApprovalCommand(command, prepared protocol.Command, ack protocol.CommandAck) (protocol.CommandAck, error) {
+	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+		return ack, nil
+	}
+	namespace := connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID)
+	resolution, found, err := c.journal.ApprovalResultInNamespace(namespace, prepared.CommandID)
+	if err != nil {
+		return c.persistUnknownCommand(namespace, prepared.CommandID, ack, err)
+	}
+	if !found {
+		return c.persistUnknownCommand(namespace, prepared.CommandID, ack, protocol.ErrUnknownCommandResult)
+	}
+	desired := "accept"
+	if command.Kind == protocol.CommandKindRunDeny {
+		desired = "decline"
+	}
+	if resolution != desired && resolution != "cleared" {
+		cause := fmt.Errorf("approval resolved as %q, requested %q", resolution, desired)
+		durable := ack
+		durable.Deduplicated = false
+		durable.State = protocol.CommandStateFailed
+		durable.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: cause.Error(), RequestID: command.CommandID}
+		if updateErr := c.journal.UpdateCommandInNamespace(namespace, prepared.CommandID, durable); updateErr != nil {
+			return ack, errors.Join(cause, updateErr)
+		}
+		durable.Deduplicated = true
+		return durable, cause
+	}
+	result, err := json.Marshal(map[string]string{"decision": desired})
+	if err != nil {
+		return c.persistUnknownCommand(namespace, prepared.CommandID, ack, err)
+	}
+	durable := ack
+	durable.Deduplicated = false
+	durable.State = protocol.CommandStateSucceeded
+	durable.Error = nil
+	durable.Result = result
+	if err := c.journal.UpdateCommandInNamespace(namespace, prepared.CommandID, durable); err != nil {
+		return ack, err
+	}
+	durable.Deduplicated = true
+	return durable, nil
 }
 
 func (c *Connector) completePlatformCommand(command, prepared protocol.Command, ack protocol.CommandAck, acceptErr error) (protocol.CommandAck, error) {

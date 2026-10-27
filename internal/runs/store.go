@@ -876,6 +876,12 @@ func (s *Store) ApplyEvent(ctx context.Context, generation string, input protoco
 		if applyErr != nil {
 			return protocol.Event{}, applyErr
 		}
+		if appended.Event.Type == protocol.EventTypeApprovalResolved {
+			updated, applyErr = s.resumeAfterApprovalEventTx(ctx, tx, updated, generation, appended.Event)
+			if applyErr != nil {
+				return protocol.Event{}, applyErr
+			}
+		}
 		if updated != current {
 			if updated.UpdatedAt == "" {
 				updated.UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
@@ -898,6 +904,42 @@ func (s *Store) ApplyEvent(ctx context.Context, generation string, input protoco
 		return protocol.Event{}, fmt.Errorf("commit execution event application: %w", err)
 	}
 	return appended.Event, nil
+}
+
+func (s *Store) resumeAfterApprovalEventTx(ctx context.Context, tx pgx.Tx, current Run, generation string, event protocol.Event) (Run, error) {
+	if current.Status != protocol.RunStatusWaitingApproval {
+		return current, nil
+	}
+	var nativeRunning bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM execution_events
+			WHERE session_id = $1
+			  AND run_id = $2
+			  AND type = $3
+		)
+	`, current.SessionID, current.ID, protocol.EventTypeRunStarted).Scan(&nativeRunning); err != nil {
+		return Run{}, fmt.Errorf("check native running fact for approval resolution: %w", err)
+	}
+	if !nativeRunning {
+		return current, nil
+	}
+	var pendingApprovals int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM execution_approvals
+		WHERE session_id = $1
+		  AND run_id = $2
+		  AND generation = $3
+		  AND status = 'pending'
+	`, current.SessionID, current.ID, generation).Scan(&pendingApprovals); err != nil {
+		return Run{}, fmt.Errorf("check pending approvals for approval resolution: %w", err)
+	}
+	if pendingApprovals != 0 {
+		return current, nil
+	}
+	return current.ResumeAfterApproval(generation, event.Cursor)
 }
 
 // ApplyApprovalRequestedEvent appends an approval.requested event, moves the
@@ -1163,6 +1205,8 @@ func applyRunEvent(current Run, generation string, event protocol.Event) (Run, e
 			return current, nil
 		}
 		return current.WaitForApproval(generation, cursor)
+	case protocol.EventTypeApprovalResolved:
+		return current, nil
 	case protocol.EventTypeRunCompleted:
 		return current.ObserveTerminal(generation, protocol.RunStatusCompleted, cursor, "")
 	case protocol.EventTypeRunFailed:

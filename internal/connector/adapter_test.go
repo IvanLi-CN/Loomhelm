@@ -116,6 +116,26 @@ func (f fakeProvider) TransportFor(context.Context, protocol.GatewaySession) (RP
 	return f.transport, nil
 }
 
+type flakySessionIdentityProvider struct {
+	mu        sync.Mutex
+	transport RPCTransport
+	bindErr   error
+	bindCalls int
+}
+
+func (p *flakySessionIdentityProvider) TransportFor(context.Context, protocol.GatewaySession) (RPCTransport, error) {
+	return p.transport, nil
+}
+
+func (p *flakySessionIdentityProvider) SetExternalThreadRef(protocol.GatewaySession, string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bindCalls++
+	err := p.bindErr
+	p.bindErr = nil
+	return err
+}
+
 type sessionTransportProvider struct {
 	mu             sync.Mutex
 	transports     map[string]RPCTransport
@@ -168,6 +188,63 @@ func TestAdapterRejectsMissingSessionCreationIdentityBeforeTransport(t *testing.
 	provider.mu.Unlock()
 	if transportCalls != 0 {
 		t.Fatalf("transport calls for missing identity = %d, want 0", transportCalls)
+	}
+}
+
+func TestAdapterDoesNotReplayThreadStartAfterKnownIdentityPersistenceFailure(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-known-after-persist-failure"}}}`),
+		Result: json.RawMessage(`{"thread":{"id":"thread-known-after-persist-failure"}}`),
+	}}}
+	transport.responses["thread/resume"] = []fakeResult{{message: RPCMessage{
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-known-after-persist-failure"}}}`),
+		Result: json.RawMessage(`{"thread":{"id":"thread-known-after-persist-failure"}}`),
+	}}}
+	provider := &flakySessionIdentityProvider{transport: transport, bindErr: errors.New("gateway identity persistence failed")}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewaySession := protocol.GatewaySession{Handle: "gateway-known-after-persist-failure", Generation: "generation-known-after-persist-failure", Path: protocol.SessionPathNew}
+	namespace := PlatformSessionCommandNamespace("platform-known-after-persist-failure")
+	request := testSessionRequest()
+	if _, err := adapter.StartSessionInNamespace(context.Background(), namespace, gatewaySession, request); !errors.Is(err, ErrUnknownOutcome) {
+		t.Fatalf("known identity persistence error = %v, want unknown outcome", err)
+	}
+	proof, found, err := journal.ResolvedSessionStartProofForGateway(gatewaySession.Handle, request)
+	if err != nil || !found || proof.AdapterSession.ExternalThreadRef != "thread-known-after-persist-failure" {
+		t.Fatalf("resolved session start proof = %+v, found = %v, error = %v", proof, found, err)
+	}
+	transport.mu.Lock()
+	closedAfterFailure := transport.closed
+	transport.mu.Unlock()
+	if closedAfterFailure {
+		t.Fatal("known native session was closed after persistence failure")
+	}
+
+	recovered, err := adapter.StartSessionInNamespace(context.Background(), namespace, gatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ExternalThreadRef != "thread-known-after-persist-failure" {
+		t.Fatalf("recovered adapter session = %+v", recovered)
+	}
+	if got := countCalls(transport, "thread/start"); got != 1 {
+		t.Fatalf("thread/start calls = %d, want 1", got)
+	}
+	if got := countCalls(transport, "thread/resume"); got != 1 {
+		t.Fatalf("thread/resume calls = %d, want 1", got)
+	}
+	provider.mu.Lock()
+	bindCalls := provider.bindCalls
+	provider.mu.Unlock()
+	if bindCalls != 2 {
+		t.Fatalf("gateway identity bind calls = %d, want 2", bindCalls)
+	}
+	if err := adapter.CloseSession(context.Background(), recovered); err != nil {
+		t.Fatal(err)
 	}
 }
 

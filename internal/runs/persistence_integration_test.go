@@ -331,6 +331,10 @@ func TestApprovalAdmissionRejectsTerminalRunBeforeResolver(t *testing.T) {
 		t.Fatalf("begin terminal winner transaction: %v", err)
 	}
 	defer terminalTx.Rollback(context.Background())
+	var blockerPID int32
+	if err := terminalTx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
+		t.Fatalf("read terminal winner backend pid: %v", err)
+	}
 	var lockedRunID string
 	if err := terminalTx.QueryRow(ctx, `SELECT id FROM execution_runs WHERE id = $1 FOR UPDATE`, ids.run).Scan(&lockedRunID); err != nil {
 		t.Fatalf("lock terminal winner run: %v", err)
@@ -341,7 +345,7 @@ func TestApprovalAdmissionRejectsTerminalRunBeforeResolver(t *testing.T) {
 		_, _, acceptErr := runStore.AcceptApproval(ctx, resolver, CommandIntent{Command: command, Generation: "1"}, request)
 		result <- acceptErr
 	}()
-	if err := waitForApprovalAdmissionRunLock(ctx, db.Pool()); err != nil {
+	if err := waitForApprovalAdmissionRunLock(ctx, db.Pool(), blockerPID); err != nil {
 		t.Fatalf("wait for terminal approval admission run lock: %v", err)
 	}
 	if _, err := terminalTx.Exec(ctx, `
@@ -688,6 +692,148 @@ func TestPersistentApprovalRequestedEventAtomicity(t *testing.T) {
 	}
 	if resolved.Status != protocol.ApprovalStatusApproved {
 		t.Fatalf("concurrently resolved approval = %+v", resolved)
+	}
+}
+
+func TestPersistentApprovalResolvedResumesOnlyFromNativeEvidence(t *testing.T) {
+	t.Run("native running fact and no pending approvals", func(t *testing.T) {
+		db := openExecutionDatabase(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ids := executionTestIDs()
+		cleanupExecutionRows(t, &db, ids)
+		runStore, approvalStore, runID := createApprovalResumeFixture(t, ctx, db, ids, true)
+		approval := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, ids.approval, ids.approval+"-requested")
+		resolveApprovalResumeFixture(t, ctx, approvalStore, approval.ID, runID, ids.session, "1", ids.approvalCommand)
+		applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-resolved", "accept")
+		stored, err := runStore.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != protocol.RunStatusRunning || stored.LastCursor != ids.approval+"-resolved-cursor" {
+			t.Fatalf("resumed run = %+v, want running at resolved cursor", stored)
+		}
+	})
+
+	t.Run("approval callback without native running fact stays waiting", func(t *testing.T) {
+		db := openExecutionDatabase(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ids := executionTestIDs()
+		cleanupExecutionRows(t, &db, ids)
+		runStore, approvalStore, runID := createApprovalResumeFixture(t, ctx, db, ids, false)
+		approval := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, ids.approval, ids.approval+"-requested")
+		resolveApprovalResumeFixture(t, ctx, approvalStore, approval.ID, runID, ids.session, "1", ids.approvalCommand)
+		applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-resolved", "accept")
+		stored, err := runStore.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != protocol.RunStatusWaitingApproval {
+			t.Fatalf("run resumed without native running fact = %+v", stored)
+		}
+	})
+
+	t.Run("other pending approval keeps run waiting", func(t *testing.T) {
+		db := openExecutionDatabase(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ids := executionTestIDs()
+		cleanupExecutionRows(t, &db, ids)
+		secondApprovalID := ids.approval + "-second"
+		t.Cleanup(func() {
+			if db == nil {
+				return
+			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			if err := execApprovalProjectionMutation(cleanupCtx, db, `DELETE FROM execution_approvals WHERE id = $1`, secondApprovalID); err != nil {
+				t.Errorf("cleanup second approval: %v", err)
+			}
+		})
+		runStore, approvalStore, runID := createApprovalResumeFixture(t, ctx, db, ids, true)
+		first := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, ids.approval, ids.approval+"-first-requested")
+		applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, secondApprovalID, ids.approval+"-second-requested")
+		resolveApprovalResumeFixture(t, ctx, approvalStore, first.ID, runID, ids.session, "1", ids.approvalCommand)
+		applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-first-resolved", "accept")
+		stored, err := runStore.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != protocol.RunStatusWaitingApproval {
+			t.Fatalf("run resumed with another pending approval = %+v", stored)
+		}
+	})
+
+	t.Run("terminal run is not reopened", func(t *testing.T) {
+		db := openExecutionDatabase(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ids := executionTestIDs()
+		cleanupExecutionRows(t, &db, ids)
+		runStore, approvalStore, runID := createApprovalResumeFixture(t, ctx, db, ids, true)
+		approval := applyApprovalResumeRequest(t, ctx, runStore, ids.session, runID, ids.approval, ids.approval+"-requested")
+		if _, err := runStore.ObserveTerminal(ctx, runID, "1", protocol.RunStatusCompleted, ids.approval+"-terminal-cursor", "terminal winner"); err != nil {
+			t.Fatal(err)
+		}
+		resolveApprovalResumeFixture(t, ctx, approvalStore, approval.ID, runID, ids.session, "1", ids.approvalCommand)
+		applyApprovalResolvedResumeEvent(t, ctx, runStore, ids.session, runID, ids.approval+"-resolved", "accept")
+		stored, err := runStore.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != protocol.RunStatusCompleted || stored.LastCursor != ids.approval+"-terminal-cursor" {
+			t.Fatalf("terminal run changed after approval callback = %+v", stored)
+		}
+	})
+}
+
+func createApprovalResumeFixture(t *testing.T, ctx context.Context, db *database.DB, ids executionIDs, nativeRunningFact bool) (*Store, *approvals.Store, string) {
+	t.Helper()
+	sessionStore := sessions.NewStore(db.Pool())
+	runStore := NewStore(db.Pool())
+	approvalStore := approvals.NewStore(db.Pool())
+	if _, err := sessionStore.Create(ctx, sessions.NewInput{ID: ids.session, Path: protocol.SessionPathNew, ExternalThreadRef: ids.thread, Generation: "1"}); err != nil {
+		t.Fatalf("create approval resume session: %v", err)
+	}
+	run, err := runStore.CreateRun(ctx, NewRunInput{ID: ids.run, SessionID: ids.session, CommandID: ids.command, Generation: "1"})
+	if err != nil {
+		t.Fatalf("create approval resume run: %v", err)
+	}
+	if nativeRunningFact {
+		runID := run.ID
+		if _, err := runStore.ApplyEvent(ctx, "1", protocol.Event{EventID: ids.run + "-started-event", Cursor: ids.run + "-started-cursor", Payload: json.RawMessage(`{"threadId":"native-thread"}`), RunID: &runID, SessionID: ids.session, Source: protocol.EventSourceAppServer, Type: protocol.EventTypeRunStarted}); err != nil {
+			t.Fatalf("apply native run started event: %v", err)
+		}
+	} else if _, err := runStore.Start(ctx, run.ID, "1", ids.run+"-started-without-fact"); err != nil {
+		t.Fatalf("start run without native fact: %v", err)
+	}
+	return runStore, approvalStore, run.ID
+}
+
+func applyApprovalResumeRequest(t *testing.T, ctx context.Context, runStore *Store, sessionID, runID, approvalID, eventPrefix string) approvals.Approval {
+	t.Helper()
+	event := protocol.Event{EventID: eventPrefix + "-event", Cursor: eventPrefix + "-cursor", Payload: json.RawMessage(`{"approval":{"kind":"command"}}`), RunID: &runID, SessionID: sessionID, Source: protocol.EventSourceAppServer, Type: protocol.EventTypeApprovalRequested}
+	request := approvals.CreateRequest{NewInput: approvals.NewInput{ID: approvalID, RunID: runID, SessionID: sessionID, Generation: "1", Revision: 1, Kind: "command", Summary: "approval resume test", RequestedAt: "2026-10-28T00:00:00Z"}, Context: json.RawMessage(`{"scope":"write"}`), RequestedEventID: event.EventID}
+	_, approval, err := runStore.ApplyApprovalRequestedEvent(ctx, "1", event, request)
+	if err != nil {
+		t.Fatalf("apply approval request %q: %v", approvalID, err)
+	}
+	return approval
+}
+
+func resolveApprovalResumeFixture(t *testing.T, ctx context.Context, approvalStore *approvals.Store, approvalID, runID, sessionID, generation, commandID string) {
+	t.Helper()
+	_, err := approvalStore.Resolve(ctx, approvals.ResolveRequest{ApprovalID: approvalID, RunID: runID, SessionID: sessionID, Generation: generation, Request: protocol.ResolveApprovalRequest{CommandID: commandID, Decision: protocol.ApprovalDecisionApprove, Revision: 1}})
+	if err != nil {
+		t.Fatalf("resolve approval %q: %v", approvalID, err)
+	}
+}
+
+func applyApprovalResolvedResumeEvent(t *testing.T, ctx context.Context, runStore *Store, sessionID, runID, eventPrefix, resolution string) {
+	t.Helper()
+	if _, err := runStore.ApplyEvent(ctx, "1", protocol.Event{EventID: eventPrefix + "-event", Cursor: eventPrefix + "-cursor", Payload: json.RawMessage(fmt.Sprintf(`{"params":{"resolution":%q}}`, resolution)), RunID: &runID, SessionID: sessionID, Source: protocol.EventSourceAppServer, Type: protocol.EventTypeApprovalResolved}); err != nil {
+		t.Fatalf("apply approval resolved event %q: %v", eventPrefix, err)
 	}
 }
 
@@ -1515,7 +1661,7 @@ func waitForDistinctRunAdmissionWaiters(ctx context.Context, pool *pgxpool.Pool)
 	}
 }
 
-func waitForApprovalAdmissionRunLock(ctx context.Context, pool *pgxpool.Pool) error {
+func waitForApprovalAdmissionRunLock(ctx context.Context, pool *pgxpool.Pool, blockerPID int32) error {
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -1528,7 +1674,8 @@ func waitForApprovalAdmissionRunLock(ctx context.Context, pool *pgxpool.Pool) er
 			WHERE activity.wait_event_type = 'Lock'
 			  AND activity.query ILIKE '%FROM execution_runs AS run%'
 			  AND activity.query ILIKE '%FOR UPDATE%'
-		`).Scan(&waiters)
+			  AND $1 = ANY(pg_blocking_pids(activity.pid))
+		`, blockerPID).Scan(&waiters)
 		if err == nil && waiters >= 1 {
 			return nil
 		}

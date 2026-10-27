@@ -510,6 +510,83 @@ func TestConnectorRecoversCachedRunAckAfterRestartWithoutNativeReplay(t *testing
 	}
 }
 
+func TestConnectorRecoversCachedApprovalAckFromExactJournalResult(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	connector := &Connector{journal: journal}
+	platformSessionID := "platform-session-approval-recovery"
+	adapterSessionID := "adapter-session-approval-recovery"
+	generation := "generation-approval-recovery"
+	nativeTurnID := "native-turn-approval-recovery"
+	if err := connector.BindSessionIdentity(platformSessionID, "create-approval-recovery", protocol.GatewaySession{Handle: "gateway-approval-recovery", Generation: generation}, protocol.AdapterSession{SessionID: adapterSessionID, ExternalThreadRef: "thread-approval-recovery"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordSession(adapterSessionID, "thread-approval-recovery", generation); err != nil {
+		t.Fatal(err)
+	}
+	platformRunID := "platform-run-approval-recovery"
+	command := protocol.Command{
+		CommandID: "run-approval-recovery",
+		Kind:      protocol.CommandKindRunApprove,
+		Payload:   json.RawMessage(`{"approval_id":"approval-recovery","decision":"approve","revision":1}`),
+		RunID:     &platformRunID,
+		SessionID: platformSessionID,
+	}
+	if err := journal.RecordRunBinding(connectorruntime.RunBinding{PlatformSessionID: platformSessionID, PlatformRunID: platformRunID, CommandID: "run-send-approval-recovery", AdapterSessionID: adapterSessionID, ExternalThreadRef: "thread-approval-recovery", Generation: generation, NativeTurnID: nativeTurnID, State: connectorruntime.IdentityStateBound}); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := connector.PreparePlatformCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeNamespace := connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID)
+	if _, deduplicated, err := journal.BeginCommandInNamespace(nativeNamespace, prepared); err != nil || deduplicated {
+		t.Fatalf("seed cached approval command = deduplicated %v, error %v", deduplicated, err)
+	}
+	if err := journal.UpdateCommandInNamespace(nativeNamespace, prepared.CommandID, protocol.CommandAck{CommandID: prepared.CommandID, State: protocol.CommandStateUnknown}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: adapterSessionID,
+		RunID:     &nativeTurnID,
+		Type:      protocol.EventTypeApprovalRequested,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   json.RawMessage(`{"jsonrpc":"2.0","id":41,"method":"item/commandExecution/requestApproval","params":{"turnId":"native-turn-approval-recovery","revision":1,"itemId":"item-approval-recovery"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.ClaimApproval(adapterSessionID, json.RawMessage(`41`), 1, prepared.CommandID, "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendEvent(protocol.Event{
+		SessionID: adapterSessionID,
+		RunID:     &nativeTurnID,
+		Type:      protocol.EventTypeApprovalResolved,
+		Source:    protocol.EventSourceAppServer,
+		Payload:   json.RawMessage(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":41,"turnId":"native-turn-approval-recovery","resolution":"accept"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, found, err := journal.ApprovalResultInNamespace(nativeNamespace, prepared.CommandID); err != nil || !found || result != "accept" {
+		t.Fatalf("durable approval result = %q, found = %v, error = %v", result, found, err)
+	}
+
+	retry, err := connector.acceptPlatformCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded || string(retry.Result) != `{"decision":"accept"}` {
+		t.Fatalf("recovered cached approval ACK = %+v", retry)
+	}
+	secondRetry, err := connector.acceptPlatformCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !secondRetry.Deduplicated || secondRetry.State != protocol.CommandStateSucceeded || string(secondRetry.Result) != string(retry.Result) {
+		t.Fatalf("repeated cached approval ACK = %+v", secondRetry)
+	}
+}
+
 func TestConnectorWithholdsSuccessWhenRunBindingPersistenceFails(t *testing.T) {
 	journal := openConnectorIdentityJournal(t)
 	journalPath := journal.Path()

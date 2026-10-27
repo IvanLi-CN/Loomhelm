@@ -354,20 +354,17 @@ func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, int
 		activeTurns:    make(map[string]string),
 	}
 	if err := a.journal.ResolveSessionStart(intentID, session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
-		_ = a.closeUnusedGatewaySession(context.Background(), gatewaySession, transport)
-		return protocol.AdapterSession{}, err
+		return protocol.AdapterSession{}, fmt.Errorf("%w: persist thread/start identity: %w", ErrUnknownOutcome, err)
 	}
 	if binder, ok := a.provider.(interface {
 		SetExternalThreadRef(protocol.GatewaySession, string) error
 	}); ok {
 		if err := binder.SetExternalThreadRef(gatewaySession, externalThreadRef); err != nil {
-			_ = a.closeUnusedGatewaySession(context.Background(), gatewaySession, transport)
-			return protocol.AdapterSession{}, err
+			return protocol.AdapterSession{}, fmt.Errorf("%w: persist thread/start gateway identity: %w", ErrUnknownOutcome, err)
 		}
 	}
 	if _, err := a.appendObservedEvent(state, protocol.EventTypeSessionCreated, "thread/start", response.Raw, ""); err != nil {
-		_ = a.closeUnusedGatewaySession(context.Background(), gatewaySession, transport)
-		return protocol.AdapterSession{}, err
+		return protocol.AdapterSession{}, fmt.Errorf("%w: persist thread/start observation: %w", ErrUnknownOutcome, err)
 	}
 	a.mu.Lock()
 	a.sessions[session.SessionID] = state
