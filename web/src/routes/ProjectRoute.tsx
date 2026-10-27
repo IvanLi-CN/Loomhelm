@@ -7,6 +7,7 @@ import { getProject as getDemoProject, useOptionalDemoRuntime } from "@/demo/con
 import { ProjectActions } from "@/features/projects/ProjectForm";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import { ProjectReadRecovery, TaskExplorer } from "@/components/product/TaskViews";
+import { shouldShowProjectLoadingState } from "./project-route-state";
 
 type ProjectPanel = "tasks" | "conversations";
 const projectPanels: readonly ProjectPanel[] = ["tasks", "conversations"];
@@ -58,7 +59,7 @@ export function ProjectRoute() {
     return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT</span><h1 ref={deleteResultHeadingRef} tabIndex={-1}>项目已删除</h1><div className="inline-state inline-state-success" role="status">项目已删除。</div><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></section>;
   }
 
-  if (source?.status === "loading" && currentDeleteState === "idle") {
+  if (shouldShowProjectLoadingState(source?.status, Boolean(displayedProject), currentDeleteState)) {
     return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">PROJECT ACCESS</span><h1>正在读取项目</h1><p>正在读取当前授权的项目范围，请稍候。</p></section>;
   }
 

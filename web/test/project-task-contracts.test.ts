@@ -38,6 +38,7 @@ import { editableProjectSummary } from "../src/features/projects/ProjectForm";
 import { reconcileTaskFormState } from "../src/features/tasks/TaskForm";
 import { wouldCreateDependencyCycle } from "../src/features/tasks/demo-store";
 import { calculateTaskRelationChanges, taskWriteBlockReason, type TaskRecord } from "../src/features/tasks/types";
+import { shouldShowProjectLoadingState } from "../src/routes/project-route-state";
 import type { Task } from "@loomhelm/protocol";
 
 function task(id: string, dependsOn: string[] = []): TaskRecord {
@@ -66,6 +67,13 @@ function protocolTask(id = "task-1"): Task {
 }
 
 describe("project/task write contracts", () => {
+  test("keeps a known project mounted while task data is still loading", () => {
+    expect(shouldShowProjectLoadingState("loading", true, "idle")).toBe(false);
+    expect(shouldShowProjectLoadingState("loading", false, "idle")).toBe(true);
+    expect(shouldShowProjectLoadingState("loading", false, "pending")).toBe(false);
+    expect(shouldShowProjectLoadingState("error", true, "idle")).toBe(false);
+  });
+
   test("calculates only explicit relation edge changes", () => {
     expect(calculateTaskRelationChanges(["parent-1", "parent-2"], ["parent-2", "parent-3"], ["task-1"], ["task-1", "task-2"])).toEqual({
       addParentIds: ["parent-3"],
