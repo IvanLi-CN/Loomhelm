@@ -118,6 +118,7 @@ func TestRealC01ProcessHelper(t *testing.T) {
 	cli := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_CLI")
 	workspace := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_WORKSPACE")
 	journalPath := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_JOURNAL")
+	platformSessionID := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_PLATFORM_SESSION")
 	sessionID := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_SESSION")
 	threadID := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_THREAD")
 	commandID := realC01HelperValue(t, "LOOMHELM_REAL_C01_HELPER_COMMAND")
@@ -129,9 +130,9 @@ func TestRealC01ProcessHelper(t *testing.T) {
 	var err error
 	switch mode {
 	case "seed":
-		result, err = runRealC01SeedHelper(ctx, cli, workspace, journalPath, sessionID, threadID, commandID)
+		result, err = runRealC01SeedHelper(ctx, cli, workspace, journalPath, platformSessionID, sessionID, threadID, commandID)
 	case "recover":
-		result, err = runRealC01RecoveryHelper(ctx, cli, workspace, journalPath, sessionID, threadID, commandID)
+		result, err = runRealC01RecoveryHelper(ctx, cli, workspace, journalPath, platformSessionID, sessionID, threadID, commandID)
 	default:
 		t.Fatalf("unknown C01 helper mode %q", mode)
 	}
@@ -150,6 +151,7 @@ func TestRealC01PendingApprovalRecoveryProcessHelper(t *testing.T) {
 	cli := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_CLI")
 	workspace := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_WORKSPACE")
 	journalPath := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_JOURNAL")
+	platformSessionID := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_PLATFORM_SESSION")
 	sessionID := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_SESSION")
 	threadID := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_THREAD")
 	requestID := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_REQUEST")
@@ -157,7 +159,7 @@ func TestRealC01PendingApprovalRecoveryProcessHelper(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	result, err := runRealC01PendingApprovalRecoveryHelper(ctx, cli, workspace, journalPath, sessionID, threadID, requestID)
+	result, err := runRealC01PendingApprovalRecoveryHelper(ctx, cli, workspace, journalPath, platformSessionID, sessionID, threadID, requestID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +177,50 @@ func realC01HelperValue(t *testing.T, name string) string {
 	return value
 }
 
-func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, commandID string) (realC01ProcessResult, error) {
+func bindRealC01PlatformSession(t *testing.T, journal *Journal, platformSessionID string, request protocol.NewSessionRequest, gatewaySession *protocol.GatewaySession, adapterSession protocol.AdapterSession) {
+	t.Helper()
+	if platformSessionID == "" || platformSessionID == adapterSession.SessionID {
+		t.Fatalf("C01 platform and adapter session identities must be explicit and different: platform=%q adapter=%q", platformSessionID, adapterSession.SessionID)
+	}
+	if gatewaySession.ExternalThreadRef == "" {
+		gatewaySession.ExternalThreadRef = adapterSession.ExternalThreadRef
+	}
+	if gatewaySession.ExternalThreadRef != adapterSession.ExternalThreadRef {
+		t.Fatalf("C01 gateway and adapter thread identities differ: gateway=%q adapter=%q", gatewaySession.ExternalThreadRef, adapterSession.ExternalThreadRef)
+	}
+	if err := journal.RecordSessionAlias(SessionAlias{
+		PlatformSessionID: platformSessionID,
+		AdapterSessionID:  adapterSession.SessionID,
+		ExternalThreadRef: adapterSession.ExternalThreadRef,
+		Generation:        gatewaySession.Generation,
+		CommandID:         request.CommandID,
+	}); err != nil {
+		t.Fatalf("persist C01 session alias: %v", err)
+	}
+	if err := journal.RecordGatewaySessionLink(GatewaySessionLink{
+		GatewayHandle:     gatewaySession.Handle,
+		PlatformSessionID: platformSessionID,
+		AdapterSessionID:  adapterSession.SessionID,
+		ExternalThreadRef: adapterSession.ExternalThreadRef,
+		Generation:        gatewaySession.Generation,
+		CommandID:         request.CommandID,
+	}); err != nil {
+		t.Fatalf("persist C01 gateway session link: %v", err)
+	}
+	alias, ok := journal.SessionAlias(platformSessionID)
+	if !ok || alias.AdapterSessionID != adapterSession.SessionID || alias.ExternalThreadRef != adapterSession.ExternalThreadRef || alias.Generation != gatewaySession.Generation || alias.CommandID != request.CommandID {
+		t.Fatalf("C01 platform alias does not preserve explicit adapter identity: %+v", alias)
+	}
+	link, found, err := journal.GatewaySessionLinkForPlatform(platformSessionID)
+	if err != nil {
+		t.Fatalf("read C01 gateway session link: %v", err)
+	}
+	if !found || link.GatewayHandle != gatewaySession.Handle || link.AdapterSessionID != adapterSession.SessionID || link.ExternalThreadRef != adapterSession.ExternalThreadRef || link.Generation != gatewaySession.Generation || link.CommandID != request.CommandID {
+		t.Fatalf("C01 gateway session link does not preserve explicit identities: found=%v link=%+v", found, link)
+	}
+}
+
+func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, platformSessionID, sessionID, threadID, commandID string) (realC01ProcessResult, error) {
 	journal, err := OpenJournal(journalPath)
 	if err != nil {
 		return realC01ProcessResult{}, err
@@ -188,6 +233,11 @@ func runRealC01SeedHelper(ctx context.Context, cli, workspace, journalPath, sess
 	if session.ExternalThreadRef != threadID {
 		_ = journal.Close()
 		return realC01ProcessResult{}, fmt.Errorf("seed helper thread = %q, want %q", session.ExternalThreadRef, threadID)
+	}
+	alias, ok := journal.SessionAlias(platformSessionID)
+	if !ok || alias.AdapterSessionID != sessionID || alias.ExternalThreadRef != threadID {
+		_ = journal.Close()
+		return realC01ProcessResult{}, fmt.Errorf("seed helper platform alias does not bind adapter session %q: %+v", sessionID, alias)
 	}
 
 	cancelSignal := make(chan struct{})
@@ -291,7 +341,7 @@ func realEventOperationID(event protocol.Event) string {
 	return realEventRPCID(event)
 }
 
-func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, commandID string) (realC01ProcessResult, error) {
+func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, platformSessionID, sessionID, threadID, commandID string) (realC01ProcessResult, error) {
 	journal, err := OpenJournal(journalPath)
 	if err != nil {
 		return realC01ProcessResult{}, err
@@ -304,6 +354,11 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 	if session.ExternalThreadRef != threadID {
 		_ = journal.Close()
 		return realC01ProcessResult{}, fmt.Errorf("recovery helper thread = %q, want %q", session.ExternalThreadRef, threadID)
+	}
+	alias, ok := journal.SessionAlias(platformSessionID)
+	if !ok || alias.AdapterSessionID != sessionID || alias.ExternalThreadRef != threadID {
+		_ = journal.Close()
+		return realC01ProcessResult{}, fmt.Errorf("recovery helper platform alias does not bind adapter session %q: %+v", sessionID, alias)
 	}
 	gateway, err := newRealC01HelperGateway(cli, workspace, nil)
 	if err != nil {
@@ -325,7 +380,7 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 		_ = journal.Close()
 		return realC01ProcessResult{}, errors.New("recovery helper could not establish an event cursor boundary")
 	}
-	reconciliation, err := controller.ReconcileCommand(ctx, sessionID, commandID)
+	reconciliation, err := controller.ReconcileCommand(ctx, platformSessionID, commandID)
 	if err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
@@ -339,7 +394,7 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
 	}
-	finalAck, err := journal.LookupCommand(commandID)
+	finalAck, err := journal.LookupCommandInNamespace(AdapterSessionCommandNamespace(sessionID), commandID)
 	if err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err
@@ -371,7 +426,7 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 	return result, nil
 }
 
-func runRealC01PendingApprovalRecoveryHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, requestID string) (realC01PendingApprovalResult, error) {
+func runRealC01PendingApprovalRecoveryHelper(ctx context.Context, cli, workspace, journalPath, platformSessionID, sessionID, threadID, requestID string) (realC01PendingApprovalResult, error) {
 	journal, err := OpenJournal(journalPath)
 	if err != nil {
 		return realC01PendingApprovalResult{}, err
@@ -384,6 +439,11 @@ func runRealC01PendingApprovalRecoveryHelper(ctx context.Context, cli, workspace
 	if session.ExternalThreadRef != threadID {
 		_ = journal.Close()
 		return realC01PendingApprovalResult{}, fmt.Errorf("pending-approval helper thread = %q, want %q", session.ExternalThreadRef, threadID)
+	}
+	alias, ok := journal.SessionAlias(platformSessionID)
+	if !ok || alias.AdapterSessionID != sessionID || alias.ExternalThreadRef != threadID {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, fmt.Errorf("pending-approval helper platform alias does not bind adapter session %q: %+v", sessionID, alias)
 	}
 	pending, err := journal.FindPendingApproval(sessionID, "", json.RawMessage(requestID))
 	if err != nil {
@@ -665,7 +725,7 @@ func TestWriteExclusiveC01EvidenceRejectsSymlink(t *testing.T) {
 	}
 }
 
-func runRealC01Helper(ctx context.Context, t *testing.T, mode, cli, workspace, journalPath, sessionID, threadID, commandID, resultPath string) realC01ProcessResult {
+func runRealC01Helper(ctx context.Context, t *testing.T, mode, cli, workspace, journalPath, platformSessionID, sessionID, threadID, commandID, resultPath string) realC01ProcessResult {
 	t.Helper()
 	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRealC01ProcessHelper$", "-test.v")
 	command.Env = append(os.Environ(),
@@ -673,6 +733,7 @@ func runRealC01Helper(ctx context.Context, t *testing.T, mode, cli, workspace, j
 		"LOOMHELM_REAL_C01_HELPER_CLI="+cli,
 		"LOOMHELM_REAL_C01_HELPER_WORKSPACE="+workspace,
 		"LOOMHELM_REAL_C01_HELPER_JOURNAL="+journalPath,
+		"LOOMHELM_REAL_C01_HELPER_PLATFORM_SESSION="+platformSessionID,
 		"LOOMHELM_REAL_C01_HELPER_SESSION="+sessionID,
 		"LOOMHELM_REAL_C01_HELPER_THREAD="+threadID,
 		"LOOMHELM_REAL_C01_HELPER_COMMAND="+commandID,
@@ -698,7 +759,7 @@ func runRealC01Helper(ctx context.Context, t *testing.T, mode, cli, workspace, j
 	return result
 }
 
-func runRealC01PendingApprovalRecoveryProcess(ctx context.Context, t *testing.T, cli, workspace, journalPath, sessionID, threadID, requestID, resultPath string) realC01PendingApprovalResult {
+func runRealC01PendingApprovalRecoveryProcess(ctx context.Context, t *testing.T, cli, workspace, journalPath, platformSessionID, sessionID, threadID, requestID, resultPath string) realC01PendingApprovalResult {
 	t.Helper()
 	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRealC01PendingApprovalRecoveryProcessHelper$", "-test.v")
 	command.Env = append(os.Environ(),
@@ -706,6 +767,7 @@ func runRealC01PendingApprovalRecoveryProcess(ctx context.Context, t *testing.T,
 		"LOOMHELM_REAL_C01_PENDING_APPROVAL_CLI="+cli,
 		"LOOMHELM_REAL_C01_PENDING_APPROVAL_WORKSPACE="+workspace,
 		"LOOMHELM_REAL_C01_PENDING_APPROVAL_JOURNAL="+journalPath,
+		"LOOMHELM_REAL_C01_PENDING_APPROVAL_PLATFORM_SESSION="+platformSessionID,
 		"LOOMHELM_REAL_C01_PENDING_APPROVAL_SESSION="+sessionID,
 		"LOOMHELM_REAL_C01_PENDING_APPROVAL_THREAD="+threadID,
 		"LOOMHELM_REAL_C01_PENDING_APPROVAL_REQUEST="+requestID,
@@ -760,11 +822,13 @@ func TestRealC01PendingApprovalConnectorRestartSingleClaim(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	createRequest := protocol.NewSessionRequest{CommandID: "c01-pending-restart-session"}
-	gatewaySession, err := gateway.StartNewSession(ctx, createRequest)
+	platformSessionID := "c01-platform-pending-restart"
+	namespace := PlatformSessionCommandNamespace(platformSessionID)
+	gatewaySession, err := gateway.StartNewSessionInNamespace(ctx, namespace, createRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	activeSession, err := adapter.StartSession(ctx, gatewaySession, createRequest)
+	activeSession, err := adapter.StartSessionInNamespace(ctx, namespace, gatewaySession, createRequest)
 	if err != nil {
 		_ = gateway.CloseSession(context.Background(), gatewaySession)
 		t.Fatal(err)
@@ -776,6 +840,7 @@ func TestRealC01PendingApprovalConnectorRestartSingleClaim(t *testing.T) {
 			_ = gateway.CloseSession(context.Background(), gatewaySession)
 		}
 	})
+	bindRealC01PlatformSession(t, journ, platformSessionID, createRequest, &gatewaySession, activeSession)
 
 	approvalCommand := realCommand("c01-pending-restart", protocol.CommandKindRunSend, activeSession.SessionID, `{"prompt":"Run exactly this harmless command in the test workspace: /usr/bin/printf LOOMHELM_C01_PENDING. Do not use any other tool. After it completes, reply exactly LOOMHELM_C01_PENDING_OK."}`)
 	approvalAck, err := adapter.SendCommand(ctx, activeSession, approvalCommand)
@@ -812,7 +877,7 @@ func TestRealC01PendingApprovalConnectorRestartSingleClaim(t *testing.T) {
 	parentSessionOpen = false
 	journalOpen = false
 
-	child := runRealC01PendingApprovalRecoveryProcess(ctx, t, cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, requestID, resultPath)
+	child := runRealC01PendingApprovalRecoveryProcess(ctx, t, cli, workspace, journalPath, platformSessionID, activeSession.SessionID, activeSession.ExternalThreadRef, requestID, resultPath)
 	if child.ProcessID == 0 || child.ProcessID == os.Getpid() {
 		t.Fatalf("recovery Connector PID = %d, parent PID = %d", child.ProcessID, os.Getpid())
 	}
@@ -987,11 +1052,13 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	createRequest := protocol.NewSessionRequest{CommandID: "c01-session-create"}
-	gatewaySession, err := gateway.StartNewSession(ctx, createRequest)
+	platformSessionID := "c01-platform-session"
+	namespace := PlatformSessionCommandNamespace(platformSessionID)
+	gatewaySession, err := gateway.StartNewSessionInNamespace(ctx, namespace, createRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	activeSession, err := adapter.StartSession(ctx, gatewaySession, createRequest)
+	activeSession, err := adapter.StartSessionInNamespace(ctx, namespace, gatewaySession, createRequest)
 	if err != nil {
 		_ = gateway.CloseSession(context.Background(), gatewaySession)
 		t.Fatal(err)
@@ -1006,6 +1073,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 			_ = gateway.CloseSession(context.Background(), currentGatewaySession)
 		}
 	})
+	bindRealC01PlatformSession(t, journal, platformSessionID, createRequest, &gatewaySession, activeSession)
 
 	attachCtx, attachCancel := context.WithTimeout(ctx, 5*time.Second)
 	_, attachErr := gateway.AttachActiveSession(attachCtx, protocol.ExistingSessionRequest{ActiveThreadRef: activeSession.ExternalThreadRef})
@@ -1191,7 +1259,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	parentSessionOpen = false
-	seedResult := runRealC01Helper(ctx, t, "seed", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-seed-result.json"))
+	seedResult := runRealC01Helper(ctx, t, "seed", cli, workspace, journalPath, platformSessionID, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-seed-result.json"))
 	if seedResult.ProcessID == os.Getpid() || seedResult.ProcessID == 0 {
 		t.Fatalf("seed helper PID = %d, parent PID = %d", seedResult.ProcessID, os.Getpid())
 	}
@@ -1208,7 +1276,7 @@ func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {
 	recoveryEvidence.NativeTurnID = seedResult.NativeTurnID
 	recoveryEvidence.NativeOperationID = seedResult.NativeOperationID
 	recoveryEvidence.ConnectorProcessIDs = []int{seedResult.ProcessID}
-	recoveryResult := runRealC01Helper(ctx, t, "recover", cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-recovery-result.json"))
+	recoveryResult := runRealC01Helper(ctx, t, "recover", cli, workspace, journalPath, platformSessionID, activeSession.SessionID, activeSession.ExternalThreadRef, unknownCommand.CommandID, filepath.Join(workspace, "c01-recovery-result.json"))
 	if recoveryResult.ProcessID == os.Getpid() || recoveryResult.ProcessID == seedResult.ProcessID || recoveryResult.ProcessID == 0 {
 		t.Fatalf("recovery helper PID = %d, seed helper PID = %d, parent PID = %d", recoveryResult.ProcessID, seedResult.ProcessID, os.Getpid())
 	}
