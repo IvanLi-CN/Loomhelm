@@ -862,7 +862,13 @@ func newControlFixture(t *testing.T, db *database.DB, sessionCount int) controlF
 			`DELETE FROM execution_commands WHERE session_id = ANY($1::text[])`,
 			`DELETE FROM execution_sessions WHERE id = ANY($1::text[])`,
 		} {
-			if _, err := db.Pool().Exec(cleanupCtx, query, fixture.sessionIDs); err != nil {
+			var err error
+			if query == `DELETE FROM execution_approvals WHERE session_id = ANY($1::text[])` {
+				err = execApprovalProjectionMutation(cleanupCtx, db, query, fixture.sessionIDs)
+			} else {
+				_, err = db.Pool().Exec(cleanupCtx, query, fixture.sessionIDs)
+			}
+			if err != nil {
 				t.Errorf("cleanup control rows with query %q: %v", query, err)
 			}
 		}
