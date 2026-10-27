@@ -70,6 +70,7 @@ type journalSession struct {
 
 type sessionStartIntent struct {
 	IntentID          string `json:"intent_id"`
+	PlatformSessionID string `json:"platform_session_id,omitempty"`
 	GatewayHandle     string `json:"gateway_handle"`
 	Generation        string `json:"generation"`
 	CommandID         string `json:"command_id"`
@@ -770,6 +771,21 @@ func sessionStartPayloadDigest(request protocol.NewSessionRequest) (string, erro
 // crosses the app-server side-effect boundary. An unresolved equivalent intent
 // blocks a duplicate start until a caller explicitly reconciles it.
 func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, request protocol.NewSessionRequest) (string, error) {
+	return j.beginSessionStart("", gatewaySession, request)
+}
+
+// BeginSessionStartForPlatform records the exact platform-to-gateway proof
+// before the native thread/start side effect. Legacy callers must use
+// BeginSessionStart so unattributed historical records remain unrecoverable.
+func (j *Journal) BeginSessionStartForPlatform(platformSessionID string, gatewaySession protocol.GatewaySession, request protocol.NewSessionRequest) (string, error) {
+	platformSessionID = normalizeIdentityPart(platformSessionID)
+	if platformSessionID == "" {
+		return "", ErrCommandScopeUnknown
+	}
+	return j.beginSessionStart(platformSessionID, gatewaySession, request)
+}
+
+func (j *Journal) beginSessionStart(platformSessionID string, gatewaySession protocol.GatewaySession, request protocol.NewSessionRequest) (string, error) {
 	if gatewaySession.Handle == "" || gatewaySession.Generation == "" {
 		return "", errors.New("gateway session handle and generation are required")
 	}
@@ -781,13 +797,14 @@ func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, requ
 		return "", fmt.Errorf("digest session start request: %w", err)
 	}
 	intent := sessionStartIntent{
-		IntentID:      gatewaySession.Generation,
-		GatewayHandle: gatewaySession.Handle,
-		Generation:    gatewaySession.Generation,
-		CommandID:     request.CommandID,
-		RequestDigest: requestDigest,
-		State:         "pending",
-		UpdatedAt:     now(),
+		IntentID:          gatewaySession.Generation,
+		PlatformSessionID: platformSessionID,
+		GatewayHandle:     gatewaySession.Handle,
+		Generation:        gatewaySession.Generation,
+		CommandID:         request.CommandID,
+		RequestDigest:     requestDigest,
+		State:             "pending",
+		UpdatedAt:         now(),
 	}
 	namespace := GatewayCommandNamespace(gatewaySession.Handle)
 	j.mu.Lock()
@@ -795,6 +812,9 @@ func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, requ
 	commandKey := commandNamespaceKey(namespace, request.CommandID)
 	if intentID, ok := j.sessionStartByCommand[commandKey]; ok {
 		existing := j.sessionStarts[intentID]
+		if existing.PlatformSessionID != platformSessionID {
+			return "", fmt.Errorf("%w: session start command %q has incompatible platform attribution", ErrCommandScopeAmbiguous, request.CommandID)
+		}
 		if existing.RequestDigest != requestDigest {
 			return "", protocol.ErrIdempotencyConflict
 		}
@@ -805,13 +825,15 @@ func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, requ
 			return "", fmt.Errorf("%w: unresolved session start intent exists", ErrUnknownOutcome)
 		}
 	}
-	if intentID, found, err := j.legacyResolvedSessionStartLocked(request.CommandID, requestDigest); err != nil {
-		return "", err
-	} else if found {
-		return intentID, nil
+	if platformSessionID == "" {
+		if intentID, found, err := j.legacyResolvedSessionStartLocked(request.CommandID, requestDigest); err != nil {
+			return "", err
+		} else if found {
+			return intentID, nil
+		}
 	}
 	if existing, ok := j.sessionStarts[intent.IntentID]; ok {
-		if existing.GatewayHandle != intent.GatewayHandle || existing.CommandID != intent.CommandID || existing.Generation != intent.Generation {
+		if existing.PlatformSessionID != intent.PlatformSessionID || existing.GatewayHandle != intent.GatewayHandle || existing.CommandID != intent.CommandID || existing.Generation != intent.Generation {
 			return "", fmt.Errorf("%w: session start intent id %q is already owned by another namespace", ErrCommandScopeAmbiguous, intent.IntentID)
 		}
 		if existing.State == "pending" {
@@ -977,7 +999,28 @@ func (j *Journal) ResolvedSessionStartProofForPlatform(platformSessionID string,
 	defer j.mu.Unlock()
 	alias, ok := j.sessionAliases[platformSessionID]
 	if !ok {
-		return SessionStartProof{}, false, fmt.Errorf("platform session %q has no verified adapter alias: %w", platformSessionID, errors.Join(ErrCommandScopeUnknown, ErrIdentityNotFound))
+		var selected *sessionStartIntent
+		var matching int
+		for _, intent := range j.sessionStarts {
+			if intent.PlatformSessionID != platformSessionID || intent.CommandID != request.CommandID || intent.State != "resolved" || intent.ExternalThreadRef == "" {
+				continue
+			}
+			if intent.RequestDigest != requestDigest {
+				return SessionStartProof{}, false, protocol.ErrIdempotencyConflict
+			}
+			matching++
+			if selected == nil {
+				value := intent
+				selected = &value
+			}
+		}
+		if matching > 1 {
+			return SessionStartProof{}, false, ErrCommandScopeAmbiguous
+		}
+		if selected == nil {
+			return SessionStartProof{}, false, fmt.Errorf("platform session %q has no exact resolved creation proof: %w", platformSessionID, errors.Join(ErrCommandScopeUnknown, ErrIdentityNotFound))
+		}
+		return sessionStartProof(*selected), true, nil
 	}
 	if alias.CommandID != request.CommandID {
 		return SessionStartProof{}, false, ErrIdentityConflict
@@ -1939,7 +1982,7 @@ func (j *Journal) applySessionStartLoadedLocked(intent sessionStartIntent, names
 		}
 	}
 	if existing, ok := j.sessionStarts[intent.IntentID]; ok {
-		if existing.GatewayHandle != intent.GatewayHandle || existing.Generation != intent.Generation || existing.CommandID != intent.CommandID || existing.RequestDigest != intent.RequestDigest {
+		if existing.PlatformSessionID != intent.PlatformSessionID || existing.GatewayHandle != intent.GatewayHandle || existing.Generation != intent.Generation || existing.CommandID != intent.CommandID || existing.RequestDigest != intent.RequestDigest {
 			return fmt.Errorf("%w: conflicting session start intent %q", ErrJournalCorrupt, intent.IntentID)
 		}
 		if existing.State == "resolved" && intent.State == "pending" {
@@ -2004,6 +2047,9 @@ func (j *Journal) reconciliationKeyLoadedLocked(record journalRecord) (string, e
 func validateSessionStartIntent(intent sessionStartIntent, requireCommandID bool) error {
 	if intent.IntentID == "" || intent.GatewayHandle == "" || intent.Generation == "" || intent.RequestDigest == "" {
 		return fmt.Errorf("%w: incomplete session start intent", ErrJournalCorrupt)
+	}
+	if intent.PlatformSessionID != "" && (strings.TrimSpace(intent.PlatformSessionID) != intent.PlatformSessionID || strings.ContainsRune(intent.PlatformSessionID, '\x00')) {
+		return fmt.Errorf("%w: invalid platform session attribution", ErrJournalCorrupt)
 	}
 	if requireCommandID && strings.TrimSpace(intent.CommandID) == "" {
 		return fmt.Errorf("%w: session start intent command id is required", ErrJournalCorrupt)

@@ -231,6 +231,20 @@ func (s *sessionService) authorizeTaskBinding(ctx context.Context, tx pgx.Tx, pr
 		if !confirmShare {
 			return sessions.ErrShareConfirmation
 		}
+		bindingProjects, ok := s.projects.(sessionProjectBindingAccess)
+		if !ok {
+			return runs.ErrControlServiceUnavailable
+		}
+		if strings.TrimSpace(facts.TaskProjectID) == "" {
+			return auth.ErrNotFound
+		}
+		allowed, err := bindingProjects.CanWriteProjectTx(ctx, tx, principal, facts.TaskProjectID)
+		if err != nil {
+			return fmt.Errorf("authorize task binding target project: %w", err)
+		}
+		if !allowed {
+			return auth.ErrNotFound
+		}
 		return nil
 	}
 	bindingProjects, ok := s.projects.(sessionProjectBindingAccess)

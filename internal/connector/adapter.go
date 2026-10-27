@@ -237,7 +237,12 @@ func (a *Adapter) StartSessionInNamespace(ctx context.Context, namespace Command
 			return protocol.AdapterSession{}, ErrUnknownOutcome
 		}
 	}
-	intentID, err := a.journal.BeginSessionStart(gatewaySession, request)
+	var intentID string
+	if namespace.Kind == CommandNamespacePlatformSession {
+		intentID, err = a.journal.BeginSessionStartForPlatform(namespace.ID, gatewaySession, request)
+	} else {
+		intentID, err = a.journal.BeginSessionStart(gatewaySession, request)
+	}
 	if err != nil {
 		if errors.Is(err, ErrUnknownOutcome) {
 			_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)

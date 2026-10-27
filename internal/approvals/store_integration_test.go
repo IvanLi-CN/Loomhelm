@@ -1,6 +1,7 @@
 package approvals
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -155,9 +156,10 @@ func TestApprovalHistoryStoreWritesAllTransitionsWithLocalCapability(t *testing.
 		t.Fatalf("approval revision count = %d, want 2", revisionCount)
 	}
 
-	var firstStatus, secondStatus, secondContext, secondEvent string
+	var firstStatus, secondStatus, secondEvent string
+	var secondContext []byte
 	if err := db.Pool().QueryRow(ctx, `
-		SELECT first.status, second.status, second.context::text, second.requested_event_id
+		SELECT first.status, second.status, second.context, second.requested_event_id
 		FROM execution_approval_revisions AS first
 		JOIN execution_approval_revisions AS second
 		  ON second.id = first.id AND second.revision = 2
@@ -165,7 +167,8 @@ func TestApprovalHistoryStoreWritesAllTransitionsWithLocalCapability(t *testing.
 	`, fixture.approvalID).Scan(&firstStatus, &secondStatus, &secondContext, &secondEvent); err != nil {
 		t.Fatalf("read approval revision history: %v", err)
 	}
-	if firstStatus != string(protocol.ApprovalStatusPending) || secondStatus != string(protocol.ApprovalStatusApproved) || secondContext != `{"step":1,"unknown":"retain"}` || secondEvent != "" {
+	originalContext := []byte(`{"step":1,"unknown":"retain"}`)
+	if firstStatus != string(protocol.ApprovalStatusPending) || secondStatus != string(protocol.ApprovalStatusApproved) || !bytes.Equal(secondContext, originalContext) || secondEvent != "" {
 		t.Fatalf("approval history = first %q second %q context %q event %q", firstStatus, secondStatus, secondContext, secondEvent)
 	}
 

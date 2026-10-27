@@ -16,7 +16,7 @@ The Journal indexes adapter facts only with complete tuples. Session lookup uses
 
 The existing `event` and `ReadEvents` records remain available for raw compatibility and recovery. Adapter observation writes use the identity-safe append seam, which preserves the raw record and returns its cursor to ACK handling while withholding unmapped public delivery. This slice does not change Server wiring, public transport schemas, command kinds, approval handlers or Adapter initial-prompt behavior.
 
-The journal advances from format v2 to format v3. The v3 reader accepts v1, v2 and v3 records; new records are v3. It appends identity records and never rewrites, compacts or deletes prior records. A v1 or v2 binary is not a supported reader for a journal after v3 records are appended and must fail closed on the explicit format version. Legacy session and session-start records remain recoverable only from their own facts. They have no platform session or caller command identity and cannot satisfy a new creation request or be used to invent one.
+The journal advances from format v3 to format v4. The v4 reader accepts v1, v2, v3 and v4 records; new records are v4. It appends identity records and never rewrites, compacts or deletes prior records. A v1, v2 or v3 binary is not a supported reader for a journal after v4 records are appended and must fail closed on the explicit format version. Legacy session and session-start records remain recoverable only from their own facts. They have no platform session or caller command identity and cannot satisfy a new creation request or be used to invent one.
 
 Journal startup replays identity records into exact indexes. Equal duplicate records are idempotent. Conflicting duplicate records, an orphan RunBinding without its SessionAlias, a mismatched thread or generation, malformed identity data and unknown format versions fail closed as journal corruption. A final incomplete JSONL record remains the only truncatable record; no historical identity is discarded.
 
@@ -24,17 +24,17 @@ The journal stores only opaque identifiers, timestamps, state and raw protocol p
 
 ## Consequences
 
-The next creation assembly can authorize the caller and validate project/task facts before checking any prior result, select the single configured host through the existing private host service seam, persist the creation intent, call the app-owned identity-preserving session opener, and then record the explicit SessionAlias after `session.start` resolves. `existing_active` remains an admission-time unsupported path with no fallback.
+The next creation assembly can authorize the caller and validate project/task facts before checking any prior result, select the single configured host through the existing private host service seam, persist the platform-attributed creation intent before native `thread/start`, call the app-owned identity-preserving session opener, and then record the explicit SessionAlias after `session.start` resolves. A retry can rebuild a missing alias only from the exact platform-attributed proof, while `existing_active` remains an admission-time unsupported path with no fallback.
 
 The next run assembly can persist a RunBinding before or while waiting for the native ACK, record a native operation identity when available, advance it with the exact native turn, and then use `ReadMappedEvents` for delivery. Unknown ACKs remain unknown until a reconciler records exact evidence. A future approval or interrupt path can reverse-lookup by the complete generation-qualified native identity without selecting an active or nearest turn.
 
 This ADR does not introduce a public schema field, a new command kind, a PostgreSQL migration, a new reconciliation frame or a long-lived Worker loop. The Server remains responsible for public admission and command identity, the Connector remains responsible for local journal and app-server observation, and Worker remains a bounded short-job dispatcher or reconciler.
 
-The persistent-state compatibility impact is minor: the candidate reads the immediately preceding v1/v2 state, treats missing v3 alias revisions as revision 1, writes v3 state that older binaries do not read safely after a rotation, and provides no direct major skip. The public protocol impact of this slice is patch because public schemas and command kinds are unchanged; the separate session-creation `command_id` requirement remains governed by ADR 0007.
+The persistent-state compatibility impact is minor: the candidate reads the immediately preceding v1/v2/v3 state, treats missing v3 alias revisions as revision 1, writes v4 state that older binaries do not read safely after a rotation, and provides no direct major skip. The public protocol impact of this slice is patch because public schemas and command kinds are unchanged; the separate session-creation `command_id` requirement remains governed by ADR 0007.
 
 ## Verification
 
-Focused journal tests verify v1/v2 read and v3 write compatibility, append-only history, explicit alias and binding indexes, idempotent duplicates, conflicting associations, revisioned generation rotation with historical run and event replay, pending and unknown non-delivery, exact native turn and operation reverse lookup, event-before-binding materialization, restart recovery, orphan binding rejection and raw payload preservation.
+Focused journal tests verify v1/v2 read and v4 write compatibility, append-only history, explicit platform-attributed creation proof, alias and binding indexes, idempotent duplicates, conflicting associations, revisioned generation rotation with historical run and event replay, pending and unknown non-delivery, exact native turn and operation reverse lookup, event-before-binding materialization, restart recovery, orphan binding rejection and raw payload preservation.
 
 ## References
 

@@ -518,8 +518,8 @@ func (s *Store) MarkUnknown(ctx context.Context, commandID, generation string) (
 
 // MarkCommandAndRunUnknown converges a command and its associated Run in one
 // transaction. The command row is locked first so an exact terminal ACK cannot
-// race a recovery decision, while the Run identity is checked before either
-// write can commit.
+// race a recovery decision, followed by the session, run and lease identity
+// locks in the same order used by admission.
 func (s *Store) MarkCommandAndRunUnknown(ctx context.Context, commandID, generation, reason string) (CommandRecord, error) {
 	return s.markCommandAndRunUnknown(ctx, commandID, generation, reason, nil)
 }
@@ -550,9 +550,6 @@ func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generat
 	}
 	if lease != nil {
 		if err := leaseMatchesCommand(record, *lease); err != nil {
-			return CommandRecord{}, err
-		}
-		if err := checkLeaseTx(ctx, tx, *lease); err != nil {
 			return CommandRecord{}, err
 		}
 	}

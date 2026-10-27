@@ -603,18 +603,17 @@ func (c *Connector) reconcileCachedSessionStart(command protocol.Command, reques
 	if err != nil {
 		return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
 	}
-	alias, ok := c.journal.SessionAlias(command.SessionID)
-	if !ok {
-		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrCommandScopeUnknown)
-	}
-	if alias.PlatformSessionID != command.SessionID || alias.CommandID != command.CommandID {
-		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
-	}
 	if !found {
 		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrCommandScopeUnknown)
 	}
-	if ok && (proof.AdapterSession.SessionID != alias.AdapterSessionID || proof.AdapterSession.ExternalThreadRef != alias.ExternalThreadRef || proof.Generation != alias.Generation) {
-		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
+	alias, aliasFound := c.journal.SessionAlias(command.SessionID)
+	if aliasFound {
+		if alias.PlatformSessionID != command.SessionID || alias.CommandID != command.CommandID {
+			return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
+		}
+		if proof.AdapterSession.SessionID != alias.AdapterSessionID || proof.AdapterSession.ExternalThreadRef != alias.ExternalThreadRef || proof.Generation != alias.Generation {
+			return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
+		}
 	}
 	gatewaySession := protocol.GatewaySession{
 		Handle:            proof.GatewayHandle,
@@ -625,8 +624,8 @@ func (c *Connector) reconcileCachedSessionStart(command protocol.Command, reques
 	if err := c.BindSessionIdentity(command.SessionID, command.CommandID, gatewaySession, proof.AdapterSession); err != nil {
 		return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
 	}
-	alias, ok = c.journal.SessionAlias(command.SessionID)
-	if !ok {
+	alias, aliasFound = c.journal.SessionAlias(command.SessionID)
+	if !aliasFound {
 		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrCommandScopeUnknown)
 	}
 	result, err := json.Marshal(sessionOpenResult{

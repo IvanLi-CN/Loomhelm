@@ -506,7 +506,7 @@ func TestJournalMappedReplaySkipsStaleNativeTokenTelemetry(t *testing.T) {
 	}
 }
 
-func TestJournalReadsV2AndAppendsV3WithoutRewritingHistory(t *testing.T) {
+func TestJournalReadsV2AndAppendsV4WithoutRewritingHistory(t *testing.T) {
 	path := filepath.Join(privateTestDir(t), "v2-journal.jsonl")
 	v2Request := protocol.NewSessionRequest{CommandID: "create-v2", ProjectID: "project-v2", TaskID: "task-v2", Prompt: "v2 prompt"}
 	v2Digest, err := sessionStartPayloadDigest(v2Request)

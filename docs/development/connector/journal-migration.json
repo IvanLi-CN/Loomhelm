@@ -2,7 +2,7 @@
   "schema_version": 1,
   "migration": {
     "description": "Upgrade the host-local Connector journal with durable platform-to-adapter session/run identity correlation, revisioned cold-recovery generation rotation and a forward-readable format boundary.",
-    "release_unit_description": "Phase-one Connector local journal format v3.",
+    "release_unit_description": "Phase-one Connector local journal format v4.",
     "version_impact": "minor"
   },
   "compatibility_assessment": {
@@ -12,21 +12,22 @@
     },
     "persistent_state": {
       "impact": "minor",
-      "scope": "The candidate reads v1 and v2, writes v3, and older binaries are not supported readers for v3 state."
+      "scope": "The candidate reads v1, v2 and v3 history, writes v4, and older binaries are not supported readers for v4 state."
     }
   },
   "durable_state": {
     "description": "Append-only JSONL records for commands, ACK updates, host-owned session identities, observed app-server events and reconciliation outcomes.",
     "storage_implementation": "Mode-0600 journal file inside a mode-0700 host-local directory.",
     "source_compatibility_range": {
-      "from_program_versions": "Phase-one Connector journal formats v1 and v2.",
-      "to_program_version": "Phase-one Connector journal format v3.",
+      "from_program_versions": "Phase-one Connector journal formats v1, v2 and v3.",
+      "to_program_version": "Phase-one Connector journal format v4.",
       "reader_accepts": [
         "v1",
         "v2",
-        "v3"
+        "v3",
+        "v4"
       ],
-      "writer_emits": "v3",
+      "writer_emits": "v4",
       "older_writer_can_read_new_state": false,
       "direct_major_skips_supported": false
     }
@@ -62,8 +63,8 @@
       "required_test_evidence": [
         "v1 records round-trip through the journal reader",
         "v2 records round-trip through the journal reader",
-        "a v2 session_start record with command_id and request_digest is read, its exact resolved intent is returned, and a retry appends v3 without rewriting the v2 bytes",
-        "v3 identity records append without rewriting v1 or v2 history",
+        "a v2 session_start record with command_id and request_digest is read, its exact resolved intent is returned, and a retry appends v4 without rewriting the v2 bytes",
+        "v3 and v4 identity records append without rewriting v1 or v2 history",
         "v1 session-start records do not satisfy a new explicit creation identity",
         "v2 session-start records persist command_id and payload digest",
         "session aliases and run bindings preserve separate platform, adapter, thread, generation, command and native identities",
@@ -78,7 +79,7 @@
         "accepted and executing commands become unknown after restart",
         "unknown outcomes require explicit reconciliation and are never replayed",
         "a duplicate run.send after restart reconciles the exact persisted native ACK into the original generation binding before returning success, while missing native evidence remains unknown and no native command is replayed",
-        "a duplicate session.start after restart requires the unchanged command digest, the resolved session-start intent and the durable alias to agree before returning the same Session; missing or ambiguous facts remain unknown and never create a second native session",
+        "a duplicate session.start after restart requires the unchanged command digest and exact platform-attributed resolved session-start proof to agree before rebuilding a missing alias and returning the same Session; missing or ambiguous facts remain unknown and never create a second native session",
         "generation-qualified persisted RPC observations disambiguate reused JSON-RPC IDs without rewriting raw response events",
         "approval claims from another session generation cannot apply a decision to the current pending request",
         "approval resolution events retain the pending run identity when the app-server omits turnId",
@@ -86,7 +87,7 @@
         "approval resolution and item-completion events must match the pending turn identity",
         "journal startup and append paths enforce bounded 8 MiB record, event-count and file-size resources"
       ],
-      "note": "The candidate reads the immediately preceding v1/v2 journal state; v1 and v2 binaries are not supported readers for v3 records."
+      "note": "The candidate reads the immediately preceding v1/v2/v3 journal state; v1, v2 and v3 binaries are not supported readers for v4 records."
     },
     "major": {
       "required_test_evidence": [],

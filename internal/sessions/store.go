@@ -240,6 +240,25 @@ func (s *Store) GetIntentByCommand(ctx context.Context, commandID string) (Creat
 	return record.Intent, nil
 }
 
+// GetIntentBySessionAndCommand resolves a creation identity only inside the
+// caller-provided platform session namespace.
+func (s *Store) GetIntentBySessionAndCommand(ctx context.Context, sessionID, commandID string) (CreationIntent, error) {
+	if err := s.ready(ctx); err != nil {
+		return CreationIntent{}, err
+	}
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(commandID) == "" {
+		return CreationIntent{}, fmt.Errorf("%w: session and command ids are required", ErrInvalidSession)
+	}
+	record, err := scanIntent(s.pool.QueryRow(ctx, intentQuery+` WHERE session.id = $1 AND session.creation_command_id = $2`, sessionID, commandID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CreationIntent{}, ErrSessionNotFound
+	}
+	if err != nil {
+		return CreationIntent{}, fmt.Errorf("read session creation intent by session and command: %w", err)
+	}
+	return record.Intent, nil
+}
+
 // MarkIntentUnknown records an ambiguous external outcome. An unknown intent
 // remains tied to its original command identity and cannot be replaced by a
 // fresh creation request.

@@ -317,12 +317,20 @@ func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
 	if forwardedRequest.Prompt == nil || *forwardedRequest.Prompt != prompt {
 		t.Fatalf("forwarded session prompt = %+v", forwardedRequest.Prompt)
 	}
-	if err := connection.AcknowledgeForSession(ctx, startCommand.SessionID, startMessage.RequestID, protocol.CommandAck{
+	ack := protocol.CommandAck{
 		CommandID:  startCommand.CommandID,
 		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		State:      protocol.CommandStateSucceeded,
 		Result:     json.RawMessage(`{"external_thread_ref":"thread-session-round-trip","generation":"execution-session-round-trip"}`),
-	}); err != nil {
+	}
+	executionTransport := &gatewayExecutionTransport{sessions: sessions.NewStore(persistence.Pool()), runs: runs.NewStore(persistence.Pool())}
+	if err := executionTransport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", "", ack); err == nil {
+		t.Fatal("session creation ACK without a platform session scope was accepted")
+	}
+	if err := executionTransport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", startCommand.SessionID, ack); err != nil {
+		t.Fatalf("exactly scoped session creation ACK rejected: %v", err)
+	}
+	if err := connection.AcknowledgeForSession(ctx, startCommand.SessionID, startMessage.RequestID, ack); err != nil {
 		t.Fatalf("acknowledge session creation command: %v", err)
 	}
 

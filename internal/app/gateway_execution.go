@@ -79,12 +79,9 @@ func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connec
 		if !errors.Is(err, runs.ErrCommandNotFound) {
 			return err
 		}
-		intent, intentErr := t.sessions.GetIntentByCommand(ctx, ack.CommandID)
+		intent, intentErr := t.sessions.GetIntentBySessionAndCommand(ctx, platformSessionID, ack.CommandID)
 		if intentErr != nil {
 			return err
-		}
-		if platformSessionID != "" && intent.SessionID != platformSessionID {
-			return fmt.Errorf("%w: creation command %q is outside platform session %q", hosts.ErrInvalid, ack.CommandID, platformSessionID)
 		}
 		if ack.RunID != nil {
 			return fmt.Errorf("%w: session creation command %q must not carry a run id", hosts.ErrInvalid, ack.CommandID)

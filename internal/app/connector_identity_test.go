@@ -626,21 +626,12 @@ func TestConnectorRecoversCachedSessionStartFromExactIntentAfterRestart(t *testi
 	}
 	nativeRequest := protocol.NewSessionRequest{CommandID: commandID, ProjectID: "project-session-recovery"}
 	gatewaySession := protocol.GatewaySession{Handle: "gateway-session-recovery", Generation: "generation-session-recovery"}
-	intentID, err := journal.BeginSessionStart(gatewaySession, nativeRequest)
+	intentID, err := journal.BeginSessionStartForPlatform(command.SessionID, gatewaySession, nativeRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	nativeSessionID := sessionRecoveryStableID(threadID)
 	if err := journal.ResolveSessionStart(intentID, nativeSessionID, threadID, gatewaySession.Generation); err != nil {
-		t.Fatal(err)
-	}
-	if err := journal.RecordSessionAlias(connectorruntime.SessionAlias{
-		PlatformSessionID: command.SessionID,
-		AdapterSessionID:  nativeSessionID,
-		ExternalThreadRef: threadID,
-		Generation:        gatewaySession.Generation,
-		CommandID:         commandID,
-	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := journal.UpdateCommandInNamespace(platformNamespace, command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateUnknown, Error: &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "simulated crash before alias persistence", RequestID: command.CommandID}}); err != nil {
@@ -681,6 +672,71 @@ func TestConnectorRecoversCachedSessionStartFromExactIntentAfterRestart(t *testi
 	retryAgain, err := recoveredConnector.acceptSessionCommand(context.Background(), command)
 	if err != nil || !retryAgain.Deduplicated || retryAgain.State != protocol.CommandStateSucceeded {
 		t.Fatalf("recovered session retry = %+v, error = %v", retryAgain, err)
+	}
+}
+
+func TestConnectorRecoversResolvedSessionStartWhenAliasAppendFails(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	journalPath := journal.Path()
+	transport := &connectorSessionTransport{threadID: "thread-alias-append-failure"}
+	connector := newConnectorIdentityAssembly(t, journal, transport)
+	commandID := "session-alias-append-failure"
+	createRequest := protocol.CreateSessionRequest{CommandID: commandID, Path: protocol.SessionPathNew, ProjectID: stringPointer("project-alias-append-failure")}
+	payload, err := json.Marshal(createRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{CommandID: commandID, Kind: protocol.CommandKindSessionStart, Payload: payload, SessionID: "platform-session-alias-append-failure"}
+	namespace := connectorruntime.PlatformSessionCommandNamespace(command.SessionID)
+	if _, deduplicated, err := journal.BeginCommandInNamespace(namespace, command); err != nil || deduplicated {
+		t.Fatalf("seed session command = deduplicated %v, error %v", deduplicated, err)
+	}
+	nativeRequest := newSessionStartRequest(createRequest)
+	gatewaySession, err := connector.appGateway.StartNewSessionInNamespace(context.Background(), namespace, nativeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapterSession, err := connector.adapter.StartSessionInNamespace(context.Background(), namespace, gatewaySession, nativeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := transport.methods()["thread/start"]; got != 1 {
+		t.Fatalf("native thread/start calls = %d, want 1", got)
+	}
+	if err := connector.adapter.CloseSession(context.Background(), adapterSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := connector.appGateway.CloseSession(context.Background(), gatewaySession); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommandInNamespace(namespace, command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateUnknown}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := connector.BindSessionIdentity(command.SessionID, command.CommandID, gatewaySession, adapterSession); err == nil {
+		t.Fatal("closed journal accepted a session alias")
+	}
+
+	recoveredJournal, err := connectorruntime.OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recoveredJournal.Close()
+	recoveredConnector := &Connector{journal: recoveredJournal}
+	retry, err := recoveredConnector.acceptSessionCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded {
+		t.Fatalf("recovered alias-append-failure ACK = %+v", retry)
+	}
+	if aliases := recoveredJournal.SessionAliases(); len(aliases) != 1 || aliases[0].PlatformSessionID != command.SessionID || aliases[0].ExternalThreadRef != adapterSession.ExternalThreadRef {
+		t.Fatalf("recovered alias after append failure = %+v", aliases)
+	}
+	if got := transport.methods()["thread/start"]; got != 1 {
+		t.Fatalf("recovery repeated native thread/start calls = %d, want 1", got)
 	}
 }
 

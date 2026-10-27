@@ -227,24 +227,19 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 		close(start)
 		deadline := time.Now().Add(5 * time.Second)
 		for {
-			var waiters int
-			if err := cleanupPool.QueryRow(ctx, `
-				SELECT COUNT(*)
-				FROM pg_stat_activity
-				WHERE wait_event_type = 'Lock'
-				  AND query LIKE '%pg_advisory_xact_lock%'
-			`).Scan(&waiters); err != nil {
+			waiterPIDs, err := relationshipAdvisoryWaiters(ctx, cleanupPool, int64(0x4c6f6f6d7461736b))
+			if err != nil {
 				lockTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, int64(0x4c6f6f6d7461736b))
 				lockTx.Rollback(ctx)
 				t.Fatalf("observe relationship barrier: %v", err)
 			}
-			if waiters == 2 {
+			if len(waiterPIDs) == 2 && waiterPIDs[0] != waiterPIDs[1] {
 				break
 			}
 			if time.Now().After(deadline) {
 				lockTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, int64(0x4c6f6f6d7461736b))
 				lockTx.Rollback(ctx)
-				t.Fatalf("relationship mutations did not both wait on advisory lock; observed %d", waiters)
+				t.Fatalf("relationship mutations did not both wait on the exact advisory lock; observed PIDs %v", waiterPIDs)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -600,6 +595,36 @@ func TestDomainPersistenceAuthorizationAndRelationships(t *testing.T) {
 	if err := reopenedProjects.Delete(ctx, owner, projectA.ID); err != nil {
 		t.Fatalf("delete project A: %v", err)
 	}
+}
+
+func relationshipAdvisoryWaiters(ctx context.Context, pool *pgxpool.Pool, key int64) ([]int32, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT activity.pid
+		FROM pg_locks AS lock
+		JOIN pg_stat_activity AS activity ON activity.pid = lock.pid
+		WHERE lock.locktype = 'advisory'
+		  AND lock.mode = 'ExclusiveLock'
+		  AND NOT lock.granted
+		  AND lock.classid = (($1::bigint >> 32) & 4294967295)::oid
+		  AND lock.objid = ($1::bigint & 4294967295)::oid
+		  AND lock.objsubid = 1
+		  AND activity.wait_event_type = 'Lock'
+		  AND activity.query ILIKE '%pg_advisory_xact_lock%'
+		ORDER BY activity.pid
+	`, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var pids []int32
+	for rows.Next() {
+		var pid int32
+		if err := rows.Scan(&pid); err != nil {
+			return nil, err
+		}
+		pids = append(pids, pid)
+	}
+	return pids, rows.Err()
 }
 
 func taskStatus(status tasks.Status) *tasks.Status {

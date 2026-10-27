@@ -736,7 +736,7 @@ func TestPersistentInterruptAdmissionAndEventUseSessionRunLockOrder(t *testing.T
 		_, err := store.AcceptInterruptWithLease(ctx, CommandIntent{Command: interruptCommand, Generation: generation}, lease)
 		acceptDone <- err
 	}()
-	if err := waitForExecutionAdvisoryWaiter(ctx, db.Pool()); err != nil {
+	if err := waitForExecutionAdvisoryWaiter(ctx, db.Pool(), lease.LeaseKey); err != nil {
 		t.Fatalf("interrupt admission did not reach advisory barrier: %v", err)
 	}
 
@@ -802,6 +802,97 @@ func TestPersistentInterruptAdmissionAndEventUseSessionRunLockOrder(t *testing.T
 	}
 }
 
+func TestPersistentUnknownTransitionLocksSessionRunBeforeLeaseCheck(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	const generation = "unknown-lock-order-generation"
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        generation,
+	}); err != nil {
+		t.Fatalf("create unknown-transition session: %v", err)
+	}
+	store := NewStore(db.Pool())
+	runID := ids.run
+	if _, _, err := store.AcceptRun(ctx, CommandIntent{Command: protocol.Command{
+		CommandID: ids.command,
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"unknown lock order"}`),
+		RunID:     &runID,
+		SessionID: ids.session,
+	}, Generation: generation}, NewRunInput{
+		ID:         ids.run,
+		SessionID:  ids.session,
+		CommandID:  ids.command,
+		Generation: generation,
+	}); err != nil {
+		t.Fatalf("accept unknown-transition run: %v", err)
+	}
+	lease := DurableLeaseIdentity{
+		LeaseKey:           ids.lease,
+		SessionID:          ids.session,
+		RunID:              ids.run,
+		Generation:         generation,
+		OwnerID:            "unknown-lock-order-owner",
+		CandidateSourceSHA: "unknown-lock-order-source",
+		ArtifactDigest:     "unknown-lock-order-artifact",
+	}
+	if _, err := store.AcquireLease(ctx, lease, LeaseStoreConfig{TTL: time.Minute}); err != nil {
+		t.Fatalf("acquire unknown-transition lease: %v", err)
+	}
+
+	leaseHolder, err := db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lease-row blocker: %v", err)
+	}
+	defer leaseHolder.Rollback(ctx)
+	if _, err := leaseHolder.Exec(ctx, `SELECT lease_key FROM execution_control_leases WHERE lease_key = $1 FOR UPDATE`, lease.LeaseKey); err != nil {
+		t.Fatalf("hold lease row: %v", err)
+	}
+	identityHolder, err := db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin session-run blocker: %v", err)
+	}
+	defer identityHolder.Rollback(ctx)
+	if _, err := identityHolder.Exec(ctx, `SELECT id FROM execution_sessions WHERE id = $1 FOR UPDATE`, lease.SessionID); err != nil {
+		t.Fatalf("hold session row: %v", err)
+	}
+	if _, err := identityHolder.Exec(ctx, `SELECT id FROM execution_runs WHERE id = $1 FOR UPDATE`, lease.RunID); err != nil {
+		t.Fatalf("hold run row: %v", err)
+	}
+
+	markDone := make(chan error, 1)
+	go func() {
+		_, err := store.MarkCommandAndRunUnknownWithLease(ctx, ids.command, generation, "unknown lock-order regression", lease)
+		markDone <- err
+	}()
+	if err := identityHolder.Rollback(ctx); err != nil {
+		t.Fatalf("release session-run blocker: %v", err)
+	}
+	if err := waitForExecutionRowLock(ctx, db.Pool(), `SELECT 1 FROM execution_runs WHERE id = $1 FOR UPDATE NOWAIT`, lease.RunID); err != nil {
+		t.Fatalf("unknown transition did not lock session and run before waiting on lease: %v", err)
+	}
+	if err := leaseHolder.Rollback(ctx); err != nil {
+		t.Fatalf("release lease-row blocker: %v", err)
+	}
+	if err := <-markDone; err != nil {
+		t.Fatalf("unknown transition after lock-order overlap: %v", err)
+	}
+	current, err := store.GetRun(ctx, ids.run)
+	if err != nil {
+		t.Fatalf("read unknown-transition run: %v", err)
+	}
+	if current.Status != protocol.RunStatusUnknown {
+		t.Fatalf("unknown-transition run status = %q, want %q", current.Status, protocol.RunStatusUnknown)
+	}
+}
+
 func TestPersistentLeaseUsesDatabaseClockAfterLockWait(t *testing.T) {
 	db := openExecutionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -855,7 +946,7 @@ func TestPersistentLeaseUsesDatabaseClockAfterLockWait(t *testing.T) {
 			err   error
 		}{lease: lease, err: err}
 	}()
-	if err := waitForExecutionAdvisoryWaiter(ctx, db.Pool()); err != nil {
+	if err := waitForExecutionAdvisoryWaiter(ctx, db.Pool(), identity.LeaseKey); err != nil {
 		t.Fatalf("lease acquisition did not reach advisory barrier: %v", err)
 	}
 	time.Sleep(500 * time.Millisecond)
@@ -875,20 +966,29 @@ func TestPersistentLeaseUsesDatabaseClockAfterLockWait(t *testing.T) {
 	}
 }
 
-func waitForExecutionAdvisoryWaiter(ctx context.Context, pool *pgxpool.Pool) error {
+func waitForExecutionAdvisoryWaiter(ctx context.Context, pool *pgxpool.Pool, leaseKey string) error {
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var count int
+		var pid int32
 		err := pool.QueryRow(waitCtx, `
-			SELECT count(*)
-			FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock'
-			  AND query ILIKE '%pg_advisory_xact_lock%'
-		`).Scan(&count)
-		if err == nil && count > 0 {
+			SELECT activity.pid
+			FROM pg_locks AS lock
+			JOIN pg_stat_activity AS activity ON activity.pid = lock.pid
+			WHERE lock.locktype = 'advisory'
+			  AND lock.mode = 'ExclusiveLock'
+			  AND NOT lock.granted
+			  AND lock.classid = ((hashtext($1)::bigint >> 32) & 4294967295)::oid
+			  AND lock.objid = (hashtext($1)::bigint & 4294967295)::oid
+			  AND lock.objsubid = 1
+			  AND activity.wait_event_type = 'Lock'
+			  AND activity.query ILIKE '%pg_advisory_xact_lock%'
+			ORDER BY activity.pid
+			LIMIT 1
+		`, leaseKey).Scan(&pid)
+		if err == nil && pid > 0 {
 			return nil
 		}
 		select {

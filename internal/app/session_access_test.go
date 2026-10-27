@@ -174,19 +174,22 @@ func TestSessionTaskBindingHTTPEnforcesConfirmationAndHidesUnauthorizedSessions(
 		principal auth.Principal
 		confirm   bool
 		status    int
+		projects  sessionAccessProjects
 	}{
 		{name: "creator must confirm sharing", principal: auth.Principal{UserID: "owner"}, status: http.StatusBadRequest},
-		{name: "creator can confirm sharing", principal: auth.Principal{UserID: "owner"}, confirm: true, status: http.StatusOK},
+		{name: "creator can confirm sharing with target write access", principal: auth.Principal{UserID: "owner"}, confirm: true, status: http.StatusOK, projects: sessionAccessProjects{write: true}},
+		{name: "creator without target write access is hidden", principal: auth.Principal{UserID: "owner"}, confirm: true, status: http.StatusNotFound},
 		{name: "foreign user is hidden", principal: auth.Principal{UserID: "other"}, confirm: true, status: http.StatusNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := &sessionService{
 				principal: sessionAccessPrincipal{principal: test.principal},
-				projects:  sessionAccessProjects{},
+				projects:  test.projects,
 				binding: &sessionTaskBindingStub{
 					facts: sessions.BindingFacts{
-						Session: sessions.Session{Session: protocol.Session{ID: "s"}},
-						Access:  sessions.SessionAccess{SessionID: "s", CreatorUserID: "owner", HostID: "h", Confirmed: true},
+						Session:       sessions.Session{Session: protocol.Session{ID: "s"}},
+						Access:        sessions.SessionAccess{SessionID: "s", CreatorUserID: "owner", HostID: "h", Confirmed: true},
+						TaskProjectID: "target-project",
 					},
 					result: sessions.Session{Session: protocol.Session{ID: "s", TaskID: stringPointer("task")}},
 				},
