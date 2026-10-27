@@ -604,7 +604,7 @@ func TestPersistentControlServiceApprovalListIsHistoricalAndRunScoped(t *testing
 		if createErr != nil {
 			t.Fatalf("create approval %q: %v", approvalID, createErr)
 		}
-		if _, updateErr := db.Pool().Exec(ctx, `UPDATE execution_approvals SET created_at = $2, updated_at = $2 WHERE id = $1`, approval.ID, createdAt.Add(time.Duration(index)*time.Second)); updateErr != nil {
+		if updateErr := execApprovalProjectionMutation(ctx, db, `UPDATE execution_approvals SET created_at = $2, updated_at = $2 WHERE id = $1`, approval.ID, createdAt.Add(time.Duration(index)*time.Second)); updateErr != nil {
 			t.Fatalf("set deterministic approval timestamp %q: %v", approvalID, updateErr)
 		}
 	}
@@ -783,7 +783,7 @@ func TestPersistentControlServiceApprovalListPreservesStableIDRevisionHistory(t 
 		t.Fatalf("unique legacy approval cursor: %v", err)
 	}
 
-	if _, err := db.Pool().Exec(ctx, `UPDATE execution_approvals SET summary = 'projection-only drift' WHERE id = $1`, stableID); err != nil {
+	if err := execApprovalProjectionMutation(ctx, db, `UPDATE execution_approvals SET summary = 'projection-only drift' WHERE id = $1`, stableID); err != nil {
 		t.Fatalf("introduce approval projection drift: %v", err)
 	}
 	if _, err := control.service.ListRunApprovals(ctx, principal, run.ID, protocol.ListRunApprovalsQuery{}); !errors.Is(err, approvals.ErrApprovalHistoryUnavailable) {

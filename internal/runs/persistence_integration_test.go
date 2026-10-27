@@ -1432,11 +1432,35 @@ func cleanupExecutionRows(t *testing.T, db **database.DB, ids executionIDs) {
 			default:
 				arg = ids.session
 			}
-			if _, err := (*db).Pool().Exec(ctx, query, arg); err != nil {
+			var err error
+			if strings.Contains(query, "DELETE FROM execution_approvals") {
+				err = execApprovalProjectionMutation(ctx, *db, query, arg)
+			} else {
+				_, err = (*db).Pool().Exec(ctx, query, arg)
+			}
+			if err != nil {
 				t.Errorf("cleanup query %q: %v", query, err)
 			}
 		}
 		(*db).Close()
 		*db = nil
 	})
+}
+
+func execApprovalProjectionMutation(ctx context.Context, db *database.DB, query string, args ...any) error {
+	tx, err := db.Pool().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin approval projection mutation: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL loomhelm.approval_writer_capability = 'revision-history-v1'`); err != nil {
+		return fmt.Errorf("set approval projection mutation capability: %w", err)
+	}
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("execute approval projection mutation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit approval projection mutation: %w", err)
+	}
+	return nil
 }
