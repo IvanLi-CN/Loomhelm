@@ -54,10 +54,6 @@ export function ProjectRoute() {
     selectPanel(projectPanels[nextIndex], true);
   };
 
-  if (source?.status === "error" || source?.status === "permission-changed") {
-    return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT ACCESS</span><ProjectReadRecovery source={source} projectId={projectId} /></section>;
-  }
-
   if (currentDeleteState === "success") {
     return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT</span><h1 ref={deleteResultHeadingRef} tabIndex={-1}>项目已删除</h1><div className="inline-state inline-state-success" role="status">项目已删除。</div><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务列表</Link></Button></section>;
   }

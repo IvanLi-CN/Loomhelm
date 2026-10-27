@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo, useRef, type ReactNode } from "react";
-import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { expect, fireEvent, fn, userEvent, waitFor, within } from "storybook/test";
 
 import { createStorySource, storyProjects } from "@/features/tasks/story-source";
 import type { ProjectRecord, WriteResult } from "@/features/tasks/types";
@@ -214,6 +214,16 @@ export const OperatorProjectAccess: Story = {
     const canvas = within(canvasElement);
     expect(canvas.getByRole("button", { name: "保存项目" })).toBeDisabled();
     expect(await canvas.findByText("当前身份或连接状态不能创建项目。")).toBeInTheDocument();
+  }
+};
+
+export const ProjectWriteWithTaskReadFailure: Story = {
+  args: { source: createStorySource({ status: "error", canCreateProjects: true }), mode: "create" },
+  render: (args) => <StoryFrame><ProjectForm {...args} /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    fireEvent.change(canvas.getByLabelText("项目名称"), { target: { value: "独立项目写入" } });
+    expect(canvas.getByRole("button", { name: "保存项目" })).toBeEnabled();
   }
 };
 

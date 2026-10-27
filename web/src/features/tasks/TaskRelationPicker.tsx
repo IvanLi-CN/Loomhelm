@@ -70,6 +70,7 @@ export function TaskRelationPicker({
     });
   }, [candidateMap, selectedCandidateMap, selectedIds]);
   const normalizedSearch = normalizeSearch(search);
+  const searchLabel = `搜索${label} ID、标题或项目`;
   const filteredCandidates = useMemo(() => {
     if (!normalizedSearch) return candidates;
     return candidates.filter((candidate) => normalizeSearch(candidateText(candidate)).includes(normalizedSearch));
@@ -101,7 +102,7 @@ export function TaskRelationPicker({
   }, [disabled]);
 
   const closePicker = () => {
-    queueOwnedFocusRestore(pickerRef.current, () => summaryRef.current);
+    queueOwnedFocusRestore(pickerRef.current, () => summaryRef.current, { restoreWhenFocusDropped: true });
     setOpen(false);
   };
 
@@ -154,8 +155,8 @@ export function TaskRelationPicker({
         <div id={pickerId} className="task-relation-picker-panel">
           <label className="task-relation-picker-search">
             <Search size={14} aria-hidden="true" />
-            <span className="sr-only">搜索{label}任务</span>
-            <input type="search" value={search} onInput={(event) => setSearch(event.currentTarget.value)} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务 ID、标题或项目" aria-label="搜索任务 ID、标题或项目" disabled={disabled} />
+            <span className="sr-only">{searchLabel}</span>
+            <input type="search" value={search} onInput={(event) => setSearch(event.currentTarget.value)} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) event.preventDefault(); }} placeholder="搜索任务 ID、标题或项目" aria-label={searchLabel} disabled={disabled} />
           </label>
           {!candidates.length ? <p className="task-relation-picker-state">{emptyMessage}</p> : !filteredCandidates.length ? <p className="task-relation-picker-state" role="status" aria-label={noMatchMessage}>{noMatchMessage}</p> : <>
             <fieldset className="task-relation-picker-results" disabled={disabled}>

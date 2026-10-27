@@ -62,13 +62,22 @@ function PickerWithExternalFocus({ initialSelected = [] }: { initialSelected?: s
   return <div className="grid gap-3"><TaskRelationPicker label="前置依赖" candidates={candidates} selectedIds={selectedIds} onChange={setSelectedIds} /><button type="button" className="button button-secondary" onClick={() => undefined}>组件外部操作</button></div>;
 }
 
+function PickerInsideForm() {
+  const [submitted, setSubmitted] = useState(false);
+  return <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); setSubmitted(true); }}>
+    <TaskRelationPicker label="父任务" candidates={candidates} selectedIds={[]} onChange={fn()} />
+    <button type="submit" className="button button-secondary">保存外层表单</button>
+    <output>{submitted ? "外层表单已提交" : "外层表单未提交"}</output>
+  </form>;
+}
+
 export const SearchSelectRemove: Story = {
   args: storyArgs,
   render: () => <StoryFrame><InteractivePicker initialSelected={["TASK-0001"]} /></StoryFrame>,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByText("添加前置依赖"));
-    const search = canvas.getByRole("searchbox", { name: "搜索任务 ID、标题或项目" });
+    const search = canvas.getByRole("searchbox", { name: "搜索前置依赖 ID、标题或项目" });
     await userEvent.click(search);
     await userEvent.keyboard("TASK-0118");
     await userEvent.click(await canvas.findByRole("checkbox", { name: /TASK-0118/ }));
@@ -76,9 +85,9 @@ export const SearchSelectRemove: Story = {
     const remove = canvas.getByRole("button", { name: "移除前置依赖 TASK-0118" });
     remove.focus();
     expect(remove).toHaveFocus();
-    fireEvent.click(remove);
+    await userEvent.click(remove);
     expect(canvas.getByRole("list", { name: "前置依赖已选任务" })).not.toHaveTextContent("TASK-0118");
-    await waitFor(() => expect(canvas.getByText("添加前置依赖").closest("summary")).toHaveFocus());
+    await waitFor(() => expect(canvas.getByText(/^(添加前置依赖|收起前置依赖候选)$/).closest("summary")).toHaveFocus());
   }
 };
 
@@ -88,7 +97,7 @@ export const SearchAndCloseDoNotWrite: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByText("添加父任务"));
-    const search = canvas.getByRole("searchbox", { name: "搜索任务 ID、标题或项目" });
+    const search = canvas.getByRole("searchbox", { name: "搜索父任务 ID、标题或项目" });
     search.focus();
     expect(search).toHaveFocus();
     await userEvent.type(search, "不存在的任务");
@@ -96,6 +105,23 @@ export const SearchAndCloseDoNotWrite: Story = {
     fireEvent.keyDown(search, { key: "Escape" });
     await waitFor(() => expect(canvas.getByText("添加父任务").closest("summary")).toHaveFocus());
     expect(args.onChange).not.toHaveBeenCalled();
+  }
+};
+
+export const SearchEnterDoesNotSubmitOuterForm: Story = {
+  args: storyArgs,
+  render: () => <StoryFrame><PickerInsideForm /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByText("添加父任务"));
+    const search = canvas.getByRole("searchbox", { name: "搜索父任务 ID、标题或项目" });
+    await userEvent.click(search);
+    fireEvent.keyDown(search, { key: "Enter", isComposing: true });
+    await userEvent.keyboard("{Enter}");
+    expect(search).toHaveFocus();
+    expect(canvas.getByText("外层表单未提交")).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "保存外层表单" }));
+    expect(canvas.getByText("外层表单已提交")).toBeInTheDocument();
   }
 };
 
@@ -127,7 +153,7 @@ export const EscapeDoesNotStealExternalFocus: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByText("添加前置依赖"));
-    const search = canvas.getByRole("searchbox", { name: "搜索任务 ID、标题或项目" });
+    const search = canvas.getByRole("searchbox", { name: "搜索前置依赖 ID、标题或项目" });
     search.focus();
     expect(search).toHaveFocus();
     fireEvent.keyDown(search, { key: "Escape" });

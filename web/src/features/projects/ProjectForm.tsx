@@ -120,7 +120,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled, foc
     setCanAcknowledgeReconciliation(false);
     setReconciliationToken(undefined);
     setFeedback({ message: "已确认当前项目状态，可以继续操作。", tone: "success" });
-    if (mode === "create") onSaved?.(recoveredProjectId);
+    if (mode === "create") onSaved?.(recoveredProjectId, event?.currentTarget === document.activeElement);
   };
 
   const submit = async (event?: FormEvent<HTMLFormElement>) => {
