@@ -331,11 +331,8 @@ func TestApprovalAdmissionRejectsTerminalRunBeforeResolver(t *testing.T) {
 		t.Fatalf("begin terminal winner transaction: %v", err)
 	}
 	defer terminalTx.Rollback(context.Background())
-	var lockedID string
-	if err := terminalTx.QueryRow(ctx, `SELECT id FROM execution_sessions WHERE id = $1 FOR UPDATE`, ids.session).Scan(&lockedID); err != nil {
-		t.Fatalf("lock terminal winner session: %v", err)
-	}
-	if err := terminalTx.QueryRow(ctx, `SELECT id FROM execution_runs WHERE id = $1 FOR UPDATE`, ids.run).Scan(&lockedID); err != nil {
+	var lockedRunID string
+	if err := terminalTx.QueryRow(ctx, `SELECT id FROM execution_runs WHERE id = $1 FOR UPDATE`, ids.run).Scan(&lockedRunID); err != nil {
 		t.Fatalf("lock terminal winner run: %v", err)
 	}
 	resolver := &countingApprovalResolver{store: approvalStore}
@@ -344,6 +341,9 @@ func TestApprovalAdmissionRejectsTerminalRunBeforeResolver(t *testing.T) {
 		_, _, acceptErr := runStore.AcceptApproval(ctx, resolver, CommandIntent{Command: command, Generation: "1"}, request)
 		result <- acceptErr
 	}()
+	if err := waitForApprovalAdmissionRunLock(ctx, db.Pool()); err != nil {
+		t.Fatalf("wait for terminal approval admission run lock: %v", err)
+	}
 	if _, err := terminalTx.Exec(ctx, `
 		UPDATE execution_runs
 		SET status = 'completed', terminal_reason = 'terminal winner', finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
@@ -369,6 +369,103 @@ func TestApprovalAdmissionRejectsTerminalRunBeforeResolver(t *testing.T) {
 	}
 	if len(pending) != 1 || pending[0].ID != ids.approval {
 		t.Fatalf("pending approval after terminal admission = %+v", pending)
+	}
+}
+
+func TestApprovalAdmissionDuplicateAcceptedSurvivesTerminalRun(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	sessionStore := sessions.NewStore(db.Pool())
+	runStore := NewStore(db.Pool())
+	approvalStore := approvals.NewStore(db.Pool())
+	if _, err := sessionStore.Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        "1",
+	}); err != nil {
+		t.Fatalf("create duplicate approval session: %v", err)
+	}
+	run, err := runStore.CreateRun(ctx, NewRunInput{ID: ids.run, SessionID: ids.session, CommandID: ids.command, Generation: "1"})
+	if err != nil {
+		t.Fatalf("create duplicate approval run: %v", err)
+	}
+	if _, err := runStore.Start(ctx, run.ID, "1", "duplicate-approval-start"); err != nil {
+		t.Fatalf("start duplicate approval run: %v", err)
+	}
+	approval, err := approvalStore.Create(ctx, approvals.CreateRequest{
+		NewInput: approvals.NewInput{
+			ID:          ids.approval,
+			RunID:       ids.run,
+			SessionID:   ids.session,
+			Generation:  "1",
+			Revision:    1,
+			Kind:        "command",
+			RequestedAt: "2026-10-27T00:00:00Z",
+		},
+		Context: json.RawMessage(`{"scope":"write"}`),
+	})
+	if err != nil {
+		t.Fatalf("create duplicate approval: %v", err)
+	}
+	runID := ids.run
+	command := protocol.Command{
+		CommandID: ids.approvalCommand,
+		Kind:      protocol.CommandKindRunApprove,
+		Payload:   json.RawMessage(fmt.Sprintf(`{"approval_id":%q}`, approval.ID)),
+		RunID:     &runID,
+		SessionID: ids.session,
+	}
+	request := approvals.ResolveRequest{
+		ApprovalID: ids.approval,
+		RunID:      ids.run,
+		SessionID:  ids.session,
+		Generation: "1",
+		Request: protocol.ResolveApprovalRequest{
+			CommandID: ids.approvalCommand,
+			Decision:  protocol.ApprovalDecisionApprove,
+			Revision:  1,
+		},
+	}
+	resolver := &countingApprovalResolver{store: approvalStore}
+	accepted, _, err := runStore.AcceptApproval(ctx, resolver, CommandIntent{Command: command, Generation: "1"}, request)
+	if err != nil {
+		t.Fatalf("accept approval before terminal run: %v", err)
+	}
+	if accepted.Deduplicated || accepted.Record.State != protocol.CommandStateAccepted || resolver.calls != 1 {
+		t.Fatalf("first approval acceptance = %+v, resolver calls = %d", accepted, resolver.calls)
+	}
+	if _, err := runStore.Transition(ctx, command.CommandID, "1", protocol.CommandStateExecuting, "", nil, nil); err != nil {
+		t.Fatalf("transition accepted approval to executing: %v", err)
+	}
+	if _, err := runStore.ObserveTerminal(ctx, ids.run, "1", protocol.RunStatusCompleted, "duplicate-approval-terminal", "done"); err != nil {
+		t.Fatalf("complete duplicate approval run: %v", err)
+	}
+
+	duplicate, _, err := runStore.AcceptApproval(ctx, resolver, CommandIntent{Command: command, Generation: "1"}, request)
+	if err != nil {
+		t.Fatalf("duplicate accepted approval after terminal run: %v", err)
+	}
+	if !duplicate.Deduplicated || duplicate.Record.State != protocol.CommandStateExecuting || resolver.calls != 1 {
+		t.Fatalf("duplicate terminal approval = %+v, resolver calls = %d", duplicate, resolver.calls)
+	}
+
+	newCommand := command
+	newCommand.CommandID = ids.approvalCommand + "-new"
+	newRequest := request
+	newRequest.Request.CommandID = newCommand.CommandID
+	if _, _, err := runStore.AcceptApproval(ctx, resolver, CommandIntent{Command: newCommand, Generation: "1"}, newRequest); !errors.Is(err, ErrRunTerminal) {
+		t.Fatalf("new approval command after terminal run error = %v, want %v", err, ErrRunTerminal)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls after new terminal command = %d, want 1", resolver.calls)
+	}
+	if _, err := runStore.Lookup(ctx, ids.session, newCommand.CommandID); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("new terminal approval command lookup error = %v, want %v", err, ErrCommandNotFound)
 	}
 }
 
@@ -1405,6 +1502,34 @@ func waitForDistinctRunAdmissionWaiters(ctx context.Context, pool *pgxpool.Pool)
 			  )
 		`).Scan(&waiters)
 		if err == nil && waiters >= 2 {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if err != nil {
+				return err
+			}
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForApprovalAdmissionRunLock(ctx context.Context, pool *pgxpool.Pool) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiters int
+		err := pool.QueryRow(waitCtx, `
+			SELECT count(*)
+			FROM pg_stat_activity AS activity
+			WHERE activity.wait_event_type = 'Lock'
+			  AND activity.query ILIKE '%FROM execution_runs AS run%'
+			  AND activity.query ILIKE '%FOR UPDATE%'
+		`).Scan(&waiters)
+		if err == nil && waiters >= 1 {
 			return nil
 		}
 		select {

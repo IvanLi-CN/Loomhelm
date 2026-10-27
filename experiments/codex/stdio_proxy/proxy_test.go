@@ -23,6 +23,31 @@ import (
 
 const bridgeReadTimeout = 3 * time.Second
 
+func TestReadBridgeUntilSkipsUnrelatedNotification(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	writes := make(chan error, 1)
+	go func() {
+		if err := writeFrame(server, []byte(`{"jsonrpc":"2.0","method":"fixture/desktop-initialized","params":{}}`)); err != nil {
+			writes <- err
+			return
+		}
+		writes <- writeFrame(server, []byte(`{"jsonrpc":"2.0","id":"bridge-init","error":{"code":-32002,"message":"desktop owns bridge"}}`))
+	}()
+
+	response := readBridgeUntil(t, client, bufio.NewReader(client), time.Second, func(message rpcMessage) bool {
+		return message.isResponse() && idKey(message.id) == `"bridge-init"`
+	})
+	if !response.hasError || response.hasResult {
+		t.Fatalf("bridge response after unrelated notification = %+v", response.fields)
+	}
+	if err := <-writes; err != nil {
+		t.Fatalf("write bridge notification/response: %v", err)
+	}
+}
+
 func TestProxyPreservesInvocationAndHandshakeBoundary(t *testing.T) {
 	fixture := startFixtureProxy(t, fixtureOptions{})
 	defer fixture.close(t)
@@ -476,7 +501,9 @@ func completeDesktopHandshake(t *testing.T, fixture *runningFixture) {
 func completeBridgeHandshake(t *testing.T, connection net.Conn, reader *bufio.Reader) {
 	t.Helper()
 	writeRequest(t, connection, "bridge-init", "initialize", nil)
-	response := readBridgeMessage(t, connection, reader, bridgeReadTimeout)
+	response := readBridgeUntil(t, connection, reader, bridgeReadTimeout, func(message rpcMessage) bool {
+		return message.isResponse() && idKey(message.id) == `"bridge-init"`
+	})
 	if got := responseErrorCode(t, response); got != localDesktopOwnedCode {
 		t.Fatalf("bridge initialize error code = %d, want %d", got, localDesktopOwnedCode)
 	}

@@ -913,6 +913,7 @@ func ensureHistoryReady(ctx context.Context, queryer approvalReadinessQuerier) e
 				  AND relation.relname = 'execution_approvals'
 				  AND trigger_row.tgname = 'execution_approvals_history_writer_guard'
 				  AND NOT trigger_row.tgisinternal
+				  AND trigger_row.tgtype = 31
 				  AND trigger_row.tgenabled = 'O'
 				  AND function_row.proname = 'loomhelm_require_approval_history_writer'
 				  AND pg_get_functiondef(function_row.oid) LIKE '%loomhelm.approval_writer_capability%'
@@ -1036,11 +1037,7 @@ func ensureHistoryConsistency(ctx context.Context, queryer approvalReadinessQuer
 				  AND function_row.proname = 'loomhelm_require_approval_history_writer'
 				  AND pg_get_functiondef(function_row.oid) LIKE '%loomhelm.approval_writer_capability%'
 				  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
-				  AND (trigger_row.tgtype & 1) <> 0
-				  AND (trigger_row.tgtype & 2) <> 0
-				  AND (trigger_row.tgtype & 4) <> 0
-				  AND (trigger_row.tgtype & 8) <> 0
-				  AND (trigger_row.tgtype & 16) <> 0
+				  AND trigger_row.tgtype = 31
 			)
 	`).Scan(&projectionExists, &historyExists, &schemaComplete, &indexesComplete, &writerGuardExists)
 	if err != nil {

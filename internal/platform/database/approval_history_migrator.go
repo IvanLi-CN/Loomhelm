@@ -1017,11 +1017,7 @@ func (m *ApprovalHistoryMigrator) recognizedAtomicLayout(ctx context.Context) (b
 				  AND relation.relname = 'execution_approvals'
 				  AND trigger_row.tgname = 'execution_approvals_history_writer_guard'
 				  AND NOT trigger_row.tgisinternal
-				  AND (trigger_row.tgtype & 1) <> 0
-				  AND (trigger_row.tgtype & 2) <> 0
-				  AND (trigger_row.tgtype & 4) <> 0
-				  AND (trigger_row.tgtype & 8) <> 0
-				  AND (trigger_row.tgtype & 16) <> 0
+				  AND trigger_row.tgtype = 31
 				  AND function_row.proname = 'loomhelm_require_approval_history_writer'
 				  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
 				  AND trigger_row.tgenabled = 'O'
@@ -1138,6 +1134,7 @@ func writerGuardTriggerExists(ctx context.Context, queryer interface {
 			  AND trigger_row.tgname = 'execution_approvals_history_writer_guard'
 			  AND function_row.proname = 'loomhelm_require_approval_history_writer'
 			  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
+			  AND trigger_row.tgtype = 31
 			  AND trigger_row.tgenabled = 'O'
 		)
 	`).Scan(&exists)

@@ -209,6 +209,12 @@ func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransaction
 		return accepted, approvals.Resolution{}, nil
 	}
 	if err := lockApprovalRunForAdmissionTx(ctx, tx, request); err != nil {
+		if accepted.Deduplicated && (accepted.Record.State == protocol.CommandStateAccepted || accepted.Record.State == protocol.CommandStateExecuting) && errors.Is(err, ErrRunTerminal) {
+			if commitErr := tx.Commit(ctx); commitErr != nil {
+				return AcceptResult{}, approvals.Resolution{}, fmt.Errorf("commit duplicate terminal approval admission lookup: %w", commitErr)
+			}
+			return accepted, approvals.Resolution{}, nil
+		}
 		return AcceptResult{}, approvals.Resolution{}, err
 	}
 	if lease != nil && !accepted.Deduplicated && !isTerminalCommandState(accepted.Record.State) {

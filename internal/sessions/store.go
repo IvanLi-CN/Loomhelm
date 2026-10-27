@@ -830,6 +830,9 @@ func (s *Store) bindTask(ctx context.Context, sessionID string, request BindRequ
 	if taskSessionID != nil {
 		request.CurrentTaskSessionID = *taskSessionID
 	}
+	if err := validateCreationTaskForSession(ctx, tx, taskProjectID, request.TaskID, sessionID); err != nil {
+		return Session{}, err
+	}
 	if authorize != nil {
 		if err := authorize(ctx, tx, BindingFacts{
 			Session: current, Access: access, TaskProjectID: taskProjectID,

@@ -617,6 +617,81 @@ func TestApprovalHistoryMigratorAdoptsAtomic00012(t *testing.T) {
 	assertApprovalHistoryTriggerState(t, ctx, db, false, true)
 }
 
+func TestApprovalHistoryGuardsRequireExactWriterTriggerShape(t *testing.T) {
+	shapes := []struct {
+		name       string
+		definition string
+	}{
+		{name: "insert-only-row-before", definition: "BEFORE INSERT ON execution_approvals FOR EACH ROW"},
+		{name: "statement-level", definition: "BEFORE INSERT OR UPDATE OR DELETE ON execution_approvals FOR EACH STATEMENT"},
+		{name: "after-row", definition: "AFTER INSERT OR UPDATE OR DELETE ON execution_approvals FOR EACH ROW"},
+	}
+	for _, shape := range shapes {
+		shape := shape
+		t.Run("adopt/"+shape.name, func(t *testing.T) {
+			db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+			setApprovalHistoryWriterGuardShape(t, ctx, db, shape.definition)
+
+			migrator := database.NewApprovalHistoryMigrator(db.Pool())
+			if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); !errors.Is(err, database.ErrApprovalHistoryAtomicAdoption) {
+				t.Fatalf("%s atomic layout error = %v, want ErrApprovalHistoryAtomicAdoption", shape.name, err)
+			}
+			var stateTable string
+			if err := db.Pool().QueryRow(ctx, `SELECT COALESCE(to_regclass(format('%I.%I', current_schema(), 'execution_approval_history_migrations'))::text, '')`).Scan(&stateTable); err != nil {
+				t.Fatalf("inspect rejected %s adoption state table: %v", shape.name, err)
+			}
+			if stateTable != "" {
+				t.Fatalf("rejected %s adoption created state table %q", shape.name, stateTable)
+			}
+		})
+	}
+
+	db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+	migrator := database.NewApprovalHistoryMigrator(db.Pool())
+	if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); err != nil {
+		t.Fatalf("adopt correct atomic layout: %v", err)
+	}
+	store := NewStore(db.Pool())
+	for _, shape := range shapes {
+		shape := shape
+		t.Run("readiness/"+shape.name, func(t *testing.T) {
+			setApprovalHistoryWriterGuardShape(t, ctx, db, shape.definition)
+			if err := migrator.Readiness(ctx); !errors.Is(err, database.ErrApprovalHistoryMigrationUnavailable) {
+				t.Fatalf("%s migrator readiness error = %v, want ErrApprovalHistoryMigrationUnavailable", shape.name, err)
+			}
+			if err := store.CheckHistoryReadiness(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
+				t.Fatalf("%s store readiness error = %v, want ErrApprovalHistoryUnavailable", shape.name, err)
+			}
+		})
+	}
+	setApprovalHistoryWriterGuardShape(t, ctx, db, "BEFORE INSERT OR UPDATE OR DELETE ON execution_approvals FOR EACH ROW")
+	if err := migrator.Readiness(ctx); err != nil {
+		t.Fatalf("migrator readiness after correct guard restore: %v", err)
+	}
+	if err := store.CheckHistoryReadiness(ctx); err != nil {
+		t.Fatalf("store readiness after correct guard restore: %v", err)
+	}
+}
+
+func setApprovalHistoryWriterGuardShape(t *testing.T, ctx context.Context, db *database.DB, definition string) {
+	t.Helper()
+	query := fmt.Sprintf(`
+		DROP TRIGGER execution_approvals_history_writer_guard ON execution_approvals;
+		CREATE TRIGGER execution_approvals_history_writer_guard
+		%s
+		EXECUTE FUNCTION loomhelm_require_approval_history_writer();
+	`, definition)
+	if _, err := db.Pool().Exec(ctx, query); err != nil {
+		t.Fatalf("install writer guard shape %q: %v", definition, err)
+	}
+}
+
 func TestApprovalHistoryMigratorRejectsUnrecognizedAtomicLayout(t *testing.T) {
 	db, _ := openApprovalFixtureDatabaseThrough(t, 11)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -330,6 +330,85 @@ func TestCreationIntentConcurrentDistinctCommandsRejectsExtraTaskIntent(t *testi
 	}
 }
 
+func TestBindTaskRejectsPendingAndUnknownCreationReservations(t *testing.T) {
+	db := openSessionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	ids := sessionIntegrationIDs{user: "e01-bind-reservation-user-" + suffix, project: "e01-bind-reservation-project-" + suffix, task: "e01-bind-reservation-task-" + suffix}
+	host := ensureSessionHost(t, ctx, db)
+	seedSessionIdentity(t, ctx, db, ids, host.ID)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupSessionIdentity(t, cleanupCtx, db, ids, host)
+	})
+
+	store := NewStore(db.Pool())
+	reservation := CreationIntentInput{
+		SessionID:     "e01-bind-reservation-intent-" + suffix,
+		CommandID:     "e01-bind-reservation-command-" + suffix,
+		CreatorUserID: ids.user,
+		HostID:        host.ID,
+		Path:          protocol.SessionPathNew,
+		ProjectID:     ids.project,
+		TaskID:        ids.task,
+		Parameters:    []byte(`{"prompt":"reserved creation"}`),
+		Summary:       "reserved creation",
+	}
+	if _, err := store.CreateIntent(ctx, reservation); err != nil {
+		t.Fatalf("create task reservation: %v", err)
+	}
+
+	standaloneIDs := []string{
+		"e01-bind-reservation-pending-" + suffix,
+		"e01-bind-reservation-unknown-" + suffix,
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, sessionID := range standaloneIDs {
+			if _, err := db.Pool().Exec(cleanupCtx, `DELETE FROM execution_sessions WHERE id = $1`, sessionID); err != nil {
+				t.Errorf("cleanup standalone session %q: %v", sessionID, err)
+			}
+		}
+	})
+	for index, sessionID := range standaloneIDs {
+		if _, err := store.Create(ctx, NewInput{
+			ID:                sessionID,
+			Path:              protocol.SessionPathNew,
+			ProjectID:         ids.project,
+			ExternalThreadRef: "e01-bind-reservation-thread-" + fmt.Sprintf("%d", index) + "-" + suffix,
+			Generation:        "e01-bind-reservation-generation-" + fmt.Sprintf("%d", index) + "-" + suffix,
+		}); err != nil {
+			t.Fatalf("create standalone session %q: %v", sessionID, err)
+		}
+		if _, err := store.BindTask(ctx, sessionID, BindRequest{TaskID: ids.task, TaskProjectID: ids.project}); !errors.Is(err, ErrTaskBound) {
+			t.Fatalf("bind task against %s reservation error = %v, want %v", reservationState(index), err, ErrTaskBound)
+		}
+		if index == 0 {
+			if _, err := store.MarkIntentUnknown(ctx, UnknownIntentInput{SessionID: reservation.SessionID, Reason: "creation response was lost"}); err != nil {
+				t.Fatalf("mark task reservation unknown: %v", err)
+			}
+		}
+	}
+	var taskSessionID *string
+	if err := db.Pool().QueryRow(ctx, `SELECT session_id FROM tasks WHERE id = $1`, ids.task).Scan(&taskSessionID); err != nil {
+		t.Fatalf("read task binding after rejected binds: %v", err)
+	}
+	if taskSessionID != nil {
+		t.Fatalf("task session id = %q, want unbound", *taskSessionID)
+	}
+}
+
+func reservationState(index int) string {
+	if index == 0 {
+		return "pending"
+	}
+	return "unknown"
+}
+
 func TestCreationIntentDefiniteFailureReleasesTaskReservation(t *testing.T) {
 	db := openSessionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

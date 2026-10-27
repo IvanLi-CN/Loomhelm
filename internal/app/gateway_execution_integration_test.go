@@ -532,6 +532,66 @@ func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGatewayLateSessionCreationFailurePersistsDefiniteMarker(t *testing.T) {
+	databaseURL := isolatedApplicationDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	persistence, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open fixture persistence: %v", err)
+	}
+	t.Cleanup(persistence.Close)
+	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+		Name:           "h01 late session failure ACK",
+		CredentialName: "late-session-failure-ack-fixture",
+	})
+	if err != nil {
+		t.Fatalf("register fixture host: %v", err)
+	}
+	store := sessions.NewStore(persistence.Pool())
+	transport := &gatewayExecutionTransport{sessions: store, runs: runs.NewStore(persistence.Pool())}
+	if _, err := persistence.Pool().Exec(ctx, `
+		INSERT INTO auth_users (id, issuer, subject)
+		VALUES ('user-late-session-failure', 'https://issuer.example.test', 'subject-late-session-failure')
+	`); err != nil {
+		t.Fatalf("create late failure ACK user: %v", err)
+	}
+
+	for _, state := range []protocol.CommandState{protocol.CommandStateFailed, protocol.CommandStateRejected} {
+		t.Run(string(state), func(t *testing.T) {
+			suffix := string(state)
+			sessionID := "session_late_failure_" + suffix
+			commandID := "create_late_failure_" + suffix
+			if _, err := store.CreateIntent(ctx, sessions.CreationIntentInput{
+				SessionID:     sessionID,
+				CommandID:     commandID,
+				CreatorUserID: "user-late-session-failure",
+				HostID:        hostRegistration.Host.ID,
+				Path:          protocol.SessionPathNew,
+				Parameters:    []byte(`{"prompt":"late failure"}`),
+				Summary:       "late failure ACK fixture",
+			}); err != nil {
+				t.Fatalf("create session intent: %v", err)
+			}
+			if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, protocol.CommandAck{
+				CommandID:  commandID,
+				ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				State:      state,
+			}); err != nil {
+				t.Fatalf("handle late %s ACK: %v", state, err)
+			}
+			intent, err := store.GetIntent(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("read late %s ACK intent: %v", state, err)
+			}
+			wantReason := "definite_failure:" + string(state)
+			if intent.State != sessions.IntentStatePending || intent.UnknownReason != wantReason {
+				t.Fatalf("late %s ACK intent = %+v, want pending marker %q", state, intent, wantReason)
+			}
+		})
+	}
+}
+
 func TestGatewayUnknownSessionCreationAckGuardsAndActivates(t *testing.T) {
 	databaseURL := isolatedApplicationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

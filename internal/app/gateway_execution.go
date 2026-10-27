@@ -93,6 +93,14 @@ func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connec
 		if strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID || (access.IntentState != sessions.IntentStatePending && access.IntentState != sessions.IntentStateUnknown && access.IntentState != sessions.IntentStateConfirmed) {
 			return fmt.Errorf("%w: creation command %q is not owned by gateway host %q", errGatewaySessionOwnership, ack.CommandID, connection.HostID)
 		}
+		if ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+			if _, err := t.sessions.MarkIntentDefiniteFailure(ctx, sessions.DefiniteFailureIntentInput{
+				SessionID: intent.SessionID,
+				State:     ack.State,
+			}); err != nil {
+				return fmt.Errorf("record definite session failure: %w", err)
+			}
+		}
 		if ack.State == protocol.CommandStateSucceeded && (access.IntentState == sessions.IntentStateUnknown || access.IntentState == sessions.IntentStateConfirmed) {
 			var opened sessionOpenResult
 			if err := json.Unmarshal(ack.Result, &opened); err != nil || strings.TrimSpace(opened.ExternalThreadRef) == "" || strings.TrimSpace(opened.Generation) == "" {

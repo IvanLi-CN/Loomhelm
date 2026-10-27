@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,21 @@ import (
 	"testing"
 	"time"
 )
+
+func TestConnectorInitializationErrorClassOmitsPrivateDetails(t *testing.T) {
+	privatePath := filepath.Join(t.TempDir(), "connector-journal-secret")
+	err := fmt.Errorf("open connector journal: %w", &os.PathError{Op: "open", Path: privatePath, Err: os.ErrPermission})
+	got := connectorInitializationErrorClass(err)
+	if got != "permission_denied" {
+		t.Fatalf("permission error class = %q, want permission_denied", got)
+	}
+	if strings.Contains(got, privatePath) {
+		t.Fatalf("permission error class leaked private path %q", privatePath)
+	}
+	if got := connectorInitializationErrorClass(fmt.Errorf("journal missing: %w", os.ErrNotExist)); got != "not_found" {
+		t.Fatalf("not-found error class = %q, want not_found", got)
+	}
+}
 
 func TestConnectorEntrypointExitsOnSignal(t *testing.T) {
 	for _, test := range []struct {
