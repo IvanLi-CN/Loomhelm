@@ -85,8 +85,8 @@ func acquireLeaseTx(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentit
 	if ttl <= 0 {
 		return ControlLease{}, fmt.Errorf("%w: lease TTL must be positive", ErrInvalidLease)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, identity.LeaseKey); err != nil {
-		return ControlLease{}, fmt.Errorf("serialize control lease acquisition: %w", err)
+	if err := lockLeaseAdvisoryTx(ctx, tx, identity.LeaseKey); err != nil {
+		return ControlLease{}, err
 	}
 	if err := lockLeaseBinding(ctx, tx, identity); err != nil {
 		return ControlLease{}, err
@@ -103,6 +103,13 @@ func acquireLeaseTx(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentit
 		return ControlLease{}, fmt.Errorf("%w: lease %q is owned by another identity", ErrLeaseHeld, identity.LeaseKey)
 	}
 	return writeLease(ctx, tx, identity, ttl, now)
+}
+
+func lockLeaseAdvisoryTx(ctx context.Context, tx pgx.Tx, leaseKey string) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, leaseKey); err != nil {
+		return fmt.Errorf("serialize control lease acquisition: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) RenewLease(ctx context.Context, identity DurableLeaseIdentity, configs ...LeaseStoreConfig) (ControlLease, error) {

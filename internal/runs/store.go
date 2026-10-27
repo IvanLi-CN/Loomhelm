@@ -113,6 +113,14 @@ func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease
 		return AcceptResult{}, fmt.Errorf("begin interrupt acceptance: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if lease != nil {
+		if err := validateLeaseIdentity(*lease); err != nil {
+			return AcceptResult{}, err
+		}
+		if err := lockLeaseAdvisoryTx(ctx, tx, lease.LeaseKey); err != nil {
+			return AcceptResult{}, err
+		}
+	}
 	accepted, err := s.acceptTx(ctx, tx, intent)
 	if err != nil {
 		return AcceptResult{}, err
@@ -184,6 +192,14 @@ func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransaction
 		return AcceptResult{}, approvals.Resolution{}, fmt.Errorf("begin approval command acceptance: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if lease != nil {
+		if err := validateLeaseIdentity(*lease); err != nil {
+			return AcceptResult{}, approvals.Resolution{}, err
+		}
+		if err := lockLeaseAdvisoryTx(ctx, tx, lease.LeaseKey); err != nil {
+			return AcceptResult{}, approvals.Resolution{}, err
+		}
+	}
 	accepted, err := s.acceptTx(ctx, tx, intent)
 	if err != nil {
 		return AcceptResult{}, approvals.Resolution{}, err
@@ -235,6 +251,14 @@ func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRu
 		return AcceptResult{}, Run{}, fmt.Errorf("begin command and run acceptance: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if lease != nil {
+		if err := validateLeaseIdentity(*lease); err != nil {
+			return AcceptResult{}, Run{}, err
+		}
+		if err := lockLeaseAdvisoryTx(ctx, tx, lease.LeaseKey); err != nil {
+			return AcceptResult{}, Run{}, err
+		}
+	}
 	accepted, err := s.acceptTx(ctx, tx, intent)
 	if err != nil {
 		return AcceptResult{}, Run{}, err
