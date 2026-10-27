@@ -189,6 +189,14 @@ Association MUST retain the same Session and the identities and continuity of it
 - covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-005`, `REQ-LH-008`, `REQ-LH-011`, `REQ-LH-012`
 - Pass condition: projectless conversations are creator-private and executable; association requires explicit sharing confirmation, preserves Session/Run/event/message/file/draft continuity and applies target-project history permissions while keeping drafts private. Both association cardinalities hold, occupied/replacement/detach and cross-project Session reassociation operations are rejected, and failed association leaves prior state intact. Cross-project task hierarchy and prerequisite relationships remain supported independently of Session binding.
 
+## Visual Evidence
+
+The current U02 Task Evidence Set contains six owner-confirmed mock-only captures: the five canonical task-form images and the current TaskGraph image. The five task-form images remain unchanged and retain their established page/component roles, density coverage and canonical paths under `docs/specs/phase1-core/assets/`.
+
+The sixth capture is `assets/task-graph-storybook-desktop.png`, rendered from candidate `0723f90af49582bd816e0a762e06c3234b37f2b2` against base `5666655ab69980265166e8ef8df46a9493f60568` using Storybook story `product-taskviews--explorer-consistency` after switching to its final graph view. It is a `1425x1061` full source-managed surface capture from a `1440x1000` CSS viewport, with 40px target-to-surface margins, no pixel trim and SHA-256 `d1360aac95bb0fd15d1bc2ff00b2ddcac043b17a2ca9cd7272a2c5c19a75ad25`. The exact destination is absent at the locked base, so its comparison is `current-only`; the owner confirmed the displayed image as accurate.
+
+The TaskGraph image documents the current component presentation and does not establish authenticated production UI, backend authorization, relationship persistence or complete product UI approval. Its source-managed DOM preflight and exact-path comparison remain recorded in the external candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/batch16-0723f90`.
+
 ## Related ADRs
 
 - [Control plane and host execution](../../adr/0001-control-plane-and-host-execution.md)

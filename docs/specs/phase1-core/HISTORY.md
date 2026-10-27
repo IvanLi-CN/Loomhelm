@@ -124,6 +124,8 @@ The task-form density repair records the owner-confirmed current candidate `3951
 
 The owner-confirmed `af1848771ae688707c2ab1306ac0d7f6c7991371` evidence refresh registers five canonical task-form captures: desktop and mobile `ui_demo` page views, the Storybook Create state, the selected parent/dependency expanded state, and the source-managed Storybook mobile state. The metadata-only refresh preserves the established density contract and does not change product or rendering behavior; the source mapping and hashes are recorded in the candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/af18487`.
 
+The owner-confirmed TaskGraph capture extends the current U02 Task Evidence Set without changing product or rendering code. It is sourced from candidate `0723f90af49582bd816e0a762e06c3234b37f2b2`, registered at `assets/task-graph-storybook-desktop.png`, and retains the full source-managed surface with 40px margins. The `1425x1061` image has SHA-256 `d1360aac95bb0fd15d1bc2ff00b2ddcac043b17a2ca9cd7272a2c5c19a75ad25`; its exact base-path comparison is `current-only` because the destination was absent at base `5666655ab69980265166e8ef8df46a9493f60568`. The owner confirmed the displayed image as accurate, and the external preflight/manifest/comparison receipts remain under `/Users/ivan/.codex/verification/loomhelm-u02/batch16-0723f90`.
+
 ## References
 
 - [Requirements](SPEC.md)

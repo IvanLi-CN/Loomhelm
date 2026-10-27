@@ -114,6 +114,10 @@ The current task-form visual candidate is `af1848771ae688707c2ab1306ac0d7f6c7991
 
 ![Task form density on a 393x852 mobile viewport](assets/u02-task-form-density-mobile-393x852.png)
 
+The current U02 Task Evidence Set is the owner-confirmed five-image task-form set above plus the TaskGraph component capture below. The TaskGraph image is bound to render source candidate `0723f90af49582bd816e0a762e06c3234b37f2b2`; the evidence-registration commit is documentation-only and does not change the render inputs. Its full source-managed surface is `1425x1061` from a `1440x1000` CSS viewport, with 40px margins and SHA-256 `d1360aac95bb0fd15d1bc2ff00b2ddcac043b17a2ca9cd7272a2c5c19a75ad25`. The exact base-path comparison is `current-only` because `docs/specs/phase1-core/assets/task-graph-storybook-desktop.png` was absent at base `5666655ab69980265166e8ef8df46a9493f60568`; no unrelated visual asset is used as a baseline.
+
+![TaskGraph component on the desktop viewport](assets/task-graph-storybook-desktop.png)
+
 ![Batch 6 workbench on the desktop viewport](assets/workbench-desktop-dark.png)
 
 ![Batch 6 workbench on a narrow viewport](assets/workbench-mobile-dark.png)
