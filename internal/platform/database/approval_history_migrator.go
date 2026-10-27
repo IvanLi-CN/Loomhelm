@@ -190,7 +190,7 @@ func (m *ApprovalHistoryMigrator) RunBackfill(ctx context.Context, options Appro
 			return progressFromState(state), nil
 		}
 		if processed >= opts.WorkBudget {
-			if err := m.setPhase(ctx, ApprovalHistoryPhaseBackfillPaused, ""); err != nil {
+			if err := m.setPhase(ctx, state.phase, ApprovalHistoryPhaseBackfillPaused, ""); err != nil {
 				return progressFromState(state), err
 			}
 			return m.progress(ctx)
@@ -220,7 +220,7 @@ func (m *ApprovalHistoryMigrator) RunBackfill(ctx context.Context, options Appro
 			return m.failOperation(ctx, batchState, err)
 		}
 		if len(ids) == 0 {
-			if err := updateStateTx(ctx, tx, ApprovalHistoryPhaseBackfillComplete, batchState.checkpointID, batchState.rowsScanned, batchState.rowsCopied, batchState.dirtyRowsReconciled, "", ""); err != nil {
+			if err := updateStateTx(ctx, tx, batchState.phase, batchState.leaseOwner, ApprovalHistoryPhaseBackfillComplete, batchState.checkpointID, batchState.rowsScanned, batchState.rowsCopied, batchState.dirtyRowsReconciled, "", ""); err != nil {
 				_ = tx.Rollback(ctx)
 				return progressFromState(batchState), err
 			}
@@ -252,7 +252,7 @@ func (m *ApprovalHistoryMigrator) RunBackfill(ctx context.Context, options Appro
 		if processed >= opts.WorkBudget {
 			phase = ApprovalHistoryPhaseBackfillPaused
 		}
-		if err := updateStateTx(ctx, tx, phase, lastID, batchState.rowsScanned+int64(len(ids)), batchState.rowsCopied+int64(len(ids)), batchState.dirtyRowsReconciled, "", ""); err != nil {
+		if err := updateStateTx(ctx, tx, batchState.phase, batchState.leaseOwner, phase, lastID, batchState.rowsScanned+int64(len(ids)), batchState.rowsCopied+int64(len(ids)), batchState.dirtyRowsReconciled, "", ""); err != nil {
 			_ = tx.Rollback(ctx)
 			return progressFromState(batchState), err
 		}
@@ -290,8 +290,8 @@ func (m *ApprovalHistoryMigrator) Validate(ctx context.Context, options Approval
 	if pending != 0 {
 		return m.failBudget(ctx, state, fmt.Sprintf("%d dirty rows appeared during validation", pending))
 	}
-	if err := m.setPhase(ctx, ApprovalHistoryPhaseValidated, ""); err != nil {
-		return m.progress(ctx)
+	if err := m.setPhase(ctx, state.phase, ApprovalHistoryPhaseValidated, ""); err != nil {
+		return m.progressWithError(ctx, err)
 	}
 	return m.progress(ctx)
 }
@@ -335,8 +335,8 @@ func (m *ApprovalHistoryMigrator) BuildIndexes(ctx context.Context, options Appr
 			return m.failOperation(ctx, state, err)
 		}
 	}
-	if err := m.setPhase(ctx, ApprovalHistoryPhaseIndexesReady, ""); err != nil {
-		return m.progress(ctx)
+	if err := m.setPhase(ctx, state.phase, ApprovalHistoryPhaseIndexesReady, ""); err != nil {
+		return m.progressWithError(ctx, err)
 	}
 	return m.progress(ctx)
 }
@@ -368,8 +368,8 @@ func (m *ApprovalHistoryMigrator) Cutover(ctx context.Context, options ApprovalH
 		return m.failBudget(ctx, state, fmt.Sprintf("%d dirty rows remain before cutover", pending))
 	}
 	if state.phase == ApprovalHistoryPhaseIndexesReady {
-		if err := m.setPhase(ctx, ApprovalHistoryPhaseCutoverRequested, ""); err != nil {
-			return m.progress(ctx)
+		if err := m.setPhase(ctx, state.phase, ApprovalHistoryPhaseCutoverRequested, ""); err != nil {
+			return m.progressWithError(ctx, err)
 		}
 	}
 
@@ -390,23 +390,15 @@ func (m *ApprovalHistoryMigrator) Cutover(ctx context.Context, options ApprovalH
 		_ = tx.Rollback(ctx)
 		return m.resetCutover(ctx, fmt.Errorf("acquire bounded approval history cutover lock: %w", err))
 	}
-	count, err := dirtyRowsTx(ctx, tx)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return m.resetCutover(ctx, err)
-	}
-	if count > opts.FinalRowBudget || count*3 > opts.FinalWorkBudget {
-		_ = tx.Rollback(ctx)
-		return m.resetCutover(ctx, fmt.Errorf("%w: final dirty rows=%d row_budget=%d work_budget=%d", ErrApprovalHistoryMigrationBudget, count, opts.FinalRowBudget, opts.FinalWorkBudget))
-	}
-	ids, err := selectDirtyIDsTx(ctx, tx, int(opts.FinalRowBudget+1))
+	probeLimit := opts.FinalRowBudget + 1
+	ids, err := selectDirtyIDsTx(ctx, tx, int(probeLimit))
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return m.resetCutover(ctx, err)
 	}
 	if int64(len(ids)) > opts.FinalRowBudget || int64(len(ids))*3 > opts.FinalWorkBudget {
 		_ = tx.Rollback(ctx)
-		return m.resetCutover(ctx, fmt.Errorf("%w: final dirty work exceeded budget", ErrApprovalHistoryMigrationBudget))
+		return m.resetCutover(ctx, fmt.Errorf("%w: final dirty rows=%d row_budget=%d work_budget=%d", ErrApprovalHistoryMigrationBudget, len(ids), opts.FinalRowBudget, opts.FinalWorkBudget))
 	}
 	if len(ids) > 0 {
 		if err := reconcileDirtyIDsTx(ctx, tx, ids); err != nil {
@@ -414,12 +406,12 @@ func (m *ApprovalHistoryMigrator) Cutover(ctx context.Context, options ApprovalH
 			return m.resetCutover(ctx, err)
 		}
 	}
-	count, err = dirtyRowsTx(ctx, tx)
+	remaining, err := dirtyRowsRemainTx(ctx, tx)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return m.resetCutover(ctx, err)
 	}
-	if count != 0 {
+	if remaining {
 		_ = tx.Rollback(ctx)
 		return m.resetCutover(ctx, fmt.Errorf("%w: dirty rows remain after final drain", ErrApprovalHistoryMigrationBudget))
 	}
@@ -440,7 +432,7 @@ EXECUTE FUNCTION loomhelm_require_approval_history_writer()`); err != nil {
 		_ = tx.Rollback(ctx)
 		return m.resetCutover(ctx, fmt.Errorf("remove approval history capture trigger: %w", err))
 	}
-	if err := updateStateTx(ctx, tx, ApprovalHistoryPhaseCutoverComplete, cutoverState.checkpointID, cutoverState.rowsScanned, cutoverState.rowsCopied, cutoverState.dirtyRowsReconciled+int64(len(ids)), "", ""); err != nil {
+	if err := updateStateTx(ctx, tx, cutoverState.phase, cutoverState.leaseOwner, ApprovalHistoryPhaseCutoverComplete, cutoverState.checkpointID, cutoverState.rowsScanned, cutoverState.rowsCopied, cutoverState.dirtyRowsReconciled+int64(len(ids)), "", ""); err != nil {
 		_ = tx.Rollback(ctx)
 		return m.resetCutover(ctx, err)
 	}
@@ -479,7 +471,7 @@ func (m *ApprovalHistoryMigrator) AdoptAtomic00012(ctx context.Context, options 
 	if err := m.pool.QueryRow(ctx, `SELECT count(*) FROM execution_approvals`).Scan(&count); err != nil {
 		return ApprovalHistoryMigrationProgress{}, fmt.Errorf("count adopted approval projections: %w", err)
 	}
-	if _, err := m.pool.Exec(ctx, `
+	result, err := m.pool.Exec(ctx, `
 		INSERT INTO execution_approval_history_migrations (
 			migration_key, phase, rows_scanned, rows_copied, last_error, updated_at
 		)
@@ -492,8 +484,19 @@ func (m *ApprovalHistoryMigrator) AdoptAtomic00012(ctx context.Context, options 
 			lease_owner = '',
 			lease_expires_at = NULL,
 			updated_at = CURRENT_TIMESTAMP
-	`, approvalHistoryMigrationKey, count); err != nil {
+		WHERE execution_approval_history_migrations.phase <> 'cutover_complete'
+		  AND (
+			execution_approval_history_migrations.lease_owner = ''
+			OR execution_approval_history_migrations.lease_owner = $3
+			OR execution_approval_history_migrations.lease_expires_at IS NULL
+			OR execution_approval_history_migrations.lease_expires_at <= CURRENT_TIMESTAMP
+		  )
+	`, approvalHistoryMigrationKey, count, m.leaseOwner)
+	if err != nil {
 		return ApprovalHistoryMigrationProgress{}, fmt.Errorf("adopt atomic approval history state: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return ApprovalHistoryMigrationProgress{}, ErrApprovalHistoryMigrationBusy
 	}
 	return m.progress(ctx)
 }
@@ -551,7 +554,7 @@ func (m *ApprovalHistoryMigrator) drainDirty(ctx context.Context, options normal
 			_ = tx.Rollback(ctx)
 			return processed, err
 		}
-		if err := updateStateTx(ctx, tx, state.phase, state.checkpointID, state.rowsScanned, state.rowsCopied, state.dirtyRowsReconciled+int64(len(ids)), "", ""); err != nil {
+		if err := updateStateTx(ctx, tx, state.phase, state.leaseOwner, state.phase, state.checkpointID, state.rowsScanned, state.rowsCopied, state.dirtyRowsReconciled+int64(len(ids)), "", ""); err != nil {
 			_ = tx.Rollback(ctx)
 			return processed, err
 		}
@@ -664,6 +667,7 @@ func (m *ApprovalHistoryMigrator) claimLeaseTx(ctx context.Context, tx pgx.Tx, o
 		    lease_expires_at = CURRENT_TIMESTAMP + ($3 * INTERVAL '1 millisecond'),
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE migration_key = $1
+		  AND phase <> 'cutover_complete'
 		  AND (
 			lease_owner = ''
 			OR lease_expires_at IS NULL
@@ -694,16 +698,14 @@ func (m *ApprovalHistoryMigrator) failOperation(ctx context.Context, state appro
 		return m.progress(ctx)
 	}
 	message := cause.Error()
-	_, _ = m.pool.Exec(ctx, `
-		UPDATE execution_approval_history_migrations
-		SET phase = 'failed', last_error = $2, lease_owner = '', lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-		WHERE migration_key = $1
-	`, approvalHistoryMigrationKey, message)
+	if err := m.setPhase(ctx, state.phase, ApprovalHistoryPhaseFailed, message); err != nil {
+		return m.progressWithError(ctx, errors.Join(cause, err))
+	}
 	return m.progressWithError(ctx, cause)
 }
 
 func (m *ApprovalHistoryMigrator) failBudget(ctx context.Context, state approvalHistoryMigrationState, message string) (ApprovalHistoryMigrationProgress, error) {
-	if err := m.setPhase(ctx, state.phase, message); err != nil {
+	if err := m.setPhase(ctx, state.phase, state.phase, message); err != nil {
 		return progressFromState(state), err
 	}
 	progress, err := m.progress(ctx)
@@ -718,8 +720,10 @@ func (m *ApprovalHistoryMigrator) resetCutover(ctx context.Context, cause error)
 		UPDATE execution_approval_history_migrations
 		SET phase = 'indexes_ready', lease_owner = '', lease_expires_at = NULL,
 		    last_error = $2, updated_at = CURRENT_TIMESTAMP
-		WHERE migration_key = $1 AND phase = 'cutover_requested'
-	`, approvalHistoryMigrationKey, cause.Error())
+		WHERE migration_key = $1
+		  AND phase = 'cutover_requested'
+		  AND (lease_owner = '' OR lease_owner = $3)
+	`, approvalHistoryMigrationKey, cause.Error(), m.leaseOwner)
 	progress, err := m.progress(ctx)
 	if err != nil {
 		return progress, cause
@@ -727,20 +731,26 @@ func (m *ApprovalHistoryMigrator) resetCutover(ctx context.Context, cause error)
 	return progress, cause
 }
 
-func (m *ApprovalHistoryMigrator) setPhase(ctx context.Context, phase ApprovalHistoryMigrationPhase, lastError string) error {
-	_, err := m.pool.Exec(ctx, `
+func (m *ApprovalHistoryMigrator) setPhase(ctx context.Context, expectedPhase, phase ApprovalHistoryMigrationPhase, lastError string) error {
+	result, err := m.pool.Exec(ctx, `
 		UPDATE execution_approval_history_migrations
 		SET phase = $2, last_error = $3, lease_owner = '', lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
 		WHERE migration_key = $1
-	`, approvalHistoryMigrationKey, phase, lastError)
+		  AND phase = $4
+		  AND phase <> 'cutover_complete'
+		  AND (lease_owner = '' OR lease_owner = $5)
+	`, approvalHistoryMigrationKey, phase, lastError, expectedPhase, m.leaseOwner)
 	if err != nil {
 		return fmt.Errorf("set approval history migration phase %s: %w", phase, err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: phase %q changed or is leased by another owner", ErrApprovalHistoryMigrationBusy, expectedPhase)
 	}
 	return nil
 }
 
-func updateStateTx(ctx context.Context, tx pgx.Tx, phase ApprovalHistoryMigrationPhase, checkpointID string, rowsScanned, rowsCopied, dirtyRowsReconciled int64, leaseOwner, lastError string) error {
-	_, err := tx.Exec(ctx, `
+func updateStateTx(ctx context.Context, tx pgx.Tx, expectedPhase ApprovalHistoryMigrationPhase, expectedLeaseOwner string, phase ApprovalHistoryMigrationPhase, checkpointID string, rowsScanned, rowsCopied, dirtyRowsReconciled int64, leaseOwner, lastError string) error {
+	result, err := tx.Exec(ctx, `
 		UPDATE execution_approval_history_migrations
 		SET phase = $2,
 		    checkpoint_id = $3,
@@ -752,15 +762,20 @@ func updateStateTx(ctx context.Context, tx pgx.Tx, phase ApprovalHistoryMigratio
 		    last_error = $8,
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE migration_key = $1
-	`, approvalHistoryMigrationKey, phase, checkpointID, rowsScanned, rowsCopied, dirtyRowsReconciled, leaseOwner, lastError)
+		  AND phase = $9
+		  AND lease_owner = $10
+	`, approvalHistoryMigrationKey, phase, checkpointID, rowsScanned, rowsCopied, dirtyRowsReconciled, leaseOwner, lastError, expectedPhase, expectedLeaseOwner)
 	if err != nil {
 		return fmt.Errorf("update approval history migration state: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: phase %q or lease owner changed", ErrApprovalHistoryMigrationBusy, expectedPhase)
 	}
 	return nil
 }
 
 func releaseLeaseTx(ctx context.Context, tx pgx.Tx, state approvalHistoryMigrationState, phase ApprovalHistoryMigrationPhase, lastError string) error {
-	return updateStateTx(ctx, tx, phase, state.checkpointID, state.rowsScanned, state.rowsCopied, state.dirtyRowsReconciled, "", lastError)
+	return updateStateTx(ctx, tx, state.phase, state.leaseOwner, phase, state.checkpointID, state.rowsScanned, state.rowsCopied, state.dirtyRowsReconciled, "", lastError)
 }
 
 func (m *ApprovalHistoryMigrator) progress(ctx context.Context) (ApprovalHistoryMigrationProgress, error) {
@@ -1250,12 +1265,16 @@ func projectionHistoryDriftTx(ctx context.Context, tx pgx.Tx, ids []string) (boo
 	return drift, nil
 }
 
-func dirtyRowsTx(ctx context.Context, tx pgx.Tx) (int64, error) {
-	var count int64
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM execution_approval_history_dirty`).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count approval history dirty rows: %w", err)
+func dirtyRowsRemainTx(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var marker int
+	err := tx.QueryRow(ctx, `SELECT 1 FROM execution_approval_history_dirty LIMIT 1`).Scan(&marker)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
 	}
-	return count, nil
+	if err != nil {
+		return false, fmt.Errorf("probe approval history dirty rows: %w", err)
+	}
+	return true, nil
 }
 
 func (m *ApprovalHistoryMigrator) pendingDirtyRows(ctx context.Context) (int64, error) {

@@ -85,10 +85,10 @@ func acquireLeaseTx(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentit
 	if ttl <= 0 {
 		return ControlLease{}, fmt.Errorf("%w: lease TTL must be positive", ErrInvalidLease)
 	}
-	if err := lockLeaseAdvisoryTx(ctx, tx, identity.LeaseKey); err != nil {
+	if err := lockLeaseBinding(ctx, tx, identity); err != nil {
 		return ControlLease{}, err
 	}
-	if err := lockLeaseBinding(ctx, tx, identity); err != nil {
+	if err := lockLeaseAdvisoryTx(ctx, tx, identity.LeaseKey); err != nil {
 		return ControlLease{}, err
 	}
 	current, found, err := lockLease(ctx, tx, identity.LeaseKey)

@@ -766,6 +766,181 @@ func TestPersistentDistinctRunAdmissionLocksSessionBeforeForeignKeys(t *testing.
 	}
 }
 
+func TestPersistentTransitionWithLeaseRejectsExpiredAndReplacedOwner(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	const generation = "transition-lease-fence-generation"
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        generation,
+	}); err != nil {
+		t.Fatalf("create transition lease session: %v", err)
+	}
+	store := NewStore(db.Pool())
+	runID := ids.run
+	intent := CommandIntent{Command: protocol.Command{
+		CommandID: ids.command,
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"lease fence"}`),
+		RunID:     &runID,
+		SessionID: ids.session,
+	}, Generation: generation}
+	accepted, _, err := store.AcceptRun(ctx, intent, NewRunInput{
+		ID:         runID,
+		SessionID:  ids.session,
+		CommandID:  ids.command,
+		Generation: generation,
+	})
+	if err != nil {
+		t.Fatalf("accept transition lease run: %v", err)
+	}
+
+	stale := DurableLeaseIdentity{
+		LeaseKey:           ids.lease,
+		SessionID:          ids.session,
+		RunID:              runID,
+		Generation:         generation,
+		OwnerID:            "transition-stale-owner",
+		CandidateSourceSHA: "transition-stale-source",
+		ArtifactDigest:     "transition-stale-artifact",
+	}
+	if _, err := store.AcquireLease(ctx, stale, LeaseStoreConfig{TTL: 20 * time.Millisecond}); err != nil {
+		t.Fatalf("acquire short transition lease: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, checkErr := store.CheckLease(ctx, stale)
+		if errors.Is(checkErr, ErrLeaseLost) {
+			break
+		}
+		if checkErr != nil {
+			t.Fatalf("check short transition lease: %v", checkErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("short transition lease did not expire")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := store.TransitionWithLease(ctx, ids.command, generation, protocol.CommandStateExecuting, "", nil, nil, stale); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("expired transition lease error = %v, want %v", err, ErrLeaseLost)
+	}
+	current, err := store.Lookup(ctx, ids.session, ids.command)
+	if err != nil {
+		t.Fatalf("read command after expired transition lease: %v", err)
+	}
+	if current.State != protocol.CommandStateAccepted {
+		t.Fatalf("command after expired transition lease = %q, want accepted", current.State)
+	}
+
+	replacement := stale
+	replacement.OwnerID = "transition-replacement-owner"
+	replacement.CandidateSourceSHA = "transition-replacement-source"
+	replacement.ArtifactDigest = "transition-replacement-artifact"
+	if _, err := store.AcquireLease(ctx, replacement, LeaseStoreConfig{TTL: time.Minute}); err != nil {
+		t.Fatalf("acquire replacement transition lease: %v", err)
+	}
+	if _, err := store.TransitionWithLease(ctx, ids.command, generation, protocol.CommandStateExecuting, "", nil, nil, stale); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("replaced transition lease error = %v, want %v", err, ErrLeaseLost)
+	}
+	current, err = store.Lookup(ctx, ids.session, ids.command)
+	if err != nil {
+		t.Fatalf("read command after replaced transition lease: %v", err)
+	}
+	if current.State != protocol.CommandStateAccepted {
+		t.Fatalf("command after replaced transition lease = %q, want accepted", current.State)
+	}
+	if _, err := store.TransitionWithLease(ctx, ids.command, generation, protocol.CommandStateExecuting, "", nil, nil, replacement); err != nil {
+		t.Fatalf("valid replacement transition lease: %v", err)
+	}
+	if current, err = store.Lookup(ctx, ids.session, ids.command); err != nil {
+		t.Fatalf("read command after valid transition lease: %v", err)
+	} else if current.State != protocol.CommandStateExecuting {
+		t.Fatalf("command after valid transition lease = %q, want executing", current.State)
+	}
+	if accepted.Record.State != protocol.CommandStateAccepted {
+		t.Fatalf("initial accepted command = %+v", accepted.Record)
+	}
+}
+
+func TestPersistentDuplicateRunAdmissionAndRecoveryUseSameLockOrder(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	const generation = "duplicate-recovery-lock-order-generation"
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        generation,
+	}); err != nil {
+		t.Fatalf("create duplicate-recovery session: %v", err)
+	}
+	store := NewStore(db.Pool())
+	runID := ids.run
+	intent := CommandIntent{Command: protocol.Command{
+		CommandID: ids.command,
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"duplicate recovery"}`),
+		RunID:     &runID,
+		SessionID: ids.session,
+	}, Generation: generation}
+	if _, _, err := store.AcceptRun(ctx, intent, NewRunInput{ID: runID, SessionID: ids.session, CommandID: ids.command, Generation: generation}); err != nil {
+		t.Fatalf("accept duplicate-recovery run: %v", err)
+	}
+	lease := DurableLeaseIdentity{
+		LeaseKey:           ids.lease,
+		SessionID:          ids.session,
+		RunID:              runID,
+		Generation:         generation,
+		OwnerID:            "duplicate-recovery-owner",
+		CandidateSourceSHA: "duplicate-recovery-source",
+		ArtifactDigest:     "duplicate-recovery-artifact",
+	}
+	if _, err := store.AcquireLease(ctx, lease, LeaseStoreConfig{TTL: time.Minute}); err != nil {
+		t.Fatalf("acquire duplicate-recovery lease: %v", err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, _, err := store.AcceptRunWithLease(ctx, intent, NewRunInput{ID: runID, SessionID: ids.session, CommandID: ids.command, Generation: generation}, lease)
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := store.MarkCommandAndRunUnknownWithLease(ctx, ids.command, generation, "duplicate admission recovery", lease)
+		results <- err
+	}()
+	close(start)
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("duplicate admission/recovery result %d: %v", i+1, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("duplicate admission and recovery did not converge")
+		}
+	}
+	current, err := store.Lookup(ctx, ids.session, ids.command)
+	if err != nil {
+		t.Fatalf("read duplicate-recovery command: %v", err)
+	}
+	if current.State != protocol.CommandStateUnknown {
+		t.Fatalf("duplicate-recovery command = %q, want unknown", current.State)
+	}
+}
+
 func TestPersistentInterruptAdmissionAndEventUseSessionRunLockOrder(t *testing.T) {
 	db := openExecutionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

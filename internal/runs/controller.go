@@ -326,6 +326,11 @@ func (c *Controller) dispatchAccepted(ctx context.Context, intent CommandIntent,
 	if transitionErr != nil {
 		return ack, transitionErr
 	}
+	if lease != nil {
+		if _, err := c.store.CheckLease(ctx, *lease); err != nil {
+			return ack, err
+		}
+	}
 	sent, sendErr := c.sendCommand(ctx, intent, lease)
 	normalized, normalizeErr := normalizeTransportAck(intent.Command, sent)
 	if normalizeErr == nil {

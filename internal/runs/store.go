@@ -117,9 +117,6 @@ func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease
 		if err := validateLeaseIdentity(*lease); err != nil {
 			return AcceptResult{}, err
 		}
-		if err := lockLeaseAdvisoryTx(ctx, tx, lease.LeaseKey); err != nil {
-			return AcceptResult{}, err
-		}
 	}
 	accepted, err := s.acceptTx(ctx, tx, intent)
 	if err != nil {
@@ -133,8 +130,6 @@ func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease
 	}
 	runID := *intent.Command.RunID
 	if lease != nil {
-		// acquireLeaseTx establishes session -> run -> lease order before the
-		// explicit run lock below.
 		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
 			return AcceptResult{}, err
 		}
@@ -196,9 +191,6 @@ func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransaction
 		if err := validateLeaseIdentity(*lease); err != nil {
 			return AcceptResult{}, approvals.Resolution{}, err
 		}
-		if err := lockLeaseAdvisoryTx(ctx, tx, lease.LeaseKey); err != nil {
-			return AcceptResult{}, approvals.Resolution{}, err
-		}
 	}
 	accepted, err := s.acceptTx(ctx, tx, intent)
 	if err != nil {
@@ -255,14 +247,8 @@ func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRu
 		if err := validateLeaseIdentity(*lease); err != nil {
 			return AcceptResult{}, Run{}, err
 		}
-		if err := lockLeaseAdvisoryTx(ctx, tx, lease.LeaseKey); err != nil {
-			return AcceptResult{}, Run{}, err
-		}
 	}
 	if err := ValidateIntent(intent); err != nil {
-		return AcceptResult{}, Run{}, err
-	}
-	if err := lockSessionForRunAdmission(ctx, tx, intent.Command.SessionID, intent.Generation); err != nil {
 		return AcceptResult{}, Run{}, err
 	}
 	accepted, err := s.acceptTx(ctx, tx, intent)
@@ -434,10 +420,7 @@ func (s *Store) transitionCommand(ctx context.Context, commandID, generation str
 		return CommandRecord{}, fmt.Errorf("begin command transition: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	record, err := scanCommand(tx.QueryRow(ctx, commandQuery+` WHERE command.command_id = $1 FOR UPDATE`, commandID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return CommandRecord{}, ErrCommandNotFound
-	}
+	record, _, err := lockCommandAndRun(ctx, tx, commandID)
 	if err != nil {
 		return CommandRecord{}, fmt.Errorf("lock command transition: %w", err)
 	}
@@ -446,6 +429,9 @@ func (s *Store) transitionCommand(ctx context.Context, commandID, generation str
 	}
 	if lease != nil {
 		if err := leaseMatchesCommand(record, *lease); err != nil {
+			return CommandRecord{}, err
+		}
+		if err := checkLeaseTx(ctx, tx, *lease); err != nil {
 			return CommandRecord{}, err
 		}
 	}
@@ -523,9 +509,8 @@ func (s *Store) MarkUnknown(ctx context.Context, commandID, generation string) (
 }
 
 // MarkCommandAndRunUnknown converges a command and its associated Run in one
-// transaction. The command row is locked first so an exact terminal ACK cannot
-// race a recovery decision, followed by the session, run and lease identity
-// locks in the same order used by admission.
+// transaction. The session is locked before the command so recovery and
+// admission share one order, followed by the associated run and lease checks.
 func (s *Store) MarkCommandAndRunUnknown(ctx context.Context, commandID, generation, reason string) (CommandRecord, error) {
 	return s.markCommandAndRunUnknown(ctx, commandID, generation, reason, nil)
 }
@@ -544,10 +529,7 @@ func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generat
 	}
 	defer tx.Rollback(ctx)
 
-	record, err := scanCommand(tx.QueryRow(ctx, commandQuery+` WHERE command.command_id = $1 FOR UPDATE`, commandID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return CommandRecord{}, ErrCommandNotFound
-	}
+	record, currentRun, err := lockCommandAndRun(ctx, tx, commandID)
 	if err != nil {
 		return CommandRecord{}, fmt.Errorf("lock command and run unknown transition: %w", err)
 	}
@@ -572,18 +554,7 @@ func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generat
 
 	runID := optionalRunID(record.Intent.Command.RunID)
 	if runID != "" {
-		if lease != nil {
-			if err := lockLeaseBinding(ctx, tx, *lease); err != nil {
-				return CommandRecord{}, err
-			}
-		}
-		current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, runID))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return CommandRecord{}, ErrRunNotFound
-		}
-		if err != nil {
-			return CommandRecord{}, fmt.Errorf("lock associated run for unknown transition: %w", err)
-		}
+		current := *currentRun
 		if lease != nil {
 			if err := checkLeaseTx(ctx, tx, *lease); err != nil {
 				return CommandRecord{}, err
@@ -639,10 +610,7 @@ func (s *Store) reconcile(ctx context.Context, commandID, generation string, obs
 		return CommandRecord{}, fmt.Errorf("begin command reconciliation: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	record, err := scanCommand(tx.QueryRow(ctx, commandQuery+` WHERE command.command_id = $1 FOR UPDATE`, commandID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return CommandRecord{}, ErrCommandNotFound
-	}
+	record, _, err := lockCommandAndRun(ctx, tx, commandID)
 	if err != nil {
 		return CommandRecord{}, fmt.Errorf("lock command reconciliation: %w", err)
 	}
@@ -1294,6 +1262,56 @@ func lockSessionForRunAdmission(ctx context.Context, tx pgx.Tx, sessionID, gener
 	return nil
 }
 
+// lockCommandAndRun establishes the shared session -> command -> run order
+// used by admission, recovery, and leased command transitions. The initial
+// identity read is intentionally unlocked so no path holds a command lock
+// while waiting for its parent session row.
+func lockCommandAndRun(ctx context.Context, tx pgx.Tx, commandID string) (CommandRecord, *Run, error) {
+	var sessionID, generation string
+	var runID *string
+	err := tx.QueryRow(ctx, `
+		SELECT session_id, run_id, generation
+		FROM execution_commands
+		WHERE command_id = $1
+	`, commandID).Scan(&sessionID, &runID, &generation)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CommandRecord{}, nil, ErrCommandNotFound
+	}
+	if err != nil {
+		return CommandRecord{}, nil, fmt.Errorf("read command identity: %w", err)
+	}
+	if err := lockSessionForRunAdmission(ctx, tx, sessionID, generation); err != nil {
+		return CommandRecord{}, nil, err
+	}
+	record, err := scanCommand(tx.QueryRow(ctx, commandQuery+` WHERE command.command_id = $1 FOR UPDATE`, commandID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return CommandRecord{}, nil, ErrCommandNotFound
+		}
+		return CommandRecord{}, nil, fmt.Errorf("lock command: %w", err)
+	}
+	if record.Intent.Command.SessionID != sessionID || record.Intent.Generation != generation {
+		return CommandRecord{}, nil, fmt.Errorf("%w: command %q identity changed while locking", ErrCommandFactConflict, commandID)
+	}
+	if optionalRunID(record.Intent.Command.RunID) == "" {
+		return record, nil, nil
+	}
+	current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, optionalRunID(record.Intent.Command.RunID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CommandRecord{}, nil, ErrRunNotFound
+	}
+	if err != nil {
+		return CommandRecord{}, nil, fmt.Errorf("lock associated run: %w", err)
+	}
+	if current.SessionID != record.Intent.Command.SessionID {
+		return CommandRecord{}, nil, fmt.Errorf("%w: command %q is not associated with run %q", ErrRunConflict, commandID, current.ID)
+	}
+	if current.Generation != record.Intent.Generation {
+		return CommandRecord{}, nil, fmt.Errorf("%w: run %q belongs to generation %q", ErrStaleGeneration, current.ID, current.Generation)
+	}
+	return record, &current, nil
+}
+
 func sameRunIdentity(left, right Run) bool {
 	return left.ID == right.ID && left.SessionID == right.SessionID && left.CommandID == right.CommandID && left.Generation == right.Generation
 }
@@ -1384,6 +1402,9 @@ const commandQuery = `
 
 func (s *Store) acceptTx(ctx context.Context, tx pgx.Tx, intent CommandIntent) (AcceptResult, error) {
 	if err := ValidateIntent(intent); err != nil {
+		return AcceptResult{}, err
+	}
+	if err := lockSessionForRunAdmission(ctx, tx, intent.Command.SessionID, intent.Generation); err != nil {
 		return AcceptResult{}, err
 	}
 	if intent.ReceivedAt == "" {
