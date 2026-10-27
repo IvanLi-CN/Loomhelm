@@ -53,7 +53,7 @@
     "dml_changes": [
       {
         "id": "dml-approval-history-capture",
-        "description": "While capture is active, every supported projection insert or update writes or reconciles the same durable history snapshot and queues its ID in the same transaction. The first captured row for an existing projection preserves its created_at and updated_at timestamps so a legacy cursor is not reordered or assigned a fabricated revision time; later revisions retain their own capture time. Approval deletion is rejected because the current product has no supported deletion semantics.",
+        "description": "While capture is active, every supported projection insert or update writes or reconciles the same durable history snapshot and queues its ID in the same transaction. For a pre-existing projection whose captured history starts above revision 1, bounded backfill or dirty-row reconciliation restores only the earliest history created_at from the projection's stable created_at so a legacy cursor is not reordered; historical updated_at values and later revision capture times remain unchanged unless an exact same-revision source is available. Approval deletion is rejected because the current product has no supported deletion semantics.",
         "order": 2,
         "depends_on": ["ddl-00012-approval-history-structure"],
         "observable": true,

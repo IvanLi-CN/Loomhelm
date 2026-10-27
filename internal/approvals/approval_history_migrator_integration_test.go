@@ -196,6 +196,203 @@ func TestApprovalHistoryMigratorPreservesLegacyProjectionCursorTimestamps(t *tes
 	}
 }
 
+func TestApprovalHistoryMigratorRepairsLegacyTriggerTimestampsAndCursor(t *testing.T) {
+	db, provider := openApprovalFixtureDatabaseThrough(t, 11)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture := seedApprovalFixture(t, ctx, db)
+	approvalID := fixture.approvalID + "-old-trigger"
+	projectionCreatedAt := time.Date(2025, 10, 27, 4, 30, 1, 0, time.UTC)
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO execution_approvals (
+			id, session_id, run_id, generation, kind, requested_at, revision,
+			status, summary, context, requested_event_id, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, 'command', $5, 1, 'pending', 'legacy projection', $6, $7, $8, $8)
+	`, approvalID, fixture.sessionID, fixture.runID, fixture.generation, "2025-10-27T04:30:01Z", []byte(`{"legacy":true}`), approvalID+"-event", projectionCreatedAt); err != nil {
+		t.Fatalf("seed legacy projection: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 12); err != nil {
+		t.Fatalf("apply structural 00012: %v", err)
+	}
+	installLegacyApprovalCapture(t, ctx, db)
+	for revision := int64(2); revision <= 3; revision++ {
+		if _, err := db.Pool().Exec(ctx, `
+			UPDATE execution_approvals
+			SET revision = $2, summary = $3
+			WHERE id = $1
+		`, approvalID, revision, fmt.Sprintf("legacy revision %d", revision)); err != nil {
+			t.Fatalf("capture legacy revision %d: %v", revision, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := readApprovalHistoryTimestampRows(t, ctx, db, approvalID)
+	if len(before) != 2 || before[0].revision != 2 || before[1].revision != 3 {
+		t.Fatalf("legacy trigger rows before repair = %+v, want revisions 2 and 3", before)
+	}
+	if before[0].createdAt.Equal(projectionCreatedAt) {
+		t.Fatalf("legacy trigger unexpectedly preserved revision 2 created_at before repair: %s", before[0].createdAt)
+	}
+
+	migrator := database.NewApprovalHistoryMigrator(db.Pool(), database.ApprovalHistoryMigratorConfig{LeaseOwner: "legacy-trigger-reentry-owner"})
+	options := database.ApprovalHistoryMigrationOptions{
+		BatchSize:          1,
+		WorkBudget:         1,
+		PreDrainBatchSize:  1,
+		PreDrainWorkBudget: 10,
+		FinalRowBudget:     10,
+		FinalWorkBudget:    30,
+	}
+	progress, err := migrator.RunBackfill(ctx, options)
+	if err != nil {
+		t.Fatalf("bounded legacy trigger backfill: %v", err)
+	}
+	if progress.Phase != database.ApprovalHistoryPhaseBackfillPaused {
+		t.Fatalf("bounded legacy trigger phase = %q, want backfill_paused", progress.Phase)
+	}
+	assertApprovalHistoryLeaseReleased(t, ctx, db, database.ApprovalHistoryPhaseBackfillPaused)
+	progress, err = migrator.RunBackfill(ctx, options)
+	if err != nil {
+		t.Fatalf("re-enter legacy trigger backfill: %v", err)
+	}
+	if progress.Phase != database.ApprovalHistoryPhaseBackfillComplete {
+		t.Fatalf("re-entered legacy trigger phase = %q, want backfill_complete", progress.Phase)
+	}
+	assertApprovalHistoryLeaseReleased(t, ctx, db, database.ApprovalHistoryPhaseBackfillComplete)
+	if _, err := migrator.Validate(ctx, options); err != nil {
+		t.Fatalf("validate repaired legacy trigger history: %v", err)
+	}
+	if _, err := migrator.BuildIndexes(ctx, options); err != nil {
+		t.Fatalf("build repaired legacy trigger indexes: %v", err)
+	}
+	if _, err := migrator.Cutover(ctx, options); err != nil {
+		t.Fatalf("cut over repaired legacy trigger history: %v", err)
+	}
+
+	after := readApprovalHistoryTimestampRows(t, ctx, db, approvalID)
+	if len(after) != len(before) {
+		t.Fatalf("legacy trigger rows after repair = %+v, want %d rows", after, len(before))
+	}
+	if !after[0].createdAt.Equal(projectionCreatedAt) {
+		t.Fatalf("earliest legacy history created_at = %s, want projection baseline %s", after[0].createdAt, projectionCreatedAt)
+	}
+	if !after[0].updatedAt.Equal(before[0].updatedAt) {
+		t.Fatalf("earliest legacy history updated_at = %s, want preserved %s", after[0].updatedAt, before[0].updatedAt)
+	}
+	if !after[1].createdAt.Equal(before[1].createdAt) || !after[1].updatedAt.Equal(before[1].updatedAt) {
+		t.Fatalf("later legacy history timestamps = %+v, want unchanged %+v", after[1], before[1])
+	}
+	var revisionOneCount int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM execution_approval_revisions WHERE id = $1 AND revision = 1`, approvalID).Scan(&revisionOneCount); err != nil {
+		t.Fatalf("count fabricated revision 1: %v", err)
+	}
+	if revisionOneCount != 0 {
+		t.Fatalf("fabricated revision 1 count = %d, want 0", revisionOneCount)
+	}
+	var projectionRevision int64
+	var currentCreatedAt time.Time
+	if err := db.Pool().QueryRow(ctx, `SELECT revision, created_at FROM execution_approvals WHERE id = $1`, approvalID).Scan(&projectionRevision, &currentCreatedAt); err != nil {
+		t.Fatalf("read repaired projection identity: %v", err)
+	}
+	if projectionRevision != 3 || !currentCreatedAt.Equal(projectionCreatedAt) {
+		t.Fatalf("repaired projection = revision %d created_at %s, want revision 3 baseline %s", projectionRevision, currentCreatedAt, projectionCreatedAt)
+	}
+
+	store := NewStore(db.Pool())
+	firstPage, err := store.ListByRun(ctx, fixture.runID, nil, 1)
+	if err != nil {
+		t.Fatalf("list repaired approval history: %v", err)
+	}
+	if len(firstPage.Items) != 1 || firstPage.Items[0].ID != approvalID || firstPage.Items[0].Revision != 2 || firstPage.NextCursor == nil {
+		t.Fatalf("first repaired approval page = %+v, want revision 2 with cursor", firstPage)
+	}
+	legacyCursor := *firstPage.NextCursor
+	legacyCursor.Version = 1
+	legacyCursor.Revision = 0
+	resumedPage, err := store.ListByRun(ctx, fixture.runID, &legacyCursor, 10)
+	if err != nil {
+		t.Fatalf("resume repaired approval history with legacy cursor: %v", err)
+	}
+	if len(resumedPage.Items) != 1 || resumedPage.Items[0].ID != approvalID || resumedPage.Items[0].Revision != 3 {
+		t.Fatalf("resumed repaired approval page = %+v, want only revision 3", resumedPage)
+	}
+
+	if progress, err := migrator.RunBackfill(ctx, options); err != nil {
+		t.Fatalf("idempotent legacy trigger backfill re-entry after cutover: %v", err)
+	} else if progress.Phase != database.ApprovalHistoryPhaseCutoverComplete {
+		t.Fatalf("post-cutover legacy trigger re-entry phase = %q, want cutover_complete", progress.Phase)
+	}
+	reentered := readApprovalHistoryTimestampRows(t, ctx, db, approvalID)
+	for index := range after {
+		if reentered[index] != after[index] {
+			t.Fatalf("post-cutover re-entry changed history row %d = %+v, want %+v", index, reentered[index], after[index])
+		}
+	}
+}
+
+type approvalHistoryTimestampRow struct {
+	revision  int64
+	createdAt time.Time
+	updatedAt time.Time
+}
+
+func readApprovalHistoryTimestampRows(t *testing.T, ctx context.Context, db *database.DB, approvalID string) []approvalHistoryTimestampRow {
+	t.Helper()
+	rows, err := db.Pool().Query(ctx, `
+		SELECT revision, created_at, updated_at
+		FROM execution_approval_revisions
+		WHERE id = $1
+		ORDER BY revision
+	`, approvalID)
+	if err != nil {
+		t.Fatalf("read approval history timestamps: %v", err)
+	}
+	defer rows.Close()
+	result := make([]approvalHistoryTimestampRow, 0, 2)
+	for rows.Next() {
+		var row approvalHistoryTimestampRow
+		if err := rows.Scan(&row.revision, &row.createdAt, &row.updatedAt); err != nil {
+			t.Fatalf("scan approval history timestamps: %v", err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read approval history timestamp rows: %v", err)
+	}
+	return result
+}
+
+func installLegacyApprovalCapture(t *testing.T, ctx context.Context, db *database.DB) {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate legacy approval capture fixture")
+	}
+	legacySQL, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "testdata", "legacy_capture_00012.sql"))
+	if err != nil {
+		t.Fatalf("read legacy approval capture fixture: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, string(legacySQL)); err != nil {
+		t.Fatalf("install legacy approval capture fixture: %v", err)
+	}
+}
+
+func assertApprovalHistoryLeaseReleased(t *testing.T, ctx context.Context, db *database.DB, wantPhase database.ApprovalHistoryMigrationPhase) {
+	t.Helper()
+	var phase database.ApprovalHistoryMigrationPhase
+	var owner string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT phase, lease_owner
+		FROM execution_approval_history_migrations
+		WHERE migration_key = 'approval-revision-history'
+	`).Scan(&phase, &owner); err != nil {
+		t.Fatalf("read approval history lease state: %v", err)
+	}
+	if phase != wantPhase || owner != "" {
+		t.Fatalf("approval history lease state = phase %q owner %q, want phase %q with no owner", phase, owner, wantPhase)
+	}
+}
+
 func TestApprovalHistoryMigratorCapturesWriterBlockedByBackfill(t *testing.T) {
 	db, provider := openApprovalFixtureDatabaseThrough(t, 11)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

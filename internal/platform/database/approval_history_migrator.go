@@ -1205,6 +1205,9 @@ func insertBackfillSnapshotsTx(ctx context.Context, tx pgx.Tx, ids []string) err
 	if err != nil {
 		return fmt.Errorf("insert approval history backfill snapshots: %w", err)
 	}
+	if err := repairLegacyEarliestCreatedAtTx(ctx, tx, ids); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1279,7 +1282,38 @@ func reconcileDirtyIDsTx(ctx context.Context, tx pgx.Tx, ids []string) error {
 	`, ids); err != nil {
 		return fmt.Errorf("reconcile approval history dirty rows: %w", err)
 	}
+	if err := repairLegacyEarliestCreatedAtTx(ctx, tx, ids); err != nil {
+		return err
+	}
 	return deleteDirtyIDsTx(ctx, tx, ids)
+}
+
+func repairLegacyEarliestCreatedAtTx(ctx context.Context, tx pgx.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE execution_approval_revisions AS history
+		SET created_at = current.created_at
+		FROM execution_approvals AS current
+		WHERE current.id = ANY($1::text[])
+		  AND history.id = current.id
+		  AND history.revision = (
+				SELECT MIN(candidate.revision)
+				FROM execution_approval_revisions AS candidate
+				WHERE candidate.id = current.id
+			)
+		  AND history.revision > 1
+		  AND NOT EXISTS (
+				SELECT 1
+				FROM execution_approval_revisions AS revision_one
+				WHERE revision_one.id = current.id AND revision_one.revision = 1
+			)
+		  AND history.created_at IS DISTINCT FROM current.created_at
+	`, ids); err != nil {
+		return fmt.Errorf("repair legacy approval history created timestamps: %w", err)
+	}
+	return nil
 }
 
 func deleteDirtyIDsTx(ctx context.Context, tx pgx.Tx, ids []string) error {
