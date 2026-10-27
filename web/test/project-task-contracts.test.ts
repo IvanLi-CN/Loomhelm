@@ -4,6 +4,7 @@ import { ApiClientConfigurationError, ApiClientError } from "@loomhelm/api-clien
 import { QueryClient } from "@tanstack/react-query";
 
 import {
+  canAcknowledgePendingCreationNotice,
   isAmbiguousWriteError,
   isCompleteProjectTaskQuery,
   createClientResourceId,
@@ -302,6 +303,34 @@ describe("project/task write contracts", () => {
     releaseMutationRefreshScopes(newSession.barriers, marked.revisions);
     expect(newSession.barriers.get("task:one")).toBe(newer.revisions.get("task:one"));
     queryClient.clear();
+  });
+
+  test("does not acknowledge an ID-less creation notice and isolates same-principal QueryClients", () => {
+    expect(canAcknowledgePendingCreationNotice(undefined)).toBe(false);
+    expect(canAcknowledgePendingCreationNotice({})).toBe(false);
+    expect(canAcknowledgePendingCreationNotice({ projectId: "project-1" })).toBe(true);
+    expect(canAcknowledgePendingCreationNotice({ taskId: "task-1" })).toBe(true);
+
+    const firstClient = new QueryClient();
+    const secondClient = new QueryClient();
+    const readable = { available: true, shared: true, notices: [] };
+    const first = getSharedMutationRefreshScopeState(firstClient, "principal-a", 1);
+    const second = getSharedMutationRefreshScopeState(secondClient, "principal-a", 1);
+    const firstMarked = markMutationRefreshScopes(first.barriers, ["task:one"], first.nextRevision);
+    const secondMarked = markMutationRefreshScopes(second.barriers, ["task:one"], second.nextRevision);
+    first.nextRevision = firstMarked.nextRevision;
+    second.nextRevision = secondMarked.nextRevision;
+
+    expect(first).not.toBe(second);
+    expect(mutationWriteAdmission("task:one", [], first.barriers, readable)).toBe("refreshing");
+    expect(mutationWriteAdmission("task:one", [], second.barriers, readable)).toBe("refreshing");
+    releaseMutationRefreshScopes(first.barriers, firstMarked.revisions);
+    expect(mutationWriteAdmission("task:one", [], first.barriers, readable)).toBeUndefined();
+    expect(mutationWriteAdmission("task:one", [], second.barriers, readable)).toBe("refreshing");
+    releaseMutationRefreshScopes(second.barriers, secondMarked.revisions);
+    expect(mutationWriteAdmission("task:one", [], second.barriers, readable)).toBeUndefined();
+    firstClient.clear();
+    secondClient.clear();
   });
 
   test("cancels an in-flight query before a complete refresh read starts", async () => {

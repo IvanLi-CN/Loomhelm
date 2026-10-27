@@ -50,6 +50,9 @@ export function TaskRelationPicker({
 }: TaskRelationPickerProps) {
   const pickerId = useId();
   const summaryRef = useRef<HTMLElement>(null);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const wasDisabledRef = useRef(disabled);
+  const restoreFocusAfterDisableRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [visibleLimit, setVisibleLimit] = useState(resultLimit);
@@ -77,7 +80,22 @@ export function TaskRelationPicker({
   }, [normalizedSearch, resultLimit]);
 
   useEffect(() => {
-    if (disabled) setOpen(false);
+    const wasDisabled = wasDisabledRef.current;
+    wasDisabledRef.current = disabled;
+    if (!disabled) return;
+    setOpen(false);
+    if (wasDisabled || typeof document === "undefined") {
+      restoreFocusAfterDisableRef.current = false;
+      return;
+    }
+    const restoreAfterBrowserBlur = restoreFocusAfterDisableRef.current;
+    restoreFocusAfterDisableRef.current = false;
+    requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      const focusStillOwned = Boolean(activeElement && detailsRef.current?.contains(activeElement));
+      const focusWasDroppedByDisable = restoreAfterBrowserBlur && (!activeElement || activeElement === document.body);
+      if (focusStillOwned || focusWasDroppedByDisable) summaryRef.current?.focus();
+    });
   }, [disabled]);
 
   const closePicker = () => {
@@ -87,6 +105,8 @@ export function TaskRelationPicker({
 
   const toggleCandidate = (candidate: TaskRelationCandidate) => {
     if (disabled || candidate.disabled) return;
+    const activeElement = typeof document === "undefined" ? null : document.activeElement;
+    if (activeElement && detailsRef.current?.contains(activeElement)) restoreFocusAfterDisableRef.current = true;
     onChange(selectedSet.has(candidate.id) ? selectedIds.filter((id) => id !== candidate.id) : [...selectedIds, candidate.id]);
   };
 
@@ -115,6 +135,7 @@ export function TaskRelationPicker({
       </ul>}
       {disabled && disabledMessage && <p className="task-relation-picker-state" role="status" aria-label={disabledMessage}>{disabledMessage}</p>}
       <details
+        ref={detailsRef}
         className="task-relation-picker-disclosure"
         open={open}
         onToggle={(event) => setOpen(event.currentTarget.open)}

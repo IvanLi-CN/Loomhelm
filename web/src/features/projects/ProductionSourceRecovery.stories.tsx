@@ -16,7 +16,7 @@ const meta = {
 export default meta;
 
 type Story = StoryObj<typeof meta>;
-type Scenario = "persistence-failure" | "remote-refresh" | "remote-refresh-failure" | "identity-mismatch";
+type Scenario = "persistence-failure" | "remote-refresh" | "remote-refresh-failure" | "identity-mismatch" | "stale-generation-create";
 
 const principalId = "story-production-recovery-user";
 const projectId = "project_0123456789abcdef0123456789abcdef";
@@ -78,6 +78,10 @@ interface ScenarioState {
   notify?: () => void;
   listeners?: Set<() => void>;
   resolveRefresh?: () => void;
+  resolveProjectCreate?: () => void;
+  resolveTaskCreate?: () => void;
+  createdProject?: Project;
+  createdTask?: Task;
   broadcastDescriptor?: PropertyDescriptor;
   locksDescriptor?: PropertyDescriptor;
   setItemDescriptor?: PropertyDescriptor;
@@ -113,7 +117,7 @@ function clearScenarioStorage(): void {
 
 function prepareScenario(state: ScenarioState): void {
   clearScenarioStorage();
-  if (state.scenario === "remote-refresh" || state.scenario === "remote-refresh-failure") {
+  if (state.scenario === "remote-refresh" || state.scenario === "remote-refresh-failure" || state.scenario === "stale-generation-create") {
     state.broadcastDescriptor = Object.getOwnPropertyDescriptor(window, "BroadcastChannel");
     Object.defineProperty(window, "BroadcastChannel", { configurable: true, value: undefined });
     state.broadcastPatched = true;
@@ -178,20 +182,30 @@ function createClient(state: ScenarioState): GeneratedApiClient {
           };
         });
       }
-      return { items: [project], has_more: false };
+      return { items: state.createdProject ? [project, state.createdProject] : [project], has_more: false };
     },
-    listProjectMembers: async () => ({ items: [member], has_more: false }),
+    listProjectMembers: async ({ project_id }: { project_id?: string }) => ({ items: [{ ...member, project_id: project_id ?? projectId }], has_more: false }),
     listTasks: async () => {
       if (state.refreshState === "pending") {
         state.refreshState = "complete";
         notifyScenario(state);
       }
-      return { items: [task, parentTask], has_more: false };
+      return { items: state.createdTask ? [task, parentTask, state.createdTask] : [task, parentTask], has_more: false };
     },
     getTaskRelationships: async () => emptyRelationships,
-    createProject: async () => {
+    createProject: async ({ body }: { body: { id?: string; name?: string; description?: string } }) => {
       state.createCalls += 1;
       notifyScenario(state);
+      if (state.scenario === "stale-generation-create") {
+        return new Promise((resolve) => {
+          state.resolveProjectCreate = () => {
+            const created = { ...project, id: body.id ?? project.id, name: body.name ?? project.name, description: body.description ?? project.description };
+            state.createdProject = created;
+            state.resolveProjectCreate = undefined;
+            resolve({ project: created });
+          };
+        });
+      }
       return { project };
     },
     updateTask: async ({ body }: { body: { title?: string } }) => {
@@ -206,6 +220,16 @@ function createClient(state: ScenarioState): GeneratedApiClient {
       state.createTaskCalls += 1;
       state.requestedTaskId = body.id ?? "";
       notifyScenario(state);
+      if (state.scenario === "stale-generation-create") {
+        return new Promise((resolve) => {
+          state.resolveTaskCreate = () => {
+            const created = { ...task, id: body.id ?? task.id };
+            state.createdTask = created;
+            state.resolveTaskCreate = undefined;
+            resolve({ task: created });
+          };
+        });
+      }
       if (state.scenario === "identity-mismatch") {
         return { task: { ...task, id: "task_fedcfedcfedcfedcfedcfedcfedcfedc" } };
       }
@@ -438,6 +462,127 @@ function GenerationRefreshContent({ state }: { state: ScenarioState }) {
   );
 }
 
+type StaleCreateKind = "project" | "task";
+
+function StaleGenerationCreateHarness({ kind }: { kind: StaleCreateKind }) {
+  const state = useMemo(() => {
+    const next: ScenarioState = {
+      scenario: "stale-generation-create",
+      principalId,
+      sessionGeneration: 1,
+      projectListCalls: 0,
+      createCalls: 0,
+      createTaskCalls: 0,
+      updateCalls: 0,
+      relationCalls: 0,
+      dependencyCalls: 0,
+      requestedTaskId: "",
+      refreshRequested: false,
+      refreshState: "idle",
+      lastResult: "",
+      broadcastPatched: false,
+      locksPatched: false,
+      setItemPatched: false,
+      listeners: new Set()
+    };
+    prepareScenario(next);
+    return next;
+  }, []);
+  const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }), []);
+  const [, setRevision] = useState(0);
+
+  useEffect(() => {
+    const listener = () => setRevision((value) => value + 1);
+    state.listeners?.add(listener);
+    return () => {
+      state.listeners?.delete(listener);
+    };
+  }, [state]);
+
+  useEffect(() => () => restoreScenario(state), [state]);
+
+  return <QueryClientProvider client={queryClient}><StaleGenerationCreateContent state={state} kind={kind} /></QueryClientProvider>;
+}
+
+function StaleGenerationCreateContent({ state, kind }: { state: ScenarioState; kind: StaleCreateKind }) {
+  const [, setRevision] = useState(0);
+  const source = usePublishedProjectTaskSource({
+    client: useMemo(() => createClient(state), [state]),
+    enabled: true,
+    canCreateProjects: true,
+    principalId: state.principalId,
+    sessionGeneration: state.sessionGeneration
+  });
+  const resourceId = kind === "project" ? source.pendingProjectCreationResourceId : source.pendingTaskCreationResourceId;
+  const reconciliationToken = kind === "project"
+    ? (resourceId ? source.getProjectReconciliationToken?.(resourceId) : undefined)
+    : (resourceId ? source.getTaskReconciliationToken?.(resourceId) : undefined);
+  const canConfirm = kind === "project"
+    ? Boolean(resourceId && source.isProjectReconciliationReady?.(resourceId, reconciliationToken))
+    : Boolean(resourceId && source.isTaskReconciliationReady?.(resourceId, reconciliationToken));
+
+  useEffect(() => {
+    const listener = () => setRevision((value) => value + 1);
+    state.listeners?.add(listener);
+    return () => {
+      state.listeners?.delete(listener);
+    };
+  }, [state]);
+  const runCreate = async () => {
+    const result = kind === "project"
+      ? await source.createProject({ name: "Stale project", summary: "generation boundary" })
+      : await source.createTask({ title: "Stale task", goal: "generation boundary", projectId });
+    state.lastResult = result.ok ? result.warning ?? "unexpected-success" : result.message;
+    notifyScenario(state);
+  };
+  const revalidateSamePrincipal = () => {
+    state.sessionGeneration += 1;
+    notifyScenario(state);
+  };
+  const resolveCreate = () => {
+    if (kind === "project") state.resolveProjectCreate?.();
+    else state.resolveTaskCreate?.();
+  };
+  const refreshCurrentGeneration = async () => {
+    try {
+      await source.refresh();
+      state.lastResult = "current-refresh-complete";
+    } catch (error) {
+      state.lastResult = error instanceof Error ? error.message : "refresh-failed";
+    }
+    notifyScenario(state);
+  };
+  const acknowledge = () => {
+    if (!resourceId) return;
+    const acknowledged = kind === "project"
+      ? source.acknowledgeProjectReconciliation?.(resourceId, reconciliationToken)
+      : source.acknowledgeTaskReconciliation?.(resourceId, reconciliationToken);
+    state.lastResult = acknowledged ? "acknowledged" : "acknowledge-blocked";
+    notifyScenario(state);
+  };
+
+  return (
+    <div className="min-h-screen bg-[var(--canvas)] p-8" data-visual-evidence-surface>
+      <div className="mx-auto grid max-w-3xl gap-4 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-6" data-visual-evidence-target>
+        <h1 className="text-lg font-semibold">Stale generation {kind} creation</h1>
+        <p data-testid="stale-generation-value">认证代次：{state.sessionGeneration}</p>
+        <p data-testid="stale-generation-status">状态：{source.status}</p>
+        <p data-testid="stale-generation-project-calls">项目 POST：{state.createCalls}</p>
+        <p data-testid="stale-generation-task-calls">任务 POST：{state.createTaskCalls}</p>
+        <p data-testid="stale-generation-resource">确切 ID：{resourceId ?? "无"}</p>
+        <p data-testid="stale-generation-result">结果：{state.lastResult || "无"}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <button type="button" className="button button-secondary" onClick={() => { void runCreate(); }}>尝试创建{kind === "project" ? "项目" : "任务"}</button>
+          <button type="button" className="button button-secondary" onClick={revalidateSamePrincipal}>同身份重新认证</button>
+          <button type="button" className="button button-secondary" onClick={resolveCreate}>完成旧代创建回调</button>
+          <button type="button" className="button button-secondary" onClick={() => { void refreshCurrentGeneration(); }}>当前代刷新并核对</button>
+          {canConfirm && <button type="button" className="button button-secondary" onClick={acknowledge}>确认当前状态并解除阻塞</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RecoveryContent({ state }: { state: ScenarioState }) {
   const source = usePublishedProjectTaskSource({
     client: useMemo(() => createClient(state), [state]),
@@ -583,6 +728,44 @@ export const SamePrincipalGenerationKeepsRefreshBarrier: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "尝试更新任务" }));
     await waitFor(() => expect(canvas.getByTestId("generation-result")).toHaveTextContent("结果：updated"));
     expect(canvas.getByTestId("generation-update-calls")).toHaveTextContent("任务 PATCH：1");
+  }
+};
+
+export const StaleProjectCreateKeepsExactIdBarrierWithoutBroadcastChannel: Story = {
+  render: () => <StaleGenerationCreateHarness kind="project" />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByTestId("stale-generation-status")).toHaveTextContent("状态：ready"));
+    await userEvent.click(canvas.getByRole("button", { name: "尝试创建项目" }));
+    await userEvent.click(canvas.getByRole("button", { name: "同身份重新认证" }));
+    await userEvent.click(canvas.getByRole("button", { name: "完成旧代创建回调" }));
+    await waitFor(() => expect(canvas.getByTestId("stale-generation-result")).toHaveTextContent("登录身份已变化"));
+    expect(canvas.getByTestId("stale-generation-resource")).toHaveTextContent(/^确切 ID：project_[0-9a-f]{32}$/);
+    await userEvent.click(canvas.getByRole("button", { name: "尝试创建项目" }));
+    expect(canvas.getByTestId("stale-generation-project-calls")).toHaveTextContent("项目 POST：1");
+    await userEvent.click(canvas.getByRole("button", { name: "当前代刷新并核对" }));
+    await waitFor(() => expect(canvas.getByTestId("stale-generation-result")).toHaveTextContent("current-refresh-complete"));
+    await userEvent.click(canvas.getByRole("button", { name: "确认当前状态并解除阻塞" }));
+    expect(canvas.getByTestId("stale-generation-result")).toHaveTextContent("acknowledged");
+  }
+};
+
+export const StaleTaskCreateKeepsExactIdBarrierWithoutBroadcastChannel: Story = {
+  render: () => <StaleGenerationCreateHarness kind="task" />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByTestId("stale-generation-status")).toHaveTextContent("状态：ready"));
+    await userEvent.click(canvas.getByRole("button", { name: "尝试创建任务" }));
+    await userEvent.click(canvas.getByRole("button", { name: "同身份重新认证" }));
+    await userEvent.click(canvas.getByRole("button", { name: "完成旧代创建回调" }));
+    await waitFor(() => expect(canvas.getByTestId("stale-generation-result")).toHaveTextContent("登录身份已变化"));
+    expect(canvas.getByTestId("stale-generation-resource")).toHaveTextContent(/^确切 ID：task_[0-9a-f]{32}$/);
+    await userEvent.click(canvas.getByRole("button", { name: "尝试创建任务" }));
+    expect(canvas.getByTestId("stale-generation-task-calls")).toHaveTextContent("任务 POST：1");
+    await userEvent.click(canvas.getByRole("button", { name: "当前代刷新并核对" }));
+    await waitFor(() => expect(canvas.getByTestId("stale-generation-result")).toHaveTextContent("current-refresh-complete"));
+    await userEvent.click(canvas.getByRole("button", { name: "确认当前状态并解除阻塞" }));
+    expect(canvas.getByTestId("stale-generation-result")).toHaveTextContent("acknowledged");
   }
 };
 

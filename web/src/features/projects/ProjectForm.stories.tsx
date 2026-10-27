@@ -27,13 +27,6 @@ function pendingCreationSource() {
   const noticeId = "project:create:story";
   source.pendingProjectCreation = true;
   source.pendingProjectCreationNoticeId = noticeId;
-  source.isPendingProjectCreationReady = (id) => id === noticeId;
-  source.acknowledgePendingProjectCreation = (id) => {
-    if (id !== noticeId) return false;
-    source.pendingProjectCreation = false;
-    delete source.pendingProjectCreationNoticeId;
-    return true;
-  };
   return source;
 }
 
@@ -106,9 +99,8 @@ export const PendingCreationRecovery: Story = {
     expect(await canvas.findByText("上一次项目创建结果仍待确认；请先检查项目列表，当前表单不会再次提交。")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "刷新并核对项目列表" }));
     expect(await canvas.findByText("列表已刷新，但本次项目创建结果仍待确认；为避免重复创建，当前表单不会再次提交。")).toBeInTheDocument();
-    await userEvent.click(canvas.getByRole("button", { name: "确认未创建，允许重新提交" }));
-    expect(await canvas.findByText("已确认项目列表中没有这次写入，可以重新提交。")).toBeInTheDocument();
-    expect(canvas.getByRole("form", { name: "创建项目" })).toHaveFocus();
+    expect(canvas.queryByRole("button", { name: "确认未创建，允许重新提交" })).not.toBeInTheDocument();
+    expect(canvas.getByRole("button", { name: "保存项目" })).toBeDisabled();
   }
 };
 

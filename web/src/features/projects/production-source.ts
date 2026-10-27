@@ -389,6 +389,10 @@ function isPendingTaskCreationNotice(notice: Pick<MutationNotice, "id" | "taskId
   return !notice.taskId && isMutationNoticeCreationId(notice.id, "task");
 }
 
+export function canAcknowledgePendingCreationNotice(notice: Pick<MutationNotice, "projectId" | "taskId"> | undefined): boolean {
+  return Boolean(notice?.projectId || notice?.taskId);
+}
+
 function isKnownProjectCreationNotice(notice: Pick<MutationNotice, "id" | "projectId">): boolean {
   return Boolean(notice.projectId) && isMutationNoticeCreationId(notice.id, "project");
 }
@@ -1475,6 +1479,12 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
             return { ...blocked<ReturnType<typeof mapProject>>(message), noticeId: createNoticeId };
           }
           const value = mapProject(response.project);
+          if (!isCurrentSession()) {
+            const warning = "项目已创建，但登录身份已变化；请在当前会话刷新并核对后再解除阻塞。";
+            const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", undefined, projectId, "project:create");
+            if (!notice.applied || !notice.persisted) return { ...success(value, "项目已创建，但结果确认状态无法保存；请刷新后核对。", true), noticeId: createNoticeId };
+            return { ...success(value, warning, true), noticeId: createNoticeId };
+          }
           const notice = recordMutationNoticeWithFallback(createNoticeId, "项目已创建，正在确认本次写入。", "in-flight", undefined, projectId, "project:create");
           if (!notice.applied) return { ...success(value, "项目已创建，但确认状态无法保存；请刷新后核对，切勿重复提交。", true), noticeId: createNoticeId };
           return finishMutation(createNoticeId, value, "项目创建");
@@ -1587,13 +1597,20 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           createdTaskValue = value;
           const notice = recordMutationNoticeWithFallback(createNoticeId, hasRelationChanges ? "任务已创建，关系写入正在进行，请等待本次操作完成。" : "任务已创建，正在确认本次写入。", "in-flight", taskId, undefined, "task:create");
           if (!notice.applied) return createdTaskPersistenceFailure("任务已创建，但确认状态无法保存；");
+          const preserveStaleCreatedTask = (): WriteResult<TaskRecord> => {
+            const warning = "任务已创建，但登录身份已变化；请在当前会话刷新并核对后再解除阻塞。";
+            const staleNotice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, "task:create");
+            if (!staleNotice.applied || !staleNotice.persisted) return createdTaskPersistenceFailure("任务已创建，但结果确认状态无法保存；");
+            return { ...success(value, warning, true), noticeId: createNoticeId };
+          };
           const completeCreatedTask = async (): Promise<WriteResult<TaskRecord>> => {
+            if (!isCurrentSession()) return preserveStaleCreatedTask();
             if (hasRelationChanges) {
               const relationBlock = relationWriteBlockReason("", relationChanges, getTask, getProjectPermissions);
               const relationBarrier = relationMutationBarrier<TaskRecord>("", relationChanges, "任务关系写入");
               if (relationBlock || relationBarrier) {
                 const warning = relationBlock ?? (relationBarrier && !relationBarrier.ok ? relationBarrier.message : undefined) ?? "关系写入结果待确认。";
-                const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, `task:${taskId}`);
+                const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, "task:create");
                 if (!notice.applied || !notice.persisted) return createdTaskPersistenceFailure(warning);
                 return { ...blocked<TaskRecord>(`${warning}请刷新后核对。`), reconcile: true, noticeId: createNoticeId };
               }
@@ -1601,11 +1618,12 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
               setRelationMutationPending(response.task.id, true);
               if (!isCurrentSession()) {
                 const warning = "任务已创建，但登录身份已变化，关系写入没有继续；请重新登录后核对。";
-                const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, `task:${taskId}`);
+                const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, "task:create");
                 if (!notice.applied || !notice.persisted) return createdTaskPersistenceFailure(warning);
                 return { ...success(value, warning, true), noticeId: createNoticeId };
               }
               const relationResult = await syncTaskRelations(api, queryClient, subjectId, sessionGeneration, taskId, relationChanges);
+              if (!isCurrentSession()) return preserveStaleCreatedTask();
               if (relationResult.failures.length) {
                 if (relationResult.failures.some((item) => item.status === 401 || item.status === 403 || item.status === 404)) await invalidatePermissionScope(false);
                 const warning = "任务已创建，但部分关系未保存：" + relationResult.failures.map((item) => item.message).join("；") + "。请刷新后核对。";
@@ -1615,6 +1633,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
               }
             } else {
               await queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) });
+              if (!isCurrentSession()) return preserveStaleCreatedTask();
             }
             return finishMutation(createNoticeId, value, "任务创建");
           };
@@ -1873,15 +1892,17 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const notices = projectReconciliationNotices(projectId);
       return isMutationNoticeReconciliationReady(notices, "project", projects.some((project) => project.id === projectId), expectedToken);
     };
-    const isPendingProjectCreationReady = (noticeId: string): boolean => currentMutationNotices().some((notice) => notice.id === noticeId && isPendingProjectCreationNotice(notice) && notice.kind === "creation");
-    const isPendingTaskCreationReady = (noticeId: string): boolean => currentMutationNotices().some((notice) => notice.id === noticeId && isPendingTaskCreationNotice(notice) && notice.kind === "creation");
+    // An ID-less creation result is ambiguous. It remains a write barrier until a complete
+    // current-generation refresh establishes a concrete resource identity; absence is not proof.
+    const isPendingProjectCreationReady = (_noticeId: string): boolean => false;
+    const isPendingTaskCreationReady = (_noticeId: string): boolean => false;
     const acknowledgePendingNotice = async (
       noticeId: string,
       pending: (notice: MutationNotice) => boolean,
       lockScope: "project:create" | "task:create"
     ): Promise<boolean> => {
       const expected = currentMutationNotices().find((notice) => notice.id === noticeId && pending(notice) && notice.kind === "creation");
-      if (!expected) return false;
+      if (!expected || !canAcknowledgePendingCreationNotice(expected)) return false;
       return withAvailableBrowserMutationLock(subjectId, lockScope, false, async () => {
         const persistedState = readPersistedMutationNoticeState(subjectId);
         if (!persistedState.available || !persistedState.shared) return false;

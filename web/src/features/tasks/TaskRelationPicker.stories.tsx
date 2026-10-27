@@ -35,6 +35,28 @@ function InteractivePicker({ initialSelected = [] }: { initialSelected?: string[
   return <TaskRelationPicker label="前置依赖" candidates={candidates} selectedIds={selectedIds} onChange={setSelectedIds} />;
 }
 
+function AsyncSavePicker() {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [pending, setPending] = useState(false);
+  return <div className="grid gap-3">
+    <TaskRelationPicker
+      label="前置依赖"
+      candidates={candidates}
+      selectedIds={selectedIds}
+      onChange={(nextIds) => {
+        setSelectedIds(nextIds);
+        setPending(true);
+      }}
+      disabled={pending}
+      disabledMessage="关系保存中，暂时不能修改。"
+    />
+    <div className="flex gap-2">
+      <button type="button" className="button button-secondary" onClick={() => setPending(true)}>开始保存</button>
+      <button type="button" className="button button-secondary" onClick={() => setPending(false)}>完成保存</button>
+    </div>
+  </div>;
+}
+
 export const SearchSelectRemove: Story = {
   args: storyArgs,
   render: () => <StoryFrame><InteractivePicker initialSelected={["TASK-0001"]} /></StoryFrame>,
@@ -62,6 +84,28 @@ export const SearchAndCloseDoNotWrite: Story = {
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(canvas.getByText("添加父任务").closest("summary")).toHaveFocus());
     expect(args.onChange).not.toHaveBeenCalled();
+  }
+};
+
+export const AsyncSaveKeepsOwnedFocus: Story = {
+  args: storyArgs,
+  render: () => <StoryFrame><AsyncSavePicker /></StoryFrame>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByText("添加前置依赖"));
+    await userEvent.click(await canvas.findByRole("checkbox", { name: /TASK-0001/ }));
+    const summary = canvas.getByText("添加前置依赖").closest("summary");
+    await waitFor(() => expect(summary).toHaveFocus());
+    expect(summary).toHaveAttribute("aria-disabled", "true");
+    expect(canvas.getByRole("status", { name: "关系保存中，暂时不能修改。" })).toBeInTheDocument();
+    const finish = canvas.getByRole("button", { name: "完成保存" });
+    await userEvent.click(finish);
+    expect(finish).toHaveFocus();
+    await userEvent.click(canvas.getByText("添加前置依赖"));
+    const start = canvas.getByRole("button", { name: "开始保存" });
+    await userEvent.click(start);
+    await waitFor(() => expect(start).toHaveFocus());
+    expect(canvas.getByText("添加前置依赖").closest("summary")).toHaveAttribute("aria-disabled", "true");
   }
 };
 
