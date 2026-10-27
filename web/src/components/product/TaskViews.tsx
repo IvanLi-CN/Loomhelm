@@ -7,7 +7,7 @@ import {
   Search,
   SlidersHorizontal
 } from "lucide-react";
-import { Fragment, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
@@ -48,37 +48,86 @@ export function ExecutionPill({ execution, className }: { execution: TaskRecord[
   return <span className={`execution-pill ${execution ? `execution-${execution}` : "execution-unavailable"}${className ? ` ${className}` : ""}`}>{label}</span>;
 }
 
-export function TaskReadRecovery({ source, taskId }: { source: ProjectTaskSource; taskId?: string }) {
+interface ResourceReadRecoveryProps {
+  source: ProjectTaskSource;
+  resourceId?: string;
+  kind: "task" | "project";
+}
+
+function ResourceReadRecovery({ source, resourceId, kind }: ResourceReadRecoveryProps) {
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const hasReconciliationBarrier = Boolean(taskId && source.getTaskReconciliationToken?.(taskId));
+  const [canAcknowledge, setCanAcknowledge] = useState(false);
+  const [reconciliationToken, setReconciliationToken] = useState<string | undefined>();
+  const [refreshAttempt, setRefreshAttempt] = useState(0);
+  const resourceLabel = kind === "task" ? "任务" : "项目";
+  const getToken = kind === "task" ? source.getTaskReconciliationToken : source.getProjectReconciliationToken;
+  const isReady = kind === "task" ? source.isTaskReconciliationReady : source.isProjectReconciliationReady;
+  const acknowledge = kind === "task" ? source.acknowledgeTaskReconciliation : source.acknowledgeProjectReconciliation;
+  const hasReconciliationBarrier = Boolean(resourceId && getToken?.(resourceId));
+  const canConfirm = Boolean(resourceId && canAcknowledge && isReady?.(resourceId, reconciliationToken));
+
+  useEffect(() => {
+    if (!refreshAttempt || !resourceId) return;
+    const token = getToken?.(resourceId);
+    const ready = Boolean(token && isReady?.(resourceId, token));
+    setReconciliationToken(token);
+    setCanAcknowledge(ready);
+    setFeedback((current) => current?.startsWith("刷新请求已完成")
+      ? ready
+        ? `刷新请求已完成；请确认当前${resourceLabel}状态后解除阻塞。`
+        : `刷新请求已完成；请确认当前${resourceLabel}和关系数据后再继续。`
+      : current);
+  }, [getToken, isReady, refreshAttempt, resourceId, resourceLabel, source]);
 
   const refresh = async () => {
     setPending(true);
     setFeedback(null);
+    setCanAcknowledge(false);
+    setReconciliationToken(undefined);
     try {
       await source.refresh();
-      setFeedback("刷新请求已完成；请确认当前任务和关系数据后再继续。");
+      setRefreshAttempt((attempt) => attempt + 1);
+      setFeedback(`刷新请求已完成；请确认当前${resourceLabel}和关系数据后再继续。`);
     } catch (error) {
+      setRefreshAttempt(0);
+      setReconciliationToken(undefined);
+      setCanAcknowledge(false);
       setFeedback(error instanceof Error ? `刷新失败：${error.message}` : "刷新失败，请稍后重试。");
     } finally {
       setPending(false);
     }
   };
 
+  const confirm = () => {
+    if (!resourceId || !canConfirm || !acknowledge?.(resourceId, reconciliationToken)) return;
+    setCanAcknowledge(false);
+    setReconciliationToken(undefined);
+    setFeedback(`已确认当前${resourceLabel}状态，可以继续操作。`);
+  };
+
   return (
-    <div className="error-state task-read-recovery" role="alert" data-task-read-recovery>
+    <div className={`error-state ${kind}-read-recovery`} role="alert" data-read-recovery={kind} data-task-read-recovery={kind === "task" ? true : undefined}>
       <span className="empty-icon empty-icon-danger" aria-hidden="true">!</span>
-      <h2>暂时无法读取任务</h2>
-      {taskId && <p className="task-read-recovery-identity">任务 ID：<code>{taskId}</code></p>}
-      <p>{hasReconciliationBarrier ? "任务写入结果仍待核对；刷新并完成核对前，不会恢复编辑、关系修改或删除。" : "当前页面保持保护，不会显示未确认的项目或关系数据。"}</p>
-      <div className="form-actions task-read-recovery-actions">
-        <Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void refresh(); }} disabled={pending}>{pending ? "刷新中…" : taskId ? "刷新并核对任务" : "刷新并核对任务列表"}</Button>
+      <h2>暂时无法读取{resourceLabel}</h2>
+      {resourceId && <p className={`${kind}-read-recovery-identity`}>{resourceLabel} ID：<code>{resourceId}</code></p>}
+      <p>{hasReconciliationBarrier ? `${resourceLabel}写入结果仍待核对；刷新并完成核对前，不会恢复编辑、关系修改或删除。` : "当前页面保持保护，不会显示未确认的项目或关系数据。"}</p>
+      <div className={`form-actions ${kind}-read-recovery-actions`}>
+        <Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void refresh(); }} disabled={pending}>{pending ? "刷新中…" : resourceId ? `刷新并核对${resourceLabel}` : `刷新并核对${resourceLabel}列表`}</Button>
+        {canConfirm && <Button type="button" variant="ghost" className="button button-quiet" onClick={confirm}>确认当前{resourceLabel}状态，解除阻塞</Button>}
         <Button asChild type="button" variant="ghost" className="button button-quiet"><Link to="/tasks">前往任务列表核对</Link></Button>
       </div>
-      {feedback && <p className="task-read-recovery-feedback" role="status">{feedback}</p>}
+      {feedback && <p className={`${kind}-read-recovery-feedback`} role="status">{feedback}</p>}
     </div>
   );
+}
+
+export function TaskReadRecovery({ source, taskId }: { source: ProjectTaskSource; taskId?: string }) {
+  return <ResourceReadRecovery source={source} resourceId={taskId} kind="task" />;
+}
+
+export function ProjectReadRecovery({ source, projectId }: { source: ProjectTaskSource; projectId?: string }) {
+  return <ResourceReadRecovery source={source} resourceId={projectId} kind="project" />;
 }
 
 interface TaskLinkOptions {

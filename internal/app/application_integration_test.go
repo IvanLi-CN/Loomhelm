@@ -179,8 +179,17 @@ func TestExpectedPrincipalBindingRejectsCookiePrincipalMismatch(t *testing.T) {
 	bobBinding := map[string]string{auth.ExpectedPrincipalHeader: bobSession.UserID}
 	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/projects", nil, aliceBinding, http.StatusOK)
 	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/auth/session", nil, aliceBinding, http.StatusUnauthorized)
-	for _, value := range []string{"", " " + aliceSession.UserID, aliceSession.UserID + ",other", bobSession.UserID} {
-		applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/projects", nil, map[string]string{auth.ExpectedPrincipalHeader: value}, http.StatusUnauthorized)
+	for _, test := range []struct {
+		value  string
+		status int
+	}{
+		{value: "", status: http.StatusUnauthorized},
+		// net/http trims optional header whitespace before the application sees it.
+		{value: " " + aliceSession.UserID, status: http.StatusOK},
+		{value: aliceSession.UserID + ",other", status: http.StatusUnauthorized},
+		{value: bobSession.UserID, status: http.StatusUnauthorized},
+	} {
+		applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/projects", nil, map[string]string{auth.ExpectedPrincipalHeader: test.value}, test.status)
 	}
 
 	duplicate, err := http.NewRequest(http.MethodGet, baseURL+"/api/v1/projects", nil)

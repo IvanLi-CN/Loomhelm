@@ -7,7 +7,7 @@ import { expect, userEvent, within } from "storybook/test";
 import { taskStates, type ExecutionState, type TaskState, type TaskView } from "@/demo/types";
 import type { ProjectTaskSource, TaskRecord } from "@/features/tasks/types";
 
-import { ExecutionPill, TaskExplorer, TaskReadRecovery, TaskStateBadge } from "./TaskViews";
+import { ExecutionPill, ProjectReadRecovery, TaskExplorer, TaskReadRecovery, TaskStateBadge } from "./TaskViews";
 
 const projects = [
   { id: "loomhelm", name: "Loomhelm", summary: "产品工作台", updatedAt: "刚刚", conversationCount: 1 },
@@ -150,6 +150,8 @@ function ErrorRecoveryHarness() {
     status: "error",
     notice: "任务关系写入结果待确认；请刷新后核对。",
     getTaskReconciliationToken: () => "story-reconciliation",
+    isTaskReconciliationReady: () => refreshCount > 0,
+    acknowledgeTaskReconciliation: () => true,
     refresh: async () => setRefreshCount((count) => count + 1)
   });
   return <div className="w-full max-w-3xl mx-auto bg-[var(--canvas)] p-8" data-visual-evidence-surface><div className="w-full" data-visual-evidence-target><div className="mb-6"><span className="section-kicker">TASK READ RECOVERY</span><h1 className="mt-2 text-xl font-semibold">任务读取恢复</h1><p className="mt-2 text-sm text-[var(--muted)]">保留保护状态，先核对远端任务与关系数据。</p></div><TaskReadRecovery source={source} taskId="STORY-RECOVERY-42" /><output className="sr-only" data-testid="refresh-count">{refreshCount}</output></div></div>;
@@ -160,8 +162,32 @@ export const Error: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "刷新并核对任务" }));
-    expect(canvas.getByText("刷新请求已完成；请确认当前任务和关系数据后再继续。")).toBeInTheDocument();
+    expect(canvas.getByText("刷新请求已完成；请确认当前任务状态后解除阻塞。")).toBeInTheDocument();
     expect(canvas.getByTestId("refresh-count")).toHaveTextContent("1");
+    await userEvent.click(canvas.getByRole("button", { name: "确认当前任务状态，解除阻塞" }));
+    expect(canvas.getByText("已确认当前任务状态，可以继续操作。")).toBeInTheDocument();
+  }
+};
+
+function ProjectRecoveryHarness() {
+  const [refreshCount, setRefreshCount] = useState(0);
+  const source = createSource({
+    status: "permission-changed",
+    getProjectReconciliationToken: () => "project-reconciliation",
+    isProjectReconciliationReady: () => refreshCount > 0,
+    acknowledgeProjectReconciliation: () => true,
+    refresh: async () => setRefreshCount((count) => count + 1)
+  });
+  return <div className="w-full max-w-3xl mx-auto bg-[var(--canvas)] p-8" data-visual-evidence-surface><div className="w-full" data-visual-evidence-target><ProjectReadRecovery source={source} projectId="STORY-PROJECT-42" /></div></div>;
+}
+
+export const ProjectReadRecoveryConfirmation: Story = {
+  render: () => <ProjectRecoveryHarness />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "刷新并核对项目" }));
+    await userEvent.click(canvas.getByRole("button", { name: "确认当前项目状态，解除阻塞" }));
+    expect(canvas.getByText("已确认当前项目状态，可以继续操作。")).toBeInTheDocument();
   }
 };
 

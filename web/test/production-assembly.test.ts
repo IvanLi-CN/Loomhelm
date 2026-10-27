@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { ApiClientError, type AuthenticatedApiClient } from "@loomhelm/api-client";
+import { ApiClientError, ApiClientConfigurationError, createAuthenticatedApiClient, type AuthenticatedApiClient } from "@loomhelm/api-client";
 import { QueryClient } from "@tanstack/react-query";
 
 import {
@@ -10,7 +10,7 @@ import {
   createProductionAuthFailureAssembly,
   createUnauthenticatedProductionAssembly
 } from "../src/app/providers";
-import { isPermissionError, readAllCursorPages } from "../src/features/projects/production-source";
+import { isAmbiguousWriteError, isPermissionError, readAllCursorPages } from "../src/features/projects/production-source";
 import { mapTask } from "../src/features/projects/api";
 
 const client = {
@@ -77,6 +77,53 @@ describe("production browser assembly", () => {
 
     expect(assembly.auth).toEqual({ status: "unauthenticated", message: "已退出当前浏览器会话。", sessionGeneration: 0 });
     expect(assembly.permissions).toEqual({ canWrite: false, canManageProjects: false, isReadOnly: true });
+  });
+
+  test("preserves post-send uncertainty while principal cache cleanup is held", async () => {
+    let releaseResponseBody;
+    let responseCommitted;
+    const responseCommittedPromise = new Promise((resolve) => { responseCommitted = resolve; });
+    const responseGate = new Promise((resolve) => { releaseResponseBody = resolve; });
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url) => {
+        if (url.pathname.endsWith("/auth/session")) return Response.json({ user_id: "user/browser", csrf_protection: "same_origin" });
+        responseCommitted();
+        await responseGate;
+        return Response.json({ items: [] });
+      }
+    });
+    await client.bootstrapBrowserSession();
+    const bound = client.bindBrowserSession({ principalId: "user/browser", epoch: 0 });
+    const pendingRequest = bound.listProjects();
+    await responseCommittedPromise;
+
+    let releaseCleanup;
+    const cleanupGate = new Promise((resolve) => { releaseCleanup = resolve; });
+    let cleanupStarted;
+    const cleanupStartedPromise = new Promise((resolve) => { cleanupStarted = resolve; });
+    const queryClient = new QueryClient();
+    queryClient.cancelQueries = (async () => {
+      cleanupStarted();
+      await cleanupGate;
+    }) as typeof queryClient.cancelQueries;
+    const cleanup = clearPrincipalQueries(queryClient, "user/browser");
+    await cleanupStartedPromise;
+    client.invalidateBrowserSession();
+    releaseResponseBody();
+
+    let caught;
+    try {
+      await pendingRequest;
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ApiClientConfigurationError);
+    expect(caught.requestSent).toBe(true);
+    expect(isAmbiguousWriteError(caught)).toBe(true);
+    releaseCleanup();
+    await cleanup;
   });
 });
 

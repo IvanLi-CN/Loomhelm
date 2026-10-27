@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { getProject as getDemoProject, useOptionalDemoRuntime } from "@/demo/context";
 import { ProjectActions } from "@/features/projects/ProjectForm";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
-import { TaskExplorer } from "@/components/product/TaskViews";
+import { ProjectReadRecovery, TaskExplorer } from "@/components/product/TaskViews";
 
 type ProjectPanel = "tasks" | "conversations";
 const projectPanels: readonly ProjectPanel[] = ["tasks", "conversations"];
@@ -55,7 +55,7 @@ export function ProjectRoute() {
   };
 
   if (source?.status === "error" || source?.status === "permission-changed") {
-    return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT ACCESS</span><h1>项目当前不可用</h1><p>{source.notice ?? "权限或连接状态发生变化，当前页面保持保护。"}</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/">返回工作台</Link></Button></section>;
+    return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT ACCESS</span><ProjectReadRecovery source={source} projectId={projectId} /></section>;
   }
 
   if (currentDeleteState === "success") {
@@ -67,7 +67,9 @@ export function ProjectRoute() {
   }
 
   if (!displayedProject || !source) {
-    return <section className="page-section unavailable-page"><span className="eyebrow">PROJECT ACCESS</span><h1>项目当前不可用</h1><p>权限或连接状态发生变化，当前页面无法显示受保护项目的信息。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/">返回工作台</Link></Button></section>;
+    return source
+      ? <section className="page-section unavailable-page"><span className="eyebrow">PROJECT ACCESS</span><ProjectReadRecovery source={source} projectId={projectId} /></section>
+      : <section className="page-section unavailable-page"><span className="eyebrow">PROJECT ACCESS</span><h1>项目当前不可用</h1><p>权限或连接状态发生变化，当前页面无法显示受保护项目的信息。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/">返回工作台</Link></Button></section>;
   }
 
   const canCreateProjectTask = source.status === "ready" && source.getProjectPermissions(projectId).canWrite;

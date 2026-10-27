@@ -286,9 +286,13 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
     login: defaultAuthActions.login,
     logout: async () => {
       if (!productionClient) return { ok: false, message: "浏览器认证入口尚未接入。" };
+      const currentAssembly = assemblyRef.current;
+      if (!currentAssembly || currentAssembly.auth.status !== "authenticated") {
+        return { ok: false, message: "浏览器会话尚未就绪，请稍候再试。" };
+      }
       setLogoutPending(true);
       try {
-        await productionClient.logoutBrowserSession();
+        await currentAssembly.client.logoutBrowserSession();
         publishProductionAuthInvalidation();
         return { ok: true };
       } catch (error) {

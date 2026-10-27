@@ -50,9 +50,12 @@ export interface AuthenticatedApiClientOptions {
 }
 
 export class ApiClientConfigurationError extends Error {
-  constructor(message: string) {
+  readonly requestSent: boolean;
+
+  constructor(message: string, requestSent = false) {
     super(message);
     this.name = "ApiClientConfigurationError";
+    this.requestSent = requestSent;
   }
 }
 
@@ -220,7 +223,7 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
 
     await notifyUnauthorized(response);
     if (binding && response.status !== 401 && !isCurrentBrowserSessionBinding(binding)) {
-      throw new ApiClientConfigurationError("browser session binding was invalidated while the request was in flight");
+      throw new ApiClientConfigurationError("browser session binding was invalidated while the request was in flight", true);
     }
     return response;
   };
@@ -239,6 +242,18 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   if (sameOriginProtection) {
     client.getBrowserSession = () => bootstrapBrowserSession();
   }
+  const wrapLogoutWithInvalidation = (boundClient: GeneratedApiClient): GeneratedApiClient => {
+    const logoutBrowserSession = boundClient.logoutBrowserSession.bind(boundClient);
+    boundClient.logoutBrowserSession = async (request) => {
+      try {
+        return await logoutBrowserSession(request);
+      } finally {
+        invalidateBrowserSession();
+      }
+    };
+    return boundClient;
+  };
+
   const bindBrowserSession = (binding: BrowserSessionBinding): GeneratedApiClient => {
     if (!sameOriginProtection) {
       throw new ApiClientConfigurationError("browser session binding requires same_origin protection");
@@ -249,20 +264,13 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
       epoch: binding.epoch,
       clientEpoch: browserSessionGeneration
     };
-    return createGeneratedApiClient({
+    return wrapLogoutWithInvalidation(createGeneratedApiClient({
       baseUrl: options.baseUrl,
       fetch: (input, init = {}) => fetchAuthenticated(input, init, immutableBinding),
       headers: undefined
-    });
+    }));
   };
-  const logoutBrowserSession = client.logoutBrowserSession.bind(client);
-  client.logoutBrowserSession = async (request) => {
-    try {
-      return await logoutBrowserSession(request);
-    } finally {
-      invalidateBrowserSession();
-    }
-  };
+  wrapLogoutWithInvalidation(client);
 
   return Object.assign(client, { bootstrapBrowserSession, invalidateBrowserSession, bindBrowserSession });
 }

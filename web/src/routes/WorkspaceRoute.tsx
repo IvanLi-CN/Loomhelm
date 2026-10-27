@@ -14,6 +14,7 @@ import { TaskEditor } from "@/features/tasks/TaskForm";
 import { TaskRelationshipEditor } from "@/features/tasks/TaskRelations";
 import { taskWriteBlockReason } from "@/features/tasks/types";
 import { TaskReadRecovery, TaskStateBadge } from "@/components/product/TaskViews";
+import { queueOwnedFocusRestore } from "@/lib/focus-ownership";
 
 function WorkspaceHeader({ taskId, conversationId }: { taskId?: string; conversationId?: string }) {
   const runtime = useDemoRuntime();
@@ -119,6 +120,7 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
   const task = source?.getTask(taskId);
   const [deleteState, setDeleteState] = useState<{ taskId: string; status: "idle" | "pending" | "success" } | null>(null);
   const lastTaskRef = useRef<{ taskId: string; task: typeof task } | undefined>(undefined);
+  const routeFocusOwnerRef = useRef<HTMLElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const deleteResultHeadingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -128,8 +130,8 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
   const displayedTask = task ?? (currentDeleteState === "pending" && lastTaskRef.current?.taskId === taskId ? lastTaskRef.current.task : undefined);
   useEffect(() => {
     if (!displayedTask) return;
-    const frame = requestAnimationFrame(() => headingRef.current?.focus({ preventScroll: true }));
-    return () => cancelAnimationFrame(frame);
+    const owner = routeFocusOwnerRef.current?.closest("main") ?? routeFocusOwnerRef.current;
+    queueOwnedFocusRestore(owner, () => headingRef.current);
   }, [displayedTask?.id]);
   useEffect(() => {
     if (currentDeleteState !== "success") return;
@@ -149,13 +151,13 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
     return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">TASK WORKSPACE</span><h1>正在读取任务</h1><p>任务工作区正在加载，请稍候。</p></section>;
   }
   if (!displayedTask) {
-    return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><h1>任务当前不可用</h1><p>任务不存在，或当前浏览器身份无权查看它的受保护信息。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button></section>;
+    return <section ref={routeFocusOwnerRef} className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><TaskReadRecovery source={source} taskId={taskId} /></section>;
   }
 
   const project = source.getProject(displayedTask.projectId);
   const projectPermissions = source.getProjectPermissions(displayedTask.projectId);
   return (
-    <section className="workspace-page">
+    <section ref={routeFocusOwnerRef} className="workspace-page">
       <header className="workspace-heading">
         <div><span className="workspace-context">{project?.name ?? "当前无权查看项目"} / {displayedTask.id}</span><h1 ref={headingRef} tabIndex={-1}>{displayedTask.title}</h1><div className="workspace-meta"><span className="execution-pill execution-dot">执行服务未接通</span><span className="inline-flex items-center gap-1">任务业务状态：<TaskStateBadge state={displayedTask.state} /></span></div></div>
       </header>

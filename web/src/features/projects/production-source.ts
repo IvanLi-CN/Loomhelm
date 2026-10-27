@@ -401,6 +401,15 @@ function isKnownTaskCreationNotice(notice: Pick<MutationNotice, "id" | "taskId">
   return Boolean(notice.taskId) && isMutationNoticeCreationId(notice.id, "task");
 }
 
+export function reconcileKnownTaskCreationNotice(notice: MutationNotice, taskIds: ReadonlySet<string>): MutationNotice {
+  if (!notice.taskId
+    || notice.identityMismatch
+    || !isKnownTaskCreationNotice(notice)
+    || mutationNoticeScope(notice) !== "task:create"
+    || !taskIds.has(notice.taskId)) return notice;
+  return { ...notice, kind: "reconciliation", lockScope: `task:${notice.taskId}` };
+}
+
 function isInFlightMutationNotice(notice: MutationNotice): boolean {
   return notice.kind === "in-flight";
 }
@@ -810,6 +819,13 @@ export interface ProjectTaskRefreshQuerySnapshot {
   };
 }
 
+interface CompleteProjectTaskRead {
+  principalId: string;
+  sessionGeneration: number;
+  projectIds: ReadonlySet<string>;
+  taskIds: ReadonlySet<string>;
+}
+
 export function isCompleteProjectTaskQuery(query: ProjectTaskRefreshQuerySnapshot | undefined, complete: boolean): boolean {
   return Boolean(query
     && query.state.status === "success"
@@ -878,7 +894,7 @@ function failure<T>(operation: string, error: unknown): WriteResult<T> {
 }
 
 export function isAmbiguousWriteError(error: unknown): boolean {
-  if (error instanceof ApiClientConfigurationError) return false;
+  if (error instanceof ApiClientConfigurationError) return error.requestSent;
   if (error instanceof ApiClientError) return error.status === 408 || error.status === 429 || error.status >= 500;
   return true;
 }
@@ -1019,8 +1035,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   const queryClient = useQueryClient();
   const subjectId = principalId ?? "anonymous";
   const sessionIdentityRef = useRef({ principalId: subjectId, sessionGeneration });
+  const completeReadRef = useRef<CompleteProjectTaskRead | undefined>(undefined);
   useLayoutEffect(() => {
     sessionIdentityRef.current = { principalId: subjectId, sessionGeneration };
+    completeReadRef.current = undefined;
   }, [sessionGeneration, subjectId]);
   const isCurrentSession = useCallback(() => sessionIdentityRef.current.principalId === subjectId && sessionIdentityRef.current.sessionGeneration === sessionGeneration, [sessionGeneration, subjectId]);
   const queryEnabled = enabled && Boolean(principalId);
@@ -1093,6 +1111,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     gcTime: Infinity
   });
   const refreshProjectTaskQueries = useCallback(async () => {
+    completeReadRef.current = undefined;
     const projectsKey = projectTaskQueryKeys.projects(subjectId, sessionGeneration);
     await Promise.all([
       queryClient.cancelQueries({ queryKey: projectsKey, exact: true }),
@@ -1137,6 +1156,12 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       || !isCompleteProjectTaskQuery(tasksQuery, !hasIncompleteProjectTaskRead(refreshedTasks, [], expectedTaskIds))) {
       throw new Error("项目、成员、任务或关系列表刷新不完整，待确认结果仍然保留。");
     }
+    completeReadRef.current = {
+      principalId: subjectId,
+      sessionGeneration,
+      projectIds: new Set(refreshedProjects.map((project) => project.id)),
+      taskIds: new Set(refreshedTasks.items.map((task) => task.id))
+    };
     return { projects: refreshedProjects, memberships: refreshedMemberships, tasks: refreshedTasks };
   }, [api, isCurrentSession, queryClient, sessionGeneration, subjectId]);
   useEffect(() => {
@@ -1823,7 +1848,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     };
     const refresh = async (): Promise<void> => {
       const remoteRefreshScopes = new Map(remoteRefreshScopeState.barriers);
-      await refreshProjectTaskQueries();
+      const refreshed = await refreshProjectTaskQueries();
+      const refreshedTaskIds = new Set(refreshed.tasks.items.map((task) => task.id));
       const persistedState = readPersistedMutationNoticeState(subjectId);
       const currentNotices = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
       if (!persistedState.available) throw new Error("待确认状态无法读取，刷新结果不能解除写入屏障。");
@@ -1832,11 +1858,12 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       }
       const notices = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
       for (const notice of notices) {
-        if (!isInFlightMutationNotice(notice)) continue;
+        const pendingCreation = isPendingProjectCreationNotice(notice) || isPendingTaskCreationNotice(notice);
+        const knownTaskCreation = isKnownTaskCreationNotice(notice) && mutationNoticeScope(notice) === "task:create";
+        if (!isInFlightMutationNotice(notice) && !pendingCreation && !knownTaskCreation) continue;
         const scope = mutationNoticeScope(notice);
         if (!scope) continue;
         const taskId = mutationNoticeTaskId(notice);
-        const pendingCreation = isPendingProjectCreationNotice(notice) || isPendingTaskCreationNotice(notice);
         const message = taskId
           ? "任务写入结果待确认；完整刷新已完成，请确认当前状态后解除阻塞。"
           : pendingCreation
@@ -1852,19 +1879,23 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           queryClient.setQueryData<readonly MutationNotice[]>(mutationNoticeKey, persistedNotices);
           const persistedNotice = persistedNotices.find((currentNotice) => currentNotice.id === notice.id);
           if (!persistedNotice
-            || persistedNotice.kind !== "in-flight"
+            || (persistedNotice.kind !== "in-flight" && persistedNotice.kind !== "creation")
+            || persistedNotice.kind !== notice.kind
             || persistedNotice.message !== notice.message
             || persistedNotice.lockScope !== notice.lockScope
             || persistedNotice.projectId !== notice.projectId
             || persistedNotice.taskId !== notice.taskId) return "unchanged" as const;
           const persisted = updateMutationNotices((current) => current.map((currentNotice) => {
             const unchanged = currentNotice.id !== notice.id
-              || currentNotice.kind !== "in-flight"
+              || (currentNotice.kind !== "in-flight" && currentNotice.kind !== "creation")
+              || currentNotice.kind !== notice.kind
               || currentNotice.message !== notice.message
               || currentNotice.lockScope !== notice.lockScope
               || currentNotice.projectId !== notice.projectId
               || currentNotice.taskId !== notice.taskId;
-            return unchanged ? currentNotice : { ...currentNotice, kind: pendingCreation ? "creation" as const : "reconciliation" as const, message };
+            return unchanged
+              ? currentNotice
+              : { ...reconcileKnownTaskCreationNotice(currentNotice, refreshedTaskIds), kind: pendingCreation ? "creation" as const : "reconciliation" as const, message };
           }));
           return persisted ? "converted" as const : "failed" as const;
         });
@@ -1884,13 +1915,21 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       const notices = projectReconciliationNotices(projectId);
       return notices.length ? mutationNoticeContentToken(notices) : undefined;
     };
+    const currentCompleteRead = (): CompleteProjectTaskRead | undefined => {
+      const read = completeReadRef.current;
+      return read?.principalId === subjectId && read.sessionGeneration === sessionGeneration ? read : undefined;
+    };
     const isTaskReconciliationReady = (taskId: string, expectedToken?: string): boolean => {
       const notices = taskReconciliationNotices(taskId);
-      return isMutationNoticeReconciliationReady(notices, "task", tasks.some((task) => task.id === taskId), expectedToken);
+      const completeRead = currentCompleteRead();
+      const resourceExists = completeRead ? completeRead.taskIds.has(taskId) : tasks.some((task) => task.id === taskId);
+      return isMutationNoticeReconciliationReady(notices, "task", resourceExists, expectedToken);
     };
     const isProjectReconciliationReady = (projectId: string, expectedToken?: string): boolean => {
       const notices = projectReconciliationNotices(projectId);
-      return isMutationNoticeReconciliationReady(notices, "project", projects.some((project) => project.id === projectId), expectedToken);
+      const completeRead = currentCompleteRead();
+      const resourceExists = completeRead ? completeRead.projectIds.has(projectId) : projects.some((project) => project.id === projectId);
+      return isMutationNoticeReconciliationReady(notices, "project", resourceExists, expectedToken);
     };
     // An ID-less creation result is ambiguous. It remains a write barrier until a complete
     // current-generation refresh establishes a concrete resource identity; absence is not proof.

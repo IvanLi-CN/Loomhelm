@@ -17,6 +17,7 @@ import {
   mergePersistedMutationNoticeState,
   mergePersistedMutationNotices,
   mutationNoticeContentToken,
+  reconcileKnownTaskCreationNotice,
   readMutationNoticesFromStorage,
   readMutationNoticeStateFromStorage,
   mutationNoticeScopes,
@@ -111,6 +112,7 @@ describe("project/task write contracts", () => {
     expect(isAmbiguousWriteError(new ApiClientError(503, { code: "server_error" }))).toBe(true);
     expect(isAmbiguousWriteError(new ApiClientError(403, { code: "forbidden" }))).toBe(false);
     expect(isAmbiguousWriteError(new ApiClientConfigurationError("missing session"))).toBe(false);
+    expect(isAmbiguousWriteError(new ApiClientConfigurationError("response completed after invalidation", true))).toBe(true);
   });
 
   test("uses stable protected-delete feedback for conflict responses", () => {
@@ -413,6 +415,20 @@ describe("project/task write contracts", () => {
     };
 
     expect(mutationNoticeScopes(notice)).toEqual(["task:task-1"]);
+  });
+
+  test("narrows only an exact known task creation after complete readback", () => {
+    const known = { id: "task:create:one", message: "task", kind: "creation" as const, taskId: "task-1", lockScope: "task:create" };
+    const narrowed = reconcileKnownTaskCreationNotice(known, new Set(["task-1"]));
+    expect(narrowed).toMatchObject({ kind: "reconciliation", taskId: "task-1", lockScope: "task:task-1" });
+    expect(mutationNoticeScopes(narrowed)).toEqual(["task:task-1"]);
+
+    const idLess = { id: "task:create:two", message: "task", kind: "creation" as const, lockScope: "task:create" };
+    expect(reconcileKnownTaskCreationNotice(idLess, new Set(["task-1"]))).toEqual(idLess);
+    const mismatched = { ...known, id: "task:create:three", identityMismatch: true };
+    expect(reconcileKnownTaskCreationNotice(mismatched, new Set(["task-1"]))).toEqual(mismatched);
+    expect(mutationWriteAdmission("task:create", [narrowed], { has: () => false }, { available: true, shared: true, notices: [] })).toBeUndefined();
+    expect(mutationWriteAdmission("task:task-1", [narrowed], { has: () => false }, { available: true, shared: true, notices: [] })).toBe("notice");
   });
 
   test("fails closed when shared notice storage is malformed or unreadable", () => {

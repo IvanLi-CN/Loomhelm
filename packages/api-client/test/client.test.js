@@ -357,6 +357,58 @@ describe("authenticated client transport", () => {
     ]);
   });
 
+  test("does not let a stale bound logout destroy a replacement cookie principal", async () => {
+    let cookiePrincipal = "alice";
+    let logoutDestroyedPrincipal = false;
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url, init) => {
+        if (url.pathname.endsWith("/auth/session")) return Response.json({ user_id: cookiePrincipal, csrf_protection: "same_origin" });
+        if (url.pathname.endsWith("/auth/logout")) {
+          const expectedPrincipal = new Headers(init.headers).get(EXPECTED_PRINCIPAL_HEADER);
+          if (expectedPrincipal !== cookiePrincipal) return Response.json({ code: "unauthorized" }, { status: 401 });
+          logoutDestroyedPrincipal = true;
+          return new Response(null, { status: 204 });
+        }
+        return Response.json({ items: [] });
+      }
+    });
+
+    await client.bootstrapBrowserSession();
+    const bound = client.bindBrowserSession({ principalId: "alice", epoch: 0 });
+    cookiePrincipal = "bob";
+
+    await expect(bound.logoutBrowserSession()).rejects.toBeInstanceOf(ApiClientError);
+    expect(logoutDestroyedPrincipal).toBe(false);
+  });
+
+  test("allows a valid bound logout and invalidates the browser bootstrap", async () => {
+    const calls = [];
+    const session = { user_id: "alice", csrf_protection: "same_origin" };
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, expectedPrincipal: new Headers(init.headers).get(EXPECTED_PRINCIPAL_HEADER) });
+        return url.pathname.endsWith("/auth/session")
+          ? Response.json(session)
+          : url.pathname.endsWith("/auth/logout")
+            ? new Response(null, { status: 204 })
+            : Response.json({ items: [] });
+      }
+    });
+
+    await client.bootstrapBrowserSession();
+    const bound = client.bindBrowserSession({ principalId: session.user_id, epoch: 0 });
+    await expect(bound.logoutBrowserSession()).resolves.toBeUndefined();
+    await expect(client.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(calls).toEqual([
+      { path: "/api/v1/auth/session", expectedPrincipal: null },
+      { path: "/api/v1/auth/logout", expectedPrincipal: session.user_id }
+    ]);
+  });
+
   test("does not replay or rebind a request after the browser assembly is invalidated", async () => {
     let release;
     let requests = 0;
