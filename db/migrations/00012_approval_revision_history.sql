@@ -56,11 +56,23 @@ CREATE FUNCTION loomhelm_capture_approval_history()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    history_created_at TIMESTAMPTZ;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'approval deletion is not supported while revision history capture is active'
             USING ERRCODE = '55000';
     END IF;
+
+    SELECT CASE
+        WHEN EXISTS (
+            SELECT 1
+            FROM execution_approval_revisions
+            WHERE id = NEW.id
+        ) THEN CURRENT_TIMESTAMP
+        ELSE NEW.created_at
+    END
+    INTO history_created_at;
 
     INSERT INTO execution_approval_revisions (
         id, revision, session_id, run_id, generation, kind, requested_at,
@@ -71,7 +83,7 @@ BEGIN
         NEW.id, NEW.revision, NEW.session_id, NEW.run_id, NEW.generation,
         NEW.kind, NEW.requested_at, NEW.status, NEW.summary, NEW.context,
         NEW.resolved_by_command_id, NEW.requested_event_id, NEW.resolved_at,
-        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        history_created_at, NEW.updated_at
     )
     ON CONFLICT (id, revision) DO UPDATE SET
         session_id = EXCLUDED.session_id,
@@ -85,7 +97,7 @@ BEGIN
         resolved_by_command_id = EXCLUDED.resolved_by_command_id,
         requested_event_id = EXCLUDED.requested_event_id,
         resolved_at = EXCLUDED.resolved_at,
-        updated_at = CURRENT_TIMESTAMP;
+        updated_at = EXCLUDED.updated_at;
 
     INSERT INTO execution_approval_history_dirty (id, queued_at)
     VALUES (NEW.id, CURRENT_TIMESTAMP)

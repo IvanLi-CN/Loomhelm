@@ -477,6 +477,146 @@ func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
 	if err != nil || lostAccess.IntentState != sessions.IntentStateUnknown || lostAccess.Confirmed {
 		t.Fatalf("ACK-loss creation access = %+v, error = %v", lostAccess, err)
 	}
+
+	retryClient, err := gateway.NewClient(gateway.ClientOptions{
+		URL:        strings.Replace(baseURL, "https://", "wss://", 1) + connectorGatewayPath,
+		HostID:     hostRegistration.Host.ID,
+		Token:      hostRegistration.Token,
+		HTTPClient: insecureTestHTTPClient(),
+	})
+	if err != nil {
+		t.Fatalf("create retry gateway client: %v", err)
+	}
+	retryConnection, err := retryClient.Connect(ctx)
+	if err != nil {
+		t.Fatalf("reconnect fixture gateway: %v", err)
+	}
+	t.Cleanup(func() { _ = retryConnection.Close() })
+	retryResultCh := postSession(lostRequest)
+	retryMessage, err := retryConnection.Read(ctx)
+	if err != nil || retryMessage.Command == nil || retryMessage.Command.CommandID != lostRequest.CommandID {
+		t.Fatalf("read retried session command: message=%+v error=%v", retryMessage, err)
+	}
+	if retryMessage.Command.SessionID != lostSessionID {
+		t.Fatalf("retried session id = %q, want original %q", retryMessage.Command.SessionID, lostSessionID)
+	}
+	if err := retryConnection.AcknowledgeForSession(ctx, retryMessage.Command.SessionID, retryMessage.RequestID, protocol.CommandAck{
+		CommandID:  retryMessage.Command.CommandID,
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateSucceeded,
+		Result:     json.RawMessage(`{"external_thread_ref":"thread-session-recovered","generation":"execution-session-recovered"}`),
+	}); err != nil {
+		t.Fatalf("acknowledge retried session command: %v", err)
+	}
+	retryResult := <-retryResultCh
+	if retryResult.err != nil {
+		t.Fatalf("retried session request: %v", retryResult.err)
+	}
+	defer retryResult.response.Body.Close()
+	if retryResult.response.StatusCode != http.StatusCreated {
+		t.Fatalf("retried session status = %d, want %d", retryResult.response.StatusCode, http.StatusCreated)
+	}
+	var recovered protocol.SessionResponse
+	if err := json.NewDecoder(retryResult.response.Body).Decode(&recovered); err != nil {
+		t.Fatalf("decode recovered session response: %v", err)
+	}
+	if recovered.Session.ID != lostSessionID || recovered.Session.ExternalThreadRef != "thread-session-recovered" || recovered.Session.State != protocol.SessionStateActive {
+		t.Fatalf("recovered session = %+v", recovered.Session)
+	}
+	var sessionCount int
+	if err := persistence.Pool().QueryRow(ctx, `SELECT COUNT(*) FROM execution_sessions WHERE creation_command_id = $1`, lostRequest.CommandID).Scan(&sessionCount); err != nil {
+		t.Fatalf("count retried session intents: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("retried session intent count = %d, want 1", sessionCount)
+	}
+}
+
+func TestGatewayUnknownSessionCreationAckGuardsAndActivates(t *testing.T) {
+	databaseURL := isolatedApplicationDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	persistence, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open fixture persistence: %v", err)
+	}
+	t.Cleanup(persistence.Close)
+	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+		Name:           "h01 unknown session ACK guards",
+		CredentialName: "unknown-session-ack-fixture",
+	})
+	if err != nil {
+		t.Fatalf("register fixture host: %v", err)
+	}
+	store := sessions.NewStore(persistence.Pool())
+	const sessionID = "session_unknown_ack_guards"
+	const commandID = "create_unknown_ack_guards"
+	if _, err := persistence.Pool().Exec(ctx, `
+		INSERT INTO auth_users (id, issuer, subject)
+		VALUES ('user-unknown-ack', 'https://issuer.example.test', 'subject-unknown-ack')
+	`); err != nil {
+		t.Fatalf("create unknown ACK user: %v", err)
+	}
+	if _, err := store.CreateIntent(ctx, sessions.CreationIntentInput{
+		SessionID:     sessionID,
+		CommandID:     commandID,
+		CreatorUserID: "user-unknown-ack",
+		HostID:        hostRegistration.Host.ID,
+		Path:          protocol.SessionPathNew,
+		Parameters:    []byte(`{}`),
+		Summary:       "unknown ACK guard fixture",
+	}); err != nil {
+		t.Fatalf("create unknown ACK intent: %v", err)
+	}
+	if _, err := store.MarkIntentUnknown(ctx, sessions.UnknownIntentInput{SessionID: sessionID, Reason: "simulated lost ACK"}); err != nil {
+		t.Fatalf("mark unknown ACK intent: %v", err)
+	}
+	transport := &gatewayExecutionTransport{sessions: store, runs: runs.NewStore(persistence.Pool())}
+	ack := protocol.CommandAck{
+		CommandID:  commandID,
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateSucceeded,
+		Result:     json.RawMessage(`{"external_thread_ref":"thread-unknown-ack","generation":"generation-unknown-ack"}`),
+	}
+	connection := hosts.Connection{HostID: hostRegistration.Host.ID}
+	if err := transport.HandleCommandAck(ctx, connection, "", sessionID, ack); err != nil {
+		t.Fatalf("unknown session ACK rejected: %v", err)
+	}
+	access, err := store.GetAccess(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("read activated unknown intent: %v", err)
+	}
+	if !access.Confirmed || access.IntentState != sessions.IntentStateConfirmed {
+		t.Fatalf("activated unknown intent access = %+v", access)
+	}
+	active, err := store.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("read activated session: %v", err)
+	}
+	if active.ExternalThreadRef != "thread-unknown-ack" || active.Generation != "generation-unknown-ack" {
+		t.Fatalf("activated session identity = %+v", active)
+	}
+	if err := transport.HandleCommandAck(ctx, connection, "", sessionID, ack); err != nil {
+		t.Fatalf("idempotent duplicate session ACK rejected: %v", err)
+	}
+
+	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: "wrong-host"}, "", sessionID, ack); err == nil {
+		t.Fatal("wrong-host session ACK accepted")
+	}
+	wrongCommand := ack
+	wrongCommand.CommandID = "wrong-command"
+	if err := transport.HandleCommandAck(ctx, connection, "", sessionID, wrongCommand); err == nil {
+		t.Fatal("wrong-command session ACK accepted")
+	}
+	if err := transport.HandleCommandAck(ctx, connection, "", "wrong-session", ack); err == nil {
+		t.Fatal("wrong-session session ACK accepted")
+	}
+	wrongRun := ack
+	runID := "run-must-not-be-present"
+	wrongRun.RunID = &runID
+	if err := transport.HandleCommandAck(ctx, connection, "", sessionID, wrongRun); err == nil {
+		t.Fatal("session creation ACK with run identity accepted")
+	}
 }
 
 func startApplicationTLSTestServer(t *testing.T, cfg platform.Config) (string, func()) {

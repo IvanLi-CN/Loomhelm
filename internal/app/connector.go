@@ -295,7 +295,7 @@ func (c *Connector) handleGatewayCommand(ctx context.Context, connection *gatewa
 	command := *message.Command
 	ack, err := c.acceptPlatformCommand(ctx, command)
 	if err != nil {
-		c.logger.Warn("connector command was not completed", "command_id", command.CommandID, "kind", command.Kind, "error", err)
+		c.logger.Warn("connector command was not completed", "command_id", command.CommandID, "kind", command.Kind, "error", connectorCommandErrorClass(err))
 		if ack.CommandID == "" {
 			ack.CommandID = command.CommandID
 		}
@@ -330,6 +330,13 @@ func (c *Connector) handleGatewayCommand(ctx context.Context, connection *gatewa
 	}
 	ack.OperationID = platformOperationID(ack.OperationID)
 	return connection.AcknowledgeForSession(ctx, command.SessionID, message.RequestID, ack)
+}
+
+func connectorCommandErrorClass(err error) string {
+	if errors.Is(err, protocol.ErrUnknownCommandResult) {
+		return "unknown_result"
+	}
+	return "command_rejected"
 }
 
 // Adapter operation identities may use NUL as an internal generation

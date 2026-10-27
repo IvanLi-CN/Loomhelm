@@ -67,9 +67,10 @@ type ApprovalHistoryMigrationProgress struct {
 }
 
 type ApprovalHistoryMigrator struct {
-	pool       *pgxpool.Pool
-	now        func() time.Time
-	leaseOwner string
+	pool                *pgxpool.Pool
+	now                 func() time.Time
+	leaseOwner          string
+	beforeBackfillClaim func()
 }
 
 type approvalHistoryMigrationState struct {
@@ -186,8 +187,16 @@ func (m *ApprovalHistoryMigrator) RunBackfill(ctx context.Context, options Appro
 		if err != nil {
 			return ApprovalHistoryMigrationProgress{}, err
 		}
-		if state.phase == ApprovalHistoryPhaseBackfillComplete {
-			return progressFromState(state), nil
+		switch state.phase {
+		case ApprovalHistoryPhaseBackfillComplete, ApprovalHistoryPhaseValidated, ApprovalHistoryPhaseIndexesReady, ApprovalHistoryPhaseCutoverComplete:
+			return m.progress(ctx)
+		case ApprovalHistoryPhaseCutoverRequested:
+			return progressFromState(state), fmt.Errorf("%w: phase is %s", ErrApprovalHistoryMigrationNotReady, state.phase)
+		case ApprovalHistoryPhaseRepairRequired:
+			return progressFromState(state), fmt.Errorf("%w: %s", ErrApprovalHistoryMigrationUnavailable, state.lastError)
+		case ApprovalHistoryPhaseStructureReady, ApprovalHistoryPhaseBackfillRunning, ApprovalHistoryPhaseBackfillPaused, ApprovalHistoryPhaseFailed:
+		default:
+			return progressFromState(state), fmt.Errorf("%w: phase is %s", ErrApprovalHistoryMigrationNotReady, state.phase)
 		}
 		if processed >= opts.WorkBudget {
 			if err := m.setPhase(ctx, state.phase, ApprovalHistoryPhaseBackfillPaused, ""); err != nil {
@@ -201,6 +210,9 @@ func (m *ApprovalHistoryMigrator) RunBackfill(ctx context.Context, options Appro
 		if int64(batchSize) > remaining {
 			batchSize = int(remaining)
 		}
+		if m.beforeBackfillClaim != nil {
+			m.beforeBackfillClaim()
+		}
 		tx, err := m.pool.Begin(ctx)
 		if err != nil {
 			return progressFromState(state), fmt.Errorf("begin approval history backfill batch: %w", err)
@@ -209,6 +221,24 @@ func (m *ApprovalHistoryMigrator) RunBackfill(ctx context.Context, options Appro
 		if err != nil {
 			_ = tx.Rollback(ctx)
 			return progressFromState(state), err
+		}
+		switch batchState.phase {
+		case ApprovalHistoryPhaseBackfillComplete, ApprovalHistoryPhaseValidated, ApprovalHistoryPhaseIndexesReady, ApprovalHistoryPhaseCutoverComplete:
+			_ = tx.Rollback(ctx)
+			return m.progress(ctx)
+		case ApprovalHistoryPhaseCutoverRequested:
+			_ = tx.Rollback(ctx)
+			return progressFromState(batchState), fmt.Errorf("%w: phase is %s", ErrApprovalHistoryMigrationNotReady, batchState.phase)
+		case ApprovalHistoryPhaseRepairRequired:
+			_ = tx.Rollback(ctx)
+			return progressFromState(batchState), fmt.Errorf("%w: %s", ErrApprovalHistoryMigrationUnavailable, batchState.lastError)
+		case ApprovalHistoryPhaseStructureReady, ApprovalHistoryPhaseBackfillRunning, ApprovalHistoryPhaseBackfillPaused, ApprovalHistoryPhaseFailed:
+			// The lease claim and this phase check are one transaction. A later
+			// operation may have advanced the phase after the caller's initial
+			// read; never let that stale caller write a backward transition.
+		default:
+			_ = tx.Rollback(ctx)
+			return progressFromState(batchState), fmt.Errorf("%w: phase is %s", ErrApprovalHistoryMigrationNotReady, batchState.phase)
 		}
 		if err := setLocalTimeouts(ctx, tx, opts); err != nil {
 			_ = tx.Rollback(ctx)
@@ -1154,7 +1184,23 @@ func insertBackfillSnapshotsTx(ctx context.Context, tx pgx.Tx, ids []string) err
 		       resolved_at, created_at, updated_at
 		FROM execution_approvals
 		WHERE id = ANY($1::text[])
-		ON CONFLICT (id, revision) DO NOTHING
+		ON CONFLICT (id, revision) DO UPDATE SET
+			created_at = CASE
+				WHEN NOT EXISTS (
+					SELECT 1
+					FROM execution_approval_revisions AS prior
+					WHERE prior.id = EXCLUDED.id AND prior.revision < EXCLUDED.revision
+				) THEN EXCLUDED.created_at
+				ELSE execution_approval_revisions.created_at
+			END,
+			updated_at = CASE
+				WHEN NOT EXISTS (
+					SELECT 1
+					FROM execution_approval_revisions AS prior
+					WHERE prior.id = EXCLUDED.id AND prior.revision < EXCLUDED.revision
+				) THEN EXCLUDED.updated_at
+				ELSE execution_approval_revisions.updated_at
+			END
 	`, ids)
 	if err != nil {
 		return fmt.Errorf("insert approval history backfill snapshots: %w", err)
@@ -1214,7 +1260,22 @@ func reconcileDirtyIDsTx(ctx context.Context, tx pgx.Tx, ids []string) error {
 			resolved_by_command_id = EXCLUDED.resolved_by_command_id,
 			requested_event_id = EXCLUDED.requested_event_id,
 			resolved_at = EXCLUDED.resolved_at,
-			updated_at = EXCLUDED.updated_at
+			created_at = CASE
+				WHEN NOT EXISTS (
+					SELECT 1
+					FROM execution_approval_revisions AS prior
+					WHERE prior.id = EXCLUDED.id AND prior.revision < EXCLUDED.revision
+				) THEN EXCLUDED.created_at
+				ELSE execution_approval_revisions.created_at
+			END,
+			updated_at = CASE
+				WHEN NOT EXISTS (
+					SELECT 1
+					FROM execution_approval_revisions AS prior
+					WHERE prior.id = EXCLUDED.id AND prior.revision < EXCLUDED.revision
+				) THEN EXCLUDED.updated_at
+				ELSE execution_approval_revisions.updated_at
+			END
 	`, ids); err != nil {
 		return fmt.Errorf("reconcile approval history dirty rows: %w", err)
 	}

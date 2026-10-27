@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,6 +72,68 @@ func TestApprovalHistoryMigratorPhaseAndOwnerGuards(t *testing.T) {
 	assertApprovalHistoryMigrationState(t, ctx, db, ApprovalHistoryPhaseCutoverComplete, "")
 	if err := migrator.Readiness(ctx); err != nil {
 		t.Fatalf("readiness after rejected stale phase write: %v", err)
+	}
+}
+
+func TestApprovalHistoryMigratorDoesNotOverwriteAdvancedPhase(t *testing.T) {
+	db := openApprovalHistoryGuardDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	claimed := make(chan struct{})
+	release := make(chan struct{})
+	var pauseOnce sync.Once
+	migrator := NewApprovalHistoryMigrator(db.Pool(), ApprovalHistoryMigratorConfig{LeaseOwner: "stale-backfill-owner"})
+	migrator.beforeBackfillClaim = func() {
+		pauseOnce.Do(func() {
+			close(claimed)
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		})
+	}
+	resultCh := make(chan struct {
+		progress ApprovalHistoryMigrationProgress
+		err      error
+	}, 1)
+	go func() {
+		progress, err := migrator.RunBackfill(ctx, ApprovalHistoryMigrationOptions{BatchSize: 1, WorkBudget: 10})
+		resultCh <- struct {
+			progress ApprovalHistoryMigrationProgress
+			err      error
+		}{progress: progress, err: err}
+	}()
+	select {
+	case <-claimed:
+	case <-ctx.Done():
+		t.Fatal("backfill did not reach deterministic claim pause")
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE execution_approval_history_migrations
+		SET phase = 'validated', lease_owner = '', lease_expires_at = NULL
+		WHERE migration_key = 'approval-revision-history'
+	`); err != nil {
+		t.Fatalf("advance approval history phase during stale backfill: %v", err)
+	}
+	close(release)
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatalf("stale backfill returned error: %v", result.err)
+	}
+	if result.progress.Phase != ApprovalHistoryPhaseValidated {
+		t.Fatalf("stale backfill progress = %+v, want validated", result.progress)
+	}
+	var phase ApprovalHistoryMigrationPhase
+	var rowsCopied int64
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT phase, rows_copied
+		FROM execution_approval_history_migrations
+		WHERE migration_key = 'approval-revision-history'
+	`).Scan(&phase, &rowsCopied); err != nil {
+		t.Fatalf("read phase after stale backfill: %v", err)
+	}
+	if phase != ApprovalHistoryPhaseValidated || rowsCopied != 0 {
+		t.Fatalf("migration state after stale backfill = phase %q rows_copied %d, want validated/0", phase, rowsCopied)
 	}
 }
 

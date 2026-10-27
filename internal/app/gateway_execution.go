@@ -90,8 +90,21 @@ func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connec
 		if accessErr != nil {
 			return fmt.Errorf("resolve session creation ACK access: %w", accessErr)
 		}
-		if strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID || access.IntentState != sessions.IntentStatePending {
+		if strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID || (access.IntentState != sessions.IntentStatePending && access.IntentState != sessions.IntentStateUnknown && access.IntentState != sessions.IntentStateConfirmed) {
 			return fmt.Errorf("%w: creation command %q is not owned by gateway host %q", errGatewaySessionOwnership, ack.CommandID, connection.HostID)
+		}
+		if ack.State == protocol.CommandStateSucceeded && (access.IntentState == sessions.IntentStateUnknown || access.IntentState == sessions.IntentStateConfirmed) {
+			var opened sessionOpenResult
+			if err := json.Unmarshal(ack.Result, &opened); err != nil || strings.TrimSpace(opened.ExternalThreadRef) == "" || strings.TrimSpace(opened.Generation) == "" {
+				return fmt.Errorf("%w: session creation ACK does not contain a complete execution identity", hosts.ErrInvalid)
+			}
+			if _, err := t.sessions.ActivateIntent(ctx, sessions.ActivationInput{
+				SessionID:           intent.SessionID,
+				ExternalThreadRef:   opened.ExternalThreadRef,
+				ExecutionGeneration: opened.Generation,
+			}); err != nil {
+				return fmt.Errorf("reconcile session creation ACK: %w", err)
+			}
 		}
 		return nil
 	}

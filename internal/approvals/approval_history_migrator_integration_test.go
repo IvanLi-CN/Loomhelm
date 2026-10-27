@@ -101,6 +101,101 @@ func TestApprovalHistoryMigratorKeepsCaptureOnFinalBudgetOverflow(t *testing.T) 
 	}
 }
 
+func TestApprovalHistoryMigratorPreservesLegacyProjectionCursorTimestamps(t *testing.T) {
+	db, provider := openApprovalFixtureDatabaseThrough(t, 11)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture := seedApprovalFixture(t, ctx, db)
+	ids := []string{fixture.approvalID + "-legacy-a", fixture.approvalID + "-legacy-b"}
+	createdAt := []time.Time{
+		time.Date(2025, 10, 27, 4, 30, 1, 0, time.UTC),
+		time.Date(2025, 10, 27, 4, 30, 2, 0, time.UTC),
+	}
+	updatedAt := time.Date(2025, 10, 27, 4, 30, 3, 0, time.UTC)
+	for index, approvalID := range ids {
+		if _, err := db.Pool().Exec(ctx, `
+			INSERT INTO execution_approvals (
+				id, session_id, run_id, generation, kind, requested_at, revision,
+				status, summary, context, requested_event_id, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, 'command', $5, 1, 'pending', 'legacy seed', $6, $7, $8, $8)
+		`, approvalID, fixture.sessionID, fixture.runID, fixture.generation, fmt.Sprintf("2025-10-27T04:30:0%dZ", index+1), []byte(`{"legacy":true}`), approvalID+"-event", createdAt[index]); err != nil {
+			t.Fatalf("seed legacy approval row %d: %v", index, err)
+		}
+	}
+	if _, err := provider.UpTo(ctx, 12); err != nil {
+		t.Fatalf("structural 00012 migration: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE execution_approvals
+		SET summary = 'legacy mutation before backfill', updated_at = $2
+		WHERE id = $1
+	`, ids[0], updatedAt); err != nil {
+		t.Fatalf("mutate legacy projection during capture: %v", err)
+	}
+	migrator := database.NewApprovalHistoryMigrator(db.Pool())
+	options := database.ApprovalHistoryMigrationOptions{BatchSize: 8, WorkBudget: 100, PreDrainBatchSize: 8, PreDrainWorkBudget: 100}
+	if _, err := migrator.RunBackfill(ctx, options); err != nil {
+		t.Fatalf("run legacy timestamp backfill: %v", err)
+	}
+	var historyCreatedAt, historyUpdatedAt time.Time
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT created_at, updated_at
+		FROM execution_approval_revisions
+		WHERE id = $1 AND revision = 1
+	`, ids[0]).Scan(&historyCreatedAt, &historyUpdatedAt); err != nil {
+		t.Fatalf("read legacy history timestamps: %v", err)
+	}
+	if !historyCreatedAt.Equal(createdAt[0]) || !historyUpdatedAt.Equal(updatedAt) {
+		t.Fatalf("legacy history timestamps = created %s updated %s, want created %s updated %s", historyCreatedAt, historyUpdatedAt, createdAt[0], updatedAt)
+	}
+
+	type cursorKey struct {
+		id        string
+		createdAt time.Time
+		revision  int64
+	}
+	readCursor := func(query string, args ...any) []cursorKey {
+		t.Helper()
+		rows, err := db.Pool().Query(ctx, query, args...)
+		if err != nil {
+			t.Fatalf("read approval cursor: %v", err)
+		}
+		defer rows.Close()
+		var result []cursorKey
+		for rows.Next() {
+			var row cursorKey
+			if err := rows.Scan(&row.id, &row.createdAt, &row.revision); err != nil {
+				t.Fatalf("scan approval cursor: %v", err)
+			}
+			result = append(result, row)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("read approval cursor rows: %v", err)
+		}
+		return result
+	}
+	projectionCursor := readCursor(`SELECT id, created_at, revision FROM execution_approvals ORDER BY created_at, id, revision`)
+	historyCursor := readCursor(`SELECT id, created_at, revision FROM execution_approval_revisions WHERE id = ANY($1::text[]) ORDER BY created_at, id, revision`, ids)
+	if len(projectionCursor) != len(historyCursor) {
+		t.Fatalf("projection/history cursor lengths = %d/%d", len(projectionCursor), len(historyCursor))
+	}
+	for index := range projectionCursor {
+		if projectionCursor[index].id != historyCursor[index].id || !projectionCursor[index].createdAt.Equal(historyCursor[index].createdAt) || projectionCursor[index].revision != historyCursor[index].revision {
+			t.Fatalf("projection/history cursor row %d = %+v/%+v", index, projectionCursor[index], historyCursor[index])
+		}
+	}
+	if _, err := migrator.Validate(ctx, options); err != nil {
+		t.Fatalf("validate legacy timestamp backfill: %v", err)
+	}
+	if _, err := migrator.BuildIndexes(ctx, options); err != nil {
+		t.Fatalf("build legacy timestamp indexes: %v", err)
+	}
+	if _, err := migrator.Cutover(ctx, options); err != nil {
+		t.Fatalf("cut over legacy timestamp migration: %v", err)
+	}
+}
+
 func TestApprovalHistoryMigratorCapturesWriterBlockedByBackfill(t *testing.T) {
 	db, provider := openApprovalFixtureDatabaseThrough(t, 11)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
