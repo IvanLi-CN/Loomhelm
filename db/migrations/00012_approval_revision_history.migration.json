@@ -88,6 +88,7 @@
     ],
     "progress_signals": [
       "A fresh PostgreSQL schema is migrated through 00011 with a real current approval row, then 00012 backfills exactly one matching history row and records migration 00012 only after the full Goose transaction commits.",
+      "The embedded Goose provider parses and executes both PL/pgSQL blocks in 00012, applies the migration, and leaves the approval-history writer guard function and trigger installed.",
       "A deliberate 00012 index-name collision fails after table creation and backfill, leaves version 12 unapplied and leaves no partial history table or rows; removing only the collision permits forward re-entry.",
       "A repeated database migration leaves exactly one history table, one primary key, both named indexes and one applied 00012 history record.",
       "The new writer checks the schema, writer guard and projection/history agreement before serving history reads or writing revision state, and old projection-only state drift fails closed instead of silently losing a page.",
@@ -111,6 +112,7 @@
     "minor": {
       "required_test_evidence": [
         "The PostgreSQL path from 00011 to 00012 locks the projection before backfill, copies a current approval row exactly once, retains raw context and requested_event_id and leaves the current projection unchanged.",
+        "A real Goose Provider execution of 00012 parses both PL/pgSQL blocks, applies the migration, and verifies the writer guard function and trigger rather than executing the SQL as one pgx batch.",
         "A deliberate 00012 index collision rolls back table creation and the backfill, leaves migration 00012 unapplied, and the same migration re-enters successfully after only the deliberate collision is removed.",
         "Repeated migration discovery leaves one history table, the Run cursor index, requested-event index and applied migration record.",
         "Same stable approval ID with revisions written at equal created_at values returns every revision through version-2 cursors without skips; current resolution changes only the matching history revision.",

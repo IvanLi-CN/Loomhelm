@@ -31,6 +31,7 @@ SELECT id, revision, session_id, run_id, generation, kind, requested_at,
 FROM execution_approvals
 ON CONFLICT (id, revision) DO NOTHING;
 
+-- +goose StatementBegin
 DO $$
 DECLARE
     drift BOOLEAN;
@@ -58,6 +59,7 @@ BEGIN
     END IF;
 END
 $$;
+-- +goose StatementEnd
 
 CREATE INDEX execution_approval_revisions_run_cursor_idx
     ON execution_approval_revisions (run_id, created_at, id, revision);
@@ -65,6 +67,7 @@ CREATE INDEX execution_approval_revisions_requested_event_idx
     ON execution_approval_revisions (requested_event_id)
     WHERE requested_event_id <> '';
 
+-- +goose StatementBegin
 CREATE FUNCTION loomhelm_require_approval_history_writer()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -81,6 +84,7 @@ BEGIN
     RETURN NEW;
 END
 $$;
+-- +goose StatementEnd
 
 CREATE TRIGGER execution_approvals_history_writer_guard
 BEFORE INSERT OR UPDATE OR DELETE ON execution_approvals

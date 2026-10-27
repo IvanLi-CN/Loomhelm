@@ -19,6 +19,50 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
+func TestApprovalHistoryMigrationExecutesGoosePLpgSQLBlocks(t *testing.T) {
+	db := openApprovalFixtureDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var applied, functionCount, triggerCount int
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT count(*)
+		FROM goose_db_version
+		WHERE version_id = 12 AND is_applied
+	`).Scan(&applied); err != nil {
+		t.Fatalf("read applied 00012 migration: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied 00012 migration count = %d, want 1", applied)
+	}
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT count(*)
+		FROM pg_proc AS proc
+		JOIN pg_namespace AS ns ON ns.oid = proc.pronamespace
+		WHERE ns.nspname = current_schema()
+		  AND proc.proname = 'loomhelm_require_approval_history_writer'
+	`).Scan(&functionCount); err != nil {
+		t.Fatalf("read approval history writer function: %v", err)
+	}
+	if functionCount != 1 {
+		t.Fatalf("approval history writer function count = %d, want 1", functionCount)
+	}
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT count(*)
+		FROM pg_trigger AS trg
+		JOIN pg_class AS rel ON rel.oid = trg.tgrelid
+		JOIN pg_namespace AS ns ON ns.oid = rel.relnamespace
+		WHERE ns.nspname = current_schema()
+		  AND rel.relname = 'execution_approvals'
+		  AND trg.tgname = 'execution_approvals_history_writer_guard'
+	`).Scan(&triggerCount); err != nil {
+		t.Fatalf("read approval history writer trigger: %v", err)
+	}
+	if triggerCount != 1 {
+		t.Fatalf("approval history writer trigger count = %d, want 1", triggerCount)
+	}
+}
+
 func TestApprovalHistoryStoreWritesAllTransitionsWithLocalCapability(t *testing.T) {
 	db := openApprovalFixtureDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
