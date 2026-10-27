@@ -661,6 +661,136 @@ func TestPersistentControlServiceApprovalListIsHistoricalAndRunScoped(t *testing
 	}
 }
 
+func TestPersistentControlServiceApprovalListPreservesStableIDRevisionHistory(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fixture := newControlFixture(t, db, 1)
+	control := newControlServiceFixture(t, db, fixture)
+	runStore := NewStore(db.Pool())
+	approvalStore := approvals.NewStore(db.Pool())
+	run, err := runStore.CreateRun(ctx, NewRunInput{
+		ID:         fixture.run,
+		SessionID:  fixture.sessionIDs[0],
+		CommandID:  fixture.command + "-stable-history",
+		Generation: fixture.generation,
+	})
+	if err != nil {
+		t.Fatalf("create stable-history run: %v", err)
+	}
+
+	stableID := fixture.approval + "-stable"
+	createdAt := time.Date(2026, 10, 25, 13, 0, 0, 0, time.UTC)
+	for revision := int64(1); revision <= 3; revision++ {
+		approval, createErr := approvalStore.Create(ctx, approvals.CreateRequest{
+			NewInput: approvals.NewInput{
+				ID:          stableID,
+				RunID:       run.ID,
+				SessionID:   run.SessionID,
+				Generation:  run.Generation,
+				Revision:    revision,
+				Kind:        "command",
+				Summary:     fmt.Sprintf("stable revision %d", revision),
+				RequestedAt: createdAt.Add(time.Duration(revision) * time.Second).Format(time.RFC3339Nano),
+			},
+			Context:          json.RawMessage(fmt.Sprintf(`{"revision":%d}`, revision)),
+			RequestedEventID: fmt.Sprintf("%s-event-%d", fixture.command, revision),
+		})
+		if createErr != nil {
+			t.Fatalf("create stable approval revision %d: %v", revision, createErr)
+		}
+		if approval.ID != stableID || approval.Revision != revision {
+			t.Fatalf("created stable approval revision %d = %+v", revision, approval)
+		}
+		if _, updateErr := db.Pool().Exec(ctx, `
+			UPDATE execution_approval_revisions
+			SET created_at = $3, updated_at = $3
+			WHERE id = $1 AND revision = $2
+		`, stableID, revision, createdAt); updateErr != nil {
+			t.Fatalf("set stable revision timestamp %d: %v", revision, updateErr)
+		}
+	}
+	if _, err := approvalStore.Resolve(ctx, approvals.ResolveRequest{
+		ApprovalID: stableID,
+		RunID:      run.ID,
+		SessionID:  run.SessionID,
+		Generation: run.Generation,
+		Request: protocol.ResolveApprovalRequest{
+			CommandID: fixture.command + "-stable-history-approve",
+			Decision:  protocol.ApprovalDecisionApprove,
+			Revision:  3,
+		},
+	}); err != nil {
+		t.Fatalf("resolve stable approval revision 3: %v", err)
+	}
+
+	principal := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}}}
+	limit := int64(1)
+	page, err := control.service.ListRunApprovals(ctx, principal, run.ID, protocol.ListRunApprovalsQuery{Limit: &limit})
+	if err != nil {
+		t.Fatalf("list stable approval page 1: %v", err)
+	}
+	if len(page.Items) != 1 || !page.HasMore || page.NextCursor == nil || page.Items[0].ID != stableID || page.Items[0].Revision != 1 || page.Items[0].Status != protocol.ApprovalStatusPending || string(page.Items[0].Context) != `{"revision":1}` {
+		t.Fatalf("stable approval page 1 = %+v", page)
+	}
+	page, err = control.service.ListRunApprovals(ctx, principal, run.ID, protocol.ListRunApprovalsQuery{AfterCursor: page.NextCursor, Limit: &limit})
+	if err != nil {
+		t.Fatalf("list stable approval page 2: %v", err)
+	}
+	if len(page.Items) != 1 || !page.HasMore || page.NextCursor == nil || page.Items[0].ID != stableID || page.Items[0].Revision != 2 || page.Items[0].Status != protocol.ApprovalStatusPending {
+		t.Fatalf("stable approval page 2 = %+v", page)
+	}
+	page, err = control.service.ListRunApprovals(ctx, principal, run.ID, protocol.ListRunApprovalsQuery{AfterCursor: page.NextCursor, Limit: &limit})
+	if err != nil {
+		t.Fatalf("list stable approval page 3: %v", err)
+	}
+	if len(page.Items) != 1 || page.HasMore || page.NextCursor != nil || page.Items[0].ID != stableID || page.Items[0].Revision != 3 || page.Items[0].Status != protocol.ApprovalStatusApproved {
+		t.Fatalf("stable approval page 3 = %+v", page)
+	}
+
+	ambiguousLegacy := approvals.EncodeCursor(approvals.Cursor{RunID: run.ID, CreatedAt: createdAt, ID: stableID})
+	if _, err := control.service.ListRunApprovals(ctx, principal, run.ID, protocol.ListRunApprovalsQuery{AfterCursor: &ambiguousLegacy}); !errors.Is(err, auth.ErrInvalid) {
+		t.Fatalf("ambiguous legacy approval cursor error = %v, want %v", err, auth.ErrInvalid)
+	}
+
+	uniqueID := fixture.approval + "-unique"
+	uniqueAt := createdAt.Add(time.Hour)
+	if _, err := approvalStore.Create(ctx, approvals.CreateRequest{
+		NewInput: approvals.NewInput{
+			ID:          uniqueID,
+			RunID:       run.ID,
+			SessionID:   run.SessionID,
+			Generation:  run.Generation,
+			Revision:    1,
+			Kind:        "command",
+			RequestedAt: uniqueAt.Format(time.RFC3339Nano),
+		},
+		Context:          json.RawMessage(`{"revision":1}`),
+		RequestedEventID: fixture.command + "-unique-event",
+	}); err != nil {
+		t.Fatalf("create unique legacy approval: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE execution_approval_revisions
+		SET created_at = $3, updated_at = $3
+		WHERE id = $1 AND revision = $2
+	`, uniqueID, 1, uniqueAt); err != nil {
+		t.Fatalf("set unique legacy approval timestamp: %v", err)
+	}
+	uniqueLegacy := approvals.EncodeCursor(approvals.Cursor{RunID: run.ID, CreatedAt: uniqueAt, ID: uniqueID})
+	if _, err := control.service.ListRunApprovals(ctx, principal, run.ID, protocol.ListRunApprovalsQuery{AfterCursor: &uniqueLegacy}); err != nil {
+		t.Fatalf("unique legacy approval cursor: %v", err)
+	}
+
+	if _, err := db.Pool().Exec(ctx, `UPDATE execution_approvals SET summary = 'projection-only drift' WHERE id = $1`, stableID); err != nil {
+		t.Fatalf("introduce approval projection drift: %v", err)
+	}
+	if _, err := control.service.ListRunApprovals(ctx, principal, run.ID, protocol.ListRunApprovalsQuery{}); !errors.Is(err, approvals.ErrApprovalHistoryUnavailable) {
+		t.Fatalf("approval projection drift error = %v, want %v", err, approvals.ErrApprovalHistoryUnavailable)
+	}
+}
+
 type controlFixture struct {
 	userID     string
 	projectA   string
@@ -725,6 +855,7 @@ func newControlFixture(t *testing.T, db *database.DB, sessionCount int) controlF
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 		for _, query := range []string{
+			`DELETE FROM execution_approval_revisions WHERE session_id = ANY($1::text[])`,
 			`DELETE FROM execution_approvals WHERE session_id = ANY($1::text[])`,
 			`DELETE FROM execution_events WHERE session_id = ANY($1::text[])`,
 			`DELETE FROM execution_runs WHERE session_id = ANY($1::text[])`,

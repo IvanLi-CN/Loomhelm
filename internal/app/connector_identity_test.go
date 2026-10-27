@@ -512,11 +512,7 @@ func TestConnectorRecoversCachedSessionStartFromExactIntentAfterRestart(t *testi
 	if err := journal.ResolveSessionStart(intentID, nativeSessionID, threadID, gatewaySession.Generation); err != nil {
 		t.Fatal(err)
 	}
-	connector := &Connector{journal: journal}
-	if err := connector.BindSessionIdentity(command.SessionID, command.CommandID, gatewaySession, protocol.AdapterSession{SessionID: nativeSessionID, ExternalThreadRef: threadID}); err != nil {
-		t.Fatal(err)
-	}
-	if err := journal.UpdateCommand(command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateUnknown, Error: &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "simulated crash after alias persistence", RequestID: command.CommandID}}); err != nil {
+	if err := journal.UpdateCommand(command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateUnknown, Error: &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "simulated crash before alias persistence", RequestID: command.CommandID}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := journal.Close(); err != nil {

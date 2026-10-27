@@ -547,14 +547,7 @@ func qualifiedOperationGeneration(operationID string) string {
 }
 
 func (c *Connector) reconcileCachedSessionStart(command protocol.Command, request protocol.CreateSessionRequest, ack protocol.CommandAck) (protocol.CommandAck, error) {
-	alias, ok := c.journal.SessionAlias(command.SessionID)
-	if !ok {
-		return c.persistUnknownCommand(command.CommandID, ack, connectorruntime.ErrIdentityNotFound)
-	}
-	if alias.PlatformSessionID != command.SessionID || alias.CommandID != command.CommandID {
-		return c.rejectSessionCommand(command, ack, connectorruntime.ErrIdentityConflict)
-	}
-	resolved, found, err := c.journal.ResolvedSessionStart(protocol.NewSessionRequest{
+	proof, found, err := c.journal.ResolvedSessionStartProof(protocol.NewSessionRequest{
 		CommandID: command.CommandID,
 		ProjectID: optionalIdentityValue(request.ProjectID),
 		TaskID:    optionalIdentityValue(request.TaskID),
@@ -567,7 +560,32 @@ func (c *Connector) reconcileCachedSessionStart(command protocol.Command, reques
 	if err != nil {
 		return c.rejectSessionCommand(command, ack, err)
 	}
-	if !found || resolved.SessionID != alias.AdapterSessionID || resolved.ExternalThreadRef != alias.ExternalThreadRef {
+	alias, ok := c.journal.SessionAlias(command.SessionID)
+	if !ok {
+		if !found {
+			return c.persistUnknownCommand(command.CommandID, ack, connectorruntime.ErrIdentityNotFound)
+		}
+		if proof.CommandID != command.CommandID {
+			return c.rejectSessionCommand(command, ack, connectorruntime.ErrIdentityConflict)
+		}
+		alias = connectorruntime.SessionAlias{
+			PlatformSessionID: command.SessionID,
+			AdapterSessionID:  proof.AdapterSession.SessionID,
+			ExternalThreadRef: proof.AdapterSession.ExternalThreadRef,
+			Generation:        proof.Generation,
+			CommandID:         proof.CommandID,
+		}
+		if err := c.journal.RecordSessionAlias(alias); err != nil {
+			if errors.Is(err, connectorruntime.ErrIdentityConflict) {
+				return c.rejectSessionCommand(command, ack, err)
+			}
+			return c.persistUnknownCommand(command.CommandID, ack, err)
+		}
+	}
+	if alias.PlatformSessionID != command.SessionID || alias.CommandID != command.CommandID {
+		return c.rejectSessionCommand(command, ack, connectorruntime.ErrIdentityConflict)
+	}
+	if !found || proof.AdapterSession.SessionID != alias.AdapterSessionID || proof.AdapterSession.ExternalThreadRef != alias.ExternalThreadRef || proof.Generation != alias.Generation {
 		return c.persistUnknownCommand(command.CommandID, ack, protocol.ErrUnknownCommandResult)
 	}
 	result, err := json.Marshal(sessionOpenResult{

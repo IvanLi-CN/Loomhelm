@@ -2,6 +2,8 @@ package jobs
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -39,7 +41,9 @@ type Lifecycle interface {
 type WorkerEnvironment struct {
 	Generation         Generation
 	CheckLease         func(context.Context) error
+	CheckLeaseTx       func(context.Context, pgx.Tx) error
 	LeaseKey           string
+	OwnerID            string
 	CandidateSourceSHA string
 	ArtifactDigest     string
 }
@@ -56,10 +60,11 @@ type Config struct {
 	LeaseHeartbeatTimeout  time.Duration
 	CandidateSourceSHA     string
 	ArtifactDigest         string
+	OwnerID                string
 	RegisterWorkers        WorkerRegistration
 }
 
-func (c Config) withDefaults() Config {
+func (c Config) withDefaults() (Config, error) {
 	if c.Queue == "" {
 		c.Queue = river.QueueDefault
 	}
@@ -78,7 +83,22 @@ func (c Config) withDefaults() Config {
 	if c.LeaseHeartbeatTimeout <= 0 {
 		c.LeaseHeartbeatTimeout = c.LeaseHeartbeatInterval
 	}
-	return c
+	if strings.TrimSpace(c.OwnerID) == "" {
+		ownerID, err := randomOwnerID("loomhelm-worker")
+		if err != nil {
+			return c, fmt.Errorf("generate worker owner id: %w", err)
+		}
+		c.OwnerID = ownerID
+	}
+	return c, nil
+}
+
+func randomOwnerID(prefix string) (string, error) {
+	var suffix [16]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	return prefix + ":" + hex.EncodeToString(suffix[:]), nil
 }
 
 func (c Config) Validate() error {
@@ -128,10 +148,14 @@ func NewRunner(db *database.DB, logger *slog.Logger, cfg Config) (*Runner, error
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	defaulted, err := cfg.withDefaults()
+	if err != nil {
+		return nil, err
+	}
 	return &Runner{
 		db:          db,
 		logger:      logger,
-		cfg:         cfg.withDefaults(),
+		cfg:         defaulted,
 		startClient: func(ctx context.Context, client *river.Client[pgx.Tx]) error { return client.Start(ctx) },
 	}, nil
 }
@@ -593,9 +617,15 @@ func (r *Runner) workers(generation Generation, lease *workerLease) (*river.Work
 			}
 			return lease.Check(ctx)
 		}
+		checkLeaseTx := func(ctx context.Context, tx pgx.Tx) error {
+			if lease == nil {
+				return ErrWorkerLeaseLost
+			}
+			return lease.CheckTx(ctx, tx)
+		}
 		if err := register(workers, WorkerEnvironment{
-			Generation: generation, CheckLease: checkLease,
-			LeaseKey: r.cfg.LeaseKey, CandidateSourceSHA: r.cfg.CandidateSourceSHA,
+			Generation: generation, CheckLease: checkLease, CheckLeaseTx: checkLeaseTx,
+			LeaseKey: r.cfg.LeaseKey, OwnerID: r.cfg.OwnerID, CandidateSourceSHA: r.cfg.CandidateSourceSHA,
 			ArtifactDigest: r.cfg.ArtifactDigest,
 		}); err != nil {
 			return nil, fmt.Errorf("register application workers: %w", err)

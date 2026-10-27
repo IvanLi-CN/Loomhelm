@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,10 +21,14 @@ var (
 	ErrRunConflict         = errors.New("run identity conflicts with persisted state")
 	ErrStaleRunObservation = errors.New("run observation is stale")
 	ErrApprovalEvent       = errors.New("approval event is invalid")
+	ErrCommandFactConflict = errors.New("command acknowledgement fact conflicts with persistence")
 )
 
+type RunJobEnqueuer func(context.Context, pgx.Tx, RunJobArgs) error
+
 type StoreConfig struct {
-	Now func() time.Time
+	Now             func() time.Time
+	EnqueueRunJobTx RunJobEnqueuer
 }
 
 // Store is the durable execution boundary. Command acceptance is committed
@@ -32,6 +37,7 @@ type StoreConfig struct {
 type Store struct {
 	pool          *pgxpool.Pool
 	now           func() time.Time
+	enqueueRunJob RunJobEnqueuer
 	events        *events.Store
 	approvalStore *approvals.Store
 }
@@ -48,7 +54,11 @@ func NewStore(pool *pgxpool.Pool, configs ...StoreConfig) *Store {
 	if len(configs) > 0 && configs[0].Now != nil {
 		now = configs[0].Now
 	}
-	return &Store{pool: pool, now: now, events: events.NewStore(pool, events.StoreConfig{Now: now}), approvalStore: approvals.NewStore(pool, approvals.StoreConfig{Now: now})}
+	var enqueueRunJob RunJobEnqueuer
+	if len(configs) > 0 {
+		enqueueRunJob = configs[0].EnqueueRunJobTx
+	}
+	return &Store{pool: pool, now: now, enqueueRunJob: enqueueRunJob, events: events.NewStore(pool, events.StoreConfig{Now: now}), approvalStore: approvals.NewStore(pool, approvals.StoreConfig{Now: now})}
 }
 
 func (s *Store) Accept(ctx context.Context, intent CommandIntent) (AcceptResult, error) {
@@ -81,6 +91,14 @@ func (s *Store) AcceptForGeneration(ctx context.Context, currentGeneration strin
 // reservation together. A failed validation or commit rolls back both writes,
 // so a retry cannot observe a consumed interrupt without a command ledger row.
 func (s *Store) AcceptInterrupt(ctx context.Context, intent CommandIntent) (AcceptResult, error) {
+	return s.acceptInterrupt(ctx, intent, nil)
+}
+
+func (s *Store) AcceptInterruptWithLease(ctx context.Context, intent CommandIntent, lease DurableLeaseIdentity) (AcceptResult, error) {
+	return s.acceptInterrupt(ctx, intent, &lease)
+}
+
+func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease *DurableLeaseIdentity) (AcceptResult, error) {
 	if err := s.ready(ctx); err != nil {
 		return AcceptResult{}, err
 	}
@@ -113,6 +131,11 @@ func (s *Store) AcceptInterrupt(ctx context.Context, intent CommandIntent) (Acce
 	if err != nil {
 		return AcceptResult{}, fmt.Errorf("lock run for interrupt acceptance: %w", err)
 	}
+	if lease != nil {
+		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
+			return AcceptResult{}, err
+		}
+	}
 	if current.SessionID != intent.Command.SessionID {
 		return AcceptResult{}, fmt.Errorf("%w: run %q belongs to session %q", ErrRunConflict, current.ID, current.SessionID)
 	}
@@ -137,6 +160,14 @@ func (s *Store) AcceptInterrupt(ctx context.Context, intent CommandIntent) (Acce
 // one transaction. The command row is locked before the approval row so races
 // on a shared command ID cannot consume a different approval.
 func (s *Store) AcceptApproval(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest) (AcceptResult, approvals.Resolution, error) {
+	return s.acceptApproval(ctx, resolver, intent, request, nil)
+}
+
+func (s *Store) AcceptApprovalWithLease(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest, lease DurableLeaseIdentity) (AcceptResult, approvals.Resolution, error) {
+	return s.acceptApproval(ctx, resolver, intent, request, &lease)
+}
+
+func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest, lease *DurableLeaseIdentity) (AcceptResult, approvals.Resolution, error) {
 	if err := s.ready(ctx); err != nil {
 		return AcceptResult{}, approvals.Resolution{}, err
 	}
@@ -161,6 +192,11 @@ func (s *Store) AcceptApproval(ctx context.Context, resolver ApprovalTransaction
 		}
 		return accepted, approvals.Resolution{}, nil
 	}
+	if lease != nil && !accepted.Deduplicated && !isTerminalCommandState(accepted.Record.State) {
+		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
+			return AcceptResult{}, approvals.Resolution{}, err
+		}
+	}
 	resolution, err := resolver.ResolveTx(ctx, tx, request)
 	if err != nil {
 		return AcceptResult{}, approvals.Resolution{}, err
@@ -174,6 +210,14 @@ func (s *Store) AcceptApproval(ctx context.Context, resolver ApprovalTransaction
 // AcceptRun commits a command and its pending Run identity together. This is
 // the Server-side boundary used before a run is enqueued into River.
 func (s *Store) AcceptRun(ctx context.Context, intent CommandIntent, input NewRunInput) (AcceptResult, Run, error) {
+	return s.acceptRun(ctx, intent, input, nil)
+}
+
+func (s *Store) AcceptRunWithLease(ctx context.Context, intent CommandIntent, input NewRunInput, lease DurableLeaseIdentity) (AcceptResult, Run, error) {
+	return s.acceptRun(ctx, intent, input, &lease)
+}
+
+func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRunInput, lease *DurableLeaseIdentity) (AcceptResult, Run, error) {
 	if err := s.ready(ctx); err != nil {
 		return AcceptResult{}, Run{}, err
 	}
@@ -203,6 +247,16 @@ func (s *Store) AcceptRun(ctx context.Context, intent CommandIntent, input NewRu
 	if !sameRunIdentity(candidate, stored) {
 		return AcceptResult{}, Run{}, fmt.Errorf("%w: run %q", ErrRunConflict, candidate.ID)
 	}
+	if lease != nil && !accepted.Deduplicated {
+		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
+			return AcceptResult{}, Run{}, err
+		}
+	}
+	if !accepted.Deduplicated && s.enqueueRunJob != nil {
+		if err := s.enqueueRunJob(ctx, tx, RunJobArgs{RunID: stored.ID, Generation: stored.Generation, LeaseKey: RunLeaseKey(stored.ID)}); err != nil {
+			return AcceptResult{}, Run{}, fmt.Errorf("enqueue accepted run: %w", err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return AcceptResult{}, Run{}, fmt.Errorf("commit command and run acceptance: %w", err)
 	}
@@ -223,7 +277,123 @@ func (s *Store) Lookup(ctx context.Context, commandID string) (CommandRecord, er
 	return record, err
 }
 
+// RecordExactCommandAck persists a Connector ACK as a durable fact without
+// using the command transition state machine. This is the path for a late ACK
+// after in-memory delivery state has disappeared; it never changes the Run.
+func (s *Store) RecordExactCommandAck(ctx context.Context, ack protocol.CommandAck) (CommandRecord, error) {
+	if err := s.ready(ctx); err != nil {
+		return CommandRecord{}, err
+	}
+	if strings.TrimSpace(ack.CommandID) == "" || ack.CommandID != strings.TrimSpace(ack.CommandID) {
+		return CommandRecord{}, fmt.Errorf("%w: command id is required", ErrCommandFactConflict)
+	}
+	if !validCommandState(ack.State) || ack.State == protocol.CommandStateUnknown {
+		return CommandRecord{}, fmt.Errorf("%w: ACK state %q is not an exact fact", protocol.ErrUnknownCommandResult, ack.State)
+	}
+	effectiveState := ack.State
+	if effectiveState == protocol.CommandStateAccepted {
+		effectiveState = protocol.CommandStateExecuting
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CommandRecord{}, fmt.Errorf("begin exact command ACK persistence: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	record, err := scanCommand(tx.QueryRow(ctx, commandQuery+` WHERE command.command_id = $1 FOR UPDATE`, ack.CommandID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CommandRecord{}, ErrCommandNotFound
+	}
+	if err != nil {
+		return CommandRecord{}, fmt.Errorf("lock exact command ACK: %w", err)
+	}
+	if ack.RunID != nil && optionalRunID(record.Intent.Command.RunID) != *ack.RunID {
+		return CommandRecord{}, fmt.Errorf("%w: ACK run id does not match command %q", ErrCommandFactConflict, ack.CommandID)
+	}
+	if err := validateCommandRunIdentityTx(ctx, tx, record); err != nil {
+		return CommandRecord{}, err
+	}
+	incoming := cloneRecord(record)
+	incoming.State = effectiveState
+	incoming.OperationID = optionalStringValue(ack.OperationID)
+	incoming.EventCursor = optionalStringValue(ack.EventCursor)
+	incoming.Result = append(json.RawMessage(nil), ack.Result...)
+	incoming.Error = cloneAPIError(ack.Error)
+	incoming.ReconciliationState = ""
+	if commandFactPresent(record) {
+		if !sameCommandFact(record, incoming) {
+			return CommandRecord{}, fmt.Errorf("%w: command %q already has a different exact ACK", ErrCommandFactConflict, ack.CommandID)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CommandRecord{}, fmt.Errorf("commit duplicate exact command ACK: %w", err)
+		}
+		return record, nil
+	}
+	if record.State != protocol.CommandStateUnknown && !allowedCommandTransition(record.State, effectiveState) && record.State != effectiveState {
+		return CommandRecord{}, fmt.Errorf("%w: %s -> %s", ErrCommandFactConflict, record.State, effectiveState)
+	}
+	if isTerminalCommandState(record.State) && record.State != effectiveState {
+		return CommandRecord{}, fmt.Errorf("%w: terminal command %q cannot become %q", ErrCommandFactConflict, ack.CommandID, effectiveState)
+	}
+	if err := updateCommandTx(ctx, tx, incoming, ""); err != nil {
+		return CommandRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CommandRecord{}, fmt.Errorf("commit exact command ACK: %w", err)
+	}
+	return incoming, nil
+}
+
+func commandFactPresent(record CommandRecord) bool {
+	return isTerminalCommandState(record.State) || record.OperationID != "" || record.EventCursor != "" || len(record.Result) > 0 || record.Error != nil
+}
+
+func sameCommandFact(left, right CommandRecord) bool {
+	return left.State == right.State && left.OperationID == right.OperationID && left.EventCursor == right.EventCursor && bytes.Equal(left.Result, right.Result) && sameAPIError(left.Error, right.Error)
+}
+
+func sameAPIError(left, right *protocol.ApiError) bool {
+	leftJSON, _ := json.Marshal(left)
+	rightJSON, _ := json.Marshal(right)
+	return bytes.Equal(leftJSON, rightJSON)
+}
+
+func validateCommandRunIdentityTx(ctx context.Context, tx pgx.Tx, record CommandRecord) error {
+	runID := optionalRunID(record.Intent.Command.RunID)
+	if runID == "" {
+		return nil
+	}
+	var runSessionID, runCommandID, runGeneration string
+	err := tx.QueryRow(ctx, `
+		SELECT session_id, command_id, generation
+		FROM execution_runs
+		WHERE id = $1
+		FOR SHARE
+	`, runID).Scan(&runSessionID, &runCommandID, &runGeneration)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: command %q run %q is not persisted", ErrCommandFactConflict, record.Intent.Command.CommandID, runID)
+	}
+	if err != nil {
+		return fmt.Errorf("validate exact command ACK run identity: %w", err)
+	}
+	identityMatches := runSessionID == record.Intent.Command.SessionID && runGeneration == record.Intent.Generation
+	if record.Intent.Command.Kind == protocol.CommandKindRunSend {
+		identityMatches = identityMatches && runCommandID == record.Intent.Command.CommandID
+	}
+	if !identityMatches {
+		return fmt.Errorf("%w: command %q does not own run %q", ErrCommandFactConflict, record.Intent.Command.CommandID, runID)
+	}
+	return nil
+}
+
 func (s *Store) Transition(ctx context.Context, commandID, generation string, next protocol.CommandState, operationID string, result json.RawMessage, apiError *protocol.ApiError) (CommandRecord, error) {
+	return s.transitionCommand(ctx, commandID, generation, next, operationID, result, apiError, nil)
+}
+
+func (s *Store) TransitionWithLease(ctx context.Context, commandID, generation string, next protocol.CommandState, operationID string, result json.RawMessage, apiError *protocol.ApiError, lease DurableLeaseIdentity) (CommandRecord, error) {
+	return s.transitionCommand(ctx, commandID, generation, next, operationID, result, apiError, &lease)
+}
+
+func (s *Store) transitionCommand(ctx context.Context, commandID, generation string, next protocol.CommandState, operationID string, result json.RawMessage, apiError *protocol.ApiError, lease *DurableLeaseIdentity) (CommandRecord, error) {
 	if err := s.ready(ctx); err != nil {
 		return CommandRecord{}, err
 	}
@@ -241,6 +411,14 @@ func (s *Store) Transition(ctx context.Context, commandID, generation string, ne
 	}
 	if err := checkCommandGeneration(record, generation); err != nil {
 		return CommandRecord{}, err
+	}
+	if lease != nil {
+		if err := leaseMatchesCommand(record, *lease); err != nil {
+			return CommandRecord{}, err
+		}
+		if err := checkLeaseTx(ctx, tx, *lease); err != nil {
+			return CommandRecord{}, err
+		}
 	}
 	if !validCommandState(next) {
 		return CommandRecord{}, fmt.Errorf("%w: unsupported command state %q", ErrCommandTransition, next)
@@ -315,7 +493,102 @@ func (s *Store) MarkUnknown(ctx context.Context, commandID, generation string) (
 	return s.Transition(ctx, commandID, generation, protocol.CommandStateUnknown, "", nil, nil)
 }
 
+// MarkCommandAndRunUnknown converges a command and its associated Run in one
+// transaction. The command row is locked first so an exact terminal ACK cannot
+// race a recovery decision, while the Run identity is checked before either
+// write can commit.
+func (s *Store) MarkCommandAndRunUnknown(ctx context.Context, commandID, generation, reason string) (CommandRecord, error) {
+	return s.markCommandAndRunUnknown(ctx, commandID, generation, reason, nil)
+}
+
+func (s *Store) MarkCommandAndRunUnknownWithLease(ctx context.Context, commandID, generation, reason string, lease DurableLeaseIdentity) (CommandRecord, error) {
+	return s.markCommandAndRunUnknown(ctx, commandID, generation, reason, &lease)
+}
+
+func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generation, reason string, lease *DurableLeaseIdentity) (CommandRecord, error) {
+	if err := s.ready(ctx); err != nil {
+		return CommandRecord{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CommandRecord{}, fmt.Errorf("begin command and run unknown transition: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	record, err := scanCommand(tx.QueryRow(ctx, commandQuery+` WHERE command.command_id = $1 FOR UPDATE`, commandID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CommandRecord{}, ErrCommandNotFound
+	}
+	if err != nil {
+		return CommandRecord{}, fmt.Errorf("lock command and run unknown transition: %w", err)
+	}
+	if err := checkCommandGeneration(record, generation); err != nil {
+		return CommandRecord{}, err
+	}
+	if lease != nil {
+		if err := leaseMatchesCommand(record, *lease); err != nil {
+			return CommandRecord{}, err
+		}
+		if err := checkLeaseTx(ctx, tx, *lease); err != nil {
+			return CommandRecord{}, err
+		}
+	}
+
+	if !isTerminalCommandState(record.State) && record.State != protocol.CommandStateUnknown {
+		record.State = protocol.CommandStateUnknown
+		record.OperationID = ""
+		record.Result = nil
+		record.Error = nil
+		if err := updateCommandTx(ctx, tx, record, ""); err != nil {
+			return CommandRecord{}, err
+		}
+	}
+
+	runID := optionalRunID(record.Intent.Command.RunID)
+	if runID != "" && !isTerminalCommandState(record.State) {
+		current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, runID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return CommandRecord{}, ErrRunNotFound
+		}
+		if err != nil {
+			return CommandRecord{}, fmt.Errorf("lock associated run for unknown transition: %w", err)
+		}
+		identityMatches := current.SessionID == record.Intent.Command.SessionID && current.Generation == record.Intent.Generation
+		if record.Intent.Command.Kind == protocol.CommandKindRunSend {
+			identityMatches = identityMatches && current.CommandID == record.Intent.Command.CommandID
+		}
+		if !identityMatches {
+			return CommandRecord{}, fmt.Errorf("%w: command %q is not associated with run %q", ErrRunConflict, record.Intent.Command.CommandID, runID)
+		}
+		updated, err := current.MarkUnknown(generation, "", reason)
+		if err != nil {
+			return CommandRecord{}, err
+		}
+		if updated != current {
+			updated.UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
+			if err := updateRunTx(ctx, tx, updated); err != nil {
+				return CommandRecord{}, err
+			}
+		}
+		if err := refreshTaskProtectionTx(ctx, tx, updated.SessionID); err != nil {
+			return CommandRecord{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CommandRecord{}, fmt.Errorf("commit command and run unknown transition: %w", err)
+	}
+	return record, nil
+}
+
 func (s *Store) Reconcile(ctx context.Context, commandID, generation string, observation CommandObservation) (CommandRecord, error) {
+	return s.reconcile(ctx, commandID, generation, observation, nil)
+}
+
+func (s *Store) ReconcileWithLease(ctx context.Context, commandID, generation string, observation CommandObservation, lease DurableLeaseIdentity) (CommandRecord, error) {
+	return s.reconcile(ctx, commandID, generation, observation, &lease)
+}
+
+func (s *Store) reconcile(ctx context.Context, commandID, generation string, observation CommandObservation, lease *DurableLeaseIdentity) (CommandRecord, error) {
 	if err := s.ready(ctx); err != nil {
 		return CommandRecord{}, err
 	}
@@ -333,6 +606,14 @@ func (s *Store) Reconcile(ctx context.Context, commandID, generation string, obs
 	}
 	if err := checkCommandGeneration(record, generation); err != nil {
 		return CommandRecord{}, err
+	}
+	if lease != nil {
+		if err := leaseMatchesCommand(record, *lease); err != nil {
+			return CommandRecord{}, err
+		}
+		if err := checkLeaseTx(ctx, tx, *lease); err != nil {
+			return CommandRecord{}, err
+		}
 	}
 	if record.State != protocol.CommandStateUnknown {
 		if isTerminalCommandState(record.State) {
@@ -507,7 +788,11 @@ func (s *Store) ReconcileRunWithLease(ctx context.Context, runID, generation str
 }
 
 func (s *Store) applyObservedRun(ctx context.Context, expected Run, generation string, observation Observation, lease *DurableLeaseIdentity) (Run, error) {
-	return s.transitionRunExpected(ctx, expected.ID, lease, &expected, func(current Run) (Run, error) {
+	return s.applyObservedRunWithFence(ctx, expected, generation, observation, nil, lease)
+}
+
+func (s *Store) applyObservedRunWithFence(ctx context.Context, expected Run, generation string, observation Observation, deploymentFence func(context.Context, pgx.Tx) error, lease *DurableLeaseIdentity) (Run, error) {
+	return s.transitionRunExpectedWithFence(ctx, expected.ID, lease, &expected, deploymentFence, func(current Run) (Run, error) {
 		return applyRunObservation(current, generation, observation)
 	})
 }
@@ -713,6 +998,10 @@ func (s *Store) transitionRun(ctx context.Context, runID string, lease *DurableL
 }
 
 func (s *Store) transitionRunExpected(ctx context.Context, runID string, lease *DurableLeaseIdentity, expected *Run, apply func(Run) (Run, error)) (Run, error) {
+	return s.transitionRunExpectedWithFence(ctx, runID, lease, expected, nil, apply)
+}
+
+func (s *Store) transitionRunExpectedWithFence(ctx context.Context, runID string, lease *DurableLeaseIdentity, expected *Run, deploymentFence func(context.Context, pgx.Tx) error, apply func(Run) (Run, error)) (Run, error) {
 	if err := s.ready(ctx); err != nil {
 		return Run{}, err
 	}
@@ -741,6 +1030,11 @@ func (s *Store) transitionRunExpected(ctx context.Context, runID string, lease *
 	}
 	if expected != nil && *expected != current {
 		return Run{}, fmt.Errorf("%w: run %q changed after observation", ErrStaleRunObservation, current.ID)
+	}
+	if deploymentFence != nil {
+		if err := deploymentFence(ctx, tx); err != nil {
+			return Run{}, err
+		}
 	}
 	updated, err := apply(current)
 	if err != nil {
@@ -777,6 +1071,19 @@ func leaseMatchesRun(current Run, lease DurableLeaseIdentity) error {
 	}
 	if lease.RunID != current.ID || lease.SessionID != current.SessionID || lease.Generation != current.Generation {
 		return fmt.Errorf("%w: lease identity does not belong to run %q", ErrLeaseLost, current.ID)
+	}
+	return nil
+}
+
+func leaseMatchesCommand(record CommandRecord, lease DurableLeaseIdentity) error {
+	if err := validateLeaseIdentity(lease); err != nil {
+		return err
+	}
+	if record.Intent.Command.RunID == nil || *record.Intent.Command.RunID == "" ||
+		lease.SessionID != record.Intent.Command.SessionID ||
+		lease.RunID != *record.Intent.Command.RunID ||
+		lease.Generation != record.Intent.Generation {
+		return fmt.Errorf("%w: lease identity does not belong to command %q", ErrLeaseLost, record.Intent.Command.CommandID)
 	}
 	return nil
 }

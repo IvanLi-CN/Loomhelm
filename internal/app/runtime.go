@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
 	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
+	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
 )
 
 // processRuntime keeps resource ownership in the application composition layer.
@@ -48,11 +51,53 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 	if err != nil {
 		return nil, fmt.Errorf("open persistence: %w", err)
 	}
+	var enqueueRunJob runs.RunJobEnqueuer
+	var registerWorkers jobs.WorkerRegistration
+	if cfg.Component == platform.ComponentServer {
+		producer, producerErr := jobs.NewProducer(db, logger, jobs.ProducerConfig{})
+		if producerErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize job producer: %w", producerErr)
+		}
+		enqueueRunJob = func(enqueueCtx context.Context, tx pgx.Tx, args runs.RunJobArgs) error {
+			_, err := producer.EnqueueTx(enqueueCtx, tx, args, nil)
+			return err
+		}
+	}
+	if cfg.Component == platform.ComponentWorker {
+		workerRunStore := runs.NewStore(db.Pool())
+		workerObserver := runs.NewDurableObserver(workerRunStore)
+		registerWorkers = func(workerSet *river.Workers, environment jobs.WorkerEnvironment) error {
+			river.AddWorker(workerSet, &runs.RunWorker{
+				Store:                workerRunStore,
+				Observer:             workerObserver,
+				RequireLease:         true,
+				CheckDeploymentLease: environment.CheckLease,
+				CheckDeploymentLeaseTx: func(checkCtx context.Context, tx pgx.Tx) error {
+					if environment.CheckLeaseTx == nil {
+						return runs.ErrDeploymentLeaseLost
+					}
+					if err := environment.CheckLeaseTx(checkCtx, tx); err != nil {
+						if errors.Is(err, jobs.ErrWorkerLeaseLost) {
+							return runs.ErrDeploymentLeaseLost
+						}
+						return err
+					}
+					return nil
+				},
+				ControlLeaseOwnerID: environment.OwnerID,
+				CandidateSourceSHA:  environment.CandidateSourceSHA,
+				ArtifactDigest:      environment.ArtifactDigest,
+			})
+			return nil
+		}
+	}
 	runner, err := jobs.NewRunner(db, logger, jobs.Config{
 		SoftStopTimeout:    cfg.ShutdownTimeout,
 		LeaseKey:           cfg.WorkerLeaseKey,
 		CandidateSourceSHA: cfg.CandidateSource(),
 		ArtifactDigest:     cfg.CandidateArtifactDigest(),
+		RegisterWorkers:    registerWorkers,
 	})
 	if err != nil {
 		db.Close()
@@ -72,7 +117,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 	runtime := &databaseRuntime{db: db, runner: runner, shutdownTimeout: cfg.ShutdownTimeout}
 	if cfg.Component == platform.ComponentServer {
 		sessionStore := sessions.NewStore(db.Pool())
-		runStore := runs.NewStore(db.Pool())
+		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
 		approvalStore := approvals.NewStore(db.Pool())
 		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth)
 		if serviceErr != nil {
@@ -86,7 +131,10 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			now:        time.Now,
 		}
 		hostRegistry := hosts.NewService(db.Pool())
-		runtime.gateway, err = gateway.NewServer(hostRegistry, gateway.ServerOptions{EventHandler: transport.HandleEvent})
+		runtime.gateway, err = gateway.NewServer(hostRegistry, gateway.ServerOptions{
+			EventHandler: transport.HandleEvent,
+			AckHandler:   transport.HandleCommandAck,
+		})
 		if err != nil {
 			db.Close()
 			return nil, fmt.Errorf("initialize Connector gateway: %w", err)
@@ -100,6 +148,8 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 				}
 				return session.Generation, nil
 			},
+			CandidateSourceSHA: cfg.CandidateSource(),
+			ArtifactDigest:     cfg.CandidateArtifactDigest(),
 		})
 		if controllerErr != nil {
 			db.Close()

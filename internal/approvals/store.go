@@ -1,6 +1,7 @@
 package approvals
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,11 +10,15 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrApprovalNotFound = errors.New("approval is not present in persistence")
+var (
+	ErrApprovalNotFound           = errors.New("approval is not present in persistence")
+	ErrApprovalHistoryUnavailable = errors.New("approval revision history is unavailable or inconsistent")
+)
 
 type StoreConfig struct {
 	Now func() time.Time
@@ -103,14 +108,15 @@ func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, request CreateRequest) 
 			return existing, nil
 		}
 	}
-	if _, err := tx.Exec(ctx, `
+	inserted, err := tx.Exec(ctx, `
 		INSERT INTO execution_approvals (
 			id, session_id, run_id, generation, kind, requested_at, revision,
 			status, summary, context, requested_event_id
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO NOTHING
-	`, candidate.ID, candidate.SessionID, candidate.RunID, candidate.Generation, candidate.Kind, candidate.RequestedAt, candidate.Revision, candidate.Status, candidate.Summary, []byte(contextPayload), request.RequestedEventID); err != nil {
+	`, candidate.ID, candidate.SessionID, candidate.RunID, candidate.Generation, candidate.Kind, candidate.RequestedAt, candidate.Revision, candidate.Status, candidate.Summary, []byte(contextPayload), request.RequestedEventID)
+	if err != nil {
 		return Approval{}, fmt.Errorf("persist approval: %w", err)
 	}
 	stored, err := scanApproval(tx.QueryRow(ctx, approvalQuery+` WHERE approval.id = $1 FOR UPDATE`, candidate.ID))
@@ -120,10 +126,49 @@ func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, request CreateRequest) 
 	if err != nil {
 		return Approval{}, err
 	}
-	if !sameCreateIdentity(candidate, stored) {
+	if inserted.RowsAffected() == 1 {
+		if err := insertApprovalHistoryTx(ctx, tx, candidate); err != nil {
+			return Approval{}, err
+		}
+		return candidate, nil
+	}
+	if err := verifyCurrentHistoryTx(ctx, tx, stored); err != nil {
+		return Approval{}, err
+	}
+	if stored.SessionID != candidate.SessionID || stored.RunID != candidate.RunID || stored.Generation != candidate.Generation || stored.Kind != candidate.Kind {
 		return Approval{}, fmt.Errorf("%w: approval %q", ErrApprovalContext, candidate.ID)
 	}
-	return stored, nil
+	if candidate.Revision == stored.Revision {
+		if !sameCreateIdentity(candidate, stored) {
+			return Approval{}, fmt.Errorf("%w: approval %q", ErrApprovalContext, candidate.ID)
+		}
+		return stored, nil
+	}
+	if candidate.Revision < stored.Revision {
+		return Approval{}, fmt.Errorf("%w: got %d, current is %d", ErrRevisionStale, candidate.Revision, stored.Revision)
+	}
+	if stored.Status != protocol.ApprovalStatusPending {
+		return Approval{}, ErrApprovalNotPending
+	}
+	if candidate.RequestedEventID != "" && candidate.RequestedEventID == stored.RequestedEventID {
+		return Approval{}, fmt.Errorf("%w: approval requested event %q", ErrApprovalContext, candidate.RequestedEventID)
+	}
+	updated := stored
+	updated.Revision = candidate.Revision
+	updated.Summary = candidate.Summary
+	updated.RequestedAt = candidate.RequestedAt
+	updated.Context = append(json.RawMessage(nil), candidate.Context...)
+	updated.RequestedEventID = candidate.RequestedEventID
+	updated.ResolvedByCommandID = ""
+	updated.ResolvedAt = ""
+	updated.Status = protocol.ApprovalStatusPending
+	if err := updateApprovalProjectionRevisionTx(ctx, tx, updated); err != nil {
+		return Approval{}, err
+	}
+	if err := insertApprovalHistoryTx(ctx, tx, updated); err != nil {
+		return Approval{}, err
+	}
+	return updated, nil
 }
 
 func (s *Store) Get(ctx context.Context, approvalID string) (Approval, error) {
@@ -195,16 +240,28 @@ func (s *Store) ListByRun(ctx context.Context, runID string, after *Cursor, limi
 	if after != nil && after.RunID != runID {
 		return ListPage{}, fmt.Errorf("%w: approval cursor belongs to another run", auth.ErrInvalid)
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ListPage{}, fmt.Errorf("begin approval list: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := verifyHistoryProjectionForRunTx(ctx, tx, runID); err != nil {
+		return ListPage{}, err
+	}
+	position, err := normalizeCursorTx(ctx, tx, runID, after)
+	if err != nil {
+		return ListPage{}, err
+	}
 
 	args := []any{runID}
-	where := "approval.run_id = $1"
-	if after != nil {
-		args = append(args, after.CreatedAt, after.ID)
-		where += fmt.Sprintf(" AND (approval.created_at, approval.id) > ($%d, $%d)", len(args)-1, len(args))
+	where := "history.run_id = $1"
+	if position != nil {
+		args = append(args, position.CreatedAt, position.ID, position.Revision)
+		where += fmt.Sprintf(" AND (history.created_at, history.id, history.revision) > ($%d, $%d, $%d)", len(args)-2, len(args)-1, len(args))
 	}
 	args = append(args, limit+1)
-	query := approvalListQuery + fmt.Sprintf(" WHERE %s ORDER BY approval.created_at, approval.id LIMIT $%d", where, len(args))
-	rows, err := s.pool.Query(ctx, query, args...)
+	query := approvalHistoryListQuery + fmt.Sprintf(" WHERE %s ORDER BY history.created_at, history.id, history.revision LIMIT $%d", where, len(args))
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return ListPage{}, fmt.Errorf("list approvals by run: %w", err)
 	}
@@ -223,10 +280,14 @@ func (s *Store) ListByRun(ctx context.Context, runID string, after *Cursor, limi
 			break
 		}
 		page.Items = append(page.Items, approval)
-		last = Cursor{RunID: runID, CreatedAt: createdAt, ID: approval.ID}
+		last = Cursor{Version: 2, RunID: runID, CreatedAt: createdAt, ID: approval.ID, Revision: approval.Revision}
 	}
 	if err := rows.Err(); err != nil {
 		return ListPage{}, fmt.Errorf("read approval list: %w", err)
+	}
+	rows.Close()
+	if err := tx.Commit(ctx); err != nil {
+		return ListPage{}, fmt.Errorf("commit approval list: %w", err)
 	}
 	return page, nil
 }
@@ -288,6 +349,9 @@ func (s *Store) ResolveTx(ctx context.Context, tx pgx.Tx, request ResolveRequest
 	if err != nil {
 		return Resolution{}, fmt.Errorf("lock approval for resolution: %w", err)
 	}
+	if err := verifyCurrentHistoryTx(ctx, tx, current); err != nil {
+		return Resolution{}, err
+	}
 	if request.Generation != current.Generation {
 		return Resolution{}, fmt.Errorf("%w: got %q, approval belongs to %q", ErrApprovalGeneration, request.Generation, current.Generation)
 	}
@@ -296,15 +360,22 @@ func (s *Store) ResolveTx(ctx context.Context, tx pgx.Tx, request ResolveRequest
 		return Resolution{}, err
 	}
 	if !resolution.Deduplicated {
-		if _, err := tx.Exec(ctx, `
+		updated, err := tx.Exec(ctx, `
 			UPDATE execution_approvals
 			SET status = $2,
 			    resolved_by_command_id = $3,
 			    resolved_at = CURRENT_TIMESTAMP,
 			    updated_at = CURRENT_TIMESTAMP
 			WHERE id = $1 AND status = 'pending' AND revision = $4 AND generation = $5
-		`, current.ID, resolution.Approval.Status, resolution.Approval.ResolvedByCommandID, current.Revision, current.Generation); err != nil {
+		`, current.ID, resolution.Approval.Status, resolution.Approval.ResolvedByCommandID, current.Revision, current.Generation)
+		if err != nil {
 			return Resolution{}, fmt.Errorf("persist approval resolution: %w", err)
+		}
+		if updated.RowsAffected() != 1 {
+			return Resolution{}, fmt.Errorf("%w: approval %q resolution CAS did not update", ErrApprovalHistoryUnavailable, current.ID)
+		}
+		if err := updateApprovalHistoryResolutionTx(ctx, tx, current, resolution.Approval); err != nil {
+			return Resolution{}, err
 		}
 		resolution.Approval.ResolvedAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
@@ -327,19 +398,32 @@ func (s *Store) transition(ctx context.Context, approvalID string, apply func(Ap
 	if err != nil {
 		return Approval{}, fmt.Errorf("lock approval for transition: %w", err)
 	}
+	if err := verifyCurrentHistoryTx(ctx, tx, current); err != nil {
+		return Approval{}, err
+	}
 	updated, err := apply(current)
 	if err != nil {
 		return Approval{}, err
 	}
+	if updated.Revision != current.Revision {
+		// AdvanceRevision creates a new logical snapshot without a new
+		// approval.requested event. Do not let one event identify two revisions.
+		updated.RequestedEventID = ""
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE execution_approvals
-		SET revision = $2, summary = $3, requested_at = $4,
-			status = $5,
-			resolved_at = CASE WHEN $5 = 'expired' AND resolved_at IS NULL THEN CURRENT_TIMESTAMP ELSE resolved_at END,
+		SET revision = $2, summary = $3, requested_at = $4, context = $5,
+			requested_event_id = $6,
+			status = $7,
+			resolved_by_command_id = CASE WHEN $7 = 'pending' THEN '' ELSE resolved_by_command_id END,
+			resolved_at = CASE WHEN $7 = 'expired' AND resolved_at IS NULL THEN CURRENT_TIMESTAMP ELSE resolved_at END,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE id = $1
-	`, updated.ID, updated.Revision, updated.Summary, updated.RequestedAt, updated.Status); err != nil {
+	`, updated.ID, updated.Revision, updated.Summary, updated.RequestedAt, []byte(updated.Context), updated.RequestedEventID, updated.Status); err != nil {
 		return Approval{}, fmt.Errorf("persist approval transition: %w", err)
+	}
+	if err := syncApprovalHistoryTransitionTx(ctx, tx, current, updated); err != nil {
+		return Approval{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Approval{}, fmt.Errorf("commit approval transition: %w", err)
@@ -361,21 +445,262 @@ const approvalListQuery = `SELECT` + approvalColumns + `, approval.created_at
 FROM execution_approvals AS approval
 `
 
+const approvalHistoryColumns = `
+	history.id, history.session_id, history.run_id, history.generation,
+	history.kind, history.requested_at, history.revision, history.status,
+	history.summary, history.context, history.resolved_by_command_id,
+	history.requested_event_id, history.resolved_at
+`
+
+const approvalHistoryQuery = `SELECT` + approvalHistoryColumns + `FROM execution_approval_revisions AS history
+`
+
+const approvalHistoryListQuery = `SELECT` + approvalHistoryColumns + `, history.created_at
+FROM execution_approval_revisions AS history
+`
+
 func findByRequestedEventIDTx(ctx context.Context, tx pgx.Tx, requestedEventID string) (Approval, bool, error) {
-	approval, err := scanApproval(tx.QueryRow(ctx, approvalQuery+` WHERE approval.requested_event_id = $1 LIMIT 1 FOR UPDATE`, requestedEventID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Approval{}, false, nil
-	} else if err != nil {
+	rows, err := tx.Query(ctx, approvalHistoryQuery+` WHERE history.requested_event_id = $1 ORDER BY history.id, history.revision LIMIT 2 FOR UPDATE`, requestedEventID)
+	if err != nil {
 		return Approval{}, false, fmt.Errorf("read approval requested event: %w", err)
 	}
-	return approval, true, nil
+	defer rows.Close()
+	var found Approval
+	count := 0
+	for rows.Next() {
+		approval, err := scanApproval(rows)
+		if err != nil {
+			return Approval{}, false, fmt.Errorf("scan approval requested event: %w", err)
+		}
+		count++
+		found = approval
+	}
+	if err := rows.Err(); err != nil {
+		return Approval{}, false, fmt.Errorf("read approval requested event: %w", err)
+	}
+	if count == 0 {
+		return Approval{}, false, nil
+	}
+	if count > 1 {
+		return Approval{}, false, fmt.Errorf("%w: requested event %q maps to multiple revisions", ErrApprovalHistoryUnavailable, requestedEventID)
+	}
+	return found, true, nil
 }
 
 func sameCreateIdentity(candidate, stored Approval) bool {
 	if candidate.ID != stored.ID || candidate.SessionID != stored.SessionID || candidate.RunID != stored.RunID || candidate.Generation != stored.Generation || candidate.Revision != stored.Revision || candidate.Kind != stored.Kind {
 		return false
 	}
+	if candidate.Summary != stored.Summary || !bytes.Equal(candidate.Context, stored.Context) {
+		return false
+	}
 	return candidate.RequestedEventID == "" || candidate.RequestedEventID == stored.RequestedEventID
+}
+
+func insertApprovalHistoryTx(ctx context.Context, tx pgx.Tx, approval Approval) error {
+	contextPayload := approval.Context
+	if len(strings.TrimSpace(string(contextPayload))) == 0 {
+		contextPayload = json.RawMessage(`{}`)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO execution_approval_revisions (
+			id, revision, session_id, run_id, generation, kind, requested_at,
+			status, summary, context, resolved_by_command_id, requested_event_id,
+			resolved_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, '')::timestamptz)
+		ON CONFLICT (id, revision) DO NOTHING
+	`, approval.ID, approval.Revision, approval.SessionID, approval.RunID, approval.Generation, approval.Kind, approval.RequestedAt, approval.Status, approval.Summary, []byte(contextPayload), approval.ResolvedByCommandID, approval.RequestedEventID, approval.ResolvedAt); err != nil {
+		return fmt.Errorf("persist approval revision history: %w", err)
+	}
+	stored, err := scanApproval(tx.QueryRow(ctx, approvalHistoryQuery+` WHERE history.id = $1 AND history.revision = $2 FOR UPDATE`, approval.ID, approval.Revision))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: approval %q revision %d was not stored", ErrApprovalHistoryUnavailable, approval.ID, approval.Revision)
+	}
+	if err != nil {
+		return fmt.Errorf("read approval revision history: %w", err)
+	}
+	if !sameApprovalSnapshot(approval, stored) {
+		return fmt.Errorf("%w: approval %q revision %d differs from the requested snapshot", ErrApprovalHistoryUnavailable, approval.ID, approval.Revision)
+	}
+	return nil
+}
+
+func updateApprovalProjectionRevisionTx(ctx context.Context, tx pgx.Tx, approval Approval) error {
+	result, err := tx.Exec(ctx, `
+		UPDATE execution_approvals
+		SET revision = $2,
+		    requested_at = $3,
+		    summary = $4,
+		    context = $5,
+		    requested_event_id = $6,
+		    status = 'pending',
+		    resolved_by_command_id = '',
+		    resolved_at = NULL,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1 AND generation = $7
+	`, approval.ID, approval.Revision, approval.RequestedAt, approval.Summary, []byte(approval.Context), approval.RequestedEventID, approval.Generation)
+	if err != nil {
+		return fmt.Errorf("persist approval revision projection: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: approval %q revision projection was not updated", ErrApprovalHistoryUnavailable, approval.ID)
+	}
+	return nil
+}
+
+func verifyCurrentHistoryTx(ctx context.Context, tx pgx.Tx, approval Approval) error {
+	history, err := scanApproval(tx.QueryRow(ctx, approvalHistoryQuery+` WHERE history.id = $1 AND history.revision = $2 FOR UPDATE`, approval.ID, approval.Revision))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: approval %q revision %d is missing", ErrApprovalHistoryUnavailable, approval.ID, approval.Revision)
+	}
+	if err != nil {
+		return fmt.Errorf("read current approval history: %w", err)
+	}
+	if !sameApprovalSnapshot(approval, history) {
+		return fmt.Errorf("%w: approval %q revision %d disagrees with current projection", ErrApprovalHistoryUnavailable, approval.ID, approval.Revision)
+	}
+	return nil
+}
+
+func syncApprovalHistoryTransitionTx(ctx context.Context, tx pgx.Tx, before, after Approval) error {
+	if before.Revision != after.Revision {
+		return insertApprovalHistoryTx(ctx, tx, after)
+	}
+	result, err := tx.Exec(ctx, `
+		UPDATE execution_approval_revisions AS history
+		SET status = $3,
+		    summary = $4,
+		    requested_at = $5,
+		    context = $6,
+		    resolved_by_command_id = $7,
+		    requested_event_id = $8,
+		    resolved_at = CASE
+		        WHEN $9 <> '' THEN $9::timestamptz
+		        WHEN $3 = 'expired' THEN COALESCE(history.resolved_at, CURRENT_TIMESTAMP)
+		        ELSE history.resolved_at
+		    END,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE history.id = $1 AND history.revision = $2
+	`, after.ID, after.Revision, after.Status, after.Summary, after.RequestedAt, []byte(after.Context), after.ResolvedByCommandID, after.RequestedEventID, after.ResolvedAt)
+	if err != nil {
+		return fmt.Errorf("persist approval history transition: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: approval %q revision %d was not updated", ErrApprovalHistoryUnavailable, after.ID, after.Revision)
+	}
+	return nil
+}
+
+func updateApprovalHistoryResolutionTx(ctx context.Context, tx pgx.Tx, current, resolved Approval) error {
+	result, err := tx.Exec(ctx, `
+		UPDATE execution_approval_revisions
+		SET status = $3,
+		    resolved_by_command_id = $4,
+		    resolved_at = CURRENT_TIMESTAMP,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1 AND revision = $2 AND status = 'pending'
+	`, current.ID, current.Revision, resolved.Status, resolved.ResolvedByCommandID)
+	if err != nil {
+		return fmt.Errorf("persist approval resolution history: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: approval %q revision %d resolution history was not updated", ErrApprovalHistoryUnavailable, current.ID, current.Revision)
+	}
+	return nil
+}
+
+func verifyHistoryProjectionForRunTx(ctx context.Context, tx pgx.Tx, runID string) error {
+	var marker int
+	err := tx.QueryRow(ctx, `
+		SELECT 1
+		FROM execution_approvals AS current
+		LEFT JOIN execution_approval_revisions AS history
+		  ON history.id = current.id AND history.revision = current.revision
+		WHERE current.run_id = $1
+		  AND (
+			 history.id IS NULL
+			 OR history.session_id IS DISTINCT FROM current.session_id
+			 OR history.run_id IS DISTINCT FROM current.run_id
+			 OR history.generation IS DISTINCT FROM current.generation
+			 OR history.kind IS DISTINCT FROM current.kind
+			 OR history.requested_at IS DISTINCT FROM current.requested_at
+			 OR history.status IS DISTINCT FROM current.status
+			 OR history.summary IS DISTINCT FROM current.summary
+			 OR history.context IS DISTINCT FROM current.context
+			 OR history.resolved_by_command_id IS DISTINCT FROM current.resolved_by_command_id
+			 OR history.requested_event_id IS DISTINCT FROM current.requested_event_id
+			 OR history.resolved_at IS DISTINCT FROM current.resolved_at
+		  )
+		LIMIT 1
+	`, runID).Scan(&marker)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("verify approval projection history: %w", err)
+	}
+	return fmt.Errorf("%w: run %q has projection/history drift", ErrApprovalHistoryUnavailable, runID)
+}
+
+func normalizeCursorTx(ctx context.Context, tx pgx.Tx, runID string, after *Cursor) (*Cursor, error) {
+	if after == nil {
+		return nil, nil
+	}
+	if after.RunID != runID {
+		return nil, fmt.Errorf("%w: approval cursor belongs to another run", auth.ErrInvalid)
+	}
+	position := *after
+	version := position.Version
+	if version == 0 {
+		if position.Revision > 0 {
+			version = 2
+		} else {
+			version = 1
+		}
+	}
+	switch version {
+	case 2:
+		if position.Revision <= 0 {
+			return nil, fmt.Errorf("%w: approval cursor revision is required", auth.ErrInvalid)
+		}
+		position.Version = 2
+		return &position, nil
+	case 1:
+		var count int
+		var revision int64
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*), COALESCE(min(revision), 0)
+			FROM execution_approval_revisions
+			WHERE run_id = $1 AND created_at = $2 AND id = $3
+		`, runID, position.CreatedAt, position.ID).Scan(&count, &revision); err != nil {
+			return nil, fmt.Errorf("resolve legacy approval cursor: %w", err)
+		}
+		if count != 1 || revision <= 0 {
+			return nil, fmt.Errorf("%w: legacy approval cursor position is missing or ambiguous", auth.ErrInvalid)
+		}
+		position.Version = 2
+		position.Revision = revision
+		return &position, nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported approval cursor version %d", auth.ErrInvalid, version)
+	}
+}
+
+func sameApprovalSnapshot(left, right Approval) bool {
+	return left.ID == right.ID &&
+		left.Revision == right.Revision &&
+		left.SessionID == right.SessionID &&
+		left.RunID == right.RunID &&
+		left.Generation == right.Generation &&
+		left.Kind == right.Kind &&
+		left.RequestedAt == right.RequestedAt &&
+		left.Status == right.Status &&
+		left.Summary == right.Summary &&
+		bytes.Equal(left.Context, right.Context) &&
+		left.ResolvedByCommandID == right.ResolvedByCommandID &&
+		left.RequestedEventID == right.RequestedEventID &&
+		left.ResolvedAt == right.ResolvedAt
 }
 
 func scanApproval(row interface{ Scan(...any) error }) (Approval, error) {

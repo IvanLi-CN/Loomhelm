@@ -22,8 +22,28 @@ func TestCursorRoundTripPreservesRunBoundPosition(t *testing.T) {
 	if got.RunID != want.RunID || !got.CreatedAt.Equal(want.CreatedAt) || got.ID != want.ID {
 		t.Fatalf("decoded cursor = %+v, want %+v", got, want)
 	}
+	if got.Version != 1 || got.Revision != 0 {
+		t.Fatalf("legacy cursor = %+v, want version 1 without revision", got)
+	}
 	if got.CreatedAt.Location() != time.UTC {
 		t.Fatalf("decoded cursor location = %v, want UTC", got.CreatedAt.Location())
+	}
+}
+
+func TestCursorV2RoundTripPreservesRevisionKey(t *testing.T) {
+	want := Cursor{
+		Version:   2,
+		RunID:     "run-1",
+		CreatedAt: time.Date(2026, 10, 25, 12, 34, 56, 789000000, time.UTC),
+		ID:        "approval-1",
+		Revision:  9,
+	}
+	got, err := DecodeCursor(EncodeCursor(want))
+	if err != nil {
+		t.Fatalf("decode v2 cursor: %v", err)
+	}
+	if got.Version != 2 || got.RunID != want.RunID || !got.CreatedAt.Equal(want.CreatedAt) || got.ID != want.ID || got.Revision != want.Revision {
+		t.Fatalf("decoded v2 cursor = %+v, want %+v", got, want)
 	}
 }
 

@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Add immutable approval revision history beside the stable-ID current CAS projection and provide a versioned Run-bound keyset position.",
+    "release_unit_description": "Phase-one execution-domain candidate following migration 00011; this migration is reserved for the Server-side approval revision-history write and read boundary.",
+    "version_impact": "minor"
+  },
+  "compatibility_assessment": {
+    "public_api": "minor",
+    "persistent_state": "minor",
+    "reason": "Public approval IDs, response fields, limits, authorization and exact resolution CAS remain stable, while the opaque cursor gains an internal version and the additive history table makes newly written same-ID revisions unreadable as complete history to projection-only older writers/readers."
+  },
+  "durable_state": {
+    "description": "The current approval projection remains the exact write-side CAS row keyed by stable native request ID. Immutable history rows are keyed by (id, revision), retain raw context and requested-event identity, and remain readable across old execution generations.",
+    "storage_implementation": "PostgreSQL table and keyset indexes managed by the embedded Goose migration history. Existing execution_approvals rows are copied only as one provable snapshot at their current persisted revision.",
+    "source_compatibility_range": {
+      "from_program_versions": "Phase-one approval-history candidate containing migrations 00009 through 00011.",
+      "to_program_version": "Phase-one stable-ID approval revision-history candidate containing migration 00012.",
+      "readable_earlier_state": true,
+      "older_program_can_read_new_state": false,
+      "direct_major_skips_supported": false,
+      "compatibility_boundary": "Older projection-only writers/readers may participate only in the pre-cutover drain window. They must be fenced before any new revision is written; after that point switchback requires a history-capable candidate."
+    }
+  },
+  "database_migration": {
+    "applicable": true,
+    "ddl_structural_changes": [
+      {
+        "id": "ddl-00012-approval-revision-history-table",
+        "description": "Create execution_approval_revisions with stable approval ID plus revision primary key, raw context/event linkage, state and resolution identity columns.",
+        "order": 1,
+        "observable": true,
+        "pauseable": false
+      },
+      {
+        "id": "ddl-00012-approval-revision-history-indexes",
+        "description": "Create the Run-bound cursor index and requested-event lookup index after the backfill so a failure proves the complete table and backfill unit rolls back.",
+        "order": 3,
+        "observable": true,
+        "pauseable": false
+      }
+    ],
+    "dml_changes": [
+      {
+        "id": "dml-00012-current-projection-snapshot",
+        "description": "Copy exactly one history row from each current execution_approvals row at its persisted (id, revision), preserving raw context, requested_event_id, status and timestamps. Missing older revisions are not synthesized.",
+        "order": 2,
+        "observable": true,
+        "pauseable": false
+      }
+    ],
+    "historical_data_backfill_or_transformation": [
+      "No discarded approval revision is reconstructed.",
+      "A current projection row without a matching history snapshot after migration is a failed migration/compatibility state, not an empty history result."
+    ]
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": false,
+    "operation_sequence": [
+      "ddl-00012-approval-revision-history-table",
+      "dml-00012-current-projection-snapshot",
+      "ddl-00012-approval-revision-history-indexes"
+    ],
+    "progress_signals": [
+      "A fresh PostgreSQL schema is migrated through 00011 with a real current approval row, then 00012 backfills exactly one matching history row and records migration 00012 only after the full Goose transaction commits.",
+      "A deliberate 00012 index-name collision fails after table creation and backfill, leaves version 12 unapplied and leaves no partial history table or rows; removing only the collision permits forward re-entry.",
+      "A repeated database migration leaves exactly one history table, one primary key, both named indexes and one applied 00012 history record.",
+      "The new writer checks projection/history agreement before serving history reads or writing revision state, and old projection-only state drift fails closed instead of silently losing a page."
+    ],
+    "pause_points": [
+      "Before applying 00012, verify the candidate source identity, the 00011 schema and PostgreSQL migration lock availability.",
+      "After 00012 commits, verify one history row for every current projection row at its current (id, revision) before admitting new approval revision writes.",
+      "Drain and fence all projection-only writers before accepting the first post-migration higher-revision approval request.",
+      "If a projection/history guard fails, stop approval history traffic and repair forward; do not switch back to an older writer after new revision history exists."
+    ]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version or a corrected re-entry after a rolled-back 00012 transaction; do not invent missing revisions or rewrite raw history",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "minor": {
+      "required_test_evidence": [
+        "The PostgreSQL path from 00011 to 00012 backfills a current approval row exactly once, retains raw context and requested_event_id and leaves the current projection unchanged.",
+        "A deliberate 00012 index collision rolls back table creation and the backfill, leaves migration 00012 unapplied, and the same migration re-enters successfully after only the deliberate collision is removed.",
+        "Repeated migration discovery leaves one history table, the Run cursor index, requested-event index and applied migration record.",
+        "Same stable approval ID with revisions written at equal created_at values returns every revision through version-2 cursors without skips; current resolution changes only the matching history revision.",
+        "A legacy cursor is accepted only for a unique persisted (run_id, created_at, id) position and ambiguous, missing, malformed or cross-run positions fail closed.",
+        "A current projection with missing or divergent history is rejected by the read/write guard, and old projection-only writers are excluded from the post-cutover acceptance window."
+      ]
+    }
+  },
+  "deployed_migrations_immutable": true,
+  "program_rollback_state_behavior": "does-not-automatically_reverse-compensate-or-down-migrate"
+}

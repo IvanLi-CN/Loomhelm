@@ -64,6 +64,59 @@ func (t *gatewayExecutionTransport) SendSessionCommand(ctx context.Context, host
 	return t.gateway.SendCommand(ctx, hostID, command)
 }
 
+// HandleCommandAck is the authenticated durable ACK ingress. The command row
+// supplies the session and exact platform run identity; the host access row
+// prevents a connected but unrelated host from writing that fact. Missing
+// optional ACK identity is filled only from the already locked command record,
+// never from an active-run guess.
+func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connection hosts.Connection, _ string, ack protocol.CommandAck) error {
+	if t == nil || t.sessions == nil || t.runs == nil {
+		return fmt.Errorf("%w: gateway ACK stores are unavailable", hosts.ErrInvalid)
+	}
+	record, err := t.runs.Lookup(ctx, ack.CommandID)
+	if err != nil {
+		if !errors.Is(err, runs.ErrCommandNotFound) {
+			return err
+		}
+		intent, intentErr := t.sessions.GetIntentByCommand(ctx, ack.CommandID)
+		if intentErr != nil {
+			return err
+		}
+		if ack.RunID != nil {
+			return fmt.Errorf("%w: session creation command %q must not carry a run id", hosts.ErrInvalid, ack.CommandID)
+		}
+		access, accessErr := t.sessions.GetAccess(ctx, intent.SessionID)
+		if accessErr != nil {
+			return fmt.Errorf("resolve session creation ACK access: %w", accessErr)
+		}
+		if strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID || access.IntentState != sessions.IntentStatePending {
+			return fmt.Errorf("%w: creation command %q is not owned by gateway host %q", errGatewaySessionOwnership, ack.CommandID, connection.HostID)
+		}
+		return nil
+	}
+	access, err := t.sessions.GetAccess(ctx, record.Intent.Command.SessionID)
+	if err != nil {
+		return fmt.Errorf("resolve gateway ACK session access: %w", err)
+	}
+	if strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID || (access.IntentState != sessions.IntentStatePending && !access.Confirmed) {
+		return fmt.Errorf("%w: command %q is not owned by gateway host %q", errGatewaySessionOwnership, ack.CommandID, connection.HostID)
+	}
+	if record.Intent.Command.RunID == nil {
+		if ack.RunID != nil {
+			return fmt.Errorf("%w: session command %q must not carry a run id", hosts.ErrInvalid, ack.CommandID)
+		}
+	} else if ack.RunID == nil {
+		runID := *record.Intent.Command.RunID
+		ack.RunID = &runID
+	} else if *ack.RunID != *record.Intent.Command.RunID {
+		return fmt.Errorf("%w: ACK run identity does not match command %q", hosts.ErrInvalid, ack.CommandID)
+	}
+	if _, err := t.runs.RecordExactCommandAck(ctx, ack); err != nil && !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		return err
+	}
+	return nil
+}
+
 // ReconcileCommand is deliberately explicit: the Connector WSS protocol has
 // no command-reconciliation frame. Reconciliation must therefore remain
 // unknown until a later Connector contract supplies a durable observation.

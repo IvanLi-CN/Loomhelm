@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/jackc/pgx/v5"
@@ -16,6 +17,7 @@ const RunJobKind = "execution_run"
 var (
 	ErrObserverUnavailable = errors.New("run observation is unavailable")
 	ErrInvalidObservation  = errors.New("run observation is invalid")
+	ErrDeploymentLeaseLost = errors.New("deployment lease was fenced by a newer generation")
 )
 
 type RunJobArgs struct {
@@ -83,9 +85,15 @@ func (f ObserverFunc) Observe(ctx context.Context, run Run) (RunObservation, err
 // and reconciles the persisted Run; command dispatch remains Server-owned.
 type RunWorker struct {
 	river.WorkerDefaults[RunJobArgs]
-	Store        *Store
-	Observer     Observer
-	RequireLease bool
+	Store                  *Store
+	Observer               Observer
+	RequireLease           bool
+	CheckDeploymentLease   func(context.Context) error
+	CheckDeploymentLeaseTx func(context.Context, pgx.Tx) error
+	ControlLeaseOwnerID    string
+	CandidateSourceSHA     string
+	ArtifactDigest         string
+	ControlLeaseTTL        time.Duration
 }
 
 func (w *RunWorker) Work(ctx context.Context, job *river.Job[RunJobArgs]) error {
@@ -104,6 +112,11 @@ func (w *RunWorker) Work(ctx context.Context, job *river.Job[RunJobArgs]) error 
 	if err := validateRunJobArgs(job.Args); err != nil {
 		return river.JobCancel(err)
 	}
+	if w.CheckDeploymentLease != nil {
+		if err := w.CheckDeploymentLease(ctx); err != nil {
+			return river.JobCancel(err)
+		}
+	}
 	run, err := w.Store.GetRun(ctx, job.Args.RunID)
 	if err != nil {
 		if errors.Is(err, ErrRunNotFound) {
@@ -117,17 +130,15 @@ func (w *RunWorker) Work(ctx context.Context, job *river.Job[RunJobArgs]) error 
 	if terminalRunStatus(run.Status) {
 		return nil
 	}
-	lease, err := job.Args.LeaseIdentity(run.SessionID)
+	_, leasePtr, releaseLease, err := w.acquireControlLease(ctx, job.Args, run)
 	if err != nil {
+		if errors.Is(err, ErrLeaseHeld) {
+			return err
+		}
 		return river.JobCancel(err)
 	}
-	if w.RequireLease && lease.LeaseKey == "" {
-		return river.JobCancel(fmt.Errorf("%w: run worker requires a control lease", ErrInvalidLease))
-	}
-	if lease.LeaseKey != "" {
-		if _, err := w.Store.CheckLease(ctx, lease); err != nil {
-			return river.JobCancel(err)
-		}
+	if releaseLease != nil {
+		defer releaseLease()
 	}
 	if err := ctx.Err(); err != nil {
 		return river.JobCancel(err)
@@ -142,23 +153,80 @@ func (w *RunWorker) Work(ctx context.Context, job *river.Job[RunJobArgs]) error 
 	if err := validateRunObservation(run, observation); err != nil {
 		return err
 	}
-	var leasePtr *DurableLeaseIdentity
-	if lease.LeaseKey != "" {
-		leasePtr = &lease
-	}
-	_, err = w.Store.applyObservedRun(ctx, run, job.Args.Generation, Observation{
+	observationInput := Observation{
 		Reconciliation: observation.Reconciliation,
 		Status:         observation.Status,
 		Cursor:         observation.Cursor,
 		Reason:         observation.Reason,
-	}, leasePtr)
+	}
+	if w.CheckDeploymentLeaseTx != nil {
+		_, err = w.Store.applyObservedRunWithFence(ctx, run, job.Args.Generation, observationInput, w.CheckDeploymentLeaseTx, leasePtr)
+	} else {
+		if w.CheckDeploymentLease != nil {
+			if err := w.CheckDeploymentLease(ctx); err != nil {
+				return river.JobCancel(err)
+			}
+		}
+		_, err = w.Store.applyObservedRun(ctx, run, job.Args.Generation, observationInput, leasePtr)
+	}
 	if err != nil {
-		if errors.Is(err, ErrLeaseLost) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, ErrLeaseLost) || errors.Is(err, ErrDeploymentLeaseLost) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return river.JobCancel(err)
 		}
 		return err
 	}
 	return nil
+}
+
+func (w *RunWorker) acquireControlLease(ctx context.Context, args RunJobArgs, run Run) (DurableLeaseIdentity, *DurableLeaseIdentity, func(), error) {
+	if strings.TrimSpace(w.ControlLeaseOwnerID) != "" {
+		leaseKey := args.LeaseKey
+		if strings.TrimSpace(leaseKey) == "" {
+			leaseKey = RunLeaseKey(run.ID)
+		}
+		candidate := strings.TrimSpace(w.CandidateSourceSHA)
+		if candidate == "" {
+			candidate = "unknown-source"
+		}
+		digest := strings.TrimSpace(w.ArtifactDigest)
+		if digest == "" {
+			digest = "unknown-artifact"
+		}
+		identity := DurableLeaseIdentity{
+			LeaseKey:           leaseKey,
+			SessionID:          run.SessionID,
+			RunID:              run.ID,
+			Generation:         run.Generation,
+			OwnerID:            w.ControlLeaseOwnerID,
+			CandidateSourceSHA: candidate,
+			ArtifactDigest:     digest,
+		}
+		ttl := w.ControlLeaseTTL
+		if ttl <= 0 {
+			ttl = defaultControlLeaseTTL
+		}
+		if _, err := w.Store.AcquireLease(ctx, identity, LeaseStoreConfig{TTL: ttl}); err != nil {
+			return DurableLeaseIdentity{}, nil, nil, err
+		}
+		release := func() {
+			_ = w.Store.ReleaseLease(context.Background(), identity)
+		}
+		return identity, &identity, release, nil
+	}
+	lease, err := args.LeaseIdentity(run.SessionID)
+	if err != nil {
+		return DurableLeaseIdentity{}, nil, nil, err
+	}
+	if w.RequireLease && lease.LeaseKey == "" {
+		return DurableLeaseIdentity{}, nil, nil, fmt.Errorf("%w: run worker requires a control lease", ErrInvalidLease)
+	}
+	if lease.LeaseKey != "" {
+		if _, err := w.Store.CheckLease(ctx, lease); err != nil {
+			return DurableLeaseIdentity{}, nil, nil, err
+		}
+		return lease, &lease, nil, nil
+	}
+	return DurableLeaseIdentity{}, nil, nil, nil
 }
 
 func validateRunObservation(run Run, observation RunObservation) error {

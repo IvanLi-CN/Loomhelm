@@ -74,6 +74,19 @@ type sessionStartIntent struct {
 	UpdatedAt         string `json:"updated_at"`
 }
 
+// SessionStartProof is the exact durable evidence produced by a resolved
+// session-start intent. It is kept private to the Connector recovery boundary;
+// public command and session contracts continue to expose only their existing
+// identities.
+type SessionStartProof struct {
+	IntentID       string
+	GatewayHandle  string
+	Generation     string
+	CommandID      string
+	RequestDigest  string
+	AdapterSession protocol.AdapterSession
+}
+
 type commandEntry struct {
 	command protocol.Command
 	digest  string
@@ -657,12 +670,22 @@ func (j *Journal) BeginSessionStart(gatewaySession protocol.GatewaySession, requ
 }
 
 func (j *Journal) ResolvedSessionStart(request protocol.NewSessionRequest) (protocol.AdapterSession, bool, error) {
+	proof, found, err := j.ResolvedSessionStartProof(request)
+	if err != nil || !found {
+		return protocol.AdapterSession{}, found, err
+	}
+	return proof.AdapterSession, true, nil
+}
+
+// ResolvedSessionStartProof returns the exact resolved creation intent needed
+// to rebuild a missing platform alias without starting a native session again.
+func (j *Journal) ResolvedSessionStartProof(request protocol.NewSessionRequest) (SessionStartProof, bool, error) {
 	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
-		return protocol.AdapterSession{}, false, err
+		return SessionStartProof{}, false, err
 	}
 	requestDigest, err := sessionStartPayloadDigest(request)
 	if err != nil {
-		return protocol.AdapterSession{}, false, fmt.Errorf("digest session start request: %w", err)
+		return SessionStartProof{}, false, fmt.Errorf("digest session start request: %w", err)
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -672,22 +695,29 @@ func (j *Journal) ResolvedSessionStart(request protocol.NewSessionRequest) (prot
 			continue
 		}
 		if intent.RequestDigest != requestDigest {
-			return protocol.AdapterSession{}, false, protocol.ErrIdempotencyConflict
+			return SessionStartProof{}, false, protocol.ErrIdempotencyConflict
 		}
 		if intent.State != "resolved" || intent.ExternalThreadRef == "" {
 			continue
 		}
-		if selected == nil || intent.UpdatedAt > selected.UpdatedAt {
+		if selected == nil || intent.UpdatedAt > selected.UpdatedAt || (intent.UpdatedAt == selected.UpdatedAt && intent.IntentID > selected.IntentID) {
 			value := intent
 			selected = &value
 		}
 	}
 	if selected == nil {
-		return protocol.AdapterSession{}, false, nil
+		return SessionStartProof{}, false, nil
 	}
-	return protocol.AdapterSession{
-		SessionID:         stableSessionID(selected.ExternalThreadRef),
-		ExternalThreadRef: selected.ExternalThreadRef,
+	return SessionStartProof{
+		IntentID:      selected.IntentID,
+		GatewayHandle: selected.GatewayHandle,
+		Generation:    selected.Generation,
+		CommandID:     selected.CommandID,
+		RequestDigest: selected.RequestDigest,
+		AdapterSession: protocol.AdapterSession{
+			SessionID:         stableSessionID(selected.ExternalThreadRef),
+			ExternalThreadRef: selected.ExternalThreadRef,
+		},
 	}, true, nil
 }
 

@@ -2,6 +2,8 @@ package runs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +13,13 @@ import (
 )
 
 const defaultControlLeaseTTL = 30 * time.Second
+
+// RunLeaseKey is stable across Server and Worker processes while keeping the
+// persisted lease key independent from user-supplied identifiers.
+func RunLeaseKey(runID string) string {
+	sum := sha256.Sum256([]byte(runID))
+	return "loomhelm-run:" + hex.EncodeToString(sum[:16])
+}
 
 type DurableLeaseIdentity struct {
 	LeaseKey           string
@@ -56,7 +65,26 @@ func (s *Store) AcquireLease(ctx context.Context, identity DurableLeaseIdentity,
 		return ControlLease{}, fmt.Errorf("begin control lease acquisition: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	lease, err := acquireLeaseTx(ctx, tx, identity, ttl)
+	if err != nil {
+		return ControlLease{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ControlLease{}, fmt.Errorf("commit control lease acquisition: %w", err)
+	}
+	return lease, nil
+}
 
+func acquireLeaseTx(ctx context.Context, tx pgx.Tx, identity DurableLeaseIdentity, ttl time.Duration) (ControlLease, error) {
+	if tx == nil {
+		return ControlLease{}, fmt.Errorf("%w: transaction is required", ErrInvalidLease)
+	}
+	if err := validateLeaseIdentity(identity); err != nil {
+		return ControlLease{}, err
+	}
+	if ttl <= 0 {
+		return ControlLease{}, fmt.Errorf("%w: lease TTL must be positive", ErrInvalidLease)
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, identity.LeaseKey); err != nil {
 		return ControlLease{}, fmt.Errorf("serialize control lease acquisition: %w", err)
 	}
@@ -67,19 +95,10 @@ func (s *Store) AcquireLease(ctx context.Context, identity DurableLeaseIdentity,
 	if err != nil {
 		return ControlLease{}, err
 	}
-	if found {
-		if current.ExpiresAt.After(time.Now().UTC()) && !sameLeaseIdentity(current.DurableLeaseIdentity, identity) {
-			return ControlLease{}, fmt.Errorf("%w: lease %q is owned by another identity", ErrLeaseHeld, identity.LeaseKey)
-		}
+	if found && current.ExpiresAt.After(time.Now().UTC()) && !sameLeaseIdentity(current.DurableLeaseIdentity, identity) {
+		return ControlLease{}, fmt.Errorf("%w: lease %q is owned by another identity", ErrLeaseHeld, identity.LeaseKey)
 	}
-	lease, err := writeLease(ctx, tx, identity, ttl)
-	if err != nil {
-		return ControlLease{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return ControlLease{}, fmt.Errorf("commit control lease acquisition: %w", err)
-	}
-	return lease, nil
+	return writeLease(ctx, tx, identity, ttl)
 }
 
 func (s *Store) RenewLease(ctx context.Context, identity DurableLeaseIdentity, configs ...LeaseStoreConfig) (ControlLease, error) {

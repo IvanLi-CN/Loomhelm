@@ -130,6 +130,10 @@ The owner-confirmed TaskGraph capture extends the current U02 Task Evidence Set 
 
 E01 adds the additive `listRunApprovals` REST/MCP contract, generated Go/TypeScript types and client method, a shared Run-control read path and durable approval keyset pagination over `(created_at,id)`. Public approvals expose the actual persisted ID, revision, status, raw context and optional requested-event identity; the read path permits historical old-generation rows while the existing exact-generation/revision/CAS resolution path remains write-protected. Migration 00011 adds only `execution_approvals_run_created_idx`, preserves 00010 rows and requires failed-index forward re-entry evidence. Compatibility impact is `public_api=minor` and `persistent_state=patch`; real-platform HTTP acceptance remains candidate-bound evidence rather than a documentation claim.
 
+## Approval Revision History Completion
+
+The E01 successor decision keeps the stable native approval ID, adds immutable `(id,revision)` history beside the current CAS projection and versions the opaque Run-bound cursor to `(created_at,id,revision)`. Migration 00012 backfills exactly one provable snapshot for each existing current row without inventing discarded revisions, and new writers update projection plus history atomically. Compatibility is `public_api=minor` and `persistent_state=minor`: old projection-only writers are drained and fenced before new revision writes, ambiguous legacy cursors fail closed, and post-cutover switchback requires a history-capable candidate.
+
 ## References
 
 - [Requirements](SPEC.md)

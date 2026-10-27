@@ -265,12 +265,12 @@ func TestSessionIntentMigrationReentry(t *testing.T) {
 	if err := db.Pool().QueryRow(ctx, `
 		SELECT count(*)
 		FROM goose_db_version
-		WHERE version_id IN (9, 10, 11) AND is_applied
+		WHERE version_id IN (9, 10, 11, 12) AND is_applied
 	`).Scan(&appliedCount); err != nil {
 		t.Fatalf("read applied migration versions: %v", err)
 	}
-	if appliedCount != 3 {
-		t.Fatalf("applied 00009/00010/00011 migration records = %d, want 3", appliedCount)
+	if appliedCount != 4 {
+		t.Fatalf("applied 00009/00010/00011/00012 migration records = %d, want 4", appliedCount)
 	}
 	var intentIndexCount int
 	if err := db.Pool().QueryRow(ctx, `
@@ -498,6 +498,9 @@ func TestApprovalHistoryMigrationFrom00010SupportsFailureReentry(t *testing.T) {
 	if _, err := provider.UpTo(ctx, 11); err != nil {
 		t.Fatalf("repeat 00011 migration: %v", err)
 	}
+	if _, err := provider.UpTo(ctx, 12); err != nil {
+		t.Fatalf("apply 00012 approval revision history migration: %v", err)
+	}
 
 	var indexCount, appliedCount int
 	if err := scoped.Pool().QueryRow(ctx, `
@@ -523,6 +526,139 @@ func TestApprovalHistoryMigrationFrom00010SupportsFailureReentry(t *testing.T) {
 	}
 	if len(page.Items) != 1 || page.Items[0].ID != approvalID || page.Items[0].Revision != 7 || string(page.Items[0].Context) != string(legacyContext) || page.Items[0].RequestedEventID != "e01-approval-migration-event" {
 		t.Fatalf("legacy approval after 00011 = %+v", page.Items)
+	}
+}
+
+func TestApprovalRevisionHistoryMigrationFrom00011SupportsFailureReentry(t *testing.T) {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == `` {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+
+	config := sessionTestDatabaseConfig(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	root, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		t.Fatalf("open approval revision migration fixture database: %v", err)
+	}
+	defer root.Close()
+
+	schema := fmt.Sprintf("e01_approval_revision_migration_%d", time.Now().UnixNano())
+	if _, err := root.Pool().Exec(ctx, "CREATE SCHEMA "+quoteSessionTestIdentifier(schema)); err != nil {
+		t.Fatalf("create approval revision migration fixture schema: %v", err)
+	}
+	defer func() {
+		if _, err := root.Pool().Exec(context.Background(), "DROP SCHEMA "+quoteSessionTestIdentifier(schema)+" CASCADE"); err != nil {
+			t.Errorf("drop approval revision migration fixture schema: %v", err)
+		}
+	}()
+
+	scopedURL, err := sessionURLWithSearchPath(config.URL, schema)
+	if err != nil {
+		t.Fatalf("scope approval revision migration fixture database URL: %v", err)
+	}
+	scoped, err := database.Open(ctx, database.Config{URL: scopedURL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		t.Fatalf("open scoped approval revision migration database: %v", err)
+	}
+	defer scoped.Close()
+
+	sqlDB := stdlib.OpenDBFromPool(scoped.Pool())
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("create approval revision migration provider: %v", err)
+	}
+	defer provider.Close()
+	if _, err := provider.UpTo(ctx, 11); err != nil {
+		t.Fatalf("apply approval revision migration fixture through 00011: %v", err)
+	}
+	const (
+		sessionID  = "e01-approval-revision-migration-session"
+		runID      = "e01-approval-revision-migration-run"
+		commandID  = "e01-approval-revision-migration-command"
+		approvalID = "e01-approval-revision-migration-approval"
+	)
+	if _, err := scoped.Pool().Exec(ctx, `
+		INSERT INTO execution_sessions (id, external_thread_ref, path, generation)
+		VALUES ($1, $2, 'new', $3)
+	`, sessionID, "e01-approval-revision-migration-thread", "e01-approval-revision-migration-generation"); err != nil {
+		t.Fatalf("seed approval revision session: %v", err)
+	}
+	if _, err := scoped.Pool().Exec(ctx, `
+		INSERT INTO execution_runs (id, session_id, command_id, generation)
+		VALUES ($1, $2, $3, $4)
+	`, runID, sessionID, commandID, "e01-approval-revision-migration-generation"); err != nil {
+		t.Fatalf("seed approval revision run: %v", err)
+	}
+	legacyContext := []byte(`{"legacy":true,"unknown_field":"retained"}`)
+	if _, err := scoped.Pool().Exec(ctx, `
+		INSERT INTO execution_approvals (id, session_id, run_id, generation, kind, requested_at, revision, status, summary, context, requested_event_id)
+		VALUES ($1, $2, $3, $4, 'command', $5, 7, 'pending', 'legacy approval', $6, $7)
+	`, approvalID, sessionID, runID, "e01-approval-revision-migration-generation", "2026-10-25T00:00:00Z", legacyContext, "e01-approval-revision-migration-event"); err != nil {
+		t.Fatalf("seed approval revision projection: %v", err)
+	}
+
+	if _, err := scoped.Pool().Exec(ctx, `CREATE INDEX execution_approval_revisions_run_cursor_idx ON execution_approvals (id)`); err != nil {
+		t.Fatalf("create deliberate 00012 migration collision: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 12); err == nil {
+		t.Fatal("00012 migration collision unexpectedly succeeded")
+	}
+	var applied12 int
+	if err := scoped.Pool().QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 12 AND is_applied`).Scan(&applied12); err != nil {
+		t.Fatalf("read failed 00012 migration history: %v", err)
+	}
+	if applied12 != 0 {
+		t.Fatalf("failed 00012 migration recorded as applied: %d", applied12)
+	}
+	var historyTableCount, historyRowCount int
+	if err := scoped.Pool().QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_name = 'execution_approval_revisions'
+	`).Scan(&historyTableCount); err != nil {
+		t.Fatalf("read rolled-back history table: %v", err)
+	}
+	if historyTableCount != 0 {
+		t.Fatalf("rolled-back history table count = %d, want 0", historyTableCount)
+	}
+	if err := scoped.Pool().QueryRow(ctx, `SELECT count(*) FROM execution_approvals WHERE id = $1`, approvalID).Scan(&historyRowCount); err != nil {
+		t.Fatalf("read unchanged current projection: %v", err)
+	}
+	if historyRowCount != 1 {
+		t.Fatalf("current projection row count after failed 00012 = %d, want 1", historyRowCount)
+	}
+	if _, err := scoped.Pool().Exec(ctx, `DROP INDEX execution_approval_revisions_run_cursor_idx`); err != nil {
+		t.Fatalf("remove deliberate 00012 migration collision: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 12); err != nil {
+		t.Fatalf("re-enter 00012 migration after cleanup: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 12); err != nil {
+		t.Fatalf("repeat 00012 migration: %v", err)
+	}
+	if err := scoped.Pool().QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 12 AND is_applied`).Scan(&applied12); err != nil {
+		t.Fatalf("read successful 00012 migration history: %v", err)
+	}
+	if applied12 != 1 {
+		t.Fatalf("successful 00012 migration records = %d, want 1", applied12)
+	}
+	if err := scoped.Pool().QueryRow(ctx, `
+		SELECT count(*) FROM execution_approval_revisions
+		WHERE id = $1 AND revision = 7 AND context = $2 AND requested_event_id = $3
+	`, approvalID, legacyContext, "e01-approval-revision-migration-event").Scan(&historyRowCount); err != nil {
+		t.Fatalf("read backfilled approval revision: %v", err)
+	}
+	if historyRowCount != 1 {
+		t.Fatalf("backfilled approval revision count = %d, want 1", historyRowCount)
+	}
+	page, err := approvals.NewStore(scoped.Pool()).ListByRun(ctx, runID, nil, 10)
+	if err != nil {
+		t.Fatalf("read backfilled approval history: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != approvalID || page.Items[0].Revision != 7 || string(page.Items[0].Context) != string(legacyContext) {
+		t.Fatalf("backfilled approval history = %+v", page.Items)
 	}
 }
 
@@ -651,6 +787,10 @@ func cleanupSessionIdentity(t *testing.T, ctx context.Context, db *database.DB, 
 			DELETE FROM execution_control_leases
 			WHERE session_id IN (SELECT id FROM execution_sessions WHERE creator_user_id = $1)
 		`, ids.user)
+		cleanup("execution approval revisions", `
+				DELETE FROM execution_approval_revisions
+				WHERE session_id IN (SELECT id FROM execution_sessions WHERE creator_user_id = $1)
+			`, ids.user)
 		cleanup("execution approvals", `
 			DELETE FROM execution_approvals
 			WHERE session_id IN (SELECT id FROM execution_sessions WHERE creator_user_id = $1)

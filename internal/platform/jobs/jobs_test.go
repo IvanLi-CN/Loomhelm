@@ -14,7 +14,10 @@ import (
 )
 
 func TestConfigDefaults(t *testing.T) {
-	config := (Config{}).withDefaults()
+	config, err := (Config{}).withDefaults()
+	if err != nil {
+		t.Fatalf("Config.withDefaults() error = %v", err)
+	}
 	if config.Queue != "default" {
 		t.Fatalf("default queue = %q, want default", config.Queue)
 	}
@@ -23,6 +26,13 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if config.SoftStopTimeout != 10*time.Second {
 		t.Fatalf("default soft stop timeout = %s, want 10s", config.SoftStopTimeout)
+	}
+	other, err := (Config{}).withDefaults()
+	if err != nil {
+		t.Fatalf("second Config.withDefaults() error = %v", err)
+	}
+	if config.OwnerID == "" || config.OwnerID == other.OwnerID {
+		t.Fatalf("worker owner ids = %q and %q, want distinct non-empty random identities", config.OwnerID, other.OwnerID)
 	}
 }
 

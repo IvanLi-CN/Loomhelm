@@ -84,7 +84,31 @@ type realC01ProcessResult struct {
 	RecoveryEventObserved bool                         `json:"recovery_event_observed,omitempty"`
 }
 
+type realC01PendingApprovalResult struct {
+	Mode                        string                `json:"mode"`
+	ProcessID                   int                   `json:"process_id"`
+	ProcessStartToken           string                `json:"process_start_token"`
+	SessionID                   string                `json:"session_id"`
+	ThreadID                    string                `json:"thread_id"`
+	TurnID                      string                `json:"turn_id"`
+	RequestID                   string                `json:"request_id"`
+	Revision                    int64                 `json:"revision"`
+	InitialGeneration           string                `json:"initial_generation"`
+	RecoveredGeneration         string                `json:"recovered_generation,omitempty"`
+	FirstCommandID              string                `json:"first_command_id,omitempty"`
+	FirstState                  protocol.CommandState `json:"first_state,omitempty"`
+	FirstError                  string                `json:"first_error,omitempty"`
+	SecondCommandID             string                `json:"second_command_id,omitempty"`
+	SecondState                 protocol.CommandState `json:"second_state,omitempty"`
+	SecondError                 string                `json:"second_error,omitempty"`
+	RecoveryError               string                `json:"recovery_error,omitempty"`
+	ResolutionEventCount        int                   `json:"resolution_event_count"`
+	ApprovalClaimRecordCount    int                   `json:"approval_claim_record_count"`
+	NativeApprovalEventObserved bool                  `json:"native_approval_event_observed"`
+}
+
 const realC01HelperEnv = "LOOMHELM_REAL_C01_HELPER"
+const realC01PendingApprovalHelperEnv = "LOOMHELM_REAL_C01_PENDING_APPROVAL_HELPER"
 
 func TestRealC01ProcessHelper(t *testing.T) {
 	mode := os.Getenv(realC01HelperEnv)
@@ -115,6 +139,29 @@ func TestRealC01ProcessHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := writeRealC01ProcessResult(resultPath, result); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRealC01PendingApprovalRecoveryProcessHelper(t *testing.T) {
+	if os.Getenv(realC01PendingApprovalHelperEnv) == "" {
+		return
+	}
+	cli := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_CLI")
+	workspace := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_WORKSPACE")
+	journalPath := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_JOURNAL")
+	sessionID := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_SESSION")
+	threadID := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_THREAD")
+	requestID := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_REQUEST")
+	resultPath := realC01HelperValue(t, "LOOMHELM_REAL_C01_PENDING_APPROVAL_RESULT")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	result, err := runRealC01PendingApprovalRecoveryHelper(ctx, cli, workspace, journalPath, sessionID, threadID, requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRealC01PendingApprovalResult(resultPath, result); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -324,6 +371,183 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 	return result, nil
 }
 
+func runRealC01PendingApprovalRecoveryHelper(ctx context.Context, cli, workspace, journalPath, sessionID, threadID, requestID string) (realC01PendingApprovalResult, error) {
+	journal, err := OpenJournal(journalPath)
+	if err != nil {
+		return realC01PendingApprovalResult{}, err
+	}
+	session, ok := journal.Session(sessionID)
+	if !ok {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, fmt.Errorf("pending-approval helper session %q is not present in the journal", sessionID)
+	}
+	if session.ExternalThreadRef != threadID {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, fmt.Errorf("pending-approval helper thread = %q, want %q", session.ExternalThreadRef, threadID)
+	}
+	pending, err := journal.FindPendingApproval(sessionID, "", json.RawMessage(requestID))
+	if err != nil {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, fmt.Errorf("find pending approval %s: %w", requestID, err)
+	}
+	result := realC01PendingApprovalResult{
+		Mode:                        "recover-pending-approval",
+		ProcessID:                   os.Getpid(),
+		ProcessStartToken:           realC01ProcessToken(),
+		SessionID:                   sessionID,
+		ThreadID:                    threadID,
+		TurnID:                      pending.TurnID,
+		RequestID:                   string(pending.RequestID),
+		Revision:                    pending.Revision,
+		InitialGeneration:           pending.Generation,
+		NativeApprovalEventObserved: realC01ApprovalRequestEventObserved(journal, sessionID, pending.RequestID),
+	}
+	if !result.NativeApprovalEventObserved {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, errors.New("pending-approval helper could not verify the original app-server approval event")
+	}
+
+	gateway, err := newRealC01HelperGateway(cli, workspace, nil)
+	if err != nil {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, err
+	}
+	adapter, err := NewAdapter(gateway, journal, realC01AdapterConfig(workspace))
+	if err != nil {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, err
+	}
+	controller, err := NewController(journal, adapter)
+	if err != nil {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, err
+	}
+	if err := controller.ensureAdapterSession(ctx, session); err != nil {
+		result.RecoveryError = err.Error()
+		result.ResolutionEventCount = realC01ApprovalResolutionEventCount(journal, sessionID, pending.RequestID)
+		if closeErr := journal.Close(); closeErr != nil {
+			return result, closeErr
+		}
+		result.ApprovalClaimRecordCount, err = realC01ApprovalClaimRecordCount(journalPath, sessionID, pending.RequestID)
+		return result, err
+	}
+	recoveredGatewaySession, err := gateway.RecoveredSession(threadID)
+	if err != nil {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, err
+	}
+	result.RecoveredGeneration = recoveredGatewaySession.Generation
+
+	firstCommand := realApprovalCommand("c01-pending-restart-claim-one", protocol.CommandKindRunApprove, sessionID, pending)
+	result.FirstCommandID = firstCommand.CommandID
+	firstAck, firstErr := adapter.SendCommand(ctx, session, firstCommand)
+	result.FirstState = firstAck.State
+	if firstErr != nil {
+		result.FirstError = firstErr.Error()
+	}
+	secondCommand := realApprovalCommand("c01-pending-restart-claim-two", protocol.CommandKindRunApprove, sessionID, pending)
+	result.SecondCommandID = secondCommand.CommandID
+	secondAck, secondErr := adapter.SendCommand(ctx, session, secondCommand)
+	result.SecondState = secondAck.State
+	if secondErr != nil {
+		result.SecondError = secondErr.Error()
+	}
+	result.ResolutionEventCount = realC01ApprovalResolutionEventCount(journal, sessionID, pending.RequestID)
+	if err := adapter.CloseSession(context.Background(), session); err != nil {
+		_ = gateway.CloseSession(context.Background(), recoveredGatewaySession)
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, err
+	}
+	if err := gateway.CloseSession(context.Background(), recoveredGatewaySession); err != nil {
+		_ = journal.Close()
+		return realC01PendingApprovalResult{}, err
+	}
+	if err := journal.Close(); err != nil {
+		return realC01PendingApprovalResult{}, err
+	}
+	result.ApprovalClaimRecordCount, err = realC01ApprovalClaimRecordCount(journalPath, sessionID, pending.RequestID)
+	if err != nil {
+		return realC01PendingApprovalResult{}, err
+	}
+	return result, nil
+}
+
+func realC01ApprovalRequestEventObserved(journal *Journal, sessionID string, requestID json.RawMessage) bool {
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, Limit: 1000})
+	if err != nil {
+		return false
+	}
+	for _, event := range page.Events {
+		if event.Type != protocol.EventTypeApprovalRequested || event.Source != protocol.EventSourceAppServer {
+			continue
+		}
+		if realC01ApprovalIDsMatch(realC01ApprovalRequestID(event.Payload), requestID) {
+			return true
+		}
+	}
+	return false
+}
+
+func realC01ApprovalResolutionEventCount(journal *Journal, sessionID string, requestID json.RawMessage) int {
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: sessionID, Limit: 1000})
+	if err != nil {
+		return -1
+	}
+	count := 0
+	for _, event := range page.Events {
+		if event.Type == protocol.EventTypeApprovalResolved && event.Source == protocol.EventSourceAppServer && realC01ApprovalIDsMatch(realC01ApprovalRequestID(event.Payload), requestID) {
+			count++
+		}
+	}
+	return count
+}
+
+func realC01ApprovalClaimRecordCount(path, sessionID string, requestID json.RawMessage) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	count := 0
+	for {
+		var record journalRecord
+		err := decoder.Decode(&record)
+		if errors.Is(err, io.EOF) {
+			return count, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if record.Type == "approval_claim" && record.ApprovalClaim != nil && record.ApprovalClaim.SessionID == sessionID && realC01ApprovalIDsMatch(record.ApprovalClaim.RequestID, requestID) {
+			count++
+		}
+	}
+}
+
+func realC01ApprovalRequestID(payload json.RawMessage) json.RawMessage {
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Params struct {
+			RequestID json.RawMessage `json:"requestId"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil {
+		return nil
+	}
+	if len(bytes.TrimSpace(envelope.ID)) > 0 && !bytes.Equal(bytes.TrimSpace(envelope.ID), []byte("null")) {
+		return envelope.ID
+	}
+	return envelope.Params.RequestID
+}
+
+func realC01ApprovalIDsMatch(left, right json.RawMessage) bool {
+	if len(bytes.TrimSpace(left)) == 0 || len(bytes.TrimSpace(right)) == 0 {
+		return false
+	}
+	return approvalIDIdentity(left) == approvalIDIdentity(right) || approvalIDText(left) == approvalIDText(right)
+}
+
 func newRealC01HelperGateway(cli, workspace string, afterRequestWrite func(string)) (*Gateway, error) {
 	return NewGateway(GatewayConfig{
 		Process: ProcessTransportConfig{CommandPath: cli, WorkingDir: workspace},
@@ -371,6 +595,14 @@ func writeRealC01ProcessResult(path string, result realC01ProcessResult) error {
 		return err
 	}
 	return file.Close()
+}
+
+func writeRealC01PendingApprovalResult(path string, result realC01PendingApprovalResult) error {
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeExclusiveC01Evidence(path, append(data, '\n'))
 }
 
 func writeExclusiveC01Evidence(path string, data []byte) error {
@@ -464,6 +696,173 @@ func runRealC01Helper(ctx context.Context, t *testing.T, mode, cli, workspace, j
 		t.Fatalf("C01 helper mode = %q, want %q", result.Mode, mode)
 	}
 	return result
+}
+
+func runRealC01PendingApprovalRecoveryProcess(ctx context.Context, t *testing.T, cli, workspace, journalPath, sessionID, threadID, requestID, resultPath string) realC01PendingApprovalResult {
+	t.Helper()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRealC01PendingApprovalRecoveryProcessHelper$", "-test.v")
+	command.Env = append(os.Environ(),
+		realC01PendingApprovalHelperEnv+"=recover",
+		"LOOMHELM_REAL_C01_PENDING_APPROVAL_CLI="+cli,
+		"LOOMHELM_REAL_C01_PENDING_APPROVAL_WORKSPACE="+workspace,
+		"LOOMHELM_REAL_C01_PENDING_APPROVAL_JOURNAL="+journalPath,
+		"LOOMHELM_REAL_C01_PENDING_APPROVAL_SESSION="+sessionID,
+		"LOOMHELM_REAL_C01_PENDING_APPROVAL_THREAD="+threadID,
+		"LOOMHELM_REAL_C01_PENDING_APPROVAL_REQUEST="+requestID,
+		"LOOMHELM_REAL_C01_PENDING_APPROVAL_RESULT="+resultPath,
+	)
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		t.Fatalf("C01 pending-approval recovery helper failed: %v\n%s", err, output.String())
+	}
+	data, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatalf("read C01 pending-approval recovery result: %v", err)
+	}
+	var result realC01PendingApprovalResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode C01 pending-approval recovery result: %v", err)
+	}
+	if result.Mode != "recover-pending-approval" {
+		t.Fatalf("C01 pending-approval helper mode = %q", result.Mode)
+	}
+	return result
+}
+
+func TestRealC01PendingApprovalConnectorRestartSingleClaim(t *testing.T) {
+	cli := strings.TrimSpace(os.Getenv("LOOMHELM_REAL_CODEX_CLI"))
+	if cli == "" {
+		t.Skip("set LOOMHELM_REAL_CODEX_CLI to run the disposable C01 pending-approval restart acceptance")
+	}
+	workspace := privateTestDir(t)
+	journalPath := filepath.Join(workspace, "connector.jsonl")
+	journ, err := OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalOpen := true
+	t.Cleanup(func() {
+		if journalOpen {
+			_ = journ.Close()
+		}
+	})
+
+	gateway, err := newRealC01HelperGateway(cli, workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewAdapter(gateway, journ, realC01AdapterConfig(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	createRequest := protocol.NewSessionRequest{CommandID: "c01-pending-restart-session"}
+	gatewaySession, err := gateway.StartNewSession(ctx, createRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeSession, err := adapter.StartSession(ctx, gatewaySession, createRequest)
+	if err != nil {
+		_ = gateway.CloseSession(context.Background(), gatewaySession)
+		t.Fatal(err)
+	}
+	parentSessionOpen := true
+	t.Cleanup(func() {
+		if parentSessionOpen {
+			_ = adapter.CloseSession(context.Background(), activeSession)
+			_ = gateway.CloseSession(context.Background(), gatewaySession)
+		}
+	})
+
+	approvalCommand := realCommand("c01-pending-restart", protocol.CommandKindRunSend, activeSession.SessionID, `{"prompt":"Run exactly this harmless command in the test workspace: /usr/bin/printf LOOMHELM_C01_PENDING. Do not use any other tool. After it completes, reply exactly LOOMHELM_C01_PENDING_OK."}`)
+	approvalAck, err := adapter.SendCommand(ctx, activeSession, approvalCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := waitForRealApproval(ctx, journ, activeSession.SessionID, gatewaySession.Generation, valueOrEmpty(approvalAck.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.TurnID == "" || approval.ItemID == "" || len(bytes.TrimSpace(approval.RequestID)) == 0 {
+		t.Fatalf("pending approval identity is incomplete: %+v", approval)
+	}
+	if approval.TurnID != valueOrEmpty(approvalAck.RunID) {
+		t.Fatalf("pending approval turn = %q, turn/start ACK = %q", approval.TurnID, valueOrEmpty(approvalAck.RunID))
+	}
+	if !realC01ApprovalRequestEventObserved(journ, activeSession.SessionID, approval.RequestID) {
+		t.Fatal("parent Connector did not persist the native approval.requested event")
+	}
+	if approval.Generation != gatewaySession.Generation {
+		t.Fatalf("pending approval generation = %q, initial gateway generation = %q", approval.Generation, gatewaySession.Generation)
+	}
+	requestID := string(approval.RequestID)
+	resultPath := filepath.Join(workspace, "c01-pending-approval-recovery-result.json")
+	if err := adapter.CloseSession(context.Background(), activeSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.CloseSession(context.Background(), gatewaySession); err != nil {
+		t.Fatal(err)
+	}
+	if err := journ.Close(); err != nil {
+		t.Fatal(err)
+	}
+	parentSessionOpen = false
+	journalOpen = false
+
+	child := runRealC01PendingApprovalRecoveryProcess(ctx, t, cli, workspace, journalPath, activeSession.SessionID, activeSession.ExternalThreadRef, requestID, resultPath)
+	if child.ProcessID == 0 || child.ProcessID == os.Getpid() {
+		t.Fatalf("recovery Connector PID = %d, parent PID = %d", child.ProcessID, os.Getpid())
+	}
+	if child.ProcessStartToken == "" {
+		t.Fatal("recovery Connector did not report a process start token")
+	}
+	if child.SessionID != activeSession.SessionID || child.ThreadID != activeSession.ExternalThreadRef || child.TurnID != approval.TurnID || child.RequestID != requestID {
+		t.Fatalf("pending approval identity changed across Connector restart: %+v", child)
+	}
+	if child.Revision != approval.Revision || child.InitialGeneration != gatewaySession.Generation {
+		t.Fatalf("pending approval durable identity changed across restart: %+v", child)
+	}
+	if child.RecoveredGeneration == "" || child.RecoveredGeneration == child.InitialGeneration {
+		t.Fatalf("recovery did not establish a new Connector generation: %+v", child)
+	}
+	if !child.NativeApprovalEventObserved {
+		t.Fatal("recovery Connector did not observe the original native approval event")
+	}
+	if child.RecoveryError != "" {
+		t.Fatalf("thread/resume recovery failed before approval handling: %s", child.RecoveryError)
+	}
+	if child.FirstState != protocol.CommandStateRejected || child.SecondState != protocol.CommandStateRejected {
+		t.Fatalf("stale approval decisions were not explicitly rejected: first=%q (%s), second=%q (%s)", child.FirstState, child.FirstError, child.SecondState, child.SecondError)
+	}
+	if child.FirstError == "" || child.SecondError == "" {
+		t.Fatalf("rejected approval decisions did not preserve errors: %+v", child)
+	}
+	if child.ResolutionEventCount != 0 {
+		t.Fatalf("Connector restart emitted native approval resolution events: %d", child.ResolutionEventCount)
+	}
+	if child.ApprovalClaimRecordCount > 1 {
+		t.Fatalf("Connector restart created duplicate approval claims: %d", child.ApprovalClaimRecordCount)
+	}
+
+	reopened, err := OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	remaining, err := reopened.FindPendingApproval(activeSession.SessionID, "", approval.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remaining.Generation != gatewaySession.Generation || remaining.TurnID != approval.TurnID {
+		t.Fatalf("old approval ownership changed after rejected restart attempts: %+v", remaining)
+	}
+	if realC01ApprovalResolutionEventCount(reopened, activeSession.SessionID, approval.RequestID) != 0 {
+		t.Fatal("old approval gained a resolution after the original Connector owner disappeared")
+	}
+	t.Logf("independent Connector restart: parent_pid=%d child_pid=%d thread=%s turn=%s request=%s initial_generation=%s recovered_generation=%s first=%s second=%s native_resolutions=%d journal_claim_records=%d", os.Getpid(), child.ProcessID, activeSession.ExternalThreadRef, approval.TurnID, requestID, gatewaySession.Generation, child.RecoveredGeneration, child.FirstState, child.SecondState, child.ResolutionEventCount, child.ApprovalClaimRecordCount)
 }
 
 func TestRealC01AdapterApprovalInterruptAndRecovery(t *testing.T) {

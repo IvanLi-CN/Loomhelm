@@ -23,3 +23,9 @@ type Registry interface {
 }
 
 type EventHandler func(context.Context, hosts.Connection, protocol.Event) error
+
+// CommandAckHandler is an internal durable-ingress seam. The Gateway invokes
+// it under the authenticated host connection fence before consulting its
+// process-local pending map, so late ACKs remain persistable without changing
+// the WSS message contract.
+type CommandAckHandler func(context.Context, hosts.Connection, string, protocol.CommandAck) error

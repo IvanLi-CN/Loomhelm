@@ -189,6 +189,47 @@ func (l *workerLease) Check(ctx context.Context) error {
 	return fmt.Errorf("check worker lease: %w", err)
 }
 
+// CheckTx holds a share lock on the exact deployment lease row until the
+// caller's transaction commits. A newer generation must therefore wait for an
+// in-flight application write, while a generation that already took over is
+// rejected before that write can commit.
+func (l *workerLease) CheckTx(ctx context.Context, tx pgx.Tx) error {
+	if l == nil || l.db == nil || l.db.Pool() == nil {
+		return errors.New("worker lease is not initialized")
+	}
+	if ctx == nil {
+		return errors.New("worker lease context must not be nil")
+	}
+	if tx == nil {
+		return errors.New("worker lease transaction must not be nil")
+	}
+	if !l.valid.Load() {
+		if failure := l.lastFailure.Load(); failure != nil && failure.(string) == ErrWorkerLeaseLost.Error() {
+			return ErrWorkerLeaseLost
+		}
+		return errors.New("worker lease is not currently valid")
+	}
+	var current int64
+	err := tx.QueryRow(ctx, `
+		SELECT generation
+		FROM platform_worker_leases
+		WHERE lease_key = $1
+		  AND generation = $2
+		  AND candidate_source_sha = $3
+		  AND artifact_digest = $4
+		FOR SHARE
+	`, l.key, l.generation, l.candidate, l.digest).Scan(&current)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		l.lastFailure.Store(ErrWorkerLeaseLost.Error())
+		l.valid.Store(false)
+		return ErrWorkerLeaseLost
+	}
+	return fmt.Errorf("check worker lease in transaction: %w", err)
+}
+
 func (l *workerLease) Valid() bool {
 	return l != nil && l.valid.Load()
 }

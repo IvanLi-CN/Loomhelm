@@ -904,6 +904,119 @@ func TestPersistentControllerPreservesActiveConcurrentDuplicate(t *testing.T) {
 	}
 }
 
+func TestPersistentControllerRepairsUnknownCommandRunSplit(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        "1",
+	}); err != nil {
+		t.Fatalf("create split-state session: %v", err)
+	}
+	command := protocol.Command{
+		CommandID: ids.command,
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"repair split state"}`),
+		SessionID: ids.session,
+	}
+	runID := ids.run
+	command.RunID = &runID
+	store := NewStore(db.Pool())
+	if _, _, err := store.AcceptRun(ctx, CommandIntent{Command: command, Generation: "1"}, NewRunInput{
+		ID:         runID,
+		SessionID:  ids.session,
+		CommandID:  command.CommandID,
+		Generation: "1",
+	}); err != nil {
+		t.Fatalf("persist split-state command and run: %v", err)
+	}
+	if _, err := store.MarkUnknown(ctx, command.CommandID, "1"); err != nil {
+		t.Fatalf("seed unknown command: %v", err)
+	}
+	if _, err := store.Start(ctx, runID, "1", "cursor-split-running"); err != nil {
+		t.Fatalf("seed non-terminal run: %v", err)
+	}
+
+	transport := &integrationCommandTransport{}
+	controller, err := NewController(store, transport, ControllerConfig{Generation: "1"})
+	if err != nil {
+		t.Fatalf("create split-state controller: %v", err)
+	}
+	if _, err := controller.ReconcileCommand(ctx, command.CommandID); !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("split-state reconciliation error = %v, want unknown result", err)
+	}
+	run, err := store.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("read repaired run: %v", err)
+	}
+	if run.Status != protocol.RunStatusUnknown {
+		t.Fatalf("repaired run = %+v, want unknown", run)
+	}
+	if _, err := store.MarkCommandAndRunUnknown(ctx, command.CommandID, "1", "retry unknown convergence"); err != nil {
+		t.Fatalf("repeat unknown convergence: %v", err)
+	}
+}
+
+func TestPersistentStoreUnknownTransitionRollsBackOnRunIdentityConflict(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+
+	if _, err := sessions.NewStore(db.Pool()).Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        "1",
+	}); err != nil {
+		t.Fatalf("create conflict session: %v", err)
+	}
+	command := protocol.Command{
+		CommandID: ids.command,
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"rollback unknown transition"}`),
+		SessionID: ids.session,
+	}
+	runID := ids.run
+	command.RunID = &runID
+	store := NewStore(db.Pool())
+	if _, _, err := store.AcceptRun(ctx, CommandIntent{Command: command, Generation: "1"}, NewRunInput{
+		ID:         runID,
+		SessionID:  ids.session,
+		CommandID:  command.CommandID,
+		Generation: "1",
+	}); err != nil {
+		t.Fatalf("persist conflict command and run: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `UPDATE execution_runs SET command_id = $1 WHERE id = $2`, ids.unknownCommand, runID); err != nil {
+		t.Fatalf("seed mismatched run identity: %v", err)
+	}
+	if _, err := store.MarkCommandAndRunUnknown(ctx, command.CommandID, "1", "mismatched association"); !errors.Is(err, ErrRunConflict) {
+		t.Fatalf("mismatched run error = %v, want %v", err, ErrRunConflict)
+	}
+	commandRecord, err := store.Lookup(ctx, command.CommandID)
+	if err != nil {
+		t.Fatalf("read rolled-back command: %v", err)
+	}
+	if commandRecord.State != protocol.CommandStateAccepted {
+		t.Fatalf("rolled-back command = %+v, want accepted", commandRecord)
+	}
+	run, err := store.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("read rolled-back run: %v", err)
+	}
+	if run.Status != protocol.RunStatusPending {
+		t.Fatalf("rolled-back run = %+v, want pending", run)
+	}
+}
+
 type integrationCommandTransport struct {
 	ack     protocol.CommandAck
 	sendErr error
@@ -1034,6 +1147,7 @@ func cleanupExecutionRows(t *testing.T, db **database.DB, ids executionIDs) {
 		defer cancel()
 		for _, query := range []string{
 			`DELETE FROM execution_control_leases WHERE lease_key = $1`,
+			`DELETE FROM execution_approval_revisions WHERE id = $1`,
 			`DELETE FROM execution_approvals WHERE id = $1`,
 			`DELETE FROM execution_events WHERE session_id = $1`,
 			`DELETE FROM execution_runs WHERE session_id = $1`,
