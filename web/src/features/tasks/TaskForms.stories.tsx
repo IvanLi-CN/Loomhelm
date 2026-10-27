@@ -66,6 +66,22 @@ export const Create: Story = {
   }
 };
 
+export const MobileCreate: Story = {
+  ...Create,
+  parameters: {
+    viewport: {
+      options: {
+        taskFormsMobile: {
+          name: "TaskForms mobile 393x852",
+          styles: { width: "393px", height: "852px" },
+          type: "mobile"
+        }
+      }
+    }
+  },
+  globals: { viewport: "taskFormsMobile" }
+};
+
 export const KnownCreationRecovery: Story = {
   args: { source: knownCreationSource(), mode: "create", onSaved: fn() },
   render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame>,
