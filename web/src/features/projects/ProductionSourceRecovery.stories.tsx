@@ -64,6 +64,7 @@ const emptyRelationships: TaskRelationshipPage = {
 interface ScenarioState {
   scenario: Scenario;
   principalId: string;
+  sessionGeneration: number;
   projectListCalls: number;
   createCalls: number;
   createTaskCalls: number;
@@ -237,6 +238,7 @@ function SharedRefreshHarness() {
     const next: ScenarioState = {
       scenario: "remote-refresh-failure",
       principalId,
+      sessionGeneration: 1,
       projectListCalls: 0,
       createCalls: 0,
       createTaskCalls: 0,
@@ -329,6 +331,113 @@ function SharedRefreshContent({ state, instance }: { state: ScenarioState; insta
   );
 }
 
+function GenerationRefreshHarness() {
+  const state = useMemo(() => {
+    const next: ScenarioState = {
+      scenario: "remote-refresh",
+      principalId,
+      sessionGeneration: 1,
+      projectListCalls: 0,
+      createCalls: 0,
+      createTaskCalls: 0,
+      updateCalls: 0,
+      relationCalls: 0,
+      dependencyCalls: 0,
+      requestedTaskId: "",
+      refreshRequested: false,
+      refreshState: "idle",
+      lastResult: "",
+      broadcastPatched: false,
+      locksPatched: false,
+      setItemPatched: false,
+      listeners: new Set()
+    };
+    prepareScenario(next);
+    return next;
+  }, []);
+  const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }), []);
+  const [, setRevision] = useState(0);
+
+  useEffect(() => {
+    const listener = () => setRevision((value) => value + 1);
+    state.listeners?.add(listener);
+    return () => {
+      state.listeners?.delete(listener);
+    };
+  }, [state]);
+
+  useEffect(() => () => restoreScenario(state), [state]);
+
+  return <QueryClientProvider client={queryClient}><GenerationRefreshContent state={state} /></QueryClientProvider>;
+}
+
+function GenerationRefreshContent({ state }: { state: ScenarioState }) {
+  const source = usePublishedProjectTaskSource({
+    client: useMemo(() => createClient(state), [state]),
+    enabled: true,
+    canCreateProjects: true,
+    principalId: state.principalId,
+    sessionGeneration: state.sessionGeneration
+  });
+  const [, setRevision] = useState(0);
+
+  useEffect(() => {
+    const listener = () => setRevision((value) => value + 1);
+    state.listeners?.add(listener);
+    return () => {
+      state.listeners?.delete(listener);
+    };
+  }, [state]);
+
+  const triggerRemoteRemoval = () => {
+    const key = mutationNoticeKey(noticeId);
+    const oldValue = JSON.stringify(remoteNotice);
+    state.refreshRequested = true;
+    window.localStorage.removeItem(key);
+    window.dispatchEvent(new StorageEvent("storage", { key, oldValue, newValue: null, storageArea: window.localStorage, url: window.location.href }));
+  };
+
+  const revalidateSamePrincipal = () => {
+    state.sessionGeneration += 1;
+    notifyScenario(state);
+  };
+
+  const completeOldRefresh = () => {
+    state.resolveRefresh?.();
+  };
+
+  const refreshCurrentGeneration = async () => {
+    await source.refresh();
+    state.lastResult = "current-refresh-complete";
+    notifyScenario(state);
+  };
+
+  const runUpdate = async () => {
+    const result = await source.updateTask(taskId, { title: "Updated task" });
+    state.lastResult = result.ok ? "updated" : result.message;
+    notifyScenario(state);
+  };
+
+  return (
+    <div className="min-h-screen bg-[var(--canvas)] p-8" data-visual-evidence-surface>
+      <div className="mx-auto grid max-w-3xl gap-4 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-6" data-visual-evidence-target>
+        <h1 className="text-lg font-semibold">Same-principal generation refresh barrier</h1>
+        <p data-testid="generation-value">认证代次：{state.sessionGeneration}</p>
+        <p data-testid="generation-refresh-state">刷新：{state.refreshState}</p>
+        <p data-testid="generation-update-calls">任务 PATCH：{state.updateCalls}</p>
+        <p data-testid="generation-result">结果：{state.lastResult || "无"}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <button type="button" className="button button-secondary" onClick={triggerRemoteRemoval}>移除远端通知</button>
+          <button type="button" className="button button-secondary" onClick={revalidateSamePrincipal}>同身份重新认证</button>
+          <button type="button" className="button button-secondary" onClick={completeOldRefresh}>完成旧代刷新</button>
+          <button type="button" className="button button-secondary" onClick={() => { void refreshCurrentGeneration(); }}>当前代刷新并核对</button>
+          <button type="button" className="button button-secondary" onClick={() => { void runUpdate(); }}>尝试更新任务</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RecoveryContent({ state }: { state: ScenarioState }) {
   const source = usePublishedProjectTaskSource({
     client: useMemo(() => createClient(state), [state]),
@@ -398,7 +507,7 @@ function RecoveryContent({ state }: { state: ScenarioState }) {
 }
 
 function renderScenario(scenario: Scenario) {
-  const state: ScenarioState = { scenario, principalId, projectListCalls: 0, createCalls: 0, createTaskCalls: 0, updateCalls: 0, relationCalls: 0, dependencyCalls: 0, requestedTaskId: "", refreshRequested: false, refreshState: "idle", lastResult: "", broadcastPatched: false, locksPatched: false, setItemPatched: false };
+  const state: ScenarioState = { scenario, principalId, sessionGeneration: 1, projectListCalls: 0, createCalls: 0, createTaskCalls: 0, updateCalls: 0, relationCalls: 0, dependencyCalls: 0, requestedTaskId: "", refreshRequested: false, refreshState: "idle", lastResult: "", broadcastPatched: false, locksPatched: false, setItemPatched: false };
   prepareScenario(state);
   return <RecoveryHarness state={state} />;
 }
@@ -453,6 +562,27 @@ export const RemoteRemovalFailureSurvivesSourceRemount: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "副本实例尝试更新任务" }));
     await waitFor(() => expect(canvas.getByTestId("副本实例-result")).toHaveTextContent("待确认"));
     expect(canvas.getByTestId("shared-update-calls")).toHaveTextContent("任务 PATCH：0");
+  }
+};
+
+export const SamePrincipalGenerationKeepsRefreshBarrier: Story = {
+  render: () => <GenerationRefreshHarness />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByTestId("generation-value")).toHaveTextContent("认证代次：1"));
+    await userEvent.click(await canvas.findByRole("button", { name: "移除远端通知" }));
+    await waitFor(() => expect(canvas.getByTestId("generation-refresh-state")).toHaveTextContent("刷新：pending"));
+    await userEvent.click(canvas.getByRole("button", { name: "同身份重新认证" }));
+    await waitFor(() => expect(canvas.getByTestId("generation-value")).toHaveTextContent("认证代次：2"));
+    await userEvent.click(canvas.getByRole("button", { name: "完成旧代刷新" }));
+    await userEvent.click(canvas.getByRole("button", { name: "尝试更新任务" }));
+    await waitFor(() => expect(canvas.getByTestId("generation-result")).toHaveTextContent("待确认"));
+    expect(canvas.getByTestId("generation-update-calls")).toHaveTextContent("任务 PATCH：0");
+    await userEvent.click(canvas.getByRole("button", { name: "当前代刷新并核对" }));
+    await waitFor(() => expect(canvas.getByTestId("generation-result")).toHaveTextContent("current-refresh-complete"));
+    await userEvent.click(canvas.getByRole("button", { name: "尝试更新任务" }));
+    await waitFor(() => expect(canvas.getByTestId("generation-result")).toHaveTextContent("结果：updated"));
+    expect(canvas.getByTestId("generation-update-calls")).toHaveTextContent("任务 PATCH：1");
   }
 };
 

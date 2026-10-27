@@ -295,7 +295,12 @@ describe("project/task write contracts", () => {
     expect(remounted).toBe(first);
     expect(mutationWriteAdmission("task:one", [], remounted.barriers, readable)).toBe("refreshing");
     expect(mutationWriteAdmission("task:one", [], otherPrincipal.barriers, readable)).toBeUndefined();
-    expect(mutationWriteAdmission("task:one", [], newSession.barriers, readable)).toBeUndefined();
+    expect(newSession).toBe(first);
+    expect(mutationWriteAdmission("task:one", [], newSession.barriers, readable)).toBe("refreshing");
+    const newer = markMutationRefreshScopes(newSession.barriers, ["task:one"], newSession.nextRevision);
+    newSession.nextRevision = newer.nextRevision;
+    releaseMutationRefreshScopes(newSession.barriers, marked.revisions);
+    expect(newSession.barriers.get("task:one")).toBe(newer.revisions.get("task:one"));
     queryClient.clear();
   });
 

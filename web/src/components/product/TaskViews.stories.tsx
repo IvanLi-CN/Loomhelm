@@ -130,6 +130,16 @@ export const ExplorerConsistency: Story = {
   }
 };
 
+export const GraphRelationsAccessibility: Story = {
+  render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ getTaskView: () => "graph" })} renderTaskLink={renderTaskLink} /></div>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.getByRole("region", { name: "任务关系图谱，可横向和纵向浏览" })).toBeInTheDocument();
+    expect(canvas.getAllByRole("link", { name: /STORY-3.*父任务：STORY-2.*父任务指向当前任务/ }).length).toBeGreaterThan(0);
+    expect(canvas.getAllByRole("link", { name: /STORY-4.*前置任务：STORY-2.*前置任务指向当前任务/ }).length).toBeGreaterThan(0);
+  }
+};
+
 export const Loading: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ status: "loading" })} renderTaskLink={renderTaskLink} /></div> };
 
 export const Empty: Story = { render: () => <div className="min-h-screen bg-[var(--canvas)] p-8"><TaskExplorer source={createSource({ tasks: [], getTasksForScope: () => [] })} renderTaskLink={renderTaskLink} /></div> };

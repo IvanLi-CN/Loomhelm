@@ -512,18 +512,16 @@ export interface MutationRefreshScopeState {
   nextRevision: number;
 }
 
-const sharedMutationRefreshScopes = new WeakMap<QueryClient, Map<number, Map<string, MutationRefreshScopeState>>>();
+// Refresh barriers belong to the principal and QueryClient, not to one auth generation.
+// Revalidation can replace the generation while the affected read is still pending;
+// revision tokens keep stale callbacks from releasing a newer barrier.
+const sharedMutationRefreshScopes = new WeakMap<QueryClient, Map<string, MutationRefreshScopeState>>();
 
-export function getSharedMutationRefreshScopeState(queryClient: QueryClient, principalId: string, sessionGeneration = 0): MutationRefreshScopeState {
-  let byGeneration = sharedMutationRefreshScopes.get(queryClient);
-  if (!byGeneration) {
-    byGeneration = new Map();
-    sharedMutationRefreshScopes.set(queryClient, byGeneration);
-  }
-  let byPrincipal = byGeneration.get(sessionGeneration);
+export function getSharedMutationRefreshScopeState(queryClient: QueryClient, principalId: string, _sessionGeneration = 0): MutationRefreshScopeState {
+  let byPrincipal = sharedMutationRefreshScopes.get(queryClient);
   if (!byPrincipal) {
     byPrincipal = new Map();
-    byGeneration.set(sessionGeneration, byPrincipal);
+    sharedMutationRefreshScopes.set(queryClient, byPrincipal);
   }
   let state = byPrincipal.get(principalId);
   if (!state) {
