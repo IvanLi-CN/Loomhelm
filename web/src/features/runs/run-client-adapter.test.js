@@ -96,6 +96,25 @@ describe("run client adapter", () => {
     expect(adapter.getStreamState(subscription)).toBeUndefined();
   });
 
+  test("does not let a late page overwrite a newer seeded stream baseline", async () => {
+    const pending = deferred();
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async () => pending.promise,
+    });
+
+    adapter.selectSession("session-1");
+    adapter.seedRecoveryCursor(subscription, { cursor: "cursor-2", sequence: 2 });
+    const read = adapter.readRunEvents(subscription);
+    expect(adapter.seedRecoveryCursor(subscription, { cursor: "cursor-10", sequence: 10 })).toBe(true);
+    pending.resolve({ events: [event({ event_id: "late-event", cursor: "cursor-3", sequence: 3 })], has_more: false, next_cursor: "cursor-3" });
+
+    await expect(read).resolves.toMatchObject({ state: "unknown", reason: "stale_response", request: { baselineSequence: 2, baselineVersion: 1 } });
+    expect(adapter.getStreamState(subscription)).toMatchObject({ cursor: "cursor-10", cursorSequence: 10 });
+    expect(adapter.getRecoveryCursorBaseline(subscription)).toEqual({ cursor: "cursor-10", sequence: 10 });
+  });
+
   test("guards duplicate submit clicks and does not call the client while offline", async () => {
     const submit = deferred();
     const calls = { submit: [], interrupt: [] };
@@ -120,9 +139,49 @@ describe("run client adapter", () => {
     adapter.selectSession("session-2");
     submit.resolve(ack("command-1"));
     await expect(first).resolves.toMatchObject({ state: "unknown", reason: "stale_response" });
+    await expect(adapter.submitRun("session-2", body)).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls.submit).toHaveLength(1);
 
     const offline = await adapter.interruptRun("session-2", "run-2", { command_id: "command-2" }, { connection: "offline" });
     expect(offline).toMatchObject({ state: "unknown", reason: "offline" });
     expect(calls.interrupt).toHaveLength(0);
+  });
+
+  test("keeps a response-lost interrupt uncertain until explicit resolution", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async (request) => {
+        calls.push(request);
+        throw new Error("response lost");
+      },
+      listRunEvents: async () => ({ events: [], has_more: false }),
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.interruptRun("session-1", "run-1", { command_id: "command-interrupt-1" })).resolves.toMatchObject({ state: "unknown", reason: "transport" });
+    await expect(adapter.interruptRun("session-1", "run-1", { command_id: "command-interrupt-2" })).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls).toHaveLength(1);
+    expect(adapter.resolveUncertainInterrupt("run-1", "command-interrupt-1")).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("keeps a response-lost submit uncertain until explicit resolution", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async (request) => {
+        calls.push(request);
+        throw new Error("response lost");
+      },
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async () => ({ events: [], has_more: false }),
+    });
+    const body = { command_id: "command-submit-1", prompt: "run this" };
+
+    adapter.selectSession("session-1");
+    await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "transport" });
+    await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls).toHaveLength(1);
+    expect(adapter.resolveUncertainSubmit("command-submit-1")).toBe(true);
   });
 });

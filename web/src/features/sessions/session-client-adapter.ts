@@ -9,6 +9,7 @@ export interface SessionRequestToken {
   generation: number;
   requestId: number;
   baselineSequence?: number;
+  baselineVersion?: number;
 }
 
 export type SessionRequestAdmission =
@@ -29,7 +30,7 @@ export class SessionRequestFence {
     return this.generation;
   }
 
-  begin(key: string, sessionId: string, baselineSequence?: number): SessionRequestAdmission {
+  begin(key: string, sessionId: string, baselineSequence?: number, baselineVersion?: number): SessionRequestAdmission {
     if (this.activeSessionId === undefined) this.activateSession(sessionId);
     if (this.activeSessionId !== sessionId) return { accepted: false, reason: "stale_session" };
 
@@ -41,7 +42,8 @@ export class SessionRequestFence {
       sessionId,
       generation: this.generation,
       requestId: ++this.requestId,
-      baselineSequence
+      baselineSequence,
+      baselineVersion
     };
     this.current.set(key, token);
     return { accepted: true, token };
@@ -60,7 +62,7 @@ export class SessionRequestFence {
 }
 
 export type SessionReadState = "received" | "pending" | "unknown";
-export type SessionReadReason = "pending" | "stale_session" | "stale_response" | "transport";
+export type SessionReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "transport";
 
 export interface SessionReadResult {
   state: SessionReadState;
@@ -91,6 +93,10 @@ export class SessionClientAdapter {
     try {
       const response = await this.client.getSession({ session_id: sessionId });
       if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
+      if (response.session.id !== sessionId) {
+        this.requests.finish(admission.token);
+        return { state: "unknown", reason: "foreign_response", request: admission.token };
+      }
       this.requests.finish(admission.token);
       return { state: "received", session: response.session, request: admission.token };
     } catch {

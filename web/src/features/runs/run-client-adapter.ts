@@ -13,6 +13,7 @@ import {
   applyEventPage,
   createRecoveryCursorState,
   createEventStreamState,
+  eventBelongsToScope,
   getEventSubscriptionKey,
   getRecoveryCursor,
   getRecoveryCursorSequence,
@@ -67,8 +68,9 @@ function toScope(subscription: RunEventSubscription): EventStreamScope {
   return { sessionId: subscription.sessionId, runId: subscription.runId };
 }
 
-function getCommandFailureReason(reason: "blocked" | "duplicate" | "stale_session", blockReason?: ClientCommandReason): ClientCommandReason {
+function getCommandFailureReason(reason: "blocked" | "duplicate" | "stale_session" | "uncertain", blockReason?: ClientCommandReason): ClientCommandReason {
   if (reason === "blocked") return blockReason ?? "unknown";
+  if (reason === "uncertain") return "unknown";
   return reason;
 }
 
@@ -77,6 +79,7 @@ export class RunClientAdapter {
   private readonly operations = new ControlOperationGuard();
   private recovery: RecoveryCursorState = createRecoveryCursorState();
   private readonly streams = new Map<string, EventStreamState>();
+  private readonly streamVersions = new Map<string, number>();
 
   constructor(private readonly client: RunClient) {}
 
@@ -106,6 +109,7 @@ export class RunClientAdapter {
     const stream = this.streams.get(key);
     if (stream === undefined) this.streams.set(key, createEventStreamState(toScope(subscription), baseline.cursor, baseline.sequence));
     else this.streams.set(key, { ...stream, cursor: baseline.cursor, cursorSequence: baseline.sequence });
+    this.streamVersions.set(key, (this.streamVersions.get(key) ?? 0) + 1);
     return true;
   }
 
@@ -120,7 +124,8 @@ export class RunClientAdapter {
 
     const key = getEventSubscriptionKey(eventSubscription);
     const stream = this.streams.get(key) ?? createEventStreamState(toScope(subscription), getRecoveryCursor(this.recovery, eventSubscription), getRecoveryCursorSequence(this.recovery, eventSubscription));
-    const admission = this.requests.begin(`run.events:${key}`, subscription.sessionId, stream.cursorSequence);
+    const streamVersion = this.streamVersions.get(key) ?? 0;
+    const admission = this.requests.begin(`run.events:${key}`, subscription.sessionId, stream.cursorSequence, streamVersion);
     if (!admission.accepted) {
       return {
         state: admission.reason === "pending" ? "pending" : "unknown",
@@ -139,11 +144,20 @@ export class RunClientAdapter {
     try {
       const page = await this.client.listRunEvents(request);
       if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
+      if (this.streamVersions.get(key) !== admission.token.baselineVersion) {
+        this.requests.finish(admission.token);
+        return { state: "unknown", reason: "stale_response", request: admission.token };
+      }
+      if (page.events.some((event) => !eventBelongsToScope(event, toScope(subscription)))) {
+        this.requests.finish(admission.token);
+        return { state: "unknown", reason: "foreign_response", page, request: admission.token };
+      }
 
-      const applied = applyEventPage(stream, page);
+      const currentStream = this.streams.get(key) ?? stream;
+      const applied = applyEventPage(currentStream, page);
       this.streams.set(key, applied.state);
+      this.streamVersions.set(key, streamVersion + 1);
       this.requests.finish(admission.token);
-      if (applied.foreign > 0) return { state: "unknown", reason: "foreign_response", page, stream: applied.state, request: admission.token };
 
       this.recovery = advanceRecoveryCursor(this.recovery, eventSubscription, page);
       return { state: "received", page, stream: applied.state, request: admission.token };
@@ -192,8 +206,16 @@ export class RunClientAdapter {
       return { state: getClientCommandState(response.ack.state), commandId: command.command_id, ack: response.ack };
     } catch {
       if (!this.operations.isCurrent(admission.token)) return { state: "unknown", commandId: command.command_id, reason: "stale_response" };
-      this.operations.release(admission.token);
+      this.operations.markUncertain(admission.token);
       return { state: "unknown", commandId: command.command_id, reason: "transport" };
     }
+  }
+
+  resolveUncertainSubmit(commandId: string): boolean {
+    return this.operations.resolveUncertain(`run.submit:${commandId}`, commandId);
+  }
+
+  resolveUncertainInterrupt(runId: string, commandId: string): boolean {
+    return this.operations.resolveUncertain(`run.interrupt:${runId}`, commandId, runId);
   }
 }

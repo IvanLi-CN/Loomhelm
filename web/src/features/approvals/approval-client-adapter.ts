@@ -45,7 +45,7 @@ export class ApprovalClientAdapter {
       return {
         state: admission.reason === "duplicate" ? "pending" : "unknown",
         commandId,
-        reason: admission.reason === "duplicate" ? "duplicate" : admission.reason === "stale_session" ? "stale_session" : admission.gate.blockReason ?? "unknown"
+        reason: admission.reason === "duplicate" ? "duplicate" : admission.reason === "stale_session" ? "stale_session" : admission.reason === "uncertain" ? "unknown" : admission.gate.blockReason ?? "unknown"
       };
     }
 
@@ -56,8 +56,12 @@ export class ApprovalClientAdapter {
       return { state: getClientCommandState(response.ack.state), commandId, ack: response.ack };
     } catch {
       if (!this.operations.isCurrent(admission.token)) return { state: "unknown", commandId, reason: "stale_response" };
-      this.operations.release(admission.token);
+      this.operations.markUncertain(admission.token);
       return { state: "unknown", commandId, reason: "transport" };
     }
+  }
+
+  resolveUncertain(approvalId: string, revision: number, runId: string, commandId: string): boolean {
+    return this.operations.resolveUncertain(`approval.resolve:${approvalId}:${revision}`, commandId, runId);
   }
 }

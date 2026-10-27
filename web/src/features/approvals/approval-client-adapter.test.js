@@ -60,4 +60,22 @@ describe("approval client adapter", () => {
     expect(reconnecting).toMatchObject({ state: "unknown", reason: "reconnecting" });
     expect(calls).toHaveLength(0);
   });
+
+  test("keeps a response-lost approval uncertain until explicit resolution", async () => {
+    const calls = [];
+    const adapter = new ApprovalClientAdapter({
+      resolveApproval: async (request) => {
+        calls.push(request);
+        throw new Error("response lost");
+      },
+    });
+    const input = { sessionId: "session-1", approval: approval(), commandId: "command-approval-1", decision: "approve" };
+
+    adapter.selectSession("session-1");
+    await expect(adapter.resolve(input)).resolves.toMatchObject({ state: "unknown", reason: "transport" });
+    await expect(adapter.resolve({ ...input, commandId: "command-approval-2" })).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls).toHaveLength(1);
+    expect(adapter.resolveUncertain("approval-1", 3, "run-1", "command-approval-1")).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
 });

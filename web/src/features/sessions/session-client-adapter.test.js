@@ -59,4 +59,13 @@ describe("session client adapter", () => {
     await expect(firstRead).resolves.toMatchObject({ state: "unknown", reason: "stale_response" });
     await expect(secondRead).resolves.toMatchObject({ state: "received", session: { id: "session-2" } });
   });
+
+  test("does not publish a session response for a different requested identity", async () => {
+    const adapter = new SessionClientAdapter({
+      getSession: async () => ({ session: session("foreign-session") }),
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.readSession("session-1")).resolves.toMatchObject({ state: "unknown", reason: "foreign_response" });
+  });
 });

@@ -65,14 +65,18 @@ export interface OperationToken {
 
 export type BeginOperationResult =
   | { accepted: true; token: OperationToken }
-  | { accepted: false; reason: "blocked" | "duplicate" | "stale_session"; gate: ControlGate };
+  | { accepted: false; reason: "blocked" | "duplicate" | "stale_session" | "uncertain"; gate: ControlGate };
 
 export type OperationResponseResult =
   | { accepted: true; state: CommandAck["state"]; inProgress: boolean }
   | { accepted: false; reason: "stale" | "mismatched_command" | "not_in_flight" };
 
+function getControlOperationKey(operationKey: string, runId?: string): string {
+  return JSON.stringify([operationKey, runId ?? null]);
+}
+
 function operationIdentity(operation: ControlOperation): string {
-  return JSON.stringify([operation.operationKey, operation.command.run_id ?? null]);
+  return getControlOperationKey(operation.operationKey, operation.command.run_id);
 }
 
 function commandIsInProgress(state: CommandAck["state"]): boolean {
@@ -91,11 +95,13 @@ export class ControlOperationGuard {
   private generation = 0;
   private nonce = 0;
   private readonly inFlight = new Map<string, OperationToken>();
+  private readonly uncertain = new Map<string, OperationToken>();
 
   activateSession(sessionId: string): number {
     if (this.activeSessionId === sessionId) return this.generation;
     this.activeSessionId = sessionId;
     this.generation += 1;
+    for (const [key, token] of this.inFlight) this.uncertain.set(key, token);
     this.inFlight.clear();
     return this.generation;
   }
@@ -106,6 +112,7 @@ export class ControlOperationGuard {
     if (this.activeSessionId !== operation.command.session_id) return { accepted: false, reason: "stale_session", gate };
 
     const key = operationIdentity(operation);
+    if (this.uncertain.has(key)) return { accepted: false, reason: "uncertain", gate };
     if (this.inFlight.has(key)) return { accepted: false, reason: "duplicate", gate };
 
     const token: OperationToken = {
@@ -124,14 +131,27 @@ export class ControlOperationGuard {
     if (ack.command_id !== token.commandId) return { accepted: false, reason: "mismatched_command" };
 
     const inProgress = commandIsInProgress(ack.state);
-    if (!inProgress) this.inFlight.delete(token.operationKey);
+    if (ack.state === "unknown") this.markUncertain(token);
+    else if (!inProgress) this.inFlight.delete(token.operationKey);
     return { accepted: true, state: ack.state, inProgress };
   }
 
-  release(token: OperationToken): boolean {
+  markUncertain(token: OperationToken): boolean {
     if (!this.isCurrent(token)) return false;
     this.inFlight.delete(token.operationKey);
+    this.uncertain.set(token.operationKey, token);
     return true;
+  }
+
+  resolveUncertain(operationKey: string, commandId: string, runId?: string): boolean {
+    const token = this.uncertain.get(getControlOperationKey(operationKey, runId));
+    if (token === undefined || token.commandId !== commandId) return false;
+    this.uncertain.delete(getControlOperationKey(operationKey, runId));
+    return true;
+  }
+
+  isUncertain(operationKey: string, runId?: string): boolean {
+    return this.uncertain.has(getControlOperationKey(operationKey, runId));
   }
 
   isCurrent(token: OperationToken): boolean {

@@ -190,6 +190,9 @@ describe("control availability and operation fencing", () => {
     guard.activateSession("session-2");
     expect(guard.acceptResponse(first.token, ack())).toEqual({ accepted: false, reason: "stale" });
 
+    const blocked = guard.begin({ operationKey: "run.interrupt", command: command({ command_id: "command-3", session_id: "session-2" }) });
+    expect(blocked).toMatchObject({ accepted: false, reason: "uncertain" });
+    expect(guard.resolveUncertain("run.interrupt", first.token.commandId, "run-1")).toBe(true);
     const current = guard.begin({ operationKey: "run.interrupt", command: command({ command_id: "command-3", session_id: "session-2" }) });
     expect(current.accepted).toBe(true);
     if (!current.accepted) return;
@@ -200,5 +203,16 @@ describe("control availability and operation fencing", () => {
     const guard = createControlOperationGuard();
     const result = guard.begin({ operationKey: "run.interrupt", command: command() }, getControlGate({ connection: "offline" }));
     expect(result).toMatchObject({ accepted: false, reason: "blocked" });
+  });
+
+  test("keeps an unknown ACK behind the explicit uncertain-operation barrier", () => {
+    const guard = createControlOperationGuard();
+    const first = guard.begin({ operationKey: "run.submit:command-unknown", command: command() });
+    expect(first.accepted).toBe(true);
+    if (!first.accepted) return;
+
+    expect(guard.acceptResponse(first.token, ack({ state: "unknown" }))).toEqual({ accepted: true, state: "unknown", inProgress: false });
+    expect(guard.begin({ operationKey: "run.submit:command-unknown", command: command() })).toMatchObject({ accepted: false, reason: "uncertain" });
+    expect(guard.resolveUncertain("run.submit:command-unknown", "command-1", "run-1")).toBe(true);
   });
 });
