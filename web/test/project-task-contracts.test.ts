@@ -9,6 +9,7 @@ import {
   createClientResourceId,
   filterTaskRelationships,
   filterTasksToVisibleProjects,
+  getSharedMutationRefreshScopeState,
   hasIncompleteProjectTaskRead,
   markMutationRefreshScopes,
   mergeMutationNoticeChanges,
@@ -19,6 +20,7 @@ import {
   readMutationNoticeStateFromStorage,
   mutationNoticeScopes,
   mutationNoticeRemovalScopes,
+  mutationWriteAdmission,
   projectTaskQueryKeys,
   readProjectMemberships,
   readTaskRelationships,
@@ -280,6 +282,23 @@ describe("project/task write contracts", () => {
     expect(barriers.has("task:one")).toBe(false);
   });
 
+  test("shares remote refresh barriers across hook instances without crossing identities", () => {
+    const queryClient = new QueryClient();
+    const first = getSharedMutationRefreshScopeState(queryClient, "principal-a", 3);
+    const marked = markMutationRefreshScopes(first.barriers, ["task:one"], first.nextRevision);
+    first.nextRevision = marked.nextRevision;
+    const remounted = getSharedMutationRefreshScopeState(queryClient, "principal-a", 3);
+    const otherPrincipal = getSharedMutationRefreshScopeState(queryClient, "principal-b", 3);
+    const newSession = getSharedMutationRefreshScopeState(queryClient, "principal-a", 4);
+    const readable = { available: true, shared: true, notices: [] };
+
+    expect(remounted).toBe(first);
+    expect(mutationWriteAdmission("task:one", [], remounted.barriers, readable)).toBe("refreshing");
+    expect(mutationWriteAdmission("task:one", [], otherPrincipal.barriers, readable)).toBeUndefined();
+    expect(mutationWriteAdmission("task:one", [], newSession.barriers, readable)).toBeUndefined();
+    queryClient.clear();
+  });
+
   test("cancels an in-flight query before a complete refresh read starts", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     let calls = 0;
@@ -379,7 +398,7 @@ describe("project/task write contracts", () => {
       key: () => `${prefix}unreadable`,
       getItem: () => { throw new Error("storage blocked"); }
     } as unknown as Storage;
-    const notice = { id: "task:one", message: "still pending", kind: "reconciliation" as const, taskId: "task-1", lockScope: "task:task-1" };
+    const notice = { id: "task:task-1", message: "still pending", kind: "reconciliation" as const, taskId: "task-1", lockScope: "task:task-1" };
     const tabOnly = {
       length: 1,
       key: () => `${prefix}task-one`,
@@ -390,6 +409,40 @@ describe("project/task write contracts", () => {
     expect(readMutationNoticeStateFromStorage(malformed, emptyTab, prefix)).toMatchObject({ available: false, shared: false, notices: [] });
     expect(readMutationNoticeStateFromStorage(unreadable, tabOnly, prefix)).toMatchObject({ available: false, shared: false, notices: [notice] });
     expect(mergePersistedMutationNoticeState([notice], readMutationNoticeStateFromStorage(unreadable, emptyTab, prefix))).toEqual([notice]);
+  });
+
+  test("fails closed for modern mutation notices without explicit resource metadata", () => {
+    const prefix = "loomhelm.notice.";
+    const ambiguous = {
+      id: "task:task-known:mutation:nonce",
+      message: "任务结果待确认。",
+      kind: "reconciliation"
+    };
+    const valid = {
+      id: "task:task-known:mutation:valid",
+      message: "另一个结果待确认。",
+      kind: "reconciliation",
+      taskId: "task-known",
+      lockScope: "task:task-known"
+    };
+    const legacyMismatch = {
+      id: "task:task-a",
+      message: "身份不一致。",
+      kind: "reconciliation",
+      taskId: "task-b",
+      lockScope: "task:task-b"
+    };
+    const storage = {
+      length: 3,
+      key: (index: number) => index === 0 ? `${prefix}ambiguous` : index === 1 ? `${prefix}legacy-mismatch` : `${prefix}valid`,
+      getItem: (key: string) => key.endsWith("ambiguous") ? JSON.stringify(ambiguous) : key.endsWith("legacy-mismatch") ? JSON.stringify(legacyMismatch) : JSON.stringify(valid)
+    } as unknown as Storage;
+
+    const state = readMutationNoticesFromStorage(storage, prefix);
+
+    expect(state).toMatchObject({ available: false, notices: [valid] });
+    expect(mergePersistedMutationNoticeState([valid], state)).toEqual([valid]);
+    expect(mutationWriteAdmission("task:task-known", [], new Map(), state)).toBe("storage");
   });
 
   test("keeps successful project memberships when one scoped read fails", async () => {

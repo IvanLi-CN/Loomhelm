@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import { ApiClientConfigurationError, ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
 import type { Project, ProjectMember, Task, TaskRelationshipPage, TaskStatus, UpdateProjectRequest, UpdateTaskRequest } from "@loomhelm/protocol";
@@ -123,16 +123,105 @@ function mutationNoticeIdFromStorageKey(prefix: string, key: string): string | u
   }
 }
 
+function isMutationNoticeCreationId(id: string, kind: "project" | "task"): boolean {
+  const prefix = `${kind}:create`;
+  const suffix = id.startsWith(`${prefix}:`) ? id.slice(prefix.length + 1) : "";
+  return id === prefix || (suffix.length > 0 && !suffix.includes(":"));
+}
+
+function isModernMutationNoticeId(id: string, kind: "project" | "task"): boolean {
+  const prefix = `${kind}:`;
+  const rest = id.startsWith(prefix) ? id.slice(prefix.length) : "";
+  const marker = rest.lastIndexOf(":mutation:");
+  const suffix = marker >= 0 ? rest.slice(marker + ":mutation:".length) : "";
+  return marker > 0
+    && rest.slice(0, marker) !== "create"
+    && suffix.length > 0
+    && !suffix.includes(":");
+}
+
+function isLegacyMutationNoticeId(id: string, kind: "project" | "task"): boolean {
+  const prefix = `${kind}:`;
+  const rest = id.startsWith(prefix) ? id.slice(prefix.length) : "";
+  return rest.length > 0 && !rest.includes(":") && rest !== "create";
+}
+
+function legacyMutationNoticeResourceId(id: string, kind: "project" | "task"): string | undefined {
+  return isLegacyMutationNoticeId(id, kind) ? id.slice(`${kind}:`.length) : undefined;
+}
+
+function validMutationNoticeShape(notice: MutationNotice): boolean {
+  const { id, lockScope, projectId, taskId } = notice;
+  if (projectId && taskId) return false;
+
+  if (isMutationNoticeCreationId(id, "project")) {
+    if (taskId) return false;
+    if (!projectId) return lockScope === undefined || lockScope === "project:create";
+    return lockScope === "project:create" || lockScope === `project:${projectId}`;
+  }
+  if (isMutationNoticeCreationId(id, "task")) {
+    if (projectId) return false;
+    if (!taskId) return lockScope === undefined || lockScope === "task:create";
+    return lockScope === "task:create" || lockScope === `task:${taskId}`;
+  }
+  if (isModernMutationNoticeId(id, "project")) {
+    const mutationPrefix = projectId ? `project:${projectId}:mutation:` : "";
+    return Boolean(projectId)
+      && !taskId
+      && lockScope === `project:${projectId}`
+      && mutationPrefix.length > 0
+      && id.startsWith(mutationPrefix)
+      && id.length > mutationPrefix.length;
+  }
+  if (isModernMutationNoticeId(id, "task")) {
+    const mutationPrefix = taskId ? `task:${taskId}:mutation:` : "";
+    return Boolean(taskId)
+      && !projectId
+      && lockScope === `task:${taskId}`
+      && mutationPrefix.length > 0
+      && id.startsWith(mutationPrefix)
+      && id.length > mutationPrefix.length;
+  }
+  if (isLegacyMutationNoticeId(id, "project")) {
+    if (taskId) return false;
+    const legacyResourceId = legacyMutationNoticeResourceId(id, "project");
+    if (projectId && projectId !== legacyResourceId) return false;
+    const legacyProjectId = projectId ?? legacyResourceId;
+    return Boolean(legacyProjectId) && (!lockScope || lockScope === `project:${legacyProjectId}`);
+  }
+  if (isLegacyMutationNoticeId(id, "task")) {
+    if (projectId) return false;
+    const legacyResourceId = legacyMutationNoticeResourceId(id, "task");
+    if (taskId && taskId !== legacyResourceId) return false;
+    const legacyTaskId = taskId ?? legacyResourceId;
+    return Boolean(legacyTaskId) && (!lockScope || lockScope === `task:${legacyTaskId}`);
+  }
+  return false;
+}
+
 function parseMutationNotice(value: unknown): MutationNotice | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const notice = value as Partial<MutationNotice>;
-  const kind = notice.kind === "creation" || notice.kind === "in-flight" || notice.kind === "reconciliation" ? notice.kind : undefined;
-  const lockScope = typeof notice.lockScope === "string" ? notice.lockScope : undefined;
-  const identityMismatch = notice.identityMismatch === true;
-  const volatile = notice.volatile === true;
-  const projectId = typeof notice.projectId === "string" ? notice.projectId : undefined;
-  const taskId = typeof notice.taskId === "string" ? notice.taskId : undefined;
-  return typeof notice.id === "string" && typeof notice.message === "string" ? { id: notice.id, message: notice.message, ...(kind ? { kind } : {}), ...(lockScope ? { lockScope } : {}), ...(identityMismatch ? { identityMismatch } : {}), ...(volatile ? { volatile } : {}), ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) } : undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const id = record.id;
+  const message = record.message;
+  if (typeof id !== "string" || id.length === 0 || typeof message !== "string") return undefined;
+  if (record.kind !== undefined && record.kind !== "creation" && record.kind !== "in-flight" && record.kind !== "reconciliation") return undefined;
+  if (record.lockScope !== undefined && (typeof record.lockScope !== "string" || record.lockScope.length === 0)) return undefined;
+  if (record.identityMismatch !== undefined && typeof record.identityMismatch !== "boolean") return undefined;
+  if (record.volatile !== undefined && typeof record.volatile !== "boolean") return undefined;
+  if (record.projectId !== undefined && (typeof record.projectId !== "string" || record.projectId.length === 0)) return undefined;
+  if (record.taskId !== undefined && (typeof record.taskId !== "string" || record.taskId.length === 0)) return undefined;
+  const notice: MutationNotice = {
+    id,
+    message,
+    ...(record.kind !== undefined ? { kind: record.kind } : {}),
+    ...(record.lockScope !== undefined ? { lockScope: record.lockScope } : {}),
+    ...(record.identityMismatch === true ? { identityMismatch: true } : {}),
+    ...(record.volatile === true ? { volatile: true } : {}),
+    ...(record.projectId !== undefined ? { projectId: record.projectId } : {}),
+    ...(record.taskId !== undefined ? { taskId: record.taskId } : {})
+  };
+  return validMutationNoticeShape(notice) ? notice : undefined;
 }
 
 function parseSerializedMutationNotice(value: string | null): MutationNotice | undefined {
@@ -293,19 +382,19 @@ function publishMutationNoticeChanges(principalId: string, added: readonly Mutat
 }
 
 function isPendingProjectCreationNotice(notice: Pick<MutationNotice, "id" | "projectId">): boolean {
-  return !notice.projectId && (notice.id === "project:create" || notice.id.startsWith("project:create:"));
+  return !notice.projectId && isMutationNoticeCreationId(notice.id, "project");
 }
 
 function isPendingTaskCreationNotice(notice: Pick<MutationNotice, "id" | "taskId">): boolean {
-  return !notice.taskId && (notice.id === "task:create" || notice.id.startsWith("task:create:"));
+  return !notice.taskId && isMutationNoticeCreationId(notice.id, "task");
 }
 
 function isKnownProjectCreationNotice(notice: Pick<MutationNotice, "id" | "projectId">): boolean {
-  return Boolean(notice.projectId) && (notice.id === "project:create" || notice.id.startsWith("project:create:"));
+  return Boolean(notice.projectId) && isMutationNoticeCreationId(notice.id, "project");
 }
 
 function isKnownTaskCreationNotice(notice: Pick<MutationNotice, "id" | "taskId">): boolean {
-  return Boolean(notice.taskId) && (notice.id === "task:create" || notice.id.startsWith("task:create:"));
+  return Boolean(notice.taskId) && isMutationNoticeCreationId(notice.id, "task");
 }
 
 function isInFlightMutationNotice(notice: MutationNotice): boolean {
@@ -333,14 +422,12 @@ function createProjectMutationNoticeId(projectId: string): string {
 
 function mutationNoticeTaskId(notice: MutationNotice): string | undefined {
   if (notice.taskId) return notice.taskId;
-  if (notice.id.startsWith("task:") && !isPendingTaskCreationNotice(notice)) return notice.id.slice("task:".length);
-  return undefined;
+  return legacyMutationNoticeResourceId(notice.id, "task");
 }
 
 function mutationNoticeProjectId(notice: MutationNotice): string | undefined {
   if (notice.projectId) return notice.projectId;
-  if (notice.id.startsWith("project:") && !isPendingProjectCreationNotice(notice)) return notice.id.slice("project:".length);
-  return undefined;
+  return legacyMutationNoticeResourceId(notice.id, "project");
 }
 
 function mutationNoticeScope(notice: MutationNotice): string | undefined {
@@ -418,6 +505,32 @@ export function releaseMutationRefreshScopes(barriers: Map<string, number>, revi
   for (const [scope, revision] of revisions) {
     if (barriers.get(scope) === revision) barriers.delete(scope);
   }
+}
+
+export interface MutationRefreshScopeState {
+  barriers: Map<string, number>;
+  nextRevision: number;
+}
+
+const sharedMutationRefreshScopes = new WeakMap<QueryClient, Map<number, Map<string, MutationRefreshScopeState>>>();
+
+export function getSharedMutationRefreshScopeState(queryClient: QueryClient, principalId: string, sessionGeneration = 0): MutationRefreshScopeState {
+  let byGeneration = sharedMutationRefreshScopes.get(queryClient);
+  if (!byGeneration) {
+    byGeneration = new Map();
+    sharedMutationRefreshScopes.set(queryClient, byGeneration);
+  }
+  let byPrincipal = byGeneration.get(sessionGeneration);
+  if (!byPrincipal) {
+    byPrincipal = new Map();
+    byGeneration.set(sessionGeneration, byPrincipal);
+  }
+  let state = byPrincipal.get(principalId);
+  if (!state) {
+    state = { barriers: new Map(), nextRevision: 0 };
+    byPrincipal.set(principalId, state);
+  }
+  return state;
 }
 
 export function createClientResourceId(kind: "project" | "task"): string | undefined {
@@ -968,11 +1081,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
 
   const mutationNoticeKey = useMemo(() => projectTaskQueryKeys.mutationNotice(subjectId), [subjectId]);
   const mutationNoticeStoragePrefixValue = useMemo(() => mutationNoticeStoragePrefix(subjectId), [subjectId]);
-  const remoteRefreshScopesRef = useRef(new Map<string, number>());
-  const remoteRefreshRevisionRef = useRef(0);
-  useLayoutEffect(() => {
-    remoteRefreshScopesRef.current.clear();
-  }, [sessionGeneration, subjectId]);
+  const remoteRefreshScopeState = getSharedMutationRefreshScopeState(queryClient, subjectId, sessionGeneration);
   const mutationNoticeQuery = useQuery<readonly MutationNotice[]>({
     queryKey: mutationNoticeKey,
     queryFn: async () => readPersistedMutationNotices(subjectId),
@@ -1046,8 +1155,8 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     ) => {
       const scopes = mutationNoticeRemovalScopes(affectedNotices, affectedIds);
       if (!scopes.length && !forceRefresh) return;
-      const marked = markMutationRefreshScopes(remoteRefreshScopesRef.current, scopes, remoteRefreshRevisionRef.current);
-      remoteRefreshRevisionRef.current = marked.nextRevision;
+      const marked = markMutationRefreshScopes(remoteRefreshScopeState.barriers, scopes, remoteRefreshScopeState.nextRevision);
+      remoteRefreshScopeState.nextRevision = marked.nextRevision;
       let refreshed = false;
       try {
         await refreshProjectTaskQueries();
@@ -1059,7 +1168,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       } catch {
         // Keep the existing notice and refreshing barrier so a failed read cannot unlock a stale write.
       } finally {
-        if (refreshed) releaseMutationRefreshScopes(remoteRefreshScopesRef.current, marked.revisions);
+        if (refreshed) releaseMutationRefreshScopes(remoteRefreshScopeState.barriers, marked.revisions);
       }
     };
     apply(readPersistedMutationNoticeState(subjectId), true);
@@ -1133,7 +1242,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       channel?.removeEventListener("message", handleBroadcast);
       channel?.close();
     };
-  }, [mutationNoticeKey, mutationNoticeStoragePrefixValue, queryClient, queryEnabled, refreshProjectTaskQueries, remoteRefreshScopesRef, subjectId]);
+  }, [mutationNoticeKey, mutationNoticeStoragePrefixValue, queryClient, queryEnabled, refreshProjectTaskQueries, remoteRefreshScopeState, subjectId]);
   const applyMutationNoticeUpdate = useCallback((update: (current: readonly MutationNotice[]) => readonly MutationNotice[], allowLocalFallback = false): MutationNoticeUpdateResult => {
     const current = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
     const next = update(current);
@@ -1330,7 +1439,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       ? result
       : blocked(`${operation}失败，但结果确认状态无法保存；请刷新后核对。`);
     const mutationBarrier = <T,>(scope: string, operation: string): WriteResult<T> | undefined => {
-      const admission = mutationWriteAdmission(scope, mutationNoticeQuery.data, remoteRefreshScopesRef.current, readPersistedMutationNoticeState(subjectId));
+      const admission = mutationWriteAdmission(scope, mutationNoticeQuery.data, remoteRefreshScopeState.barriers, readPersistedMutationNoticeState(subjectId));
       if (admission === "refreshing") return blocked(`${operation}已有结果待确认，请先刷新并核对后再试。`);
       if (admission === "notice") return blocked(`${operation}的待确认状态尚未核对，写入没有执行。请先刷新并核对后再试。`);
       if (admission === "storage") return blocked(`${operation}的待确认状态无法读取或尚未核对，写入没有执行。请先刷新并核对后再试。`);
@@ -1696,7 +1805,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       });
     };
     const refresh = async (): Promise<void> => {
-      const remoteRefreshScopes = new Map(remoteRefreshScopesRef.current);
+      const remoteRefreshScopes = new Map(remoteRefreshScopeState.barriers);
       await refreshProjectTaskQueries();
       const persistedState = readPersistedMutationNoticeState(subjectId);
       const currentNotices = queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
@@ -1744,7 +1853,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
         });
         if (result === "failed") throw new Error("写入结果确认状态无法保存，待确认结果仍然保留。");
       }
-      releaseMutationRefreshScopes(remoteRefreshScopesRef.current, remoteRefreshScopes);
+      releaseMutationRefreshScopes(remoteRefreshScopeState.barriers, remoteRefreshScopes);
     };
 
     const currentMutationNotices = (): readonly MutationNotice[] => queryClient.getQueryData<readonly MutationNotice[]>(mutationNoticeKey) ?? [];
@@ -1829,5 +1938,5 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       refresh,
       notice: [readNotice, ...mutationNoticeQuery.data.map((notice) => notice.message)].filter(Boolean).join(" ") || undefined
     } satisfies ProjectTaskSource;
-  }, [api, canCreateProjects, clearMutationNotice, clearProjectMutationNotices, clearTaskMutationNotices, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, invalidatePermissionScope, isCurrentSession, mutationNoticeKey, mutationNoticeQuery.data, pendingProjectCreation, pendingProjectCreationNoticeId, pendingProjectCreationResourceId, pendingTaskCreation, pendingTaskCreationNoticeId, pendingTaskCreationResourceId, permissionChanged, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, recordMutationNoticeWithFallback, refreshProjectTaskQueries, relationshipsByTaskId, relationMutationsPending, remoteRefreshScopesRef, sessionGeneration, setRelationMutationPending, setTaskView, subjectId, taskViews, tasks, updateMutationNotices, updateProjectMutation, updateTaskMutation]);
+  }, [api, canCreateProjects, clearMutationNotice, clearProjectMutationNotices, clearTaskMutationNotices, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, invalidatePermissionScope, isCurrentSession, mutationNoticeKey, mutationNoticeQuery.data, pendingProjectCreation, pendingProjectCreationNoticeId, pendingProjectCreationResourceId, pendingTaskCreation, pendingTaskCreationNoticeId, pendingTaskCreationResourceId, permissionChanged, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, recordMutationNoticeWithFallback, refreshProjectTaskQueries, relationshipsByTaskId, relationMutationsPending, remoteRefreshScopeState, sessionGeneration, setRelationMutationPending, setTaskView, subjectId, taskViews, tasks, updateMutationNotices, updateProjectMutation, updateTaskMutation]);
 }

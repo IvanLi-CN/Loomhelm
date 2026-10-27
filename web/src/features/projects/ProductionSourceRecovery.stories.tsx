@@ -74,6 +74,7 @@ interface ScenarioState {
   refreshState: "idle" | "pending" | "failed" | "complete";
   lastResult: string;
   notify?: () => void;
+  listeners?: Set<() => void>;
   resolveRefresh?: () => void;
   broadcastDescriptor?: PropertyDescriptor;
   locksDescriptor?: PropertyDescriptor;
@@ -81,6 +82,11 @@ interface ScenarioState {
   broadcastPatched: boolean;
   locksPatched: boolean;
   setItemPatched: boolean;
+}
+
+function notifyScenario(state: ScenarioState): void {
+  state.notify?.();
+  state.listeners?.forEach((listener) => listener());
 }
 
 function mutationNoticeKey(id: string): string {
@@ -156,10 +162,10 @@ function createClient(state: ScenarioState): GeneratedApiClient {
       state.projectListCalls += 1;
       if (state.projectListCalls > 1) {
         state.refreshState = "pending";
-        state.notify?.();
+        notifyScenario(state);
         if (state.scenario === "remote-refresh-failure") {
           state.refreshState = "failed";
-          state.notify?.();
+          notifyScenario(state);
           throw new Error("刷新项目失败");
         }
         return new Promise((resolve) => {
@@ -175,19 +181,19 @@ function createClient(state: ScenarioState): GeneratedApiClient {
     listTasks: async () => {
       if (state.refreshState === "pending") {
         state.refreshState = "complete";
-        state.notify?.();
+        notifyScenario(state);
       }
       return { items: [task, parentTask], has_more: false };
     },
     getTaskRelationships: async () => emptyRelationships,
     createProject: async () => {
       state.createCalls += 1;
-      state.notify?.();
+      notifyScenario(state);
       return { project };
     },
     updateTask: async ({ body }: { body: { title?: string } }) => {
       state.updateCalls += 1;
-      state.notify?.();
+      notifyScenario(state);
       return { task: { ...task, title: body.title ?? task.title } };
     },
     getProject: async () => ({ project }),
@@ -196,7 +202,7 @@ function createClient(state: ScenarioState): GeneratedApiClient {
     createTask: async ({ body }: { body: { id?: string } }) => {
       state.createTaskCalls += 1;
       state.requestedTaskId = body.id ?? "";
-      state.notify?.();
+      notifyScenario(state);
       if (state.scenario === "identity-mismatch") {
         return { task: { ...task, id: "task_fedcfedcfedcfedcfedcfedcfedcfedc" } };
       }
@@ -206,12 +212,12 @@ function createClient(state: ScenarioState): GeneratedApiClient {
     deleteTask: async () => undefined,
     addTaskParent: async () => {
       state.relationCalls += 1;
-      state.notify?.();
+      notifyScenario(state);
     },
     removeTaskParent: async () => undefined,
     addTaskDependency: async () => {
       state.dependencyCalls += 1;
-      state.notify?.();
+      notifyScenario(state);
     },
     removeTaskDependency: async () => undefined,
     grantProjectMember: async () => ({ member }),
@@ -222,6 +228,92 @@ function createClient(state: ScenarioState): GeneratedApiClient {
 function RecoveryHarness({ state }: { state: ScenarioState }) {
   const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }), []);
   return <QueryClientProvider client={queryClient}><RecoveryContent state={state} /></QueryClientProvider>;
+}
+
+function SharedRefreshHarness() {
+  const state = useMemo(() => {
+    const next: ScenarioState = {
+      scenario: "remote-refresh-failure",
+      principalId,
+      projectListCalls: 0,
+      createCalls: 0,
+      createTaskCalls: 0,
+      updateCalls: 0,
+      relationCalls: 0,
+      dependencyCalls: 0,
+      requestedTaskId: "",
+      refreshState: "idle",
+      lastResult: "",
+      broadcastPatched: false,
+      locksPatched: false,
+      setItemPatched: false,
+      listeners: new Set()
+    };
+    prepareScenario(next);
+    return next;
+  }, []);
+  const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }), []);
+  const [secondaryRevision, setSecondaryRevision] = useState(0);
+
+  useEffect(() => () => restoreScenario(state), [state]);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <div className="min-h-screen bg-[var(--canvas)] p-8" data-visual-evidence-surface>
+        <div className="mx-auto grid max-w-3xl gap-4 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-6" data-visual-evidence-target>
+          <h1 className="text-lg font-semibold">Shared remote refresh barrier</h1>
+          <p data-testid="shared-refresh-state">刷新：{state.refreshState}</p>
+          <p data-testid="shared-update-calls">任务 PATCH：{state.updateCalls}</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SharedRefreshContent state={state} instance="主实例" />
+            <SharedRefreshContent key={`secondary-${secondaryRevision}`} state={state} instance="副本实例" />
+          </div>
+          <button type="button" className="button button-secondary" onClick={() => setSecondaryRevision((value) => value + 1)}>重挂载副本实例</button>
+        </div>
+      </div>
+    </QueryClientProvider>
+  );
+}
+
+function SharedRefreshContent({ state, instance }: { state: ScenarioState; instance: string }) {
+  const source = usePublishedProjectTaskSource({
+    client: useMemo(() => createClient(state), [state]),
+    enabled: true,
+    canCreateProjects: true,
+    principalId: state.principalId
+  });
+  const [, setRevision] = useState(0);
+
+  useEffect(() => {
+    const listener = () => setRevision((value) => value + 1);
+    state.listeners?.add(listener);
+    return () => {
+      state.listeners?.delete(listener);
+    };
+  }, [state]);
+
+  const triggerRemoteRemoval = () => {
+    const key = mutationNoticeKey(noticeId);
+    const oldValue = JSON.stringify(remoteNotice);
+    window.localStorage.removeItem(key);
+    window.dispatchEvent(new StorageEvent("storage", { key, oldValue, newValue: null, storageArea: window.localStorage, url: window.location.href }));
+  };
+
+  const runUpdate = async () => {
+    const result = await source.updateTask(taskId, { title: "Updated task" });
+    state.lastResult = result.ok ? "updated" : result.message;
+    notifyScenario(state);
+  };
+
+  return (
+    <section className="grid gap-2 rounded-lg border border-[var(--line)] p-4" aria-label={instance}>
+      <h2 className="font-semibold">{instance}</h2>
+      <p data-testid={`${instance}-status`}>状态：{source.status}</p>
+      <p data-testid={`${instance}-result`}>结果：{state.lastResult || "无"}</p>
+      {instance === "主实例" && <button type="button" className="button button-secondary" onClick={triggerRemoteRemoval}>主实例移除远端通知</button>}
+      <button type="button" className="button button-secondary" onClick={() => { void runUpdate(); }}>{instance}尝试更新任务</button>
+    </section>
+  );
 }
 
 function RecoveryContent({ state }: { state: ScenarioState }) {
@@ -251,13 +343,13 @@ function RecoveryContent({ state }: { state: ScenarioState }) {
   const runCreate = async () => {
     const result = await source.createProject({ name: "Blocked project", summary: "" });
     state.lastResult = result.ok ? "unexpected-success" : result.message;
-    state.notify?.();
+    notifyScenario(state);
   };
 
   const runUpdate = async () => {
     const result = await source.updateTask(taskId, { title: "Updated task" });
     state.lastResult = result.ok ? "updated" : result.message;
-    state.notify?.();
+    notifyScenario(state);
   };
 
   const runTaskCreate = async () => {
@@ -269,7 +361,7 @@ function RecoveryContent({ state }: { state: ScenarioState }) {
       dependsOn: [parentTaskId]
     });
     state.lastResult = result.ok ? "unexpected-success" : result.message;
-    state.notify?.();
+    notifyScenario(state);
   };
 
   return (
@@ -332,6 +424,20 @@ export const RemoteRemovalFailureKeepsWriteBlocked: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "尝试更新任务" }));
     expect(await canvas.findByTestId("last-result")).toHaveTextContent("待确认");
     expect(canvas.getByTestId("update-calls")).toHaveTextContent("任务 PATCH：0");
+  }
+};
+
+export const RemoteRemovalFailureSurvivesSourceRemount: Story = {
+  render: () => <SharedRefreshHarness />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "主实例移除远端通知" }));
+    await waitFor(() => expect(canvas.getByTestId("shared-refresh-state")).toHaveTextContent("刷新：failed"));
+    await userEvent.click(canvas.getByRole("button", { name: "重挂载副本实例" }));
+    await waitFor(() => expect(canvas.getByTestId("副本实例-status")).toHaveTextContent("状态：ready"));
+    await userEvent.click(canvas.getByRole("button", { name: "副本实例尝试更新任务" }));
+    await waitFor(() => expect(canvas.getByTestId("副本实例-result")).toHaveTextContent("待确认"));
+    expect(canvas.getByTestId("shared-update-calls")).toHaveTextContent("任务 PATCH：0");
   }
 };
 

@@ -24,6 +24,7 @@ import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 import type { ProjectTaskSource } from "@/features/tasks/types";
 
 import { DemoInspector, DemoNotice, DemoSceneBanner } from "./DemoInspector";
+import { useRouteContentFocus } from "./route-focus";
 
 type MobileCloseReason = "dismiss" | "navigate";
 
@@ -322,6 +323,7 @@ function ProductionShell() {
   const source = useOptionalProjectTaskSource();
   const { login, logout, logoutPending } = useProductionAuthActions();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const contentRef = useRouteContentFocus(pathname);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ projects: true });
   const [theme, setTheme] = useProductionTheme();
@@ -403,7 +405,7 @@ function ProductionShell() {
             <X size={19} aria-hidden="true" />
           </Button>
         </header>
-        <main className="product-content" tabIndex={-1}>
+        <main ref={contentRef} className="product-content" tabIndex={-1} aria-label="主要内容">
           {logoutMessage && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{logoutMessage}</div>}
           {authenticated ? <Outlet /> : <ProductionAuthGate />}
         </main>
@@ -415,6 +417,7 @@ function ProductionShell() {
 export function ProductShell({ children }: PropsWithChildren) {
   const runtime = useDemoRuntime();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const contentRef = useRouteContentFocus(pathname);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ projects: true, "project:loomhelm": true });
 
@@ -506,7 +509,7 @@ export function ProductShell({ children }: PropsWithChildren) {
           </Button>
         </header>
         <DemoSceneBanner />
-        <main className="product-content" tabIndex={-1}>{children ?? <Outlet />}</main>
+        <main ref={contentRef} className="product-content" tabIndex={-1} aria-label="主要内容">{children ?? <Outlet />}</main>
       </div>
       <DemoNotice />
       <DemoInspector />
