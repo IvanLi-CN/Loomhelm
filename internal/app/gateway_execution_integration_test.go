@@ -145,7 +145,7 @@ func TestServerGatewayRunControlTLSWSSRoundTrip(t *testing.T) {
 	if command.CommandID != "run_gateway_round_trip" || command.RunID == nil || *command.RunID == "turn-external-1" {
 		t.Fatalf("gateway command identity = %+v", command)
 	}
-	if err := connection.Acknowledge(ctx, commandMessage.RequestID, protocol.CommandAck{
+	if err := connection.AcknowledgeForSession(ctx, command.SessionID, commandMessage.RequestID, protocol.CommandAck{
 		CommandID:  command.CommandID,
 		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		State:      protocol.CommandStateAccepted,
@@ -317,7 +317,7 @@ func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
 	if forwardedRequest.Prompt == nil || *forwardedRequest.Prompt != prompt {
 		t.Fatalf("forwarded session prompt = %+v", forwardedRequest.Prompt)
 	}
-	if err := connection.Acknowledge(ctx, startMessage.RequestID, protocol.CommandAck{
+	if err := connection.AcknowledgeForSession(ctx, startCommand.SessionID, startMessage.RequestID, protocol.CommandAck{
 		CommandID:  startCommand.CommandID,
 		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		State:      protocol.CommandStateSucceeded,
@@ -333,7 +333,7 @@ func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
 	if runMessage.Command == nil || runMessage.Command.Kind != protocol.CommandKindRunSend || runMessage.Command.CommandID != createRequest.CommandID+":initial" || runMessage.Command.RunID == nil {
 		t.Fatalf("initial run command = %+v", runMessage.Command)
 	}
-	if err := connection.Acknowledge(ctx, runMessage.RequestID, protocol.CommandAck{
+	if err := connection.AcknowledgeForSession(ctx, runMessage.Command.SessionID, runMessage.RequestID, protocol.CommandAck{
 		CommandID:  runMessage.Command.CommandID,
 		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		State:      protocol.CommandStateAccepted,
@@ -420,7 +420,7 @@ func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
 	if err != nil || unknownMessage.Command == nil || unknownMessage.Command.CommandID != unknownRequest.CommandID {
 		t.Fatalf("read unknown session command: message=%+v error=%v", unknownMessage, err)
 	}
-	if err := connection.Acknowledge(ctx, unknownMessage.RequestID, protocol.CommandAck{
+	if err := connection.AcknowledgeForSession(ctx, unknownMessage.Command.SessionID, unknownMessage.RequestID, protocol.CommandAck{
 		CommandID:  unknownRequest.CommandID,
 		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		State:      protocol.CommandStateUnknown,

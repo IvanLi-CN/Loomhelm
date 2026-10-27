@@ -100,7 +100,7 @@ func TestConnectorIdentityFencesHistoricalGenerationControls(t *testing.T) {
 	journal := openConnectorIdentityJournal(t)
 	defer journal.Close()
 	connector := &Connector{journal: journal}
-	if err := connector.BindSessionIdentity("platform-session-generation", "create-generation", protocol.GatewaySession{Generation: "generation-old"}, protocol.AdapterSession{SessionID: "adapter-generation", ExternalThreadRef: "thread-generation"}); err != nil {
+	if err := connector.BindSessionIdentity("platform-session-generation", "create-generation", protocol.GatewaySession{Handle: "gateway-generation", Generation: "generation-old"}, protocol.AdapterSession{SessionID: "adapter-generation", ExternalThreadRef: "thread-generation"}); err != nil {
 		t.Fatal(err)
 	}
 	runID := "platform-run-old"
@@ -146,7 +146,7 @@ func TestConnectorIdentityRedeliversDurableBoundCommandWithoutRebinding(t *testi
 	journal := openConnectorIdentityJournal(t)
 	defer journal.Close()
 	connector := &Connector{journal: journal}
-	if err := connector.BindSessionIdentity("platform-session-dedup", "create-dedup", protocol.GatewaySession{Generation: "generation-dedup"}, protocol.AdapterSession{SessionID: "adapter-dedup", ExternalThreadRef: "thread-dedup"}); err != nil {
+	if err := connector.BindSessionIdentity("platform-session-dedup", "create-dedup", protocol.GatewaySession{Handle: "gateway-dedup", Generation: "generation-dedup"}, protocol.AdapterSession{SessionID: "adapter-dedup", ExternalThreadRef: "thread-dedup"}); err != nil {
 		t.Fatal(err)
 	}
 	runID := "platform-run-dedup"
@@ -163,11 +163,12 @@ func TestConnectorIdentityRedeliversDurableBoundCommandWithoutRebinding(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	nativeNamespace := connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID)
 	ack := protocol.CommandAck{CommandID: prepared.CommandID, State: protocol.CommandStateSucceeded, RunID: &nativeTurnID, Result: json.RawMessage(`{"ok":true}`)}
-	if _, _, err := journal.BeginCommand(prepared); err != nil {
+	if _, _, err := journal.BeginCommandInNamespace(nativeNamespace, prepared); err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.UpdateCommand(prepared.CommandID, ack); err != nil {
+	if err := journal.UpdateCommandInNamespace(nativeNamespace, prepared.CommandID, ack); err != nil {
 		t.Fatal(err)
 	}
 	connector.controller = nil
@@ -190,7 +191,7 @@ func TestConnectorIdentityBindsRecoveredAdapterAckAfterJournalRestart(t *testing
 	journalPath := journal.Path()
 	connector := &Connector{journal: journal}
 	adapterSession := protocol.AdapterSession{SessionID: "adapter-recovered", ExternalThreadRef: "thread-recovered"}
-	if err := connector.BindSessionIdentity("platform-session-recovered", "create-recovered", protocol.GatewaySession{Generation: "generation-recovered"}, adapterSession); err != nil {
+	if err := connector.BindSessionIdentity("platform-session-recovered", "create-recovered", protocol.GatewaySession{Handle: "gateway-recovered", Generation: "generation-recovered"}, adapterSession); err != nil {
 		t.Fatal(err)
 	}
 	platformRunID := "platform-run-recovered"
@@ -253,6 +254,7 @@ func TestConnectorIdentityRejectsMismatchedRecoveryAndGatewayThread(t *testing.T
 		t.Fatal(err)
 	}
 	if err := connector.BindSessionIdentity(alias.PlatformSessionID, alias.CommandID, protocol.GatewaySession{
+		Handle:            "gateway-recovery",
 		Generation:        alias.Generation,
 		ExternalThreadRef: "different-thread",
 	}, protocol.AdapterSession{SessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef}); !errors.Is(err, connectorruntime.ErrIdentityConflict) {
@@ -323,15 +325,131 @@ func TestConnectorSessionStartUsesExplicitIdentityAndDoesNotSynthesizeInitialRun
 	if calls := transport.methods(); calls["thread/start"] != 1 || calls["turn/start"] != 0 {
 		t.Fatalf("duplicate session open crossed adapter boundary: %+v", calls)
 	}
+	link, linked, err := journal.GatewaySessionLinkForPlatform(command.SessionID)
+	if err != nil || !linked || link.PlatformSessionID != command.SessionID || link.CommandID != command.CommandID {
+		t.Fatalf("session gateway link = %+v, linked = %v, error = %v", link, linked, err)
+	}
 	_ = adapter.CloseSession(context.Background(), protocol.AdapterSession{SessionID: alias.AdapterSessionID})
 	_ = appGateway.CloseSession(context.Background(), protocol.GatewaySession{Handle: alias.AdapterSessionID})
+}
+
+func TestConnectorNewSessionScopesSameCommandIDAndDoesNotReplayNativeStart(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	transport := &connectorSessionTransport{threadIDs: []string{"thread-platform-a", "thread-platform-b"}}
+	connector := newConnectorIdentityAssembly(t, journal, transport)
+	promptA := "prompt for platform A"
+	promptB := "prompt for platform B"
+	requestA := protocol.CreateSessionRequest{CommandID: "same-creation-command", ProjectID: stringPointer("project-a"), Path: protocol.SessionPathNew, Prompt: &promptA}
+	requestB := protocol.CreateSessionRequest{CommandID: "same-creation-command", ProjectID: stringPointer("project-b"), Path: protocol.SessionPathNew, Prompt: &promptB}
+	payloadA, err := json.Marshal(requestA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadB, err := json.Marshal(requestB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandA := protocol.Command{CommandID: requestA.CommandID, Kind: protocol.CommandKindSessionStart, Payload: payloadA, SessionID: "platform-session-a"}
+	commandB := protocol.Command{CommandID: requestB.CommandID, Kind: protocol.CommandKindSessionStart, Payload: payloadB, SessionID: "platform-session-b"}
+	first, err := connector.acceptSessionCommand(context.Background(), commandA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := connector.acceptSessionCommand(context.Background(), commandB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := connector.acceptSessionCommand(context.Background(), commandA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.State != protocol.CommandStateSucceeded || second.State != protocol.CommandStateSucceeded || retry.State != protocol.CommandStateSucceeded {
+		t.Fatalf("platform-scoped creation ACKs = first=%+v second=%+v retry=%+v", first, second, retry)
+	}
+	aliasA, ok := journal.SessionAlias(commandA.SessionID)
+	if !ok {
+		t.Fatalf("platform A alias is missing")
+	}
+	aliasB, ok := journal.SessionAlias(commandB.SessionID)
+	if !ok {
+		t.Fatalf("platform B alias is missing")
+	}
+	if aliasA.ExternalThreadRef == aliasB.ExternalThreadRef || aliasA.AdapterSessionID == aliasB.AdapterSessionID {
+		t.Fatalf("platform-scoped creations collided: alias A=%+v alias B=%+v", aliasA, aliasB)
+	}
+	calls := transport.methods()
+	if calls["thread/start"] != 2 || calls["turn/start"] != 0 {
+		t.Fatalf("native creation calls = %+v, want two thread/start and no initial turn", calls)
+	}
+	for _, sessionID := range []string{"platform-session-a", "platform-session-b"} {
+		link, linked, linkErr := journal.GatewaySessionLinkForPlatform(sessionID)
+		if linkErr != nil || !linked || link.PlatformSessionID != sessionID || link.CommandID != commandA.CommandID {
+			t.Fatalf("gateway link for %s = %+v, linked = %v, error = %v", sessionID, link, linked, linkErr)
+		}
+	}
+}
+
+func TestConnectorAliasPersistenceFailureDoesNotReturnSuccess(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	if err := journal.RecordSessionAlias(connectorruntime.SessionAlias{
+		PlatformSessionID: "platform-session-alias-conflict",
+		AdapterSessionID:  "existing-adapter",
+		ExternalThreadRef: "existing-thread",
+		Generation:        "existing-generation",
+		CommandID:         "existing-command",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	connector := &Connector{journal: journal}
+	err := connector.BindSessionIdentity("platform-session-alias-conflict", "new-command", protocol.GatewaySession{Handle: "gateway-alias-conflict", Generation: "generation-alias-conflict"}, protocol.AdapterSession{SessionID: "new-adapter", ExternalThreadRef: "new-thread"})
+	if err == nil {
+		t.Fatal("alias persistence unexpectedly succeeded")
+	}
+	err = unknownSessionIdentityError(err)
+	if !errors.Is(err, connectorruntime.ErrUnknownOutcome) || !errors.Is(err, connectorruntime.ErrIdentityConflict) {
+		t.Fatalf("alias persistence error = %v, want unknown identity conflict", err)
+	}
+}
+
+func TestConnectorGatewayLinkPersistenceFailureDoesNotReturnSuccess(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	targetAlias := connectorruntime.SessionAlias{PlatformSessionID: "platform-session-link-conflict", AdapterSessionID: "target-adapter", ExternalThreadRef: "target-thread", Generation: "target-generation", CommandID: "target-command"}
+	otherAlias := connectorruntime.SessionAlias{PlatformSessionID: "other-platform-session", AdapterSessionID: "other-adapter", ExternalThreadRef: "other-thread", Generation: "other-generation", CommandID: "other-command"}
+	if err := journal.RecordSessionAlias(targetAlias); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordSessionAlias(otherAlias); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordGatewaySessionLink(connectorruntime.GatewaySessionLink{
+		GatewayHandle:     "gateway-link-conflict",
+		PlatformSessionID: otherAlias.PlatformSessionID,
+		AdapterSessionID:  otherAlias.AdapterSessionID,
+		ExternalThreadRef: otherAlias.ExternalThreadRef,
+		Generation:        otherAlias.Generation,
+		CommandID:         "other-command",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	connector := &Connector{journal: journal}
+	err := connector.BindSessionIdentity(targetAlias.PlatformSessionID, targetAlias.CommandID, protocol.GatewaySession{Handle: "gateway-link-conflict", Generation: targetAlias.Generation}, protocol.AdapterSession{SessionID: targetAlias.AdapterSessionID, ExternalThreadRef: targetAlias.ExternalThreadRef})
+	if err == nil {
+		t.Fatal("gateway link persistence unexpectedly succeeded")
+	}
+	err = unknownSessionIdentityError(err)
+	if !errors.Is(err, connectorruntime.ErrUnknownOutcome) || !errors.Is(err, connectorruntime.ErrCommandScopeAmbiguous) {
+		t.Fatalf("gateway link persistence error = %v, want unknown scope conflict", err)
+	}
 }
 
 func TestConnectorRecoversCachedRunAckAfterRestartWithoutNativeReplay(t *testing.T) {
 	journal := openConnectorIdentityJournal(t)
 	journalPath := journal.Path()
 	connector := &Connector{journal: journal}
-	if err := connector.BindSessionIdentity("platform-session-run-recovery", "create-run-recovery", protocol.GatewaySession{Generation: "generation-run-recovery"}, protocol.AdapterSession{SessionID: "adapter-run-recovery", ExternalThreadRef: "thread-run-recovery"}); err != nil {
+	if err := connector.BindSessionIdentity("platform-session-run-recovery", "create-run-recovery", protocol.GatewaySession{Handle: "gateway-run-recovery", Generation: "generation-run-recovery"}, protocol.AdapterSession{SessionID: "adapter-run-recovery", ExternalThreadRef: "thread-run-recovery"}); err != nil {
 		t.Fatal(err)
 	}
 	runID := "platform-run-recovery"
@@ -346,7 +464,8 @@ func TestConnectorRecoversCachedRunAckAfterRestartWithoutNativeReplay(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, deduplicated, err := journal.BeginCommand(prepared); err != nil || deduplicated {
+	nativeNamespace := connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID)
+	if _, deduplicated, err := journal.BeginCommandInNamespace(nativeNamespace, prepared); err != nil || deduplicated {
 		t.Fatalf("seed cached run command = deduplicated %v, error %v", deduplicated, err)
 	}
 	nativeTurnID := "native-turn-recovery"
@@ -358,7 +477,7 @@ func TestConnectorRecoversCachedRunAckAfterRestartWithoutNativeReplay(t *testing
 		Result:      json.RawMessage(`{"ok":true}`),
 		RunID:       &nativeTurnID,
 	}
-	if err := journal.UpdateCommand(prepared.CommandID, seedAck); err != nil {
+	if err := journal.UpdateCommandInNamespace(nativeNamespace, prepared.CommandID, seedAck); err != nil {
 		t.Fatal(err)
 	}
 	if err := journal.Close(); err != nil {
@@ -378,11 +497,11 @@ func TestConnectorRecoversCachedRunAckAfterRestartWithoutNativeReplay(t *testing
 	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded || string(retry.Result) != string(seedAck.Result) {
 		t.Fatalf("recovered cached run ACK = %+v, want the persisted success", retry)
 	}
-	binding, ok := recoveredJournal.RunBindingForCommand(command.CommandID)
+	binding, ok := recoveredJournal.RunBinding(command.SessionID, runID)
 	if !ok || binding.State != connectorruntime.IdentityStateBound || binding.Generation != "generation-run-recovery" || binding.NativeTurnID != nativeTurnID || binding.NativeOperationID != nativeOperationID {
 		t.Fatalf("recovered run binding = %+v, found = %v", binding, ok)
 	}
-	storedCommand, _, err := recoveredJournal.Command(command.CommandID)
+	storedCommand, _, err := recoveredJournal.CommandInNamespace(nativeNamespace, prepared.CommandID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +514,7 @@ func TestConnectorWithholdsSuccessWhenRunBindingPersistenceFails(t *testing.T) {
 	journal := openConnectorIdentityJournal(t)
 	journalPath := journal.Path()
 	connector := &Connector{journal: journal}
-	if err := connector.BindSessionIdentity("platform-session-binding-failure", "create-binding-failure", protocol.GatewaySession{Generation: "generation-binding-failure"}, protocol.AdapterSession{SessionID: "adapter-binding-failure", ExternalThreadRef: "thread-binding-failure"}); err != nil {
+	if err := connector.BindSessionIdentity("platform-session-binding-failure", "create-binding-failure", protocol.GatewaySession{Handle: "gateway-binding-failure", Generation: "generation-binding-failure"}, protocol.AdapterSession{SessionID: "adapter-binding-failure", ExternalThreadRef: "thread-binding-failure"}); err != nil {
 		t.Fatal(err)
 	}
 	runID := "platform-run-binding-failure"
@@ -410,7 +529,8 @@ func TestConnectorWithholdsSuccessWhenRunBindingPersistenceFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, deduplicated, err := journal.BeginCommand(prepared); err != nil || deduplicated {
+	nativeNamespace := connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID)
+	if _, deduplicated, err := journal.BeginCommandInNamespace(nativeNamespace, prepared); err != nil || deduplicated {
 		t.Fatalf("seed command = deduplicated %v, error %v", deduplicated, err)
 	}
 	nativeTurnID := "native-turn-binding-failure"
@@ -422,14 +542,14 @@ func TestConnectorWithholdsSuccessWhenRunBindingPersistenceFails(t *testing.T) {
 		OperationID: &nativeOperationID,
 		Result:      json.RawMessage(`{"ok":true}`),
 	}
-	if err := journal.UpdateCommand(prepared.CommandID, nativeAck); err != nil {
+	if err := journal.UpdateCommandInNamespace(nativeNamespace, prepared.CommandID, nativeAck); err != nil {
 		t.Fatal(err)
 	}
 	if err := journal.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	unknown, err := connector.completePlatformCommand(command, nativeAck, nil)
+	unknown, err := connector.completePlatformCommand(command, prepared, nativeAck, nil)
 	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
 		t.Fatalf("binding persistence error = %v, want unknown result", err)
 	}
@@ -450,7 +570,7 @@ func TestConnectorWithholdsSuccessWhenRunBindingPersistenceFails(t *testing.T) {
 	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded || retry.RunID == nil || *retry.RunID != nativeTurnID {
 		t.Fatalf("exact duplicate recovery ACK = %+v", retry)
 	}
-	binding, ok := recoveredJournal.RunBindingForCommand(command.CommandID)
+	binding, ok := recoveredJournal.RunBinding(command.SessionID, runID)
 	if !ok || binding.State != connectorruntime.IdentityStateBound || binding.NativeTurnID != nativeTurnID || binding.NativeOperationID != nativeOperationID {
 		t.Fatalf("recovered binding = %+v, found = %v", binding, ok)
 	}
@@ -460,7 +580,7 @@ func TestConnectorLeavesCachedRunAckUnknownWithoutExactNativeFacts(t *testing.T)
 	journal := openConnectorIdentityJournal(t)
 	defer journal.Close()
 	connector := &Connector{journal: journal}
-	if err := connector.BindSessionIdentity("platform-session-run-unknown", "create-run-unknown", protocol.GatewaySession{Generation: "generation-run-unknown"}, protocol.AdapterSession{SessionID: "adapter-run-unknown", ExternalThreadRef: "thread-run-unknown"}); err != nil {
+	if err := connector.BindSessionIdentity("platform-session-run-unknown", "create-run-unknown", protocol.GatewaySession{Handle: "gateway-run-unknown", Generation: "generation-run-unknown"}, protocol.AdapterSession{SessionID: "adapter-run-unknown", ExternalThreadRef: "thread-run-unknown"}); err != nil {
 		t.Fatal(err)
 	}
 	runID := "platform-run-unknown"
@@ -469,10 +589,11 @@ func TestConnectorLeavesCachedRunAckUnknownWithoutExactNativeFacts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := journal.BeginCommand(prepared); err != nil {
+	nativeNamespace := connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID)
+	if _, _, err := journal.BeginCommandInNamespace(nativeNamespace, prepared); err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.UpdateCommand(prepared.CommandID, protocol.CommandAck{CommandID: prepared.CommandID, State: protocol.CommandStateSucceeded, Result: json.RawMessage(`{"ok":true}`)}); err != nil {
+	if err := journal.UpdateCommandInNamespace(nativeNamespace, prepared.CommandID, protocol.CommandAck{CommandID: prepared.CommandID, State: protocol.CommandStateSucceeded, Result: json.RawMessage(`{"ok":true}`)}); err != nil {
 		t.Fatal(err)
 	}
 	retry, err := connector.acceptPlatformCommand(context.Background(), command)
@@ -482,7 +603,7 @@ func TestConnectorLeavesCachedRunAckUnknownWithoutExactNativeFacts(t *testing.T)
 	if !retry.Deduplicated || retry.State != protocol.CommandStateUnknown || retry.Error == nil || retry.Error.Code != protocol.ErrorCodeUnknownResult {
 		t.Fatalf("insufficient run evidence ACK = %+v", retry)
 	}
-	binding, ok := journal.RunBindingForCommand(command.CommandID)
+	binding, ok := journal.RunBinding(command.SessionID, runID)
 	if !ok || binding.State != connectorruntime.IdentityStateUnknown || binding.NativeTurnID != "" || binding.NativeOperationID != "" {
 		t.Fatalf("insufficient run evidence binding = %+v, found = %v", binding, ok)
 	}
@@ -499,7 +620,8 @@ func TestConnectorRecoversCachedSessionStartFromExactIntentAfterRestart(t *testi
 		t.Fatal(err)
 	}
 	command := protocol.Command{CommandID: commandID, Kind: protocol.CommandKindSessionStart, Payload: payload, SessionID: "platform-session-session-recovery"}
-	if _, deduplicated, err := journal.BeginCommand(command); err != nil || deduplicated {
+	platformNamespace := connectorruntime.PlatformSessionCommandNamespace(command.SessionID)
+	if _, deduplicated, err := journal.BeginCommandInNamespace(platformNamespace, command); err != nil || deduplicated {
 		t.Fatalf("seed cached session command = deduplicated %v, error %v", deduplicated, err)
 	}
 	nativeRequest := protocol.NewSessionRequest{CommandID: commandID, ProjectID: "project-session-recovery"}
@@ -512,7 +634,16 @@ func TestConnectorRecoversCachedSessionStartFromExactIntentAfterRestart(t *testi
 	if err := journal.ResolveSessionStart(intentID, nativeSessionID, threadID, gatewaySession.Generation); err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.UpdateCommand(command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateUnknown, Error: &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "simulated crash before alias persistence", RequestID: command.CommandID}}); err != nil {
+	if err := journal.RecordSessionAlias(connectorruntime.SessionAlias{
+		PlatformSessionID: command.SessionID,
+		AdapterSessionID:  nativeSessionID,
+		ExternalThreadRef: threadID,
+		Generation:        gatewaySession.Generation,
+		CommandID:         commandID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommandInNamespace(platformNamespace, command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateUnknown, Error: &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "simulated crash before alias persistence", RequestID: command.CommandID}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := journal.Close(); err != nil {
@@ -543,9 +674,57 @@ func TestConnectorRecoversCachedSessionStartFromExactIntentAfterRestart(t *testi
 	if len(aliases) != 1 || aliases[0].AdapterSessionID != nativeSessionID {
 		t.Fatalf("recovered session aliases = %+v", aliases)
 	}
+	link, linked, err := recoveredJournal.GatewaySessionLinkForPlatform(command.SessionID)
+	if err != nil || !linked || link.GatewayHandle != gatewaySession.Handle || link.AdapterSessionID != nativeSessionID || link.CommandID != command.CommandID {
+		t.Fatalf("recovered gateway link = %+v, linked = %v, error = %v", link, linked, err)
+	}
+	retryAgain, err := recoveredConnector.acceptSessionCommand(context.Background(), command)
+	if err != nil || !retryAgain.Deduplicated || retryAgain.State != protocol.CommandStateSucceeded {
+		t.Fatalf("recovered session retry = %+v, error = %v", retryAgain, err)
+	}
 }
 
-func TestConnectorRejectsCachedSessionStartWithConflictingAlias(t *testing.T) {
+func TestConnectorLeavesCachedSessionStartUnknownWithoutPlatformAttribution(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	defer journal.Close()
+	commandID := "session-unattributed"
+	request := protocol.CreateSessionRequest{CommandID: commandID, ProjectID: stringPointer("project-unattributed"), Path: protocol.SessionPathNew}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{CommandID: commandID, Kind: protocol.CommandKindSessionStart, Payload: payload, SessionID: "platform-session-unattributed"}
+	platformNamespace := connectorruntime.PlatformSessionCommandNamespace(command.SessionID)
+	if _, _, err := journal.BeginCommandInNamespace(platformNamespace, command); err != nil {
+		t.Fatal(err)
+	}
+	otherGateway := protocol.GatewaySession{Handle: "gateway-unattributed", Generation: "generation-unattributed"}
+	intentID, err := journal.BeginSessionStart(otherGateway, newSessionStartRequest(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.ResolveSessionStart(intentID, sessionRecoveryStableID("thread-unattributed"), "thread-unattributed", otherGateway.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommandInNamespace(platformNamespace, command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateUnknown}); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := (&Connector{journal: journal}).acceptSessionCommand(context.Background(), command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("unattributed session error = %v, want unknown result", err)
+	}
+	if retry.State != protocol.CommandStateUnknown || !retry.Deduplicated {
+		t.Fatalf("unattributed session ACK = %+v, want persisted unknown", retry)
+	}
+	if _, found := journal.SessionAlias(command.SessionID); found {
+		t.Fatal("unattributed session unexpectedly acquired an alias")
+	}
+	if _, linked, err := journal.GatewaySessionLinkForPlatform(command.SessionID); err != nil || linked {
+		t.Fatalf("unattributed session gateway link = linked %v, error %v", linked, err)
+	}
+}
+
+func TestConnectorLeavesCachedSessionStartUnknownWithConflictingAlias(t *testing.T) {
 	journal := openConnectorIdentityJournal(t)
 	defer journal.Close()
 	commandID := "session-conflicting-alias"
@@ -555,21 +734,22 @@ func TestConnectorRejectsCachedSessionStartWithConflictingAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := protocol.Command{CommandID: commandID, Kind: protocol.CommandKindSessionStart, Payload: payload, SessionID: "platform-session-conflicting-alias"}
-	if _, _, err := journal.BeginCommand(command); err != nil {
+	platformNamespace := connectorruntime.PlatformSessionCommandNamespace(command.SessionID)
+	if _, _, err := journal.BeginCommandInNamespace(platformNamespace, command); err != nil {
 		t.Fatal(err)
 	}
 	if err := journal.RecordSessionAlias(connectorruntime.SessionAlias{PlatformSessionID: command.SessionID, AdapterSessionID: "adapter-conflicting-alias", ExternalThreadRef: "thread-conflicting-alias", Generation: "generation-conflicting-alias", CommandID: "another-creation-command"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.UpdateCommand(command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateSucceeded}); err != nil {
+	if err := journal.UpdateCommandInNamespace(platformNamespace, command.CommandID, protocol.CommandAck{CommandID: command.CommandID, State: protocol.CommandStateSucceeded}); err != nil {
 		t.Fatal(err)
 	}
 	retry, err := (&Connector{journal: journal}).acceptSessionCommand(context.Background(), command)
-	if !errors.Is(err, connectorruntime.ErrIdentityConflict) {
-		t.Fatalf("conflicting session alias error = %v, want identity conflict", err)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || !errors.Is(err, connectorruntime.ErrIdentityConflict) {
+		t.Fatalf("conflicting session alias error = %v, want unknown identity conflict", err)
 	}
-	if retry.State != protocol.CommandStateRejected {
-		t.Fatalf("conflicting session alias ACK = %+v, want rejected", retry)
+	if retry.State != protocol.CommandStateUnknown {
+		t.Fatalf("conflicting session alias ACK = %+v, want unknown", retry)
 	}
 }
 
@@ -591,20 +771,45 @@ func openConnectorIdentityJournal(t *testing.T) *connectorruntime.Journal {
 	return journal
 }
 
+func newConnectorIdentityAssembly(t *testing.T, journal *connectorruntime.Journal, transport *connectorSessionTransport) *Connector {
+	t.Helper()
+	appGateway, err := connectorruntime.NewGateway(connectorruntime.GatewayConfig{
+		TransportFactory: func(context.Context) (connectorruntime.RPCTransport, error) { return transport, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := connectorruntime.NewAdapter(appGateway, journal, connectorruntime.AdapterConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Connector{journal: journal, appGateway: appGateway, adapter: adapter}
+}
+
 type connectorSessionTransport struct {
-	mu       sync.Mutex
-	threadID string
-	calls    []string
-	events   chan connectorruntime.RPCMessage
-	closed   bool
+	mu          sync.Mutex
+	threadID    string
+	threadIDs   []string
+	threadIndex int
+	calls       []string
+	events      chan connectorruntime.RPCMessage
+	closed      bool
 }
 
 func (t *connectorSessionTransport) Call(_ context.Context, method string, _ json.RawMessage) (connectorruntime.RPCMessage, error) {
 	t.mu.Lock()
 	t.calls = append(t.calls, method)
+	threadID := t.threadID
+	if method == "thread/start" && t.threadIndex < len(t.threadIDs) {
+		threadID = t.threadIDs[t.threadIndex]
+		t.threadIndex++
+	}
 	t.mu.Unlock()
 	if method == "thread/start" {
-		return connectorruntime.RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-explicit"}}`)}, nil
+		if threadID == "" {
+			threadID = "thread-explicit"
+		}
+		return connectorruntime.RPCMessage{Result: json.RawMessage(`{"thread":{"id":"` + threadID + `"}}`)}, nil
 	}
 	return connectorruntime.RPCMessage{Result: json.RawMessage(`{}`)}, nil
 }

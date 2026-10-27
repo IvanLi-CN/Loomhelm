@@ -32,33 +32,46 @@ func (c *Connector) OpenSession(ctx context.Context, platformSessionID string, r
 	if platformSessionID == "" {
 		return OpenPlatformSession{}, errors.New("platform session identity is required")
 	}
-	// The public creation payload may carry an initial prompt, but opening the
-	// host session must not synthesize a run before the server has created its
-	// durable Run identity. The application boundary submits that prompt after
-	// activation through the ordinary run controller.
-	openRequest := request
-	openRequest.Prompt = nil
-	opened, err := protocol.OpenSessionWithIdentity(ctx, c.appGateway, c.adapter, openRequest)
-	if err != nil {
-		return OpenPlatformSession{}, err
+	var gatewaySession protocol.GatewaySession
+	var adapterSession protocol.AdapterSession
+	if request.Path == protocol.SessionPathNew {
+		namespace := connectorruntime.PlatformSessionCommandNamespace(platformSessionID)
+		nativeRequest := newSessionStartRequest(request)
+		var err error
+		gatewaySession, err = c.appGateway.StartNewSessionInNamespace(ctx, namespace, nativeRequest)
+		if err != nil {
+			return OpenPlatformSession{}, err
+		}
+		adapterSession, err = c.adapter.StartSessionInNamespace(ctx, namespace, gatewaySession, nativeRequest)
+		if err != nil {
+			return OpenPlatformSession{}, err
+		}
+	} else {
+		// Existing-session attachment keeps the established R01 selector. The
+		// public creation payload may carry an initial prompt, but this path must
+		// not synthesize a run before the server has created its durable Run.
+		openRequest := request
+		openRequest.Prompt = nil
+		opened, err := protocol.OpenSessionWithIdentity(ctx, c.appGateway, c.adapter, openRequest)
+		if err != nil {
+			return OpenPlatformSession{}, err
+		}
+		gatewaySession = opened.GatewaySession
+		adapterSession = opened.AdapterSession
 	}
-	gatewaySession := opened.GatewaySession
+	if err := validateSessionIdentity(platformSessionID, request.CommandID, gatewaySession, adapterSession); err != nil {
+		return OpenPlatformSession{}, unknownSessionIdentityError(err)
+	}
 	if gatewaySession.ExternalThreadRef == "" {
-		gatewaySession.ExternalThreadRef = opened.AdapterSession.ExternalThreadRef
+		gatewaySession.ExternalThreadRef = adapterSession.ExternalThreadRef
 	}
 	if err := c.appGateway.SetExternalThreadRef(gatewaySession, gatewaySession.ExternalThreadRef); err != nil {
-		cleanupCtx := context.WithoutCancel(ctx)
-		_ = c.adapter.CloseSession(cleanupCtx, opened.AdapterSession)
-		_ = c.appGateway.CloseSession(cleanupCtx, gatewaySession)
-		return OpenPlatformSession{}, err
+		return OpenPlatformSession{}, unknownSessionIdentityError(err)
 	}
-	if err := c.BindSessionIdentity(platformSessionID, request.CommandID, gatewaySession, opened.AdapterSession); err != nil {
-		cleanupCtx := context.WithoutCancel(ctx)
-		_ = c.adapter.CloseSession(cleanupCtx, opened.AdapterSession)
-		_ = c.appGateway.CloseSession(cleanupCtx, gatewaySession)
-		return OpenPlatformSession{}, err
+	if err := c.BindSessionIdentity(platformSessionID, request.CommandID, gatewaySession, adapterSession); err != nil {
+		return OpenPlatformSession{}, unknownSessionIdentityError(err)
 	}
-	return OpenPlatformSession{GatewaySession: gatewaySession, AdapterSession: opened.AdapterSession}, nil
+	return OpenPlatformSession{GatewaySession: gatewaySession, AdapterSession: adapterSession}, nil
 }
 
 // BindSessionIdentity records the explicit platform-to-host session
@@ -74,22 +87,55 @@ func (c *Connector) BindSessionIdentity(platformSessionID, commandID string, gat
 	if platformSessionID == "" || commandID == "" {
 		return errors.New("platform session and creation command identities are required")
 	}
-	if strings.TrimSpace(adapterSession.SessionID) == "" || strings.TrimSpace(adapterSession.ExternalThreadRef) == "" {
-		return errors.New("adapter session identity is incomplete")
+	if err := validateSessionIdentity(platformSessionID, commandID, gatewaySession, adapterSession); err != nil {
+		return err
 	}
-	if strings.TrimSpace(gatewaySession.Generation) == "" {
-		return errors.New("gateway session generation is required")
-	}
-	if gatewaySession.ExternalThreadRef != "" && gatewaySession.ExternalThreadRef != adapterSession.ExternalThreadRef {
-		return connectorruntime.ErrIdentityConflict
-	}
-	return c.journal.RecordSessionAlias(connectorruntime.SessionAlias{
+	alias := connectorruntime.SessionAlias{
 		PlatformSessionID: platformSessionID,
 		AdapterSessionID:  strings.TrimSpace(adapterSession.SessionID),
 		ExternalThreadRef: strings.TrimSpace(adapterSession.ExternalThreadRef),
 		Generation:        strings.TrimSpace(gatewaySession.Generation),
 		CommandID:         commandID,
+	}
+	if err := c.journal.RecordSessionAlias(alias); err != nil {
+		return err
+	}
+	return c.journal.RecordGatewaySessionLink(connectorruntime.GatewaySessionLink{
+		GatewayHandle:     strings.TrimSpace(gatewaySession.Handle),
+		PlatformSessionID: platformSessionID,
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		CommandID:         commandID,
 	})
+}
+
+func validateSessionIdentity(platformSessionID, commandID string, gatewaySession protocol.GatewaySession, adapterSession protocol.AdapterSession) error {
+	if strings.TrimSpace(platformSessionID) == "" || strings.TrimSpace(commandID) == "" {
+		return errors.New("platform session and creation command identities are required")
+	}
+	if strings.TrimSpace(gatewaySession.Handle) == "" || strings.TrimSpace(gatewaySession.Generation) == "" {
+		return errors.New("gateway session identity is incomplete")
+	}
+	if strings.TrimSpace(adapterSession.SessionID) == "" || strings.TrimSpace(adapterSession.ExternalThreadRef) == "" {
+		return errors.New("adapter session identity is incomplete")
+	}
+	if gatewaySession.ExternalThreadRef != "" && gatewaySession.ExternalThreadRef != adapterSession.ExternalThreadRef {
+		return connectorruntime.ErrIdentityConflict
+	}
+	return nil
+}
+
+func unknownSessionIdentityError(cause error) error {
+	return fmt.Errorf("%w: persist platform session identity: %w", connectorruntime.ErrUnknownOutcome, cause)
+}
+
+func newSessionStartRequest(request protocol.CreateSessionRequest) protocol.NewSessionRequest {
+	return protocol.NewSessionRequest{
+		CommandID: request.CommandID,
+		ProjectID: optionalIdentityValue(request.ProjectID),
+		TaskID:    optionalIdentityValue(request.TaskID),
+	}
 }
 
 // RotateSessionIdentity advances one platform session to the fresh Gateway
@@ -329,7 +375,8 @@ func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.
 	if err != nil {
 		return protocol.CommandAck{}, err
 	}
-	if ack, found, err := c.journal.LookupCommandForRequest(prepared); err != nil {
+	preparedNamespace := connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID)
+	if ack, found, err := c.journal.LookupCommandForRequestInNamespace(preparedNamespace, prepared); err != nil {
 		return ack, err
 	} else if found {
 		if command.Kind == protocol.CommandKindRunSend {
@@ -349,14 +396,14 @@ func (c *Connector) acceptPlatformCommand(ctx context.Context, command protocol.
 		return protocol.CommandAck{}, errors.New("connector command controller is unavailable")
 	}
 	ack, acceptErr := c.controller.AcceptCommand(ctx, prepared)
-	return c.completePlatformCommand(command, ack, acceptErr)
+	return c.completePlatformCommand(command, prepared, ack, acceptErr)
 }
 
-func (c *Connector) completePlatformCommand(command protocol.Command, ack protocol.CommandAck, acceptErr error) (protocol.CommandAck, error) {
+func (c *Connector) completePlatformCommand(command, prepared protocol.Command, ack protocol.CommandAck, acceptErr error) (protocol.CommandAck, error) {
 	observeErr := c.ObserveCommandIdentity(command, ack)
 	combinedErr := errors.Join(acceptErr, observeErr)
 	if ack.State == protocol.CommandStateSucceeded && combinedErr != nil {
-		unknown, unknownErr := c.persistUnknownCommand(command.CommandID, ack, combinedErr)
+		unknown, unknownErr := c.persistUnknownCommand(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID, ack, combinedErr)
 		unknown.Deduplicated = false
 		return unknown, unknownErr
 	}
@@ -367,7 +414,8 @@ func (c *Connector) acceptSessionCommand(ctx context.Context, command protocol.C
 	if c == nil || c.journal == nil {
 		return protocol.CommandAck{}, errors.New("connector session command journal is unavailable")
 	}
-	ack, deduplicated, err := c.journal.BeginCommand(command)
+	namespace := connectorruntime.PlatformSessionCommandNamespace(command.SessionID)
+	ack, deduplicated, err := c.journal.BeginCommandInNamespace(namespace, command)
 	if err != nil {
 		return ack, err
 	}
@@ -375,7 +423,7 @@ func (c *Connector) acceptSessionCommand(ctx context.Context, command protocol.C
 		if command.Kind == protocol.CommandKindSessionStart && ack.State != protocol.CommandStateFailed && ack.State != protocol.CommandStateRejected {
 			request, decodeErr := decodeSessionCommand(command.Payload)
 			if decodeErr != nil {
-				return c.persistUnknownCommand(command.CommandID, ack, decodeErr)
+				return c.persistUnknownCommand(namespace, command.CommandID, ack, decodeErr)
 			}
 			if request.CommandID != command.CommandID || request.Path != protocol.SessionPathNew {
 				return c.rejectSessionCommand(command, ack, protocol.ErrIdempotencyConflict)
@@ -405,7 +453,7 @@ func (c *Connector) acceptSessionCommand(ctx context.Context, command protocol.C
 		if errors.Is(err, protocol.ErrUnknownCommandResult) || errors.Is(err, connectorruntime.ErrUnknownOutcome) {
 			ack.State = protocol.CommandStateUnknown
 			ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "session opening outcome is unknown", RequestID: command.CommandID}
-			if updateErr := c.journal.UpdateCommand(command.CommandID, ack); updateErr != nil {
+			if updateErr := c.journal.UpdateCommandInNamespace(namespace, command.CommandID, ack); updateErr != nil {
 				return ack, errors.Join(err, updateErr)
 			}
 			return ack, err
@@ -422,7 +470,7 @@ func (c *Connector) acceptSessionCommand(ctx context.Context, command protocol.C
 	ack.State = protocol.CommandStateSucceeded
 	ack.Error = nil
 	ack.Result = result
-	if err := c.journal.UpdateCommand(command.CommandID, ack); err != nil {
+	if err := c.journal.UpdateCommandInNamespace(namespace, command.CommandID, ack); err != nil {
 		return ack, err
 	}
 	return ack, nil
@@ -439,16 +487,16 @@ func (c *Connector) reconcileCachedRunCommand(ctx context.Context, command, prep
 	if err != nil {
 		return ack, err
 	}
-	binding, found := c.journal.RunBindingForCommand(command.CommandID)
+	binding, found := c.journal.RunBinding(command.SessionID, platformRunID)
 	if found {
 		if binding.PlatformSessionID != command.SessionID || binding.PlatformRunID != platformRunID || binding.CommandID != command.CommandID {
-			return c.persistUnknownCommand(prepared.CommandID, ack, connectorruntime.ErrIdentityConflict)
+			return c.persistUnknownCommand(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID, ack, connectorruntime.ErrIdentityConflict)
 		}
 		if err := validateRunAckAgainstBinding(binding, ack); err != nil {
-			return c.persistUnknownCommand(prepared.CommandID, ack, err)
+			return c.persistUnknownCommand(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID, ack, err)
 		}
 	} else if err := c.ensureRunIdentityForRecovery(command, ack); err != nil {
-		return c.persistUnknownCommand(prepared.CommandID, ack, err)
+		return c.persistUnknownCommand(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID, ack, err)
 	}
 
 	var reconcileErr error
@@ -456,41 +504,41 @@ func (c *Connector) reconcileCachedRunCommand(ctx context.Context, command, prep
 		if c.controller == nil {
 			reconcileErr = errors.New("connector command controller is unavailable for durable reconciliation")
 		} else {
-			_, reconcileErr = c.controller.ReconcileCommand(ctx, prepared.CommandID)
+			_, reconcileErr = c.controller.ReconcileCommand(ctx, command.SessionID, command.CommandID)
 		}
-		latest, lookupErr := c.journal.LookupCommand(prepared.CommandID)
+		latest, lookupErr := c.journal.LookupCommandInNamespace(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID)
 		if lookupErr != nil {
-			return c.persistUnknownCommand(prepared.CommandID, ack, errors.Join(reconcileErr, lookupErr))
+			return c.persistUnknownCommand(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID, ack, errors.Join(reconcileErr, lookupErr))
 		}
 		ack = latest
 	}
 
 	if err := c.ObserveCommandIdentity(command, ack); err != nil {
-		return c.persistUnknownCommand(prepared.CommandID, ack, errors.Join(reconcileErr, err))
+		return c.persistUnknownCommand(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID, ack, errors.Join(reconcileErr, err))
 	}
-	latest, err := c.journal.LookupCommand(prepared.CommandID)
+	latest, err := c.journal.LookupCommandInNamespace(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID)
 	if err != nil {
-		return c.persistUnknownCommand(prepared.CommandID, ack, errors.Join(reconcileErr, err))
+		return c.persistUnknownCommand(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID, ack, errors.Join(reconcileErr, err))
 	}
 	ack = latest
-	binding, found = c.journal.RunBindingForCommand(command.CommandID)
+	binding, found = c.journal.RunBinding(command.SessionID, platformRunID)
 	if err := validateRunAckAgainstBinding(binding, ack); err != nil || !found || binding.State != connectorruntime.IdentityStateBound || binding.NativeTurnID == "" || ack.State != protocol.CommandStateSucceeded {
 		if err == nil {
 			err = protocol.ErrUnknownCommandResult
 		}
-		return c.persistUnknownCommand(prepared.CommandID, ack, errors.Join(reconcileErr, err))
+		return c.persistUnknownCommand(connectorruntime.AdapterSessionCommandNamespace(prepared.SessionID), prepared.CommandID, ack, errors.Join(reconcileErr, err))
 	}
 	ack.Deduplicated = true
 	return ack, nil
 }
 
 func (c *Connector) ensureRunIdentityForRecovery(command protocol.Command, ack protocol.CommandAck) error {
-	if _, found := c.journal.RunBindingForCommand(command.CommandID); found {
-		return nil
-	}
 	platformRunID, err := platformCommandRunID(command)
 	if err != nil {
 		return err
+	}
+	if _, found := c.journal.RunBinding(command.SessionID, platformRunID); found {
+		return nil
 	}
 	alias, ok := c.journal.SessionAlias(command.SessionID)
 	if !ok {
@@ -547,72 +595,65 @@ func qualifiedOperationGeneration(operationID string) string {
 }
 
 func (c *Connector) reconcileCachedSessionStart(command protocol.Command, request protocol.CreateSessionRequest, ack protocol.CommandAck) (protocol.CommandAck, error) {
-	proof, found, err := c.journal.ResolvedSessionStartProof(protocol.NewSessionRequest{
-		CommandID: command.CommandID,
-		ProjectID: optionalIdentityValue(request.ProjectID),
-		TaskID:    optionalIdentityValue(request.TaskID),
-		// OpenSession intentionally removes the optional initial prompt before
-		// crossing the native session-start boundary. The command journal digest
-		// still covers the original payload, while this lookup matches the exact
-		// native creation intent that was persisted before the side effect.
-		Prompt: "",
-	})
+	namespace := connectorruntime.PlatformSessionCommandNamespace(command.SessionID)
+	nativeRequest := newSessionStartRequest(request)
+	// Recovery must resolve through the verified platform alias/link. A bare
+	// command ID is not enough because separate platform sessions may reuse it.
+	proof, found, err := c.journal.ResolvedSessionStartProofForPlatform(command.SessionID, nativeRequest)
 	if err != nil {
-		return c.rejectSessionCommand(command, ack, err)
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
 	}
 	alias, ok := c.journal.SessionAlias(command.SessionID)
 	if !ok {
-		if !found {
-			return c.persistUnknownCommand(command.CommandID, ack, connectorruntime.ErrIdentityNotFound)
-		}
-		if proof.CommandID != command.CommandID {
-			return c.rejectSessionCommand(command, ack, connectorruntime.ErrIdentityConflict)
-		}
-		alias = connectorruntime.SessionAlias{
-			PlatformSessionID: command.SessionID,
-			AdapterSessionID:  proof.AdapterSession.SessionID,
-			ExternalThreadRef: proof.AdapterSession.ExternalThreadRef,
-			Generation:        proof.Generation,
-			CommandID:         proof.CommandID,
-		}
-		if err := c.journal.RecordSessionAlias(alias); err != nil {
-			if errors.Is(err, connectorruntime.ErrIdentityConflict) {
-				return c.rejectSessionCommand(command, ack, err)
-			}
-			return c.persistUnknownCommand(command.CommandID, ack, err)
-		}
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrCommandScopeUnknown)
 	}
 	if alias.PlatformSessionID != command.SessionID || alias.CommandID != command.CommandID {
-		return c.rejectSessionCommand(command, ack, connectorruntime.ErrIdentityConflict)
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
 	}
-	if !found || proof.AdapterSession.SessionID != alias.AdapterSessionID || proof.AdapterSession.ExternalThreadRef != alias.ExternalThreadRef || proof.Generation != alias.Generation {
-		return c.persistUnknownCommand(command.CommandID, ack, protocol.ErrUnknownCommandResult)
+	if !found {
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrCommandScopeUnknown)
+	}
+	if ok && (proof.AdapterSession.SessionID != alias.AdapterSessionID || proof.AdapterSession.ExternalThreadRef != alias.ExternalThreadRef || proof.Generation != alias.Generation) {
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
+	}
+	gatewaySession := protocol.GatewaySession{
+		Handle:            proof.GatewayHandle,
+		ExternalThreadRef: proof.AdapterSession.ExternalThreadRef,
+		Generation:        proof.Generation,
+		Path:              protocol.SessionPathNew,
+	}
+	if err := c.BindSessionIdentity(command.SessionID, command.CommandID, gatewaySession, proof.AdapterSession); err != nil {
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
+	}
+	alias, ok = c.journal.SessionAlias(command.SessionID)
+	if !ok {
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrCommandScopeUnknown)
 	}
 	result, err := json.Marshal(sessionOpenResult{
 		ExternalThreadRef: alias.ExternalThreadRef,
 		Generation:        alias.Generation,
 	})
 	if err != nil {
-		return c.persistUnknownCommand(command.CommandID, ack, err)
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
 	}
 	durable := ack
 	durable.Deduplicated = false
 	durable.State = protocol.CommandStateSucceeded
 	durable.Error = nil
 	durable.Result = result
-	if err := c.journal.UpdateCommand(command.CommandID, durable); err != nil {
+	if err := c.journal.UpdateCommandInNamespace(namespace, command.CommandID, durable); err != nil {
 		return ack, err
 	}
 	durable.Deduplicated = true
 	return durable, nil
 }
 
-func (c *Connector) persistUnknownCommand(commandID string, ack protocol.CommandAck, cause error) (protocol.CommandAck, error) {
+func (c *Connector) persistUnknownCommand(namespace connectorruntime.CommandNamespace, commandID string, ack protocol.CommandAck, cause error) (protocol.CommandAck, error) {
 	durable := ack
 	durable.Deduplicated = false
 	durable.State = protocol.CommandStateUnknown
 	durable.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "command outcome is unknown", RequestID: commandID}
-	updateErr := c.journal.UpdateCommand(commandID, durable)
+	updateErr := c.journal.UpdateCommandInNamespace(namespace, commandID, durable)
 	durable.Deduplicated = true
 	return durable, errors.Join(protocol.ErrUnknownCommandResult, cause, updateErr)
 }
@@ -623,7 +664,7 @@ func (c *Connector) rejectSessionCommand(command protocol.Command, ack protocol.
 	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeInvalidRequest, Message: "session command was rejected", RequestID: command.CommandID}
 	durable := ack
 	durable.Deduplicated = false
-	if err := c.journal.UpdateCommand(command.CommandID, durable); err != nil {
+	if err := c.journal.UpdateCommandInNamespace(connectorruntime.PlatformSessionCommandNamespace(command.SessionID), command.CommandID, durable); err != nil {
 		return ack, errors.Join(cause, err)
 	}
 	ack.Deduplicated = deduplicated

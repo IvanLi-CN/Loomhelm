@@ -265,14 +265,14 @@ func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRu
 	return accepted, stored, nil
 }
 
-func (s *Store) Lookup(ctx context.Context, commandID string) (CommandRecord, error) {
+func (s *Store) Lookup(ctx context.Context, platformSessionID, commandID string) (CommandRecord, error) {
 	if err := s.ready(ctx); err != nil {
 		return CommandRecord{}, err
 	}
-	if strings.TrimSpace(commandID) == "" {
-		return CommandRecord{}, fmt.Errorf("%w: command id is required", ErrCommandNotFound)
+	if strings.TrimSpace(platformSessionID) == "" || strings.TrimSpace(commandID) == "" {
+		return CommandRecord{}, fmt.Errorf("%w: platform session and command id are required", ErrCommandNotFound)
 	}
-	record, err := scanCommand(s.pool.QueryRow(ctx, commandQuery+` WHERE command.command_id = $1`, commandID))
+	record, err := scanCommand(s.pool.QueryRow(ctx, commandQuery+` WHERE command.session_id = $1 AND command.command_id = $2`, platformSessionID, commandID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CommandRecord{}, ErrCommandNotFound
 	}
@@ -282,12 +282,12 @@ func (s *Store) Lookup(ctx context.Context, commandID string) (CommandRecord, er
 // RecordExactCommandAck persists a Connector ACK as a durable fact without
 // using the command transition state machine. This is the path for a late ACK
 // after in-memory delivery state has disappeared; it never changes the Run.
-func (s *Store) RecordExactCommandAck(ctx context.Context, ack protocol.CommandAck) (CommandRecord, error) {
+func (s *Store) RecordExactCommandAck(ctx context.Context, platformSessionID string, ack protocol.CommandAck) (CommandRecord, error) {
 	if err := s.ready(ctx); err != nil {
 		return CommandRecord{}, err
 	}
-	if strings.TrimSpace(ack.CommandID) == "" || ack.CommandID != strings.TrimSpace(ack.CommandID) {
-		return CommandRecord{}, fmt.Errorf("%w: command id is required", ErrCommandFactConflict)
+	if strings.TrimSpace(platformSessionID) == "" || strings.TrimSpace(ack.CommandID) == "" || ack.CommandID != strings.TrimSpace(ack.CommandID) {
+		return CommandRecord{}, fmt.Errorf("%w: platform session and command id are required", ErrCommandFactConflict)
 	}
 	if !validCommandState(ack.State) || ack.State == protocol.CommandStateUnknown {
 		return CommandRecord{}, fmt.Errorf("%w: ACK state %q is not an exact fact", protocol.ErrUnknownCommandResult, ack.State)
@@ -301,7 +301,7 @@ func (s *Store) RecordExactCommandAck(ctx context.Context, ack protocol.CommandA
 		return CommandRecord{}, fmt.Errorf("begin exact command ACK persistence: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	record, err := scanCommand(tx.QueryRow(ctx, commandQuery+` WHERE command.command_id = $1 FOR UPDATE`, ack.CommandID))
+	record, err := scanCommand(tx.QueryRow(ctx, commandQuery+` WHERE command.session_id = $1 AND command.command_id = $2 FOR UPDATE`, platformSessionID, ack.CommandID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CommandRecord{}, ErrCommandNotFound
 	}

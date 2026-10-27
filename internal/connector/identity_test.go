@@ -567,8 +567,8 @@ func TestJournalReadsV2AndAppendsV3WithoutRewritingHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(data, []byte(`{"format_version":2`)) || !bytes.Contains(data, []byte(`{"format_version":3`)) {
-		t.Fatalf("v2 history was rewritten or v3 record missing: %s", data)
+	if !bytes.HasPrefix(data, []byte(`{"format_version":2`)) || !bytes.Contains(data, []byte(`{"format_version":4`)) || !bytes.Contains(data, []byte(`"type":"journal_header"`)) {
+		t.Fatalf("v2 history was rewritten or v4 record missing: %s", data)
 	}
 }
 
@@ -754,6 +754,17 @@ func TestJournalSessionAliasRotationPreservesHistoricalBindings(t *testing.T) {
 func writeJournalRecords(t *testing.T, path string, records []journalRecord) {
 	t.Helper()
 	var data []byte
+	for _, record := range records {
+		if record.FormatVersion == journalFormatVersion {
+			header, err := json.Marshal(journalRecord{FormatVersion: journalFormatVersion, Type: "journal_header", At: "2026-10-21T00:00:00Z"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = append(data, header...)
+			data = append(data, '\n')
+			break
+		}
+	}
 	for _, record := range records {
 		encoded, err := json.Marshal(record)
 		if err != nil {

@@ -119,6 +119,10 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
 		approvalStore := approvals.NewStore(db.Pool())
+		if err := approvalStore.CheckHistoryReadiness(ctx); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("check approval history readiness: %w", err)
+		}
 		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth)
 		if serviceErr != nil {
 			db.Close()

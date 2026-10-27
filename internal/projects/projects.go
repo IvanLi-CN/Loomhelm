@@ -103,6 +103,30 @@ func (s *Service) CanWriteProject(ctx context.Context, principal auth.Principal,
 	return s.hasRole(ctx, principal.UserID, projectID, RoleOperator, RoleOwner)
 }
 
+// CanWriteProjectTx evaluates project write access while retaining a share
+// lock on the membership row until the caller's transaction commits. This is
+// used by multi-row mutations that must not authorize before a concurrent
+// membership revoke can commit.
+func (s *Service) CanWriteProjectTx(ctx context.Context, tx pgx.Tx, principal auth.Principal, projectID string) (bool, error) {
+	if s == nil || tx == nil || principal.UserID == "" || !principal.HasProjectScope(projectID) {
+		return false, nil
+	}
+	var role Role
+	err := tx.QueryRow(ctx, `
+		SELECT role
+		FROM project_members
+		WHERE user_id = $1 AND project_id = $2
+		FOR SHARE
+	`, principal.UserID, projectID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read project write membership: %w", err)
+	}
+	return role == RoleOperator || role == RoleOwner, nil
+}
+
 func (s *Service) CanManageProject(ctx context.Context, principal auth.Principal, projectID string) (bool, error) {
 	return s.canManageMembers(ctx, principal, projectID)
 }

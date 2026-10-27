@@ -208,13 +208,19 @@ func (c *ClientConnection) SendHeartbeatForStream(ctx context.Context, sessionID
 }
 
 func (c *ClientConnection) Acknowledge(ctx context.Context, requestID string, ack protocol.CommandAck) error {
+	return c.AcknowledgeForSession(ctx, "", requestID, ack)
+}
+
+// AcknowledgeForSession carries the original platform session identity in the
+// existing gateway envelope so the server can scope the durable command lookup.
+func (c *ClientConnection) AcknowledgeForSession(ctx context.Context, sessionID, requestID string, ack protocol.CommandAck) error {
 	if c == nil {
 		return ErrConnectionClosed
 	}
 	if strings.TrimSpace(requestID) == "" {
 		return errors.New("gateway acknowledgement request id must not be empty")
 	}
-	return c.write(ctx, Message{Type: MessageCommandAck, RequestID: requestID, Generation: c.generation, Ack: &ack})
+	return c.write(ctx, Message{Type: MessageCommandAck, RequestID: requestID, Generation: c.generation, SessionID: sessionID, Ack: &ack})
 }
 
 func (c *ClientConnection) Close() error {

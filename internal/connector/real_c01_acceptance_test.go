@@ -325,7 +325,7 @@ func runRealC01RecoveryHelper(ctx context.Context, cli, workspace, journalPath, 
 		_ = journal.Close()
 		return realC01ProcessResult{}, errors.New("recovery helper could not establish an event cursor boundary")
 	}
-	reconciliation, err := controller.ReconcileCommand(ctx, commandID)
+	reconciliation, err := controller.ReconcileCommand(ctx, sessionID, commandID)
 	if err != nil {
 		_ = journal.Close()
 		return realC01ProcessResult{}, err

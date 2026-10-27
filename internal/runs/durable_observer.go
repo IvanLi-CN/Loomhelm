@@ -95,7 +95,7 @@ func (o *DurableObserver) Observe(ctx context.Context, run Run) (RunObservation,
 		observation.Reason = "current durable Run state remains active"
 		return observation, nil
 	}
-	command, commandErr := o.store.Lookup(ctx, run.CommandID)
+	command, commandErr := o.store.Lookup(ctx, run.SessionID, run.CommandID)
 	if commandErr == nil {
 		switch command.State {
 		case protocol.CommandStateExecuting, protocol.CommandStateSucceeded:

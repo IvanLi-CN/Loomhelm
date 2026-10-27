@@ -13,6 +13,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 type sessionAccessRecords struct {
@@ -40,6 +41,31 @@ func (p sessionAccessProjects) CanReadProject(context.Context, auth.Principal, s
 
 func (p sessionAccessProjects) CanWriteProject(context.Context, auth.Principal, string) (bool, error) {
 	return p.write, nil
+}
+
+func (p sessionAccessProjects) CanWriteProjectTx(context.Context, pgx.Tx, auth.Principal, string) (bool, error) {
+	return p.write, nil
+}
+
+type sessionTaskBindingStub struct {
+	facts  sessions.BindingFacts
+	result sessions.Session
+	err    error
+}
+
+func (b *sessionTaskBindingStub) BindTaskAuthorized(ctx context.Context, _ string, request sessions.BindRequest, authorize sessions.BindingAuthorizer) (sessions.Session, error) {
+	if b.err != nil {
+		return sessions.Session{}, b.err
+	}
+	if request.TaskID == "" {
+		return sessions.Session{}, sessions.ErrInvalidSession
+	}
+	if authorize != nil {
+		if err := authorize(ctx, nil, b.facts); err != nil {
+			return sessions.Session{}, err
+		}
+	}
+	return b.result, nil
 }
 
 type sessionAccessPrincipal struct {
@@ -137,6 +163,44 @@ func TestSessionReadHTTPKeepsDependencyDetailsPrivate(t *testing.T) {
 				if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil || failure.RequestID == "" {
 					t.Fatalf("error response has no request identity: %s", body)
 				}
+			}
+		})
+	}
+}
+
+func TestSessionTaskBindingHTTPEnforcesConfirmationAndHidesUnauthorizedSessions(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		principal auth.Principal
+		confirm   bool
+		status    int
+	}{
+		{name: "creator must confirm sharing", principal: auth.Principal{UserID: "owner"}, status: http.StatusBadRequest},
+		{name: "creator can confirm sharing", principal: auth.Principal{UserID: "owner"}, confirm: true, status: http.StatusOK},
+		{name: "foreign user is hidden", principal: auth.Principal{UserID: "other"}, confirm: true, status: http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := &sessionService{
+				principal: sessionAccessPrincipal{principal: test.principal},
+				projects:  sessionAccessProjects{},
+				binding: &sessionTaskBindingStub{
+					facts: sessions.BindingFacts{
+						Session: sessions.Session{Session: protocol.Session{ID: "s"}},
+						Access:  sessions.SessionAccess{SessionID: "s", CreatorUserID: "owner", HostID: "h", Confirmed: true},
+					},
+					result: sessions.Session{Session: protocol.Session{ID: "s", TaskID: stringPointer("task")}},
+				},
+			}
+			router := chi.NewRouter()
+			service.mount(router)
+			body := `{"task_id":"task"}`
+			if test.confirm {
+				body = `{"task_id":"task","confirm_share":true}`
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/sessions/s/task", strings.NewReader(body)))
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d: %s", response.Code, test.status, response.Body.String())
 			}
 		})
 	}

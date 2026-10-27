@@ -113,7 +113,7 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 }
 
 func (s *applicationServices) sessionAccess() *sessionService {
-	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions, creation: s.sessionCreation}
+	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions, creation: s.sessionCreation, binding: s.sessions}
 }
 
 func writeApplicationError(writer http.ResponseWriter, request *http.Request, status int, message string) {

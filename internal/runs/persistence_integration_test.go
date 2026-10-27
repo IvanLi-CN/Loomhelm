@@ -985,7 +985,7 @@ func TestPersistentControllerDeduplicatesAndFreezesUnknownDelivery(t *testing.T)
 	if _, err := unknownController.AcceptCommand(ctx, unknownCommand); !errors.Is(err, protocol.ErrUnknownCommandResult) {
 		t.Fatalf("unknown controller error = %v, want %v", err, protocol.ErrUnknownCommandResult)
 	}
-	unknownRecord, err := NewStore(db.Pool()).Lookup(ctx, ids.unknownCommand)
+	unknownRecord, err := NewStore(db.Pool()).Lookup(ctx, ids.session, ids.unknownCommand)
 	if err != nil {
 		t.Fatalf("lookup unknown command: %v", err)
 	}
@@ -1053,7 +1053,7 @@ func TestPersistentControllerReconcilesOrphanedAdmissionAfterRestart(t *testing.
 	if transport.calls != 0 {
 		t.Fatalf("orphaned admission sent %d native commands, want 0", transport.calls)
 	}
-	record, err := store.Lookup(ctx, command.CommandID)
+	record, err := store.Lookup(ctx, command.SessionID, command.CommandID)
 	if err != nil {
 		t.Fatalf("lookup recovered command: %v", err)
 	}
@@ -1217,7 +1217,7 @@ func TestPersistentControllerRepairsUnknownCommandRunSplit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create split-state controller: %v", err)
 	}
-	if _, err := controller.ReconcileCommand(ctx, command.CommandID); !errors.Is(err, protocol.ErrUnknownCommandResult) {
+	if _, err := controller.ReconcileCommand(ctx, command.SessionID, command.CommandID); !errors.Is(err, protocol.ErrUnknownCommandResult) {
 		t.Fatalf("split-state reconciliation error = %v, want unknown result", err)
 	}
 	run, err := store.GetRun(ctx, runID)
@@ -1270,7 +1270,7 @@ func TestPersistentStoreUnknownTransitionRollsBackOnRunIdentityConflict(t *testi
 	if _, err := store.MarkCommandAndRunUnknown(ctx, command.CommandID, "1", "mismatched association"); !errors.Is(err, ErrRunConflict) {
 		t.Fatalf("mismatched run error = %v, want %v", err, ErrRunConflict)
 	}
-	commandRecord, err := store.Lookup(ctx, command.CommandID)
+	commandRecord, err := store.Lookup(ctx, command.SessionID, command.CommandID)
 	if err != nil {
 		t.Fatalf("read rolled-back command: %v", err)
 	}

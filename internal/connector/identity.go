@@ -257,6 +257,10 @@ func runBindingPlatformKey(binding RunBinding) string {
 	return identityTupleKey(binding.PlatformSessionID, binding.PlatformRunID)
 }
 
+func runBindingCommandKey(binding RunBinding) string {
+	return identityTupleKey(binding.PlatformSessionID, binding.CommandID)
+}
+
 func runBindingNativeTurnKey(binding RunBinding) string {
 	if binding.NativeTurnID == "" {
 		return ""
@@ -593,7 +597,7 @@ func (j *Journal) recordRunBindingLocked(binding RunBinding) error {
 }
 
 func (j *Journal) checkRunBindingIndexesLocked(binding RunBinding, platformKey string) error {
-	if existing, ok := j.runBindingByCommand[binding.CommandID]; ok && existing != platformKey {
+	if existing, ok := j.runBindingByCommand[runBindingCommandKey(binding)]; ok && existing != platformKey {
 		return ErrIdentityConflict
 	}
 	if key := runBindingNativeTurnKey(binding); key != "" {
@@ -612,7 +616,7 @@ func (j *Journal) checkRunBindingIndexesLocked(binding RunBinding, platformKey s
 func (j *Journal) indexRunBindingLocked(binding RunBinding) {
 	platformKey := runBindingPlatformKey(binding)
 	j.runBindings[platformKey] = binding
-	j.runBindingByCommand[binding.CommandID] = platformKey
+	j.runBindingByCommand[runBindingCommandKey(binding)] = platformKey
 	if key := runBindingNativeTurnKey(binding); key != "" {
 		j.runBindingByNativeTurn[key] = platformKey
 	}
@@ -655,8 +659,8 @@ func (j *Journal) applyRunBindingLoadedLocked(binding RunBinding) error {
 func (j *Journal) removeRunBindingIndexesLocked(binding RunBinding) {
 	platformKey := runBindingPlatformKey(binding)
 	delete(j.runBindings, platformKey)
-	if existing, ok := j.runBindingByCommand[binding.CommandID]; ok && existing == platformKey {
-		delete(j.runBindingByCommand, binding.CommandID)
+	if existing, ok := j.runBindingByCommand[runBindingCommandKey(binding)]; ok && existing == platformKey {
+		delete(j.runBindingByCommand, runBindingCommandKey(binding))
 	}
 	if key := runBindingNativeTurnKey(binding); key != "" {
 		if existing, ok := j.runBindingByNativeTurn[key]; ok && existing == platformKey {
@@ -683,12 +687,35 @@ func (j *Journal) RunBinding(platformSessionID, platformRunID string) (RunBindin
 func (j *Journal) RunBindingForCommand(commandID string) (RunBinding, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	platformKey, ok := j.runBindingByCommand[strings.TrimSpace(commandID)]
+	var found RunBinding
+	for _, binding := range j.runBindings {
+		if binding.CommandID != strings.TrimSpace(commandID) {
+			continue
+		}
+		if found.CommandID != "" {
+			return RunBinding{}, false
+		}
+		found = binding
+	}
+	return cloneRunBinding(found), found.CommandID != ""
+}
+
+// RunBindingForPlatformCommand resolves a command only inside the supplied
+// platform session namespace. It never inspects a native or adapter session ID.
+func (j *Journal) RunBindingForPlatformCommand(platformSessionID, commandID string) (RunBinding, bool, error) {
+	platformSessionID = normalizeIdentityPart(platformSessionID)
+	commandID = normalizeIdentityPart(commandID)
+	if platformSessionID == "" || commandID == "" {
+		return RunBinding{}, false, ErrCommandScopeUnknown
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	platformKey, ok := j.runBindingByCommand[identityTupleKey(platformSessionID, commandID)]
 	if !ok {
-		return RunBinding{}, false
+		return RunBinding{}, false, nil
 	}
 	binding, ok := j.runBindings[platformKey]
-	return cloneRunBinding(binding), ok
+	return cloneRunBinding(binding), ok, nil
 }
 
 // RunBindingForNativeTurn resolves a native turn using every identity fact

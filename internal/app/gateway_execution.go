@@ -69,11 +69,12 @@ func (t *gatewayExecutionTransport) SendSessionCommand(ctx context.Context, host
 // prevents a connected but unrelated host from writing that fact. Missing
 // optional ACK identity is filled only from the already locked command record,
 // never from an active-run guess.
-func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connection hosts.Connection, _ string, ack protocol.CommandAck) error {
+func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connection hosts.Connection, _ string, platformSessionID string, ack protocol.CommandAck) error {
 	if t == nil || t.sessions == nil || t.runs == nil {
 		return fmt.Errorf("%w: gateway ACK stores are unavailable", hosts.ErrInvalid)
 	}
-	record, err := t.runs.Lookup(ctx, ack.CommandID)
+	platformSessionID = strings.TrimSpace(platformSessionID)
+	record, err := t.runs.Lookup(ctx, platformSessionID, ack.CommandID)
 	if err != nil {
 		if !errors.Is(err, runs.ErrCommandNotFound) {
 			return err
@@ -81,6 +82,9 @@ func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connec
 		intent, intentErr := t.sessions.GetIntentByCommand(ctx, ack.CommandID)
 		if intentErr != nil {
 			return err
+		}
+		if platformSessionID != "" && intent.SessionID != platformSessionID {
+			return fmt.Errorf("%w: creation command %q is outside platform session %q", hosts.ErrInvalid, ack.CommandID, platformSessionID)
 		}
 		if ack.RunID != nil {
 			return fmt.Errorf("%w: session creation command %q must not carry a run id", hosts.ErrInvalid, ack.CommandID)
@@ -111,7 +115,7 @@ func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connec
 	} else if *ack.RunID != *record.Intent.Command.RunID {
 		return fmt.Errorf("%w: ACK run identity does not match command %q", hosts.ErrInvalid, ack.CommandID)
 	}
-	if _, err := t.runs.RecordExactCommandAck(ctx, ack); err != nil && !errors.Is(err, protocol.ErrUnknownCommandResult) {
+	if _, err := t.runs.RecordExactCommandAck(ctx, platformSessionID, ack); err != nil && !errors.Is(err, protocol.ErrUnknownCommandResult) {
 		return err
 	}
 	return nil

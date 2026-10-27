@@ -495,7 +495,7 @@ func (c *serverConnection) resolve(ctx context.Context, message Message) error {
 			if message.Ack == nil {
 				return errors.New("gateway acknowledgement payload is missing")
 			}
-			if err := c.onAck(ctx, c.connection, message.RequestID, *message.Ack); err != nil {
+			if err := c.onAck(ctx, c.connection, message.RequestID, message.SessionID, *message.Ack); err != nil {
 				return err
 			}
 		}

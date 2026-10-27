@@ -190,3 +190,46 @@ func TestGatewayRejectsCreationIdentityConflictWithoutClosingCachedSession(t *te
 		t.Fatal(err)
 	}
 }
+
+func TestGatewayScopesSameCreationCommandIDByPlatformNamespace(t *testing.T) {
+	created := 0
+	gateway, err := NewGateway(GatewayConfig{
+		TransportFactory: func(context.Context) (RPCTransport, error) {
+			created++
+			return newFakeTransport(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "shared-gateway-command", Prompt: "same prompt"}
+	first, err := gateway.StartNewSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-gateway-a"), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := gateway.StartNewSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-gateway-b"), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Handle == second.Handle {
+		t.Fatalf("different platform namespaces reused gateway handle %q", first.Handle)
+	}
+	retry, err := gateway.StartNewSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-gateway-a"), request)
+	if err != nil || retry != first {
+		t.Fatalf("same platform namespace retry = %+v error=%v, want %+v", retry, err, first)
+	}
+	if created != 2 {
+		t.Fatalf("transport factory calls = %d, want 2", created)
+	}
+	conflict := request
+	conflict.Prompt = "changed prompt"
+	if _, err := gateway.StartNewSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-gateway-a"), conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("same namespace payload conflict = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+	if err := gateway.CloseSession(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.CloseSession(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+}

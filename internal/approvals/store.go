@@ -20,6 +20,8 @@ var (
 	ErrApprovalHistoryUnavailable = errors.New("approval revision history is unavailable or inconsistent")
 )
 
+const approvalWriterCapability = "revision-history-v1"
+
 type StoreConfig struct {
 	Now func() time.Time
 }
@@ -76,11 +78,17 @@ func (s *Store) Create(ctx context.Context, request CreateRequest) (Approval, er
 // the approval.requested event, so retries cannot create a second approval
 // with a different approval ID.
 func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, request CreateRequest) (Approval, error) {
-	if err := s.ready(ctx); err != nil {
+	if err := s.readyBase(ctx); err != nil {
 		return Approval{}, err
 	}
 	if tx == nil {
 		return Approval{}, errors.New("approval transaction is required")
+	}
+	if err := ensureHistoryReadyTx(ctx, tx); err != nil {
+		return Approval{}, err
+	}
+	if err := setApprovalWriterCapabilityTx(ctx, tx); err != nil {
+		return Approval{}, err
 	}
 	if request.RequestedAt == "" {
 		request.RequestedAt = s.now().UTC().Format(time.RFC3339Nano)
@@ -245,6 +253,9 @@ func (s *Store) ListByRun(ctx context.Context, runID string, after *Cursor, limi
 		return ListPage{}, fmt.Errorf("begin approval list: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := ensureHistoryReadyTx(ctx, tx); err != nil {
+		return ListPage{}, err
+	}
 	if err := verifyHistoryProjectionForRunTx(ctx, tx, runID); err != nil {
 		return ListPage{}, err
 	}
@@ -336,11 +347,17 @@ func (s *Store) Resolve(ctx context.Context, request ResolveRequest) (Resolution
 // caller-owned transaction. The caller must commit only after every related
 // durable intent has been admitted, and must roll back on any later failure.
 func (s *Store) ResolveTx(ctx context.Context, tx pgx.Tx, request ResolveRequest) (Resolution, error) {
-	if err := s.ready(ctx); err != nil {
+	if err := s.readyBase(ctx); err != nil {
 		return Resolution{}, err
 	}
 	if tx == nil {
 		return Resolution{}, errors.New("approval transaction is required")
+	}
+	if err := ensureHistoryReadyTx(ctx, tx); err != nil {
+		return Resolution{}, err
+	}
+	if err := setApprovalWriterCapabilityTx(ctx, tx); err != nil {
+		return Resolution{}, err
 	}
 	current, err := scanApproval(tx.QueryRow(ctx, approvalQuery+` WHERE approval.id = $1 FOR UPDATE`, request.ApprovalID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -391,6 +408,12 @@ func (s *Store) transition(ctx context.Context, approvalID string, apply func(Ap
 		return Approval{}, fmt.Errorf("begin approval transition: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := ensureHistoryReadyTx(ctx, tx); err != nil {
+		return Approval{}, err
+	}
+	if err := setApprovalWriterCapabilityTx(ctx, tx); err != nil {
+		return Approval{}, err
+	}
 	current, err := scanApproval(tx.QueryRow(ctx, approvalQuery+` WHERE approval.id = $1 FOR UPDATE`, approvalID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Approval{}, ErrApprovalNotFound
@@ -742,12 +765,189 @@ func scanApprovalWithCreatedAt(row interface{ Scan(...any) error }) (Approval, t
 	return approval, createdAt, nil
 }
 
-func (s *Store) ready(ctx context.Context) error {
+type approvalReadinessQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func (s *Store) readyBase(ctx context.Context) error {
 	if s == nil || s.pool == nil {
 		return errors.New("approval store database is not configured")
 	}
 	if ctx == nil {
 		return errors.New("approval context must not be nil")
+	}
+	return nil
+}
+
+func (s *Store) ready(ctx context.Context) error {
+	if err := s.readyBase(ctx); err != nil {
+		return err
+	}
+	return ensureHistoryReady(ctx, s.pool)
+}
+
+// CheckHistoryReadiness verifies the cutover schema, writer guard and every
+// current projection against its corresponding history snapshot.
+func (s *Store) CheckHistoryReadiness(ctx context.Context) error {
+	if err := s.readyBase(ctx); err != nil {
+		return err
+	}
+	return ensureHistoryReady(ctx, s.pool)
+}
+
+func ensureHistoryReadyTx(ctx context.Context, tx pgx.Tx) error {
+	if tx == nil {
+		return errors.New("approval transaction is required")
+	}
+	return ensureHistoryReady(ctx, tx)
+}
+
+func ensureHistoryReady(ctx context.Context, queryer approvalReadinessQuerier) error {
+	var projectionExists, historyExists, schemaComplete, indexesComplete, writerGuardExists bool
+	err := queryer.QueryRow(ctx, `
+		WITH required_columns(table_name, column_name) AS (
+			VALUES
+				('execution_approvals', 'id'),
+				('execution_approvals', 'session_id'),
+				('execution_approvals', 'run_id'),
+				('execution_approvals', 'generation'),
+				('execution_approvals', 'kind'),
+				('execution_approvals', 'requested_at'),
+				('execution_approvals', 'revision'),
+				('execution_approvals', 'status'),
+				('execution_approvals', 'summary'),
+				('execution_approvals', 'context'),
+				('execution_approvals', 'resolved_by_command_id'),
+				('execution_approvals', 'requested_event_id'),
+				('execution_approvals', 'resolved_at'),
+				('execution_approvals', 'created_at'),
+				('execution_approvals', 'updated_at'),
+				('execution_approval_revisions', 'id'),
+				('execution_approval_revisions', 'session_id'),
+				('execution_approval_revisions', 'run_id'),
+				('execution_approval_revisions', 'generation'),
+				('execution_approval_revisions', 'kind'),
+				('execution_approval_revisions', 'requested_at'),
+				('execution_approval_revisions', 'revision'),
+				('execution_approval_revisions', 'status'),
+				('execution_approval_revisions', 'summary'),
+				('execution_approval_revisions', 'context'),
+				('execution_approval_revisions', 'resolved_by_command_id'),
+				('execution_approval_revisions', 'requested_event_id'),
+				('execution_approval_revisions', 'resolved_at'),
+				('execution_approval_revisions', 'created_at'),
+				('execution_approval_revisions', 'updated_at')
+		)
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM pg_class AS relation
+				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				WHERE namespace.nspname = current_schema()
+				  AND relation.relname = 'execution_approvals'
+				  AND relation.relkind IN ('r', 'p')
+			),
+			EXISTS (
+				SELECT 1
+				FROM pg_class AS relation
+				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				WHERE namespace.nspname = current_schema()
+				  AND relation.relname = 'execution_approval_revisions'
+				  AND relation.relkind IN ('r', 'p')
+			),
+			NOT EXISTS (
+				SELECT 1
+				FROM required_columns AS required
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM pg_attribute AS attribute
+					JOIN pg_class AS relation ON relation.oid = attribute.attrelid
+					JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+					WHERE namespace.nspname = current_schema()
+					  AND relation.relname = required.table_name
+					  AND relation.relkind IN ('r', 'p')
+					  AND attribute.attname = required.column_name
+					  AND attribute.attnum > 0
+					  AND NOT attribute.attisdropped
+				)
+			),
+			NOT EXISTS (
+				SELECT 1
+				FROM unnest(ARRAY[
+					'execution_approval_revisions_pkey',
+					'execution_approval_revisions_run_cursor_idx',
+					'execution_approval_revisions_requested_event_idx'
+				]) AS required(index_name)
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM pg_class AS relation
+					JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+					WHERE namespace.nspname = current_schema()
+					  AND relation.relname = required.index_name
+					  AND relation.relkind = 'i'
+				)
+			),
+			EXISTS (
+				SELECT 1
+				FROM pg_trigger AS trigger_row
+				JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
+				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+				JOIN pg_namespace AS function_namespace ON function_namespace.oid = function_row.pronamespace
+				WHERE namespace.nspname = current_schema()
+				  AND function_namespace.nspname = current_schema()
+				  AND relation.relname = 'execution_approvals'
+				  AND trigger_row.tgname = 'execution_approvals_history_writer_guard'
+				  AND NOT trigger_row.tgisinternal
+				  AND trigger_row.tgenabled = 'O'
+				  AND function_row.proname = 'loomhelm_require_approval_history_writer'
+				  AND pg_get_functiondef(function_row.oid) LIKE '%loomhelm.approval_writer_capability%'
+				  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
+				  AND (trigger_row.tgtype & 1) <> 0
+				  AND (trigger_row.tgtype & 2) <> 0
+				  AND (trigger_row.tgtype & 4) <> 0
+				  AND (trigger_row.tgtype & 8) <> 0
+				  AND (trigger_row.tgtype & 16) <> 0
+			)
+	`).Scan(&projectionExists, &historyExists, &schemaComplete, &indexesComplete, &writerGuardExists)
+	if err != nil {
+		return fmt.Errorf("%w: inspect approval history cutover: %v", ErrApprovalHistoryUnavailable, err)
+	}
+	if !projectionExists || !historyExists || !schemaComplete || !indexesComplete || !writerGuardExists {
+		return fmt.Errorf("%w: approval history cutover is incomplete", ErrApprovalHistoryUnavailable)
+	}
+	var drift bool
+	if err := queryer.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM execution_approvals AS current
+			LEFT JOIN execution_approval_revisions AS history
+			  ON history.id = current.id AND history.revision = current.revision
+			WHERE history.id IS NULL
+			   OR history.session_id IS DISTINCT FROM current.session_id
+			   OR history.run_id IS DISTINCT FROM current.run_id
+			   OR history.generation IS DISTINCT FROM current.generation
+			   OR history.kind IS DISTINCT FROM current.kind
+			   OR history.requested_at IS DISTINCT FROM current.requested_at
+			   OR history.status IS DISTINCT FROM current.status
+			   OR history.summary IS DISTINCT FROM current.summary
+			   OR history.context IS DISTINCT FROM current.context
+			   OR history.resolved_by_command_id IS DISTINCT FROM current.resolved_by_command_id
+			   OR history.requested_event_id IS DISTINCT FROM current.requested_event_id
+			   OR history.resolved_at IS DISTINCT FROM current.resolved_at
+		)
+	`).Scan(&drift); err != nil {
+		return fmt.Errorf("%w: verify approval projection/history: %v", ErrApprovalHistoryUnavailable, err)
+	}
+	if drift {
+		return ErrApprovalHistoryUnavailable
+	}
+	return nil
+}
+
+func setApprovalWriterCapabilityTx(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `SET LOCAL loomhelm.approval_writer_capability = 'revision-history-v1'`); err != nil {
+		return fmt.Errorf("%w: set approval writer capability: %v", ErrApprovalHistoryUnavailable, err)
 	}
 	return nil
 }

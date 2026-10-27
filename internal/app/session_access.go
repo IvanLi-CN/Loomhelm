@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
@@ -15,6 +17,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 type sessionRecords interface {
@@ -27,6 +30,14 @@ type sessionProjectAccess interface {
 	CanWriteProject(context.Context, auth.Principal, string) (bool, error)
 }
 
+type sessionProjectBindingAccess interface {
+	CanWriteProjectTx(context.Context, pgx.Tx, auth.Principal, string) (bool, error)
+}
+
+type sessionTaskBinder interface {
+	BindTaskAuthorized(context.Context, string, sessions.BindRequest, sessions.BindingAuthorizer) (sessions.Session, error)
+}
+
 // sessionService applies the same access boundary to reads and subsequent
 // control operations. A guessed Session ID never substitutes for permission.
 type sessionService struct {
@@ -34,6 +45,7 @@ type sessionService struct {
 	projects  sessionProjectAccess
 	records   sessionRecords
 	creation  sessionCreationApplication
+	binding   sessionTaskBinder
 }
 
 func (s *sessionService) authorize(ctx context.Context, principal auth.Principal, sessionID string, write bool) (sessions.SessionAccess, error) {
@@ -97,6 +109,7 @@ func (s *sessionService) GetSession(ctx context.Context, principal auth.Principa
 func (s *sessionService) mount(router chi.Router) {
 	router.Post("/sessions", s.handleCreate)
 	router.Get("/sessions/{session_id}", s.handleGet)
+	router.Post("/sessions/{session_id}/task", s.handleBindTask)
 }
 
 func (s *sessionService) handleCreate(writer http.ResponseWriter, request *http.Request) {
@@ -164,6 +177,83 @@ func (s *sessionService) handleGet(writer http.ResponseWriter, request *http.Req
 	_ = json.NewEncoder(writer).Encode(protocol.SessionResponse{Session: session})
 }
 
+func (s *sessionService) handleBindTask(writer http.ResponseWriter, request *http.Request) {
+	if s.principal == nil {
+		writeSessionBindingError(writer, request, runs.ErrControlServiceUnavailable)
+		return
+	}
+	principal, err := s.principal.ResolvePrincipal(request.Context(), request)
+	if err == nil && principal.UserID == "" {
+		err = auth.ErrUnauthenticated
+	}
+	if err != nil {
+		writeSessionBindingError(writer, request, err)
+		return
+	}
+	if s.binding == nil || s.projects == nil {
+		writeSessionBindingError(writer, request, runs.ErrControlServiceUnavailable)
+		return
+	}
+	var body protocol.BindSessionTaskRequest
+	if err := auth.DecodeJSON(request, &body); err != nil {
+		writeSessionBindingError(writer, request, err)
+		return
+	}
+	body.TaskID = strings.TrimSpace(body.TaskID)
+	if body.TaskID == "" {
+		writeSessionBindingError(writer, request, auth.ErrInvalid)
+		return
+	}
+	confirmShare := body.ConfirmShare != nil && *body.ConfirmShare
+	session, err := s.binding.BindTaskAuthorized(
+		request.Context(), chi.URLParam(request, "session_id"),
+		sessions.BindRequest{TaskID: body.TaskID, ConfirmShare: confirmShare},
+		func(ctx context.Context, tx pgx.Tx, facts sessions.BindingFacts) error {
+			return s.authorizeTaskBinding(ctx, tx, principal, confirmShare, facts)
+		},
+	)
+	if err != nil {
+		writeSessionBindingError(writer, request, err)
+		return
+	}
+	auth.WriteJSON(writer, http.StatusOK, protocol.SessionResponse{Session: session.Session})
+}
+
+func (s *sessionService) authorizeTaskBinding(ctx context.Context, tx pgx.Tx, principal auth.Principal, confirmShare bool, facts sessions.BindingFacts) error {
+	access := facts.Access
+	if access.SessionID != facts.Session.ID || access.CreatorUserID == "" || access.HostID == "" || !access.Confirmed {
+		return auth.ErrNotFound
+	}
+	if access.ProjectID == "" {
+		if access.CreatorUserID != principal.UserID || len(principal.ProjectScope) != 0 {
+			return auth.ErrNotFound
+		}
+		if !confirmShare {
+			return sessions.ErrShareConfirmation
+		}
+		return nil
+	}
+	bindingProjects, ok := s.projects.(sessionProjectBindingAccess)
+	if !ok {
+		return runs.ErrControlServiceUnavailable
+	}
+	projectIDs := []string{access.ProjectID, facts.TaskProjectID}
+	sort.Strings(projectIDs)
+	for index, projectID := range projectIDs {
+		if index > 0 && projectID == projectIDs[index-1] {
+			continue
+		}
+		allowed, err := bindingProjects.CanWriteProjectTx(ctx, tx, principal, projectID)
+		if err != nil {
+			return fmt.Errorf("authorize task binding project: %w", err)
+		}
+		if !allowed {
+			return auth.ErrNotFound
+		}
+	}
+	return nil
+}
+
 func writeSessionCreationError(writer http.ResponseWriter, request *http.Request, err error) {
 	status := http.StatusServiceUnavailable
 	code := protocol.ErrorCodeInvalidRequest
@@ -187,6 +277,30 @@ func writeSessionCreationError(writer http.ResponseWriter, request *http.Request
 		status, code, message = http.StatusConflict, protocol.ErrorCodeConflict, "session creation conflicts with persisted state"
 	case errors.Is(err, hosts.ErrNotFound), errors.Is(err, hosts.ErrCommandNotDelivered), errors.Is(err, gateway.ErrNoActiveConnection):
 		status, code, message = http.StatusServiceUnavailable, protocol.ErrorCodeConflict, "execution host is not ready"
+	}
+	requestID := request.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = "req_" + rand.Text()
+	}
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(protocol.ApiError{Code: code, Message: message, RequestID: requestID})
+}
+
+func writeSessionBindingError(writer http.ResponseWriter, request *http.Request, err error) {
+	status := http.StatusServiceUnavailable
+	code := protocol.ErrorCodeInvalidRequest
+	message := "session binding is temporarily unavailable"
+	switch {
+	case errors.Is(err, auth.ErrUnauthenticated):
+		status, code, message = http.StatusUnauthorized, protocol.ErrorCodeUnauthorized, "authentication required"
+	case errors.Is(err, auth.ErrNotFound), errors.Is(err, sessions.ErrTaskNotFound), errors.Is(err, sessions.ErrSessionNotFound):
+		status, code, message = http.StatusNotFound, protocol.ErrorCodeNotFound, "session or task is unavailable"
+	case errors.Is(err, auth.ErrInvalid), errors.Is(err, sessions.ErrInvalidSession), errors.Is(err, sessions.ErrShareConfirmation):
+		status, code, message = http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid session binding request"
+	case errors.Is(err, sessions.ErrTaskBound), errors.Is(err, sessions.ErrSessionBound), errors.Is(err, sessions.ErrProjectMismatch), errors.Is(err, sessions.ErrSessionTerminal), errors.Is(err, sessions.ErrSessionConflict), errors.Is(err, sessions.ErrSessionTransition):
+		status, code, message = http.StatusConflict, protocol.ErrorCodeConflict, "session binding conflicts with persisted state"
 	}
 	requestID := request.Header.Get("X-Request-ID")
 	if requestID == "" {

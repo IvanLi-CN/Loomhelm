@@ -154,7 +154,7 @@ func TestPersistentRunWorkerDoesNotInferNativeStartFromCommandAck(t *testing.T) 
 		}); err != nil {
 			t.Fatalf("accept %s run: %v", commandState, err)
 		}
-		if _, err := store.RecordExactCommandAck(ctx, protocol.CommandAck{
+		if _, err := store.RecordExactCommandAck(ctx, command.SessionID, protocol.CommandAck{
 			CommandID: ids.command,
 			RunID:     &runID,
 			State:     commandState,

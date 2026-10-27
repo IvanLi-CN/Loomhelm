@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -170,6 +171,143 @@ func TestAdapterRejectsMissingSessionCreationIdentityBeforeTransport(t *testing.
 	}
 }
 
+func TestAdapterScopesSameCreationCommandIDByPlatformNamespace(t *testing.T) {
+	firstTransport := newFakeTransport()
+	firstTransport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-platform-a"}}`)}}}
+	secondTransport := newFakeTransport()
+	secondTransport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-platform-b"}}`)}}}
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{
+		"gateway-platform-a": firstTransport,
+		"gateway-platform-b": secondTransport,
+	}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "shared-create-command", ProjectID: "project-shared"}
+	firstGateway := protocol.GatewaySession{Handle: "gateway-platform-a", Generation: "generation-platform-a", Path: protocol.SessionPathNew}
+	secondGateway := protocol.GatewaySession{Handle: "gateway-platform-b", Generation: "generation-platform-b", Path: protocol.SessionPathNew}
+	first, err := adapter.StartSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-a"), firstGateway, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := adapter.StartSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-b"), secondGateway, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("different platform namespaces reused adapter session %+v", first)
+	}
+	if got := countCalls(firstTransport, "thread/start"); got != 1 {
+		t.Fatalf("first thread/start calls = %d, want 1", got)
+	}
+	if got := countCalls(secondTransport, "thread/start"); got != 1 {
+		t.Fatalf("second thread/start calls = %d, want 1", got)
+	}
+	retry, err := adapter.StartSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-a"), firstGateway, request)
+	if err != nil || retry != first {
+		t.Fatalf("same platform creation retry = %+v error=%v, want %+v", retry, err, first)
+	}
+	if got := countCalls(firstTransport, "thread/start"); got != 1 {
+		t.Fatalf("retry repeated first thread/start calls = %d, want 1", got)
+	}
+	if err := adapter.CloseSession(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.CloseSession(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdapterRepairsMissingGatewayLinkAfterRestartWithoutSecondNativeStart(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "missing-gateway-link.jsonl")
+	firstJournal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewaySession := protocol.GatewaySession{
+		Handle:     "gateway-link-recovery",
+		Generation: "generation-link-recovery",
+		Path:       protocol.SessionPathNew,
+	}
+	request := protocol.NewSessionRequest{CommandID: "create-link-recovery", ProjectID: "project-link-recovery"}
+	intentID, err := firstJournal.BeginSessionStart(gatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadRef := "thread-link-recovery"
+	adapterSessionID := stableSessionID(threadRef)
+	if err := firstJournal.ResolveSessionStart(intentID, adapterSessionID, threadRef, gatewaySession.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstJournal.RecordSessionAlias(SessionAlias{
+		PlatformSessionID: "platform-link-recovery",
+		AdapterSessionID:  adapterSessionID,
+		ExternalThreadRef: threadRef,
+		Generation:        gatewaySession.Generation,
+		CommandID:         request.CommandID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	link := GatewaySessionLink{
+		GatewayHandle:     gatewaySession.Handle,
+		PlatformSessionID: "platform-link-recovery",
+		AdapterSessionID:  adapterSessionID,
+		ExternalThreadRef: threadRef,
+		Generation:        gatewaySession.Generation,
+		CommandID:         request.CommandID,
+	}
+	if err := firstJournal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstJournal.RecordGatewaySessionLink(link); err == nil {
+		t.Fatal("closed journal accepted a gateway session link")
+	}
+
+	secondJournal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondJournal.Close()
+	transport := newFakeTransport()
+	transport.responses["thread/resume"] = []fakeResult{{message: RPCMessage{
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-link-recovery"}}}`),
+		Result: json.RawMessage(`{"thread":{"id":"thread-link-recovery"}}`),
+	}}}
+	retryGatewaySession := gatewaySession
+	retryGatewaySession.Handle = "gateway-link-recovery-retry"
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{retryGatewaySession.Handle: transport}}
+	adapter, err := NewCodexAdapter(provider, secondJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := adapter.StartSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-link-recovery"), retryGatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.SessionID != adapterSessionID || recovered.ExternalThreadRef != threadRef {
+		t.Fatalf("recovered adapter session = %+v", recovered)
+	}
+	if got := countCalls(transport, "thread/start"); got != 0 {
+		t.Fatalf("recovery repeated thread/start calls = %d, want 0", got)
+	}
+	if got := countCalls(transport, "thread/resume"); got != 1 {
+		t.Fatalf("recovery thread/resume calls = %d, want 1", got)
+	}
+	link.GatewayHandle = retryGatewaySession.Handle
+	if err := secondJournal.RecordGatewaySessionLink(link); err != nil {
+		t.Fatalf("repair gateway session link: %v", err)
+	}
+	link.UpdatedAt = "2026-10-27T03:00:00Z"
+	if err := secondJournal.RecordGatewaySessionLink(link); err != nil {
+		t.Fatalf("idempotent gateway session link repair: %v", err)
+	}
+	if err := adapter.CloseSession(context.Background(), recovered); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T) {
 	firstTransport := &blockingTransport{
 		fakeTransport: newFakeTransport(),
@@ -217,7 +355,7 @@ func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T
 		}{session: session, err: startErr}
 	}()
 	adapter.startMu.Lock()
-	startCall := adapter.startCalls[request.CommandID]
+	startCall := adapter.startCalls[adapterStartKey(LegacyCommandNamespace(request.CommandID), request.CommandID, "gateway-concurrent-1")]
 	adapter.startMu.Unlock()
 	if startCall == nil {
 		t.Fatal("session start call was not registered")
@@ -291,7 +429,7 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 		secondDone <- startErr
 	}()
 	adapter.startMu.Lock()
-	startCall := adapter.startCalls[request.CommandID]
+	startCall := adapter.startCalls[adapterStartKey(LegacyCommandNamespace(request.CommandID), request.CommandID, "gateway-cancel-1")]
 	adapter.startMu.Unlock()
 	if startCall == nil {
 		t.Fatal("canceled session start call was not registered")
@@ -359,7 +497,7 @@ func TestAdapterDoesNotCloseSharedGatewaySessionWhenWaiterCancels(t *testing.T) 
 		secondDone <- startErr
 	}()
 	adapter.startMu.Lock()
-	startCall := adapter.startCalls[request.CommandID]
+	startCall := adapter.startCalls[adapterStartKey(LegacyCommandNamespace(request.CommandID), request.CommandID, "gateway-shared-cancel")]
 	adapter.startMu.Unlock()
 	if startCall == nil {
 		t.Fatal("shared session start call was not registered")
@@ -703,12 +841,12 @@ func TestAdapterLegacyPersistedCorrelationRequiresRawSuccess(t *testing.T) {
 		json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"status":"inProgress"}}}`),
 	} {
 		rawEvent := protocol.Event{RunID: &runID, Payload: raw}
-		if adapter.legacyPersistedOperationSucceeded("unused-command", &correlation, "41", []protocol.Event{rawEvent}) {
+		if adapter.legacyPersistedOperationSucceeded("unused-command", "legacy-session", &correlation, "41", []protocol.Event{rawEvent}) {
 			t.Fatalf("legacy correlation accepted incomplete response %s", raw)
 		}
 	}
 	valid := protocol.Event{RunID: &runID, Payload: json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-legacy-correlation"}}}`)}
-	if !adapter.legacyPersistedOperationSucceeded("unused-command", &correlation, "41", []protocol.Event{valid}) {
+	if !adapter.legacyPersistedOperationSucceeded("unused-command", "legacy-session", &correlation, "41", []protocol.Event{valid}) {
 		t.Fatal("legacy correlation rejected a complete turn/start response")
 	}
 }

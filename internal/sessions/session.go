@@ -18,6 +18,7 @@ var (
 	ErrSessionTerminal    = errors.New("session is already terminal")
 	ErrSessionBound       = errors.New("session is already bound to a task")
 	ErrTaskBound          = errors.New("task is already bound to a session")
+	ErrTaskNotFound       = errors.New("task is not present in persistence")
 	ErrProjectMismatch    = errors.New("session and task belong to different projects")
 	ErrShareConfirmation  = errors.New("projectless session requires explicit sharing confirmation")
 	ErrStaleGeneration    = errors.New("session generation is stale")

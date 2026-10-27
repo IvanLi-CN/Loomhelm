@@ -329,7 +329,7 @@ func (c *Connector) handleGatewayCommand(ctx context.Context, connection *gatewa
 		ack.RunID = &runID
 	}
 	ack.OperationID = platformOperationID(ack.OperationID)
-	return connection.Acknowledge(ctx, message.RequestID, ack)
+	return connection.AcknowledgeForSession(ctx, command.SessionID, message.RequestID, ack)
 }
 
 // Adapter operation identities may use NUL as an internal generation

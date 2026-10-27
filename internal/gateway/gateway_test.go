@@ -1106,7 +1106,7 @@ func TestGatewayLateCommandAckCallsDurableHandlerWithoutPending(t *testing.T) {
 		registry:   registry,
 		connection: connection,
 		pending:    map[string]chan commandResponse{},
-		onAck: func(_ context.Context, got hosts.Connection, requestID string, gotAck protocol.CommandAck) error {
+		onAck: func(_ context.Context, got hosts.Connection, requestID, _ string, gotAck protocol.CommandAck) error {
 			called++
 			if !reflect.DeepEqual(got, connection) {
 				t.Fatalf("durable ACK connection = %+v, want %+v", got, connection)
@@ -1142,7 +1142,7 @@ func TestGatewayWSSLateCommandAckCallsDurableHandlerAfterPendingRemoval(t *testi
 		requestID string
 		ack       protocol.CommandAck
 	}, 2)
-	server, err := NewServer(registry, ServerOptions{AckHandler: func(_ context.Context, _ hosts.Connection, requestID string, ack protocol.CommandAck) error {
+	server, err := NewServer(registry, ServerOptions{AckHandler: func(_ context.Context, _ hosts.Connection, requestID, _ string, ack protocol.CommandAck) error {
 		ackCalls <- struct {
 			requestID string
 			ack       protocol.CommandAck

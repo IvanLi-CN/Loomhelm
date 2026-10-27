@@ -131,7 +131,7 @@ func TestJournalPersistsSessionStartIntentAndBlocksDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := second.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-2", Generation: "generation-2"}, request); !errors.Is(err, ErrUnknownOutcome) {
+	if _, err := second.BeginSessionStart(original, request); !errors.Is(err, ErrUnknownOutcome) {
 		t.Fatalf("duplicate session start error = %v, want %v", err, ErrUnknownOutcome)
 	}
 	if err := second.ResolveSessionStart(intentID, "session-1", "thread-1", original.Generation); err != nil {
@@ -149,8 +149,8 @@ func TestJournalPersistsSessionStartIntentAndBlocksDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer third.Close()
-	if _, err := third.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-3", Generation: "generation-3"}, request); err != nil {
-		t.Fatalf("resolved session start remained blocked: %v", err)
+	if intent, err := third.BeginSessionStart(original, request); err != nil || intent != intentID {
+		t.Fatalf("resolved session start remained blocked: intent=%q error=%v", intent, err)
 	}
 }
 
@@ -206,7 +206,7 @@ func TestJournalSessionStartUsesExplicitCommandIdentity(t *testing.T) {
 
 	conflict := request
 	conflict.Prompt = "different prompt"
-	if _, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-identity-2", Generation: "generation-identity-2"}, conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+	if _, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-identity-1", Generation: "generation-identity-1"}, conflict); !errors.Is(err, protocol.ErrIdempotencyConflict) {
 		t.Fatalf("same identity with changed payload error = %v, want %v", err, protocol.ErrIdempotencyConflict)
 	}
 
@@ -225,8 +225,219 @@ func TestJournalSessionStartUsesExplicitCommandIdentity(t *testing.T) {
 	if session, ok, err := journal.ResolvedSessionStart(request); err != nil || !ok || session.ExternalThreadRef != "thread-identity-1" {
 		t.Fatalf("resolved explicit session = %+v, found = %v, error = %v", session, ok, err)
 	}
-	if intentID, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-identity-4", Generation: "generation-identity-4"}, request); err != nil || intentID != firstIntent {
+	if intentID, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-identity-1", Generation: "generation-identity-1"}, request); err != nil || intentID != firstIntent {
 		t.Fatalf("same identity did not remain idempotent: intent = %q, error = %v", intentID, err)
+	}
+}
+
+func TestJournalAllowsSameCreationCommandIDAcrossGatewayNamespaces(t *testing.T) {
+	j := openTestJournal(t)
+	request := protocol.NewSessionRequest{CommandID: "shared-create", ProjectID: "project-shared", Prompt: "same payload"}
+	firstGateway := protocol.GatewaySession{Handle: "gateway-shared-a", Generation: "generation-shared-a"}
+	secondGateway := protocol.GatewaySession{Handle: "gateway-shared-b", Generation: "generation-shared-b"}
+	firstIntent, err := j.BeginSessionStart(firstGateway, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondIntent, err := j.BeginSessionStart(secondGateway, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstIntent == secondIntent {
+		t.Fatalf("distinct gateway namespaces reused intent %q", firstIntent)
+	}
+	if err := j.ResolveSessionStart(firstIntent, "adapter-shared-a", "thread-shared-a", firstGateway.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.ResolveSessionStart(secondIntent, "adapter-shared-b", "thread-shared-b", secondGateway.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := j.ResolvedSessionStartForGateway(firstGateway.Handle, request); err != nil || !found {
+		t.Fatalf("first gateway proof = found %v error %v", found, err)
+	}
+	if _, found, err := j.ResolvedSessionStartForGateway(secondGateway.Handle, request); err != nil || !found {
+		t.Fatalf("second gateway proof = found %v error %v", found, err)
+	}
+	if _, _, err := j.ResolvedSessionStartProof(request); !errors.Is(err, ErrCommandScopeAmbiguous) {
+		t.Fatalf("unscoped resolved proof error = %v, want %v", err, ErrCommandScopeAmbiguous)
+	}
+}
+
+func TestJournalRetainsGatewayToPlatformSessionLinkIdempotently(t *testing.T) {
+	j := openTestJournal(t)
+	gateway := protocol.GatewaySession{Handle: "gateway-link", Generation: "generation-link"}
+	request := protocol.NewSessionRequest{CommandID: "create-link", Prompt: "link"}
+	intentID, err := j.BeginSessionStart(gateway, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.ResolveSessionStart(intentID, "adapter-link", "thread-link", gateway.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.RecordSessionAlias(SessionAlias{
+		PlatformSessionID: "platform-link",
+		AdapterSessionID:  "adapter-link",
+		ExternalThreadRef: "thread-link",
+		Generation:        gateway.Generation,
+		CommandID:         request.CommandID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	link := GatewaySessionLink{
+		GatewayHandle:     gateway.Handle,
+		PlatformSessionID: "platform-link",
+		AdapterSessionID:  "adapter-link",
+		ExternalThreadRef: "thread-link",
+		Generation:        gateway.Generation,
+		CommandID:         request.CommandID,
+	}
+	if err := j.RecordGatewaySessionLink(link); err != nil {
+		t.Fatal(err)
+	}
+	proof, found, err := j.ResolvedSessionStartProofForPlatform(link.PlatformSessionID, request)
+	if err != nil || !found || proof.GatewayHandle != gateway.Handle {
+		t.Fatalf("linked platform proof = %+v found=%v error=%v", proof, found, err)
+	}
+	link.UpdatedAt = "2026-10-27T03:00:00Z"
+	if err := j.RecordGatewaySessionLink(link); err != nil {
+		t.Fatalf("repeated gateway link = %v", err)
+	}
+	got, found, err := j.GatewaySessionLinkForPlatform(link.PlatformSessionID)
+	if err != nil || !found || got.GatewayHandle != gateway.Handle || got.AdapterSessionID != link.AdapterSessionID {
+		t.Fatalf("gateway link = %+v found=%v error=%v", got, found, err)
+	}
+}
+
+func TestJournalResolvesCreationProofByPlatformAliasWhenGatewayLinkIsMissing(t *testing.T) {
+	j := openTestJournal(t)
+	gateway := protocol.GatewaySession{Handle: "gateway-platform-proof", Generation: "generation-platform-proof"}
+	request := protocol.NewSessionRequest{CommandID: "create-platform-proof", ProjectID: "project-platform-proof"}
+	intentID, err := j.BeginSessionStart(gateway, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.ResolveSessionStart(intentID, "adapter-platform-proof", "thread-platform-proof", gateway.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.RecordSessionAlias(SessionAlias{
+		PlatformSessionID: "platform-proof",
+		AdapterSessionID:  "adapter-platform-proof",
+		ExternalThreadRef: "thread-platform-proof",
+		Generation:        gateway.Generation,
+		CommandID:         request.CommandID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	proof, found, err := j.ResolvedSessionStartProofForPlatform("platform-proof", request)
+	if err != nil || !found || proof.GatewayHandle != gateway.Handle || proof.AdapterSession.SessionID != "adapter-platform-proof" {
+		t.Fatalf("platform creation proof = %+v found=%v error=%v", proof, found, err)
+	}
+	if _, found, err := j.GatewaySessionLinkForPlatform("platform-proof"); err != nil || found {
+		t.Fatalf("missing gateway link = found %v error %v", found, err)
+	}
+}
+
+func TestJournalPlatformCreationProofDoesNotCrossSameCommandID(t *testing.T) {
+	j := openTestJournal(t)
+	requestA := protocol.NewSessionRequest{CommandID: "shared-platform-proof", ProjectID: "project-a", Prompt: "prompt-a"}
+	requestB := protocol.NewSessionRequest{CommandID: "shared-platform-proof", ProjectID: "project-b", Prompt: "prompt-b"}
+	gatewayA := protocol.GatewaySession{Handle: "gateway-platform-proof-a", Generation: "generation-platform-proof-a"}
+	gatewayB := protocol.GatewaySession{Handle: "gateway-platform-proof-b", Generation: "generation-platform-proof-b"}
+	intentA, err := j.BeginSessionStart(gatewayA, requestA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentB, err := j.BeginSessionStart(gatewayB, requestB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.ResolveSessionStart(intentA, "adapter-proof-a", "thread-proof-a", gatewayA.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.ResolveSessionStart(intentB, "adapter-proof-b", "thread-proof-b", gatewayB.Generation); err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []SessionAlias{
+		{PlatformSessionID: "platform-proof-a", AdapterSessionID: "adapter-proof-a", ExternalThreadRef: "thread-proof-a", Generation: gatewayA.Generation, CommandID: requestA.CommandID},
+		{PlatformSessionID: "platform-proof-b", AdapterSessionID: "adapter-proof-b", ExternalThreadRef: "thread-proof-b", Generation: gatewayB.Generation, CommandID: requestB.CommandID},
+	} {
+		if err := j.RecordSessionAlias(alias); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []struct {
+		platform string
+		request  protocol.NewSessionRequest
+		gateway  string
+		thread   string
+	}{
+		{platform: "platform-proof-a", request: requestA, gateway: gatewayA.Handle, thread: "thread-proof-a"},
+		{platform: "platform-proof-b", request: requestB, gateway: gatewayB.Handle, thread: "thread-proof-b"},
+	} {
+		proof, found, err := j.ResolvedSessionStartProofForPlatform(want.platform, want.request)
+		if err != nil || !found || proof.GatewayHandle != want.gateway || proof.AdapterSession.ExternalThreadRef != want.thread {
+			t.Fatalf("platform %s proof = %+v found=%v error=%v", want.platform, proof, found, err)
+		}
+	}
+	if _, _, err := j.ResolvedSessionStartProofForPlatform("platform-proof-a", requestB); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("cross-payload proof error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+	if _, _, err := j.ResolvedSessionStartProofForPlatform("platform-proof-missing", requestA); !errors.Is(err, ErrCommandScopeUnknown) {
+		t.Fatalf("missing platform proof error = %v, want %v", err, ErrCommandScopeUnknown)
+	}
+}
+
+func TestJournalScopesSameCommandIDAcrossAdapterNamespacesAfterRestart(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "scoped-command.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandA := testCommand("shared-command", `{"prompt":"same command"}`)
+	commandA.SessionID = "adapter-scoped-a"
+	commandB := commandA
+	commandB.SessionID = "adapter-scoped-b"
+	for _, command := range []protocol.Command{commandA, commandB} {
+		if _, deduplicated, err := first.BeginCommandInNamespace(AdapterSessionCommandNamespace(command.SessionID), command); err != nil || deduplicated {
+			t.Fatalf("begin scoped command %+v: deduplicated=%v error=%v", command, deduplicated, err)
+		}
+	}
+	ackA, err := first.LookupCommandInNamespace(AdapterSessionCommandNamespace(commandA.SessionID), commandA.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackA.State = protocol.CommandStateSucceeded
+	ackA.Result = json.RawMessage(`{"adapter":"a"}`)
+	if err := first.UpdateCommandInNamespace(AdapterSessionCommandNamespace(commandA.SessionID), commandA.CommandID, ackA); err != nil {
+		t.Fatal(err)
+	}
+	ackB, err := first.LookupCommandInNamespace(AdapterSessionCommandNamespace(commandB.SessionID), commandB.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackB.State = protocol.CommandStateFailed
+	ackB.Result = json.RawMessage(`{"adapter":"b"}`)
+	if err := first.UpdateCommandInNamespace(AdapterSessionCommandNamespace(commandB.SessionID), commandB.CommandID, ackB); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	gotA, err := second.LookupCommandInNamespace(AdapterSessionCommandNamespace(commandA.SessionID), commandA.CommandID)
+	if err != nil || gotA.State != protocol.CommandStateSucceeded || string(gotA.Result) != `{"adapter":"a"}` {
+		t.Fatalf("scoped command A = %+v error=%v", gotA, err)
+	}
+	gotB, err := second.LookupCommandInNamespace(AdapterSessionCommandNamespace(commandB.SessionID), commandB.CommandID)
+	if err != nil || gotB.State != protocol.CommandStateFailed || string(gotB.Result) != `{"adapter":"b"}` {
+		t.Fatalf("scoped command B = %+v error=%v", gotB, err)
+	}
+	if _, err := second.LookupCommand(commandA.CommandID); !errors.Is(err, ErrCommandScopeAmbiguous) {
+		t.Fatalf("unscoped command lookup error = %v, want %v", err, ErrCommandScopeAmbiguous)
 	}
 }
 
@@ -320,11 +531,17 @@ func TestJournalRejectsMismatchedCommandRecordIdentity(t *testing.T) {
 		Digest:        digest,
 		Ack:           &ack,
 	}
+	header, err := json.Marshal(journalRecord{FormatVersion: journalFormatVersion, Type: "journal_header", At: command.IssuedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	data = append(append(header, '\n'), data...)
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -345,11 +562,15 @@ func TestJournalDuplicateCommandRecordDoesNotRollBackAck(t *testing.T) {
 	succeeded.State = protocol.CommandStateSucceeded
 	succeeded.Result = json.RawMessage(`{"ok":true}`)
 	records := []journalRecord{
-		{FormatVersion: journalFormatVersion, Type: "command", At: command.IssuedAt, Command: &command, CommandID: command.CommandID, Digest: digest, Ack: &accepted},
-		{FormatVersion: journalFormatVersion, Type: "command_update", At: command.IssuedAt, CommandID: command.CommandID, Ack: &succeeded},
-		{FormatVersion: journalFormatVersion, Type: "command", At: command.IssuedAt, Command: &command, CommandID: command.CommandID, Digest: digest, Ack: &accepted},
+		{FormatVersion: journalFormatVersion, Type: "command", At: command.IssuedAt, Command: &command, CommandID: command.CommandID, Namespace: namespacePointer(AdapterSessionCommandNamespace(command.SessionID)), Digest: digest, Ack: &accepted},
+		{FormatVersion: journalFormatVersion, Type: "command_update", At: command.IssuedAt, CommandID: command.CommandID, Namespace: namespacePointer(AdapterSessionCommandNamespace(command.SessionID)), Ack: &succeeded},
+		{FormatVersion: journalFormatVersion, Type: "command", At: command.IssuedAt, Command: &command, CommandID: command.CommandID, Namespace: namespacePointer(AdapterSessionCommandNamespace(command.SessionID)), Digest: digest, Ack: &accepted},
 	}
-	var data []byte
+	header, err := json.Marshal(journalRecord{FormatVersion: journalFormatVersion, Type: "journal_header", At: command.IssuedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append(header, '\n')
 	for _, record := range records {
 		encoded, marshalErr := json.Marshal(record)
 		if marshalErr != nil {
@@ -457,8 +678,8 @@ func TestJournalWritesCurrentFormatAndCommandIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(data, []byte("\"format_version\":3")) || !bytes.Contains(data, []byte("\"command_id\":\"current-format-id\"")) {
-		t.Fatalf("current journal record did not include v3 identity: %s", data)
+	if !bytes.Contains(data, []byte("\"format_version\":4")) || !bytes.Contains(data, []byte("\"type\":\"journal_header\"")) || !bytes.Contains(data, []byte("\"namespace\":{\"kind\":\"gateway\"")) || !bytes.Contains(data, []byte("\"command_id\":\"current-format-id\"")) {
+		t.Fatalf("current journal record did not include v4 identity marker: %s", data)
 	}
 }
 
@@ -522,8 +743,8 @@ func TestJournalRejectsOversizedAppendWithoutPoisoning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data) != 0 {
-		t.Fatalf("oversized append polluted journal with %d bytes", len(data))
+	if bytes.Contains(data, []byte("oversized-append")) || !bytes.Contains(data, []byte(`"type":"journal_header"`)) {
+		t.Fatalf("oversized append polluted journal: %s", data)
 	}
 
 	valid := testCommand("valid-after-oversized", `{"prompt":"accepted"}`)
@@ -562,6 +783,31 @@ func TestJournalRejectsUnsupportedFormatVersion(t *testing.T) {
 	}
 }
 
+func TestJournalRejectsLegacyWriterAfterV4Marker(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "legacy-writer-after-v4.jsonl")
+	j, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(`{"format_version":3,"type":"event","event":{"session_id":"adapter-old-writer","event_id":"old-writer-event","cursor":"adapter-old-writer:1","sequence":1,"type":"unknown","payload":"e30="}}` + "\n"); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenJournal(path); !errors.Is(err, ErrJournalCorrupt) {
+		t.Fatalf("legacy writer after v4 marker error = %v, want %v", err, ErrJournalCorrupt)
+	}
+}
+
 func TestJournalDiscardsInterruptedFinalRecord(t *testing.T) {
 	path := filepath.Join(privateTestDir(t), "journal.jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -585,8 +831,12 @@ func TestJournalDiscardsInterruptedFinalRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Size() != 0 {
-		t.Fatalf("journal size after incomplete record = %d, want 0", info.Size())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() == 0 || !bytes.Contains(data, []byte(`"type":"journal_header"`)) {
+		t.Fatalf("journal marker after incomplete record = %d bytes, want a valid v4 marker", info.Size())
 	}
 }
 
@@ -995,7 +1245,11 @@ func TestJournalReplaysObservedApprovalAndClaimIdentity(t *testing.T) {
 		{FormatVersion: journalFormatVersion, Type: "approval_claim", At: session.UpdatedAt, ApprovalClaim: &claim},
 		{FormatVersion: journalFormatVersion, Type: "observed_event", At: session.UpdatedAt, ObservedEvent: &observed},
 	}
-	var data []byte
+	header, err := json.Marshal(journalRecord{FormatVersion: journalFormatVersion, Type: "journal_header", At: session.UpdatedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append(header, '\n')
 	for _, record := range records {
 		encoded, err := json.Marshal(record)
 		if err != nil {

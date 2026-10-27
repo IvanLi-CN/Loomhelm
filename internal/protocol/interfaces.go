@@ -95,9 +95,9 @@ type EventQuery struct {
 // side-effecting retry.
 type RunController interface {
 	AcceptCommand(context.Context, Command) (CommandAck, error)
-	LookupCommand(context.Context, string) (CommandAck, error)
+	LookupCommand(context.Context, string, string) (CommandAck, error)
 	ReadEvents(context.Context, EventQuery) (EventPage, error)
-	ReconcileCommand(context.Context, string) (Reconciliation, error)
+	ReconcileCommand(context.Context, string, string) (Reconciliation, error)
 }
 
 // ArtifactReader is the authorized stream for an original conversation file.

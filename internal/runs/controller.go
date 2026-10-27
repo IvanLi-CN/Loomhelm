@@ -199,14 +199,14 @@ func (c *Controller) AcceptApprovalCommand(ctx context.Context, command protocol
 	return c.dispatchAccepted(ctx, intent, accepted)
 }
 
-func (c *Controller) LookupCommand(ctx context.Context, commandID string) (protocol.CommandAck, error) {
+func (c *Controller) LookupCommand(ctx context.Context, platformSessionID, commandID string) (protocol.CommandAck, error) {
 	if c == nil || c.store == nil {
 		return protocol.CommandAck{}, errors.New("run controller is not initialized")
 	}
 	if ctx == nil {
 		return protocol.CommandAck{}, errors.New("run controller context must not be nil")
 	}
-	record, err := c.store.Lookup(ctx, commandID)
+	record, err := c.store.Lookup(ctx, platformSessionID, commandID)
 	if err != nil {
 		return protocol.CommandAck{}, err
 	}
@@ -220,14 +220,14 @@ func (c *Controller) ReadEvents(ctx context.Context, query protocol.EventQuery) 
 	return c.store.ReadEvents(ctx, query)
 }
 
-func (c *Controller) ReconcileCommand(ctx context.Context, commandID string) (protocol.Reconciliation, error) {
+func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, commandID string) (protocol.Reconciliation, error) {
 	if c == nil || c.store == nil || c.transport == nil {
 		return protocol.Reconciliation{}, errors.New("run controller is not initialized")
 	}
 	if ctx == nil {
 		return protocol.Reconciliation{}, errors.New("run controller context must not be nil")
 	}
-	record, err := c.store.Lookup(ctx, commandID)
+	record, err := c.store.Lookup(ctx, platformSessionID, commandID)
 	if err != nil {
 		return protocol.Reconciliation{}, err
 	}
@@ -329,7 +329,7 @@ func (c *Controller) dispatchAccepted(ctx context.Context, intent CommandIntent,
 	sent, sendErr := c.sendCommand(ctx, intent, lease)
 	normalized, normalizeErr := normalizeTransportAck(intent.Command, sent)
 	if normalizeErr == nil {
-		record, factErr := c.store.RecordExactCommandAck(ctx, normalized)
+		record, factErr := c.store.RecordExactCommandAck(ctx, intent.Command.SessionID, normalized)
 		if factErr == nil {
 			if record.State == protocol.CommandStateExecuting {
 				c.retainActiveCommand(intent.Command.CommandID)
@@ -361,8 +361,8 @@ func (c *Controller) dispatchAccepted(ctx context.Context, intent CommandIntent,
 }
 
 func (c *Controller) reconcileOrphanedCommand(ctx context.Context, record CommandRecord) (protocol.CommandAck, error) {
-	_, reconcileErr := c.ReconcileCommand(ctx, record.Intent.Command.CommandID)
-	latest, lookupErr := c.store.Lookup(ctx, record.Intent.Command.CommandID)
+	_, reconcileErr := c.ReconcileCommand(ctx, record.Intent.Command.SessionID, record.Intent.Command.CommandID)
+	latest, lookupErr := c.store.Lookup(ctx, record.Intent.Command.SessionID, record.Intent.Command.CommandID)
 	if lookupErr != nil {
 		return record.Ack(), errors.Join(protocol.ErrUnknownCommandResult, reconcileErr, lookupErr)
 	}

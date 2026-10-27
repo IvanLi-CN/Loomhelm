@@ -112,15 +112,89 @@ func NewCodexAdapter(provider TransportProvider, journal *Journal) (*Adapter, er
 	return NewAdapter(provider, journal, AdapterConfig{})
 }
 
+func adapterCommandNamespace(sessionID string) CommandNamespace {
+	return AdapterSessionCommandNamespace(sessionID)
+}
+
+func (a *Adapter) beginCommand(command protocol.Command) (protocol.CommandAck, bool, error) {
+	return a.journal.BeginCommandInNamespace(adapterCommandNamespace(command.SessionID), command)
+}
+
+func (a *Adapter) updateCommand(command protocol.Command, ack protocol.CommandAck) error {
+	return a.journal.UpdateCommandInNamespace(adapterCommandNamespace(command.SessionID), command.CommandID, ack)
+}
+
+func (a *Adapter) updateCommandForSession(sessionID, commandID string, ack protocol.CommandAck) error {
+	return a.journal.UpdateCommandInNamespace(adapterCommandNamespace(sessionID), commandID, ack)
+}
+
+func (a *Adapter) commandForSession(sessionID, commandID string) (protocol.Command, protocol.CommandAck, error) {
+	return a.journal.CommandInNamespace(adapterCommandNamespace(sessionID), commandID)
+}
+
+func (a *Adapter) reconciliationForSession(sessionID, commandID string) (protocol.Reconciliation, bool, error) {
+	return a.journal.ReconciliationInNamespace(adapterCommandNamespace(sessionID), commandID)
+}
+
+func (a *Adapter) existingReconciliation(sessionID, commandID string) (protocol.Reconciliation, bool) {
+	value, found, err := a.reconciliationForSession(sessionID, commandID)
+	if err != nil {
+		return protocol.Reconciliation{}, false
+	}
+	return value, found
+}
+
+func (a *Adapter) recordReconciliation(sessionID string, value protocol.Reconciliation) error {
+	return a.journal.RecordReconciliationInNamespace(adapterCommandNamespace(sessionID), value)
+}
+
+func (a *Adapter) approvalResultForSession(sessionID, commandID string) (string, bool, error) {
+	return a.journal.ApprovalResultInNamespace(adapterCommandNamespace(sessionID), commandID)
+}
+
+func (a *Adapter) resolvedSessionStart(namespace CommandNamespace, gatewayHandle string, request protocol.NewSessionRequest) (protocol.AdapterSession, bool, error) {
+	existing, found, err := a.journal.ResolvedSessionStartForGateway(gatewayHandle, request)
+	if err != nil || found {
+		return existing, found, err
+	}
+	if namespace.Kind == CommandNamespaceLegacy {
+		return a.journal.ResolvedSessionStart(request)
+	}
+	if namespace.Kind == CommandNamespacePlatformSession {
+		platformProof, platformFound, platformErr := a.journal.ResolvedSessionStartProofForPlatform(namespace.ID, request)
+		if platformErr != nil && !errors.Is(platformErr, ErrIdentityNotFound) {
+			return protocol.AdapterSession{}, false, platformErr
+		}
+		if platformFound {
+			return platformProof.AdapterSession, true, nil
+		}
+		link, linked, linkErr := a.journal.GatewaySessionLinkForPlatform(namespace.ID)
+		if linkErr != nil || !linked {
+			return protocol.AdapterSession{}, false, linkErr
+		}
+		return a.journal.ResolvedSessionStartForGateway(link.GatewayHandle, request)
+	}
+	return protocol.AdapterSession{}, false, nil
+}
+
 func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.GatewaySession, request protocol.NewSessionRequest) (protocol.AdapterSession, error) {
+	return a.StartSessionInNamespace(ctx, LegacyCommandNamespace(request.CommandID), gatewaySession, request)
+}
+
+// StartSessionInNamespace is the Connector-only creation entry point used by
+// the application assembly once it has a platform session namespace.
+func (a *Adapter) StartSessionInNamespace(ctx context.Context, namespace CommandNamespace, gatewaySession protocol.GatewaySession, request protocol.NewSessionRequest) (protocol.AdapterSession, error) {
 	if ctx == nil {
 		return protocol.AdapterSession{}, errors.New("adapter context must not be nil")
 	}
 	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
 		return protocol.AdapterSession{}, err
 	}
+	if err := namespace.validate(); err != nil {
+		return protocol.AdapterSession{}, err
+	}
 	for {
-		release, wait := a.acquireSessionStart(request.CommandID, gatewaySession.Handle)
+		release, wait := a.acquireSessionStart(namespace, request.CommandID, gatewaySession.Handle)
 		if wait == nil {
 			defer release()
 			break
@@ -139,7 +213,7 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	if err != nil {
 		return protocol.AdapterSession{}, err
 	}
-	if existing, ok, err := a.journal.ResolvedSessionStart(request); err != nil {
+	if existing, ok, err := a.resolvedSessionStart(namespace, gatewaySession.Handle, request); err != nil {
 		_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
 		return protocol.AdapterSession{}, err
 	} else if ok {
@@ -151,14 +225,30 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 		}
 		return a.resumeExistingSession(ctx, gatewaySession, request, transport, existing)
 	}
+	if namespace.Kind == CommandNamespaceLegacy {
+		pending, pendingErr := a.journal.HasPendingSessionStart(request)
+		if pendingErr != nil {
+			_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
+			return protocol.AdapterSession{}, pendingErr
+		} else if pending {
+			if !a.hasUnknownSessionStart(namespace, request.CommandID, gatewaySession.Handle, transport) {
+				_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
+			}
+			return protocol.AdapterSession{}, ErrUnknownOutcome
+		}
+	}
 	intentID, err := a.journal.BeginSessionStart(gatewaySession, request)
 	if err != nil {
-		if !errors.Is(err, ErrUnknownOutcome) || !a.hasUnknownSessionStart(request.CommandID, gatewaySession.Handle, transport) {
+		if errors.Is(err, ErrUnknownOutcome) {
+			_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
+			return protocol.AdapterSession{}, err
+		}
+		if !errors.Is(err, ErrUnknownOutcome) || !a.hasUnknownSessionStart(namespace, request.CommandID, gatewaySession.Handle, transport) {
 			_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
 		}
 		return protocol.AdapterSession{}, err
 	}
-	if existing, ok, err := a.journal.ResolvedSessionStart(request); err != nil {
+	if existing, ok, err := a.resolvedSessionStart(namespace, gatewaySession.Handle, request); err != nil {
 		_ = a.discardUnusedGatewaySession(ctx, gatewaySession, transport, nil)
 		return protocol.AdapterSession{}, err
 	} else if ok {
@@ -177,8 +267,8 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 			_ = a.journal.FailSessionStart(intentID)
 			_ = a.closeUnusedGatewaySession(context.WithoutCancel(ctx), gatewaySession, transport)
 		} else {
-			a.trackUnknownSessionStart(request.CommandID, gatewaySession.Handle, transport)
-			go a.watchUnknownSessionStart(request.CommandID, gatewaySession, intentID, transport)
+			a.trackUnknownSessionStart(namespace, request.CommandID, gatewaySession.Handle, transport)
+			go a.watchUnknownSessionStart(namespace, request.CommandID, gatewaySession, intentID, transport)
 		}
 		return protocol.AdapterSession{}, err
 	}
@@ -199,19 +289,20 @@ func (a *Adapter) StartSession(ctx context.Context, gatewaySession protocol.Gate
 	return session, nil
 }
 
-func (a *Adapter) acquireSessionStart(commandID, gatewayHandle string) (func(), *sessionStartCall) {
+func (a *Adapter) acquireSessionStart(namespace CommandNamespace, commandID, gatewayHandle string) (func(), *sessionStartCall) {
+	key := adapterStartKey(namespace, commandID, gatewayHandle)
 	a.startMu.Lock()
 	defer a.startMu.Unlock()
-	if wait, ok := a.startCalls[commandID]; ok {
+	if wait, ok := a.startCalls[key]; ok {
 		wait.waiterOnce.Do(func() { close(wait.waiterEntered) })
 		return nil, wait
 	}
 	call := &sessionStartCall{done: make(chan struct{}), waiterEntered: make(chan struct{}), gatewayHandle: gatewayHandle}
-	a.startCalls[commandID] = call
+	a.startCalls[key] = call
 	return func() {
 		a.startMu.Lock()
-		if current, ok := a.startCalls[commandID]; ok && current == call {
-			delete(a.startCalls, commandID)
+		if current, ok := a.startCalls[key]; ok && current == call {
+			delete(a.startCalls, key)
 			close(call.done)
 		}
 		a.startMu.Unlock()
@@ -280,8 +371,8 @@ func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, int
 	return session, nil
 }
 
-func (a *Adapter) watchUnknownSessionStart(commandID string, gatewaySession protocol.GatewaySession, intentID string, transport RPCTransport) {
-	defer a.clearUnknownSessionStart(commandID, gatewaySession.Handle, transport)
+func (a *Adapter) watchUnknownSessionStart(namespace CommandNamespace, commandID string, gatewaySession protocol.GatewaySession, intentID string, transport RPCTransport) {
+	defer a.clearUnknownSessionStart(namespace, commandID, gatewaySession.Handle, transport)
 	for message := range transport.Events() {
 		if !message.IsResponse() || message.operation != "thread/start" {
 			continue
@@ -298,26 +389,34 @@ func (a *Adapter) watchUnknownSessionStart(commandID string, gatewaySession prot
 	}
 }
 
-func (a *Adapter) trackUnknownSessionStart(commandID, gatewayHandle string, transport RPCTransport) {
+func (a *Adapter) trackUnknownSessionStart(namespace CommandNamespace, commandID, gatewayHandle string, transport RPCTransport) {
 	a.startMu.Lock()
-	a.unknownSessionStarts[commandID] = unknownSessionStart{gatewayHandle: gatewayHandle, transport: transport}
+	a.unknownSessionStarts[adapterStartKey(namespace, commandID, gatewayHandle)] = unknownSessionStart{gatewayHandle: gatewayHandle, transport: transport}
 	a.startMu.Unlock()
 }
 
-func (a *Adapter) hasUnknownSessionStart(commandID, gatewayHandle string, transport RPCTransport) bool {
+func (a *Adapter) hasUnknownSessionStart(namespace CommandNamespace, commandID, gatewayHandle string, transport RPCTransport) bool {
 	a.startMu.Lock()
-	watch, ok := a.unknownSessionStarts[commandID]
+	watch, ok := a.unknownSessionStarts[adapterStartKey(namespace, commandID, gatewayHandle)]
 	a.startMu.Unlock()
 	return ok && watch.gatewayHandle == gatewayHandle && sameRPCTransport(watch.transport, transport)
 }
 
-func (a *Adapter) clearUnknownSessionStart(commandID, gatewayHandle string, transport RPCTransport) {
+func (a *Adapter) clearUnknownSessionStart(namespace CommandNamespace, commandID, gatewayHandle string, transport RPCTransport) {
 	a.startMu.Lock()
-	watch, ok := a.unknownSessionStarts[commandID]
+	key := adapterStartKey(namespace, commandID, gatewayHandle)
+	watch, ok := a.unknownSessionStarts[key]
 	if ok && watch.gatewayHandle == gatewayHandle && sameRPCTransport(watch.transport, transport) {
-		delete(a.unknownSessionStarts, commandID)
+		delete(a.unknownSessionStarts, key)
 	}
 	a.startMu.Unlock()
+}
+
+func adapterStartKey(namespace CommandNamespace, commandID, gatewayHandle string) string {
+	if namespace.Kind == CommandNamespaceLegacy {
+		return commandID
+	}
+	return identityTupleKey(string(namespace.Kind), namespace.ID, strings.TrimSpace(gatewayHandle), strings.TrimSpace(commandID))
 }
 
 func sameRPCTransport(left, right RPCTransport) bool {
@@ -363,7 +462,7 @@ func (a *Adapter) ensureInitialPrompt(ctx context.Context, request protocol.NewS
 	if strings.TrimSpace(request.Prompt) == "" {
 		return nil
 	}
-	initialAck, lookupErr := a.journal.LookupCommand(session.SessionID + ":initial")
+	initialAck, lookupErr := a.journal.LookupCommandInNamespace(adapterCommandNamespace(session.SessionID), session.SessionID+":initial")
 	if errors.Is(lookupErr, ErrCommandNotFound) {
 		_, err := a.SendCommand(ctx, session, initialPromptCommand(session, request))
 		return err
@@ -538,7 +637,7 @@ func (a *Adapter) SendCommand(ctx context.Context, session protocol.AdapterSessi
 	if err := state.persistenceError(); err != nil {
 		return protocol.CommandAck{}, fmt.Errorf("adapter event journal is unavailable: %w", err)
 	}
-	ack, deduplicated, err := a.journal.BeginCommand(command)
+	ack, deduplicated, err := a.beginCommand(command)
 	if err != nil {
 		return ack, err
 	}
@@ -549,7 +648,7 @@ func (a *Adapter) SendCommand(ctx context.Context, session protocol.AdapterSessi
 		return ack, nil
 	}
 	ack.State = protocol.CommandStateExecuting
-	if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
+	if err := a.updateCommand(command, ack); err != nil {
 		return ack, err
 	}
 
@@ -587,7 +686,7 @@ func (a *Adapter) Steer(ctx context.Context, session protocol.AdapterSession, co
 	if err := state.persistenceError(); err != nil {
 		return protocol.CommandAck{}, fmt.Errorf("adapter event journal is unavailable: %w", err)
 	}
-	ack, deduplicated, err := a.journal.BeginCommand(command)
+	ack, deduplicated, err := a.beginCommand(command)
 	if err != nil {
 		return ack, err
 	}
@@ -598,7 +697,7 @@ func (a *Adapter) Steer(ctx context.Context, session protocol.AdapterSession, co
 		return ack, nil
 	}
 	ack.State = protocol.CommandStateExecuting
-	if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
+	if err := a.updateCommand(command, ack); err != nil {
 		return ack, err
 	}
 	payload, err := decodeCommandPayload(command.Payload)
@@ -631,14 +730,14 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	if ctx == nil {
 		return protocol.Reconciliation{}, errors.New("adapter context must not be nil")
 	}
-	command, ack, err := a.journal.Command(commandID)
+	command, ack, err := a.commandForSession(session.SessionID, commandID)
 	if err != nil {
 		return protocol.Reconciliation{}, err
 	}
 	if command.SessionID != session.SessionID {
 		return protocol.Reconciliation{}, fmt.Errorf("command %q belongs to adapter session %q, not %q", commandID, command.SessionID, session.SessionID)
 	}
-	if previous, ok := a.journal.Reconciliation(commandID); ok && previous.State != protocol.ReconciliationStateUnknown {
+	if previous, ok := a.existingReconciliation(session.SessionID, commandID); ok && previous.State != protocol.ReconciliationStateUnknown {
 		return previous, nil
 	}
 	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
@@ -647,14 +746,14 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 			reconciliationState = protocol.ReconciliationStateNotFound
 		}
 		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: reconciliationState, EventCursor: ack.EventCursor}
-		if err := a.journal.RecordReconciliation(value); err != nil {
+		if err := a.recordReconciliation(session.SessionID, value); err != nil {
 			return value, err
 		}
 		return value, nil
 	}
 	if ack.State == protocol.CommandStateAccepted || ack.State == protocol.CommandStateExecuting {
 		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer("command remains in flight; external outcome has not been observed")}
-		if err := a.journal.RecordReconciliation(value); err != nil {
+		if err := a.recordReconciliation(session.SessionID, value); err != nil {
 			return value, err
 		}
 		return value, nil
@@ -668,7 +767,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	if !a.isCurrentState(state) || state.closed.Load() {
 		return protocol.Reconciliation{}, fmt.Errorf("adapter session %q generation is no longer active", session.SessionID)
 	}
-	latestCommand, latestAck, err := a.journal.Command(commandID)
+	latestCommand, latestAck, err := a.commandForSession(session.SessionID, commandID)
 	if err != nil {
 		return protocol.Reconciliation{}, err
 	}
@@ -677,7 +776,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	}
 	command = latestCommand
 	ack = latestAck
-	if previous, ok := a.journal.Reconciliation(commandID); ok && previous.State != protocol.ReconciliationStateUnknown {
+	if previous, ok := a.existingReconciliation(session.SessionID, commandID); ok && previous.State != protocol.ReconciliationStateUnknown {
 		return previous, nil
 	}
 	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
@@ -686,14 +785,14 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 			reconciliationState = protocol.ReconciliationStateNotFound
 		}
 		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: reconciliationState, EventCursor: ack.EventCursor}
-		if err := a.journal.RecordReconciliation(value); err != nil {
+		if err := a.recordReconciliation(session.SessionID, value); err != nil {
 			return value, err
 		}
 		return value, nil
 	}
 	if ack.State == protocol.CommandStateAccepted || ack.State == protocol.CommandStateExecuting {
 		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer("command remains in flight; external outcome has not been observed")}
-		if err := a.journal.RecordReconciliation(value); err != nil {
+		if err := a.recordReconciliation(session.SessionID, value); err != nil {
 			return value, err
 		}
 		return value, nil
@@ -710,7 +809,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 				EventCursor: ack.EventCursor,
 				Note:        stringPointer("persisted app-server RPC response proves command delivery"),
 			}
-			if err := a.journal.RecordReconciliation(reconciliation); err != nil {
+			if err := a.recordReconciliation(session.SessionID, reconciliation); err != nil {
 				return reconciliation, err
 			}
 			return reconciliation, nil
@@ -724,13 +823,16 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 			EventCursor: ack.EventCursor,
 			Note:        stringPointer("persisted app-server RPC error proves the command did not complete"),
 		}
-		if err := a.journal.RecordReconciliation(reconciliation); err != nil {
+		if err := a.recordReconciliation(session.SessionID, reconciliation); err != nil {
 			return reconciliation, err
 		}
 		return reconciliation, nil
 	}
 	if command.Kind == protocol.CommandKindRunApprove || command.Kind == protocol.CommandKindRunDeny {
-		observedDecision, ok := a.journal.ApprovalResult(commandID)
+		observedDecision, ok, approvalErr := a.approvalResultForSession(session.SessionID, commandID)
+		if approvalErr != nil {
+			return protocol.Reconciliation{}, approvalErr
+		}
 		reconciliation := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown}
 		expectedDecision := "decline"
 		if command.Kind == protocol.CommandKindRunApprove {
@@ -744,7 +846,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 			reconciliation.State = protocol.ReconciliationStateConfirmed
 			ack.State = protocol.CommandStateSucceeded
 			ack.Error = nil
-			if err := a.journal.UpdateCommand(commandID, ack); err != nil {
+			if err := a.updateCommand(command, ack); err != nil {
 				return reconciliation, err
 			}
 		} else if observedDecision != "unknown" {
@@ -752,11 +854,11 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 			reconciliation.Note = stringPointer(fmt.Sprintf("approval resolved as %q", observedDecision))
 			ack.State = protocol.CommandStateFailed
 			ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: valueOrEmpty(reconciliation.Note), RequestID: commandID}
-			if err := a.journal.UpdateCommand(commandID, ack); err != nil {
+			if err := a.updateCommand(command, ack); err != nil {
 				return reconciliation, err
 			}
 		}
-		if err := a.journal.RecordReconciliation(reconciliation); err != nil {
+		if err := a.recordReconciliation(session.SessionID, reconciliation); err != nil {
 			return reconciliation, err
 		}
 		return reconciliation, nil
@@ -764,7 +866,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	turns, err := a.listTurns(ctx, state)
 	if err != nil {
 		value := protocol.Reconciliation{CommandID: commandID, ObservedAt: now(), State: protocol.ReconciliationStateUnknown, Note: stringPointer("turn history could not be read; command remains unknown")}
-		if recordErr := a.journal.RecordReconciliation(value); recordErr != nil {
+		if recordErr := a.recordReconciliation(session.SessionID, value); recordErr != nil {
 			return value, recordErr
 		}
 		return value, nil
@@ -790,7 +892,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 				if outcome == protocol.CommandStateFailed {
 					ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server turn ended unsuccessfully", RequestID: commandID}
 				}
-				if err := a.journal.UpdateCommand(commandID, ack); err != nil {
+				if err := a.updateCommand(command, ack); err != nil {
 					return reconciliation, fmt.Errorf("persist reconciled command %q: %w", commandID, err)
 				}
 			}
@@ -804,7 +906,7 @@ func (a *Adapter) ReconcileCommand(ctx context.Context, session protocol.Adapter
 	} else {
 		reconciliation.Note = stringPointer("turn history does not prove this command outcome; command remains unknown and is not replayed")
 	}
-	if err := a.journal.RecordReconciliation(reconciliation); err != nil {
+	if err := a.recordReconciliation(session.SessionID, reconciliation); err != nil {
 		return reconciliation, err
 	}
 	return reconciliation, nil
@@ -950,7 +1052,7 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 			if runID != "" {
 				ack.RunID = &runID
 			}
-			if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
+			if err := a.updateCommand(command, ack); err != nil {
 				return ack, err
 			}
 			return ack, nil
@@ -961,7 +1063,7 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 	if observedDecision != hostDecision {
 		ack.State = protocol.CommandStateFailed
 		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: fmt.Sprintf("approval resolved as %q, requested %q", observedDecision, hostDecision), RequestID: command.CommandID}
-		if updateErr := a.journal.UpdateCommand(command.CommandID, ack); updateErr != nil {
+		if updateErr := a.updateCommand(command, ack); updateErr != nil {
 			return ack, updateErr
 		}
 		return ack, fmt.Errorf("approval resolved as %q, requested %q", observedDecision, hostDecision)
@@ -972,7 +1074,7 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 	if runID != "" {
 		ack.RunID = &runID
 	}
-	if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
+	if err := a.updateCommand(command, ack); err != nil {
 		return ack, err
 	}
 	return ack, nil
@@ -1061,7 +1163,7 @@ func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionSta
 	if response.Error != nil {
 		ack.State = protocol.CommandStateFailed
 		ack.Error = rpcAPIError(response.Error, command.CommandID)
-		if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
+		if err := a.updateCommand(command, ack); err != nil {
 			return ack, fmt.Errorf("persist %s failure: %w", operation, err)
 		}
 		return ack, rpcResponseError(operation, response)
@@ -1082,7 +1184,7 @@ func (a *Adapter) finishRPCCommand(ctx context.Context, state *adapterSessionSta
 	if runID != "" {
 		ack.RunID = &runID
 	}
-	if err := a.journal.UpdateCommand(command.CommandID, ack); err != nil {
+	if err := a.updateCommand(command, ack); err != nil {
 		return ack, err
 	}
 	return ack, nil
@@ -1137,14 +1239,14 @@ func (a *Adapter) finishTransportError(command protocol.Command, ack protocol.Co
 	if isUnknownTransportError(err) {
 		ack.State = protocol.CommandStateUnknown
 		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "command outcome is unknown", RequestID: command.CommandID}
-		if persistErr := a.journal.UpdateCommand(command.CommandID, ack); persistErr != nil {
+		if persistErr := a.updateCommand(command, ack); persistErr != nil {
 			return ack, fmt.Errorf("persist unknown %s result: %w", operation, persistErr)
 		}
 		return ack, protocol.ErrUnknownCommandResult
 	}
 	ack.State = protocol.CommandStateFailed
 	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server operation failed", RequestID: command.CommandID}
-	if persistErr := a.journal.UpdateCommand(command.CommandID, ack); persistErr != nil {
+	if persistErr := a.updateCommand(command, ack); persistErr != nil {
 		return ack, fmt.Errorf("persist failed %s result: %w", operation, persistErr)
 	}
 	return ack, fmt.Errorf("%s: %w", operation, err)
@@ -1164,7 +1266,7 @@ func isUnknownTransportError(err error) bool {
 func (a *Adapter) rejectCommand(command protocol.Command, ack protocol.CommandAck, err error) (protocol.CommandAck, error) {
 	ack.State = protocol.CommandStateRejected
 	ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeInvalidRequest, Message: err.Error(), RequestID: command.CommandID}
-	if persistErr := a.journal.UpdateCommand(command.CommandID, ack); persistErr != nil {
+	if persistErr := a.updateCommand(command, ack); persistErr != nil {
 		return ack, fmt.Errorf("persist rejected command: %w", persistErr)
 	}
 	return ack, err
@@ -1503,11 +1605,11 @@ func stringOrDefault(payload map[string]json.RawMessage, name, fallback string) 
 }
 
 func waitForApprovalResolution(ctx context.Context, journal *Journal, sessionID string, requestID json.RawMessage, commandID string) (string, error) {
-	if result, ok := journal.ApprovalResult(commandID); ok {
+	if result, ok, err := journal.ApprovalResultInNamespace(adapterCommandNamespace(sessionID), commandID); err == nil && ok {
 		return result, nil
 	}
 	if !journal.IsApprovalPending(sessionID, requestID) {
-		if result, ok := journal.ApprovalResult(commandID); ok {
+		if result, ok, err := journal.ApprovalResultInNamespace(adapterCommandNamespace(sessionID), commandID); err == nil && ok {
 			return result, nil
 		}
 		return "", errors.New("approval result is not durable")
@@ -1519,11 +1621,11 @@ func waitForApprovalResolution(ctx context.Context, journal *Journal, sessionID 
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-ticker.C:
-			if result, ok := journal.ApprovalResult(commandID); ok {
+			if result, ok, err := journal.ApprovalResultInNamespace(adapterCommandNamespace(sessionID), commandID); err == nil && ok {
 				return result, nil
 			}
 			if !journal.IsApprovalPending(sessionID, requestID) {
-				if result, ok := journal.ApprovalResult(commandID); ok {
+				if result, ok, err := journal.ApprovalResultInNamespace(adapterCommandNamespace(sessionID), commandID); err == nil && ok {
 					return result, nil
 				}
 				return "", errors.New("approval result is not durable")
@@ -1746,11 +1848,11 @@ func (a *Adapter) bindPersistedOperation(commandID string, session protocol.Adap
 		ack.State = protocol.CommandStateFailed
 		ack.Error = &protocol.ApiError{Code: protocol.ErrorCodeConflict, Message: "app-server operation failed", RequestID: commandID}
 		ack.Result = nil
-	} else if rpcEnvelopeSuccess(matched.Payload) || (!rpcEnvelopeHasSuccessMarker(matched.Payload) && a.legacyPersistedOperationSucceeded(commandID, matched, rawOperationID, rawResponses)) {
+	} else if rpcEnvelopeSuccess(matched.Payload) || (!rpcEnvelopeHasSuccessMarker(matched.Payload) && a.legacyPersistedOperationSucceeded(commandID, session.SessionID, matched, rawOperationID, rawResponses)) {
 		ack.State = protocol.CommandStateSucceeded
 		ack.Error = nil
 	}
-	if err := a.journal.UpdateCommand(commandID, ack); err != nil {
+	if err := a.updateCommandForSession(session.SessionID, commandID, ack); err != nil {
 		return ack, false, fmt.Errorf("persist operation observation for command %q: %w", commandID, err)
 	}
 	return ack, true, nil
@@ -1817,10 +1919,10 @@ func rpcEnvelopeSuccessValue(payload json.RawMessage) (bool, bool) {
 	return *envelope.ResponseSucceeded, true
 }
 
-func (a *Adapter) legacyPersistedOperationSucceeded(commandID string, correlation *protocol.Event, rawOperationID string, rawResponses []protocol.Event) bool {
+func (a *Adapter) legacyPersistedOperationSucceeded(commandID, sessionID string, correlation *protocol.Event, rawOperationID string, rawResponses []protocol.Event) bool {
 	operation := rpcEnvelopeMethod(correlation.Payload)
 	if operation == "" {
-		command, _, err := a.journal.Command(commandID)
+		command, _, err := a.commandForSession(sessionID, commandID)
 		if err != nil {
 			return false
 		}

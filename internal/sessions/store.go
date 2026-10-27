@@ -667,6 +667,17 @@ func (s *Store) RecordCursor(ctx context.Context, sessionID, generation, cursor 
 // guard; this transaction also checks project sharing and keeps both rows in
 // one committed state.
 func (s *Store) BindTask(ctx context.Context, sessionID string, request BindRequest) (Session, error) {
+	return s.bindTask(ctx, sessionID, request, nil)
+}
+
+// BindTaskAuthorized performs the association and invokes authorize after the
+// Session and Task rows are locked. The callback must re-check the caller's
+// authorization using the supplied transaction before returning success.
+func (s *Store) BindTaskAuthorized(ctx context.Context, sessionID string, request BindRequest, authorize BindingAuthorizer) (Session, error) {
+	return s.bindTask(ctx, sessionID, request, authorize)
+}
+
+func (s *Store) bindTask(ctx context.Context, sessionID string, request BindRequest, authorize BindingAuthorizer) (Session, error) {
 	if err := s.ready(ctx); err != nil {
 		return Session{}, err
 	}
@@ -686,6 +697,23 @@ func (s *Store) BindTask(ctx context.Context, sessionID string, request BindRequ
 	if err != nil {
 		return Session{}, fmt.Errorf("lock session for binding: %w", err)
 	}
+	var creatorUserID, hostID, projectID *string
+	var creationState string
+	if err := tx.QueryRow(ctx, `
+		SELECT creator_user_id, host_id, project_id, creation_state
+		FROM execution_sessions
+		WHERE id = $1
+	`, sessionID).Scan(&creatorUserID, &hostID, &projectID, &creationState); err != nil {
+		return Session{}, fmt.Errorf("read session authorization facts: %w", err)
+	}
+	access := SessionAccess{
+		SessionID:     sessionID,
+		CreatorUserID: optionalStringValue(creatorUserID),
+		HostID:        optionalStringValue(hostID),
+		ProjectID:     optionalStringValue(projectID),
+		IntentState:   IntentState(creationState),
+		Confirmed:     current.ExternalThreadRef != "" && current.Generation != "" && IntentState(creationState) == IntentStateConfirmed,
+	}
 	var taskProjectID string
 	var taskSessionID *string
 	err = tx.QueryRow(ctx, `
@@ -695,7 +723,7 @@ func (s *Store) BindTask(ctx context.Context, sessionID string, request BindRequ
 		FOR UPDATE
 	`, request.TaskID).Scan(&taskProjectID, &taskSessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Session{}, ErrTaskBound
+		return Session{}, ErrTaskNotFound
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("lock task for session binding: %w", err)
@@ -703,6 +731,14 @@ func (s *Store) BindTask(ctx context.Context, sessionID string, request BindRequ
 	request.TaskProjectID = taskProjectID
 	if taskSessionID != nil {
 		request.CurrentTaskSessionID = *taskSessionID
+	}
+	if authorize != nil {
+		if err := authorize(ctx, tx, BindingFacts{
+			Session: current, Access: access, TaskProjectID: taskProjectID,
+			CurrentTaskSessionID: request.CurrentTaskSessionID,
+		}); err != nil {
+			return Session{}, err
+		}
 	}
 	if _, err := current.BindTask(request); err != nil {
 		return Session{}, err

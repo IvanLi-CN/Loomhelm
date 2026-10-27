@@ -486,6 +486,14 @@
         "active_thread_ref": {"type": "string"}
       }
     },
+    "BindSessionTaskRequest": {
+      "type": "object",
+      "required": ["task_id"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "confirm_share": {"type": "boolean"}
+      }
+    },
     "SubmitRunRequest": {
       "type": "object",
       "required": ["command_id", "prompt"],
@@ -758,6 +766,17 @@
         "response_type": "SessionResponse",
         "summary": "Read a session",
         "mcp_tool": {"name": "loomhelm.get_session", "description": "Read an authorized session."}
+      },
+      {
+        "operation_id": "bindSessionTask",
+        "method": "POST",
+        "path": "/sessions/{session_id}/task",
+        "path_params": {"session_id": "string"},
+        "body_type": "BindSessionTaskRequest",
+        "response_type": "SessionResponse",
+        "response_status": 200,
+        "summary": "Bind an authorized task to a session",
+        "mcp_tool": {"name": "loomhelm.bind_session_task", "description": "Bind a task to an authorized session with explicit confirmation when sharing a projectless session."}
       },
       {
         "operation_id": "submitRun",
