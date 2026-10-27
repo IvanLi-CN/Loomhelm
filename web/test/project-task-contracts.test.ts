@@ -12,6 +12,7 @@ import {
   filterTasksToVisibleProjects,
   getSharedMutationRefreshScopeState,
   hasIncompleteProjectTaskRead,
+  isTaskCreationNotice,
   markMutationRefreshScopes,
   mergeMutationNoticeChanges,
   mergePersistedMutationNoticeState,
@@ -415,6 +416,19 @@ describe("project/task write contracts", () => {
     };
 
     expect(mutationNoticeScopes(notice)).toEqual(["task:task-1"]);
+  });
+
+  test("keeps a narrowed known task creation visible to the recovery form", () => {
+    expect(isTaskCreationNotice({
+      id: "task:create:one",
+      taskId: "task-1",
+      lockScope: "task:task-1"
+    })).toBe(true);
+    expect(isTaskCreationNotice({
+      id: "task:task-1:mutation:one",
+      taskId: "task-1",
+      lockScope: "task:task-1"
+    })).toBe(false);
   });
 
   test("narrows only an exact known task creation after complete readback", () => {

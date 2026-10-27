@@ -381,11 +381,13 @@ function publishMutationNoticeChanges(principalId: string, added: readonly Mutat
   return persisted;
 }
 
-function isPendingProjectCreationNotice(notice: Pick<MutationNotice, "id" | "projectId">): boolean {
+type MutationNoticeScopeInput = Pick<MutationNotice, "id"> & Partial<Pick<MutationNotice, "lockScope" | "projectId" | "taskId">>;
+
+function isPendingProjectCreationNotice(notice: MutationNoticeScopeInput): boolean {
   return !notice.projectId && isMutationNoticeCreationId(notice.id, "project");
 }
 
-function isPendingTaskCreationNotice(notice: Pick<MutationNotice, "id" | "taskId">): boolean {
+function isPendingTaskCreationNotice(notice: MutationNoticeScopeInput): boolean {
   return !notice.taskId && isMutationNoticeCreationId(notice.id, "task");
 }
 
@@ -393,12 +395,16 @@ export function canAcknowledgePendingCreationNotice(notice: Pick<MutationNotice,
   return Boolean(notice?.projectId || notice?.taskId);
 }
 
-function isKnownProjectCreationNotice(notice: Pick<MutationNotice, "id" | "projectId">): boolean {
+function isKnownProjectCreationNotice(notice: MutationNoticeScopeInput): boolean {
   return Boolean(notice.projectId) && isMutationNoticeCreationId(notice.id, "project");
 }
 
-function isKnownTaskCreationNotice(notice: Pick<MutationNotice, "id" | "taskId">): boolean {
+function isKnownTaskCreationNotice(notice: MutationNoticeScopeInput): boolean {
   return Boolean(notice.taskId) && isMutationNoticeCreationId(notice.id, "task");
+}
+
+export function isTaskCreationNotice(notice: MutationNoticeScopeInput): boolean {
+  return mutationNoticeScope(notice) === "task:create" || isKnownTaskCreationNotice(notice);
 }
 
 export function reconcileKnownTaskCreationNotice(notice: MutationNotice, taskIds: ReadonlySet<string>): MutationNotice {
@@ -433,17 +439,17 @@ function createProjectMutationNoticeId(projectId: string): string {
   return `project:${projectId}:mutation:${createMutationNoticeSuffix()}`;
 }
 
-function mutationNoticeTaskId(notice: MutationNotice): string | undefined {
+function mutationNoticeTaskId(notice: MutationNoticeScopeInput): string | undefined {
   if (notice.taskId) return notice.taskId;
   return legacyMutationNoticeResourceId(notice.id, "task");
 }
 
-function mutationNoticeProjectId(notice: MutationNotice): string | undefined {
+function mutationNoticeProjectId(notice: MutationNoticeScopeInput): string | undefined {
   if (notice.projectId) return notice.projectId;
   return legacyMutationNoticeResourceId(notice.id, "project");
 }
 
-function mutationNoticeScope(notice: MutationNotice): string | undefined {
+function mutationNoticeScope(notice: MutationNoticeScopeInput): string | undefined {
   if (notice.lockScope) return notice.lockScope;
   if (isPendingProjectCreationNotice(notice)) return "project:create";
   if (isPendingTaskCreationNotice(notice)) return "task:create";
@@ -1336,7 +1342,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     return new Map([...messages.entries()].map(([projectId, values]) => [projectId, values.join("；")] as const));
   }, [mutationNoticeQuery.data]);
   const pendingProjectCreationNotice = mutationNoticeQuery.data.find((notice) => mutationNoticeScope(notice) === "project:create");
-  const pendingTaskCreationNotice = mutationNoticeQuery.data.find((notice) => mutationNoticeScope(notice) === "task:create");
+  const pendingTaskCreationNotice = mutationNoticeQuery.data.find(isTaskCreationNotice);
   const pendingProjectCreation = Boolean(pendingProjectCreationNotice);
   const pendingTaskCreation = Boolean(pendingTaskCreationNotice);
   const pendingProjectCreationResourceId = pendingProjectCreationNotice?.projectId;
