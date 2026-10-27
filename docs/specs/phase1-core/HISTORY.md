@@ -122,6 +122,8 @@ Repair Batch 9 extends the U02 recovery implementation without changing the publ
 
 The task-form density repair records the owner-confirmed current candidate `39516fcf68271819d54cb71cdcdfbc7ce751d37f`: desktop primary controls use the `42px` form metric, mobile primary controls use the `44px` touch metric, and repeated relationship rows retain the `38px` compact/list metric. The three canonical captures are recorded in [Implementation](IMPLEMENTATION.md#shared-control-metrics-u02-project-tasks-and-batch-6) and in the candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/39516fc`; production Web and durable-state acceptance remain separate gates.
 
+The owner-confirmed `af1848771ae688707c2ab1306ac0d7f6c7991371` evidence refresh registers five canonical task-form captures: desktop and mobile `ui_demo` page views, the Storybook Create state, the selected parent/dependency expanded state, and the source-managed Storybook mobile state. The metadata-only refresh preserves the established density contract and does not change product or rendering behavior; the source mapping and hashes are recorded in the candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/af18487`.
+
 ## References
 
 - [Requirements](SPEC.md)
