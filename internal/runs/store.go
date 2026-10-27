@@ -202,6 +202,15 @@ func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransaction
 		}
 		return accepted, approvals.Resolution{}, nil
 	}
+	if accepted.Deduplicated && isTerminalCommandState(accepted.Record.State) {
+		if err := tx.Commit(ctx); err != nil {
+			return AcceptResult{}, approvals.Resolution{}, fmt.Errorf("commit duplicate terminal approval command lookup: %w", err)
+		}
+		return accepted, approvals.Resolution{}, nil
+	}
+	if err := lockApprovalRunForAdmissionTx(ctx, tx, request); err != nil {
+		return AcceptResult{}, approvals.Resolution{}, err
+	}
 	if lease != nil && !accepted.Deduplicated && !isTerminalCommandState(accepted.Record.State) {
 		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
 			return AcceptResult{}, approvals.Resolution{}, err
@@ -1453,6 +1462,26 @@ func validateApprovalCommandIntent(intent CommandIntent, request approvals.Resol
 	}
 	if (intent.Command.Kind == protocol.CommandKindRunApprove) != (request.Request.Decision == protocol.ApprovalDecisionApprove) {
 		return fmt.Errorf("%w: command kind and approval decision do not match", ErrInvalidCommand)
+	}
+	return nil
+}
+
+func lockApprovalRunForAdmissionTx(ctx context.Context, tx pgx.Tx, request approvals.ResolveRequest) error {
+	current, err := scanRun(tx.QueryRow(ctx, runQuery+` WHERE run.id = $1 FOR UPDATE`, request.RunID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrRunNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock run for approval admission: %w", err)
+	}
+	if current.SessionID != request.SessionID {
+		return fmt.Errorf("%w: run %q belongs to session %q", ErrRunConflict, current.ID, current.SessionID)
+	}
+	if err := current.CheckGeneration(request.Generation); err != nil {
+		return err
+	}
+	if terminalRunStatus(current.Status) {
+		return fmt.Errorf("%w: run %q cannot accept a new approval response", ErrRunTerminal, current.ID)
 	}
 	return nil
 }

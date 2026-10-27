@@ -636,6 +636,31 @@ func TestApprovalHistoryMigratorRejectsUnrecognizedAtomicLayout(t *testing.T) {
 	}
 }
 
+func TestApprovalHistoryMigratorRejectsAtomicLayoutWithWrongPrimaryKey(t *testing.T) {
+	db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+	if _, err := db.Pool().Exec(ctx, `
+		ALTER TABLE execution_approval_revisions DROP CONSTRAINT execution_approval_revisions_pkey;
+		ALTER TABLE execution_approval_revisions ADD CONSTRAINT execution_approval_revisions_pkey PRIMARY KEY (revision, id)
+	`); err != nil {
+		t.Fatalf("install wrong approval history primary key: %v", err)
+	}
+
+	migrator := database.NewApprovalHistoryMigrator(db.Pool())
+	if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); !errors.Is(err, database.ErrApprovalHistoryAtomicAdoption) {
+		t.Fatalf("wrong-primary-key atomic layout error = %v, want ErrApprovalHistoryAtomicAdoption", err)
+	}
+	var stateTable string
+	if err := db.Pool().QueryRow(ctx, `SELECT COALESCE(to_regclass(format('%I.%I', current_schema(), 'execution_approval_history_migrations'))::text, '')`).Scan(&stateTable); err != nil {
+		t.Fatalf("inspect wrong-primary-key adoption state table: %v", err)
+	}
+	if stateTable != "" {
+		t.Fatalf("wrong-primary-key adoption created state table %q", stateTable)
+	}
+}
+
 func insertMigratorApprovalRows(t *testing.T, ctx context.Context, db *database.DB, fixture approvalFixture, count int) []string {
 	t.Helper()
 	ids := make([]string, 0, count)

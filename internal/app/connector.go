@@ -158,7 +158,7 @@ func (c *Connector) Run(ctx context.Context) error {
 	serverURL, _ := url.Parse(c.cfg.ConnectorServerURL)
 	c.logger.Info("connector started", "server_host", serverURL.Host)
 	if err := c.recoverJournalSessions(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		c.logger.Warn("connector session recovery incomplete", "error", err)
+		c.logger.Warn("connector session recovery incomplete", "error_class", connectorRecoveryErrorClass(err))
 	}
 	runErr := c.connectionLoop(ctx)
 	if c.lifecycle.BeginDrain("context canceled") {
@@ -337,6 +337,17 @@ func connectorCommandErrorClass(err error) string {
 		return "unknown_result"
 	}
 	return "command_rejected"
+}
+
+func connectorRecoveryErrorClass(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	default:
+		return "recovery_failed"
+	}
 }
 
 // Adapter operation identities may use NUL as an internal generation

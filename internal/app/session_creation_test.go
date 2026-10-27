@@ -21,6 +21,7 @@ type fakeSessionCreationRecords struct {
 	intents     map[string]sessions.CreationIntent
 	sessions    map[string]sessions.Session
 	unknown     int
+	definite    []sessions.DefiniteFailureIntentInput
 	activations []sessions.ActivationInput
 }
 
@@ -58,6 +59,12 @@ func (f *fakeSessionCreationRecords) MarkIntentUnknown(_ context.Context, input 
 	intent.State = sessions.IntentStateUnknown
 	intent.UnknownReason = input.Reason
 	f.intents[input.SessionID] = intent
+	return intent, nil
+}
+
+func (f *fakeSessionCreationRecords) MarkIntentDefiniteFailure(_ context.Context, input sessions.DefiniteFailureIntentInput) (sessions.CreationIntent, error) {
+	f.definite = append(f.definite, input)
+	intent := f.intents[input.SessionID]
 	return intent, nil
 }
 
@@ -201,6 +208,37 @@ func TestSessionCreationKeepsUnknownOutcomeUnknown(t *testing.T) {
 	}
 	if records.unknown != 1 || records.intents["session-unknown"].State != sessions.IntentStateUnknown {
 		t.Fatalf("unknown intent state = %+v, mark count = %d", records.intents["session-unknown"], records.unknown)
+	}
+}
+
+func TestSessionCreationKeepsDefiniteHostRejectionDefiniteAndIdempotent(t *testing.T) {
+	for _, state := range []protocol.CommandState{protocol.CommandStateFailed, protocol.CommandStateRejected} {
+		t.Run(string(state), func(t *testing.T) {
+			records := &fakeSessionCreationRecords{}
+			transport := &fakeSessionCreationTransport{ack: protocol.CommandAck{State: state}}
+			service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, &fakeSessionCreationHost{host: hosts.Host{ID: "host-1"}}, transport, nil)
+			service.newID = func() (string, error) { return "session-definite-rejection", nil }
+			request := protocol.CreateSessionRequest{CommandID: "create-session-definite-rejection", Path: protocol.SessionPathNew}
+
+			for attempt := 0; attempt < 2; attempt++ {
+				_, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, request)
+				if err == nil || errors.Is(err, protocol.ErrUnknownCommandResult) || !strings.Contains(err.Error(), string(state)) {
+					t.Fatalf("attempt %d error = %v, want definite %q rejection", attempt+1, err, state)
+				}
+			}
+			if records.unknown != 0 {
+				t.Fatalf("unknown marks = %d, want 0", records.unknown)
+			}
+			if len(records.definite) != 2 || records.definite[0].State != state || records.definite[1].State != state {
+				t.Fatalf("definite failure records = %+v, want two %q records", records.definite, state)
+			}
+			if len(records.intents) != 1 || records.intents["session-definite-rejection"].State != sessions.IntentStatePending {
+				t.Fatalf("rejected intent state = %+v", records.intents)
+			}
+			if len(transport.commands) != 2 || transport.commands[0].SessionID != transport.commands[1].SessionID || transport.commands[0].CommandID != transport.commands[1].CommandID {
+				t.Fatalf("retry command identities = %+v, want one durable identity", transport.commands)
+			}
+		})
 	}
 }
 

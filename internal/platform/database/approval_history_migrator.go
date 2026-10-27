@@ -386,6 +386,13 @@ func (m *ApprovalHistoryMigrator) Cutover(ctx context.Context, options ApprovalH
 	if state.phase != ApprovalHistoryPhaseIndexesReady && state.phase != ApprovalHistoryPhaseCutoverRequested {
 		return progressFromState(state), fmt.Errorf("%w: phase is %s", ErrApprovalHistoryMigrationNotReady, state.phase)
 	}
+	primaryKeyReady, err := m.historyPrimaryKeyReady(ctx)
+	if err != nil {
+		return progressFromState(state), err
+	}
+	if !primaryKeyReady {
+		return progressFromState(state), fmt.Errorf("%w: approval history primary key is not (id, revision)", ErrApprovalHistoryMigrationUnavailable)
+	}
 	if _, err := m.drainDirty(ctx, opts, opts.PreDrainWorkBudget); err != nil {
 		return m.progressWithError(ctx, err)
 	}
@@ -1026,6 +1033,13 @@ func (m *ApprovalHistoryMigrator) recognizedAtomicLayout(ctx context.Context) (b
 	if !recognized {
 		return false, nil
 	}
+	primaryKeyReady, err := m.historyPrimaryKeyReady(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !primaryKeyReady {
+		return false, nil
+	}
 	for _, index := range []struct {
 		name string
 		want string
@@ -1049,6 +1063,13 @@ func (m *ApprovalHistoryMigrator) writerGuardReady(ctx context.Context) bool {
 }
 
 func (m *ApprovalHistoryMigrator) historyIndexesReady(ctx context.Context) error {
+	primaryKeyReady, err := m.historyPrimaryKeyReady(ctx)
+	if err != nil {
+		return err
+	}
+	if !primaryKeyReady {
+		return fmt.Errorf("%w: approval history primary key is not (id, revision)", ErrApprovalHistoryMigrationUnavailable)
+	}
 	var ready bool
 	if err := m.pool.QueryRow(ctx, `
 		SELECT NOT EXISTS (
@@ -1077,6 +1098,28 @@ func (m *ApprovalHistoryMigrator) historyIndexesReady(ctx context.Context) error
 		return fmt.Errorf("%w: required history indexes are not ready", ErrApprovalHistoryMigrationUnavailable)
 	}
 	return nil
+}
+
+func (m *ApprovalHistoryMigrator) historyPrimaryKeyReady(ctx context.Context) (bool, error) {
+	var definition string
+	err := m.pool.QueryRow(ctx, `
+		SELECT pg_get_indexdef(constraint_row.conindid)
+		FROM pg_constraint AS constraint_row
+		JOIN pg_class AS relation ON relation.oid = constraint_row.conrelid
+		JOIN pg_class AS index_relation ON index_relation.oid = constraint_row.conindid
+		JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+		WHERE namespace.nspname = current_schema()
+		  AND relation.relname = 'execution_approval_revisions'
+		  AND index_relation.relname = 'execution_approval_revisions_pkey'
+		  AND constraint_row.contype = 'p'
+	`).Scan(&definition)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect approval history primary key: %w", err)
+	}
+	return strings.HasSuffix(strings.TrimSpace(definition), "(id, revision)"), nil
 }
 
 func writerGuardTriggerExists(ctx context.Context, queryer interface {

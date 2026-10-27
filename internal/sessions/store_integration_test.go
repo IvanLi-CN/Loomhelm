@@ -253,6 +253,142 @@ func TestCreationIntentConcurrentSameCommandConverges(t *testing.T) {
 	}
 }
 
+func TestCreationIntentConcurrentDistinctCommandsRejectsExtraTaskIntent(t *testing.T) {
+	db := openSessionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	ids := sessionIntegrationIDs{user: "e01-distinct-race-user-" + suffix, project: "e01-distinct-race-project-" + suffix, task: "e01-distinct-race-task-" + suffix}
+	host := ensureSessionHost(t, ctx, db)
+	seedSessionIdentity(t, ctx, db, ids, host.ID)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupSessionIdentity(t, cleanupCtx, db, ids, host)
+	})
+
+	base := CreationIntentInput{
+		CreatorUserID: ids.user,
+		HostID:        host.ID,
+		Path:          protocol.SessionPathNew,
+		ProjectID:     ids.project,
+		TaskID:        ids.task,
+		Parameters:    []byte(`{"prompt":"distinct task race"}`),
+		Summary:       "distinct task race",
+	}
+	inputs := []CreationIntentInput{base, base}
+	inputs[0].SessionID = "e01-distinct-race-session-a-" + suffix
+	inputs[0].CommandID = "e01-distinct-race-command-a-" + suffix
+	inputs[1].SessionID = "e01-distinct-race-session-b-" + suffix
+	inputs[1].CommandID = "e01-distinct-race-command-b-" + suffix
+
+	start := make(chan struct{})
+	type result struct {
+		intent CreationIntent
+		err    error
+	}
+	results := make(chan result, len(inputs))
+	var group sync.WaitGroup
+	for _, input := range inputs {
+		input := input
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			intent, err := NewStore(db.Pool()).CreateIntent(ctx, input)
+			results <- result{intent: intent, err: err}
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+
+	var successes, taskBound int
+	for outcome := range results {
+		switch {
+		case outcome.err == nil:
+			successes++
+			if outcome.intent.State != IntentStatePending {
+				t.Fatalf("distinct task race intent = %+v, want pending", outcome.intent)
+			}
+		case errors.Is(outcome.err, ErrTaskBound):
+			taskBound++
+		default:
+			t.Fatalf("distinct task race error = %v", outcome.err)
+		}
+	}
+	if successes != 1 || taskBound != 1 {
+		t.Fatalf("distinct task race outcomes = successes %d/task-bound %d, want 1/1", successes, taskBound)
+	}
+	var intentCount int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM execution_sessions WHERE creation_task_id = $1`, ids.task).Scan(&intentCount); err != nil {
+		t.Fatalf("count task creation intents: %v", err)
+	}
+	if intentCount != 1 {
+		t.Fatalf("task creation intents = %d, want 1", intentCount)
+	}
+}
+
+func TestCreationIntentDefiniteFailureReleasesTaskReservation(t *testing.T) {
+	db := openSessionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	ids := sessionIntegrationIDs{user: "e01-definite-failure-user-" + suffix, project: "e01-definite-failure-project-" + suffix, task: "e01-definite-failure-task-" + suffix}
+	host := ensureSessionHost(t, ctx, db)
+	seedSessionIdentity(t, ctx, db, ids, host.ID)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupSessionIdentity(t, cleanupCtx, db, ids, host)
+	})
+
+	store := NewStore(db.Pool())
+	first := CreationIntentInput{
+		SessionID:     "e01-definite-failure-session-a-" + suffix,
+		CommandID:     "e01-definite-failure-command-a-" + suffix,
+		CreatorUserID: ids.user,
+		HostID:        host.ID,
+		Path:          protocol.SessionPathNew,
+		ProjectID:     ids.project,
+		TaskID:        ids.task,
+		Parameters:    []byte(`{"prompt":"rejected first attempt"}`),
+		Summary:       "rejected first attempt",
+	}
+	if _, err := store.CreateIntent(ctx, first); err != nil {
+		t.Fatalf("create definite-failure intent: %v", err)
+	}
+	if _, err := store.MarkIntentDefiniteFailure(ctx, DefiniteFailureIntentInput{SessionID: first.SessionID, State: protocol.CommandStateRejected}); err != nil {
+		t.Fatalf("mark definite-failure intent: %v", err)
+	}
+	retry := first
+	retry.SessionID = "e01-definite-failure-session-b-" + suffix
+	retry.CommandID = "e01-definite-failure-command-b-" + suffix
+	createdRetry, err := store.CreateIntent(ctx, retry)
+	if err != nil {
+		t.Fatalf("create new task intent after definite failure: %v", err)
+	}
+	if createdRetry.State != IntentStatePending {
+		t.Fatalf("new task intent after definite failure = %+v, want pending", createdRetry)
+	}
+	if _, err := store.MarkIntentUnknown(ctx, UnknownIntentInput{SessionID: retry.SessionID, Reason: "transport result was lost"}); err != nil {
+		t.Fatalf("mark unknown-protection intent: %v", err)
+	}
+
+	unknown := retry
+	unknown.SessionID = "e01-definite-failure-session-unknown-" + suffix
+	unknown.CommandID = "e01-definite-failure-command-unknown-" + suffix
+	if _, err := store.CreateIntent(ctx, unknown); !errors.Is(err, ErrTaskBound) {
+		t.Fatalf("create unknown-protection intent error = %v, want %v", err, ErrTaskBound)
+	}
+	sameCommandRetry, err := store.CreateIntent(ctx, retry)
+	if err != nil || sameCommandRetry.State != IntentStateUnknown {
+		t.Fatalf("same-command retry after unknown outcome = %+v, error = %v", sameCommandRetry, err)
+	}
+}
+
 func TestCreationIntentRetryRevalidatesCurrentTaskFacts(t *testing.T) {
 	db := openSessionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -267,6 +267,121 @@ func TestPersistentExecutionDomainRoundTripAndFencing(t *testing.T) {
 	}
 }
 
+func TestApprovalAdmissionRejectsTerminalRunBeforeResolver(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	sessionStore := sessions.NewStore(db.Pool())
+	runStore := NewStore(db.Pool())
+	approvalStore := approvals.NewStore(db.Pool())
+	if _, err := sessionStore.Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        "1",
+	}); err != nil {
+		t.Fatalf("create approval admission session: %v", err)
+	}
+	run, err := runStore.CreateRun(ctx, NewRunInput{ID: ids.run, SessionID: ids.session, CommandID: ids.command, Generation: "1"})
+	if err != nil {
+		t.Fatalf("create approval admission run: %v", err)
+	}
+	if _, err := runStore.Start(ctx, run.ID, "1", "approval-admission-start"); err != nil {
+		t.Fatalf("start approval admission run: %v", err)
+	}
+	approval, err := approvalStore.Create(ctx, approvals.CreateRequest{
+		NewInput: approvals.NewInput{
+			ID:          ids.approval,
+			RunID:       ids.run,
+			SessionID:   ids.session,
+			Generation:  "1",
+			Revision:    1,
+			Kind:        "command",
+			RequestedAt: "2026-10-27T00:00:00Z",
+		},
+		Context: json.RawMessage(`{"scope":"write"}`),
+	})
+	if err != nil {
+		t.Fatalf("create approval admission approval: %v", err)
+	}
+	runID := run.ID
+	command := protocol.Command{
+		CommandID: ids.approvalCommand,
+		Kind:      protocol.CommandKindRunApprove,
+		Payload:   json.RawMessage(fmt.Sprintf(`{"approval_id":%q}`, approval.ID)),
+		RunID:     &runID,
+		SessionID: ids.session,
+	}
+	request := approvals.ResolveRequest{
+		ApprovalID: ids.approval,
+		RunID:      ids.run,
+		SessionID:  ids.session,
+		Generation: "1",
+		Request: protocol.ResolveApprovalRequest{
+			CommandID: ids.approvalCommand,
+			Decision:  protocol.ApprovalDecisionApprove,
+			Revision:  1,
+		},
+	}
+	terminalTx, err := db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin terminal winner transaction: %v", err)
+	}
+	defer terminalTx.Rollback(context.Background())
+	var lockedID string
+	if err := terminalTx.QueryRow(ctx, `SELECT id FROM execution_sessions WHERE id = $1 FOR UPDATE`, ids.session).Scan(&lockedID); err != nil {
+		t.Fatalf("lock terminal winner session: %v", err)
+	}
+	if err := terminalTx.QueryRow(ctx, `SELECT id FROM execution_runs WHERE id = $1 FOR UPDATE`, ids.run).Scan(&lockedID); err != nil {
+		t.Fatalf("lock terminal winner run: %v", err)
+	}
+	resolver := &countingApprovalResolver{store: approvalStore}
+	result := make(chan error, 1)
+	go func() {
+		_, _, acceptErr := runStore.AcceptApproval(ctx, resolver, CommandIntent{Command: command, Generation: "1"}, request)
+		result <- acceptErr
+	}()
+	if _, err := terminalTx.Exec(ctx, `
+		UPDATE execution_runs
+		SET status = 'completed', terminal_reason = 'terminal winner', finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1
+	`, ids.run); err != nil {
+		t.Fatalf("mark terminal winner run: %v", err)
+	}
+	if err := terminalTx.Commit(ctx); err != nil {
+		t.Fatalf("commit terminal winner transaction: %v", err)
+	}
+	if err := <-result; !errors.Is(err, ErrRunTerminal) {
+		t.Fatalf("terminal approval admission error = %v, want %v", err, ErrRunTerminal)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("approval resolver calls = %d, want 0", resolver.calls)
+	}
+	if _, err := runStore.Lookup(ctx, ids.session, ids.approvalCommand); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("rolled-back terminal approval command lookup error = %v, want %v", err, ErrCommandNotFound)
+	}
+	pending, err := approvalStore.Pending(ctx, ids.session, ids.run, "1")
+	if err != nil {
+		t.Fatalf("read pending approval after terminal admission: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != ids.approval {
+		t.Fatalf("pending approval after terminal admission = %+v", pending)
+	}
+}
+
+type countingApprovalResolver struct {
+	store *approvals.Store
+	calls int
+}
+
+func (r *countingApprovalResolver) ResolveTx(ctx context.Context, tx pgx.Tx, request approvals.ResolveRequest) (approvals.Resolution, error) {
+	r.calls++
+	return r.store.ResolveTx(ctx, tx, request)
+}
+
 func TestPersistentApprovalRequestedEventAtomicity(t *testing.T) {
 	db := openExecutionDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

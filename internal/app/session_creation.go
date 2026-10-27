@@ -25,6 +25,7 @@ type sessionCreationApplication interface {
 type sessionCreationRecords interface {
 	CreateIntent(context.Context, sessions.CreationIntentInput) (sessions.CreationIntent, error)
 	MarkIntentUnknown(context.Context, sessions.UnknownIntentInput) (sessions.CreationIntent, error)
+	MarkIntentDefiniteFailure(context.Context, sessions.DefiniteFailureIntentInput) (sessions.CreationIntent, error)
 	ActivateIntent(context.Context, sessions.ActivationInput) (sessions.Session, error)
 	Get(context.Context, string) (sessions.Session, error)
 }
@@ -183,6 +184,13 @@ func (s *sessionCreationService) openPendingSession(ctx context.Context, princip
 		return protocol.Session{}, err
 	}
 	if ack.State != protocol.CommandStateSucceeded {
+		if ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+			definiteErr := fmt.Errorf("session creation command %q returned definite state %q", intent.CommandID, ack.State)
+			if _, markErr := s.records.MarkIntentDefiniteFailure(ctx, sessions.DefiniteFailureIntentInput{SessionID: intent.SessionID, State: ack.State}); markErr != nil {
+				return protocol.Session{}, errors.Join(definiteErr, fmt.Errorf("record definite session failure: %w", markErr))
+			}
+			return protocol.Session{}, definiteErr
+		}
 		return protocol.Session{}, s.markUnknown(ctx, intent.SessionID, fmt.Errorf("host returned session command state %q", ack.State))
 	}
 	var opened sessionOpenResult

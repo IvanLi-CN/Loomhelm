@@ -1,7 +1,11 @@
 package app
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +57,20 @@ func TestConnectorReconnectBounds(t *testing.T) {
 	}
 	if got := connectorDialTimeoutFor(30 * time.Second); got != connectorDialTimeout {
 		t.Fatalf("connectorDialTimeoutFor(30s) = %s, want %s", got, connectorDialTimeout)
+	}
+}
+
+func TestConnectorRecoveryErrorClassOmitsPrivateDetails(t *testing.T) {
+	privatePath := "/private/connector/app-server-secret"
+	err := fmt.Errorf("recover journal session: %w", &os.PathError{Op: "start", Path: privatePath, Err: os.ErrPermission})
+	if got := connectorRecoveryErrorClass(err); got != "recovery_failed" {
+		t.Fatalf("connectorRecoveryErrorClass() = %q, want recovery_failed", got)
+	}
+	if strings.Contains(connectorRecoveryErrorClass(err), privatePath) {
+		t.Fatalf("recovery error class exposed private path: %q", connectorRecoveryErrorClass(err))
+	}
+	if connectorRecoveryErrorClass(errors.Join(context.Canceled, err)) != "canceled" {
+		t.Fatalf("canceled recovery error class = %q, want canceled", connectorRecoveryErrorClass(errors.Join(context.Canceled, err)))
 	}
 }
 

@@ -54,6 +54,8 @@ const (
 	IntentStateConfirmed IntentState = "confirmed"
 )
 
+const definiteFailureReasonPrefix = "definite_failure:"
+
 // CreationIntentInput contains authorization facts resolved by the caller's
 // application boundary. CreatorUserID and HostID are not public request
 // declarations; the caller must derive them from authenticated identity and
@@ -107,6 +109,12 @@ type UnknownIntentInput struct {
 	UpdatedAt string
 }
 
+type DefiniteFailureIntentInput struct {
+	SessionID string
+	State     protocol.CommandState
+	UpdatedAt string
+}
+
 type SessionAccess struct {
 	SessionID     string
 	CreatorUserID string
@@ -123,6 +131,7 @@ type CreationBoundary interface {
 	CreateIntent(context.Context, CreationIntentInput) (CreationIntent, error)
 	GetIntent(context.Context, string) (CreationIntent, error)
 	MarkIntentUnknown(context.Context, UnknownIntentInput) (CreationIntent, error)
+	MarkIntentDefiniteFailure(context.Context, DefiniteFailureIntentInput) (CreationIntent, error)
 	ActivateIntent(context.Context, ActivationInput) (Session, error)
 	GetAccess(context.Context, string) (SessionAccess, error)
 }

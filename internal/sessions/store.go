@@ -318,6 +318,47 @@ func (s *Store) MarkIntentUnknown(ctx context.Context, input UnknownIntentInput)
 	return s.GetIntent(ctx, input.SessionID)
 }
 
+// MarkIntentDefiniteFailure records a host rejection without converting it to
+// unknown. The marker releases a task reservation for a new command while the
+// original command identity remains durable for exact retries.
+func (s *Store) MarkIntentDefiniteFailure(ctx context.Context, input DefiniteFailureIntentInput) (CreationIntent, error) {
+	if err := s.ready(ctx); err != nil {
+		return CreationIntent{}, err
+	}
+	if strings.TrimSpace(input.SessionID) == "" {
+		return CreationIntent{}, fmt.Errorf("%w: session id is required", ErrInvalidSession)
+	}
+	if input.State != protocol.CommandStateFailed && input.State != protocol.CommandStateRejected {
+		return CreationIntent{}, fmt.Errorf("%w: definite failure requires failed or rejected state", ErrInvalidSession)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CreationIntent{}, fmt.Errorf("begin definite session failure: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	record, found, err := lockIntentByID(ctx, tx, input.SessionID)
+	if err != nil {
+		return CreationIntent{}, err
+	}
+	if !found {
+		return CreationIntent{}, ErrSessionNotFound
+	}
+	if record.Intent.State != IntentStateConfirmed {
+		if _, err := tx.Exec(ctx, `
+			UPDATE execution_sessions
+			SET creation_unknown_reason = $2,
+			    updated_at = $3::timestamptz
+			WHERE id = $1
+		`, input.SessionID, definiteFailureReasonPrefix+string(input.State), s.timestamp(input.UpdatedAt)); err != nil {
+			return CreationIntent{}, fmt.Errorf("mark definite session failure: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CreationIntent{}, fmt.Errorf("commit definite session failure: %w", err)
+	}
+	return s.GetIntent(ctx, input.SessionID)
+}
+
 // ActivateIntent atomically turns an intent into a confirmed Session. A
 // pending or unknown intent may only be activated with a real external thread
 // and explicit Codex execution generation. The optional task target is locked
@@ -527,11 +568,7 @@ func validateExistingCreationIntentTarget(ctx context.Context, tx pgx.Tx, record
 	if taskID == "" {
 		return nil
 	}
-	allowedSessionID := ""
-	if record.Intent.State == IntentStateConfirmed {
-		allowedSessionID = record.Intent.SessionID
-	}
-	return validateCreationTaskForSession(ctx, tx, record.Intent.ProjectID, taskID, allowedSessionID)
+	return validateCreationTaskForSession(ctx, tx, record.Intent.ProjectID, taskID, record.Intent.SessionID)
 }
 
 func validateCreationTaskForSession(ctx context.Context, tx pgx.Tx, projectID, taskID, allowedSessionID string) error {
@@ -541,7 +578,7 @@ func validateCreationTaskForSession(ctx context.Context, tx pgx.Tx, projectID, t
 		SELECT project_id, session_id
 		FROM tasks
 		WHERE id = $1
-		FOR SHARE
+		FOR UPDATE
 	`, taskID).Scan(&taskProjectID, &taskSessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: task %q is not present", ErrInvalidSession, taskID)
@@ -557,6 +594,23 @@ func validateCreationTaskForSession(ctx context.Context, tx pgx.Tx, projectID, t
 			return nil
 		}
 		return ErrTaskBound
+	}
+	var existingSessionID string
+	err = tx.QueryRow(ctx, `
+		SELECT id
+		FROM execution_sessions
+		WHERE creation_task_id = $1
+		  AND creation_state IN ('pending', 'unknown', 'confirmed')
+		  AND creation_unknown_reason NOT LIKE 'definite_failure:%'
+		  AND ($2 = '' OR id <> $2)
+		ORDER BY created_at, id
+		LIMIT 1
+	`, taskID, allowedSessionID).Scan(&existingSessionID)
+	if err == nil {
+		return ErrTaskBound
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("check task creation intent: %w", err)
 	}
 	return nil
 }
