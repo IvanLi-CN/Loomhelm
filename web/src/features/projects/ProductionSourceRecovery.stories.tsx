@@ -71,6 +71,7 @@ interface ScenarioState {
   relationCalls: number;
   dependencyCalls: number;
   requestedTaskId: string;
+  refreshRequested: boolean;
   refreshState: "idle" | "pending" | "failed" | "complete";
   lastResult: string;
   notify?: () => void;
@@ -160,7 +161,8 @@ function createClient(state: ScenarioState): GeneratedApiClient {
   return {
     listProjects: async () => {
       state.projectListCalls += 1;
-      if (state.projectListCalls > 1) {
+      if (state.refreshRequested) {
+        state.refreshRequested = false;
         state.refreshState = "pending";
         notifyScenario(state);
         if (state.scenario === "remote-refresh-failure") {
@@ -242,6 +244,7 @@ function SharedRefreshHarness() {
       relationCalls: 0,
       dependencyCalls: 0,
       requestedTaskId: "",
+      refreshRequested: false,
       refreshState: "idle",
       lastResult: "",
       broadcastPatched: false,
@@ -254,6 +257,15 @@ function SharedRefreshHarness() {
   }, []);
   const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }), []);
   const [secondaryRevision, setSecondaryRevision] = useState(0);
+  const [, setScenarioRevision] = useState(0);
+
+  useEffect(() => {
+    const listener = () => setScenarioRevision((value) => value + 1);
+    state.listeners?.add(listener);
+    return () => {
+      state.listeners?.delete(listener);
+    };
+  }, [state]);
 
   useEffect(() => () => restoreScenario(state), [state]);
 
@@ -295,6 +307,7 @@ function SharedRefreshContent({ state, instance }: { state: ScenarioState; insta
   const triggerRemoteRemoval = () => {
     const key = mutationNoticeKey(noticeId);
     const oldValue = JSON.stringify(remoteNotice);
+    state.refreshRequested = true;
     window.localStorage.removeItem(key);
     window.dispatchEvent(new StorageEvent("storage", { key, oldValue, newValue: null, storageArea: window.localStorage, url: window.location.href }));
   };
@@ -336,6 +349,7 @@ function RecoveryContent({ state }: { state: ScenarioState }) {
   const triggerRemoteRemoval = () => {
     const key = mutationNoticeKey(noticeId);
     const oldValue = JSON.stringify(remoteNotice);
+    state.refreshRequested = true;
     window.localStorage.removeItem(key);
     window.dispatchEvent(new StorageEvent("storage", { key, oldValue, newValue: null, storageArea: window.localStorage, url: window.location.href }));
   };
@@ -384,7 +398,7 @@ function RecoveryContent({ state }: { state: ScenarioState }) {
 }
 
 function renderScenario(scenario: Scenario) {
-  const state: ScenarioState = { scenario, principalId, projectListCalls: 0, createCalls: 0, createTaskCalls: 0, updateCalls: 0, relationCalls: 0, dependencyCalls: 0, requestedTaskId: "", refreshState: "idle", lastResult: "", broadcastPatched: false, locksPatched: false, setItemPatched: false };
+  const state: ScenarioState = { scenario, principalId, projectListCalls: 0, createCalls: 0, createTaskCalls: 0, updateCalls: 0, relationCalls: 0, dependencyCalls: 0, requestedTaskId: "", refreshRequested: false, refreshState: "idle", lastResult: "", broadcastPatched: false, locksPatched: false, setItemPatched: false };
   prepareScenario(state);
   return <RecoveryHarness state={state} />;
 }
@@ -431,10 +445,11 @@ export const RemoteRemovalFailureSurvivesSourceRemount: Story = {
   render: () => <SharedRefreshHarness />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByTestId("主实例-status")).toHaveTextContent("状态：ready"));
+    await waitFor(() => expect(canvas.getByTestId("副本实例-status")).toHaveTextContent("状态：ready"));
     await userEvent.click(await canvas.findByRole("button", { name: "主实例移除远端通知" }));
     await waitFor(() => expect(canvas.getByTestId("shared-refresh-state")).toHaveTextContent("刷新：failed"));
     await userEvent.click(canvas.getByRole("button", { name: "重挂载副本实例" }));
-    await waitFor(() => expect(canvas.getByTestId("副本实例-status")).toHaveTextContent("状态：ready"));
     await userEvent.click(canvas.getByRole("button", { name: "副本实例尝试更新任务" }));
     await waitFor(() => expect(canvas.getByTestId("副本实例-result")).toHaveTextContent("待确认"));
     expect(canvas.getByTestId("shared-update-calls")).toHaveTextContent("任务 PATCH：0");
