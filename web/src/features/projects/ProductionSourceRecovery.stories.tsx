@@ -5,7 +5,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { useEffect, useMemo, useState } from "react";
 
-import { usePublishedProjectTaskSource, type MutationNotice } from "./production-source";
+import { readMutationNoticesFromStorage, usePublishedProjectTaskSource, type MutationNotice } from "./production-source";
 
 const meta = {
   title: "Product/ProductionSourceRecovery",
@@ -16,7 +16,7 @@ const meta = {
 export default meta;
 
 type Story = StoryObj<typeof meta>;
-type Scenario = "persistence-failure" | "remote-refresh" | "remote-refresh-failure" | "identity-mismatch" | "stale-generation-create";
+type Scenario = "persistence-failure" | "remote-refresh" | "remote-refresh-failure" | "identity-mismatch" | "task-relation-failure" | "stale-generation-create";
 
 const principalId = "story-production-recovery-user";
 const projectId = "project_0123456789abcdef0123456789abcdef";
@@ -233,6 +233,9 @@ function createClient(state: ScenarioState): GeneratedApiClient {
       if (state.scenario === "identity-mismatch") {
         return { task: { ...task, id: "task_fedcfedcfedcfedcfedcfedcfedcfedc" } };
       }
+      if (state.scenario === "task-relation-failure") {
+        return { task: { ...task, id: body.id ?? task.id } };
+      }
       return { task };
     },
     getTask: async () => ({ task }),
@@ -240,6 +243,7 @@ function createClient(state: ScenarioState): GeneratedApiClient {
     addTaskParent: async () => {
       state.relationCalls += 1;
       notifyScenario(state);
+      if (state.scenario === "task-relation-failure") throw new Error("relation denied");
     },
     removeTaskParent: async () => undefined,
     addTaskDependency: async () => {
@@ -591,6 +595,9 @@ function RecoveryContent({ state }: { state: ScenarioState }) {
     principalId: state.principalId
   });
   const [, setRevision] = useState(0);
+  const taskNotice = state.scenario === "task-relation-failure"
+    ? readMutationNoticesFromStorage(window.localStorage, `loomhelm.project-task.mutation-notice.v2.${encodeURIComponent(principalId)}.`).notices.find((notice) => notice.taskId === state.requestedTaskId)
+    : undefined;
 
   useEffect(() => {
     state.notify = () => setRevision((value) => value + 1);
@@ -641,11 +648,12 @@ function RecoveryContent({ state }: { state: ScenarioState }) {
         <p data-testid="create-calls">项目 POST：{state.createCalls}</p>
         <p data-testid="task-create-calls">任务 POST：{state.createTaskCalls}</p>
         <p data-testid="requested-task-id">请求任务 ID：{state.requestedTaskId || "无"}</p>
+        {state.scenario === "task-relation-failure" && <p data-testid="task-notice-scope">任务屏障：{taskNotice?.lockScope ?? "无"}</p>}
         <p data-testid="update-calls">任务 PATCH：{state.updateCalls}</p>
         <p data-testid="relation-calls">关系 POST：{state.relationCalls}</p>
         <p data-testid="dependency-calls">依赖 POST：{state.dependencyCalls}</p>
         <p data-testid="last-result">结果：{state.lastResult || "无"}</p>
-        {state.scenario === "persistence-failure" ? <button type="button" onClick={() => { void runCreate(); }} disabled={source.status !== "ready"}>尝试创建项目</button> : state.scenario === "identity-mismatch" ? <button type="button" onClick={() => { void runTaskCreate(); }} disabled={source.status !== "ready"}>尝试创建任务</button> : <><button type="button" onClick={triggerRemoteRemoval}>移除远端通知</button><button type="button" onClick={() => { void runUpdate(); }}>尝试更新任务</button>{state.scenario === "remote-refresh" && <button type="button" onClick={() => state.resolveRefresh?.()}>完成刷新</button>}</>}
+        {state.scenario === "persistence-failure" ? <button type="button" onClick={() => { void runCreate(); }} disabled={source.status !== "ready"}>尝试创建项目</button> : state.scenario === "identity-mismatch" || state.scenario === "task-relation-failure" ? <button type="button" onClick={() => { void runTaskCreate(); }} disabled={source.status !== "ready"}>尝试创建任务</button> : <><button type="button" onClick={triggerRemoteRemoval}>移除远端通知</button><button type="button" onClick={() => { void runUpdate(); }}>尝试更新任务</button>{state.scenario === "remote-refresh" && <button type="button" onClick={() => state.resolveRefresh?.()}>完成刷新</button>}</>}
       </div>
     </div>
   );
@@ -787,5 +795,19 @@ export const IdentityMismatchDoesNotRetryOrReplayRelations: Story = {
     expect(canvas.getByTestId("task-create-calls")).toHaveTextContent("任务 POST：1");
     expect(canvas.getByTestId("relation-calls")).toHaveTextContent("关系 POST：0");
     expect(canvas.getByTestId("dependency-calls")).toHaveTextContent("依赖 POST：0");
+  }
+};
+
+export const ConfirmedTaskRelationFailureKeepsExactTaskBarrier: Story = {
+  render: () => renderScenario("task-relation-failure"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText(/状态：\s*ready/)).toBeInTheDocument());
+    await userEvent.click(await canvas.findByRole("button", { name: "尝试创建任务" }));
+    await waitFor(() => expect(canvas.getByTestId("task-notice-scope")).not.toHaveTextContent("任务屏障：无"));
+    const taskResource = canvas.getByTestId("requested-task-id").textContent?.replace("请求任务 ID：", "");
+    expect(canvas.getByTestId("task-notice-scope")).toHaveTextContent(`任务屏障：task:${taskResource}`);
+    expect(canvas.getByTestId("task-create-calls")).toHaveTextContent("任务 POST：1");
+    expect(canvas.getByTestId("relation-calls")).toHaveTextContent("关系 POST：1");
   }
 };

@@ -5,6 +5,7 @@ import { QueryClient } from "@tanstack/react-query";
 
 import {
   clearPrincipalQueries,
+  commitProductionAssembly,
   createAuthenticatedProductionAssembly,
   createProductionAuthFailureAssembly,
   createUnauthenticatedProductionAssembly
@@ -12,7 +13,9 @@ import {
 import { isPermissionError, readAllCursorPages } from "../src/features/projects/production-source";
 import { mapTask } from "../src/features/projects/api";
 
-const client = {} as AuthenticatedApiClient;
+const client = {
+  bindBrowserSession: (binding: { principalId: string; epoch: number }) => ({ binding })
+} as unknown as AuthenticatedApiClient;
 
 describe("production browser assembly", () => {
   test("cancels and removes queries for the previous browser principal", async () => {
@@ -31,6 +34,37 @@ describe("production browser assembly", () => {
 
     expect(assembly.auth).toEqual({ status: "authenticated", principalId: "user/browser", workspaceId: "default", sessionGeneration: 0 });
     expect(assembly.permissions).toEqual({ canWrite: true, canManageProjects: true, isReadOnly: false });
+    expect(assembly.client).toEqual({ binding: { principalId: "user/browser", epoch: 0 } });
+  });
+
+  test("does not expose a replacement assembly after cache cleanup advances its generation", async () => {
+    let currentGeneration = 2;
+    let applied = false;
+    const previous = createAuthenticatedProductionAssembly(client, { user_id: "user/old", csrf_protection: "same_origin" }, 1);
+    const next = createAuthenticatedProductionAssembly(client, { user_id: "user/new", csrf_protection: "same_origin" }, 2);
+
+    const committed = await commitProductionAssembly(
+      next,
+      () => currentGeneration,
+      previous,
+      async () => {
+        currentGeneration = 3;
+      },
+      () => {
+        applied = true;
+      }
+    );
+
+    expect(committed).toBe(false);
+    expect(applied).toBe(false);
+  });
+
+  test("applies an assembly only when its generation is still current", async () => {
+    let applied;
+    const next = createAuthenticatedProductionAssembly(client, { user_id: "user/new", csrf_protection: "same_origin" }, 4);
+
+    expect(await commitProductionAssembly(next, () => 4, null, async () => {}, (assembly) => { applied = assembly; })).toBe(true);
+    expect(applied).toBe(next);
   });
 
   test("treats only 401 as session loss; a 403 remains an authentication error", () => {

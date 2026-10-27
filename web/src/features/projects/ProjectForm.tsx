@@ -5,6 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { queueOwnedFocusRestore } from "@/lib/focus-ownership";
 import { projectWriteBlockReason, type ProjectRecord, type ProjectTaskSource } from "@/features/tasks/types";
 
 type Feedback = { message: string; tone: "success" | "warning"; reconcile?: boolean; noticeId?: string };
@@ -17,11 +18,12 @@ interface ProjectFormProps {
   source: ProjectTaskSource;
   mode: "create" | "edit";
   projectId?: string;
-  onSaved?: (projectId: string) => void;
+  onSaved?: (projectId: string, focusWasOwned?: boolean) => void;
   onCancelled?: () => void;
+  focusOwnerRef?: { current: HTMLFormElement | null };
 }
 
-export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: ProjectFormProps) {
+export function ProjectForm({ source, mode, projectId, onSaved, onCancelled, focusOwnerRef }: ProjectFormProps) {
   const project = projectId ? source.getProject(projectId) : undefined;
   const [name, setName] = useState(project?.name ?? "");
   const [summary, setSummary] = useState(editableProjectSummary(project));
@@ -124,6 +126,7 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
   const submit = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     if (effectiveBlocked) return;
+    const focusWasOwned = typeof document !== "undefined" && Boolean(formRef.current?.contains(document.activeElement));
     setPending(true);
     setFeedback(null);
     setReconciliationToken(undefined);
@@ -146,17 +149,17 @@ export function ProjectForm({ source, mode, projectId, onSaved, onCancelled }: P
     }
     if (resolved.warning) {
       setFeedback({ message: resolved.warning, tone: "warning", reconcile: resolved.reconcile, noticeId: resolved.noticeId });
-      if (mode === "create" && resolved.reconcile) onSaved?.(resolved.value.id);
+      if (mode === "create" && resolved.reconcile) onSaved?.(resolved.value.id, focusWasOwned);
       return;
     }
     nameDirtyRef.current = false;
     summaryDirtyRef.current = false;
     setFeedback({ message: mode === "create" ? "项目已创建，当前页面保留这次写入结果。" : "项目已更新。", tone: "success" });
-    onSaved?.(resolved.value.id);
+    onSaved?.(resolved.value.id, focusWasOwned);
   };
 
   return (
-    <form ref={formRef} tabIndex={-1} className="form-panel w-full max-w-2xl" aria-label={mode === "create" ? "创建项目" : "编辑项目"} onSubmit={(event) => { void submit(event); }}>
+    <form ref={(element) => { formRef.current = element; if (focusOwnerRef) focusOwnerRef.current = element; }} tabIndex={-1} className="form-panel w-full max-w-2xl" aria-label={mode === "create" ? "创建项目" : "编辑项目"} onSubmit={(event) => { void submit(event); }}>
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
           <span className="section-kicker">{mode === "create" ? "NEW PROJECT" : "PROJECT SETTINGS"}</span>
@@ -198,6 +201,7 @@ export function ProjectActions({ source, projectId, fallbackProject, onDeleteSta
   const [reconciliationToken, setReconciliationToken] = useState<string | undefined>();
   const [deleted, setDeleted] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
+  const editFormRef = useRef<HTMLFormElement>(null);
   const feedbackRef = useRef<HTMLDivElement>(null);
   const restoreFocusAfterAcknowledgementRef = useRef(false);
   const project = source.getProject(projectId) ?? fallbackProject;
@@ -218,11 +222,11 @@ export function ProjectActions({ source, projectId, fallbackProject, onDeleteSta
   const effectiveBlocked = blockedByUnknown || sourceProjectBlocked;
   const canConfirmReconciliation = canAcknowledgeReconciliation
     && source.isProjectReconciliationReady?.(projectId, reconciliationToken) === true;
-  const finishEditing = () => {
+  const finishEditing = (_projectId?: string, focusWasOwned = false) => {
+    queueOwnedFocusRestore(editFormRef.current, () => editButtonRef.current, { restoreWhenFocusDropped: focusWasOwned });
     setEditing(false);
-    requestAnimationFrame(() => editButtonRef.current?.focus());
   };
-  if (editing) return <ProjectForm source={source} mode="edit" projectId={projectId} onCancelled={finishEditing} onSaved={finishEditing} />;
+  if (editing) return <ProjectForm source={source} mode="edit" projectId={projectId} onCancelled={finishEditing} onSaved={finishEditing} focusOwnerRef={editFormRef} />;
 
   const remove = async () => {
     onDeleteStarted?.();

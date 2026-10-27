@@ -103,7 +103,7 @@ export function createLoadingProductionAssembly(client: AuthenticatedApiClient, 
 
 export function createAuthenticatedProductionAssembly(client: AuthenticatedApiClient, session: BrowserSessionBootstrap, sessionGeneration = 0): ProductionApiAssembly {
   return createProductionApiAssembly({
-    client,
+    client: client.bindBrowserSession({ principalId: session.user_id, epoch: sessionGeneration }),
     auth: {
       status: "authenticated",
       principalId: session.user_id,
@@ -117,6 +117,20 @@ export function createAuthenticatedProductionAssembly(client: AuthenticatedApiCl
       isReadOnly: false
     }
   });
+}
+
+export async function commitProductionAssembly(
+  next: ProductionApiAssembly,
+  getCurrentSessionGeneration: () => number,
+  previous: ProductionApiAssembly | null,
+  clearPrincipalCache: (principalId: string) => Promise<void>,
+  apply: (assembly: ProductionApiAssembly) => void
+): Promise<boolean> {
+  const previousPrincipalId = previous?.auth.principalId;
+  if (previousPrincipalId && previousPrincipalId !== next.auth.principalId) await clearPrincipalCache(previousPrincipalId);
+  if ((next.auth.sessionGeneration ?? 0) !== getCurrentSessionGeneration()) return false;
+  apply(next);
+  return true;
 }
 
 export function createUnauthenticatedProductionAssembly(client: AuthenticatedApiClient, message?: string, sessionGeneration = 0): ProductionApiAssembly {
@@ -159,10 +173,16 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
   const clearPrincipalCache = useCallback((principalId: string) => clearPrincipalQueries(queryClient, principalId), []);
 
   const commitAssembly = useCallback(async (next: ProductionApiAssembly) => {
-    const previousPrincipalId = assemblyRef.current?.auth.principalId;
-    if (previousPrincipalId && previousPrincipalId !== next.auth.principalId) await clearPrincipalCache(previousPrincipalId);
-    assemblyRef.current = next;
-    setProductionApi(next);
+    return commitProductionAssembly(
+      next,
+      () => sessionGenerationRef.current,
+      assemblyRef.current,
+      clearPrincipalCache,
+      (assembly) => {
+        assemblyRef.current = assembly;
+        setProductionApi(assembly);
+      }
+    );
   }, [clearPrincipalCache]);
 
   const bootstrapForGeneration = useCallback((generation: number) => {

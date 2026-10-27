@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ApiClientConfigurationError,
   ApiClientError,
+  EXPECTED_PRINCIPAL_HEADER,
   LoomhelmApiClient,
   createAuthenticatedApiClient,
 } from "../src/index";
@@ -327,6 +328,59 @@ describe("authenticated client transport", () => {
       { path: "/api/v1/auth/session", method: "GET", credentials: "include", csrf: null },
       { path: "/api/v1/projects", method: "POST", credentials: "include", csrf: null }
     ]);
+  });
+
+  test("keeps bootstrap unbound and adds the immutable principal to bound requests", async () => {
+    const calls = [];
+    const session = { user_id: "user-browser", csrf_protection: "same_origin" };
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url, init) => {
+        calls.push({
+          path: url.pathname,
+          expectedPrincipal: new Headers(init.headers).get(EXPECTED_PRINCIPAL_HEADER)
+        });
+        return url.pathname.endsWith("/auth/session")
+          ? Response.json(session)
+          : Response.json({ items: [] });
+      }
+    });
+
+    await client.bootstrapBrowserSession();
+    const bound = client.bindBrowserSession({ principalId: session.user_id, epoch: 0 });
+    await bound.listProjects();
+
+    expect(calls).toEqual([
+      { path: "/api/v1/auth/session", expectedPrincipal: null },
+      { path: "/api/v1/projects", expectedPrincipal: session.user_id }
+    ]);
+  });
+
+  test("does not replay or rebind a request after the browser assembly is invalidated", async () => {
+    let release;
+    let requests = 0;
+    const session = { user_id: "user-browser", csrf_protection: "same_origin" };
+    const pendingResponse = new Promise((resolve) => { release = resolve; });
+    const client = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url) => {
+        requests += 1;
+        if (url.pathname.endsWith("/auth/session")) return Response.json(session);
+        return pendingResponse;
+      }
+    });
+
+    await client.bootstrapBrowserSession();
+    const bound = client.bindBrowserSession({ principalId: session.user_id, epoch: 0 });
+    const pending = bound.listProjects();
+    client.invalidateBrowserSession();
+    release(Response.json({ items: [] }));
+
+    await expect(pending).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    await expect(bound.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(requests).toBe(1);
   });
 
   test("rejects an invalid same-origin declaration and keeps mutations closed", async () => {

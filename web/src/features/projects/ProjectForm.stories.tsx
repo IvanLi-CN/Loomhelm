@@ -1,9 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { ReactNode } from "react";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { useMemo, useRef, type ReactNode } from "react";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 
 import { createStorySource, storyProjects } from "@/features/tasks/story-source";
-import type { ProjectRecord } from "@/features/tasks/types";
+import type { ProjectRecord, WriteResult } from "@/features/tasks/types";
 
 import { ProjectActions, ProjectForm } from "./ProjectForm";
 
@@ -161,6 +161,45 @@ export const ActionReconciliationRecovery: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "刷新并核对项目列表" }));
     await userEvent.click(canvas.getByRole("button", { name: "确认当前项目状态，解除阻塞" }));
     expect(await canvas.findByRole("status", { name: "已确认当前项目状态，可以继续操作。" })).toHaveFocus();
+  }
+};
+
+function DeferredProjectActions() {
+  const resolveSaveRef = useRef<((moveFocusOutside?: boolean) => void) | null>(null);
+  const outsideRef = useRef<HTMLButtonElement>(null);
+  const source = useMemo(() => createStorySource({
+    updateProject: () => new Promise<WriteResult<ProjectRecord>>((resolve) => {
+      resolveSaveRef.current = (moveFocusOutside = false) => {
+        resolve({ ok: true, value: storyProjects[0] });
+        if (moveFocusOutside) queueMicrotask(() => outsideRef.current?.focus());
+      };
+    })
+  }), []);
+  const resolveSave = (moveFocusOutside = false) => {
+    resolveSaveRef.current?.(moveFocusOutside);
+    resolveSaveRef.current = null;
+  };
+  return <StoryFrame><div className="grid gap-4"><ProjectActions source={source} projectId="loomhelm" /><div className="flex gap-2"><button type="button" className="button button-secondary" onMouseDown={(event) => event.preventDefault()} onClick={() => resolveSave()}>保留当前焦点完成项目保存</button><button type="button" className="button button-secondary" onMouseDown={(event) => event.preventDefault()} onClick={() => resolveSave(true)}>排队后移到项目外部</button><button ref={outsideRef} type="button" className="button button-secondary" onClick={() => undefined}>项目外部焦点</button></div></div></StoryFrame>;
+}
+
+export const DeferredEditFocusOwnership: Story = {
+  args: { source: createStorySource(), mode: "edit", projectId: "loomhelm" },
+  render: () => <DeferredProjectActions />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "编辑项目" }));
+    await userEvent.click(canvas.getByRole("button", { name: "保存项目" }));
+    await userEvent.click(canvas.getByRole("button", { name: "保留当前焦点完成项目保存" }));
+    await waitFor(() => expect(canvas.getByRole("button", { name: "编辑项目" })).toHaveFocus());
+
+    await userEvent.click(canvas.getByRole("button", { name: "编辑项目" }));
+    await userEvent.click(canvas.getByRole("button", { name: "保存项目" }));
+    const save = canvas.getByRole("button", { name: "保存中…" });
+    expect(save).toBeDisabled();
+    await userEvent.click(canvas.getByRole("button", { name: "排队后移到项目外部" }));
+    const outside = canvas.getByRole("button", { name: "项目外部焦点" });
+    await waitFor(() => expect(outside).toHaveFocus());
+    expect(canvas.getByRole("button", { name: "编辑项目" })).not.toHaveFocus();
   }
 };
 

@@ -71,7 +71,7 @@ func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform
 	protection.SetDenyHandler(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writeApplicationError(writer, request, http.StatusForbidden, "cross-origin browser request rejected")
 	}))
-	protected := protection.Handler(identity.Middleware(browserOnly))
+	protected := protection.Handler(identity.Middleware(identity.ExpectedPrincipalMiddleware(browserOnly)))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		protected.ServeHTTP(writer, request)

@@ -2,6 +2,7 @@ import { ChevronDown, Search, X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { queueOwnedFocusRestore } from "@/lib/focus-ownership";
 
 export interface TaskRelationCandidate {
   id: string;
@@ -49,6 +50,7 @@ export function TaskRelationPicker({
   resultLimit = DEFAULT_RESULT_LIMIT
 }: TaskRelationPickerProps) {
   const pickerId = useId();
+  const pickerRef = useRef<HTMLDivElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const wasDisabledRef = useRef(disabled);
@@ -99,8 +101,8 @@ export function TaskRelationPicker({
   }, [disabled]);
 
   const closePicker = () => {
+    queueOwnedFocusRestore(pickerRef.current, () => summaryRef.current);
     setOpen(false);
-    requestAnimationFrame(() => summaryRef.current?.focus());
   };
 
   const toggleCandidate = (candidate: TaskRelationCandidate) => {
@@ -112,12 +114,12 @@ export function TaskRelationPicker({
 
   const removeCandidate = (candidate: TaskRelationCandidate) => {
     if (disabled || candidate.disabled) return;
+    queueOwnedFocusRestore(pickerRef.current, () => summaryRef.current);
     onChange(selectedIds.filter((id) => id !== candidate.id));
-    requestAnimationFrame(() => summaryRef.current?.focus());
   };
 
   return (
-    <div className="task-relation-picker" data-density={density}>
+    <div ref={pickerRef} className="task-relation-picker" data-density={density}>
       <div className="task-relation-picker-heading">
         <span>{label}</span>
         <span className="task-relation-picker-count" aria-live="polite">{selectedItems.length ? `已选 ${selectedItems.length}` : "未选择"}</span>

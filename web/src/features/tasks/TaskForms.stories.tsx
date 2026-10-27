@@ -1,11 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { ReactNode } from "react";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { useMemo, useRef, type ReactNode } from "react";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 
 import { createStorySource, storyTasks } from "./story-source";
 import { TaskEditor, TaskForm } from "./TaskForm";
 import { TaskRelationshipEditor } from "./TaskRelations";
-import type { TaskRecord } from "./types";
+import type { TaskRecord, WriteResult } from "./types";
 
 const meta = {
   title: "Product/TaskForms",
@@ -125,6 +125,45 @@ export const KnownCreationRefreshFailure: Story = {
 };
 
 export const Edit: Story = { args: { source: createStorySource(), mode: "edit", task: createStorySource().getTask("STORY-01") }, render: (args) => <StoryFrame><TaskForm {...args} /></StoryFrame> };
+
+function DeferredTaskEditor() {
+  const resolveSaveRef = useRef<((moveFocusOutside?: boolean) => void) | null>(null);
+  const outsideRef = useRef<HTMLButtonElement>(null);
+  const source = useMemo(() => createStorySource({
+    updateTask: () => new Promise<WriteResult<TaskRecord>>((resolve) => {
+      resolveSaveRef.current = (moveFocusOutside = false) => {
+        resolve({ ok: true, value: storyTasks[0] });
+        if (moveFocusOutside) queueMicrotask(() => outsideRef.current?.focus());
+      };
+    })
+  }), []);
+  const resolveSave = (moveFocusOutside = false) => {
+    resolveSaveRef.current?.(moveFocusOutside);
+    resolveSaveRef.current = null;
+  };
+  return <StoryFrame><div className="grid gap-4"><TaskEditor source={source} taskId="STORY-01" /><div className="flex gap-2"><button type="button" className="button button-secondary" onMouseDown={(event) => event.preventDefault()} onClick={() => resolveSave()}>保留当前焦点完成任务保存</button><button type="button" className="button button-secondary" onMouseDown={(event) => event.preventDefault()} onClick={() => resolveSave(true)}>排队后移到任务外部</button><button ref={outsideRef} type="button" className="button button-secondary" onClick={() => undefined}>任务外部焦点</button></div></div></StoryFrame>;
+}
+
+export const DeferredEditFocusOwnership: Story = {
+  args: { source: createStorySource(), mode: "edit" },
+  render: () => <DeferredTaskEditor />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "编辑任务" }));
+    await userEvent.click(canvas.getByRole("button", { name: "保存任务" }));
+    await userEvent.click(canvas.getByRole("button", { name: "保留当前焦点完成任务保存" }));
+    await waitFor(() => expect(canvas.getByRole("button", { name: "编辑任务" })).toHaveFocus());
+
+    await userEvent.click(canvas.getByRole("button", { name: "编辑任务" }));
+    await userEvent.click(canvas.getByRole("button", { name: "保存任务" }));
+    const save = canvas.getByRole("button", { name: "保存中…" });
+    expect(save).toBeDisabled();
+    await userEvent.click(canvas.getByRole("button", { name: "排队后移到任务外部" }));
+    const outside = canvas.getByRole("button", { name: "任务外部焦点" });
+    await waitFor(() => expect(outside).toHaveFocus());
+    expect(canvas.getByRole("button", { name: "编辑任务" })).not.toHaveFocus();
+  }
+};
 
 export const EditWithRelations: Story = {
   args: {

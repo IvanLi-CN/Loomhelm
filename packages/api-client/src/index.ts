@@ -8,9 +8,21 @@ export type BrowserSessionBootstrap = Awaited<ReturnType<LoomhelmApiClient["getB
 
 export type BrowserProtectionMode = "same_origin";
 
+export const EXPECTED_PRINCIPAL_HEADER = "X-Loomhelm-Expected-Principal";
+
 export interface AuthenticatedApiClient extends GeneratedApiClient {
   bootstrapBrowserSession: () => Promise<BrowserSessionBootstrap>;
   invalidateBrowserSession: () => void;
+  bindBrowserSession: (binding: BrowserSessionBinding) => GeneratedApiClient;
+}
+
+export interface BrowserSessionBinding {
+  principalId: string;
+  epoch: number;
+}
+
+interface ActiveBrowserSessionBinding extends BrowserSessionBinding {
+  clientEpoch: number;
 }
 
 export type ApiClientFactory<TClient = GeneratedApiClient> = () => TClient;
@@ -83,6 +95,15 @@ function hasAuthorizationHeader(headers?: HeadersInit): boolean {
     return new Headers(headers).has("authorization");
   } catch {
     throw new ApiClientConfigurationError("same_origin browser protection requires valid request headers");
+  }
+}
+
+function validateBrowserSessionBinding(binding: BrowserSessionBinding): void {
+  if (typeof binding.principalId !== "string" || binding.principalId.trim().length === 0) {
+    throw new ApiClientConfigurationError("browser session binding requires a principal");
+  }
+  if (!Number.isInteger(binding.epoch) || binding.epoch < 0) {
+    throw new ApiClientConfigurationError("browser session binding requires a nonnegative epoch");
   }
 }
 
@@ -160,9 +181,16 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   };
 
   const fetchWithAuthentication: typeof globalThis.fetch = async (input, init = {}) => {
+    return fetchAuthenticated(input, init);
+  };
+
+  const fetchAuthenticated = async (input: RequestInfo | URL, init: RequestInit = {}, binding?: ActiveBrowserSessionBinding): Promise<Response> => {
     const headers = new Headers(init.headers);
     if (sameOriginProtection && headers.has("authorization")) {
       throw new ApiClientConfigurationError("same_origin protection cannot send an Authorization header");
+    }
+    if (binding && !isCurrentBrowserSessionBinding(binding)) {
+      throw new ApiClientConfigurationError("browser session binding is no longer current");
     }
     const method = (init.method ?? "GET").toString().toUpperCase();
     const accessToken = await options.accessToken?.();
@@ -172,6 +200,7 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
       if (!browserSession) {
         throw new ApiClientConfigurationError("same_origin browser session bootstrap is required before an API request");
       }
+      if (binding) headers.set(EXPECTED_PRINCIPAL_HEADER, binding.principalId);
     } else if (isMutationMethod(method)) {
       if (!options.csrf) {
         throw new ApiClientConfigurationError("CSRF transport is not configured for an API mutation");
@@ -190,8 +219,16 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
     });
 
     await notifyUnauthorized(response);
+    if (binding && response.status !== 401 && !isCurrentBrowserSessionBinding(binding)) {
+      throw new ApiClientConfigurationError("browser session binding was invalidated while the request was in flight");
+    }
     return response;
   };
+
+  const isCurrentBrowserSessionBinding = (binding: ActiveBrowserSessionBinding): boolean => (
+    browserSessionGeneration === binding.clientEpoch
+      && browserSession?.user_id === binding.principalId
+  );
 
   const client = createGeneratedApiClient({
     baseUrl: options.baseUrl,
@@ -202,6 +239,22 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   if (sameOriginProtection) {
     client.getBrowserSession = () => bootstrapBrowserSession();
   }
+  const bindBrowserSession = (binding: BrowserSessionBinding): GeneratedApiClient => {
+    if (!sameOriginProtection) {
+      throw new ApiClientConfigurationError("browser session binding requires same_origin protection");
+    }
+    validateBrowserSessionBinding(binding);
+    const immutableBinding = {
+      principalId: binding.principalId,
+      epoch: binding.epoch,
+      clientEpoch: browserSessionGeneration
+    };
+    return createGeneratedApiClient({
+      baseUrl: options.baseUrl,
+      fetch: (input, init = {}) => fetchAuthenticated(input, init, immutableBinding),
+      headers: undefined
+    });
+  };
   const logoutBrowserSession = client.logoutBrowserSession.bind(client);
   client.logoutBrowserSession = async (request) => {
     try {
@@ -211,5 +264,5 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
     }
   };
 
-  return Object.assign(client, { bootstrapBrowserSession, invalidateBrowserSession });
+  return Object.assign(client, { bootstrapBrowserSession, invalidateBrowserSession, bindBrowserSession });
 }

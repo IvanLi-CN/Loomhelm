@@ -1599,7 +1599,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
           if (!notice.applied) return createdTaskPersistenceFailure("任务已创建，但确认状态无法保存；");
           const preserveStaleCreatedTask = (): WriteResult<TaskRecord> => {
             const warning = "任务已创建，但登录身份已变化；请在当前会话刷新并核对后再解除阻塞。";
-            const staleNotice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, "task:create");
+            const staleNotice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, `task:${taskId}`);
             if (!staleNotice.applied || !staleNotice.persisted) return createdTaskPersistenceFailure("任务已创建，但结果确认状态无法保存；");
             return { ...success(value, warning, true), noticeId: createNoticeId };
           };
@@ -1610,7 +1610,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
               const relationBarrier = relationMutationBarrier<TaskRecord>("", relationChanges, "任务关系写入");
               if (relationBlock || relationBarrier) {
                 const warning = relationBlock ?? (relationBarrier && !relationBarrier.ok ? relationBarrier.message : undefined) ?? "关系写入结果待确认。";
-                const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, "task:create");
+                const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, `task:${taskId}`);
                 if (!notice.applied || !notice.persisted) return createdTaskPersistenceFailure(warning);
                 return { ...blocked<TaskRecord>(`${warning}请刷新后核对。`), reconcile: true, noticeId: createNoticeId };
               }
@@ -1618,7 +1618,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
               setRelationMutationPending(response.task.id, true);
               if (!isCurrentSession()) {
                 const warning = "任务已创建，但登录身份已变化，关系写入没有继续；请重新登录后核对。";
-                const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, "task:create");
+                const notice = recordMutationNoticeWithFallback(createNoticeId, warning, "reconciliation", taskId, undefined, `task:${taskId}`);
                 if (!notice.applied || !notice.persisted) return createdTaskPersistenceFailure(warning);
                 return { ...success(value, warning, true), noticeId: createNoticeId };
               }
