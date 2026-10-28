@@ -134,12 +134,12 @@ func (s *sessionService) handleCreate(writer http.ResponseWriter, request *http.
 		writeSessionCreationError(writer, request, err)
 		return
 	}
-	session, err := s.creation.CreateSession(request.Context(), principal, body)
+	created, err := s.creation.CreateSession(request.Context(), principal, body)
 	if err != nil {
 		writeSessionCreationError(writer, request, err)
 		return
 	}
-	auth.WriteJSON(writer, http.StatusCreated, protocol.SessionResponse{Session: session})
+	auth.WriteJSON(writer, http.StatusCreated, created)
 }
 
 func (s *sessionService) handleGet(writer http.ResponseWriter, request *http.Request) {

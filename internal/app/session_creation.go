@@ -19,7 +19,7 @@ import (
 )
 
 type sessionCreationApplication interface {
-	CreateSession(context.Context, auth.Principal, protocol.CreateSessionRequest) (protocol.Session, error)
+	CreateSession(context.Context, auth.Principal, protocol.CreateSessionRequest) (protocol.SessionResponse, error)
 }
 
 type sessionCreationRecords interface {
@@ -69,40 +69,40 @@ func newSessionCreationService(records sessionCreationRecords, projects sessionP
 	}
 }
 
-func (s *sessionCreationService) CreateSession(ctx context.Context, principal auth.Principal, request protocol.CreateSessionRequest) (protocol.Session, error) {
+func (s *sessionCreationService) CreateSession(ctx context.Context, principal auth.Principal, request protocol.CreateSessionRequest) (protocol.SessionResponse, error) {
 	if ctx == nil {
-		return protocol.Session{}, fmt.Errorf("%w: session creation context must not be nil", auth.ErrInvalid)
+		return protocol.SessionResponse{}, fmt.Errorf("%w: session creation context must not be nil", auth.ErrInvalid)
 	}
 	if principal.UserID == "" {
-		return protocol.Session{}, auth.ErrUnauthenticated
+		return protocol.SessionResponse{}, auth.ErrUnauthenticated
 	}
 	normalized, err := normalizeCreateSessionRequest(request)
 	if err != nil {
-		return protocol.Session{}, err
+		return protocol.SessionResponse{}, err
 	}
 	if err := s.authorize(ctx, principal, normalized); err != nil {
-		return protocol.Session{}, err
+		return protocol.SessionResponse{}, err
 	}
 	if s.records == nil || s.hosts == nil || s.transport == nil {
-		return protocol.Session{}, runs.ErrControlServiceUnavailable
+		return protocol.SessionResponse{}, runs.ErrControlServiceUnavailable
 	}
 	host, err := s.hosts.ConfiguredHost(ctx)
 	if err != nil {
-		return protocol.Session{}, fmt.Errorf("resolve configured execution host: %w", err)
+		return protocol.SessionResponse{}, fmt.Errorf("resolve configured execution host: %w", err)
 	}
 	if strings.TrimSpace(host.ID) == "" {
-		return protocol.Session{}, fmt.Errorf("%w: configured execution host has no identity", hosts.ErrInvalid)
+		return protocol.SessionResponse{}, fmt.Errorf("%w: configured execution host has no identity", hosts.ErrInvalid)
 	}
 	parameters, err := json.Marshal(normalized)
 	if err != nil {
-		return protocol.Session{}, fmt.Errorf("encode session creation parameters: %w", err)
+		return protocol.SessionResponse{}, fmt.Errorf("encode session creation parameters: %w", err)
 	}
 	if s.newID == nil {
 		s.newID = newSessionID
 	}
 	sessionID, err := s.newID()
 	if err != nil {
-		return protocol.Session{}, err
+		return protocol.SessionResponse{}, err
 	}
 	createdAt := ""
 	if s.now != nil {
@@ -122,7 +122,7 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 		UpdatedAt:     createdAt,
 	})
 	if err != nil {
-		return protocol.Session{}, err
+		return protocol.SessionResponse{}, err
 	}
 
 	switch intent.State {
@@ -136,7 +136,7 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 	case sessions.IntentStatePending:
 		return s.openPendingSession(ctx, principal, normalized, intent)
 	default:
-		return protocol.Session{}, fmt.Errorf("%w: unsupported creation intent state %q", sessions.ErrSessionTransition, intent.State)
+		return protocol.SessionResponse{}, fmt.Errorf("%w: unsupported creation intent state %q", sessions.ErrSessionTransition, intent.State)
 	}
 }
 
@@ -161,10 +161,10 @@ func (s *sessionCreationService) authorize(ctx context.Context, principal auth.P
 	return nil
 }
 
-func (s *sessionCreationService) openPendingSession(ctx context.Context, principal auth.Principal, request protocol.CreateSessionRequest, intent sessions.CreationIntent) (protocol.Session, error) {
+func (s *sessionCreationService) openPendingSession(ctx context.Context, principal auth.Principal, request protocol.CreateSessionRequest, intent sessions.CreationIntent) (protocol.SessionResponse, error) {
 	parameters, err := json.Marshal(request)
 	if err != nil {
-		return protocol.Session{}, fmt.Errorf("encode session command payload: %w", err)
+		return protocol.SessionResponse{}, fmt.Errorf("encode session command payload: %w", err)
 	}
 	issuedAt := ""
 	if s.now != nil {
@@ -179,23 +179,23 @@ func (s *sessionCreationService) openPendingSession(ctx context.Context, princip
 	})
 	if err != nil {
 		if isUnknownSessionOutcome(err) {
-			return protocol.Session{}, s.markUnknown(ctx, intent.SessionID, err)
+			return protocol.SessionResponse{}, s.markUnknown(ctx, intent.SessionID, err)
 		}
-		return protocol.Session{}, err
+		return protocol.SessionResponse{}, err
 	}
 	if ack.State != protocol.CommandStateSucceeded {
 		if ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
 			definiteErr := fmt.Errorf("session creation command %q returned definite state %q", intent.CommandID, ack.State)
 			if _, markErr := s.records.MarkIntentDefiniteFailure(ctx, sessions.DefiniteFailureIntentInput{SessionID: intent.SessionID, State: ack.State}); markErr != nil {
-				return protocol.Session{}, errors.Join(definiteErr, fmt.Errorf("record definite session failure: %w", markErr))
+				return protocol.SessionResponse{}, errors.Join(definiteErr, fmt.Errorf("record definite session failure: %w", markErr))
 			}
-			return protocol.Session{}, definiteErr
+			return protocol.SessionResponse{}, definiteErr
 		}
-		return protocol.Session{}, s.markUnknown(ctx, intent.SessionID, fmt.Errorf("host returned session command state %q", ack.State))
+		return protocol.SessionResponse{}, s.markUnknown(ctx, intent.SessionID, fmt.Errorf("host returned session command state %q", ack.State))
 	}
 	var opened sessionOpenResult
 	if err := json.Unmarshal(ack.Result, &opened); err != nil || strings.TrimSpace(opened.ExternalThreadRef) == "" || strings.TrimSpace(opened.Generation) == "" {
-		return protocol.Session{}, s.markUnknown(ctx, intent.SessionID, errors.New("host session acknowledgement did not contain a complete execution identity"))
+		return protocol.SessionResponse{}, s.markUnknown(ctx, intent.SessionID, errors.New("host session acknowledgement did not contain a complete execution identity"))
 	}
 	active, err := s.records.ActivateIntent(ctx, sessions.ActivationInput{
 		SessionID:           intent.SessionID,
@@ -203,37 +203,41 @@ func (s *sessionCreationService) openPendingSession(ctx context.Context, princip
 		ExecutionGeneration: opened.Generation,
 	})
 	if err != nil {
-		return protocol.Session{}, err
+		return protocol.SessionResponse{}, err
 	}
 	return s.finishInitialPrompt(ctx, principal, request, active)
 }
 
-func (s *sessionCreationService) finishConfirmedSession(ctx context.Context, principal auth.Principal, request protocol.CreateSessionRequest, sessionID string) (protocol.Session, error) {
+func (s *sessionCreationService) finishConfirmedSession(ctx context.Context, principal auth.Principal, request protocol.CreateSessionRequest, sessionID string) (protocol.SessionResponse, error) {
 	if s.records == nil {
-		return protocol.Session{}, runs.ErrControlServiceUnavailable
+		return protocol.SessionResponse{}, runs.ErrControlServiceUnavailable
 	}
 	active, err := s.records.Get(ctx, sessionID)
 	if err != nil {
-		return protocol.Session{}, err
+		return protocol.SessionResponse{}, err
 	}
 	return s.finishInitialPrompt(ctx, principal, request, active)
 }
 
-func (s *sessionCreationService) finishInitialPrompt(ctx context.Context, principal auth.Principal, request protocol.CreateSessionRequest, session sessions.Session) (protocol.Session, error) {
+func (s *sessionCreationService) finishInitialPrompt(ctx context.Context, principal auth.Principal, request protocol.CreateSessionRequest, session sessions.Session) (protocol.SessionResponse, error) {
 	if request.Prompt == nil || strings.TrimSpace(*request.Prompt) == "" {
-		return session.Session, nil
+		return protocol.SessionResponse{Session: session.Session}, nil
 	}
 	if s.initialRun == nil {
-		return protocol.Session{}, runs.ErrControlServiceUnavailable
+		return protocol.SessionResponse{}, runs.ErrControlServiceUnavailable
 	}
-	_, err := s.initialRun.SubmitRun(ctx, principal, session.ID, protocol.SubmitRunRequest{
-		CommandID: request.CommandID + ":initial",
+	ack, err := s.initialRun.SubmitRun(ctx, principal, session.ID, protocol.SubmitRunRequest{
+		CommandID: initialRunCommandID(session.ID),
 		Prompt:    *request.Prompt,
 	})
 	if err != nil {
-		return protocol.Session{}, err
+		return protocol.SessionResponse{}, err
 	}
-	return session.Session, nil
+	return protocol.SessionResponse{Session: session.Session, InitialRunAck: &ack.Ack}, nil
+}
+
+func initialRunCommandID(sessionID string) string {
+	return sessionID + ":initial"
 }
 
 func (s *sessionCreationService) markUnknown(ctx context.Context, sessionID string, cause error) error {

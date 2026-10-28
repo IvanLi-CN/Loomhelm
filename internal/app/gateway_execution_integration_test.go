@@ -338,7 +338,7 @@ func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read durable initial run command: %v", err)
 	}
-	if runMessage.Command == nil || runMessage.Command.Kind != protocol.CommandKindRunSend || runMessage.Command.CommandID != createRequest.CommandID+":initial" || runMessage.Command.RunID == nil {
+	if runMessage.Command == nil || runMessage.Command.Kind != protocol.CommandKindRunSend || runMessage.Command.CommandID != initialRunCommandID(startCommand.SessionID) || runMessage.Command.RunID == nil {
 		t.Fatalf("initial run command = %+v", runMessage.Command)
 	}
 	if err := connection.AcknowledgeForSession(ctx, runMessage.Command.SessionID, runMessage.RequestID, protocol.CommandAck{

@@ -38,6 +38,8 @@ var (
 	ErrApprovalHistoryAtomicAdoption       = errors.New("atomic approval history migration layout is not recognized")
 )
 
+const approvalHistoryWriterBody = "\nBEGIN\n    IF current_setting('loomhelm.approval_writer_capability', true)\n        IS DISTINCT FROM 'revision-history-v1' THEN\n        RAISE EXCEPTION 'approval projection writes require revision-history capability'\n            USING ERRCODE = '55000';\n    END IF;\n    IF TG_OP = 'DELETE' THEN\n        RETURN OLD;\n    END IF;\n    RETURN NEW;\nEND\n"
+
 type ApprovalHistoryMigrationOptions struct {
 	BatchSize          int
 	WorkBudget         int64
@@ -1013,13 +1015,18 @@ func (m *ApprovalHistoryMigrator) recognizedAtomicLayout(ctx context.Context) (b
 				JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
 				JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
 				JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+				JOIN pg_namespace AS function_namespace ON function_namespace.oid = function_row.pronamespace
 				WHERE namespace.nspname = current_schema()
+				  AND function_namespace.nspname = current_schema()
 				  AND relation.relname = 'execution_approvals'
 				  AND trigger_row.tgname = 'execution_approvals_history_writer_guard'
 				  AND NOT trigger_row.tgisinternal
 				  AND trigger_row.tgtype = 31
+				  AND cardinality(trigger_row.tgattr) = 0
+				  AND trigger_row.tgqual IS NULL
 				  AND function_row.proname = 'loomhelm_require_approval_history_writer'
-				  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
+				  AND function_row.proconfig IS NULL
+				  AND function_row.prosrc = $1
 				  AND trigger_row.tgenabled = 'O'
 			)
 			AND NOT EXISTS (
@@ -1032,7 +1039,7 @@ func (m *ApprovalHistoryMigrator) recognizedAtomicLayout(ctx context.Context) (b
 				  AND trigger_row.tgname = 'execution_approvals_history_capture'
 				  AND NOT trigger_row.tgisinternal
 			)
-	`).Scan(&recognized)
+	`, approvalHistoryWriterBody).Scan(&recognized)
 	if err != nil {
 		return false, fmt.Errorf("inspect atomic approval history layout: %w", err)
 	}
@@ -1139,15 +1146,21 @@ func writerGuardTriggerExists(ctx context.Context, queryer interface {
 			JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
 			JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
 			JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+			JOIN pg_namespace AS function_namespace ON function_namespace.oid = function_row.pronamespace
 			WHERE namespace.nspname = current_schema()
+			  AND function_namespace.nspname = current_schema()
 			  AND relation.relname = 'execution_approvals'
 			  AND trigger_row.tgname = 'execution_approvals_history_writer_guard'
+			  AND NOT trigger_row.tgisinternal
 			  AND function_row.proname = 'loomhelm_require_approval_history_writer'
-			  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
+			  AND function_row.proconfig IS NULL
+			  AND function_row.prosrc = $1
 			  AND trigger_row.tgtype = 31
+			  AND cardinality(trigger_row.tgattr) = 0
+			  AND trigger_row.tgqual IS NULL
 			  AND trigger_row.tgenabled = 'O'
 		)
-	`).Scan(&exists)
+	`, approvalHistoryWriterBody).Scan(&exists)
 	return err == nil && exists
 }
 

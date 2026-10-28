@@ -588,29 +588,75 @@ func TestConnectorRecoversCachedApprovalAckFromExactJournalResult(t *testing.T) 
 }
 
 func TestConnectorKeepsCachedApprovalUnknownForUnknownNativeResolution(t *testing.T) {
-	journal := openConnectorIdentityJournal(t)
+	journal, connector, command, nativeNamespace := seedCachedApprovalResolution(t, "unexpected")
 	defer journal.Close()
+	if result, found, err := journal.ApprovalResultInNamespace(nativeNamespace, command.CommandID); err != nil || !found || result != "unknown" {
+		t.Fatalf("durable unknown approval result = %q, found = %v, error = %v", result, found, err)
+	}
+
+	retry, err := connector.acceptPlatformCommand(context.Background(), command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("cached unknown approval error = %v, want unknown result", err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateUnknown || retry.Error == nil || retry.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("cached unknown approval ACK = %+v", retry)
+	}
+	stored, err := journal.LookupCommandInNamespace(nativeNamespace, command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != protocol.CommandStateUnknown || stored.Error == nil || stored.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("durable cached unknown approval ACK = %+v", stored)
+	}
+}
+
+func TestConnectorKeepsCachedApprovalUnknownWhenResolutionIsCleared(t *testing.T) {
+	journal, connector, command, nativeNamespace := seedCachedApprovalResolution(t, "")
+	defer journal.Close()
+	if result, found, err := journal.ApprovalResultInNamespace(nativeNamespace, command.CommandID); err != nil || !found || result != "cleared" {
+		t.Fatalf("durable cleared approval result = %q, found = %v, error = %v", result, found, err)
+	}
+
+	retry, err := connector.acceptPlatformCommand(context.Background(), command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("cached cleared approval error = %v, want unknown result", err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateUnknown || retry.Error == nil || retry.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("cached cleared approval ACK = %+v", retry)
+	}
+	stored, err := journal.LookupCommandInNamespace(nativeNamespace, command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != protocol.CommandStateUnknown || stored.Error == nil || stored.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("durable cached cleared approval ACK = %+v", stored)
+	}
+}
+
+func seedCachedApprovalResolution(t *testing.T, rawResolution string) (*connectorruntime.Journal, *Connector, protocol.Command, connectorruntime.CommandNamespace) {
+	t.Helper()
+	journal := openConnectorIdentityJournal(t)
 	connector := &Connector{journal: journal}
-	platformSessionID := "platform-session-approval-unknown"
-	adapterSessionID := "adapter-session-approval-unknown"
-	generation := "generation-approval-unknown"
-	nativeTurnID := "native-turn-approval-unknown"
-	threadID := "thread-approval-unknown"
-	if err := connector.BindSessionIdentity(platformSessionID, "create-approval-unknown", protocol.GatewaySession{Handle: "gateway-approval-unknown", Generation: generation}, protocol.AdapterSession{SessionID: adapterSessionID, ExternalThreadRef: threadID}); err != nil {
+	platformSessionID := "platform-session-approval-resolution"
+	adapterSessionID := "adapter-session-approval-resolution"
+	generation := "generation-approval-resolution"
+	nativeTurnID := "native-turn-approval-resolution"
+	threadID := "thread-approval-resolution"
+	if err := connector.BindSessionIdentity(platformSessionID, "create-approval-resolution", protocol.GatewaySession{Handle: "gateway-approval-resolution", Generation: generation}, protocol.AdapterSession{SessionID: adapterSessionID, ExternalThreadRef: threadID}); err != nil {
 		t.Fatal(err)
 	}
 	if err := journal.RecordSession(adapterSessionID, threadID, generation); err != nil {
 		t.Fatal(err)
 	}
-	platformRunID := "platform-run-approval-unknown"
+	platformRunID := "platform-run-approval-resolution"
 	command := protocol.Command{
-		CommandID: "run-approval-unknown",
+		CommandID: "run-approval-resolution",
 		Kind:      protocol.CommandKindRunApprove,
-		Payload:   json.RawMessage(`{"approval_id":"approval-unknown","decision":"approve","revision":1}`),
+		Payload:   json.RawMessage(`{"approval_id":"approval-resolution","decision":"approve","revision":1}`),
 		RunID:     &platformRunID,
 		SessionID: platformSessionID,
 	}
-	if err := journal.RecordRunBinding(connectorruntime.RunBinding{PlatformSessionID: platformSessionID, PlatformRunID: platformRunID, CommandID: "run-send-approval-unknown", AdapterSessionID: adapterSessionID, ExternalThreadRef: threadID, Generation: generation, NativeTurnID: nativeTurnID, State: connectorruntime.IdentityStateBound}); err != nil {
+	if err := journal.RecordRunBinding(connectorruntime.RunBinding{PlatformSessionID: platformSessionID, PlatformRunID: platformRunID, CommandID: "run-send-approval-resolution", AdapterSessionID: adapterSessionID, ExternalThreadRef: threadID, Generation: generation, NativeTurnID: nativeTurnID, State: connectorruntime.IdentityStateBound}); err != nil {
 		t.Fatal(err)
 	}
 	prepared, err := connector.PreparePlatformCommand(command)
@@ -629,40 +675,27 @@ func TestConnectorKeepsCachedApprovalUnknownForUnknownNativeResolution(t *testin
 		RunID:     &nativeTurnID,
 		Type:      protocol.EventTypeApprovalRequested,
 		Source:    protocol.EventSourceAppServer,
-		Payload:   json.RawMessage(`{"jsonrpc":"2.0","id":42,"method":"item/commandExecution/requestApproval","params":{"turnId":"native-turn-approval-unknown","revision":1,"itemId":"item-approval-unknown"}}`),
+		Payload:   json.RawMessage(`{"jsonrpc":"2.0","id":42,"method":"item/commandExecution/requestApproval","params":{"turnId":"native-turn-approval-resolution","revision":1,"itemId":"item-approval-resolution"}}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := journal.ClaimApproval(adapterSessionID, json.RawMessage(`42`), 1, prepared.CommandID, "approve"); err != nil {
 		t.Fatal(err)
 	}
+	resolutionField := ""
+	if rawResolution != "" {
+		resolutionField = `,"resolution":"` + rawResolution + `"`
+	}
 	if _, err := journal.AppendEvent(protocol.Event{
 		SessionID: adapterSessionID,
 		RunID:     &nativeTurnID,
 		Type:      protocol.EventTypeApprovalResolved,
 		Source:    protocol.EventSourceAppServer,
-		Payload:   json.RawMessage(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":42,"turnId":"native-turn-approval-unknown","resolution":"unexpected"}}`),
+		Payload:   json.RawMessage(`{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":42,"turnId":"native-turn-approval-resolution"` + resolutionField + `}}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if result, found, err := journal.ApprovalResultInNamespace(nativeNamespace, prepared.CommandID); err != nil || !found || result != "unknown" {
-		t.Fatalf("durable unknown approval result = %q, found = %v, error = %v", result, found, err)
-	}
-
-	retry, err := connector.acceptPlatformCommand(context.Background(), command)
-	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
-		t.Fatalf("cached unknown approval error = %v, want unknown result", err)
-	}
-	if !retry.Deduplicated || retry.State != protocol.CommandStateUnknown || retry.Error == nil || retry.Error.Code != protocol.ErrorCodeUnknownResult {
-		t.Fatalf("cached unknown approval ACK = %+v", retry)
-	}
-	stored, err := journal.LookupCommandInNamespace(nativeNamespace, prepared.CommandID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.State != protocol.CommandStateUnknown || stored.Error == nil || stored.Error.Code != protocol.ErrorCodeUnknownResult {
-		t.Fatalf("durable cached unknown approval ACK = %+v", stored)
-	}
+	return journal, connector, command, nativeNamespace
 }
 
 func TestConnectorWithholdsSuccessWhenRunBindingPersistenceFails(t *testing.T) {
@@ -991,6 +1024,134 @@ func TestConnectorRecoversCachedSessionStartWithCurrentColdGeneration(t *testing
 	}
 	if calls := recoveryTransport.methods(); calls["thread/start"] != 0 || calls["thread/resume"] != 1 {
 		t.Fatalf("cached session recovery replayed native calls = %+v", calls)
+	}
+}
+
+func TestConnectorRecoversCachedSessionStartAfterRecoveredAliasWrite(t *testing.T) {
+	journal := openConnectorIdentityJournal(t)
+	journalPath := journal.Path()
+	commandID := "session-recovered-alias-write"
+	platformSessionID := "platform-session-recovered-alias-write"
+	threadID := "thread-recovered-alias-write"
+	request := protocol.CreateSessionRequest{CommandID: commandID, Path: protocol.SessionPathNew, ProjectID: stringPointer("project-recovered-alias-write")}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{CommandID: commandID, Kind: protocol.CommandKindSessionStart, Payload: payload, SessionID: platformSessionID}
+	namespace := connectorruntime.PlatformSessionCommandNamespace(platformSessionID)
+	if _, deduplicated, err := journal.BeginCommandInNamespace(namespace, command); err != nil || deduplicated {
+		t.Fatalf("seed recovered-alias session command = deduplicated %v, error %v", deduplicated, err)
+	}
+	originalGateway := protocol.GatewaySession{Handle: "gateway-original-recovered-alias-write", Generation: "generation-original-recovered-alias-write"}
+	originalAdapter := protocol.AdapterSession{SessionID: sessionRecoveryStableID(threadID), ExternalThreadRef: threadID}
+	intentID, err := journal.BeginSessionStartForPlatform(platformSessionID, originalGateway, newSessionStartRequest(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.ResolveSessionStart(intentID, originalAdapter.SessionID, threadID, originalGateway.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordSession(originalAdapter.SessionID, threadID, originalGateway.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.UpdateCommandInNamespace(namespace, commandID, protocol.CommandAck{CommandID: commandID, State: protocol.CommandStateUnknown, Error: &protocol.ApiError{Code: protocol.ErrorCodeUnknownResult, Message: "simulated crash before session success ACK", RequestID: commandID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	firstJournal, err := connectorruntime.OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTransport := &connectorSessionTransport{threadID: threadID}
+	firstConnector := newConnectorIdentityAssembly(t, firstJournal, firstTransport)
+	if err := firstConnector.recoverJournalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	firstGateway, err := firstConnector.appGateway.RecoveredSession(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstConnector.BindSessionIdentity(platformSessionID, commandID, firstGateway, originalAdapter); err != nil {
+		t.Fatal(err)
+	}
+	firstAlias, found := firstJournal.SessionAlias(platformSessionID)
+	if !found || firstAlias.Generation != firstGateway.Generation {
+		t.Fatalf("recovered alias before crash = %+v, found = %v, gateway = %+v", firstAlias, found, firstGateway)
+	}
+	if calls := firstTransport.methods(); calls["thread/start"] != 0 || calls["thread/resume"] != 1 {
+		t.Fatalf("first recovery native calls = %+v, want one resume and no start", calls)
+	}
+	if err := firstConnector.adapter.CloseSession(context.Background(), originalAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstConnector.appGateway.CloseSession(context.Background(), firstGateway); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstJournal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondJournal, err := connectorruntime.OpenJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTransport := &connectorSessionTransport{threadID: threadID}
+	secondConnector := newConnectorIdentityAssembly(t, secondJournal, secondTransport)
+	var secondGateway protocol.GatewaySession
+	defer func() {
+		_ = secondConnector.adapter.CloseSession(context.Background(), originalAdapter)
+		if secondGateway.Handle != "" {
+			_ = secondConnector.appGateway.CloseSession(context.Background(), secondGateway)
+		}
+		_ = secondJournal.Close()
+	}()
+	if err := secondConnector.recoverJournalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	secondGateway, err = secondConnector.appGateway.RecoveredSession(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondGateway.Generation == firstGateway.Generation || secondGateway.Generation == originalGateway.Generation {
+		t.Fatalf("second recovery generation = %q, first = %q, original = %q", secondGateway.Generation, firstGateway.Generation, originalGateway.Generation)
+	}
+	secondAlias, found := secondJournal.SessionAlias(platformSessionID)
+	if !found || secondAlias.Generation != secondGateway.Generation {
+		t.Fatalf("rotated alias before retry = %+v, found = %v, gateway = %+v", secondAlias, found, secondGateway)
+	}
+
+	retry, err := secondConnector.acceptSessionCommand(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Deduplicated || retry.State != protocol.CommandStateSucceeded {
+		t.Fatalf("recovered alias-write session ACK = %+v", retry)
+	}
+	var opened sessionOpenResult
+	if err := json.Unmarshal(retry.Result, &opened); err != nil {
+		t.Fatal(err)
+	}
+	if opened.ExternalThreadRef != threadID || opened.Generation != secondGateway.Generation {
+		t.Fatalf("recovered alias-write session result = %+v, gateway = %+v", opened, secondGateway)
+	}
+	historicalAlias, historicalFound := secondJournal.SessionAliasForAdapter(originalAdapter.SessionID, threadID, firstGateway.Generation)
+	if !historicalFound || historicalAlias.PlatformSessionID != platformSessionID || historicalAlias.Generation != firstGateway.Generation {
+		t.Fatalf("historical recovered alias = %+v, found = %v", historicalAlias, historicalFound)
+	}
+	originalProof, proofFound, err := secondJournal.ResolvedSessionStartProofForGateway(originalGateway.Handle, newSessionStartRequest(request))
+	if err != nil || !proofFound || originalProof.Generation != originalGateway.Generation || originalProof.AdapterSession.ExternalThreadRef != threadID {
+		t.Fatalf("original creation proof = %+v, found = %v, error = %v", originalProof, proofFound, err)
+	}
+	link, linked, err := secondJournal.GatewaySessionLinkForPlatform(platformSessionID)
+	if err != nil || !linked || link.GatewayHandle != secondGateway.Handle || link.Generation != secondGateway.Generation {
+		t.Fatalf("current recovered gateway link = %+v, linked = %v, error = %v", link, linked, err)
+	}
+	if calls := secondTransport.methods(); calls["thread/start"] != 0 || calls["thread/resume"] != 1 {
+		t.Fatalf("retry replayed native session creation = %+v", calls)
 	}
 }
 

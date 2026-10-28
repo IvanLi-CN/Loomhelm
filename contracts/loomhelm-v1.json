@@ -405,7 +405,10 @@
     "SessionResponse": {
       "type": "object",
       "required": ["session"],
-      "properties": {"session": {"$ref": "#/types/Session"}}
+      "properties": {
+        "session": {"$ref": "#/types/Session"},
+        "initial_run_ack": {"$ref": "#/types/CommandAck"}
+      }
     },
     "CommandAckResponse": {
       "type": "object",

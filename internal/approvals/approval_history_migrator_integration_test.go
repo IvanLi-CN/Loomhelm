@@ -617,6 +617,89 @@ func TestApprovalHistoryMigratorAdoptsAtomic00012(t *testing.T) {
 	assertApprovalHistoryTriggerState(t, ctx, db, false, true)
 }
 
+func TestApprovalHistoryMigratorRejectsMarkerOnlyWriterGuard(t *testing.T) {
+	t.Run("adoption", func(t *testing.T) {
+		db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+		installMarkerOnlyWriterGuardNearMiss(t, ctx, db)
+
+		migrator := database.NewApprovalHistoryMigrator(db.Pool())
+		if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); !errors.Is(err, database.ErrApprovalHistoryAtomicAdoption) {
+			t.Fatalf("marker-only writer guard adoption error = %v, want ErrApprovalHistoryAtomicAdoption", err)
+		}
+		var stateTable string
+		if err := db.Pool().QueryRow(ctx, `SELECT COALESCE(to_regclass(format('%I.%I', current_schema(), 'execution_approval_history_migrations'))::text, '')`).Scan(&stateTable); err != nil {
+			t.Fatalf("inspect marker-only adoption state table: %v", err)
+		}
+		if stateTable != "" {
+			t.Fatalf("marker-only writer guard adoption created state table %q", stateTable)
+		}
+	})
+
+	t.Run("readiness", func(t *testing.T) {
+		db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+
+		migrator := database.NewApprovalHistoryMigrator(db.Pool())
+		if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); err != nil {
+			t.Fatalf("adopt official writer guard before near-miss readiness: %v", err)
+		}
+		installMarkerOnlyWriterGuardNearMiss(t, ctx, db)
+		if err := migrator.Readiness(ctx); !errors.Is(err, database.ErrApprovalHistoryMigrationUnavailable) {
+			t.Fatalf("marker-only migrator readiness error = %v, want ErrApprovalHistoryMigrationUnavailable", err)
+		}
+		store := NewStore(db.Pool())
+		if err := store.CheckHistoryReadiness(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
+			t.Fatalf("marker-only store readiness error = %v, want ErrApprovalHistoryUnavailable", err)
+		}
+		if err := store.CheckHistoryConsistency(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
+			t.Fatalf("marker-only store consistency error = %v, want ErrApprovalHistoryUnavailable", err)
+		}
+	})
+}
+
+func TestApprovalHistoryMigratorRejectsCommentOnlyWriterGuard(t *testing.T) {
+	t.Run("adoption", func(t *testing.T) {
+		db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+		installCommentOnlyWriterGuardNearMiss(t, ctx, db)
+
+		migrator := database.NewApprovalHistoryMigrator(db.Pool())
+		if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); !errors.Is(err, database.ErrApprovalHistoryAtomicAdoption) {
+			t.Fatalf("comment-only writer guard adoption error = %v, want ErrApprovalHistoryAtomicAdoption", err)
+		}
+	})
+
+	t.Run("readiness", func(t *testing.T) {
+		db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+
+		migrator := database.NewApprovalHistoryMigrator(db.Pool())
+		if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); err != nil {
+			t.Fatalf("adopt official writer guard before comment-only readiness: %v", err)
+		}
+		installCommentOnlyWriterGuardNearMiss(t, ctx, db)
+		if err := migrator.Readiness(ctx); !errors.Is(err, database.ErrApprovalHistoryMigrationUnavailable) {
+			t.Fatalf("comment-only migrator readiness error = %v, want ErrApprovalHistoryMigrationUnavailable", err)
+		}
+		store := NewStore(db.Pool())
+		if err := store.CheckHistoryReadiness(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
+			t.Fatalf("comment-only store readiness error = %v, want ErrApprovalHistoryUnavailable", err)
+		}
+		if err := store.CheckHistoryConsistency(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
+			t.Fatalf("comment-only store consistency error = %v, want ErrApprovalHistoryUnavailable", err)
+		}
+	})
+}
+
 func TestApprovalHistoryMigratorRejectsAtomicLayoutWithCaptureModes(t *testing.T) {
 	modes := []struct {
 		name  string
@@ -676,6 +759,8 @@ func TestApprovalHistoryGuardsRequireExactWriterTriggerShape(t *testing.T) {
 		{name: "insert-only-row-before", definition: "BEFORE INSERT ON execution_approvals FOR EACH ROW"},
 		{name: "statement-level", definition: "BEFORE INSERT OR UPDATE OR DELETE ON execution_approvals FOR EACH STATEMENT"},
 		{name: "after-row", definition: "AFTER INSERT OR UPDATE OR DELETE ON execution_approvals FOR EACH ROW"},
+		{name: "column-filtered-update", definition: "BEFORE INSERT OR UPDATE OF summary OR DELETE ON execution_approvals FOR EACH ROW"},
+		{name: "conditional", definition: "BEFORE INSERT OR UPDATE OR DELETE ON execution_approvals FOR EACH ROW WHEN (true)"},
 	}
 	for _, shape := range shapes {
 		shape := shape
@@ -730,6 +815,51 @@ func TestApprovalHistoryGuardsRequireExactWriterTriggerShape(t *testing.T) {
 	}
 }
 
+func TestApprovalHistoryGuardsRejectFunctionWriterConfig(t *testing.T) {
+	t.Run("adoption", func(t *testing.T) {
+		db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+		setApprovalHistoryWriterFunctionConfig(t, ctx, db)
+
+		migrator := database.NewApprovalHistoryMigrator(db.Pool())
+		if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); !errors.Is(err, database.ErrApprovalHistoryAtomicAdoption) {
+			t.Fatalf("function-configured writer guard adoption error = %v, want ErrApprovalHistoryAtomicAdoption", err)
+		}
+		var stateTable string
+		if err := db.Pool().QueryRow(ctx, `SELECT COALESCE(to_regclass(format('%I.%I', current_schema(), 'execution_approval_history_migrations'))::text, '')`).Scan(&stateTable); err != nil {
+			t.Fatalf("inspect function-configured adoption state table: %v", err)
+		}
+		if stateTable != "" {
+			t.Fatalf("function-configured writer guard adoption created state table %q", stateTable)
+		}
+	})
+
+	t.Run("readiness", func(t *testing.T) {
+		db, _ := openApprovalFixtureDatabaseThrough(t, 11)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		applyAtomicApprovalHistoryFixture(t, ctx, db, false)
+
+		migrator := database.NewApprovalHistoryMigrator(db.Pool())
+		if _, err := migrator.AdoptAtomic00012(ctx, database.ApprovalHistoryMigrationOptions{}); err != nil {
+			t.Fatalf("adopt official writer guard before function-configured readiness: %v", err)
+		}
+		setApprovalHistoryWriterFunctionConfig(t, ctx, db)
+		if err := migrator.Readiness(ctx); !errors.Is(err, database.ErrApprovalHistoryMigrationUnavailable) {
+			t.Fatalf("function-configured migrator readiness error = %v, want ErrApprovalHistoryMigrationUnavailable", err)
+		}
+		store := NewStore(db.Pool())
+		if err := store.CheckHistoryReadiness(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
+			t.Fatalf("function-configured store readiness error = %v, want ErrApprovalHistoryUnavailable", err)
+		}
+		if err := store.CheckHistoryConsistency(ctx); !errors.Is(err, ErrApprovalHistoryUnavailable) {
+			t.Fatalf("function-configured store consistency error = %v, want ErrApprovalHistoryUnavailable", err)
+		}
+	})
+}
+
 func setApprovalHistoryWriterGuardShape(t *testing.T, ctx context.Context, db *database.DB, definition string) {
 	t.Helper()
 	query := fmt.Sprintf(`
@@ -740,6 +870,13 @@ func setApprovalHistoryWriterGuardShape(t *testing.T, ctx context.Context, db *d
 	`, definition)
 	if _, err := db.Pool().Exec(ctx, query); err != nil {
 		t.Fatalf("install writer guard shape %q: %v", definition, err)
+	}
+}
+
+func setApprovalHistoryWriterFunctionConfig(t *testing.T, ctx context.Context, db *database.DB) {
+	t.Helper()
+	if _, err := db.Pool().Exec(ctx, `ALTER FUNCTION loomhelm_require_approval_history_writer() SET loomhelm.approval_writer_capability = 'revision-history-v1'`); err != nil {
+		t.Fatalf("install writer guard function config: %v", err)
 	}
 }
 
@@ -850,6 +987,36 @@ func installAtomicCaptureNearMiss(t *testing.T, ctx context.Context, db *databas
 		if _, err := db.Pool().Exec(ctx, alterSQL); err != nil {
 			t.Fatalf("set capture near-miss trigger mode with %q: %v", alterSQL, err)
 		}
+	}
+}
+
+func installMarkerOnlyWriterGuardNearMiss(t *testing.T, ctx context.Context, db *database.DB) {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate marker-only writer guard near-miss fixture")
+	}
+	fixtureSQL, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "testdata", "atomic_00012_marker_only_guard_near_miss.sql"))
+	if err != nil {
+		t.Fatalf("read marker-only writer guard near-miss fixture: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, string(fixtureSQL)); err != nil {
+		t.Fatalf("install marker-only writer guard near-miss fixture: %v", err)
+	}
+}
+
+func installCommentOnlyWriterGuardNearMiss(t *testing.T, ctx context.Context, db *database.DB) {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate comment-only writer guard near-miss fixture")
+	}
+	fixtureSQL, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "testdata", "atomic_00012_comment_only_guard_near_miss.sql"))
+	if err != nil {
+		t.Fatalf("read comment-only writer guard near-miss fixture: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, string(fixtureSQL)); err != nil {
+		t.Fatalf("install comment-only writer guard near-miss fixture: %v", err)
 	}
 }
 

@@ -123,13 +123,25 @@ func (f *fakeSessionCreationTransport) SendSessionCommand(_ context.Context, _ s
 }
 
 type fakeSessionInitialRun struct {
-	requests []protocol.SubmitRunRequest
-	err      error
+	requests         []protocol.SubmitRunRequest
+	ack              protocol.CommandAck
+	err              error
+	rejectCommandIDs map[string]bool
 }
 
 func (f *fakeSessionInitialRun) SubmitRun(_ context.Context, _ auth.Principal, _ string, request protocol.SubmitRunRequest) (protocol.CommandAckResponse, error) {
 	f.requests = append(f.requests, request)
-	return protocol.CommandAckResponse{Ack: protocol.CommandAck{CommandID: request.CommandID, State: protocol.CommandStateAccepted}}, f.err
+	if f.rejectCommandIDs[request.CommandID] {
+		return protocol.CommandAckResponse{}, protocol.ErrIdempotencyConflict
+	}
+	ack := f.ack
+	if ack.CommandID == "" {
+		ack.CommandID = request.CommandID
+	}
+	if ack.State == "" {
+		ack.State = protocol.CommandStateAccepted
+	}
+	return protocol.CommandAckResponse{Ack: ack}, f.err
 }
 
 type fakeSessionCreationProjects struct{ write bool }
@@ -151,27 +163,58 @@ func TestSessionCreationUsesHostCommandThenRealInitialRun(t *testing.T) {
 		State:     protocol.CommandStateSucceeded,
 		Result:    []byte(`{"external_thread_ref":"thread-1","generation":"generation-1"}`),
 	}}
-	initialRun := &fakeSessionInitialRun{}
+	initialRun := &fakeSessionInitialRun{ack: protocol.CommandAck{RunID: stringPointer("run-1")}}
 	host := &fakeSessionCreationHost{host: hosts.Host{ID: "host-1"}}
 	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, host, transport, initialRun)
 	service.newID = func() (string, error) { return "session-1", nil }
 	service.now = func() time.Time { return time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC) }
 
-	session, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, request)
+	created, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.ID != "session-1" || session.ExternalThreadRef != "thread-1" || session.State != protocol.SessionStateActive {
-		t.Fatalf("created session = %+v", session)
+	if created.Session.ID != "session-1" || created.Session.ExternalThreadRef != "thread-1" || created.Session.State != protocol.SessionStateActive {
+		t.Fatalf("created session = %+v", created.Session)
+	}
+	if created.InitialRunAck == nil || created.InitialRunAck.CommandID != "session-1:initial" || created.InitialRunAck.State != protocol.CommandStateAccepted || created.InitialRunAck.RunID == nil || *created.InitialRunAck.RunID != "run-1" {
+		t.Fatalf("initial run ACK = %+v", created.InitialRunAck)
 	}
 	if len(transport.commands) != 1 || transport.commands[0].Kind != protocol.CommandKindSessionStart || transport.commands[0].SessionID != "session-1" {
 		t.Fatalf("host commands = %+v", transport.commands)
 	}
-	if len(initialRun.requests) != 1 || initialRun.requests[0].CommandID != "create-session-1:initial" || initialRun.requests[0].Prompt != prompt {
+	if len(initialRun.requests) != 1 || initialRun.requests[0].CommandID != "session-1:initial" || initialRun.requests[0].Prompt != prompt {
 		t.Fatalf("initial run requests = %+v", initialRun.requests)
 	}
 	if len(records.activations) != 1 || records.activations[0].ExecutionGeneration != "generation-1" {
 		t.Fatalf("activations = %+v", records.activations)
+	}
+}
+
+func TestSessionCreationInitialRunIDDoesNotReuseCreationCommandNamespace(t *testing.T) {
+	prompt := "start without a global command collision"
+	request := protocol.CreateSessionRequest{CommandID: "create-session-collision", Path: protocol.SessionPathNew, Prompt: &prompt}
+	records := &fakeSessionCreationRecords{}
+	transport := &fakeSessionCreationTransport{ack: protocol.CommandAck{
+		CommandID: request.CommandID,
+		State:     protocol.CommandStateSucceeded,
+		Result:    []byte(`{"external_thread_ref":"thread-collision","generation":"generation-collision"}`),
+	}}
+	initialRun := &fakeSessionInitialRun{rejectCommandIDs: map[string]bool{
+		request.CommandID + ":initial": true,
+	}}
+	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, &fakeSessionCreationHost{host: hosts.Host{ID: "host-1"}}, transport, initialRun)
+	service.newID = func() (string, error) { return "session-collision", nil }
+
+	created, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, request)
+	if err != nil {
+		t.Fatalf("create session with pre-existing global command id: %v", err)
+	}
+	wantCommandID := initialRunCommandID("session-collision")
+	if created.InitialRunAck == nil || created.InitialRunAck.CommandID != wantCommandID {
+		t.Fatalf("initial run ACK = %+v, want command id %q", created.InitialRunAck, wantCommandID)
+	}
+	if len(initialRun.requests) != 1 || initialRun.requests[0].CommandID != wantCommandID {
+		t.Fatalf("initial run requests = %+v, want command id %q", initialRun.requests, wantCommandID)
 	}
 }
 
@@ -188,8 +231,12 @@ func TestSessionCreationWithEmptyPromptOnlyOpensSession(t *testing.T) {
 	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, &fakeSessionCreationHost{host: hosts.Host{ID: "host-1"}}, transport, initialRun)
 	service.newID = func() (string, error) { return "session-empty", nil }
 
-	if _, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, request); err != nil {
+	created, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, request)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if created.InitialRunAck != nil {
+		t.Fatalf("empty prompt returned initial run ACK = %+v", created.InitialRunAck)
 	}
 	if len(initialRun.requests) != 0 {
 		t.Fatalf("empty prompt submitted a run: %+v", initialRun.requests)
@@ -273,8 +320,8 @@ func TestSessionCreationRetriesUnknownIntentThroughExactCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID != "session-existing-unknown" || created.ExternalThreadRef != "thread-recovered" {
-		t.Fatalf("reconciled session = %+v", created)
+	if created.Session.ID != "session-existing-unknown" || created.Session.ExternalThreadRef != "thread-recovered" {
+		t.Fatalf("reconciled session = %+v", created.Session)
 	}
 	if len(transport.commands) != 1 || transport.commands[0].CommandID != request.CommandID || transport.commands[0].SessionID != "session-existing-unknown" {
 		t.Fatalf("reconciliation commands = %+v", transport.commands)
@@ -324,7 +371,7 @@ func TestSessionCreationDifferentCommandIDsDoNotMergeIdenticalPrompts(t *testing
 
 func TestSessionCreateHTTPUsesStrictBodyAndCreationBoundary(t *testing.T) {
 	principal := sessionAccessPrincipal{principal: auth.Principal{UserID: "user-1"}}
-	creation := &fakeSessionCreationApplication{session: protocol.Session{ID: "session-http", State: protocol.SessionStateActive}}
+	creation := &fakeSessionCreationApplication{response: protocol.SessionResponse{Session: protocol.Session{ID: "session-http", State: protocol.SessionStateActive}}}
 	service := &sessionService{principal: principal, creation: creation}
 	router := chi.NewRouter()
 	service.mount(router)
@@ -337,14 +384,44 @@ func TestSessionCreateHTTPUsesStrictBodyAndCreationBoundary(t *testing.T) {
 	}
 }
 
-type fakeSessionCreationApplication struct {
-	session protocol.Session
-	calls   int
+func TestSessionCreateHTTPExposesInitialRunAck(t *testing.T) {
+	principal := sessionAccessPrincipal{principal: auth.Principal{UserID: "user-1"}}
+	runID := "run-http-initial"
+	creation := &fakeSessionCreationApplication{response: protocol.SessionResponse{
+		Session: protocol.Session{ID: "session-http-initial", State: protocol.SessionStateActive},
+		InitialRunAck: &protocol.CommandAck{
+			CommandID: "create-http:initial",
+			RunID:     &runID,
+			State:     protocol.CommandStateAccepted,
+		},
+	}}
+	service := &sessionService{principal: principal, creation: creation}
+	router := chi.NewRouter()
+	service.mount(router)
+
+	request := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(`{"command_id":"create-http","path":"new","prompt":"start"}`))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create response status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var created protocol.SessionResponse
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Session.ID != "session-http-initial" || created.InitialRunAck == nil || created.InitialRunAck.RunID == nil || *created.InitialRunAck.RunID != runID || created.InitialRunAck.CommandID != "create-http:initial" {
+		t.Fatalf("create response = %+v", created)
+	}
 }
 
-func (f *fakeSessionCreationApplication) CreateSession(context.Context, auth.Principal, protocol.CreateSessionRequest) (protocol.Session, error) {
+type fakeSessionCreationApplication struct {
+	response protocol.SessionResponse
+	calls    int
+}
+
+func (f *fakeSessionCreationApplication) CreateSession(context.Context, auth.Principal, protocol.CreateSessionRequest) (protocol.SessionResponse, error) {
 	f.calls++
-	return f.session, nil
+	return f.response, nil
 }
 
 func stringPointer(value string) *string {

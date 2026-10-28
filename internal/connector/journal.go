@@ -1025,22 +1025,47 @@ func (j *Journal) ResolvedSessionStartProofForPlatform(platformSessionID string,
 	if alias.CommandID != request.CommandID {
 		return SessionStartProof{}, false, ErrIdentityConflict
 	}
-	if link, linked, linkErr := j.gatewaySessionLinkForPlatformLocked(platformSessionID); linkErr != nil {
+	link, linked, linkErr := j.gatewaySessionLinkForPlatformLocked(platformSessionID)
+	if linkErr != nil {
 		return SessionStartProof{}, false, linkErr
-	} else if linked {
-		if !gatewaySessionLinkMatchesAlias(link, alias) {
+	}
+	if linked {
+		if link.PlatformSessionID != alias.PlatformSessionID ||
+			link.AdapterSessionID != alias.AdapterSessionID ||
+			link.ExternalThreadRef != alias.ExternalThreadRef ||
+			link.CommandID != alias.CommandID {
 			return SessionStartProof{}, false, ErrIdentityConflict
 		}
-		proof, found, proofErr := j.resolvedSessionStartProofForGatewayLocked(link.GatewayHandle, request.CommandID, requestDigest)
-		if proofErr != nil {
-			return SessionStartProof{}, false, proofErr
+		if link.Generation == alias.Generation {
+			proof, found, proofErr := j.resolvedSessionStartProofForGatewayLocked(link.GatewayHandle, request.CommandID, requestDigest)
+			if proofErr != nil {
+				return SessionStartProof{}, false, proofErr
+			}
+			if found {
+				proof.AdapterSession.SessionID = alias.AdapterSessionID
+				return proof, true, nil
+			}
 		}
-		if !found {
-			return SessionStartProof{}, false, fmt.Errorf("platform session %q gateway link has no resolved creation intent: %w", platformSessionID, ErrCommandScopeUnknown)
-		}
-		proof.AdapterSession.SessionID = alias.AdapterSessionID
+	} else if proof, found, proofErr := j.resolvedSessionStartProofForAliasLocked(alias, requestDigest); proofErr != nil {
+		return SessionStartProof{}, false, proofErr
+	} else if found {
 		return proof, true, nil
 	}
+
+	proof, found, proofErr := j.resolvedSessionStartProofForPlatformIntentLocked(platformSessionID, request.CommandID, requestDigest, alias)
+	if proofErr != nil {
+		return SessionStartProof{}, false, proofErr
+	}
+	if found {
+		return proof, true, nil
+	}
+	if linked {
+		return SessionStartProof{}, false, fmt.Errorf("platform session %q gateway link has no resolved creation intent: %w", platformSessionID, ErrCommandScopeUnknown)
+	}
+	return SessionStartProof{}, false, fmt.Errorf("platform session %q has no matching resolved creation intent: %w", platformSessionID, ErrCommandScopeUnknown)
+}
+
+func (j *Journal) resolvedSessionStartProofForAliasLocked(alias SessionAlias, requestDigest string) (SessionStartProof, bool, error) {
 	var selected *sessionStartIntent
 	var matching int
 	for _, intent := range j.sessionStarts {
@@ -1060,7 +1085,37 @@ func (j *Journal) ResolvedSessionStartProofForPlatform(platformSessionID string,
 		return SessionStartProof{}, false, ErrCommandScopeAmbiguous
 	}
 	if selected == nil {
-		return SessionStartProof{}, false, fmt.Errorf("platform session %q has no matching resolved creation intent: %w", platformSessionID, ErrCommandScopeUnknown)
+		return SessionStartProof{}, false, nil
+	}
+	proof := sessionStartProof(*selected)
+	proof.AdapterSession.SessionID = alias.AdapterSessionID
+	return proof, true, nil
+}
+
+func (j *Journal) resolvedSessionStartProofForPlatformIntentLocked(platformSessionID, commandID, requestDigest string, alias SessionAlias) (SessionStartProof, bool, error) {
+	var selected *sessionStartIntent
+	var matching int
+	for _, intent := range j.sessionStarts {
+		if intent.PlatformSessionID != platformSessionID || intent.CommandID != commandID || intent.State != "resolved" || intent.ExternalThreadRef == "" {
+			continue
+		}
+		if intent.RequestDigest != requestDigest {
+			return SessionStartProof{}, false, protocol.ErrIdempotencyConflict
+		}
+		if intent.ExternalThreadRef != alias.ExternalThreadRef || stableSessionID(intent.ExternalThreadRef) != alias.AdapterSessionID {
+			return SessionStartProof{}, false, ErrIdentityConflict
+		}
+		matching++
+		if selected == nil {
+			value := intent
+			selected = &value
+		}
+	}
+	if matching > 1 {
+		return SessionStartProof{}, false, ErrCommandScopeAmbiguous
+	}
+	if selected == nil {
+		return SessionStartProof{}, false, nil
 	}
 	proof := sessionStartProof(*selected)
 	proof.AdapterSession.SessionID = alias.AdapterSessionID

@@ -1044,22 +1044,11 @@ func (a *Adapter) resolveApproval(ctx context.Context, state *adapterSessionStat
 		return a.finishTransportError(command, ack, unknownErr, "approval response")
 	}
 	if observedDecision == "unknown" || observedDecision == approvalResolutionCleared {
-		// A live serverRequest/resolved event without a resolution confirms that
-		// app-server accepted the response, while item execution remains a
-		// separate observation used by cold reconciliation.
+		unknownReason := "app-server approval resolution is unknown"
 		if observedDecision == approvalResolutionCleared {
-			ack.State = protocol.CommandStateSucceeded
-			ack.Error = nil
-			ack.Result = append(json.RawMessage(nil), result...)
-			if runID != "" {
-				ack.RunID = &runID
-			}
-			if err := a.updateCommand(command, ack); err != nil {
-				return ack, err
-			}
-			return ack, nil
+			unknownReason = "app-server approval resolution was cleared without an observed item decision"
 		}
-		unknownErr := fmt.Errorf("%w: app-server approval resolution is unknown", ErrUnknownOutcome)
+		unknownErr := fmt.Errorf("%w: %s", ErrUnknownOutcome, unknownReason)
 		return a.finishTransportError(command, ack, unknownErr, "approval response")
 	}
 	if observedDecision != hostDecision {

@@ -1388,11 +1388,22 @@ func TestAdapterKeepsApprovalUnknownWhenResolutionIsCleared(t *testing.T) {
 		SessionID: session.SessionID,
 	}
 	ack, err := adapter.SendCommand(context.Background(), session, command)
-	if err != nil || ack.State != protocol.CommandStateSucceeded {
-		t.Fatalf("cleared approval delivery ACK = %+v, error = %v", ack, err)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
+		t.Fatalf("cleared approval ACK = %+v, error = %v", ack, err)
 	}
 	if result, ok := journal.ApprovalResult(command.CommandID); !ok || result != approvalResolutionCleared {
 		t.Fatalf("cleared approval result = %q, found = %v", result, ok)
+	}
+	stored, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != protocol.CommandStateUnknown {
+		t.Fatalf("stored cleared approval ACK = %+v, want unknown", stored)
+	}
+	duplicate, err := adapter.SendCommand(context.Background(), session, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || duplicate.State != protocol.CommandStateUnknown {
+		t.Fatalf("duplicate cleared approval ACK = %+v, error = %v", duplicate, err)
 	}
 }
 

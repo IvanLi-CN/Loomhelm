@@ -97,6 +97,13 @@ func (c *Connector) BindSessionIdentity(platformSessionID, commandID string, gat
 		Generation:        strings.TrimSpace(gatewaySession.Generation),
 		CommandID:         commandID,
 	}
+	if existing, found := c.journal.SessionAlias(platformSessionID); found &&
+		existing.AdapterSessionID == alias.AdapterSessionID &&
+		existing.ExternalThreadRef == alias.ExternalThreadRef &&
+		existing.Generation == alias.Generation &&
+		existing.CommandID == alias.CommandID {
+		alias.Revision = existing.Revision
+	}
 	if err := c.journal.RecordSessionAlias(alias); err != nil {
 		return err
 	}
@@ -416,7 +423,7 @@ func (c *Connector) reconcileCachedApprovalCommand(command, prepared protocol.Co
 	if !found {
 		return c.persistUnknownCommand(namespace, prepared.CommandID, ack, protocol.ErrUnknownCommandResult)
 	}
-	if resolution == "" || resolution == "unknown" {
+	if resolution == "" || resolution == "unknown" || resolution == "cleared" {
 		return c.persistUnknownCommand(namespace, prepared.CommandID, ack, protocol.ErrUnknownCommandResult)
 	}
 	desired := "accept"
@@ -675,7 +682,7 @@ func (c *Connector) reconcileCachedSessionStart(command protocol.Command, reques
 		if alias.PlatformSessionID != command.SessionID || alias.CommandID != command.CommandID {
 			return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
 		}
-		if proof.AdapterSession.SessionID != alias.AdapterSessionID || proof.AdapterSession.ExternalThreadRef != alias.ExternalThreadRef || proof.Generation != alias.Generation {
+		if proof.AdapterSession.SessionID != alias.AdapterSessionID || proof.AdapterSession.ExternalThreadRef != alias.ExternalThreadRef {
 			return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
 		}
 	}
@@ -690,12 +697,32 @@ func (c *Connector) reconcileCachedSessionStart(command protocol.Command, reques
 		if recoverErr != nil {
 			return c.persistUnknownCommand(namespace, command.CommandID, ack, recoverErr)
 		}
-		if err := validateRecoveredGatewaySession(connectorruntime.SessionAlias{ExternalThreadRef: proof.AdapterSession.ExternalThreadRef}, recovered); err != nil {
+		if aliasFound {
+			if err := validateRecoveredSessionIdentity(alias, recovered, proof.AdapterSession); err != nil {
+				return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
+			}
+			if recovered.Generation != alias.Generation {
+				return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
+			}
+		} else if err := validateRecoveredGatewaySession(connectorruntime.SessionAlias{ExternalThreadRef: proof.AdapterSession.ExternalThreadRef}, recovered); err != nil {
 			return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
 		}
 		gatewaySession = recovered
+	} else if aliasFound && proof.Generation != alias.Generation {
+		return c.persistUnknownCommand(namespace, command.CommandID, ack, connectorruntime.ErrIdentityConflict)
 	}
-	if err := c.BindSessionIdentity(command.SessionID, command.CommandID, gatewaySession, proof.AdapterSession); err != nil {
+	if aliasFound {
+		if err := c.journal.RecordGatewaySessionLink(connectorruntime.GatewaySessionLink{
+			GatewayHandle:     gatewaySession.Handle,
+			PlatformSessionID: alias.PlatformSessionID,
+			AdapterSessionID:  alias.AdapterSessionID,
+			ExternalThreadRef: alias.ExternalThreadRef,
+			Generation:        alias.Generation,
+			CommandID:         alias.CommandID,
+		}); err != nil {
+			return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
+		}
+	} else if err := c.BindSessionIdentity(command.SessionID, command.CommandID, gatewaySession, proof.AdapterSession); err != nil {
 		return c.persistUnknownCommand(namespace, command.CommandID, ack, err)
 	}
 	alias, aliasFound = c.journal.SessionAlias(command.SessionID)

@@ -22,6 +22,8 @@ var (
 
 const approvalWriterCapability = "revision-history-v1"
 
+const approvalHistoryWriterBody = "\nBEGIN\n    IF current_setting('loomhelm.approval_writer_capability', true)\n        IS DISTINCT FROM 'revision-history-v1' THEN\n        RAISE EXCEPTION 'approval projection writes require revision-history capability'\n            USING ERRCODE = '55000';\n    END IF;\n    IF TG_OP = 'DELETE' THEN\n        RETURN OLD;\n    END IF;\n    RETURN NEW;\nEND\n"
+
 type StoreConfig struct {
 	Now func() time.Time
 }
@@ -914,10 +916,12 @@ func ensureHistoryReady(ctx context.Context, queryer approvalReadinessQuerier) e
 				  AND trigger_row.tgname = 'execution_approvals_history_writer_guard'
 				  AND NOT trigger_row.tgisinternal
 				  AND trigger_row.tgtype = 31
+				  AND cardinality(trigger_row.tgattr) = 0
+				  AND trigger_row.tgqual IS NULL
 				  AND trigger_row.tgenabled = 'O'
 				  AND function_row.proname = 'loomhelm_require_approval_history_writer'
-				  AND pg_get_functiondef(function_row.oid) LIKE '%loomhelm.approval_writer_capability%'
-				  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
+				  AND function_row.proconfig IS NULL
+				  AND function_row.prosrc = $1
 			),
 			EXISTS (
 				SELECT 1
@@ -926,7 +930,7 @@ func ensureHistoryReady(ctx context.Context, queryer approvalReadinessQuerier) e
 				  AND phase = 'cutover_complete'
 			),
 			NOT EXISTS (SELECT 1 FROM execution_approval_history_dirty)
-	`).Scan(&projectionExists, &historyExists, &schemaComplete, &indexesComplete, &writerGuardExists, &cutoverComplete, &dirtyEmpty)
+	`, approvalHistoryWriterBody).Scan(&projectionExists, &historyExists, &schemaComplete, &indexesComplete, &writerGuardExists, &cutoverComplete, &dirtyEmpty)
 	if err != nil {
 		return fmt.Errorf("%w: inspect approval history readiness: %v", ErrApprovalHistoryUnavailable, err)
 	}
@@ -1035,11 +1039,13 @@ func ensureHistoryConsistency(ctx context.Context, queryer approvalReadinessQuer
 				  AND NOT trigger_row.tgisinternal
 				  AND trigger_row.tgenabled = 'O'
 				  AND function_row.proname = 'loomhelm_require_approval_history_writer'
-				  AND pg_get_functiondef(function_row.oid) LIKE '%loomhelm.approval_writer_capability%'
-				  AND pg_get_functiondef(function_row.oid) LIKE '%revision-history-v1%'
+				  AND function_row.proconfig IS NULL
+			  AND function_row.prosrc = $1
 				  AND trigger_row.tgtype = 31
+				  AND cardinality(trigger_row.tgattr) = 0
+				  AND trigger_row.tgqual IS NULL
 			)
-	`).Scan(&projectionExists, &historyExists, &schemaComplete, &indexesComplete, &writerGuardExists)
+	`, approvalHistoryWriterBody).Scan(&projectionExists, &historyExists, &schemaComplete, &indexesComplete, &writerGuardExists)
 	if err != nil {
 		return fmt.Errorf("%w: inspect approval history cutover: %v", ErrApprovalHistoryUnavailable, err)
 	}
