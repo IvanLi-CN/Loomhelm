@@ -64,7 +64,8 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 		t.Fatalf("register focused interrupt host: %v", err)
 	}
 
-	journalPath := filepath.Join(t.TempDir(), "journal", "connector.jsonl")
+	workspace := t.TempDir()
+	journalPath := filepath.Join(workspace, "journal", "connector.jsonl")
 	connectorConfig := platform.Config{
 		Component:                 platform.ComponentConnector,
 		Version:                   "real-platform-c01-interrupt-only",
@@ -74,6 +75,7 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 		ConnectorToken:            hostRegistration.Token,
 		ConnectorJournalPath:      journalPath,
 		ConnectorAppServerCommand: cli,
+		ConnectorWorkingDir:       workspace,
 	}
 	newConnector := func() (*Connector, error) {
 		connector, connectorErr := NewConnector(connectorConfig, platform.NewLogger(os.Stderr, connectorConfig.Component, connectorConfig.Version))
@@ -137,7 +139,7 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 
 	interruptRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-interrupt-only-run", "Run exactly this harmless command in the test workspace: /bin/sleep 30. Do not use any other tool. After it completes, reply exactly LOOMHELM_PLATFORM_C01_INTERRUPT_ONLY_OK.")
 	interruptApproval := waitForRealPlatformApproval(t, ctx, browser, baseURL, interruptRun)
-	resolveRealPlatformApproval(t, browser, baseURL, interruptRun, interruptApproval, protocol.ApprovalDecisionApprove, "real-platform-c01-interrupt-only-approval")
+	resolveRealPlatformApproval(t, ctx, browser, baseURL, interruptRun, interruptApproval, protocol.ApprovalDecisionApprove, "real-platform-c01-interrupt-only-approval")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, interruptRun, protocol.EventTypeItemStarted)
 
 	interruptResponse := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/runs/"+interruptRun+"/interrupt", protocol.InterruptRunRequest{
@@ -164,7 +166,7 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 	connector, connectorCancel, connectorResult = startConnector()
 	connectorStopped = false
 	_ = connector
-	assertRealPlatformApprovalReadable(t, browser, baseURL, interruptRun, interruptApproval)
+	assertRealPlatformApprovalReadable(t, browser, baseURL, interruptRun, interruptApproval, protocol.ApprovalStatusApproved)
 	recoveredRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-interrupt-only-recovered", "Reply exactly LOOMHELM_PLATFORM_C01_INTERRUPT_ONLY_RECOVERED_OK and do not use tools.")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, recoveredRun, protocol.EventTypeRunCompleted)
 }

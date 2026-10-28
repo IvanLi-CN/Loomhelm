@@ -68,6 +68,7 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 	appGateway, err := connectorruntime.NewGateway(connectorruntime.GatewayConfig{
 		Process: connectorruntime.ProcessTransportConfig{
 			CommandPath: cfg.ConnectorAppServerCommand,
+			WorkingDir:  cfg.ConnectorWorkingDir,
 		},
 		ClientInfo: connectorruntime.ClientInfo{
 			Name:    "loomhelm_connector",
@@ -78,7 +79,9 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 	if err != nil {
 		return nil, fmt.Errorf("initialize connector app-server gateway: %w", err)
 	}
-	adapter, err := connectorruntime.NewAdapter(appGateway, journal, connectorruntime.AdapterConfig{})
+	adapter, err := connectorruntime.NewAdapter(appGateway, journal, connectorruntime.AdapterConfig{
+		WorkingDir: cfg.ConnectorWorkingDir,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize connector Codex adapter: %w", err)
 	}

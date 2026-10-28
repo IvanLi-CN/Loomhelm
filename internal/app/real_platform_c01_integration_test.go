@@ -64,7 +64,8 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		t.Fatalf("register acceptance host: %v", err)
 	}
 
-	journalDir := filepath.Join(t.TempDir(), "journal")
+	workspace := t.TempDir()
+	journalDir := filepath.Join(workspace, "journal")
 	if err := os.Mkdir(journalDir, 0o700); err != nil {
 		t.Fatalf("create secure connector journal directory: %v", err)
 	}
@@ -78,6 +79,7 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		ConnectorToken:            hostRegistration.Token,
 		ConnectorJournalPath:      journalPath,
 		ConnectorAppServerCommand: cli,
+		ConnectorWorkingDir:       workspace,
 	}
 	newConnector := func() (*Connector, error) {
 		connector, connectorErr := NewConnector(connectorConfig, platform.NewLogger(os.Stderr, connectorConfig.Component, connectorConfig.Version))
@@ -147,17 +149,17 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 
 	approveRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-approve", "Run exactly this harmless command in the test workspace: /usr/bin/printf LOOMHELM_PLATFORM_C01_APPROVED. Do not use any other tool. After it completes, reply exactly LOOMHELM_PLATFORM_C01_APPROVE_OK.")
 	approveApproval := waitForRealPlatformApproval(t, ctx, browser, baseURL, approveRun)
-	resolveRealPlatformApproval(t, browser, baseURL, approveRun, approveApproval, protocol.ApprovalDecisionApprove, "real-platform-c01-approve-decision")
+	resolveRealPlatformApproval(t, ctx, browser, baseURL, approveRun, approveApproval, protocol.ApprovalDecisionApprove, "real-platform-c01-approve-decision")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, approveRun, protocol.EventTypeRunCompleted)
 
 	denyRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-deny", "Run exactly this harmless command in the test workspace: /usr/bin/printf LOOMHELM_PLATFORM_C01_DENIED. Do not use any other tool. After it completes, reply exactly LOOMHELM_PLATFORM_C01_DENY_OK.")
 	denyApproval := waitForRealPlatformApproval(t, ctx, browser, baseURL, denyRun)
-	resolveRealPlatformApproval(t, browser, baseURL, denyRun, denyApproval, protocol.ApprovalDecisionDeny, "real-platform-c01-deny-decision")
+	resolveRealPlatformApproval(t, ctx, browser, baseURL, denyRun, denyApproval, protocol.ApprovalDecisionDeny, "real-platform-c01-deny-decision")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, denyRun, protocol.EventTypeRunCompleted)
 
 	interruptRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-interrupt", "Run exactly this harmless command in the test workspace: /bin/sleep 30. Do not use any other tool. After it completes, reply exactly LOOMHELM_PLATFORM_C01_INTERRUPT_OK.")
 	interruptApproval := waitForRealPlatformApproval(t, ctx, browser, baseURL, interruptRun)
-	resolveRealPlatformApproval(t, browser, baseURL, interruptRun, interruptApproval, protocol.ApprovalDecisionApprove, "real-platform-c01-interrupt-approval")
+	resolveRealPlatformApproval(t, ctx, browser, baseURL, interruptRun, interruptApproval, protocol.ApprovalDecisionApprove, "real-platform-c01-interrupt-approval")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, interruptRun, protocol.EventTypeItemStarted)
 	interruptResponse := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/runs/"+interruptRun+"/interrupt", protocol.InterruptRunRequest{
 		CommandID: "real-platform-c01-interrupt-command",
@@ -182,9 +184,9 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 	connectorStopped = true
 	_, connectorCancel, connectorResult = startConnector()
 	connectorStopped = false
-	assertRealPlatformApprovalReadable(t, browser, baseURL, approveRun, approveApproval)
-	assertRealPlatformApprovalReadable(t, browser, baseURL, denyRun, denyApproval)
-	assertRealPlatformApprovalReadable(t, browser, baseURL, interruptRun, interruptApproval)
+	assertRealPlatformApprovalReadable(t, browser, baseURL, approveRun, approveApproval, protocol.ApprovalStatusApproved)
+	assertRealPlatformApprovalReadable(t, browser, baseURL, denyRun, denyApproval, protocol.ApprovalStatusDenied)
+	assertRealPlatformApprovalReadable(t, browser, baseURL, interruptRun, interruptApproval, protocol.ApprovalStatusApproved)
 	recoveredRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-recovered", "Reply exactly LOOMHELM_PLATFORM_C01_RECOVERED_OK and do not use tools.")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, recoveredRun, protocol.EventTypeRunCompleted)
 	t.Logf("real platform Connector closure passed: session=%s approve=%s deny=%s interrupt=%s recovered=%s", created.Session.ID, approveRun, denyRun, interruptRun, recoveredRun)
@@ -277,13 +279,16 @@ func waitForRealPlatformApprovalRecord(t *testing.T, ctx context.Context, browse
 	}
 }
 
-func assertRealPlatformApprovalReadable(t *testing.T, browser *http.Client, baseURL, runID string, want protocol.Approval) {
+func assertRealPlatformApprovalReadable(t *testing.T, browser *http.Client, baseURL, runID string, want protocol.Approval, wantStatus protocol.ApprovalStatus) {
 	t.Helper()
 	response := applicationRequest(t, browser, http.MethodGet, baseURL+"/api/v1/runs/"+runID+"/approvals?limit=200", nil, nil, http.StatusOK)
 	var page protocol.ApprovalListResponse
 	decodeApplicationResponse(t, response, &page)
 	for _, approval := range page.Items {
 		if approval.ID == want.ID {
+			if approval.Status != wantStatus {
+				t.Fatalf("reconnected approval %q status = %q, want %q", approval.ID, approval.Status, wantStatus)
+			}
 			if approval.Revision != want.Revision || approval.RunID != want.RunID || string(approval.Context) != string(want.Context) || approval.RequestedEventID == nil || want.RequestedEventID == nil || *approval.RequestedEventID != *want.RequestedEventID {
 				t.Fatalf("reconnected approval changed: got %+v want %+v", approval, want)
 			}
@@ -293,8 +298,12 @@ func assertRealPlatformApprovalReadable(t *testing.T, browser *http.Client, base
 	t.Fatalf("reconnected approval %q was not returned", want.ID)
 }
 
-func resolveRealPlatformApproval(t *testing.T, browser *http.Client, baseURL, runID string, approval protocol.Approval, decision protocol.ApprovalDecision, commandID string) {
+func resolveRealPlatformApproval(t *testing.T, ctx context.Context, browser *http.Client, baseURL, runID string, approval protocol.Approval, decision protocol.ApprovalDecision, commandID string) {
 	t.Helper()
+	wantStatus := protocol.ApprovalStatusApproved
+	if decision == protocol.ApprovalDecisionDeny {
+		wantStatus = protocol.ApprovalStatusDenied
+	}
 	response := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/runs/"+runID+"/approvals/"+approval.ID, protocol.ResolveApprovalRequest{
 		CommandID: commandID,
 		Decision:  decision,
@@ -307,12 +316,45 @@ func resolveRealPlatformApproval(t *testing.T, browser *http.Client, baseURL, ru
 			t.Fatalf("platform approval %q conflict error = %+v", decision, failure)
 		}
 		t.Logf("platform approval %q outcome is explicitly unknown; continuing to observe run %s", decision, runID)
-		return
+	} else {
+		var result protocol.CommandAckResponse
+		decodeApplicationResponse(t, response, &result)
+		if result.Ack.State != protocol.CommandStateSucceeded {
+			t.Fatalf("platform approval %q ACK = %+v", decision, result.Ack)
+		}
 	}
-	var result protocol.CommandAckResponse
-	decodeApplicationResponse(t, response, &result)
-	if result.Ack.State != protocol.CommandStateSucceeded {
-		t.Fatalf("platform approval %q ACK = %+v", decision, result.Ack)
+	waitForRealPlatformApprovalStatus(t, ctx, browser, baseURL, runID, approval.ID, wantStatus)
+}
+
+func waitForRealPlatformApprovalStatus(t *testing.T, ctx context.Context, browser *http.Client, baseURL, runID, approvalID string, want protocol.ApprovalStatus) {
+	t.Helper()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		response := applicationRequest(t, browser, http.MethodGet, baseURL+"/api/v1/runs/"+runID+"/approvals?limit=200", nil, nil, http.StatusOK)
+		var page protocol.ApprovalListResponse
+		decodeApplicationResponse(t, response, &page)
+		for _, approval := range page.Items {
+			if approval.ID != approvalID {
+				continue
+			}
+			if approval.Status == want {
+				return
+			}
+			if approval.Status != protocol.ApprovalStatusPending {
+				t.Fatalf("platform approval %q status = %q, want %q", approvalID, approval.Status, want)
+			}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-deadline.C:
+			t.Fatalf("platform approval %q did not reach status %q", approvalID, want)
+		case <-ticker.C:
+		}
 	}
 }
 

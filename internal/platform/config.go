@@ -41,6 +41,7 @@ type Config struct {
 	ConnectorToken            string
 	ConnectorJournalPath      string
 	ConnectorAppServerCommand string
+	ConnectorWorkingDir       string
 	BrowserAuth               BrowserAuthConfig
 }
 
