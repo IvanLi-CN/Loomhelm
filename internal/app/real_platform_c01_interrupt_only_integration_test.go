@@ -163,9 +163,13 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 
 	stopConnector(connectorCancel, connectorResult)
 	connectorStopped = true
+	stopServer()
+	baseURL, stopServer = startApplicationTLSTestServer(t, serverConfig)
+	connectorConfig.ConnectorServerURL = baseURL
 	connector, connectorCancel, connectorResult = startConnector()
 	connectorStopped = false
 	_ = connector
+	loginApplicationBrowser(t, browser, baseURL, "real-platform-c01-interrupt-only")
 	assertRealPlatformApprovalReadable(t, browser, baseURL, interruptRun, interruptApproval, protocol.ApprovalStatusApproved)
 	recoveredRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-interrupt-only-recovered", "Reply exactly LOOMHELM_PLATFORM_C01_INTERRUPT_ONLY_RECOVERED_OK and do not use tools.")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, recoveredRun, protocol.EventTypeRunCompleted)

@@ -182,8 +182,12 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 
 	stopConnector(connectorCancel, connectorResult)
 	connectorStopped = true
+	stopServer()
+	baseURL, stopServer = startApplicationTLSTestServer(t, serverConfig)
+	connectorConfig.ConnectorServerURL = baseURL
 	_, connectorCancel, connectorResult = startConnector()
 	connectorStopped = false
+	loginApplicationBrowser(t, browser, baseURL, "real-platform-c01")
 	assertRealPlatformApprovalReadable(t, browser, baseURL, approveRun, approveApproval, protocol.ApprovalStatusApproved)
 	assertRealPlatformApprovalReadable(t, browser, baseURL, denyRun, denyApproval, protocol.ApprovalStatusDenied)
 	assertRealPlatformApprovalReadable(t, browser, baseURL, interruptRun, interruptApproval, protocol.ApprovalStatusApproved)
