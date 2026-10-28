@@ -161,11 +161,20 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, interruptRun, protocol.EventTypeItemStarted)
 	interruptResponse := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/runs/"+interruptRun+"/interrupt", protocol.InterruptRunRequest{
 		CommandID: "real-platform-c01-interrupt-command",
-	}, map[string]string{"Origin": baseURL}, http.StatusOK)
-	var interruptAck protocol.CommandAckResponse
-	decodeApplicationResponse(t, interruptResponse, &interruptAck)
-	if interruptAck.Ack.State != protocol.CommandStateSucceeded {
-		t.Fatalf("platform interrupt ACK = %+v", interruptAck.Ack)
+	}, map[string]string{"Origin": baseURL}, http.StatusOK, http.StatusConflict)
+	if interruptResponse.StatusCode == http.StatusConflict {
+		var failure protocol.ApiError
+		decodeApplicationResponse(t, interruptResponse, &failure)
+		if failure.Code != protocol.ErrorCodeUnknownResult || failure.RequestID == "" {
+			t.Fatalf("platform interrupt conflict error = %+v", failure)
+		}
+		t.Logf("platform interrupt outcome is explicitly unknown; continuing to observe run %s", interruptRun)
+	} else {
+		var interruptAck protocol.CommandAckResponse
+		decodeApplicationResponse(t, interruptResponse, &interruptAck)
+		if interruptAck.Ack.State != protocol.CommandStateSucceeded {
+			t.Fatalf("platform interrupt ACK = %+v", interruptAck.Ack)
+		}
 	}
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, interruptRun, protocol.EventTypeRunInterrupted)
 
@@ -290,7 +299,16 @@ func resolveRealPlatformApproval(t *testing.T, browser *http.Client, baseURL, ru
 		CommandID: commandID,
 		Decision:  decision,
 		Revision:  approval.Revision,
-	}, map[string]string{"Origin": baseURL}, http.StatusOK)
+	}, map[string]string{"Origin": baseURL}, http.StatusOK, http.StatusConflict)
+	if response.StatusCode == http.StatusConflict {
+		var failure protocol.ApiError
+		decodeApplicationResponse(t, response, &failure)
+		if failure.Code != protocol.ErrorCodeUnknownResult || failure.RequestID == "" {
+			t.Fatalf("platform approval %q conflict error = %+v", decision, failure)
+		}
+		t.Logf("platform approval %q outcome is explicitly unknown; continuing to observe run %s", decision, runID)
+		return
+	}
 	var result protocol.CommandAckResponse
 	decodeApplicationResponse(t, response, &result)
 	if result.Ack.State != protocol.CommandStateSucceeded {

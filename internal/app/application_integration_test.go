@@ -396,8 +396,11 @@ func applicationBrowser(t *testing.T) *http.Client {
 	return &http.Client{Jar: jar, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func applicationRequest(t *testing.T, client *http.Client, method, target string, body any, headers map[string]string, status int) *http.Response {
+func applicationRequest(t *testing.T, client *http.Client, method, target string, body any, headers map[string]string, statuses ...int) *http.Response {
 	t.Helper()
+	if len(statuses) == 0 {
+		t.Fatal("application request requires at least one expected status")
+	}
 	var input io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -426,14 +429,21 @@ func applicationRequest(t *testing.T, client *http.Client, method, target string
 		t.Fatal(err)
 	}
 	response.Body = io.NopCloser(bytes.NewReader(data))
-	if response.StatusCode != status {
+	statusAllowed := false
+	for _, status := range statuses {
+		if response.StatusCode == status {
+			statusAllowed = true
+			break
+		}
+	}
+	if !statusAllowed {
 		// Avoid printing credential/session payloads on a failing assertion.
-		t.Fatalf("%s %s returned %d, want %d", method, request.URL.Path, response.StatusCode, status)
+		t.Fatalf("%s %s returned %d, want one of %v", method, request.URL.Path, response.StatusCode, statuses)
 	}
 	if strings.HasPrefix(request.URL.Path, "/api/v1/") && response.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("%s response was cacheable", request.URL.Path)
 	}
-	if strings.HasPrefix(request.URL.Path, "/api/v1/") && status >= 400 {
+	if strings.HasPrefix(request.URL.Path, "/api/v1/") && response.StatusCode >= 400 {
 		var failure struct {
 			Code      string `json:"code"`
 			RequestID string `json:"request_id"`
@@ -442,7 +452,7 @@ func applicationRequest(t *testing.T, client *http.Client, method, target string
 			t.Fatalf("%s returned an invalid API error envelope", request.URL.Path)
 		}
 	}
-	if status == http.StatusNoContent && len(data) != 0 {
+	if response.StatusCode == http.StatusNoContent && len(data) != 0 {
 		t.Fatal("bodyless operation returned content")
 	}
 	return response
