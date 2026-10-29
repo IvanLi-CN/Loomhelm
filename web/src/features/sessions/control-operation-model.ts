@@ -58,6 +58,7 @@ export interface ControlOperation {
 export interface OperationToken {
   operationKey: string;
   commandId: string;
+  runId?: string;
   sessionId: string;
   generation: number;
   nonce: number;
@@ -118,6 +119,7 @@ export class ControlOperationGuard {
     const token: OperationToken = {
       operationKey: key,
       commandId: operation.command.command_id,
+      runId: operation.command.run_id,
       sessionId: operation.command.session_id,
       generation: this.generation,
       nonce: ++this.nonce
@@ -129,6 +131,10 @@ export class ControlOperationGuard {
   acceptResponse(token: OperationToken, ack: CommandAck): OperationResponseResult {
     if (!this.isCurrent(token)) return { accepted: false, reason: "stale" };
     if (ack.command_id !== token.commandId) return { accepted: false, reason: "mismatched_command" };
+    if (token.runId !== undefined && ack.run_id !== undefined && ack.run_id !== token.runId) {
+      this.markUncertain(token);
+      return { accepted: false, reason: "mismatched_command" };
+    }
 
     const inProgress = commandIsInProgress(ack.state);
     if (ack.state === "unknown") this.markUncertain(token);

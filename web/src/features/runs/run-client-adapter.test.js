@@ -220,6 +220,25 @@ describe("run client adapter", () => {
     expect(calls).toHaveLength(2);
   });
 
+  test("keeps an interrupt acknowledgement for another Run uncertain", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async (request) => {
+        calls.push(request);
+        return { ack: { ...ack(request.body.command_id).ack, run_id: "run-2", state: "accepted" } };
+      },
+      listRunEvents: async () => ({ events: [], has_more: false }),
+    });
+    const body = { command_id: "command-interrupt-run-mismatch" };
+
+    adapter.selectSession("session-1");
+    await expect(adapter.interruptRun("session-1", "run-1", body)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
+    await expect(adapter.interruptRun("session-1", "run-1", body)).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls).toHaveLength(1);
+    expect(adapter.resolveUncertainInterrupt("run-1", body.command_id)).toBe(true);
+  });
+
   test("releases a command after a definite API rejection", async () => {
     const calls = [];
     const adapter = new RunClientAdapter({

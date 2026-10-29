@@ -533,6 +533,8 @@ export function ProductionConversationWorkspace({
   const approvalCommandIds = useRef(new Map<string, string>());
   const pendingRunSubmission = useRef<{ commandId: string; prompt: string } | undefined>(storedRunIntent ? { commandId: storedRunIntent.commandId, prompt: storedRunIntent.prompt } : undefined);
   const currentSessionIdRef = useRef<string | undefined>(sessionId);
+  const routeVersionRef = useRef(0);
+  const mountedRef = useRef(false);
   const previousSessionId = useRef<string | undefined>(undefined);
   const previousRunId = useRef<string | undefined>(initialRunId);
   const lastAppliedRunSequence = useRef(0);
@@ -552,6 +554,13 @@ export function ProductionConversationWorkspace({
   const context = sessionForRoute ? toSessionContextModel(sessionForRoute, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
   const activeApprovals = runIdentityVerified && activeRunId ? approvals.filter((approval) => approval.run_id === activeRunId) : [];
   const runRouteUnverified = Boolean(initialRunId && (!activeRun || !runIdentityVerified));
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     connectionRef.current = connection;
@@ -594,6 +603,7 @@ export function ProductionConversationWorkspace({
   }, [principalId, sessionId]);
 
   useEffect(() => {
+    routeVersionRef.current += 1;
     if (previousRunId.current === initialRunId) return;
     previousRunId.current = initialRunId;
     seenEventIds.current = new Set();
@@ -746,6 +756,7 @@ export function ProductionConversationWorkspace({
   const createSession = async (request: CreateSessionRequest) => {
     if (!api || !adapters) throw new Error("当前浏览器没有可用的会话服务");
     const response = await api.createSession({ body: request });
+    if (!mountedRef.current) return;
     const initialAck = response.initial_run_ack;
     const initialRunId = initialAck?.run_id;
     if (initialRunId && !writeRunRecoveryId(getRunRecoveryKey(principalId, response.session.id), initialRunId)) {
@@ -788,6 +799,7 @@ export function ProductionConversationWorkspace({
       return;
     }
     const sessionIdForSubmit = sessionForRoute.id;
+    const routeVersion = routeVersionRef.current;
     const intentKey = getRunIntentKey(principalId, sessionIdForSubmit);
     const commandId = pendingRunSubmission.current?.prompt === prompt ? pendingRunSubmission.current.commandId : createCommandId("run");
     if (!writeRunIntent(intentKey, { commandId, prompt, uncertain: true })) {
@@ -796,17 +808,18 @@ export function ProductionConversationWorkspace({
     }
     pendingRunSubmission.current = { commandId, prompt };
     const result = await adapters.run.submitRun(sessionIdForSubmit, { command_id: commandId, prompt }, { connection, readOnly: effectiveReadOnly });
-    if (currentSessionIdRef.current !== sessionIdForSubmit) return;
+    if (!mountedRef.current || currentSessionIdRef.current !== sessionIdForSubmit || routeVersionRef.current !== routeVersion) return;
     if (result.state === "unknown") {
       const acknowledgedRun = result.ack ? runFromCommandAck(sessionForRoute, result.ack) : undefined;
+      const recoveryPersisted = acknowledgedRun ? writeRunRecoveryId(getRunRecoveryKey(principalId, sessionIdForSubmit), acknowledgedRun.id) : false;
       if (acknowledgedRun) {
-        writeRunRecoveryId(getRunRecoveryKey(principalId, sessionIdForSubmit), acknowledgedRun.id);
         setRun(acknowledgedRun);
         setRunIdentityVerified(false);
       }
       setUncertainRunCommandId(commandId);
       writeRunIntent(intentKey, { commandId, prompt, uncertain: true });
-      setActivityNotice("发送结果不确定；请刷新或手动对账后再决定是否继续。相同意图不会自动重复提交。");
+      setActivityNotice(acknowledgedRun && !recoveryPersisted ? "发送结果不确定，且 Run 恢复身份无法持久化；已暂停控制，请恢复浏览器存储后再对账。" : "发送结果不确定；请刷新或手动对账后再决定是否继续。相同意图不会自动重复提交。");
+      if (acknowledgedRun && recoveryPersisted) void onRunCreated?.(sessionIdForSubmit, acknowledgedRun.id);
       return;
     }
     if (result.state === "pending" && !result.ack) {
