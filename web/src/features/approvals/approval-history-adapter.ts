@@ -65,8 +65,8 @@ export class ApprovalHistoryClientAdapter {
         this.cachedHistory.set(runId, { approvals, resumeCursor: afterCursor });
         return approvals;
       }
-      const nextCursor = page.next_cursor?.trim();
-      if (!nextCursor || seenCursors.has(nextCursor)) throw new Error("审批历史分页游标未前进");
+      const nextCursor = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
+      if (!nextCursor || !nextCursor.trim() || seenCursors.has(nextCursor)) throw new Error("审批历史分页游标未前进");
       seenCursors.add(nextCursor);
       afterCursor = nextCursor;
     }

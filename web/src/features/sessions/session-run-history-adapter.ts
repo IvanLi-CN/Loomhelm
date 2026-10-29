@@ -87,8 +87,8 @@ export class SessionRunHistoryClientAdapter {
             this.requests.finish(admission.token);
             return { state: "received", request: admission.token, runs };
           }
-          const nextCursor = page.next_cursor?.trim();
-          if (!nextCursor || seenCursors.has(nextCursor)) {
+          const nextCursor = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
+          if (!nextCursor || !nextCursor.trim() || seenCursors.has(nextCursor)) {
             this.requests.finish(admission.token);
             return { state: "unknown", reason: "invalid_response", request: admission.token };
           }

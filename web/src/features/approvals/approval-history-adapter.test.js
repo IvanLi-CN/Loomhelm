@@ -23,7 +23,7 @@ describe("approval history adapter", () => {
     const adapter = new ApprovalHistoryClientAdapter({
       listRunApprovals: async (request) => {
         calls.push(request);
-        if (calls.length === 1) return { has_more: true, items: [approval("approval-1")], next_cursor: "cursor-1" };
+        if (calls.length === 1) return { has_more: true, items: [approval("approval-1")], next_cursor: " cursor-1 " };
         if (calls.length === 2) return { has_more: false, items: [approval("approval-2")] };
         return { has_more: false, items: [approval("approval-2", 1, { status: "approved" }), approval("approval-3")] };
       },
@@ -33,8 +33,8 @@ describe("approval history adapter", () => {
     await expect(adapter.readApprovals("run-1")).resolves.toMatchObject([{ id: "approval-1" }, { id: "approval-2", status: "approved" }, { id: "approval-3" }]);
     expect(calls).toEqual([
       { run_id: "run-1", limit: 200 },
-      { run_id: "run-1", after_cursor: "cursor-1", limit: 200 },
-      { run_id: "run-1", after_cursor: "cursor-1", limit: 200 },
+      { run_id: "run-1", after_cursor: " cursor-1 ", limit: 200 },
+      { run_id: "run-1", after_cursor: " cursor-1 ", limit: 200 },
     ]);
   });
 
@@ -43,7 +43,7 @@ describe("approval history adapter", () => {
     const adapter = new ApprovalHistoryClientAdapter({
       listRunApprovals: async (request) => {
         calls += 1;
-        if (calls === 1) return { has_more: true, items: [approval("approval-1")], next_cursor: "cursor-1" };
+        if (calls === 1) return { has_more: true, items: [approval("approval-1")], next_cursor: " cursor-1 " };
         if (calls === 2) throw new ApiClientError(409, { code: "cursor_expired" });
         return { has_more: false, items: [approval("approval-1", 1, { status: "denied" })] };
       },

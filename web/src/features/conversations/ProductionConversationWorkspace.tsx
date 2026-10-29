@@ -940,8 +940,9 @@ export function ProductionConversationWorkspace({
           } else {
             setRun((current) => {
               if (!current || current.id !== selected.id || current.session_id !== loadedSession.id) return current;
+              if (current.status === "unknown") return { ...current, ...selected, session_id: loadedSession.id, status: "unknown" };
               const durableProgress = selected.status === "running" || selected.status === "completed" || selected.status === "failed" || selected.status === "interrupted";
-              if (current.status !== "unknown" && !(current.status === "waiting_approval" && durableProgress)) return current;
+              if (!(current.status === "waiting_approval" && durableProgress)) return current;
               return { ...current, ...selected, session_id: loadedSession.id };
             });
           }

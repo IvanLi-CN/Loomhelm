@@ -30,7 +30,7 @@ describe("session run history adapter", () => {
       listSessionRuns: async (request) => {
         calls.push(request);
         return calls.length === 1
-          ? { has_more: true, items: [run("run-1")], next_cursor: "cursor-1" }
+          ? { has_more: true, items: [run("run-1")], next_cursor: " cursor-1 " }
           : { has_more: false, items: [run("run-2", { created_at: "2026-10-27T00:00:01Z" })] };
       },
     });
@@ -39,7 +39,7 @@ describe("session run history adapter", () => {
     await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ state: "received", runs: [{ id: "run-1" }, { id: "run-2" }] });
     expect(calls).toEqual([
       { session_id: "session-1", limit: 200 },
-      { session_id: "session-1", after_cursor: "cursor-1", limit: 200 },
+      { session_id: "session-1", after_cursor: " cursor-1 ", limit: 200 },
     ]);
   });
 
@@ -84,7 +84,7 @@ describe("session run history adapter", () => {
     const adapter = new SessionRunHistoryClientAdapter({
       listSessionRuns: async (request) => {
         calls.push(request);
-        if (calls.length === 1) return { has_more: true, items: [run("run-1")], next_cursor: "cursor-1" };
+        if (calls.length === 1) return { has_more: true, items: [run("run-1")], next_cursor: " cursor-1 " };
         if (calls.length === 2) return { has_more: false, items: [run("run-2") ] };
         return { has_more: false, items: [run("run-2"), run("run-3") ] };
       },
@@ -95,8 +95,8 @@ describe("session run history adapter", () => {
     await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ runs: [{ id: "run-1" }, { id: "run-2" }, { id: "run-3" }] });
     expect(calls).toEqual([
       { session_id: "session-1", limit: 200 },
-      { session_id: "session-1", after_cursor: "cursor-1", limit: 200 },
-      { session_id: "session-1", after_cursor: "cursor-1", limit: 200 },
+      { session_id: "session-1", after_cursor: " cursor-1 ", limit: 200 },
+      { session_id: "session-1", after_cursor: " cursor-1 ", limit: 200 },
     ]);
   });
 
