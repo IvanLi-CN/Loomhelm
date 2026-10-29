@@ -40,6 +40,7 @@ const SESSION_CREATION_INTENT_PREFIX = "loomhelm:session-creation-intent:";
 const RUN_INTENT_PREFIX = "loomhelm:run-intent:";
 const RUN_RECOVERY_PREFIX = "loomhelm:run-recovery:";
 const DRAFT_PREFIX = "loomhelm:draft:";
+const DRAFT_STATE_PREFIX = "loomhelm:draft-state:";
 const DRAFT_CLIENT_PREFIX = "loomhelm:draft-client:";
 const DRAFT_SEQUENCE_PREFIX = "loomhelm:draft-sequence:";
 const CONTROL_INTENT_PREFIX = "loomhelm:control-intent:";
@@ -62,6 +63,12 @@ interface RunIntent {
 interface ControlIntent {
   commandId: string;
   uncertain: boolean;
+}
+
+interface LocalDraftState {
+  baseRevision: number;
+  content: string;
+  dirty: boolean;
 }
 
 function getSessionStorage(): Storage | undefined {
@@ -132,6 +139,10 @@ function getRunRecoveryKey(principalId: string | undefined, sessionId: string | 
 
 function getDraftKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
   return sessionId ? `${DRAFT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}` : undefined;
+}
+
+function getDraftStateKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
+  return sessionId ? `${DRAFT_STATE_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}` : undefined;
 }
 
 function getDraftClientKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
@@ -228,6 +239,51 @@ function writeDraft(key: string | undefined, draft: string): boolean {
   } catch {
     return false;
   }
+}
+
+function readLocalDraftState(key: string | undefined): LocalDraftState | undefined {
+  const storage = getSessionStorage();
+  if (!key || !storage) return undefined;
+  try {
+    const value = storage.getItem(key);
+    if (!value) return undefined;
+    const parsed = JSON.parse(value) as Partial<LocalDraftState>;
+    if (typeof parsed.baseRevision !== "number" || !Number.isInteger(parsed.baseRevision) || parsed.baseRevision < 0 || typeof parsed.content !== "string" || typeof parsed.dirty !== "boolean") return undefined;
+    return { baseRevision: parsed.baseRevision, content: parsed.content, dirty: parsed.dirty };
+  } catch {
+    return undefined;
+  }
+}
+
+function writeLocalDraftState(key: string | undefined, state: LocalDraftState): boolean {
+  const storage = getSessionStorage();
+  if (!key || !storage) return false;
+  try {
+    storage.setItem(key, JSON.stringify(state));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearLocalDraftState(key: string | undefined): void {
+  const storage = getSessionStorage();
+  if (!key || !storage) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Best effort only; the server remains the source of truth.
+  }
+}
+
+function writeStoredDraft(key: string | undefined, stateKey: string | undefined, draft: string, state: LocalDraftState): boolean {
+  if (!writeDraft(key, draft)) return false;
+  return writeLocalDraftState(stateKey, state);
+}
+
+function clearStoredDraft(key: string | undefined, stateKey: string | undefined): void {
+  writeDraft(key, "");
+  clearLocalDraftState(stateKey);
 }
 
 function readRunIntent(key: string | undefined): RunIntent | undefined {
@@ -594,6 +650,7 @@ export function ProductionConversationWorkspace({
   const runIntentKey = getRunIntentKey(principalId, sessionId);
   const storedRunIntent = useMemo(() => readRunIntent(runIntentKey), [runIntentKey]);
   const draftKey = getDraftKey(principalId, sessionId);
+  const draftStateKey = getDraftStateKey(principalId, sessionId);
   const [session, setSession] = useState<Session | undefined>();
   const [sessionLoading, setSessionLoading] = useState(Boolean(sessionId));
   const [sessionFailure, setSessionFailure] = useState<string | null>(null);
@@ -641,6 +698,11 @@ export function ProductionConversationWorkspace({
   const draftSavePromiseRef = useRef<Promise<void> | undefined>(undefined);
   const draftAccessBlockedRef = useRef(false);
   const draftInputSinceReadRef = useRef(false);
+  const fenceRunTransition = (nextRunId: string | undefined): void => {
+    if (activeRunIdRef.current === nextRunId) return;
+    activeRunIdRef.current = nextRunId;
+    runGenerationRef.current += 1;
+  };
 
   const sessionForRoute = session && (sessionId === undefined || session.id === sessionId) ? session : undefined;
   const activeSessionId = sessionForRoute?.id ?? sessionId;
@@ -731,6 +793,7 @@ export function ProductionConversationWorkspace({
     setDraftAccessBlocked(false);
     draftAccessBlockedRef.current = false;
     setDraftFailure(null);
+    fenceRunTransition(undefined);
     setRun(undefined);
     setCommandState(undefined);
     setActivityNotice(null);
@@ -774,6 +837,7 @@ export function ProductionConversationWorkspace({
     setDraftAccessBlocked(false);
     draftAccessBlockedRef.current = false;
     setDraftFailure(null);
+    fenceRunTransition(undefined);
     setRun(undefined);
     setCommandState(undefined);
     const nextRunIntent = readRunIntent(getRunIntentKey(principalId, sessionId));
@@ -801,6 +865,7 @@ export function ProductionConversationWorkspace({
     setSessionRunHistoryLoading(true);
     setSessionRunHistoryFailure(null);
     setSessionRunHistory([]);
+    fenceRunTransition(undefined);
     setRun(undefined);
     setApprovals([]);
     setApprovalHistoryAvailable(false);
@@ -829,7 +894,10 @@ export function ProductionConversationWorkspace({
       if (result.state === "received" && result.session) {
         setSession(result.session);
         const recoveredRunId = initialRunId ?? readRunRecoveryId(getRunRecoveryKey(principalId, sessionId));
-        if (recoveredRunId) setRun(runFromRecoveredIdentity(result.session, recoveredRunId));
+        if (recoveredRunId) {
+          fenceRunTransition(recoveredRunId);
+          setRun(runFromRecoveredIdentity(result.session, recoveredRunId));
+        }
       } else {
         setSession(undefined);
         const failureMessage = sessionReadFailureMessage(result.reason);
@@ -867,6 +935,7 @@ export function ProductionConversationWorkspace({
             seenEventIds.current = new Set();
             approvalCommandIds.current = new Map();
             lastAppliedRunSequence.current = 0;
+            fenceRunTransition(selected.id);
             setRun(runFromHistory(loadedSession, selected));
             setMessages([]);
             setApprovals([]);
@@ -879,6 +948,7 @@ export function ProductionConversationWorkspace({
             setCommandState(undefined);
           }
         } else if (!activeRunIdRef.current) {
+          fenceRunTransition(undefined);
           setRun(undefined);
           setMessages([]);
           setApprovals([]);
@@ -892,6 +962,7 @@ export function ProductionConversationWorkspace({
       setSessionRunHistoryLoading(false);
       setSessionRunHistoryFailure(sessionRunHistoryFailureMessage(result.reason));
       setSessionRunHistory([]);
+      fenceRunTransition(undefined);
       setRun(undefined);
       setMessages([]);
       setApprovals([]);
@@ -933,7 +1004,7 @@ export function ProductionConversationWorkspace({
           if (draftRef.current === nextValue) {
             draftDirtyRef.current = false;
             draftInputSinceReadRef.current = false;
-            writeDraft(draftKey, nextValue);
+            writeStoredDraft(draftKey, draftStateKey, nextValue, { baseRevision: result.draft.revision, content: nextValue, dirty: false });
           }
           continue;
         }
@@ -944,7 +1015,7 @@ export function ProductionConversationWorkspace({
           if (!preserveFreshInput) {
             draftRef.current = "";
             setDraft("");
-            writeDraft(draftKey, "");
+            clearStoredDraft(draftKey, draftStateKey);
           }
           setDraftReadUncertain(false);
           setDraftAccessBlocked(true);
@@ -990,30 +1061,40 @@ export function ProductionConversationWorkspace({
         draftAccessBlockedRef.current = false;
         setDraftFailure(null);
         const localDraft = readDraft(draftKey);
+        const localDraftState = readLocalDraftState(draftStateKey);
+        const hasPendingLocalDraft = Boolean(localDraftState?.dirty && localDraftState.content === localDraft && draftRef.current === localDraft && localDraft !== result.draft.content);
         if (draftInputSinceReadRef.current && draftRef.current !== result.draft.content) {
           draftDirtyRef.current = true;
           scheduleDraftPersistence(loadedSessionId, draftRef.current);
+          return;
+        }
+        if (hasPendingLocalDraft) {
+          draftDirtyRef.current = true;
+          draftInputSinceReadRef.current = true;
+          scheduleDraftPersistence(loadedSessionId, localDraft);
           return;
         }
         if (draftDirtyRef.current) {
           if (draftRef.current === result.draft.content) {
             draftDirtyRef.current = false;
             draftInputSinceReadRef.current = false;
-            writeDraft(draftKey, result.draft.content);
+            writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false });
           } else {
             scheduleDraftPersistence(loadedSessionId, draftRef.current);
           }
         } else if (result.draft.revision === 0 && result.draft.content === "" && localDraft) {
           draftRef.current = localDraft;
           draftDirtyRef.current = true;
+          draftInputSinceReadRef.current = true;
           setDraft(localDraft);
+          writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: localDraft, dirty: true });
           scheduleDraftPersistence(loadedSessionId, localDraft);
         } else {
           draftRef.current = result.draft.content;
           setDraft(result.draft.content);
           draftDirtyRef.current = false;
           draftInputSinceReadRef.current = false;
-          writeDraft(draftKey, result.draft.content);
+          writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false });
         }
         return;
       }
@@ -1026,7 +1107,7 @@ export function ProductionConversationWorkspace({
         if (!preserveFreshInput) {
           draftRef.current = "";
           setDraft("");
-          writeDraft(draftKey, "");
+          clearStoredDraft(draftKey, draftStateKey);
         }
         setDraftReadUncertain(false);
         setDraftAccessBlocked(true);
@@ -1043,7 +1124,7 @@ export function ProductionConversationWorkspace({
       active = false;
       clearInterval(interval);
     };
-  }, [adapters, api, draftKey, sessionForRoute?.id]);
+  }, [adapters, api, draftKey, draftStateKey, sessionForRoute?.id]);
 
   useEffect(() => {
     if (!api || !adapters || !activeSessionId) return;
@@ -1273,6 +1354,7 @@ export function ProductionConversationWorkspace({
     if (initialAck) {
       setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
       const initialRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
+      fenceRunTransition(initialRun?.id);
       setRun(initialRun);
       setRunIdentityVerified(false);
       setUncertainRunCommandId(initialRunUncertain ? expectedInitialCommandId : undefined);
@@ -1281,6 +1363,7 @@ export function ProductionConversationWorkspace({
       if (!initialRunUncertain) clearStoredIntent(getRunIntentKey(principalId, response.session.id));
     } else if (initialPrompt) {
       setCommandState("unknown");
+      fenceRunTransition(undefined);
       setRun(undefined);
       setRunIdentityVerified(false);
       setUncertainRunCommandId(expectedInitialCommandId);
@@ -1288,6 +1371,7 @@ export function ProductionConversationWorkspace({
       setActivityNotice("首条提示已随 Session 提交，但服务没有返回 Run 命令确认；已保留同一命令身份，请先对账。");
     } else {
       setCommandState(undefined);
+      fenceRunTransition(undefined);
       setRun(undefined);
       setRunIdentityVerified(false);
       setUncertainRunCommandId(undefined);
@@ -1338,6 +1422,7 @@ export function ProductionConversationWorkspace({
       const acknowledgedRun = result.ack ? runFromCommandAck(sessionForRoute, result.ack) : undefined;
       const recoveryPersisted = acknowledgedRun ? writeRunRecoveryId(getRunRecoveryKey(principalId, sessionIdForSubmit), acknowledgedRun.id) : false;
       if (acknowledgedRun) {
+        fenceRunTransition(acknowledgedRun.id);
         setRun(acknowledgedRun);
         setRunIdentityVerified(false);
       }
@@ -1371,7 +1456,9 @@ export function ProductionConversationWorkspace({
     if (result.ack) {
       if (nextRun) {
         selectedRunIdRef.current = nextRun.id;
-        if (previousRunId && previousRunId !== nextRun.id) {
+        const runChanged = activeRunIdRef.current !== nextRun.id;
+        if (runChanged) fenceRunTransition(nextRun.id);
+        if (runChanged || (previousRunId && previousRunId !== nextRun.id)) {
           seenEventIds.current = new Set();
           approvalCommandIds.current = new Map();
           lastAppliedRunSequence.current = 0;
@@ -1396,7 +1483,7 @@ export function ProductionConversationWorkspace({
           draftRef.current = "";
           setDraft("");
           draftInputSinceReadRef.current = false;
-          writeDraft(draftKey, "");
+          clearStoredDraft(draftKey, draftStateKey);
           setActivityNotice("Run 命令已收到；当前账户没有可同步的私有草稿，已清除本地输入，不会自动再次发送。");
         } else {
           setActivityNotice("Run 命令已收到；已发送内容暂保持为私有草稿，等待 revision-aware consume 接线，不会自动再次发送。");
@@ -1536,7 +1623,7 @@ export function ProductionConversationWorkspace({
     if (!selected || selected.id === activeRunId) return;
     routeVersionRef.current += 1;
     selectedRunIdRef.current = selected.id;
-    activeRunIdRef.current = selected.id;
+    fenceRunTransition(selected.id);
     seenEventIds.current = new Set();
     approvalCommandIds.current = new Map();
     lastAppliedRunSequence.current = 0;
@@ -1598,7 +1685,7 @@ export function ProductionConversationWorkspace({
         return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
       {draftFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{draftFailure}</span></div> : null}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; draftInputSinceReadRef.current = true; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; writeDraft(draftKey, value); scheduleDraftPersistence(sessionForRoute.id, value); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; draftInputSinceReadRef.current = true; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; if (writeDraft(draftKey, value)) writeLocalDraftState(draftStateKey, { baseRevision: draftRevisionRef.current, content: value, dirty: true }); scheduleDraftPersistence(sessionForRoute.id, value); } else { clearLocalDraftState(draftStateKey); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );
