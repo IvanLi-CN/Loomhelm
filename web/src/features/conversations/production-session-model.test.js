@@ -160,12 +160,16 @@ describe("production session model", () => {
     expect(eventToConversationMessage(event({ payload: { jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "nested hello" } } }))).toMatchObject({ content: "nested hello" });
     expect(eventToConversationMessage(event({ event_id: "tool", payload: {}, type: "item.completed" }))).toMatchObject({ kind: "tool", content: "已接收事件：item.completed" });
     expect(eventToConversationMessage(event({ event_id: "unknown", payload: {}, type: "unknown" }))).toMatchObject({ kind: "unknown", content: "已接收事件：unknown" });
+    expect(eventToConversationMessage(event({ event_id: "unknown-item", payload: { params: { item: { type: "futureContent", value: "preserve-me" } } }, type: "item.completed" }))).toMatchObject({ kind: "unknown" });
   });
 
   test("keeps raw payload and metadata inspectable for unknown events", () => {
     const message = eventToConversationMessage(event({ event_id: "unknown-raw", payload: { futureField: true }, type: "unknown" }));
     expect(message.detail).toContain('"event_id": "unknown-raw"');
     expect(message.detail).toContain('"futureField": true');
+
+    const unknownItem = eventToConversationMessage(event({ event_id: "unknown-item-raw", payload: { params: { item: { type: "futureContent", value: "preserve-me" } } }, type: "item.completed" }));
+    expect(unknownItem.detail).toContain('"value": "preserve-me"');
   });
 
   test("correlates approval resolutions through the durable requested-event identity", () => {

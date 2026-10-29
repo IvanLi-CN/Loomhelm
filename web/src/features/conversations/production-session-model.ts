@@ -213,9 +213,21 @@ function eventDetail(event: Event): string {
   return `事件元数据\n${metadata}\n\n原始 payload\n${payload}`;
 }
 
+const knownItemTypes = new Set(["agentMessage", "artifact", "collabToolCall", "commandExecution", "dynamicToolCall", "fileChange", "mcpToolCall", "plan", "reasoning", "userMessage", "webSearch"]);
+
+function eventHasUnknownContent(event: Event): boolean {
+  if (event.type === "unknown" || event.type.startsWith("reconciliation.")) return true;
+  if (event.type !== "item.started" && event.type !== "item.completed") return false;
+  const payload = asRecord(event.payload);
+  const params = asRecord(payload?.params);
+  const item = asRecord(params?.item) ?? asRecord(payload?.item);
+  const itemType = firstString(item, ["type"]);
+  return Boolean(itemType && !knownItemTypes.has(itemType));
+}
+
 export function eventToConversationMessage(event: Event): ConversationMessage {
   const isMessage = event.type === "message.delta";
-  const isUnknown = event.type === "unknown" || event.type.startsWith("reconciliation.");
+  const isUnknown = eventHasUnknownContent(event);
   const isTool = !isMessage && !isUnknown;
   return {
     author: isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
