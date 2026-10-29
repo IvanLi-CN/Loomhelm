@@ -701,6 +701,14 @@ func TestGatewayCommandAckFinalizesDraftAndFencesUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create draft ACK recovery controller: %v", err)
 	}
+	if _, err := persistence.Pool().Exec(ctx, `
+		UPDATE execution_commands
+		SET state = 'executing', operation_id = '', result = NULL, error = NULL,
+		    event_cursor = '', reconciliation_state = ''
+		WHERE command_id = $1
+	`, commandID); err != nil {
+		t.Fatalf("simulate legacy ACK writer: %v", err)
+	}
 	if _, err := controller.ReconcileCommand(ctx, sessionID, commandID); err != nil {
 		t.Fatalf("recover draft finalization from confirmed ACK: %v", err)
 	}
@@ -718,8 +726,23 @@ func TestGatewayCommandAckFinalizesDraftAndFencesUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read ACK command: %v", err)
 	}
-	if record.State != protocol.CommandStateExecuting || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
+	if record.State != protocol.CommandStateExecuting || record.ReconciliationState != protocol.ReconciliationStateConfirmed || record.ExactAckState != protocol.CommandStateExecuting {
 		t.Fatalf("ACK command = %+v, want executing confirmed", record)
+	}
+	if _, err := runStore.Reconcile(ctx, commandID, "generation-"+sessionID, runs.CommandObservation{
+		Reconciliation: protocol.ReconciliationStateNotFound,
+	}); !errors.Is(err, runs.ErrCommandFactConflict) {
+		t.Fatalf("stale not-found reconciliation error = %v, want command fact conflict", err)
+	}
+	if _, err := runStore.MarkCommandAndRunUnknown(ctx, commandID, "generation-"+sessionID, "late send timeout"); err != nil {
+		t.Fatalf("fence unknown transition after executing ACK: %v", err)
+	}
+	record, err = runStore.Lookup(ctx, sessionID, commandID)
+	if err != nil {
+		t.Fatalf("read executing fenced command: %v", err)
+	}
+	if record.State != protocol.CommandStateExecuting || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
+		t.Fatalf("executing fenced command = %+v, want executing confirmed", record)
 	}
 	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, protocol.CommandAck{
 		CommandID:  commandID,
@@ -736,16 +759,6 @@ func TestGatewayCommandAckFinalizesDraftAndFencesUnknown(t *testing.T) {
 	}
 	if record.State != protocol.CommandStateSucceeded || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
 		t.Fatalf("terminal ACK command = %+v, want succeeded confirmed", record)
-	}
-	if _, err := runStore.MarkCommandAndRunUnknown(ctx, commandID, "generation-"+sessionID, "late send timeout"); err != nil {
-		t.Fatalf("fence unknown transition after exact ACK: %v", err)
-	}
-	record, err = runStore.Lookup(ctx, sessionID, commandID)
-	if err != nil {
-		t.Fatalf("read fenced command: %v", err)
-	}
-	if record.State != protocol.CommandStateSucceeded || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
-		t.Fatalf("fenced command = %+v, want succeeded confirmed", record)
 	}
 }
 

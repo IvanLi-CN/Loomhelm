@@ -278,6 +278,124 @@ func TestPersistentDraftCommandReconciliationRejectsMismatchedCommandID(t *testi
 	}
 }
 
+func TestPersistentDraftCommandReconciliationFinalizesMatchingObservation(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture := newControlFixture(t, db, 2)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := db.Pool().Exec(cleanupCtx, `DELETE FROM conversation_draft_commands WHERE session_id = ANY($1::text[])`, fixture.sessionIDs); err != nil {
+			t.Errorf("cleanup draft command bindings: %v", err)
+		}
+		if _, err := db.Pool().Exec(cleanupCtx, `DELETE FROM conversation_draft_mutations WHERE session_id = ANY($1::text[])`, fixture.sessionIDs); err != nil {
+			t.Errorf("cleanup draft mutations: %v", err)
+		}
+		if _, err := db.Pool().Exec(cleanupCtx, `DELETE FROM conversation_drafts WHERE session_id = ANY($1::text[])`, fixture.sessionIDs); err != nil {
+			t.Errorf("cleanup drafts: %v", err)
+		}
+	})
+
+	cases := []struct {
+		name            string
+		sessionIndex    int
+		reconciliation  protocol.ReconciliationState
+		wantState       protocol.CommandState
+		wantContent     string
+		wantRevisionAdd int64
+	}{
+		{
+			name:            "confirmed",
+			sessionIndex:    0,
+			reconciliation:  protocol.ReconciliationStateConfirmed,
+			wantState:       protocol.CommandStateSucceeded,
+			wantRevisionAdd: 1,
+		},
+		{
+			name:           "not-found",
+			sessionIndex:   1,
+			reconciliation: protocol.ReconciliationStateNotFound,
+			wantState:      protocol.CommandStateRejected,
+			wantContent:    "retain after not-found reconciliation",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sessionID := fixture.sessionIDs[tc.sessionIndex]
+			commandID := fixture.command + "-draft-reconcile-" + tc.name
+			runID := fixture.run + "-draft-reconcile-" + tc.name
+			draftStore := drafts.NewStore(db.Pool())
+			runStore := NewStore(db.Pool())
+			draft, err := draftStore.Apply(ctx, drafts.UpdateInput{
+				SessionID:      sessionID,
+				OwnerUserID:    fixture.userID,
+				MutationID:     "draft-reconcile-matching-" + tc.name,
+				ClientID:       "desktop",
+				ClientSequence: 1,
+				Content:        firstNonEmpty(tc.wantContent, "consume after confirmed reconciliation"),
+			})
+			if err != nil {
+				t.Fatalf("seed draft: %v", err)
+			}
+			command := protocol.Command{
+				CommandID: commandID,
+				IssuedAt:  "2026-10-30T00:00:05Z",
+				Kind:      protocol.CommandKindRunSend,
+				Payload:   json.RawMessage(`{"prompt":"draft reconciliation"}`),
+				RunID:     &runID,
+				SessionID: sessionID,
+			}
+			_, _, err = runStore.AcceptRunWithMutation(ctx, CommandIntent{Command: command, Generation: fixture.generation}, NewRunInput{
+				ID:         runID,
+				SessionID:  sessionID,
+				CommandID:  commandID,
+				Generation: fixture.generation,
+			}, func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
+				return draftStore.PrepareCommandTx(mutationCtx, tx, drafts.CommandDraftInput{
+					CommandID:        commandID,
+					SessionID:        sessionID,
+					OwnerUserID:      fixture.userID,
+					ExpectedRevision: draft.Revision,
+					Content:          draft.Content,
+				})
+			})
+			if err != nil {
+				t.Fatalf("accept draft command: %v", err)
+			}
+			transport := &matchingReconciliationTransport{state: tc.reconciliation}
+			controller, err := NewController(runStore, transport, ControllerConfig{
+				Generation:    fixture.generation,
+				DraftCommands: draftStore,
+			})
+			if err != nil {
+				t.Fatalf("create reconciliation controller: %v", err)
+			}
+			reconciliation, err := controller.ReconcileCommand(ctx, sessionID, commandID)
+			if err != nil {
+				t.Fatalf("matching reconciliation: %v", err)
+			}
+			if reconciliation.State != tc.reconciliation || transport.sendCalls != 0 {
+				t.Fatalf("reconciliation = %+v, send calls = %d", reconciliation, transport.sendCalls)
+			}
+			record, err := runStore.Lookup(ctx, sessionID, commandID)
+			if err != nil {
+				t.Fatalf("read reconciled command: %v", err)
+			}
+			if record.State != tc.wantState {
+				t.Fatalf("reconciled command state = %s, want %s", record.State, tc.wantState)
+			}
+			current, err := draftStore.Get(ctx, sessionID, fixture.userID)
+			if err != nil {
+				t.Fatalf("read reconciled draft: %v", err)
+			}
+			if current.Content != tc.wantContent || current.Revision != draft.Revision+tc.wantRevisionAdd {
+				t.Fatalf("reconciled draft = %+v, want content %q revision %d", current, tc.wantContent, draft.Revision+tc.wantRevisionAdd)
+			}
+		})
+	}
+}
+
 type mismatchedReconciliationTransport struct {
 	response protocol.Reconciliation
 }
@@ -288,4 +406,18 @@ func (t *mismatchedReconciliationTransport) SendCommand(_ context.Context, comma
 
 func (t *mismatchedReconciliationTransport) ReconcileCommand(context.Context, protocol.Command) (protocol.Reconciliation, error) {
 	return t.response, nil
+}
+
+type matchingReconciliationTransport struct {
+	state     protocol.ReconciliationState
+	sendCalls int
+}
+
+func (t *matchingReconciliationTransport) SendCommand(context.Context, protocol.Command) (protocol.CommandAck, error) {
+	t.sendCalls++
+	return protocol.CommandAck{}, errors.New("unexpected command send during reconciliation")
+}
+
+func (t *matchingReconciliationTransport) ReconcileCommand(_ context.Context, command protocol.Command) (protocol.Reconciliation, error) {
+	return protocol.Reconciliation{CommandID: command.CommandID, State: t.state}, nil
 }

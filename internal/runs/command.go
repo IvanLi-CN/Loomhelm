@@ -42,6 +42,7 @@ type CommandRecord struct {
 	OperationID         string
 	EventCursor         string
 	ReconciliationState protocol.ReconciliationState
+	ExactAckState       protocol.CommandState
 	Result              json.RawMessage
 	Error               *protocol.ApiError
 }

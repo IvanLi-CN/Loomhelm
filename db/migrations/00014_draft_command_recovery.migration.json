@@ -9,11 +9,11 @@
   "compatibility_assessment": {
     "public_api": "patch",
     "persistent_state": "minor",
-    "reason": "The migration is additive and older candidates ignore the new table, while a draft-capable candidate can recover command delivery without rewriting existing draft projections."
+    "reason": "The migration is additive: earlier candidates ignore the new table and exact_ack_state column, while their existing command UPDATE paths leave the additive marker intact; a draft-capable candidate can recover command delivery without rewriting existing draft projections."
   },
   "durable_state": {
-    "description": "conversation_draft_commands records the owner, Session and exact draft revision bound to one accepted run command, then records whether delivery consumed that revision or preserved the projection.",
-    "storage_implementation": "PostgreSQL table managed by embedded Goose migration 00014. Admission inserts the binding without clearing the projection; exact transport ACK or trusted reconciliation finalizes it through the draft store.",
+    "description": "execution_commands.exact_ack_state preserves the strongest exact Connector ACK state across older writers; conversation_draft_commands records the owner, Session and exact draft revision bound to one accepted run command, then records whether delivery consumed that revision or preserved the projection.",
+    "storage_implementation": "PostgreSQL state managed by embedded Goose migration 00014. The exact ACK marker is additive and is not named by earlier command UPDATE statements. Admission inserts the binding without clearing the projection; exact transport ACK or trusted reconciliation finalizes it through the draft store.",
     "retention_policy": "Bindings remain for the lifetime of the command so duplicate ACKs and reconciliation can finalize idempotently. They are retained with command history; any future parent cleanup must delete binding rows before deleting the restricted command or Session rows.",
     "source_compatibility_range": {
       "from_program_versions": "Phase-one private shared-draft candidate after migration 00013.",
@@ -21,16 +21,23 @@
       "readable_earlier_state": true,
       "older_program_can_read_new_state": true,
       "direct_major_skips_supported": false,
-      "compatibility_boundary": "Only a draft-command-capable candidate reads or writes the new table."
+      "compatibility_boundary": "Only a draft-command-capable candidate reads or writes the new table; the additive exact ACK marker is preserved by earlier command writers."
     }
   },
   "database_migration": {
     "applicable": true,
     "ddl_structural_changes": [
       {
+        "id": "ddl-00014-exact-ack-marker",
+        "description": "Add the exact ACK state marker without rewriting existing commands or drafts; earlier command writers leave the additive column unchanged.",
+        "order": 1,
+        "observable": true,
+        "pauseable": false
+      },
+      {
         "id": "ddl-00014-draft-command-recovery",
         "description": "Create the command binding projection and pending-state index without rewriting existing commands or drafts.",
-        "order": 1,
+        "order": 2,
         "observable": true,
         "pauseable": false
       }
@@ -41,10 +48,12 @@
   "rollout_observability": {
     "operations_must_remain_separate": false,
     "operation_sequence": [
+      "ddl-00014-exact-ack-marker",
       "ddl-00014-draft-command-recovery"
     ],
     "progress_signals": [
       "Command admission creates one pending binding only after the exact Session draft revision is checked.",
+      "An exact ACK records its strongest state in the additive marker, which earlier command writers preserve.",
       "A delivered fact marks the binding consumed only when the expected revision is still current; a newer revision is preserved.",
       "A failed, not-found or unresolved command leaves the draft projection untouched."
     ],
@@ -66,6 +75,7 @@
         "A delivered command clears the bound revision, while a newer concurrent update remains current.",
         "A failed or not-found command preserves the draft, and repeated finalization is idempotent.",
         "An unknown command creates no consume mutation; later confirmed or not-found reconciliation finalizes without sending again.",
+        "An earlier command writer may update existing command columns without clearing exact_ack_state; the candidate still fences unknown transitions and retries pending draft finalization.",
         "The migration is additive and re-entry does not rewrite existing execution or draft state."
       ]
     }

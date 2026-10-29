@@ -286,7 +286,7 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 		}
 		return reconciliation, nil
 	}
-	if record.State == protocol.CommandStateExecuting && record.ReconciliationState == protocol.ReconciliationStateConfirmed {
+	if record.State == protocol.CommandStateExecuting && commandDeliveryConfirmed(record) {
 		reconciliation := confirmedCommandReconciliation(record)
 		if err := c.finalizeDraftCommand(ctx, record); err != nil {
 			return reconciliation, err
@@ -316,6 +316,13 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 	}
 	if isTerminalCommandState(record.State) {
 		reconciliation := terminalReconciliation(record)
+		if err := c.finalizeDraftCommand(ctx, record); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
+	}
+	if record.State == protocol.CommandStateExecuting && commandDeliveryConfirmed(record) {
+		reconciliation := confirmedCommandReconciliation(record)
 		if err := c.finalizeDraftCommand(ctx, record); err != nil {
 			return reconciliation, err
 		}
