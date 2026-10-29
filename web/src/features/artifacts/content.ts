@@ -52,9 +52,7 @@ const sensitiveFieldNames = new Set([
   "token"
 ]);
 
-const privatePathFieldNames = new Set(["cwd", "filepath", "grantroot", "path", "root", "workspace"]);
 const inlineSecretPattern = /\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b\s*([:=])\s*(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+/gi;
-const inlinePrivatePathPattern = /(?:~\/|\\\\|[A-Za-z]:[\\/]|\/(?:Users|home|private|root|tmp|var|workspace)(?:\/|$))(?:(?:[^\s"'`<>,;}\]]+)|(?:\s+(?=(?:[^\s"'`<>,;}\]]+\/|[^\s"'`<>,;}\]]+\.[A-Za-z0-9]{1,12}(?:$|[\s,;}]|\])|[^\s"'`<>,;}\]]+$))))*/gi;
 
 function normalizedFieldName(value: string): string {
   return value.toLowerCase().replaceAll("_", "").replaceAll("-", "");
@@ -65,22 +63,13 @@ function isSensitiveField(value: string): boolean {
   return sensitiveFieldNames.has(normalized) || [...sensitiveFieldNames].some((name) => normalized.endsWith(name));
 }
 
-function isPrivatePath(value: string): boolean {
-  return value.startsWith("~") || /^\\\\/.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\/(?:Users|home|private|root|tmp|var)(?:\/|$)/i.test(value);
-}
-
 function redactInspectableString(value: string): string {
-  return value
-    .replace(inlineSecretPattern, (_match, field: string, separator: string) => `${field}${separator} [已隐藏]`)
-    .replace(inlinePrivatePathPattern, "[路径已隐藏]");
+  return value.replace(inlineSecretPattern, (_match, field: string, separator: string) => `${field}${separator} [已隐藏]`);
 }
 
 function redactInspectableValue(value: JsonValue, fieldName?: string): JsonValue {
   if (fieldName && isSensitiveField(fieldName)) return "[已隐藏]";
-  if (typeof value === "string") {
-    if (fieldName && privatePathFieldNames.has(normalizedFieldName(fieldName)) && isPrivatePath(value)) return "[路径已隐藏]";
-    return redactInspectableString(value);
-  }
+  if (typeof value === "string") return redactInspectableString(value);
   if (Array.isArray(value)) return value.map((item) => redactInspectableValue(item));
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactInspectableValue(item, key)]));
@@ -99,10 +88,6 @@ function asRecord(value: JsonValue | undefined): JsonRecord | undefined {
 
 function asString(value: JsonValue | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function displayablePath(value: string | undefined): string | undefined {
-  return value ? asString(redactInspectableValue(value, "path")) : undefined;
 }
 
 function firstString(...values: Array<JsonValue | undefined>): string | undefined {
@@ -188,7 +173,7 @@ export function classifyConversationEvent(event: ConversationEvent): Conversatio
       kind: "code",
       code,
       language: firstString(item.language, params.language, payload.language),
-      filename: displayablePath(firstString(item.filename, item.path, params.filename, params.path, payload.filename, payload.path)),
+      filename: firstString(item.filename, item.path, params.filename, params.path, payload.filename, payload.path),
       raw: event.payload
     };
   }
