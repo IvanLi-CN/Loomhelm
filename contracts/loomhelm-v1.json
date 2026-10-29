@@ -138,6 +138,7 @@
       "type": "string",
       "enum": [
         "invalid_request",
+        "service_unavailable",
         "unauthorized",
         "not_found",
         "conflict",
@@ -446,6 +447,9 @@
       "type": "object",
       "required": ["artifact"],
       "properties": {"artifact": {"$ref": "#/types/Artifact"}}
+    },
+    "ArtifactDownload": {
+      "kind": "binary"
     },
     "CreateProjectRequest": {
       "type": "object",
@@ -912,6 +916,16 @@
         "response_type": "ArtifactResponse",
         "summary": "Read authorized artifact metadata",
         "mcp_tool": {"name": "loomhelm.get_artifact", "description": "Read authorized conversation artifact metadata."}
+      },
+      {
+        "operation_id": "downloadArtifact",
+        "browser_only": true,
+        "method": "GET",
+        "path": "/artifacts/{artifact_id}/download",
+        "path_params": {"artifact_id": "string"},
+        "response_type": "ArtifactDownload",
+        "response_status": 200,
+        "summary": "Download the authorized original artifact bytes"
       }
     ]
   },

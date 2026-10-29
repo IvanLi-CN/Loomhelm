@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
+	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
@@ -132,6 +133,27 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		if serviceErr != nil {
 			db.Close()
 			return nil, serviceErr
+		}
+		if cfg.ArtifactRoot != "" {
+			artifactStore, artifactErr := artifacts.NewStore(db.Pool(), artifacts.Config{
+				Root: cfg.ArtifactRoot,
+				Authorizer: artifacts.NewResolvedAuthorizer(
+					artifactOwnershipResolver{sessions: services.sessions, runs: services.runRecords},
+					artifactScopeAuthorizer{principal: services.identity, sessions: services.sessionAccess()},
+				),
+			})
+			if artifactErr != nil {
+				db.Close()
+				return nil, fmt.Errorf("initialize artifact store: %w", artifactErr)
+			}
+			recoveryCtx, cancelRecovery := context.WithTimeout(ctx, cfg.StartupBudget())
+			_, artifactErr = artifactStore.Recover(recoveryCtx, artifacts.DefaultRecoveryLimit)
+			cancelRecovery()
+			if artifactErr != nil {
+				db.Close()
+				return nil, fmt.Errorf("recover artifact store: %w", artifactErr)
+			}
+			services.artifactStore = artifactStore
 		}
 		transport := &gatewayExecutionTransport{
 			sessions:   sessionStore,

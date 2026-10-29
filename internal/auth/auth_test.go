@@ -99,6 +99,7 @@ func TestStatusForError(t *testing.T) {
 		{err: ErrNotFound, want: 404},
 		{err: ErrConflict, want: 409},
 		{err: ErrInvalid, want: 400},
+		{err: ErrUnavailable, want: 503},
 		{err: errors.New("unexpected"), want: 500},
 	}
 	for _, test := range tests {

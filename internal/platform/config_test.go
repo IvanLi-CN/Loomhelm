@@ -141,6 +141,7 @@ func TestLoadConfigValidatesComponentSpecificValues(t *testing.T) {
 		"LOOMHELM_HTTP_ADDR":        "127.0.0.1:0",
 		"LOOMHELM_DRAIN_TOKEN":      "test-token",
 		"LOOMHELM_SHUTDOWN_TIMEOUT": "250ms",
+		"LOOMHELM_ARTIFACT_ROOT":    "/var/lib/loomhelm/artifacts",
 		"LOOMHELM_DATABASE_URL":     "postgres://test@localhost/loomhelm",
 	})
 
@@ -148,7 +149,7 @@ func TestLoadConfigValidatesComponentSpecificValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigWithLookup() error = %v", err)
 	}
-	if config.Version != "test-version" || config.HTTPAddr != "127.0.0.1:0" || config.DrainToken != "test-token" || config.ShutdownTimeout != 250*time.Millisecond {
+	if config.Version != "test-version" || config.HTTPAddr != "127.0.0.1:0" || config.DrainToken != "test-token" || config.ShutdownTimeout != 250*time.Millisecond || config.ArtifactRoot != "/var/lib/loomhelm/artifacts" {
 		t.Fatalf("unexpected config: %+v", config)
 	}
 }
@@ -247,6 +248,12 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 			component: ComponentWorker,
 			env:       map[string]string{"LOOMHELM_WORKER_GENERATION": "0"},
 			wantError: "LOOMHELM_WORKER_GENERATION",
+		},
+		{
+			name:      "artifact root line break",
+			component: ComponentServer,
+			env:       map[string]string{"LOOMHELM_ARTIFACT_ROOT": "/var/lib/loomhelm/artifacts\nprivate"},
+			wantError: "artifact root",
 		},
 		{
 			name:      "invalid connector URL",

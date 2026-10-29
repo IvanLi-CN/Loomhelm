@@ -26,6 +26,7 @@ type Config struct {
 	Version                   string
 	CandidateSourceSHA        string
 	ArtifactDigest            string
+	ArtifactRoot              string
 	HTTPAddr                  string
 	WorkerHTTPAddr            string
 	DrainToken                string
@@ -144,6 +145,7 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		Version:            strings.TrimSpace(version),
 		CandidateSourceSHA: strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CANDIDATE_SOURCE_SHA", version)),
 		ArtifactDigest:     strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_DIGEST", "unknown")),
+		ArtifactRoot:       strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_ROOT", "")),
 		ShutdownTimeout:    shutdownTimeout,
 	}
 	if component != ComponentConnector {
@@ -214,6 +216,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.ArtifactDigest) != "" && strings.ContainsAny(c.ArtifactDigest, " \t\r\n") {
 		return fmt.Errorf("artifact digest must not contain whitespace")
+	}
+	if strings.TrimSpace(c.ArtifactRoot) != "" && strings.ContainsAny(c.ArtifactRoot, "\x00\r\n") {
+		return fmt.Errorf("artifact root must not contain NUL or line breaks")
 	}
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("shutdown timeout must be greater than zero")

@@ -243,7 +243,7 @@ func validateSchema(types map[string]schema, value schema, location string) erro
 		}
 		return nil
 	}
-	if value.Kind == "json-value" || value.Kind == "raw-json" {
+	if value.Kind == "json-value" || value.Kind == "raw-json" || value.Kind == "binary" {
 		return nil
 	}
 	if value.Type == "" {
@@ -329,7 +329,7 @@ func (g generator) goSource() ([]byte, error) {
 	names := sortedKeys(g.contract.Types)
 	for _, name := range names {
 		value := g.contract.Types[name]
-		if value.Kind == "json-value" || value.Kind == "raw-json" {
+		if value.Kind == "json-value" || value.Kind == "raw-json" || value.Kind == "binary" {
 			continue
 		}
 		if len(value.Enum) > 0 {
@@ -444,7 +444,7 @@ func (g generator) protocolTypeScript() string {
 
 	for _, name := range sortedKeys(g.contract.Types) {
 		value := g.contract.Types[name]
-		if value.Kind == "json-value" || value.Kind == "raw-json" {
+		if value.Kind == "json-value" || value.Kind == "raw-json" || value.Kind == "binary" {
 			continue
 		}
 		if len(value.Enum) > 0 {
@@ -551,8 +551,14 @@ func (g generator) apiClientTypeScript() string {
 		paramsType := operationParamsType(operation)
 		requestOptional := len(operation.PathParams) == 0 && operation.BodyType == ""
 		responseType := "void"
+		binaryResponse := false
 		if operation.ResponseType != "" {
-			responseType = "Protocol." + operation.ResponseType
+			if g.isBinaryResponse(operation) {
+				responseType = "Response"
+				binaryResponse = true
+			} else {
+				responseType = "Protocol." + operation.ResponseType
+			}
 		}
 		if requestOptional {
 			fmt.Fprintf(&out, "  async %s(request: %s = {}): Promise<%s> {\n", operation.OperationID, paramsType, responseType)
@@ -575,7 +581,11 @@ func (g generator) apiClientTypeScript() string {
 			if operation.BodyType != "" {
 				body = "request.body"
 			}
-			fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %d);\n", responseType, operation.Method, body, operation.ResponseStatus)
+			if binaryResponse {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %d, true);\n", responseType, operation.Method, body, operation.ResponseStatus)
+			} else {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %d);\n", responseType, operation.Method, body, operation.ResponseStatus)
+			}
 		} else if operation.BodyType != "" {
 			fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, request.body);\n", responseType, operation.Method)
 		} else {
@@ -583,32 +593,35 @@ func (g generator) apiClientTypeScript() string {
 		}
 		out.WriteString("  }\n\n")
 	}
-	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number): Promise<T> {
+	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number, binary = false): Promise<T> {
     const baseUrl = this.options.baseUrl ?? (typeof location === "undefined" ? "http://localhost" : location.origin);
     const url = new URL(path, baseUrl);
     const fetcher = this.options.fetch ?? globalThis.fetch;
     if (!fetcher) throw new Error("a fetch implementation is required");
     const headers = new Headers(this.options.headers);
-    headers.set("Accept", "application/json");
+    headers.set("Accept", binary ? "application/octet-stream" : "application/json");
     const init: RequestInit = { method, headers };
     if (body !== undefined) {
       headers.set("Content-Type", "application/json");
       init.body = JSON.stringify(body);
     }
     const response = await fetcher(url, init);
-    const text = await response.text();
     let parsed: unknown = undefined;
-    if (text.length > 0) {
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        parsed = text;
+    if (!binary || !response.ok) {
+      const text = await response.text();
+      if (text.length > 0) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = text;
+        }
       }
     }
     if (!response.ok) throw new ApiClientError(response.status, parsed);
     if (expectedStatus !== undefined && response.status !== expectedStatus) {
       throw new Error("Loomhelm API returned status " + response.status + "; expected " + expectedStatus);
     }
+    if (binary) return response as T;
     return parsed as T;
   }
 }
@@ -618,6 +631,14 @@ export function createGeneratedApiClient(options: ApiClientOptions = {}): Loomhe
 }
 `)
 	return out.String()
+}
+
+func (g generator) isBinaryResponse(operation operation) bool {
+	if operation.ResponseType == "" {
+		return false
+	}
+	value, ok := g.contract.Types[operation.ResponseType]
+	return ok && value.Kind == "binary"
 }
 
 func (g generator) goType(value schema, required bool) string {

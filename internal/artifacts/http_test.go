@@ -54,7 +54,7 @@ func TestDownloadHTTPHandlerStreamsVerifiedBytesWithSafeHeaders(t *testing.T) {
 	if response.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("content type options = %q", response.Header().Get("X-Content-Type-Options"))
 	}
-	if response.Header().Get("Cache-Control") != "private, no-store" {
+	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("cache control = %q", response.Header().Get("Cache-Control"))
 	}
 	if response.Header().Get("ETag") != `"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"` {

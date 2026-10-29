@@ -68,7 +68,7 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	}
 	defer reader.Close()
 
-	writer.Header().Set("Cache-Control", "private, no-store")
+	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Disposition", contentDisposition(artifact.Name))
 	writer.Header().Set("Content-Type", safeDownloadContentType(artifact.ContentType))
 	writer.Header().Set("X-Content-Type-Options", "nosniff")

@@ -44,6 +44,34 @@ describe("generated browser authentication transport", () => {
   });
 });
 
+describe("generated binary artifact transport", () => {
+  test("returns the original response without consuming its bytes", async () => {
+    const calls = [];
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({
+          path: url.pathname,
+          method: init.method,
+          accept: new Headers(init.headers).get("Accept"),
+        });
+        return new Response(new Uint8Array([0, 1, 2, 255]), {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+      },
+    });
+
+    const response = await client.downloadArtifact({ artifact_id: "artifact/A B?" });
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([0, 1, 2, 255]);
+    expect(calls).toEqual([{
+      path: "/api/v1/artifacts/artifact%2FA%20B%3F/download",
+      method: "GET",
+      accept: "application/octet-stream",
+    }]);
+  });
+});
+
 describe("generated user credential transport", () => {
   test("creation preserves the explicit delegated scope and requires HTTP 201", async () => {
     const calls = [];

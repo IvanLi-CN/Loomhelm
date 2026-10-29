@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
@@ -26,8 +27,10 @@ type applicationServices struct {
 	tasks           *tasks.Service
 	sessions        *sessions.Store
 	runHistory      sessionRunStore
+	runRecords      artifactRunRecords
 	drafts          draftStore
 	sessionCreation sessionCreationApplication
+	artifactStore   protocol.ArtifactStore
 }
 
 // newApplicationHandler returns relative routes for Server's /api/v1 mount.
@@ -72,6 +75,7 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		tasks:      tasks.NewService(pool, identity, projectService),
 		sessions:   sessions.NewStore(pool),
 		runHistory: runs.NewStore(pool),
+		runRecords: runs.NewStore(pool),
 		drafts:     drafts.NewStore(pool),
 	}, nil
 }
@@ -87,6 +91,15 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	(&runControlHTTP{principal: s.identity, service: control}).mount(router)
 	(&sessionRunHTTP{principal: s.identity, sessions: sessionAccess, runs: s.runHistory}).mount(router)
 	(&draftHTTP{principal: s.identity, sessions: sessionAccess, drafts: s.drafts}).mount(router)
+	var download http.Handler = http.HandlerFunc(unavailableArtifactDownload)
+	if s.artifactStore != nil {
+		if handler, err := artifacts.NewDownloadHTTPHandler(s.artifactStore, writeArtifactDownloadError); err == nil {
+			download = handler
+		}
+	}
+	protectedDownload := s.artifactDownloadHandler(download)
+	router.Get("/artifacts/{artifact_id}/download", protectedDownload)
+	router.Head("/artifacts/{artifact_id}/download", protectedDownload)
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
 		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
 		if err != nil || principal.UserID == "" || principal.CredentialID != "" {
@@ -120,6 +133,38 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 		writer.Header().Set("Cache-Control", "no-store")
 		protected.ServeHTTP(writer, request)
 	})
+}
+
+func (s *applicationServices) artifactDownloadHandler(download http.Handler) http.HandlerFunc {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
+		if err != nil || principal.UserID == "" {
+			if err == nil {
+				err = auth.ErrUnauthenticated
+			}
+			auth.WriteError(writer, request, auth.StatusForError(err), err, "authentication required")
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal))
+		download.ServeHTTP(writer, request)
+	})
+}
+
+func writeArtifactDownloadError(writer http.ResponseWriter, request *http.Request, status int, err error, message string) {
+	apiErr := auth.ErrInvalid
+	switch status {
+	case http.StatusServiceUnavailable:
+		apiErr = auth.ErrUnavailable
+	case http.StatusUnauthorized:
+		apiErr = auth.ErrUnauthenticated
+	case http.StatusNotFound:
+		apiErr = auth.ErrNotFound
+	}
+	auth.WriteError(writer, request, status, apiErr, message)
+}
+
+func unavailableArtifactDownload(writer http.ResponseWriter, request *http.Request) {
+	auth.WriteError(writer, request, http.StatusServiceUnavailable, auth.ErrUnavailable, "artifact download is temporarily unavailable")
 }
 
 func (s *applicationServices) sessionAccess() *sessionService {

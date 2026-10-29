@@ -30,6 +30,7 @@ var (
 	ErrNotFound        = errors.New("resource not found")
 	ErrConflict        = errors.New("resource conflict")
 	ErrInvalid         = errors.New("invalid request")
+	ErrUnavailable     = errors.New("service unavailable")
 )
 
 const ExpectedPrincipalHeader = "X-Loomhelm-Expected-Principal"
@@ -691,6 +692,8 @@ func writeError(writer http.ResponseWriter, request *http.Request, status int, e
 		code = protocol.ErrorCodeNotFound
 	case errors.Is(err, ErrConflict):
 		code = protocol.ErrorCodeConflict
+	case errors.Is(err, ErrUnavailable):
+		code = protocol.ErrorCodeServiceUnavailable
 	}
 	requestID := ""
 	if request != nil {
@@ -716,6 +719,8 @@ func statusForError(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, ErrConflict):
 		return http.StatusConflict
+	case errors.Is(err, ErrUnavailable):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrInvalid):
 		return http.StatusBadRequest
 	default:

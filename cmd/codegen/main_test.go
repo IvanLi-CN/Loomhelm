@@ -38,3 +38,37 @@ func TestBrowserAuthenticationDoesNotBecomeAnMCPTool(t *testing.T) {
 	}
 	t.Fatal("browser session operation missing from contract")
 }
+
+func TestArtifactDownloadUsesBinaryBrowserClientResponse(t *testing.T) {
+	data, err := os.ReadFile("../../contracts/loomhelm-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source contract
+	if err := json.Unmarshal(data, &source); err != nil {
+		t.Fatal(err)
+	}
+	if err := validate(source); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, operation := range source.REST.Operations {
+		if operation.OperationID != "downloadArtifact" {
+			continue
+		}
+		found = true
+		if !operation.BrowserOnly || operation.MCPTool != nil {
+			t.Fatal("artifact download must remain browser-only")
+		}
+		if source.Types[operation.ResponseType].Kind != "binary" {
+			t.Fatalf("artifact download response kind = %q, want binary", source.Types[operation.ResponseType].Kind)
+		}
+		generated := (generator{contract: source}).apiClientTypeScript()
+		if !strings.Contains(generated, "async downloadArtifact(request: DownloadArtifactParams): Promise<Response>") || !strings.Contains(generated, "application/octet-stream") {
+			t.Fatal("generated artifact download client does not preserve the binary response")
+		}
+	}
+	if !found {
+		t.Fatal("artifact download operation missing from contract")
+	}
+}

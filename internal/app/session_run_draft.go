@@ -24,6 +24,10 @@ type sessionRunStore interface {
 	ListBySession(context.Context, string, *runs.Cursor, int) (runs.SessionRunPage, error)
 }
 
+type artifactRunRecords interface {
+	GetRun(context.Context, string) (runs.Run, error)
+}
+
 type draftStore interface {
 	Get(context.Context, string, string) (drafts.Draft, error)
 	Apply(context.Context, drafts.UpdateInput) (drafts.Draft, error)
