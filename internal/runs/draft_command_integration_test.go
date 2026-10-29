@@ -496,8 +496,9 @@ func TestPersistentDraftCommandLegacyMarkerlessAckRemainsUnknown(t *testing.T) {
 	// than infer delivery from the ambiguous state and consume the draft.
 	if _, err := db.Pool().Exec(ctx, `
 		UPDATE execution_commands
-		SET state = 'executing', operation_id = '', result = NULL, error = NULL,
-		    event_cursor = '', reconciliation_state = ''
+		SET state = 'executing', operation_id = 'legacy-operation',
+		    result = convert_to('{"legacy":true}', 'UTF8'), error = NULL,
+		    event_cursor = 'legacy-cursor', reconciliation_state = ''
 		WHERE command_id = $1
 	`, commandID); err != nil {
 		t.Fatalf("simulate markerless legacy ACK: %v", err)
@@ -517,7 +518,7 @@ func TestPersistentDraftCommandLegacyMarkerlessAckRemainsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read markerless legacy command: %v", err)
 	}
-	if record.State != protocol.CommandStateUnknown || record.ExactAckState != "" {
+	if record.State != protocol.CommandStateUnknown || record.ExactAckState != "" || record.OperationID != "legacy-operation" || record.EventCursor != "legacy-cursor" || string(record.Result) != `{"legacy":true}` {
 		t.Fatalf("markerless legacy command = %+v, want unknown without exact marker", record)
 	}
 	current, err := draftStore.Get(ctx, sessionID, fixture.userID)

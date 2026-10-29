@@ -358,6 +358,11 @@ func allowedCommandTransition(from, to protocol.CommandState) bool {
 	}
 }
 
+func allowedExactCommandTransition(from, to protocol.CommandState) bool {
+	return allowedCommandTransition(from, to) ||
+		(from == protocol.CommandStateExecuting && to == protocol.CommandStateRejected)
+}
+
 func isDeliveryConfirmedAckState(state protocol.CommandState) bool {
 	return state == protocol.CommandStateExecuting || state == protocol.CommandStateSucceeded
 }

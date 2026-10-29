@@ -233,6 +233,27 @@ func TestTerminalReconciliationPreservesExactDeliveryFact(t *testing.T) {
 	}
 }
 
+func TestMergeExactCommandAckAllowsRejectedAfterExecuting(t *testing.T) {
+	existing := CommandRecord{
+		Intent:        CommandIntent{Command: protocol.Command{CommandID: "cmd-rejected-after-executing"}},
+		State:         protocol.CommandStateExecuting,
+		ExactAckState: protocol.CommandStateExecuting,
+	}
+	incoming := existing
+	incoming.State = protocol.CommandStateRejected
+	incoming.ExactAckState = protocol.CommandStateRejected
+	merged, err := mergeExactCommandAck(existing, incoming)
+	if err != nil {
+		t.Fatalf("merge rejected exact ACK: %v", err)
+	}
+	if merged.State != protocol.CommandStateRejected || merged.ExactAckState != protocol.CommandStateRejected {
+		t.Fatalf("merged rejected exact ACK = %+v, want rejected state and marker", merged)
+	}
+	if merged.DraftDeliveryConfirmed() {
+		t.Fatal("rejected exact ACK must preserve, not consume, the draft")
+	}
+}
+
 func TestCommandAckClonesMutablePayloads(t *testing.T) {
 	ledger := NewLedger()
 	intent := testIntent("cmd-clone", "generation-1", `{"prompt":"clone"}`)

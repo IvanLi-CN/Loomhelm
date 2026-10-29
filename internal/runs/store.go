@@ -497,6 +497,11 @@ func commandFactPresent(record CommandRecord) bool {
 	return isTerminalCommandState(record.State) || record.ReconciliationState == protocol.ReconciliationStateNotFound || record.OperationID != "" || record.EventCursor != "" || len(record.Result) > 0 || record.Error != nil
 }
 
+func isMarkerlessExecuting(record CommandRecord) bool {
+	return record.State == protocol.CommandStateExecuting && record.ExactAckState == "" &&
+		(record.ReconciliationState == "" || record.ReconciliationState == protocol.ReconciliationStateUnknown)
+}
+
 func commandDeliveryConfirmed(record CommandRecord) bool {
 	return record.ExactAckState != "" || record.ReconciliationState == protocol.ReconciliationStateConfirmed
 }
@@ -506,7 +511,7 @@ func sameCommandFact(left, right CommandRecord) bool {
 }
 
 func mergeExactCommandAck(existing, incoming CommandRecord) (CommandRecord, error) {
-	if existing.State != incoming.State && existing.State != protocol.CommandStateUnknown && !allowedCommandTransition(existing.State, incoming.State) {
+	if existing.State != incoming.State && existing.State != protocol.CommandStateUnknown && !allowedExactCommandTransition(existing.State, incoming.State) {
 		if isTerminalCommandState(existing.State) {
 			return CommandRecord{}, fmt.Errorf("%w: terminal command %q cannot become %q", ErrCommandFactConflict, incoming.Intent.Command.CommandID, incoming.State)
 		}
@@ -549,7 +554,7 @@ func mergeExactAckState(existing, incoming protocol.CommandState, commandID stri
 	if existing == incoming {
 		return existing, nil
 	}
-	if !allowedCommandTransition(existing, incoming) {
+	if !allowedExactCommandTransition(existing, incoming) {
 		return "", fmt.Errorf("%w: command %q exact ACK state cannot become %q", ErrCommandFactConflict, commandID, incoming)
 	}
 	// An executing ACK is a durable delivery fact. A later failed ACK may
@@ -758,16 +763,19 @@ func (s *Store) markUnknown(ctx context.Context, commandID, generation string, l
 			return CommandRecord{}, err
 		}
 	}
-	if commandFactPresent(record) || commandDeliveryConfirmed(record) || record.State == protocol.CommandStateUnknown {
+	markerlessExecuting := isMarkerlessExecuting(record)
+	if (commandFactPresent(record) && !markerlessExecuting) || commandDeliveryConfirmed(record) || record.State == protocol.CommandStateUnknown {
 		if err := tx.Commit(ctx); err != nil {
 			return CommandRecord{}, fmt.Errorf("commit existing command unknown transition: %w", err)
 		}
 		return record, nil
 	}
 	record.State = protocol.CommandStateUnknown
-	record.OperationID = ""
-	record.Result = nil
-	record.Error = nil
+	if !markerlessExecuting {
+		record.OperationID = ""
+		record.Result = nil
+		record.Error = nil
+	}
 	if err := updateCommandTx(ctx, tx, record, ""); err != nil {
 		return CommandRecord{}, err
 	}
@@ -810,7 +818,8 @@ func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generat
 			return CommandRecord{}, err
 		}
 	}
-	if commandFactPresent(record) || commandDeliveryConfirmed(record) {
+	markerlessExecuting := isMarkerlessExecuting(record)
+	if (commandFactPresent(record) && !markerlessExecuting) || commandDeliveryConfirmed(record) {
 		if err := tx.Commit(ctx); err != nil {
 			return CommandRecord{}, fmt.Errorf("commit existing command fact unknown transition: %w", err)
 		}
@@ -819,9 +828,11 @@ func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generat
 
 	if !isTerminalCommandState(record.State) && record.State != protocol.CommandStateUnknown {
 		record.State = protocol.CommandStateUnknown
-		record.OperationID = ""
-		record.Result = nil
-		record.Error = nil
+		if !markerlessExecuting {
+			record.OperationID = ""
+			record.Result = nil
+			record.Error = nil
+		}
 		if err := updateCommandTx(ctx, tx, record, ""); err != nil {
 			return CommandRecord{}, err
 		}
@@ -925,7 +936,9 @@ func (s *Store) reconcile(ctx context.Context, commandID, generation string, obs
 	switch observation.Reconciliation {
 	case protocol.ReconciliationStateUnknown:
 		record.ReconciliationState = observation.Reconciliation
-		record.EventCursor = observation.EventCursor
+		if observation.EventCursor != "" {
+			record.EventCursor = observation.EventCursor
+		}
 		if err := updateCommandTx(ctx, tx, record, "unknown"); err != nil {
 			return CommandRecord{}, err
 		}
