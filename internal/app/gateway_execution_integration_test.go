@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -682,15 +683,29 @@ func TestGatewayCommandAckFinalizesDraftAndFencesUnknown(t *testing.T) {
 	transport := &gatewayExecutionTransport{
 		sessions:      sessionStore,
 		runs:          runStore,
-		draftCommands: draftStore,
+		draftCommands: &flakyDraftCommandLifecycle{store: draftStore, failures: 1},
 	}
-	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, protocol.CommandAck{
+	ack := protocol.CommandAck{
 		CommandID:  commandID,
 		RunID:      stringPointer(runID),
 		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		State:      protocol.CommandStateExecuting,
-	}); err != nil {
-		t.Fatalf("handle draft ACK: %v", err)
+	}
+	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, ack); !errors.Is(err, runs.ErrDraftRecoveryRequired) {
+		t.Fatalf("first draft ACK error = %v, want draft recovery error", err)
+	}
+	controller, err := runs.NewController(runStore, noCallCommandTransport{}, runs.ControllerConfig{
+		Generation:    "generation-" + sessionID,
+		DraftCommands: transport.draftCommands,
+	})
+	if err != nil {
+		t.Fatalf("create draft ACK recovery controller: %v", err)
+	}
+	if _, err := controller.ReconcileCommand(ctx, sessionID, commandID); err != nil {
+		t.Fatalf("recover draft finalization from confirmed ACK: %v", err)
+	}
+	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, ack); err != nil {
+		t.Fatalf("retry draft ACK finalization: %v", err)
 	}
 	current, err := draftStore.Get(ctx, sessionID, userID)
 	if err != nil {
@@ -706,6 +721,22 @@ func TestGatewayCommandAckFinalizesDraftAndFencesUnknown(t *testing.T) {
 	if record.State != protocol.CommandStateExecuting || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
 		t.Fatalf("ACK command = %+v, want executing confirmed", record)
 	}
+	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, protocol.CommandAck{
+		CommandID:  commandID,
+		RunID:      stringPointer(runID),
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateSucceeded,
+		Result:     json.RawMessage(`{"status":"done"}`),
+	}); err != nil {
+		t.Fatalf("handle terminal draft ACK: %v", err)
+	}
+	record, err = runStore.Lookup(ctx, sessionID, commandID)
+	if err != nil {
+		t.Fatalf("read terminal ACK command: %v", err)
+	}
+	if record.State != protocol.CommandStateSucceeded || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
+		t.Fatalf("terminal ACK command = %+v, want succeeded confirmed", record)
+	}
 	if _, err := runStore.MarkCommandAndRunUnknown(ctx, commandID, "generation-"+sessionID, "late send timeout"); err != nil {
 		t.Fatalf("fence unknown transition after exact ACK: %v", err)
 	}
@@ -713,9 +744,36 @@ func TestGatewayCommandAckFinalizesDraftAndFencesUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fenced command: %v", err)
 	}
-	if record.State != protocol.CommandStateExecuting || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
-		t.Fatalf("fenced command = %+v, want executing confirmed", record)
+	if record.State != protocol.CommandStateSucceeded || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
+		t.Fatalf("fenced command = %+v, want succeeded confirmed", record)
 	}
+}
+
+type flakyDraftCommandLifecycle struct {
+	store    *drafts.Store
+	failures int
+}
+
+type noCallCommandTransport struct{}
+
+func (noCallCommandTransport) SendCommand(context.Context, protocol.Command) (protocol.CommandAck, error) {
+	return protocol.CommandAck{}, errors.New("unexpected command send during confirmed ACK recovery")
+}
+
+func (noCallCommandTransport) ReconcileCommand(context.Context, protocol.Command) (protocol.Reconciliation, error) {
+	return protocol.Reconciliation{}, errors.New("unexpected command reconciliation during confirmed ACK recovery")
+}
+
+func (f *flakyDraftCommandLifecycle) PrepareCommandTx(ctx context.Context, tx pgx.Tx, input drafts.CommandDraftInput) error {
+	return f.store.PrepareCommandTx(ctx, tx, input)
+}
+
+func (f *flakyDraftCommandLifecycle) FinalizeCommand(ctx context.Context, commandID string, delivered bool) (drafts.CommandDraftResult, error) {
+	if f.failures > 0 {
+		f.failures--
+		return drafts.CommandDraftResult{}, errors.New("injected draft finalization failure")
+	}
+	return f.store.FinalizeCommand(ctx, commandID, delivered)
 }
 
 func TestGatewayUnknownSessionCreationAckGuardsAndActivates(t *testing.T) {

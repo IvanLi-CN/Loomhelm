@@ -286,6 +286,13 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 		}
 		return reconciliation, nil
 	}
+	if record.State == protocol.CommandStateExecuting && record.ReconciliationState == protocol.ReconciliationStateConfirmed {
+		reconciliation := confirmedCommandReconciliation(record)
+		if err := c.finalizeDraftCommand(ctx, record); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
+	}
 	lease := c.leaseForIntent(CommandIntent{Command: record.Intent.Command, Generation: record.Intent.Generation})
 	if lease != nil {
 		if _, err := c.store.AcquireLease(ctx, *lease, LeaseStoreConfig{TTL: c.leaseTTL}); err != nil {
@@ -640,6 +647,14 @@ func terminalReconciliation(record CommandRecord) protocol.Reconciliation {
 		CommandID:   record.Intent.Command.CommandID,
 		EventCursor: optionalString(record.EventCursor),
 		State:       state,
+	}
+}
+
+func confirmedCommandReconciliation(record CommandRecord) protocol.Reconciliation {
+	return protocol.Reconciliation{
+		CommandID:   record.Intent.Command.CommandID,
+		EventCursor: optionalString(record.EventCursor),
+		State:       protocol.ReconciliationStateConfirmed,
 	}
 }
 
