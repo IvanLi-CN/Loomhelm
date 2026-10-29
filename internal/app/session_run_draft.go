@@ -1,10 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -55,7 +58,12 @@ func (h *sessionRunHTTP) list(writer http.ResponseWriter, request *http.Request)
 		writeRunControlError(writer, request, protocol.ErrUnknownCommandResult)
 		return
 	}
-	after, limit, err := parseSessionRunQuery(request.URL.Query(), sessionID)
+	values, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil {
+		writeRunControlError(writer, request, auth.ErrInvalid)
+		return
+	}
+	after, limit, err := parseSessionRunQuery(values, sessionID)
 	if err != nil {
 		writeRunControlError(writer, request, err)
 		return
@@ -181,7 +189,7 @@ func (h *draftHTTP) update(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body protocol.UpdateDraftRequest
-	if err := auth.DecodeJSON(request, &body); err != nil {
+	if err := decodeDraftUpdateJSON(request, &body); err != nil {
 		writeDraftError(writer, request, err)
 		return
 	}
@@ -195,6 +203,31 @@ func (h *draftHTTP) update(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	auth.WriteJSON(writer, http.StatusOK, protocol.DraftResponse{Draft: publicDraft(draft)})
+}
+
+const maxDraftRequestBytes = (drafts.MaxContentBytes * 6) + (16 << 10)
+
+func decodeDraftUpdateJSON(request *http.Request, destination any) error {
+	if request == nil || request.Body == nil {
+		return fmt.Errorf("%w: request body is required", auth.ErrInvalid)
+	}
+	data, err := io.ReadAll(io.LimitReader(request.Body, maxDraftRequestBytes+1))
+	if err != nil {
+		return fmt.Errorf("%w: read request body: %v", auth.ErrInvalid, err)
+	}
+	if len(data) > maxDraftRequestBytes {
+		return fmt.Errorf("%w: request body is too large", auth.ErrInvalid)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return fmt.Errorf("%w: %v", auth.ErrInvalid, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("%w: request body must contain one JSON value", auth.ErrInvalid)
+	}
+	return nil
 }
 
 func (h *draftHTTP) resolveAccess(writer http.ResponseWriter, request *http.Request, write bool) (sessions.SessionAccess, bool) {

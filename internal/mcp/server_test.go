@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -212,7 +213,11 @@ func TestServerSessionRunAndDraftToolsDelegateContractRoutes(t *testing.T) {
 		case "/sessions/session-1/runs":
 			_, _ = writer.Write([]byte(`{"items":[],"has_more":false}`))
 		default:
-			_, _ = writer.Write([]byte(`{"draft":{"session_id":"session-1","content":"","revision":0,"updated_at":"2026-10-30T00:00:00Z"}}`))
+			revision := 0
+			if request.Method == http.MethodPut {
+				revision = 1
+			}
+			_, _ = writer.Write([]byte(fmt.Sprintf(`{"draft":{"session_id":"session-1","content":"","revision":%d,"updated_at":"2026-10-30T00:00:00Z"}}`, revision)))
 		}
 	})
 
@@ -661,6 +666,39 @@ func TestServerReportsMalformedMutationEnvelopeAsUnknown(t *testing.T) {
 				t.Fatalf("malformed project success = %#v, want unknown outcome", result)
 			}
 		})
+	}
+}
+
+func TestServerReportsMalformedDraftMutationSuccessAsUnknown(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte(`{}`))
+	})
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      25,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.update_draft",
+			"arguments": map[string]any{
+				"session_id": "session-1", "mutation_id": "mutation-1", "client_id": "client-1",
+				"client_sequence": 1, "content": "hello",
+			},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("malformed draft success = %#v, want unknown outcome", result)
 	}
 }
 

@@ -110,7 +110,7 @@ func TestSessionRunHTTPRejectsInvalidOrCrossSessionCursorBeforeStore(t *testing.
 		runs:      store,
 	}).mount(router)
 
-	for _, query := range []string{"limit=0", "limit=201", "limit=1&limit=2", "after_cursor=not-base64"} {
+	for _, query := range []string{"limit=0", "limit=201", "limit=1&limit=2", "after_cursor=not-base64", "after_cursor=%ZZ"} {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/sessions/session-1/runs?"+query, nil))
 		if response.Code != http.StatusBadRequest || store.calls != 0 {
@@ -180,6 +180,28 @@ func TestDraftHTTPMapsConflictAndRejectsUnknownFields(t *testing.T) {
 	var failure protocol.ApiError
 	if err := json.Unmarshal(unknown.Body.Bytes(), &failure); err != nil || failure.Code != protocol.ErrorCodeInvalidRequest {
 		t.Fatalf("unknown error = %s", unknown.Body.String())
+	}
+}
+
+func TestDraftHTTPAcceptsMaximumDomainContentWithinJSONEnvelope(t *testing.T) {
+	store := &draftStoreStub{draft: drafts.Draft{SessionID: "session-1", Revision: 1, UpdatedAt: "2026-10-30T02:03:04Z"}}
+	router := chi.NewRouter()
+	(&draftHTTP{
+		principal: sessionAccessPrincipal{principal: auth.Principal{UserID: "owner"}},
+		sessions:  authorizedSessionService(),
+		drafts:    store,
+	}).mount(router)
+	body, err := json.Marshal(protocol.UpdateDraftRequest{
+		MutationID: "mutation-max", ClientID: "client-1", ClientSequence: 1,
+		Content: strings.Repeat("a", drafts.MaxContentBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/sessions/session-1/draft", strings.NewReader(string(body))))
+	if response.Code != http.StatusOK || store.applyCalls != 1 || len(store.updateInput.Content) != drafts.MaxContentBytes {
+		t.Fatalf("maximum content status=%d calls=%d content=%d body=%s", response.Code, store.applyCalls, len(store.updateInput.Content), response.Body.String())
 	}
 }
 

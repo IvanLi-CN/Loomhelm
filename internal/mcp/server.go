@@ -64,6 +64,7 @@ var (
 		"createSession":        "session",
 		"bindSessionTask":      "session",
 		"submitRun":            "ack",
+		"updateDraft":          "draft",
 		"resolveApproval":      "ack",
 		"interruptRun":         "ack",
 	}
@@ -77,6 +78,7 @@ var (
 		"createSession":        {"id", "path", "state", "external_thread_ref", "created_at", "updated_at"},
 		"bindSessionTask":      {"id", "path", "state", "external_thread_ref", "created_at", "updated_at"},
 		"submitRun":            {"command_id", "state", "received_at", "deduplicated"},
+		"updateDraft":          {"session_id", "content", "revision", "updated_at"},
 		"resolveApproval":      {"command_id", "state", "received_at", "deduplicated"},
 		"interruptRun":         {"command_id", "state", "received_at", "deduplicated"},
 	}
@@ -424,6 +426,9 @@ func validToolResponse(operationID string, body []byte) bool {
 	case "submitRun", "resolveApproval", "interruptRun":
 		var response protocol.CommandAckResponse
 		return json.Unmarshal(body, &response) == nil && validCommandAck(response.Ack)
+	case "updateDraft":
+		var response protocol.DraftResponse
+		return json.Unmarshal(body, &response) == nil && validDraft(response.Draft)
 	default:
 		return false
 	}
@@ -495,6 +500,10 @@ func validCommandAck(value protocol.CommandAck) bool {
 	default:
 		return false
 	}
+}
+
+func validDraft(value protocol.Draft) bool {
+	return value.SessionID != "" && value.Revision > 0 && value.UpdatedAt != ""
 }
 
 func unknownOutcomeResult() *sdk.CallToolResult {
