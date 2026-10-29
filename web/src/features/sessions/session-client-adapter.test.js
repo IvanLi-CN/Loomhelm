@@ -40,7 +40,7 @@ describe("session client adapter", () => {
     expect(result).toMatchObject({ state: "received", session: { id: "session-1" } });
   });
 
-  test("reports duplicate reads as pending and fences a response after session switching", async () => {
+  test("coalesces duplicate reads and fences a response after session switching", async () => {
     const first = deferred();
     const second = deferred();
     const adapter = new SessionClientAdapter({
@@ -49,7 +49,7 @@ describe("session client adapter", () => {
 
     adapter.selectSession("session-1");
     const firstRead = adapter.readSession("session-1");
-    await expect(adapter.readSession("session-1")).resolves.toMatchObject({ state: "pending", reason: "pending" });
+    const duplicateRead = adapter.readSession("session-1");
 
     adapter.selectSession("session-2");
     const secondRead = adapter.readSession("session-2");
@@ -57,7 +57,28 @@ describe("session client adapter", () => {
     second.resolve({ session: session("session-2") });
 
     await expect(firstRead).resolves.toMatchObject({ state: "unknown", reason: "stale_response" });
+    await expect(duplicateRead).resolves.toMatchObject({ state: "unknown", reason: "stale_response" });
     await expect(secondRead).resolves.toMatchObject({ state: "received", session: { id: "session-2" } });
+  });
+
+  test("shares the first session response with a StrictMode-style remount", async () => {
+    const first = deferred();
+    const calls = [];
+    const adapter = new SessionClientAdapter({
+      getSession: (request) => {
+        calls.push(request);
+        return first.promise;
+      },
+    });
+
+    adapter.selectSession("session-1");
+    const firstRead = adapter.readSession("session-1");
+    const remountedRead = adapter.readSession("session-1");
+    first.resolve({ session: session("session-1") });
+
+    await expect(firstRead).resolves.toMatchObject({ state: "received", session: { id: "session-1" } });
+    await expect(remountedRead).resolves.toMatchObject({ state: "received", session: { id: "session-1" } });
+    expect(calls).toEqual([{ session_id: "session-1" }]);
   });
 
   test("does not publish a session response for a different requested identity", async () => {

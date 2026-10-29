@@ -73,6 +73,7 @@ export interface SessionReadResult {
 
 export class SessionClientAdapter {
   private readonly requests = new SessionRequestFence();
+  private readonly pendingReads = new Map<string, { key: symbol; promise: Promise<SessionReadResult> }>();
 
   constructor(private readonly client: SessionReadClient) {}
 
@@ -83,6 +84,10 @@ export class SessionClientAdapter {
   async readSession(sessionId: string): Promise<SessionReadResult> {
     const admission = this.requests.begin("session.read", sessionId);
     if (!admission.accepted) {
+      if (admission.reason === "pending") {
+        const pendingRead = this.pendingReads.get(sessionId)?.promise;
+        if (pendingRead) return pendingRead;
+      }
       return {
         state: admission.reason === "pending" ? "pending" : "unknown",
         request: admission.token,
@@ -90,19 +95,26 @@ export class SessionClientAdapter {
       };
     }
 
-    try {
-      const response = await this.client.getSession({ session_id: sessionId });
-      if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
-      if (response.session.id !== sessionId) {
+    const requestKey = Symbol(sessionId);
+    const pendingRead = (async (): Promise<SessionReadResult> => {
+      try {
+        const response = await Promise.resolve().then(() => this.client.getSession({ session_id: sessionId }));
+        if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
+        if (response.session.id !== sessionId) {
+          this.requests.finish(admission.token);
+          return { state: "unknown", reason: "foreign_response", request: admission.token };
+        }
         this.requests.finish(admission.token);
-        return { state: "unknown", reason: "foreign_response", request: admission.token };
+        return { state: "received", session: response.session, request: admission.token };
+      } catch {
+        if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
+        this.requests.finish(admission.token);
+        return { state: "unknown", reason: "transport", request: admission.token };
+      } finally {
+        if (this.pendingReads.get(sessionId)?.key === requestKey) this.pendingReads.delete(sessionId);
       }
-      this.requests.finish(admission.token);
-      return { state: "received", session: response.session, request: admission.token };
-    } catch {
-      if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
-      this.requests.finish(admission.token);
-      return { state: "unknown", reason: "transport", request: admission.token };
-    }
+    })();
+    this.pendingReads.set(sessionId, { key: requestKey, promise: pendingRead });
+    return pendingRead;
   }
 }
