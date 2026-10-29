@@ -861,8 +861,8 @@
         "path_params": {"session_id": "string"},
         "body_type": "UpdateDraftRequest",
         "response_type": "DraftResponse",
-        "summary": "Replace the private shared unsent draft with an idempotent last-accepted update",
-        "mcp_tool": {"name": "loomhelm.update_draft", "description": "Update the caller's private shared unsent draft; updates are durable, idempotent and never submit a run."}
+        "summary": "Replace the private shared unsent draft with an idempotent last-accepted update; client_sequence increases per session/client, accepted order is Session lock order, and mutation_id retries reuse the original request",
+        "mcp_tool": {"name": "loomhelm.update_draft", "description": "Update the caller's private shared unsent draft. The UTF-8 content is at most 1 MiB; client_sequence is positive and strictly increasing per session/client, stale sequences are rejected, and mutation_id is an idempotency key that must not be reused with different metadata or content. Matching retries return the persisted projection without reapplying it. Updates are durable and never submit a run."}
       },
       {
         "operation_id": "listRunApprovals",
