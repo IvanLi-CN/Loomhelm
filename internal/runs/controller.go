@@ -385,15 +385,10 @@ func (c *Controller) finalizeDraftCommand(ctx context.Context, record CommandRec
 	if c.draftCommands == nil {
 		return nil
 	}
-	var delivered bool
-	switch record.State {
-	case protocol.CommandStateExecuting, protocol.CommandStateSucceeded:
-		delivered = true
-	case protocol.CommandStateFailed, protocol.CommandStateRejected:
-		delivered = false
-	default:
+	if record.State != protocol.CommandStateExecuting && !isTerminalCommandState(record.State) {
 		return nil
 	}
+	delivered := record.DraftDeliveryConfirmed()
 	if _, err := c.draftCommands.FinalizeCommand(ctx, record.Intent.Command.CommandID, delivered); err != nil {
 		return errors.Join(ErrDraftRecoveryRequired, err)
 	}

@@ -9,11 +9,11 @@
   "compatibility_assessment": {
     "public_api": "patch",
     "persistent_state": "minor",
-    "reason": "The migration is additive: earlier candidates ignore the new table and exact_ack_state column, while their existing command UPDATE paths leave the additive marker intact; a draft-capable candidate can recover command delivery without rewriting existing draft projections."
+    "reason": "The migration is additive: earlier candidates ignore the new table and exact_ack_state column, while their existing UPDATE paths preserve the marker on rows that already have one. A draft-capable candidate can recover those delivery facts without rewriting existing draft projections; a markerless first ACK from an earlier writer is intentionally unresolved and requires a bounded writer drain/fence before rollback or draft admission."
   },
   "durable_state": {
     "description": "execution_commands.exact_ack_state preserves the strongest exact Connector ACK state across older writers; conversation_draft_commands records the owner, Session and exact draft revision bound to one accepted run command, then records whether delivery consumed that revision or preserved the projection.",
-    "storage_implementation": "PostgreSQL state managed by embedded Goose migration 00014. The exact ACK marker is additive and is not named by earlier command UPDATE statements. Admission inserts the binding without clearing the projection; exact transport ACK or trusted reconciliation finalizes it through the draft store.",
+    "storage_implementation": "PostgreSQL state managed by embedded Goose migration 00014. The exact ACK marker is additive and is not named by earlier command UPDATE statements; earlier writers therefore preserve it on existing rows but cannot populate it for a first ACK. Admission inserts the binding without clearing the projection; exact transport ACK or trusted reconciliation finalizes it through the draft store.",
     "retention_policy": "Bindings remain for the lifetime of the command so duplicate ACKs and reconciliation can finalize idempotently. They are retained with command history; any future parent cleanup must delete binding rows before deleting the restricted command or Session rows.",
     "source_compatibility_range": {
       "from_program_versions": "Phase-one private shared-draft candidate after migration 00013.",
@@ -21,7 +21,7 @@
       "readable_earlier_state": true,
       "older_program_can_read_new_state": true,
       "direct_major_skips_supported": false,
-      "compatibility_boundary": "Only a draft-command-capable candidate reads or writes the new table; the additive exact ACK marker is preserved by earlier command writers."
+      "compatibility_boundary": "Only a draft-command-capable candidate reads or writes the new table. Earlier writers may preserve exact_ack_state on existing command rows, but they must be drained and fenced from commands with pending draft bindings before draft admission is enabled or the program is rolled back; a markerless first ACK cannot be inferred safely from executing alone."
     }
   },
   "database_migration": {
@@ -53,13 +53,14 @@
     ],
     "progress_signals": [
       "Command admission creates one pending binding only after the exact Session draft revision is checked.",
-      "An exact ACK records its strongest state in the additive marker, which earlier command writers preserve.",
+      "An exact ACK records its strongest state in the additive marker, which earlier command writers preserve on existing rows; a markerless first ACK remains unresolved rather than being inferred from executing alone.",
       "A delivered fact marks the binding consumed only when the expected revision is still current; a newer revision is preserved.",
-      "A failed, not-found or unresolved command leaves the draft projection untouched."
+      "A failed or not-found command with no prior delivery-confirmed exact ACK leaves the draft projection untouched; a later failed ACK cannot erase an earlier executing delivery fact."
     ],
     "pause_points": [
       "Before applying 00014, verify the candidate source identity and PostgreSQL migration lock availability.",
-      "After the migration commits and before enabling draft-command admission, verify the binding foreign keys and pending-state index."
+      "After the migration commits and before enabling draft-command admission, verify the binding foreign keys and pending-state index.",
+      "Before enabling draft-command admission or rolling back to an earlier writer, drain and fence earlier writers from commands with pending draft bindings; do not treat markerless executing rows as confirmed delivery."
     ]
   },
   "recovery": {
@@ -76,6 +77,7 @@
         "A failed or not-found command preserves the draft, and repeated finalization is idempotent.",
         "An unknown command creates no consume mutation; later confirmed or not-found reconciliation finalizes without sending again.",
         "An earlier command writer may update existing command columns without clearing exact_ack_state; the candidate still fences unknown transitions and retries pending draft finalization.",
+        "A markerless first executing ACK from an earlier writer remains unknown and does not consume a pending draft; rollout evidence records the required earlier-writer drain/fence before draft admission or rollback.",
         "The migration is additive and re-entry does not rewrite existing execution or draft state."
       ]
     }

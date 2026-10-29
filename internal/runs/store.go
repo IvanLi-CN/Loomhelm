@@ -515,10 +515,11 @@ func mergeExactCommandAck(existing, incoming CommandRecord) (CommandRecord, erro
 	if existing.ReconciliationState == protocol.ReconciliationStateNotFound && incoming.State != protocol.CommandStateRejected {
 		return CommandRecord{}, fmt.Errorf("%w: command %q was reconciled as not found", ErrCommandFactConflict, incoming.Intent.Command.CommandID)
 	}
-	if existing.ExactAckState != "" && existing.ExactAckState != incoming.ExactAckState && !allowedCommandTransition(existing.ExactAckState, incoming.ExactAckState) {
-		return CommandRecord{}, fmt.Errorf("%w: command %q exact ACK state cannot become %q", ErrCommandFactConflict, incoming.Intent.Command.CommandID, incoming.ExactAckState)
-	}
 	var err error
+	incoming.ExactAckState, err = mergeExactAckState(existing.ExactAckState, incoming.ExactAckState, incoming.Intent.Command.CommandID)
+	if err != nil {
+		return CommandRecord{}, err
+	}
 	incoming.OperationID, err = mergeExactString(existing.OperationID, incoming.OperationID, "operation id", incoming.Intent.Command.CommandID)
 	if err != nil {
 		return CommandRecord{}, err
@@ -537,6 +538,25 @@ func mergeExactCommandAck(existing, incoming CommandRecord) (CommandRecord, erro
 	}
 	if existing.ReconciliationState == protocol.ReconciliationStateNotFound {
 		incoming.ReconciliationState = protocol.ReconciliationStateNotFound
+	}
+	return incoming, nil
+}
+
+func mergeExactAckState(existing, incoming protocol.CommandState, commandID string) (protocol.CommandState, error) {
+	if existing == "" {
+		return incoming, nil
+	}
+	if existing == incoming {
+		return existing, nil
+	}
+	if !allowedCommandTransition(existing, incoming) {
+		return "", fmt.Errorf("%w: command %q exact ACK state cannot become %q", ErrCommandFactConflict, commandID, incoming)
+	}
+	// An executing ACK is a durable delivery fact. A later failed ACK may
+	// describe the execution result, but it must not erase that fact before a
+	// retried draft finalization can consume the already-sent revision.
+	if isDeliveryConfirmedAckState(existing) && incoming == protocol.CommandStateFailed {
+		return existing, nil
 	}
 	return incoming, nil
 }

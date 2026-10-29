@@ -396,6 +396,142 @@ func TestPersistentDraftCommandReconciliationFinalizesMatchingObservation(t *tes
 	}
 }
 
+func TestPersistentDraftCommandLegacyMarkerlessAckRemainsUnknown(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture := newControlFixture(t, db, 1)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, query := range []string{
+			`DELETE FROM conversation_draft_commands WHERE session_id = $1`,
+			`DELETE FROM conversation_draft_mutations WHERE session_id = $1`,
+			`DELETE FROM conversation_drafts WHERE session_id = $1`,
+		} {
+			if _, err := db.Pool().Exec(cleanupCtx, query, fixture.sessionIDs[0]); err != nil {
+				t.Errorf("cleanup legacy markerless draft rows with query %q: %v", query, err)
+			}
+		}
+	})
+
+	draftStore := drafts.NewStore(db.Pool())
+	runStore := NewStore(db.Pool())
+	sessionID := fixture.sessionIDs[0]
+	commandID := "draft-command-legacy-markerless-" + sessionID
+	runID := fixture.run + "-draft-legacy-markerless"
+	draft, err := draftStore.Apply(ctx, drafts.UpdateInput{
+		SessionID:      sessionID,
+		OwnerUserID:    fixture.userID,
+		MutationID:     "draft-legacy-markerless",
+		ClientID:       "desktop",
+		ClientSequence: 1,
+		Content:        "legacy ACK content",
+	})
+	if err != nil {
+		t.Fatalf("seed legacy markerless draft: %v", err)
+	}
+	command := protocol.Command{
+		CommandID: commandID,
+		IssuedAt:  "2026-10-30T00:00:06Z",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"legacy ACK content"}`),
+		RunID:     &runID,
+		SessionID: sessionID,
+	}
+	_, _, err = runStore.AcceptRunWithMutation(ctx, CommandIntent{Command: command, Generation: fixture.generation}, NewRunInput{
+		ID:         runID,
+		SessionID:  sessionID,
+		CommandID:  commandID,
+		Generation: fixture.generation,
+	}, func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
+		return draftStore.PrepareCommandTx(mutationCtx, tx, drafts.CommandDraftInput{
+			CommandID:        commandID,
+			SessionID:        sessionID,
+			OwnerUserID:      fixture.userID,
+			ExpectedRevision: draft.Revision,
+			Content:          draft.Content,
+		})
+	})
+	if err != nil {
+		t.Fatalf("accept legacy markerless draft command: %v", err)
+	}
+
+	var beforeState, beforeMarker, beforeReconciliation string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, exact_ack_state, reconciliation_state
+		FROM execution_commands
+		WHERE command_id = $1
+	`, commandID).Scan(&beforeState, &beforeMarker, &beforeReconciliation); err != nil {
+		t.Fatalf("read command before migration re-entry: %v", err)
+	}
+	beforeDraft, err := draftStore.Get(ctx, sessionID, fixture.userID)
+	if err != nil {
+		t.Fatalf("read draft before migration re-entry: %v", err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("first migration re-entry: %v", err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("second migration re-entry: %v", err)
+	}
+	var afterState, afterMarker, afterReconciliation string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, exact_ack_state, reconciliation_state
+		FROM execution_commands
+		WHERE command_id = $1
+	`, commandID).Scan(&afterState, &afterMarker, &afterReconciliation); err != nil {
+		t.Fatalf("read command after migration re-entry: %v", err)
+	}
+	afterDraft, err := draftStore.Get(ctx, sessionID, fixture.userID)
+	if err != nil {
+		t.Fatalf("read draft after migration re-entry: %v", err)
+	}
+	if afterState != beforeState || afterMarker != beforeMarker || afterReconciliation != beforeReconciliation || afterDraft != beforeDraft {
+		t.Fatalf("migration re-entry changed command or draft: before command=(%q,%q,%q) draft=%+v after command=(%q,%q,%q) draft=%+v", beforeState, beforeMarker, beforeReconciliation, beforeDraft, afterState, afterMarker, afterReconciliation, afterDraft)
+	}
+
+	// A 00013 writer can record the first executing ACK without knowing the
+	// additive marker. The candidate must keep that outcome unresolved rather
+	// than infer delivery from the ambiguous state and consume the draft.
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE execution_commands
+		SET state = 'executing', operation_id = '', result = NULL, error = NULL,
+		    event_cursor = '', reconciliation_state = ''
+		WHERE command_id = $1
+	`, commandID); err != nil {
+		t.Fatalf("simulate markerless legacy ACK: %v", err)
+	}
+	transport := &matchingReconciliationTransport{state: protocol.ReconciliationStateUnknown}
+	controller, err := NewController(runStore, transport, ControllerConfig{
+		Generation:    fixture.generation,
+		DraftCommands: draftStore,
+	})
+	if err != nil {
+		t.Fatalf("create markerless recovery controller: %v", err)
+	}
+	if _, err := controller.ReconcileCommand(ctx, sessionID, commandID); !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("markerless legacy reconciliation error = %v, want unknown result", err)
+	}
+	record, err := runStore.Lookup(ctx, sessionID, commandID)
+	if err != nil {
+		t.Fatalf("read markerless legacy command: %v", err)
+	}
+	if record.State != protocol.CommandStateUnknown || record.ExactAckState != "" {
+		t.Fatalf("markerless legacy command = %+v, want unknown without exact marker", record)
+	}
+	current, err := draftStore.Get(ctx, sessionID, fixture.userID)
+	if err != nil {
+		t.Fatalf("read markerless legacy draft: %v", err)
+	}
+	if current.Content != draft.Content || current.Revision != draft.Revision {
+		t.Fatalf("markerless legacy draft = %+v, want preserved %+v", current, draft)
+	}
+	if transport.sendCalls != 0 {
+		t.Fatalf("markerless reconciliation sent %d commands, want 0", transport.sendCalls)
+	}
+}
+
 type mismatchedReconciliationTransport struct {
 	response protocol.Reconciliation
 }

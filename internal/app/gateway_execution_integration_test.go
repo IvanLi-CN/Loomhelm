@@ -694,6 +694,28 @@ func TestGatewayCommandAckFinalizesDraftAndFencesUnknown(t *testing.T) {
 	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, ack); !errors.Is(err, runs.ErrDraftRecoveryRequired) {
 		t.Fatalf("first draft ACK error = %v, want draft recovery error", err)
 	}
+	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, protocol.CommandAck{
+		CommandID:  commandID,
+		RunID:      stringPointer(runID),
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateFailed,
+	}); err != nil {
+		t.Fatalf("failed ACK after executing delivery = %v", err)
+	}
+	failedRecord, err := runStore.Lookup(ctx, sessionID, commandID)
+	if err != nil {
+		t.Fatalf("read failed ACK command: %v", err)
+	}
+	if failedRecord.State != protocol.CommandStateFailed || failedRecord.ExactAckState != protocol.CommandStateExecuting {
+		t.Fatalf("failed ACK command = %+v, want failed state with executing delivery marker", failedRecord)
+	}
+	failedDraft, err := draftStore.Get(ctx, sessionID, userID)
+	if err != nil {
+		t.Fatalf("read draft after failed ACK: %v", err)
+	}
+	if failedDraft.Content != "" || failedDraft.Revision != draft.Revision+1 {
+		t.Fatalf("draft after failed ACK = %+v, want consumed revision %d", failedDraft, draft.Revision+1)
+	}
 	controller, err := runs.NewController(runStore, noCallCommandTransport{}, runs.ControllerConfig{
 		Generation:    "generation-" + sessionID,
 		DraftCommands: transport.draftCommands,

@@ -358,6 +358,19 @@ func allowedCommandTransition(from, to protocol.CommandState) bool {
 	}
 }
 
+func isDeliveryConfirmedAckState(state protocol.CommandState) bool {
+	return state == protocol.CommandStateExecuting || state == protocol.CommandStateSucceeded
+}
+
+// DraftDeliveryConfirmed reports whether the durable command facts prove that
+// the command reached the Connector, including when a later exact failed ACK
+// follows an earlier executing ACK.
+func (record CommandRecord) DraftDeliveryConfirmed() bool {
+	return record.State == protocol.CommandStateExecuting ||
+		record.State == protocol.CommandStateSucceeded ||
+		isDeliveryConfirmedAckState(record.ExactAckState)
+}
+
 func allowedReconciliationState(state protocol.CommandState) bool {
 	return state == protocol.CommandStateExecuting || state == protocol.CommandStateSucceeded || state == protocol.CommandStateFailed || state == protocol.CommandStateRejected
 }

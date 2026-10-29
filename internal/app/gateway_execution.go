@@ -148,15 +148,10 @@ func (t *gatewayExecutionTransport) finalizeDraftCommand(ctx context.Context, re
 	if t == nil || t.draftCommands == nil {
 		return nil
 	}
-	var delivered bool
-	switch record.State {
-	case protocol.CommandStateExecuting, protocol.CommandStateSucceeded:
-		delivered = true
-	case protocol.CommandStateFailed, protocol.CommandStateRejected:
-		delivered = false
-	default:
+	if record.State != protocol.CommandStateExecuting && record.State != protocol.CommandStateSucceeded && record.State != protocol.CommandStateFailed && record.State != protocol.CommandStateRejected {
 		return nil
 	}
+	delivered := record.DraftDeliveryConfirmed()
 	if _, err := t.draftCommands.FinalizeCommand(ctx, record.Intent.Command.CommandID, delivered); err != nil {
 		return errors.Join(runs.ErrDraftRecoveryRequired, err)
 	}
