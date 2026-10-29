@@ -241,13 +241,13 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 		}
 		defer c.releaseLease(context.Background(), *lease)
 		if unknownCommandPreservesRun(record.Intent.Command.Kind) {
-			record, err = c.store.TransitionWithLease(ctx, commandID, record.Intent.Generation, protocol.CommandStateUnknown, "", nil, nil, *lease)
+			record, err = c.store.MarkUnknownWithLease(ctx, commandID, record.Intent.Generation, *lease)
 		} else {
 			record, err = c.store.MarkCommandAndRunUnknownWithLease(ctx, commandID, record.Intent.Generation, "command delivery outcome is unknown", *lease)
 		}
 	} else {
 		if unknownCommandPreservesRun(record.Intent.Command.Kind) {
-			record, err = c.store.Transition(ctx, commandID, record.Intent.Generation, protocol.CommandStateUnknown, "", nil, nil)
+			record, err = c.store.MarkUnknown(ctx, commandID, record.Intent.Generation)
 		} else {
 			record, err = c.store.MarkCommandAndRunUnknown(ctx, commandID, record.Intent.Generation, "command delivery outcome is unknown")
 		}

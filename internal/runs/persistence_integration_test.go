@@ -567,6 +567,25 @@ func TestPersistentControllerReconcileUnknownApprovalPreservesRunControl(t *test
 	if storedRun.Interrupt != InterruptRequested {
 		t.Fatalf("interrupted recovery run = %+v, want interrupt requested", storedRun)
 	}
+	terminalCommand := command
+	terminalCommand.CommandID = ids.approvalCommand + "-terminal"
+	terminalAccepted, err := runStore.Accept(ctx, CommandIntent{Command: terminalCommand, Generation: "1"})
+	if err != nil {
+		t.Fatalf("accept terminal race command: %v", err)
+	}
+	if terminalAccepted.Record.State != protocol.CommandStateAccepted {
+		t.Fatalf("accepted terminal race command = %+v", terminalAccepted)
+	}
+	if _, err := runStore.Transition(ctx, terminalCommand.CommandID, "1", protocol.CommandStateSucceeded, "late-ack", nil, nil); err != nil {
+		t.Fatalf("persist terminal race command: %v", err)
+	}
+	terminalRecord, err := runStore.MarkUnknown(ctx, terminalCommand.CommandID, "1")
+	if err != nil {
+		t.Fatalf("converge terminal race command: %v", err)
+	}
+	if terminalRecord.State != protocol.CommandStateSucceeded {
+		t.Fatalf("terminal race command after unknown convergence = %+v, want succeeded", terminalRecord)
+	}
 }
 
 type countingApprovalResolver struct {

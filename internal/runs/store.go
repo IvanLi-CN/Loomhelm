@@ -616,7 +616,54 @@ func (s *Store) RecordCommandCursor(ctx context.Context, commandID, generation, 
 }
 
 func (s *Store) MarkUnknown(ctx context.Context, commandID, generation string) (CommandRecord, error) {
-	return s.Transition(ctx, commandID, generation, protocol.CommandStateUnknown, "", nil, nil)
+	return s.markUnknown(ctx, commandID, generation, nil)
+}
+
+func (s *Store) MarkUnknownWithLease(ctx context.Context, commandID, generation string, lease DurableLeaseIdentity) (CommandRecord, error) {
+	return s.markUnknown(ctx, commandID, generation, &lease)
+}
+
+func (s *Store) markUnknown(ctx context.Context, commandID, generation string, lease *DurableLeaseIdentity) (CommandRecord, error) {
+	if err := s.ready(ctx); err != nil {
+		return CommandRecord{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CommandRecord{}, fmt.Errorf("begin command unknown transition: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	record, _, err := lockCommandAndRun(ctx, tx, commandID)
+	if err != nil {
+		return CommandRecord{}, fmt.Errorf("lock command unknown transition: %w", err)
+	}
+	if err := checkCommandGeneration(record, generation); err != nil {
+		return CommandRecord{}, err
+	}
+	if lease != nil {
+		if err := leaseMatchesCommand(record, *lease); err != nil {
+			return CommandRecord{}, err
+		}
+		if err := checkLeaseTx(ctx, tx, *lease); err != nil {
+			return CommandRecord{}, err
+		}
+	}
+	if record.State == protocol.CommandStateUnknown || isTerminalCommandState(record.State) {
+		if err := tx.Commit(ctx); err != nil {
+			return CommandRecord{}, fmt.Errorf("commit existing command unknown transition: %w", err)
+		}
+		return record, nil
+	}
+	record.State = protocol.CommandStateUnknown
+	record.OperationID = ""
+	record.Result = nil
+	record.Error = nil
+	if err := updateCommandTx(ctx, tx, record, ""); err != nil {
+		return CommandRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CommandRecord{}, fmt.Errorf("commit command unknown transition: %w", err)
+	}
+	return record, nil
 }
 
 // MarkCommandAndRunUnknown converges a command and its associated Run in one
