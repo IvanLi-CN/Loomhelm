@@ -1072,6 +1072,15 @@ export function ProductionConversationWorkspace({
           return;
         }
         if (hasPendingLocalDraft) {
+          if (result.draft.revision !== localDraftState?.baseRevision) {
+            draftRef.current = result.draft.content;
+            draftDirtyRef.current = false;
+            draftInputSinceReadRef.current = false;
+            setDraft(result.draft.content);
+            writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false });
+            setActivityNotice("检测到其他设备的更新，已采用最新共享草稿。");
+            return;
+          }
           draftDirtyRef.current = true;
           draftInputSinceReadRef.current = true;
           scheduleDraftPersistence(loadedSessionId, localDraft);
@@ -1292,6 +1301,8 @@ export function ProductionConversationWorkspace({
               setRunReadFailure(accessMessage);
               setApprovalReadFailure(accessMessage);
             } else {
+              setApprovalReadUncertain(true);
+              setApprovalReadFailure("审批历史读取结果不确定；当前审批事实保留展示，但控制命令已暂停。");
               setActivityNotice("审批历史暂时无法读取；当前已展示的审批事实保持不变，审批控制已禁用。");
             }
           }
@@ -1499,7 +1510,7 @@ export function ProductionConversationWorkspace({
   const resolveApproval = async (params: ResolveApprovalParams) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
     if (!approvalHistoryAvailable) throw new Error("审批历史尚未通过当前 Run 核对，请刷新后再确认");
-    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || approvalHistoryBlocked || uncertainRunCommandId || activeRun?.status === "unknown" || effectiveCommandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
+    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || approvalHistoryBlocked || uncertainRunCommandId || activeRun?.status !== "waiting_approval" || effectiveCommandState === "unknown") throw new Error("当前 Run 身份、审批历史或结果未完成核对，不能继续提交审批控制命令");
     if (sessionForRoute.state !== "active" || !canSendControl(connection, effectiveReadOnly)) throw new Error("当前 Session 不允许提交审批控制命令");
     const approval = activeApprovals.find((item) => item.id === params.approval_id && item.revision === params.body.revision);
     if (!approval) throw new Error("审批修订已变化，请刷新后重新确认");
@@ -1685,7 +1696,7 @@ export function ProductionConversationWorkspace({
         };
         const latestRevision = activeApprovals.filter((candidate) => candidate.id === approval.id).reduce((latest, candidate) => Math.max(latest, candidate.revision), 0);
         const recoveryDecision = uncertainApprovalDecision(principalId, sessionForRoute.id, approval);
-        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
+        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status === "waiting_approval" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
       {draftFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{draftFailure}</span></div> : null}
       <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; draftInputSinceReadRef.current = true; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; if (writeDraft(draftKey, value)) writeLocalDraftState(draftStateKey, { baseRevision: draftRevisionRef.current, content: value, dirty: true }); scheduleDraftPersistence(sessionForRoute.id, value); } else { clearLocalDraftState(draftStateKey); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
