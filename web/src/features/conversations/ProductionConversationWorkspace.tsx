@@ -1148,7 +1148,14 @@ export function ProductionConversationWorkspace({
           const responseApprovals = await readAllApprovalPages(api, activeRunId, () => active);
           if (!active) return;
           const approvalItems = responseApprovals.filter((approval) => approval.run_id === activeRunId);
-          if (approvalItems.length !== responseApprovals.length) setActivityNotice("审批响应包含其他 Run 的记录；已丢弃越界事实。");
+          if (approvalItems.length !== responseApprovals.length) {
+            setApprovals([]);
+            setApprovalHistoryAvailable(false);
+            setApprovalReadUncertain(true);
+            setApprovalReadFailure("审批响应包含其他 Run 的记录；审批历史未完成身份核对，控制命令已暂停。");
+            setActivityNotice(null);
+            return;
+          }
           setApprovals((current) => mergeApprovals(current, approvalItems));
           setApprovalHistoryAvailable(true);
           setRunReadUncertain(false);
