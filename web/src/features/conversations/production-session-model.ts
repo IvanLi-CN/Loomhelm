@@ -127,7 +127,8 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
     id: event.event_id,
     kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",
     occurredAt: event.occurred_at,
-    role: isMessage ? "assistant" : "system"
+    role: isMessage ? "assistant" : "system",
+    sequence: event.sequence
   };
 }
 

@@ -254,6 +254,7 @@ export interface ProductionSessionCreationPanelProps {
   fixedProjectName?: string;
   onCreate: (request: CreateSessionRequest) => void | Promise<void>;
   principalId?: string;
+  projectCanWrite?: (projectId: string) => boolean;
   projectOptions?: readonly ProjectOption[];
   readOnly?: boolean;
   taskId?: string;
@@ -275,6 +276,7 @@ export function ProductionSessionCreationPanel({
   fixedProjectName,
   onCreate,
   principalId,
+  projectCanWrite,
   projectOptions = [],
   readOnly = false,
   taskId
@@ -289,10 +291,15 @@ export function ProductionSessionCreationPanel({
   const [failure, setFailure] = useState<string | null>(null);
   const [creationUncertain, setCreationUncertain] = useState(() => storedIntent?.uncertain ?? false);
   const commandRef = useRef<SessionCreationIntent | undefined>(storedIntent);
+  const selectedProjectReadOnly = selectedProjectId !== NO_PROJECT && Boolean(projectCanWrite && !projectCanWrite(selectedProjectId));
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (pending || readOnly) return;
+    if (selectedProjectReadOnly) {
+      setFailure("当前所选项目为只读；请选择可写项目或独立会话后再创建 Session。");
+      return;
+    }
     const submitPath = path;
     if (submitPath === "existing_active" && !existingActiveSupported) {
       setFailure("当前服务暂不支持接入现有活跃对话；入口保留用于展示一期缺口，不会提交请求。");
@@ -397,7 +404,7 @@ export function ProductionSessionCreationPanel({
               <SelectTrigger aria-label="项目"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_PROJECT}>独立会话，不归属项目</SelectItem>
-                {projectOptions.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}
+                {projectOptions.map((project) => <SelectItem key={project.id} value={project.id} disabled={Boolean(projectCanWrite && !projectCanWrite(project.id))}>{project.name}{projectCanWrite && !projectCanWrite(project.id) ? "（只读）" : ""}</SelectItem>)}
               </SelectContent>
             </Select>
           </label>
@@ -414,11 +421,12 @@ export function ProductionSessionCreationPanel({
         </label>
 
         {readOnly ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><WifiOff className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>当前身份或项目权限为只读；表单保留展示，但不会创建 Session。</span></div> : null}
+        {selectedProjectReadOnly ? <div className="rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status">当前所选项目为只读；项目内 Session 创建已禁用，独立会话仍可创建。</div> : null}
         {failure ? <div className="rounded-[var(--radius-sm)] bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert">{failure}</div> : null}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
           <span className="text-[11px] leading-5 text-[var(--muted)]">不会自动发送草稿；创建请求只提交一次 command_id。</span>
-          <Button type="submit" disabled={pending || readOnly || (path === "existing_active" && !existingActiveSupported)}>
+          <Button type="submit" disabled={pending || readOnly || selectedProjectReadOnly || (path === "existing_active" && !existingActiveSupported)}>
             {pending ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
             {pending ? "正在创建" : creationUncertain ? "重试同一命令" : "创建会话"}
           </Button>
@@ -532,7 +540,7 @@ export function ProductionConversationWorkspace({
 
   const sessionForRoute = session && (sessionId === undefined || session.id === sessionId) ? session : undefined;
   const activeSessionId = sessionForRoute?.id ?? sessionId;
-  const activeRun = run && run.session_id === activeSessionId ? run : undefined;
+  const activeRun = run && run.session_id === activeSessionId && (!initialRunId || run.id === initialRunId) ? run : undefined;
   const activeRunId = activeRun?.id;
   const connection: ConnectionAvailability = sessionForRoute ? connectionFromSessionState(sessionForRoute.state) : "online";
   const sessionProjectReadOnly = Boolean(sessionForRoute?.project_id && projectCanWrite && !projectCanWrite(sessionForRoute.project_id));
@@ -543,6 +551,7 @@ export function ProductionConversationWorkspace({
   const taskSummary = mapTaskSummary(task);
   const context = sessionForRoute ? toSessionContextModel(sessionForRoute, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
   const activeApprovals = runIdentityVerified && activeRunId ? approvals.filter((approval) => approval.run_id === activeRunId) : [];
+  const runRouteUnverified = Boolean(initialRunId && (!activeRun || !runIdentityVerified));
 
   useEffect(() => {
     connectionRef.current = connection;
@@ -681,7 +690,13 @@ export function ProductionConversationWorkspace({
             return true;
           }).sort((left, right) => left.sequence - right.sequence);
           if (freshEvents.length > 0) {
-            setMessages((current) => [...current, ...freshEvents.map(eventToConversationMessage)]);
+            setMessages((current) => {
+              const next = [...current, ...freshEvents.map(eventToConversationMessage)];
+              return next.sort((left, right) => {
+                if (left.sequence === undefined || right.sequence === undefined) return 0;
+                return left.sequence - right.sequence;
+              });
+            });
             const stateEvents = freshEvents.filter((event) => event.sequence > lastAppliedRunSequence.current);
             if (stateEvents.length > 0) {
               setRun((current) => current ? stateEvents.reduce(applyRunEvent, current) : current);
@@ -764,7 +779,7 @@ export function ProductionConversationWorkspace({
   const send = async (prompt: string) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
     if (!canSendControl(connection, effectiveReadOnly) || sessionForRoute.state !== "active") throw new Error("当前 Session 不允许发送控制命令");
-    if (sessionReadUncertain || activeRun?.status === "unknown" || commandState === "unknown") {
+    if (runRouteUnverified || sessionReadUncertain || activeRun?.status === "unknown" || commandState === "unknown") {
       setActivityNotice("当前 Run 结果不确定；请先完成对账，不能在未确认的执行上继续发送或授权。");
       return;
     }
@@ -783,6 +798,12 @@ export function ProductionConversationWorkspace({
     const result = await adapters.run.submitRun(sessionIdForSubmit, { command_id: commandId, prompt }, { connection, readOnly: effectiveReadOnly });
     if (currentSessionIdRef.current !== sessionIdForSubmit) return;
     if (result.state === "unknown") {
+      const acknowledgedRun = result.ack ? runFromCommandAck(sessionForRoute, result.ack) : undefined;
+      if (acknowledgedRun) {
+        writeRunRecoveryId(getRunRecoveryKey(principalId, sessionIdForSubmit), acknowledgedRun.id);
+        setRun(acknowledgedRun);
+        setRunIdentityVerified(false);
+      }
       setUncertainRunCommandId(commandId);
       writeRunIntent(intentKey, { commandId, prompt, uncertain: true });
       setActivityNotice("发送结果不确定；请刷新或手动对账后再决定是否继续。相同意图不会自动重复提交。");
@@ -837,7 +858,7 @@ export function ProductionConversationWorkspace({
   const resolveApproval = async (params: ResolveApprovalParams) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
     if (!approvalHistoryAvailable) throw new Error("审批历史尚未通过当前 Run 核对，请刷新后再确认");
-    if (!runIdentityVerified || sessionReadUncertain || uncertainRunCommandId || activeRun?.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
+    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || uncertainRunCommandId || activeRun?.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
     if (sessionForRoute.state !== "active" || !canSendControl(connection, effectiveReadOnly)) throw new Error("当前 Session 不允许提交审批控制命令");
     const approval = activeApprovals.find((item) => item.id === params.approval_id && item.revision === params.body.revision);
     if (!approval) throw new Error("审批修订已变化，请刷新后重新确认");
@@ -900,7 +921,7 @@ export function ProductionConversationWorkspace({
     const interruptOperationKey = `interrupt:${activeRun.id}`;
     const interruptIntentKey = getControlIntentKey(principalId, sessionForRoute.id, interruptOperationKey);
     const storedInterruptIntent = readControlIntent(interruptIntentKey);
-    if (!runIdentityVerified || sessionReadUncertain || uncertainRunCommandId || activeRun.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交中断控制命令");
+    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || uncertainRunCommandId || activeRun.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交中断控制命令");
     if (storedInterruptIntent?.uncertain) throw new Error("中断命令结果未完成对账；请先确认服务事实，不会自动重复提交");
     if (storedInterruptIntent && storedInterruptIntent.commandId !== request.command_id) throw new Error("中断命令身份已变化，请刷新后重新核对");
     if (!writeControlIntent(interruptIntentKey, { commandId: request.command_id, uncertain: true })) throw new Error("当前浏览器无法持久化中断命令身份；为避免未知结果下重复中断，请先恢复存储后再试");
@@ -935,7 +956,7 @@ export function ProductionConversationWorkspace({
   if (!sessionForRoute && !sessionId) {
     return (
       <section className="grid min-w-0 gap-5" aria-label="创建会话工作区">
-        {api ? <ProductionSessionCreationPanel conversationTitle={currentConversationTitle} existingActiveSupported={existingActiveSupported} fixedProjectId={projectId} fixedProjectName={projectName} onCreate={createSession} principalId={principalId} projectOptions={projectOptions} readOnly={effectiveReadOnly} taskId={task?.id} /> : <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-5 text-sm text-[var(--muted)]"><h2 className="text-base font-semibold text-[var(--ink)]">会话服务不可用</h2><p>当前浏览器没有已认证的生产 API，不能创建 Session。</p></div>}
+        {api ? <ProductionSessionCreationPanel conversationTitle={currentConversationTitle} existingActiveSupported={existingActiveSupported} fixedProjectId={projectId} fixedProjectName={projectName} onCreate={createSession} principalId={principalId} projectCanWrite={projectCanWrite} projectOptions={projectOptions} readOnly={effectiveReadOnly} taskId={task?.id} /> : <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-5 text-sm text-[var(--muted)]"><h2 className="text-base font-semibold text-[var(--ink)]">会话服务不可用</h2><p>当前浏览器没有已认证的生产 API，不能创建 Session。</p></div>}
       </section>
     );
   }
@@ -974,7 +995,7 @@ export function ProductionConversationWorkspace({
         const recoveryDecision = uncertainApprovalDecision(principalId, sessionForRoute.id, approval);
         return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || sessionReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { setDraft(value); writeDraft(draftKey, value); }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { setDraft(value); writeDraft(draftKey, value); }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );

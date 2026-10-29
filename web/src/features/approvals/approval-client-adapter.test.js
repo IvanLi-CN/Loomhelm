@@ -80,6 +80,25 @@ describe("approval client adapter", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("keeps a mismatched approval acknowledgement uncertain until explicit resolution", async () => {
+    const calls = [];
+    const adapter = new ApprovalClientAdapter({
+      resolveApproval: async (request) => {
+        calls.push(request);
+        return { ack: { command_id: "different-command", deduplicated: false, received_at: "2026-10-27T00:00:01Z", state: "succeeded" } };
+      },
+    });
+    const input = { sessionId: "session-1", approval: approval(), commandId: "command-approval-1", decision: "approve" };
+
+    adapter.selectSession("session-1");
+    await expect(adapter.resolve(input)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
+    await expect(adapter.resolve(input)).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls).toHaveLength(1);
+    expect(adapter.resolveUncertain("approval-1", 3, "run-1", "command-approval-1")).toBe(true);
+    await expect(adapter.resolve(input)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
+    expect(calls).toHaveLength(2);
+  });
+
   test("releases an approval command after a definite API rejection", async () => {
     const calls = [];
     const adapter = new ApprovalClientAdapter({

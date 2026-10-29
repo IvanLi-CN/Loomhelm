@@ -56,10 +56,12 @@ function ProductionCreateConversationRoute() {
   return (
     <section className="page-section">
       <ProductionConversationWorkspace
+        key={assembly?.auth.principalId ?? "anonymous"}
         api={api}
         conversationTitle="新建独立会话"
         onSessionCreated={(sessionId, initialRunId) => navigate({ params: { conversationId: sessionId }, search: initialRunId ? { runId: initialRunId } : {}, to: "/conversations/$conversationId" })}
         principalId={assembly?.auth.principalId}
+        projectCanWrite={(projectId) => source?.getProjectPermissions(projectId).canWrite === true}
         projectOptions={source?.projects}
         readOnly={assembly?.permissions.isReadOnly ?? true}
       />

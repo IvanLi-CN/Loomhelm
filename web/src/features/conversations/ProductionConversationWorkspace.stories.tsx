@@ -93,3 +93,15 @@ export const ExistingActiveUnavailable: Story = {
     await expect(canvas.getByRole("button", { name: "创建会话" })).toBeDisabled();
   }
 };
+
+export const ReadOnlyProjectOptions: Story = {
+  render: (args) => (
+    <EvidenceFrame>
+      <ProductionSessionCreationPanel {...args} projectCanWrite={(projectId) => projectId === "loomhelm"} />
+    </EvidenceFrame>
+  ),
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(canvas.getByRole("combobox", { name: "项目" }));
+    await expect(within(document.body).getByRole("option", { name: "Codex 兼容性（只读）" })).toBeDisabled();
+  }
+};

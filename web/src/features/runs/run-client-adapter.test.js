@@ -199,6 +199,27 @@ describe("run client adapter", () => {
     expect(adapter.resolveUncertainSubmit("command-submit-1")).toBe(true);
   });
 
+  test("keeps a mismatched submit acknowledgement uncertain until explicit resolution", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async (request) => {
+        calls.push(request);
+        return ack("different-command");
+      },
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async () => ({ events: [], has_more: false }),
+    });
+    const body = { command_id: "command-submit-1", prompt: "run this" };
+
+    adapter.selectSession("session-1");
+    await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
+    await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls).toHaveLength(1);
+    expect(adapter.resolveUncertainSubmit("command-submit-1")).toBe(true);
+    await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
+    expect(calls).toHaveLength(2);
+  });
+
   test("releases a command after a definite API rejection", async () => {
     const calls = [];
     const adapter = new RunClientAdapter({

@@ -124,6 +124,7 @@ function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string
   const assembly = useOptionalProductionApi();
   const sessionApi = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
   const task = source?.getTask(taskId);
+  const [createdSession, setCreatedSession] = useState<{ sessionId: string; taskId: string }>();
   const [deleteState, setDeleteState] = useState<{ taskId: string; status: "idle" | "pending" | "success" } | null>(null);
   const lastTaskRef = useRef<{ taskId: string; task: typeof task } | undefined>(undefined);
   const routeFocusOwnerRef = useRef<HTMLElement>(null);
@@ -139,6 +140,9 @@ function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string
     const owner = routeFocusOwnerRef.current?.closest("main") ?? routeFocusOwnerRef.current;
     queueOwnedFocusRestore(owner, () => headingRef.current);
   }, [displayedTask?.id]);
+  useEffect(() => {
+    setCreatedSession(undefined);
+  }, [taskId]);
   useEffect(() => {
     if (currentDeleteState !== "success") return;
     const frame = requestAnimationFrame(() => deleteResultHeadingRef.current?.focus({ preventScroll: true }));
@@ -162,6 +166,7 @@ function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string
 
   const project = source.getProject(displayedTask.projectId);
   const projectPermissions = source.getProjectPermissions(displayedTask.projectId);
+  const taskSessionId = displayedTask.conversationId ?? (createdSession?.taskId === taskId ? createdSession.sessionId : undefined);
   return (
     <section ref={routeFocusOwnerRef} className="workspace-page">
       <header className="workspace-heading">
@@ -170,18 +175,19 @@ function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string
       <div className="workspace-layout workspace-panel-info">
         <section className="chat-panel" aria-label="任务工作区">
           <ProductionConversationWorkspace
-            key={`${displayedTask.id}:${assembly?.auth.principalId ?? "anonymous"}`}
+            key={`${displayedTask.id}:${assembly?.auth.principalId ?? "anonymous"}:${taskSessionId ?? "new"}:${initialRunId ?? "none"}`}
             api={sessionApi}
             conversationTitle={displayedTask.title}
             initialRunId={initialRunId}
-            onRunCreated={displayedTask.conversationId ? (sessionId, runId) => navigate({ params: { taskId }, search: { runId }, to: "/tasks/$taskId" }) : undefined}
+            onRunCreated={(sessionId, runId) => { setCreatedSession({ sessionId, taskId }); return navigate({ params: { taskId }, search: { runId }, to: "/tasks/$taskId" }); }}
+            onSessionCreated={(sessionId, runId) => { setCreatedSession({ sessionId, taskId }); return navigate({ params: { taskId }, search: runId ? { runId } : {}, to: "/tasks/$taskId" }); }}
             principalId={assembly?.auth.principalId}
             projectCanWrite={(projectId) => source.getProjectPermissions(projectId).canWrite}
             projectId={displayedTask.projectId}
             projectName={project?.name}
             projectOptions={source.projects}
             readOnly={!projectPermissions.canWrite || assembly?.permissions.isReadOnly === true}
-            sessionId={displayedTask.conversationId}
+            sessionId={taskSessionId}
             task={displayedTask}
           />
         </section>
@@ -215,7 +221,7 @@ export function ConversationWorkspaceRoute() {
     const project = source?.getProject(task?.projectId);
     const projectPermissions = source?.getProjectPermissions(task?.projectId);
     if (source?.status === "loading") return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">CONVERSATION WORKSPACE</span><h1>正在读取对话上下文</h1><p>正在读取任务与项目权限，随后显示 Session 和 Host 状态。</p></section>;
-    return <section className="page-section"><ProductionConversationWorkspace key={`${conversationId}:${assembly?.auth.principalId ?? "anonymous"}`} api={sessionApi} conversationTitle={task?.title ?? "独立会话"} initialRunId={runId} onRunCreated={(sessionId, nextRunId) => navigate({ params: { conversationId: sessionId }, search: { runId: nextRunId }, to: "/conversations/$conversationId" })} principalId={assembly?.auth.principalId} projectCanWrite={(projectId) => source?.getProjectPermissions(projectId).canWrite === true} projectId={task?.projectId} projectName={project?.name} projectOptions={source?.projects} readOnly={task ? projectPermissions?.canWrite !== true : assembly?.permissions.isReadOnly !== false} sessionId={conversationId} task={task} /></section>;
+    return <section className="page-section"><ProductionConversationWorkspace key={`${conversationId}:${assembly?.auth.principalId ?? "anonymous"}:${runId ?? "none"}`} api={sessionApi} conversationTitle={task?.title ?? "独立会话"} initialRunId={runId} onRunCreated={(sessionId, nextRunId) => navigate({ params: { conversationId: sessionId }, search: { runId: nextRunId }, to: "/conversations/$conversationId" })} principalId={assembly?.auth.principalId} projectCanWrite={(projectId) => source?.getProjectPermissions(projectId).canWrite === true} projectId={task?.projectId} projectName={project?.name} projectOptions={source?.projects} readOnly={task ? projectPermissions?.canWrite !== true : assembly?.permissions.isReadOnly !== false} sessionId={conversationId} task={task} /></section>;
   }
   const conversation = getConversation(runtime.fixtures, conversationId);
   return <WorkspaceRoute taskId={conversation?.taskId} conversationId={conversationId} />;
