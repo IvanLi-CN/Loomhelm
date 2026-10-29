@@ -400,6 +400,10 @@ func validateArgument(name string, raw json.RawMessage, definition argumentDefin
 }
 
 func validateJSONType(raw json.RawMessage, kind string) error {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return fmt.Errorf("must be a %s", kind)
+	}
 	switch kind {
 	case "string":
 		var value string

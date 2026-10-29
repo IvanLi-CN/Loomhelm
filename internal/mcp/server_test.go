@@ -195,19 +195,30 @@ func TestServerToolCallDelegatesAuthenticationPathAndBody(t *testing.T) {
 func TestServerRejectsInvalidMutationArgumentsBeforeREST(t *testing.T) {
 	tests := []struct {
 		name      string
+		toolName  string
 		arguments map[string]any
 	}{
 		{
-			name: "wrong body type",
+			name:     "wrong body type",
+			toolName: "loomhelm.create_project",
 			arguments: map[string]any{
 				"name": 17,
 			},
 		},
 		{
-			name: "optional null",
+			name:     "optional null",
+			toolName: "loomhelm.update_project",
 			arguments: map[string]any{
 				"project_id": "project-1",
 				"name":       nil,
+			},
+		},
+		{
+			name:     "null array item",
+			toolName: "loomhelm.create_user_credential",
+			arguments: map[string]any{
+				"name":        "automation",
+				"project_ids": []any{nil},
 			},
 		},
 	}
@@ -218,16 +229,12 @@ func TestServerRejectsInvalidMutationArgumentsBeforeREST(t *testing.T) {
 				calls.Add(1)
 				writer.WriteHeader(http.StatusInternalServerError)
 			})
-			toolName := "loomhelm.create_project"
-			if test.name == "optional null" {
-				toolName = "loomhelm.update_project"
-			}
 			response := callMCP(t, server, map[string]any{
 				"jsonrpc": "2.0",
 				"id":      13,
 				"method":  "tools/call",
 				"params": map[string]any{
-					"name":      toolName,
+					"name":      test.toolName,
 					"arguments": test.arguments,
 				},
 			})
@@ -989,6 +996,53 @@ func TestServerDoesNotMarkTypeInvalidMutationUnknownInOverflowFallback(t *testin
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("type-invalid mutation REST invocation count = %d, want zero", calls.Load())
+	}
+}
+
+func TestServerDoesNotMarkNullArrayItemMutationUnknownInOverflowFallback(t *testing.T) {
+	var calls atomic.Int32
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls.Add(1)
+			writer.WriteHeader(http.StatusInternalServerError)
+		}),
+		MaxResponseBytes: 2048,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	body := mustJSON(t, []map[string]any{
+		{"jsonrpc": "2.0", "id": 7, "method": "tools/list"},
+		{
+			"jsonrpc": "2.0",
+			"id":      8,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name": "loomhelm.create_user_credential",
+				"arguments": map[string]any{
+					"name":        "automation",
+					"project_ids": []any{nil},
+				},
+			},
+		},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Protocol-Version", OlderProtocolVersion)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("X-Loomhelm-MCP-Response") != "too_large_fallback" {
+		t.Fatalf("null-array mutation fallback status=%d marker=%q, want 200/too_large_fallback", recorder.Code, recorder.Header().Get("X-Loomhelm-MCP-Response"))
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(strconv.Itoa(jsonrpc.CodeInvalidParams))) {
+		t.Fatalf("null-array mutation fallback response = %s, want invalid-params", recorder.Body.String())
+	}
+	if bytes.Contains(recorder.Body.Bytes(), []byte(string(protocol.ErrorCodeUnknownResult))) {
+		t.Fatalf("null-array mutation fallback response = %s, must not claim unknown_result", recorder.Body.String())
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("null-array mutation REST invocation count = %d, want zero", calls.Load())
 	}
 }
 
