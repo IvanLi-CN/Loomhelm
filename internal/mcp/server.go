@@ -825,15 +825,33 @@ func (s *Server) oversizedBatchResponse(request *http.Request) ([]byte, bool) {
 		response := oversizedRPCResponse{JSONRPC: "2.0", ID: encodedID}
 		if rpcRequest.Method == "tools/call" {
 			var params struct {
-				Name string `json:"name"`
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
 			}
 			if json.Unmarshal(rpcRequest.Params, &params) == nil {
 				if spec, exists := s.toolByName[params.Name]; exists && spec.route.method != http.MethodGet {
-					response.Result = unknownOutcomeResult()
+					arguments, err := decodeArguments(params.Arguments, spec)
+					if err == nil {
+						_, err = routePath(spec.route.path, spec.route.pathParams, arguments)
+					}
+					if err == nil {
+						_, err = routeQuery(spec.route.queryParams, arguments)
+					}
+					if err == nil {
+						_, err = routeBody(spec.route, arguments)
+					}
+					if err == nil {
+						response.Result = unknownOutcomeResult()
+					} else {
+						response.Error = &oversizedRPCError{
+							Code:    jsonrpc.CodeInvalidParams,
+							Message: "invalid MCP tool arguments",
+						}
+					}
 				}
 			}
 		}
-		if response.Result == nil {
+		if response.Result == nil && response.Error == nil {
 			response.Error = &oversizedRPCError{
 				Code:    jsonrpc.CodeInternalError,
 				Message: "MCP response exceeds configured limit",
@@ -986,7 +1004,7 @@ func (h *requestIDLimitHandler) ServeHTTP(writer http.ResponseWriter, request *h
 	clearReadDeadline := setRequestBodyReadDeadline(writer, defaultRequestBodyReadTimeout)
 	body, err := readRequestBody(request.Context(), request.Body, h.maxBody+1, defaultRequestBodyReadTimeout)
 	if err == nil {
-		if closeRequestBody(request.Body) {
+		if closeRequestBodyWithin(request.Body, defaultRequestBodyReadTimeout) {
 			clearReadDeadline()
 		}
 	}
@@ -1052,15 +1070,22 @@ func readRequestBody(ctx context.Context, body io.ReadCloser, limit int64, timeo
 }
 
 func closeRequestBody(body io.Closer) bool {
+	return closeRequestBodyWithin(body, requestBodyCloseWait)
+}
+
+func closeRequestBodyWithin(body io.Closer, wait time.Duration) bool {
 	if body == nil {
 		return true
+	}
+	if wait <= 0 {
+		wait = requestBodyCloseWait
 	}
 	done := make(chan struct{})
 	go func() {
 		_ = body.Close()
 		close(done)
 	}()
-	timer := time.NewTimer(requestBodyCloseWait)
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-done:

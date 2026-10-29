@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
 func TestServerDiscoveryMatchesGeneratedContract(t *testing.T) {
@@ -550,7 +552,7 @@ func TestRequestBodyReadTimeoutDoesNotWaitForBlockingClose(t *testing.T) {
 	close(body.closed)
 }
 
-func TestRequestBodyCloseAfterCappedReadIsBounded(t *testing.T) {
+func TestRequestBodyCloseAfterCappedReadCompletesBeforeHandlerReturn(t *testing.T) {
 	body := &cappedBlockingCloseRequestBody{
 		data:     bytes.Repeat([]byte("x"), 5),
 		release:  make(chan struct{}),
@@ -573,23 +575,25 @@ func TestRequestBodyCloseAfterCappedReadIsBounded(t *testing.T) {
 		handler.ServeHTTP(recorder, request)
 		close(done)
 	}()
+	releaseDelay := 300 * time.Millisecond
+	go func() {
+		time.Sleep(releaseDelay)
+		close(body.release)
+	}()
 
 	select {
 	case <-done:
-		if elapsed := time.Since(started); elapsed > requestBodyCloseWait+500*time.Millisecond {
-			t.Fatalf("capped-read handler waited %s for a blocking Close, want bounded return", elapsed)
+		if elapsed := time.Since(started); elapsed < releaseDelay/2 {
+			t.Fatalf("capped-read handler returned after %s before the original body Close completed", elapsed)
 		}
-	case <-time.After(requestBodyCloseWait + 500*time.Millisecond):
-		close(body.release)
-		<-done
-		t.Fatal("capped-read handler waited for a blocking Close")
+	case <-time.After(time.Second):
+		t.Fatal("capped-read handler did not return after the original body Close completed")
 	}
 	select {
 	case <-body.started:
 	default:
 		t.Fatal("capped-read handler did not close the original request body")
 	}
-	close(body.release)
 	select {
 	case <-body.finished:
 	case <-time.After(time.Second):
@@ -839,6 +843,50 @@ func TestServerPreservesUnknownOutcomeWhenBoundedBatchResponseOverflows(t *testi
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("overflowed legacy batch REST invocation count = %d, want 1", calls.Load())
+	}
+}
+
+func TestServerDoesNotMarkRejectedMutationUnknownInOverflowFallback(t *testing.T) {
+	var calls atomic.Int32
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls.Add(1)
+			writer.WriteHeader(http.StatusInternalServerError)
+		}),
+		MaxResponseBytes: 2048,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	body := mustJSON(t, []map[string]any{
+		{"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+		{
+			"jsonrpc": "2.0",
+			"id":      4,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "loomhelm.create_user_credential",
+				"arguments": map[string]any{},
+			},
+		},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Protocol-Version", OlderProtocolVersion)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("X-Loomhelm-MCP-Response") != "too_large_fallback" {
+		t.Fatalf("rejected mutation fallback status=%d marker=%q, want 200/too_large_fallback", recorder.Code, recorder.Header().Get("X-Loomhelm-MCP-Response"))
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(strconv.Itoa(jsonrpc.CodeInvalidParams))) {
+		t.Fatalf("rejected mutation fallback response = %s, want invalid-params", recorder.Body.String())
+	}
+	if bytes.Contains(recorder.Body.Bytes(), []byte(string(protocol.ErrorCodeUnknownResult))) {
+		t.Fatalf("rejected mutation fallback response = %s, must not claim unknown_result", recorder.Body.String())
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("rejected mutation REST invocation count = %d, want zero", calls.Load())
 	}
 }
 
