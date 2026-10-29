@@ -6,6 +6,7 @@ import {
   connectionFromSessionState,
   eventToConversationMessage,
   runFromCommandAck,
+  runFromRecoveredIdentity,
   taskStatusFromState,
   toSessionContextModel
 } from "./production-session-model";
@@ -80,6 +81,10 @@ describe("production session model", () => {
     })).toMatchObject({ id: "run-rejected", status: "pending" });
   });
 
+  test("keeps a recovered Run identity unknown until an event verifies it", () => {
+    expect(runFromRecoveredIdentity(session, "run-recovered")).toMatchObject({ id: "run-recovered", session_id: "session-1", status: "unknown" });
+  });
+
   test("reduces terminal and approval events without inferring from transport", () => {
     const pending = runFromCommandAck(session, {
       command_id: "command-1",
@@ -149,5 +154,6 @@ describe("production session model", () => {
     expect(connectionFromSessionState("active")).toBe("online");
     expect(connectionFromSessionState("reconciling")).toBe("reconnecting");
     expect(connectionFromSessionState("disconnected")).toBe("offline");
+    expect(connectionFromSessionState("unsupported")).toBe("offline");
   });
 });

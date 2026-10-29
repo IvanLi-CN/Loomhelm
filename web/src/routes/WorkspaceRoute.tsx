@@ -1,6 +1,6 @@
 import { FileText, Info, MessageCircle, Pause, Send, ShieldCheck, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Link, useParams, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 
 import { useOptionalProductionApi } from "@/app/providers";
 import { Button } from "@/components/ui/button";
@@ -118,7 +118,8 @@ export function WorkspaceRoute({ taskId, conversationId }: { taskId?: string; co
   );
 }
 
-function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
+function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string; initialRunId?: string }) {
+  const navigate = useNavigate();
   const source = useOptionalProjectTaskSource();
   const assembly = useOptionalProductionApi();
   const sessionApi = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
@@ -171,6 +172,8 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
           <ProductionConversationWorkspace
             api={sessionApi}
             conversationTitle={displayedTask.title}
+            initialRunId={initialRunId}
+            onRunCreated={displayedTask.conversationId ? (sessionId, runId) => navigate({ params: { taskId }, search: { runId }, to: "/tasks/$taskId" }) : undefined}
             projectId={displayedTask.projectId}
             projectName={project?.name}
             projectOptions={source.projects}
@@ -192,12 +195,14 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
 
 export function TaskWorkspaceRoute() {
   const { taskId } = useParams({ from: "/tasks/$taskId" });
-  return useOptionalDemoRuntime() ? <WorkspaceRoute taskId={taskId} /> : <ProductionTaskWorkspaceRoute taskId={taskId} />;
+  const { runId } = useSearch({ from: "/tasks/$taskId" });
+  return useOptionalDemoRuntime() ? <WorkspaceRoute taskId={taskId} /> : <ProductionTaskWorkspaceRoute initialRunId={runId} taskId={taskId} />;
 }
 
 export function ConversationWorkspaceRoute() {
   const { conversationId } = useParams({ from: "/conversations/$conversationId" });
   const { runId } = useSearch({ from: "/conversations/$conversationId" });
+  const navigate = useNavigate();
   const runtime = useOptionalDemoRuntime();
   const source = useOptionalProjectTaskSource();
   const assembly = useOptionalProductionApi();
@@ -207,7 +212,7 @@ export function ConversationWorkspaceRoute() {
     const project = source?.getProject(task?.projectId);
     const projectPermissions = source?.getProjectPermissions(task?.projectId);
     if (source?.status === "loading") return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">CONVERSATION WORKSPACE</span><h1>正在读取对话上下文</h1><p>正在读取任务与项目权限，随后显示 Session 和 Host 状态。</p></section>;
-    return <section className="page-section"><ProductionConversationWorkspace api={sessionApi} conversationTitle={task?.title ?? "独立会话"} initialRunId={runId} projectId={task?.projectId} projectName={project?.name} projectOptions={source?.projects} readOnly={task ? projectPermissions?.canWrite !== true : assembly?.permissions.isReadOnly !== false} sessionId={conversationId} task={task} /></section>;
+    return <section className="page-section"><ProductionConversationWorkspace api={sessionApi} conversationTitle={task?.title ?? "独立会话"} initialRunId={runId} onRunCreated={(sessionId, nextRunId) => navigate({ params: { conversationId: sessionId }, search: { runId: nextRunId }, to: "/conversations/$conversationId" })} projectId={task?.projectId} projectName={project?.name} projectOptions={source?.projects} readOnly={task ? projectPermissions?.canWrite !== true : assembly?.permissions.isReadOnly !== false} sessionId={conversationId} task={task} /></section>;
   }
   const conversation = getConversation(runtime.fixtures, conversationId);
   return <WorkspaceRoute taskId={conversation?.taskId} conversationId={conversationId} />;

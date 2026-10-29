@@ -102,6 +102,7 @@ const createTaskRoute = createRoute({
 const taskWorkspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks/$taskId",
+  validateSearch: (search: Record<string, unknown>) => typeof search.runId === "string" ? { runId: search.runId } : {},
   component: TaskWorkspaceRoute
 });
 

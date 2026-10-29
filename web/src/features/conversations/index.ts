@@ -15,6 +15,7 @@ export {
   connectionFromSessionState,
   eventToConversationMessage,
   runFromCommandAck,
+  runFromRecoveredIdentity,
   runFromIdentity,
   taskStatusFromState,
   toSessionContextModel,

@@ -76,6 +76,10 @@ export function runFromIdentity(session: Session, runId: string, createdAt = ses
   };
 }
 
+export function runFromRecoveredIdentity(session: Session, runId: string, createdAt = session.updated_at): Run {
+  return { ...runFromIdentity(session, runId, createdAt), status: "unknown" };
+}
+
 export function applyRunEvent(run: Run, event: Event): Run {
   const next: Run = { ...run, last_cursor: event.cursor };
   if (event.type === "run.started") return { ...next, started_at: event.occurred_at, status: "running" };
@@ -150,7 +154,7 @@ export function approvalContextFromApproval(approval: Approval): ApprovalContext
 }
 
 export function connectionFromSessionState(state: Session["state"]): ConnectionAvailability {
-  if (state === "disconnected" || state === "closed") return "offline";
+  if (state === "disconnected" || state === "closed" || state === "unsupported") return "offline";
   if (state === "reconciling" || state === "starting") return "reconnecting";
   return "online";
 }

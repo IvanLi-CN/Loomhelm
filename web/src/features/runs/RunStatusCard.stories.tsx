@@ -63,6 +63,9 @@ export const StateGallery: Story = {
       <RunStatusCard run={run("pending", "run-received")} session={session} commandState="accepted" interruptCommandId="cmd-interrupt-received" />
       <RunStatusCard run={run("running", "run-executing")} session={session} commandState="executing" interruptCommandId="cmd-interrupt-executing" onInterrupt={() => undefined} />
       <RunStatusCard run={run("running", "run-interrupting")} session={session} interruptRequested commandState="executing" interruptCommandId="cmd-interrupting" onInterrupt={() => undefined} />
+      <RunStatusCard run={run("waiting_approval", "run-waiting-approval")} session={session} commandState="executing" interruptCommandId="cmd-interrupt-waiting" />
+      <RunStatusCard run={run("completed", "run-completed")} session={session} commandState="succeeded" interruptCommandId="cmd-interrupt-completed" />
+      <RunStatusCard run={run("failed", "run-failed")} session={session} commandState="failed" interruptCommandId="cmd-interrupt-failed" />
       <RunStatusCard run={run("interrupted", "run-terminated")} session={session} commandState="succeeded" interruptCommandId="cmd-interrupt-terminated" />
       <RunStatusCard run={run("unknown", "run-unknown")} session={session} commandState="unknown" interruptCommandId="cmd-interrupt-unknown" />
       <RunStatusCard run={run("running", "run-disconnected")} session={{ ...session, state: "disconnected" }} connection="offline" commandState="executing" interruptCommandId="cmd-interrupt-disconnected" />
