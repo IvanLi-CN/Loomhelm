@@ -275,6 +275,14 @@ func (r *databaseRuntime) startArtifactRecovery(store artifactRecoveryStore) {
 	r.startArtifactRecoveryWithInterval(store, artifactRecoveryInterval)
 }
 
+// RequestShutdown cancels background recovery as soon as the server enters
+// drain. Close still waits for the canceled pass before releasing the pool.
+func (r *databaseRuntime) RequestShutdown() {
+	if r != nil && r.artifactRecoveryCancel != nil {
+		r.artifactRecoveryCancel()
+	}
+}
+
 func (r *databaseRuntime) startArtifactRecoveryWithInterval(store artifactRecoveryStore, interval time.Duration) {
 	if r == nil || store == nil || interval <= 0 {
 		return
@@ -318,9 +326,9 @@ func (r *databaseRuntime) stopArtifactRecovery() bool {
 	}
 	r.artifactRecoveryCancel()
 	if r.artifactRecoveryDone != nil {
-		timeout := r.shutdownTimeout
-		if timeout <= 0 {
-			timeout = artifactRecoveryPassBudget
+		timeout := artifactRecoveryPassBudget
+		if r.shutdownTimeout > 0 && r.shutdownTimeout < timeout {
+			timeout = r.shutdownTimeout
 		}
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()

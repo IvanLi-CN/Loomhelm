@@ -925,6 +925,7 @@
         "path_params": {"artifact_id": "string"},
         "response_type": "ArtifactDownload",
         "response_status": 200,
+        "response_statuses": [200, 206],
         "summary": "Download the authorized original artifact bytes"
       }
     ]

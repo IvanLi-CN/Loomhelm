@@ -244,8 +244,21 @@ func (s *Server) BeginDrain(reason string) bool {
 	changed := s.lifecycle.BeginDrain(reason)
 	if changed {
 		s.logger.Info("server entering drain", "reason", reason)
+		s.requestRuntimeShutdown()
 	}
 	return changed
+}
+
+func (s *Server) requestRuntimeShutdown() {
+	s.resourceMu.RLock()
+	resources := s.resources
+	s.resourceMu.RUnlock()
+	if resources == nil {
+		return
+	}
+	if requester, ok := resources.(interface{ RequestShutdown() }); ok {
+		requester.RequestShutdown()
+	}
 }
 
 func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener, serveResult <-chan error, reason string) error {

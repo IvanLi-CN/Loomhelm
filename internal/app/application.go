@@ -102,12 +102,12 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	router.Head("/artifacts/{artifact_id}/download", protectedDownload)
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
 		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
-		if err != nil || principal.UserID == "" || principal.CredentialID != "" {
-			status := http.StatusUnauthorized
-			if err != nil && !errors.Is(err, auth.ErrUnauthenticated) {
-				status = http.StatusInternalServerError
-			}
-			writeApplicationError(writer, request, status, "browser session is unavailable")
+		if err != nil {
+			auth.WriteError(writer, request, auth.StatusForError(err), err, "browser session is unavailable")
+			return
+		}
+		if principal.UserID == "" || principal.CredentialID != "" {
+			auth.WriteError(writer, request, http.StatusUnauthorized, auth.ErrUnauthenticated, "browser session is unavailable")
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")

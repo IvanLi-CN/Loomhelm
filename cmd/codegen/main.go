@@ -46,17 +46,18 @@ type restContract struct {
 }
 
 type operation struct {
-	OperationID    string            `json:"operation_id"`
-	BrowserOnly    bool              `json:"browser_only"`
-	Method         string            `json:"method"`
-	Path           string            `json:"path"`
-	PathParams     map[string]string `json:"path_params"`
-	QueryType      string            `json:"query_type"`
-	BodyType       string            `json:"body_type"`
-	ResponseType   string            `json:"response_type"`
-	ResponseStatus int               `json:"response_status"`
-	Summary        string            `json:"summary"`
-	MCPTool        *mcpTool          `json:"mcp_tool"`
+	OperationID      string            `json:"operation_id"`
+	BrowserOnly      bool              `json:"browser_only"`
+	Method           string            `json:"method"`
+	Path             string            `json:"path"`
+	PathParams       map[string]string `json:"path_params"`
+	QueryType        string            `json:"query_type"`
+	BodyType         string            `json:"body_type"`
+	ResponseType     string            `json:"response_type"`
+	ResponseStatus   int               `json:"response_status"`
+	ResponseStatuses []int             `json:"response_statuses"`
+	Summary          string            `json:"summary"`
+	MCPTool          *mcpTool          `json:"mcp_tool"`
 }
 
 type mcpTool struct {
@@ -199,15 +200,35 @@ func validate(source contract) error {
 				}
 			}
 		}
-		if operation.ResponseStatus != 0 && (operation.ResponseStatus < 200 || operation.ResponseStatus > 299) {
-			return fmt.Errorf("operation %s response status must be successful", operation.OperationID)
-		}
-		if operation.ResponseStatus == 204 {
-			if operation.ResponseType != "" {
-				return fmt.Errorf("operation %s cannot declare a response body for status 204", operation.OperationID)
+		statuses := responseStatuses(operation)
+		seenStatuses := map[int]bool{}
+		for _, status := range statuses {
+			if status < 200 || status > 299 {
+				return fmt.Errorf("operation %s response status must be successful", operation.OperationID)
 			}
-		} else if operation.ResponseType == "" {
-			return fmt.Errorf("operation %s response type must not be empty unless status is 204", operation.OperationID)
+			if seenStatuses[status] {
+				return fmt.Errorf("operation %s response statuses must be unique", operation.OperationID)
+			}
+			seenStatuses[status] = true
+		}
+		if len(operation.ResponseStatuses) > 0 && operation.ResponseStatus == 0 {
+			return fmt.Errorf("operation %s response_statuses requires response_status", operation.OperationID)
+		}
+		if len(operation.ResponseStatuses) > 0 && !seenStatuses[operation.ResponseStatus] {
+			return fmt.Errorf("operation %s response_status must be included in response_statuses", operation.OperationID)
+		}
+		if operation.ResponseType == "" {
+			for _, status := range statuses {
+				if status != 204 {
+					return fmt.Errorf("operation %s response type must not be empty unless every status is 204", operation.OperationID)
+				}
+			}
+		} else {
+			for _, status := range statuses {
+				if status == 204 {
+					return fmt.Errorf("operation %s cannot declare a response body for status 204", operation.OperationID)
+				}
+			}
 		}
 		if operation.BrowserOnly && operation.MCPTool != nil {
 			return fmt.Errorf("browser-only operation %s must not declare an MCP tool", operation.OperationID)
@@ -359,11 +380,11 @@ func (g generator) goSource() ([]byte, error) {
 		out.WriteString("}\n\n")
 	}
 
-	out.WriteString("type RESTOperation struct {\n\tOperationID string\n\tMethod string\n\tPath string\n\tRequestType string\n\tResponseType string\n\tResponseStatus int\n}\n\n")
+	out.WriteString("type RESTOperation struct {\n\tOperationID string\n\tMethod string\n\tPath string\n\tRequestType string\n\tResponseType string\n\tResponseStatus int\n\tResponseStatuses []int\n}\n\n")
 	out.WriteString("var RESTOperations = []RESTOperation{\n")
 	for _, operation := range g.contract.REST.Operations {
 		requestType := operationRequestType(operation)
-		fmt.Fprintf(&out, "\t{OperationID: %q, Method: %q, Path: %q, RequestType: %q, ResponseType: %q, ResponseStatus: %d},\n", operation.OperationID, operation.Method, g.contract.REST.BasePath+operation.Path, requestType, operation.ResponseType, operation.ResponseStatus)
+		fmt.Fprintf(&out, "\t{OperationID: %q, Method: %q, Path: %q, RequestType: %q, ResponseType: %q, ResponseStatus: %d, ResponseStatuses: %s},\n", operation.OperationID, operation.Method, g.contract.REST.BasePath+operation.Path, requestType, operation.ResponseType, operation.ResponseStatus, formatGoIntSlice(responseStatuses(operation)))
 	}
 	out.WriteString("}\n\n")
 
@@ -468,10 +489,10 @@ func (g generator) protocolTypeScript() string {
 		out.WriteString("}\n\n")
 	}
 
-	out.WriteString("export interface RestOperation { operationId: string; method: string; path: string; requestType: string; responseType: string; responseStatus: number; }\n")
+	out.WriteString("export interface RestOperation { operationId: string; method: string; path: string; requestType: string; responseType: string; responseStatus: number; responseStatuses: readonly number[]; }\n")
 	out.WriteString("export const REST_OPERATIONS = [\n")
 	for _, operation := range g.contract.REST.Operations {
-		fmt.Fprintf(&out, "  { operationId: %q, method: %q, path: %q, requestType: %q, responseType: %q, responseStatus: %d },\n", operation.OperationID, operation.Method, g.contract.REST.BasePath+operation.Path, operationRequestType(operation), operation.ResponseType, operation.ResponseStatus)
+		fmt.Fprintf(&out, "  { operationId: %q, method: %q, path: %q, requestType: %q, responseType: %q, responseStatus: %d, responseStatuses: %s },\n", operation.OperationID, operation.Method, g.contract.REST.BasePath+operation.Path, operationRequestType(operation), operation.ResponseType, operation.ResponseStatus, formatIntSlice(responseStatuses(operation)))
 	}
 	out.WriteString("] as const satisfies readonly RestOperation[];\n\n")
 
@@ -581,10 +602,14 @@ func (g generator) apiClientTypeScript() string {
 			if operation.BodyType != "" {
 				body = "request.body"
 			}
+			expectedStatus := strconv.Itoa(operation.ResponseStatus)
+			if statuses := responseStatuses(operation); len(statuses) > 1 {
+				expectedStatus = formatIntSlice(statuses)
+			}
 			if binaryResponse {
-				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %d, true);\n", responseType, operation.Method, body, operation.ResponseStatus)
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true);\n", responseType, operation.Method, body, expectedStatus)
 			} else {
-				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %d);\n", responseType, operation.Method, body, operation.ResponseStatus)
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s);\n", responseType, operation.Method, body, expectedStatus)
 			}
 		} else if operation.BodyType != "" {
 			fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, request.body);\n", responseType, operation.Method)
@@ -593,7 +618,7 @@ func (g generator) apiClientTypeScript() string {
 		}
 		out.WriteString("  }\n\n")
 	}
-	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number, binary = false): Promise<T> {
+	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number | readonly number[], binary = false): Promise<T> {
     const baseUrl = this.options.baseUrl ?? (typeof location === "undefined" ? "http://localhost" : location.origin);
     const url = new URL(path, baseUrl);
     const fetcher = this.options.fetch ?? globalThis.fetch;
@@ -618,8 +643,11 @@ func (g generator) apiClientTypeScript() string {
       }
     }
     if (!response.ok) throw new ApiClientError(response.status, parsed);
-    if (expectedStatus !== undefined && response.status !== expectedStatus) {
-      throw new Error("Loomhelm API returned status " + response.status + "; expected " + expectedStatus);
+    if (expectedStatus !== undefined) {
+      const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+      if (!expectedStatuses.includes(response.status)) {
+        throw new Error("Loomhelm API returned status " + response.status + "; expected " + expectedStatuses.join(", "));
+      }
     }
     if (binary) return response as T;
     return parsed as T;
@@ -698,6 +726,38 @@ func (g generator) tsType(value schema) string {
 
 func operationRequestType(value operation) string {
 	return operationParamsType(value)
+}
+
+func responseStatuses(value operation) []int {
+	if len(value.ResponseStatuses) > 0 {
+		return append([]int(nil), value.ResponseStatuses...)
+	}
+	if value.ResponseStatus == 0 {
+		return nil
+	}
+	return []int{value.ResponseStatus}
+}
+
+func formatGoIntSlice(values []int) string {
+	if len(values) == 0 {
+		return "nil"
+	}
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.Itoa(value)
+	}
+	return "[]int{" + strings.Join(parts, ", ") + "}"
+}
+
+func formatIntSlice(values []int) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.Itoa(value)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func operationParamsType(value operation) string {

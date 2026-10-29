@@ -64,7 +64,7 @@ func TestArtifactDownloadUsesBinaryBrowserClientResponse(t *testing.T) {
 			t.Fatalf("artifact download response kind = %q, want binary", source.Types[operation.ResponseType].Kind)
 		}
 		generated := (generator{contract: source}).apiClientTypeScript()
-		if !strings.Contains(generated, "async downloadArtifact(request: DownloadArtifactParams): Promise<Response>") || !strings.Contains(generated, "application/octet-stream") {
+		if !strings.Contains(generated, "async downloadArtifact(request: DownloadArtifactParams): Promise<Response>") || !strings.Contains(generated, "application/octet-stream") || !strings.Contains(generated, "undefined, [200, 206], true") {
 			t.Fatal("generated artifact download client does not preserve the binary response")
 		}
 	}
