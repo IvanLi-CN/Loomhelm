@@ -40,7 +40,7 @@ export const MetadataOnly: Story = {
     const canvas = within(canvasElement);
     expect(await canvas.findByRole("article", { name: "对话产物：reports/summary.md" })).toBeInTheDocument();
     expect(canvas.getByRole("button", { name: "下载文件" })).toBeDisabled();
-    expect(canvas.getByText("内容下载等待授权端点接线。")).toBeInTheDocument();
+    expect(canvas.getByText("文件暂不可下载。")).toBeInTheDocument();
   }
 };
 

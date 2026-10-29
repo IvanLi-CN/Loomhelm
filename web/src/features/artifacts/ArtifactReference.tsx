@@ -82,12 +82,12 @@ export function ArtifactReference({
         <dt className="text-[var(--muted)]">产物身份</dt><dd className="break-all font-mono text-[var(--ink)]">{artifact.id}</dd>
       </dl>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60" onClick={() => void handleDownload()} disabled={!download || downloadState === "pending"} title={!download ? "内容下载等待服务接线" : undefined}>
+        <button type="button" className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60" onClick={() => void handleDownload()} disabled={!download || downloadState === "pending"} title={!download ? "文件暂不可下载" : undefined}>
           {downloadState === "pending" ? <LoaderCircle className="animate-spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
           {downloadState === "pending" ? "准备下载…" : downloadState === "completed" ? "已请求下载" : "下载文件"}
         </button>
         <span className="text-xs text-[var(--muted)]" aria-live="polite">
-          {!download ? "内容下载等待授权端点接线。" : downloadState === "error" ? "下载失败，请重试。" : downloadState === "completed" ? "下载请求已完成。" : "仅在当前授权范围内读取。"}
+          {!download ? "文件暂不可下载。" : downloadState === "error" ? "下载失败，请重试。" : downloadState === "completed" ? "下载请求已完成。" : "仅在当前授权范围内读取。"}
         </span>
       </div>
     </article>
