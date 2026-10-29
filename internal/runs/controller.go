@@ -255,6 +255,9 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 	if err != nil {
 		return protocol.Reconciliation{}, err
 	}
+	if isTerminalCommandState(record.State) {
+		return terminalReconciliation(record), nil
+	}
 	reconciliation, err := c.transport.ReconcileCommand(ctx, record.Intent.Command)
 	if err != nil {
 		return reconciliation, err
