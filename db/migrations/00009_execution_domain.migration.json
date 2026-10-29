@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Persist Codex Sessions, command identities and ACK state, Run transitions, ordered event history, versioned approvals and per-run control leases.",
+    "release_unit_description": "Phase-one execution-domain candidate following the immutable Host Gateway migration 00008.",
+    "version_impact": "minor"
+  },
+  "durable_state": {
+    "description": "Execution state survives Server, Worker and Connector process boundaries. Session identity and task association remain stable, command retries reconcile by command identity and digest, events are ordered per session, approval decisions are revision and generation guarded, and control leases fence stale execution owners.",
+    "storage_implementation": "PostgreSQL tables managed by the embedded Goose migration history. Raw command, event, result, error and approval context bytes are retained in BYTEA columns so unknown payload fields are not rewritten by storage normalization.",
+    "source_compatibility_range": {
+      "from_program_version": "Phase-one Host Gateway candidate containing migration 00008.",
+      "to_program_version": "Phase-one execution-domain candidate containing migration 00009.",
+      "readable_earlier_state": true,
+      "earlier_state": "The missing execution tables are treated as an unapplied migration. Existing projects, tasks, artifacts and host state remain readable; no pre-00009 execution rows are reinterpreted or backfilled. Cross-table Session/task and artifact ownership checks are enforced by the execution service transaction rather than adding retroactive foreign keys to existing nullable identifiers."
+    }
+  },
+  "database_migration": {
+    "ordered_operations": [
+      {"order": 1, "kind": "ddl", "description": "Create execution_sessions and its identity, project and state indexes."},
+      {"order": 2, "kind": "ddl", "description": "Create execution_commands with command digest, ACK state, raw payload and reconciliation fields."},
+      {"order": 3, "kind": "ddl", "description": "Create execution_runs with distinct interrupt-request and observed-terminal state."},
+      {"order": 4, "kind": "ddl", "description": "Create execution_events with per-session sequence and cursor uniqueness."},
+      {"order": 5, "kind": "ddl", "description": "Create execution_approvals with revision, generation and resolution identity."},
+      {"order": 6, "kind": "ddl", "description": "Create execution_control_leases with owner identity, expiry and generation fencing."}
+    ],
+    "backfill": "none",
+    "rollout_signals": [
+      "Goose records migration 00009 only after migration 00008 and the parent-owned migrations 00001 through 00007 are present.",
+      "A command intent is committed before a side-effecting Gateway or Connector call; identical retries return the persisted ACK and changed payloads return idempotency_conflict.",
+      "Event append locks the owning Session row, assigns or validates the next sequence, and commits the event before the Gateway acknowledges the host cursor.",
+      "Approval resolution updates pending status and exact revision/generation in one compare-and-set transaction; stale or repeated decisions cannot authorize a second response.",
+      "A higher execution generation or an expired owner lease can replace a control lease, while an older generation cannot renew, release or perform a run transition."
+    ],
+    "recovery": {
+      "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+      "faulty_release_recovery": "forward-repair-by-a-new-program-version-or-a-compatible switchback only when 00009 state remains readable; unknown command and run outcomes must be reconciled before side-effect retry"
+    }
+  },
+  "validation": [
+    "Re-running migration discovery leaves all six execution tables, constraints, indexes and Goose history unchanged.",
+    "A database close and reopen preserves Session/task binding, command ACKs, Run state, raw event payloads, approval revisions and control lease identity.",
+    "Concurrent same-identity command and approval operations produce one committed authorization, while conflicting payloads, stale generations and stale revisions fail closed.",
+    "A stopped or fenced Worker leaves an unfinished River run retryable without replaying an unknown side effect; explicit reconciliation is required before retry.",
+    "Earlier 00008 state with no execution rows remains readable, and no automatic down migration or destructive cleanup is used for a stopped release."
+  ],
+  "deployed_migrations_immutable": true,
+  "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate"
+}

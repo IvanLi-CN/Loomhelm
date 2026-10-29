@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,8 @@ type fakeResult struct {
 	message RPCMessage
 	err     error
 }
+
+const adapterTestSynchronizationTimeout = 5 * time.Second
 
 func newFakeTransport() *fakeTransport {
 	return &fakeTransport{responses: make(map[string][]fakeResult), responseEvents: make(map[string]RPCMessage), events: make(chan RPCMessage, 32)}
@@ -113,6 +116,26 @@ func (f fakeProvider) TransportFor(context.Context, protocol.GatewaySession) (RP
 	return f.transport, nil
 }
 
+type flakySessionIdentityProvider struct {
+	mu        sync.Mutex
+	transport RPCTransport
+	bindErr   error
+	bindCalls int
+}
+
+func (p *flakySessionIdentityProvider) TransportFor(context.Context, protocol.GatewaySession) (RPCTransport, error) {
+	return p.transport, nil
+}
+
+func (p *flakySessionIdentityProvider) SetExternalThreadRef(protocol.GatewaySession, string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bindCalls++
+	err := p.bindErr
+	p.bindErr = nil
+	return err
+}
+
 type sessionTransportProvider struct {
 	mu             sync.Mutex
 	transports     map[string]RPCTransport
@@ -168,6 +191,200 @@ func TestAdapterRejectsMissingSessionCreationIdentityBeforeTransport(t *testing.
 	}
 }
 
+func TestAdapterDoesNotReplayThreadStartAfterKnownIdentityPersistenceFailure(t *testing.T) {
+	transport := newFakeTransport()
+	transport.responses["thread/start"] = []fakeResult{{message: RPCMessage{
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-known-after-persist-failure"}}}`),
+		Result: json.RawMessage(`{"thread":{"id":"thread-known-after-persist-failure"}}`),
+	}}}
+	transport.responses["thread/resume"] = []fakeResult{{message: RPCMessage{
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-known-after-persist-failure"}}}`),
+		Result: json.RawMessage(`{"thread":{"id":"thread-known-after-persist-failure"}}`),
+	}}}
+	provider := &flakySessionIdentityProvider{transport: transport, bindErr: errors.New("gateway identity persistence failed")}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewaySession := protocol.GatewaySession{Handle: "gateway-known-after-persist-failure", Generation: "generation-known-after-persist-failure", Path: protocol.SessionPathNew}
+	namespace := PlatformSessionCommandNamespace("platform-known-after-persist-failure")
+	request := testSessionRequest()
+	if _, err := adapter.StartSessionInNamespace(context.Background(), namespace, gatewaySession, request); !errors.Is(err, ErrUnknownOutcome) {
+		t.Fatalf("known identity persistence error = %v, want unknown outcome", err)
+	}
+	proof, found, err := journal.ResolvedSessionStartProofForGateway(gatewaySession.Handle, request)
+	if err != nil || !found || proof.AdapterSession.ExternalThreadRef != "thread-known-after-persist-failure" {
+		t.Fatalf("resolved session start proof = %+v, found = %v, error = %v", proof, found, err)
+	}
+	transport.mu.Lock()
+	closedAfterFailure := transport.closed
+	transport.mu.Unlock()
+	if closedAfterFailure {
+		t.Fatal("known native session was closed after persistence failure")
+	}
+
+	recovered, err := adapter.StartSessionInNamespace(context.Background(), namespace, gatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ExternalThreadRef != "thread-known-after-persist-failure" {
+		t.Fatalf("recovered adapter session = %+v", recovered)
+	}
+	if got := countCalls(transport, "thread/start"); got != 1 {
+		t.Fatalf("thread/start calls = %d, want 1", got)
+	}
+	if got := countCalls(transport, "thread/resume"); got != 1 {
+		t.Fatalf("thread/resume calls = %d, want 1", got)
+	}
+	provider.mu.Lock()
+	bindCalls := provider.bindCalls
+	provider.mu.Unlock()
+	if bindCalls != 2 {
+		t.Fatalf("gateway identity bind calls = %d, want 2", bindCalls)
+	}
+	if err := adapter.CloseSession(context.Background(), recovered); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdapterScopesSameCreationCommandIDByPlatformNamespace(t *testing.T) {
+	firstTransport := newFakeTransport()
+	firstTransport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-platform-a"}}`)}}}
+	secondTransport := newFakeTransport()
+	secondTransport.responses["thread/start"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-platform-b"}}`)}}}
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{
+		"gateway-platform-a": firstTransport,
+		"gateway-platform-b": secondTransport,
+	}}
+	journal := openTestJournal(t)
+	adapter, err := NewCodexAdapter(provider, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.NewSessionRequest{CommandID: "shared-create-command", ProjectID: "project-shared"}
+	firstGateway := protocol.GatewaySession{Handle: "gateway-platform-a", Generation: "generation-platform-a", Path: protocol.SessionPathNew}
+	secondGateway := protocol.GatewaySession{Handle: "gateway-platform-b", Generation: "generation-platform-b", Path: protocol.SessionPathNew}
+	first, err := adapter.StartSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-a"), firstGateway, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := adapter.StartSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-b"), secondGateway, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("different platform namespaces reused adapter session %+v", first)
+	}
+	if got := countCalls(firstTransport, "thread/start"); got != 1 {
+		t.Fatalf("first thread/start calls = %d, want 1", got)
+	}
+	if got := countCalls(secondTransport, "thread/start"); got != 1 {
+		t.Fatalf("second thread/start calls = %d, want 1", got)
+	}
+	retry, err := adapter.StartSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-a"), firstGateway, request)
+	if err != nil || retry != first {
+		t.Fatalf("same platform creation retry = %+v error=%v, want %+v", retry, err, first)
+	}
+	if got := countCalls(firstTransport, "thread/start"); got != 1 {
+		t.Fatalf("retry repeated first thread/start calls = %d, want 1", got)
+	}
+	if err := adapter.CloseSession(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.CloseSession(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdapterRepairsMissingGatewayLinkAfterRestartWithoutSecondNativeStart(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "missing-gateway-link.jsonl")
+	firstJournal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewaySession := protocol.GatewaySession{
+		Handle:     "gateway-link-recovery",
+		Generation: "generation-link-recovery",
+		Path:       protocol.SessionPathNew,
+	}
+	request := protocol.NewSessionRequest{CommandID: "create-link-recovery", ProjectID: "project-link-recovery"}
+	intentID, err := firstJournal.BeginSessionStart(gatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadRef := "thread-link-recovery"
+	adapterSessionID := stableSessionID(threadRef)
+	if err := firstJournal.ResolveSessionStart(intentID, adapterSessionID, threadRef, gatewaySession.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstJournal.RecordSessionAlias(SessionAlias{
+		PlatformSessionID: "platform-link-recovery",
+		AdapterSessionID:  adapterSessionID,
+		ExternalThreadRef: threadRef,
+		Generation:        gatewaySession.Generation,
+		CommandID:         request.CommandID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	link := GatewaySessionLink{
+		GatewayHandle:     gatewaySession.Handle,
+		PlatformSessionID: "platform-link-recovery",
+		AdapterSessionID:  adapterSessionID,
+		ExternalThreadRef: threadRef,
+		Generation:        gatewaySession.Generation,
+		CommandID:         request.CommandID,
+	}
+	if err := firstJournal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstJournal.RecordGatewaySessionLink(link); err == nil {
+		t.Fatal("closed journal accepted a gateway session link")
+	}
+
+	secondJournal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondJournal.Close()
+	transport := newFakeTransport()
+	transport.responses["thread/resume"] = []fakeResult{{message: RPCMessage{
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-link-recovery"}}}`),
+		Result: json.RawMessage(`{"thread":{"id":"thread-link-recovery"}}`),
+	}}}
+	retryGatewaySession := gatewaySession
+	retryGatewaySession.Handle = "gateway-link-recovery-retry"
+	provider := &sessionTransportProvider{transports: map[string]RPCTransport{retryGatewaySession.Handle: transport}}
+	adapter, err := NewCodexAdapter(provider, secondJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := adapter.StartSessionInNamespace(context.Background(), PlatformSessionCommandNamespace("platform-link-recovery"), retryGatewaySession, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.SessionID != adapterSessionID || recovered.ExternalThreadRef != threadRef {
+		t.Fatalf("recovered adapter session = %+v", recovered)
+	}
+	if got := countCalls(transport, "thread/start"); got != 0 {
+		t.Fatalf("recovery repeated thread/start calls = %d, want 0", got)
+	}
+	if got := countCalls(transport, "thread/resume"); got != 1 {
+		t.Fatalf("recovery thread/resume calls = %d, want 1", got)
+	}
+	link.GatewayHandle = retryGatewaySession.Handle
+	if err := secondJournal.RecordGatewaySessionLink(link); err != nil {
+		t.Fatalf("repair gateway session link: %v", err)
+	}
+	link.UpdatedAt = "2026-10-27T03:00:00Z"
+	if err := secondJournal.RecordGatewaySessionLink(link); err != nil {
+		t.Fatalf("idempotent gateway session link repair: %v", err)
+	}
+	if err := adapter.CloseSession(context.Background(), recovered); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T) {
 	firstTransport := &blockingTransport{
 		fakeTransport: newFakeTransport(),
@@ -200,7 +417,7 @@ func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T
 	}()
 	select {
 	case <-firstTransport.entered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("first thread/start did not reach the transport")
 	}
 	secondDone := make(chan struct {
@@ -215,7 +432,7 @@ func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T
 		}{session: session, err: startErr}
 	}()
 	adapter.startMu.Lock()
-	startCall := adapter.startCalls[request.CommandID]
+	startCall := adapter.startCalls[adapterStartKey(LegacyCommandNamespace(request.CommandID), request.CommandID, "gateway-concurrent-1")]
 	adapter.startMu.Unlock()
 	if startCall == nil {
 		t.Fatal("session start call was not registered")
@@ -224,7 +441,7 @@ func TestAdapterSerializesConcurrentSessionStartsByCreationIdentity(t *testing.T
 	case result := <-secondDone:
 		t.Fatalf("second session start returned before the first completed: %+v", result)
 	case <-startCall.waiterEntered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("second session start did not enter the single-flight waiter")
 	}
 	close(firstTransport.release)
@@ -278,7 +495,7 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 	}()
 	select {
 	case <-firstTransport.entered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("first thread/start did not reach the transport")
 	}
 
@@ -289,14 +506,14 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 		secondDone <- startErr
 	}()
 	adapter.startMu.Lock()
-	startCall := adapter.startCalls[request.CommandID]
+	startCall := adapter.startCalls[adapterStartKey(LegacyCommandNamespace(request.CommandID), request.CommandID, "gateway-cancel-1")]
 	adapter.startMu.Unlock()
 	if startCall == nil {
 		t.Fatal("canceled session start call was not registered")
 	}
 	select {
 	case <-startCall.waiterEntered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("canceled session start did not enter the single-flight waiter")
 	}
 	cancel()
@@ -305,7 +522,7 @@ func TestAdapterClosesCanceledConcurrentSessionStart(t *testing.T) {
 		if !errors.Is(startErr, context.Canceled) {
 			t.Fatalf("canceled concurrent session start error = %v", startErr)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("canceled concurrent session start did not return")
 	}
 	provider.mu.Lock()
@@ -347,7 +564,7 @@ func TestAdapterDoesNotCloseSharedGatewaySessionWhenWaiterCancels(t *testing.T) 
 	}()
 	select {
 	case <-transport.entered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("shared session start did not reach the transport")
 	}
 	secondCtx, cancel := context.WithCancel(context.Background())
@@ -357,14 +574,14 @@ func TestAdapterDoesNotCloseSharedGatewaySessionWhenWaiterCancels(t *testing.T) 
 		secondDone <- startErr
 	}()
 	adapter.startMu.Lock()
-	startCall := adapter.startCalls[request.CommandID]
+	startCall := adapter.startCalls[adapterStartKey(LegacyCommandNamespace(request.CommandID), request.CommandID, "gateway-shared-cancel")]
 	adapter.startMu.Unlock()
 	if startCall == nil {
 		t.Fatal("shared session start call was not registered")
 	}
 	select {
 	case <-startCall.waiterEntered:
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("shared session start did not enter the single-flight waiter")
 	}
 	cancel()
@@ -373,7 +590,7 @@ func TestAdapterDoesNotCloseSharedGatewaySessionWhenWaiterCancels(t *testing.T) 
 		if !errors.Is(startErr, context.Canceled) {
 			t.Fatalf("shared canceled session start error = %v", startErr)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(adapterTestSynchronizationTimeout):
 		t.Fatal("shared canceled session start did not return")
 	}
 	transport.mu.Lock()
@@ -701,12 +918,12 @@ func TestAdapterLegacyPersistedCorrelationRequiresRawSuccess(t *testing.T) {
 		json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"status":"inProgress"}}}`),
 	} {
 		rawEvent := protocol.Event{RunID: &runID, Payload: raw}
-		if adapter.legacyPersistedOperationSucceeded("unused-command", &correlation, "41", []protocol.Event{rawEvent}) {
+		if adapter.legacyPersistedOperationSucceeded("unused-command", "legacy-session", &correlation, "41", []protocol.Event{rawEvent}) {
 			t.Fatalf("legacy correlation accepted incomplete response %s", raw)
 		}
 	}
 	valid := protocol.Event{RunID: &runID, Payload: json.RawMessage(`{"jsonrpc":"2.0","id":41,"result":{"turn":{"id":"turn-legacy-correlation"}}}`)}
-	if !adapter.legacyPersistedOperationSucceeded("unused-command", &correlation, "41", []protocol.Event{valid}) {
+	if !adapter.legacyPersistedOperationSucceeded("unused-command", "legacy-session", &correlation, "41", []protocol.Event{valid}) {
 		t.Fatal("legacy correlation rejected a complete turn/start response")
 	}
 }
@@ -883,13 +1100,87 @@ func TestAdapterBindsPersistedOperationWhenAckLostItsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, bound, err := adapter.bindPersistedOperation(command.CommandID, session.SessionID, stored)
+	updated, bound, err := adapter.bindPersistedOperation(command.CommandID, session, stored)
 	if err != nil || !bound {
 		t.Fatalf("persisted correlation binding = %+v, bound = %v, error = %v", updated, bound, err)
 	}
 	wantOperationID := rpcOperationIdentity("generation-operation-ack-loss", json.RawMessage(`41`))
-	if updated.OperationID == nil || *updated.OperationID != wantOperationID || updated.EventCursor == nil {
+	if updated.OperationID == nil || *updated.OperationID != wantOperationID || updated.RunID == nil || *updated.RunID != "turn-operation-ack-loss" || updated.EventCursor == nil {
 		t.Fatalf("recovered operation identity = %+v, want %q and event cursor", updated, wantOperationID)
+	}
+}
+
+func TestAdapterRejectsMismatchedPersistedOperationObservation(t *testing.T) {
+	operationID := rpcOperationIdentity("generation-operation-scope", json.RawMessage(`41`))
+	cases := []struct {
+		name             string
+		threadID         string
+		generation       string
+		nativeOperation  string
+		payloadCommandID string
+	}{
+		{name: "thread", threadID: "thread-foreign", generation: "generation-operation-scope", nativeOperation: operationID, payloadCommandID: "operation-scope-command"},
+		{name: "generation", threadID: "thread-operation-scope", generation: "generation-foreign", nativeOperation: operationID, payloadCommandID: "operation-scope-command"},
+		{name: "operation", threadID: "thread-operation-scope", generation: "generation-operation-scope", nativeOperation: rpcOperationIdentity("generation-foreign", json.RawMessage(`41`)), payloadCommandID: "operation-scope-command"},
+		{name: "command", threadID: "thread-operation-scope", generation: "generation-operation-scope", nativeOperation: operationID, payloadCommandID: "foreign-command"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			journal := openTestJournal(t)
+			defer journal.Close()
+			adapter, err := NewAdapter(fakeProvider{transport: newFakeTransport()}, journal, AdapterConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			session := protocol.AdapterSession{SessionID: "adapter-operation-scope", ExternalThreadRef: "thread-operation-scope"}
+			command := testCommand("operation-scope-command", `{"prompt":"recover exact operation"}`)
+			command.SessionID = session.SessionID
+			if _, _, err := journal.BeginCommand(command); err != nil {
+				t.Fatal(err)
+			}
+			ack, err := journal.LookupCommand(command.CommandID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ack.State = protocol.CommandStateUnknown
+			ack.OperationID = &operationID
+			if err := journal.UpdateCommand(command.CommandID, ack); err != nil {
+				t.Fatal(err)
+			}
+			payload := mustRawJSON(map[string]any{
+				"generation":         "generation-operation-scope",
+				"method":             "turn/start",
+				"operation_id":       operationID,
+				"command_id":         testCase.payloadCommandID,
+				"response_succeeded": true,
+			})
+			_, _, err = journal.AppendObservedEventWithRecord(protocol.Event{
+				EventID:   "operation-scope-" + testCase.name,
+				Cursor:    "operation-scope-" + testCase.name,
+				Sequence:  1,
+				SessionID: session.SessionID,
+				Source:    protocol.EventSourceHostObservation,
+				Type:      protocol.EventTypeUnknown,
+				Payload:   payload,
+			}, EventObservation{
+				AdapterSessionID:  session.SessionID,
+				ExternalThreadRef: testCase.threadID,
+				Generation:        testCase.generation,
+				NativeTurnID:      "native-operation-scope",
+				NativeOperationID: testCase.nativeOperation,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated, bound, err := adapter.bindPersistedOperation(command.CommandID, session, ack)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bound || updated.RunID != nil || updated.EventCursor != nil || updated.State != protocol.CommandStateUnknown {
+				t.Fatalf("mismatched observation was bound: updated=%+v bound=%v", updated, bound)
+			}
+		})
 	}
 }
 
@@ -1097,11 +1388,22 @@ func TestAdapterKeepsApprovalUnknownWhenResolutionIsCleared(t *testing.T) {
 		SessionID: session.SessionID,
 	}
 	ack, err := adapter.SendCommand(context.Background(), session, command)
-	if err != nil || ack.State != protocol.CommandStateSucceeded {
-		t.Fatalf("cleared approval delivery ACK = %+v, error = %v", ack, err)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || ack.State != protocol.CommandStateUnknown {
+		t.Fatalf("cleared approval ACK = %+v, error = %v", ack, err)
 	}
 	if result, ok := journal.ApprovalResult(command.CommandID); !ok || result != approvalResolutionCleared {
 		t.Fatalf("cleared approval result = %q, found = %v", result, ok)
+	}
+	stored, err := journal.LookupCommand(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != protocol.CommandStateUnknown {
+		t.Fatalf("stored cleared approval ACK = %+v, want unknown", stored)
+	}
+	duplicate, err := adapter.SendCommand(context.Background(), session, command)
+	if !errors.Is(err, protocol.ErrUnknownCommandResult) || duplicate.State != protocol.CommandStateUnknown {
+		t.Fatalf("duplicate cleared approval ACK = %+v, error = %v", duplicate, err)
 	}
 }
 
@@ -1383,6 +1685,121 @@ func TestAdapterRebuildsActiveTurnOnColdRecovery(t *testing.T) {
 	}
 }
 
+func TestAdapterLeavesIDLessTerminalEventUnresolved(t *testing.T) {
+	journal := openTestJournal(t)
+	adapterSession := protocol.AdapterSession{SessionID: "session-terminal-fallback"}
+	state := &adapterSessionState{
+		session:        adapterSession,
+		gatewaySession: protocol.GatewaySession{ExternalThreadRef: "thread-terminal-fallback", Generation: "generation-terminal-fallback"},
+		activeTurns:    map[string]string{"turn-terminal-fallback": "turn-terminal-fallback", "turn-other": "turn-other"},
+	}
+	state.session.ExternalThreadRef = state.gatewaySession.ExternalThreadRef
+	adapter := &Adapter{
+		journal:  journal,
+		sessions: map[string]*adapterSessionState{adapterSession.SessionID: state},
+	}
+
+	message := RPCMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"turn":{"status":"interrupted"}}`),
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"interrupted"}}}`),
+	}
+	if err := adapter.observe(state, message); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: adapterSession.SessionID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("terminal events = %+v, want one event", page.Events)
+	}
+	observation, ok := journal.observedEventObservation(page.Events[0].EventID)
+	if !ok || observation.NativeTurnID != "" {
+		t.Fatalf("terminal event observation = %+v, found = %v, want no native turn", observation, ok)
+	}
+	if page.Events[0].Type != protocol.EventTypeRunInterrupted {
+		t.Fatalf("terminal event = %+v, want interrupted", page.Events[0])
+	}
+	if _, ok := state.activeTurns["turn-terminal-fallback"]; !ok {
+		t.Fatal("ID-less terminal event removed the active turn")
+	}
+	if _, ok := state.activeTurns["turn-other"]; !ok {
+		t.Fatal("ID-less terminal event removed another active turn")
+	}
+}
+
+func TestAdapterAssociatesTerminalEventWithExplicitNativeTurnID(t *testing.T) {
+	journal := openTestJournal(t)
+	adapterSession := protocol.AdapterSession{SessionID: "session-terminal-explicit"}
+	state := &adapterSessionState{
+		session:        adapterSession,
+		gatewaySession: protocol.GatewaySession{ExternalThreadRef: "thread-terminal-explicit", Generation: "generation-terminal-explicit"},
+		activeTurns:    map[string]string{"turn-terminal-explicit": "turn-terminal-explicit", "turn-other-explicit": "turn-other-explicit"},
+	}
+	state.session.ExternalThreadRef = state.gatewaySession.ExternalThreadRef
+	adapter := &Adapter{
+		journal:  journal,
+		sessions: map[string]*adapterSessionState{adapterSession.SessionID: state},
+	}
+
+	message := RPCMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"turn":{"id":"turn-terminal-explicit","status":"completed"}}`),
+		Raw:    json.RawMessage(`{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-terminal-explicit","status":"completed"}}}`),
+	}
+	if err := adapter.observe(state, message); err != nil {
+		t.Fatal(err)
+	}
+	page, err := journal.ReadEvents(protocol.EventQuery{SessionID: adapterSession.SessionID, Limit: 10})
+	if err != nil || len(page.Events) != 1 {
+		t.Fatalf("explicit terminal events = %+v, error = %v", page.Events, err)
+	}
+	observation, ok := journal.observedEventObservation(page.Events[0].EventID)
+	if !ok || observation.NativeTurnID != "turn-terminal-explicit" {
+		t.Fatalf("explicit terminal observation = %+v, found = %v", observation, ok)
+	}
+	if _, ok := state.activeTurns["turn-terminal-explicit"]; ok {
+		t.Fatal("explicit terminal turn remained active")
+	}
+	if _, ok := state.activeTurns["turn-other-explicit"]; !ok {
+		t.Fatal("explicit terminal event removed an unrelated active turn")
+	}
+}
+
+func TestAdapterReversesScopedApprovalIDToExactNativeRequest(t *testing.T) {
+	journal := openTestJournal(t)
+	if err := journal.RecordSessionAlias(SessionAlias{
+		PlatformSessionID: "platform-approval-scope",
+		AdapterSessionID:  "adapter-approval-scope",
+		ExternalThreadRef: "thread-approval-scope",
+		Generation:        "generation-approval-scope",
+		CommandID:         "create-approval-scope",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state := &adapterSessionState{
+		session:        protocol.AdapterSession{SessionID: "adapter-approval-scope", ExternalThreadRef: "thread-approval-scope"},
+		gatewaySession: protocol.GatewaySession{Generation: "generation-approval-scope"},
+	}
+	adapter := &Adapter{journal: journal}
+	scoped, err := ScopedNativeApprovalID("platform-approval-scope", "generation-approval-scope", json.RawMessage(`41`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(scoped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.resolveScopedApprovalRequestID(state, encoded); string(got) != "41" {
+		t.Fatalf("scoped approval native request = %s, want 41", got)
+	}
+	if got := adapter.resolveScopedApprovalRequestID(state, json.RawMessage(`"41"`)); string(got) != `"41"` {
+		t.Fatalf("unscoped approval request changed = %s", got)
+	}
+}
+
 func TestAdapterLeavesInFlightCommandUnknownDuringReconciliation(t *testing.T) {
 	transport := newFakeTransport()
 	journal := openTestJournal(t)
@@ -1555,8 +1972,9 @@ func TestAdapterPreservesRawAppServerResponseEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := &adapterSessionState{
-		session:   protocol.AdapterSession{SessionID: "session-raw"},
-		transport: transport,
+		session:        protocol.AdapterSession{SessionID: "session-raw", ExternalThreadRef: "thread-raw"},
+		gatewaySession: protocol.GatewaySession{Generation: "generation-raw"},
+		transport:      transport,
 	}
 	raw := json.RawMessage(`{"jsonrpc":"2.0","id":7,"result":{"thread":{"id":"thread-raw"}}}`)
 	event, err := adapter.appendObservedEventFromSource(state, protocol.EventTypeSessionCreated, protocol.EventSourceAppServer, "thread/start", raw, "")

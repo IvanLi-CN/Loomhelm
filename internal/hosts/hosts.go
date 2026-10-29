@@ -573,6 +573,29 @@ func (s *Service) GetHost(ctx context.Context, hostID string) (Host, error) {
 	return host, nil
 }
 
+// ConfiguredHost returns the singleton execution host selected by the
+// installation. Session creation uses this private lookup after application
+// authorization and before persisting the host-bound intent.
+func (s *Service) ConfiguredHost(ctx context.Context) (Host, error) {
+	if err := s.ready(ctx); err != nil {
+		return Host{}, err
+	}
+	var hostID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id
+		FROM host_registrations
+		ORDER BY created_at, id
+		LIMIT 1
+	`).Scan(&hostID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Host{}, ErrNotFound
+	}
+	if err != nil {
+		return Host{}, fmt.Errorf("find configured host: %w", err)
+	}
+	return s.GetHost(ctx, hostID)
+}
+
 func (s *Service) RevokeCredential(ctx context.Context, credentialID string) error {
 	if err := s.ready(ctx); err != nil {
 		return err

@@ -52,6 +52,15 @@ type AdapterSession struct {
 	ExternalThreadRef string
 }
 
+// OpenedSession is the internal result of selecting and completing one
+// session-creation path. The application assembly uses the gateway identity
+// to persist the platform-to-host relationship; the existing OpenSession
+// helper keeps its adapter-only compatibility result for current callers.
+type OpenedSession struct {
+	GatewaySession GatewaySession
+	AdapterSession AdapterSession
+}
+
 // HostGateway owns the selected execution host and app-server generation. The
 // two open methods are intentionally separate so existing-session attachment
 // cannot fall back to a new independent session.
@@ -86,9 +95,9 @@ type EventQuery struct {
 // side-effecting retry.
 type RunController interface {
 	AcceptCommand(context.Context, Command) (CommandAck, error)
-	LookupCommand(context.Context, string) (CommandAck, error)
+	LookupCommand(context.Context, string, string) (CommandAck, error)
 	ReadEvents(context.Context, EventQuery) (EventPage, error)
-	ReconcileCommand(context.Context, string) (Reconciliation, error)
+	ReconcileCommand(context.Context, string, string) (Reconciliation, error)
 }
 
 // ArtifactReader is the authorized stream for an original conversation file.
@@ -118,14 +127,25 @@ type ArtifactStore interface {
 // OpenSession selects exactly one R01 path. Existing-session attachment is
 // explicit and never retries through StartNewSession after an attach failure.
 func OpenSession(ctx context.Context, gateway HostGateway, adapter CodexAdapter, request CreateSessionRequest) (AdapterSession, error) {
+	opened, err := OpenSessionWithIdentity(ctx, gateway, adapter, request)
+	if err != nil {
+		return AdapterSession{}, err
+	}
+	return opened.AdapterSession, nil
+}
+
+// OpenSessionWithIdentity selects exactly one R01 path and retains the
+// gateway identity needed by the application assembly to bind the resulting
+// adapter session to a platform session.
+func OpenSessionWithIdentity(ctx context.Context, gateway HostGateway, adapter CodexAdapter, request CreateSessionRequest) (OpenedSession, error) {
 	if ctx == nil {
-		return AdapterSession{}, errors.New("session context must not be nil")
+		return OpenedSession{}, errors.New("session context must not be nil")
 	}
 	if gateway == nil || adapter == nil {
-		return AdapterSession{}, errors.New("session gateway and adapter are required")
+		return OpenedSession{}, errors.New("session gateway and adapter are required")
 	}
 	if strings.TrimSpace(request.CommandID) == "" {
-		return AdapterSession{}, errors.New("session creation command id is required")
+		return OpenedSession{}, errors.New("session creation command id is required")
 	}
 	switch request.Path {
 	case SessionPathNew:
@@ -136,17 +156,21 @@ func OpenSession(ctx context.Context, gateway HostGateway, adapter CodexAdapter,
 			Prompt:    valueOrEmpty(request.Prompt),
 		})
 		if err != nil {
-			return AdapterSession{}, err
+			return OpenedSession{}, err
 		}
-		return adapter.StartSession(ctx, gatewaySession, NewSessionRequest{
+		adapterSession, err := adapter.StartSession(ctx, gatewaySession, NewSessionRequest{
 			CommandID: request.CommandID,
 			ProjectID: valueOrEmpty(request.ProjectID),
 			TaskID:    valueOrEmpty(request.TaskID),
 			Prompt:    valueOrEmpty(request.Prompt),
 		})
+		if err != nil {
+			return OpenedSession{}, err
+		}
+		return OpenedSession{GatewaySession: gatewaySession, AdapterSession: adapterSession}, nil
 	case SessionPathExistingActive:
 		if request.ActiveThreadRef == nil || *request.ActiveThreadRef == "" {
-			return AdapterSession{}, ErrUnsupportedSessionPath
+			return OpenedSession{}, ErrUnsupportedSessionPath
 		}
 		active := ExistingSessionRequest{
 			CommandID:       request.CommandID,
@@ -156,11 +180,15 @@ func OpenSession(ctx context.Context, gateway HostGateway, adapter CodexAdapter,
 		}
 		gatewaySession, err := gateway.AttachActiveSession(ctx, active)
 		if err != nil {
-			return AdapterSession{}, err
+			return OpenedSession{}, err
 		}
-		return adapter.AttachSession(ctx, gatewaySession, active)
+		adapterSession, err := adapter.AttachSession(ctx, gatewaySession, active)
+		if err != nil {
+			return OpenedSession{}, err
+		}
+		return OpenedSession{GatewaySession: gatewaySession, AdapterSession: adapterSession}, nil
 	default:
-		return AdapterSession{}, ErrUnsupportedSessionPath
+		return OpenedSession{}, ErrUnsupportedSessionPath
 	}
 }
 

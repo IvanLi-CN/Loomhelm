@@ -126,6 +126,14 @@ The owner-confirmed `af1848771ae688707c2ab1306ac0d7f6c7991371` evidence refresh 
 
 The owner-confirmed TaskGraph capture extends the current U02 Task Evidence Set without changing product or rendering code. It is sourced from candidate `0723f90af49582bd816e0a762e06c3234b37f2b2`, registered at `assets/task-graph-storybook-desktop.png`, and retains the full source-managed surface with 40px margins. The `1425x1061` image has SHA-256 `d1360aac95bb0fd15d1bc2ff00b2ddcac043b17a2ca9cd7272a2c5c19a75ad25`; its exact base-path comparison is `current-only` because the destination was absent at base `5666655ab69980265166e8ef8df46a9493f60568`. The owner confirmed the displayed image as accurate, and the external preflight/manifest/comparison receipts remain under `/Users/ivan/.codex/verification/loomhelm-u02/batch16-0723f90`.
 
+## Approval History Read
+
+E01 adds the additive `listRunApprovals` REST/MCP contract, generated Go/TypeScript types and client method, a shared Run-control read path and durable approval keyset pagination over `(created_at,id)`. Public approvals expose the actual persisted ID, revision, status, raw context and optional requested-event identity; the read path permits historical old-generation rows while the existing exact-generation/revision/CAS resolution path remains write-protected. Migration 00011 adds only `execution_approvals_run_created_idx`, preserves 00010 rows and requires failed-index forward re-entry evidence. Compatibility impact is `public_api=minor` and `persistent_state=patch`; real-platform HTTP acceptance remains candidate-bound evidence rather than a documentation claim.
+
+## Approval Revision History Completion
+
+The E01 successor decision keeps the stable native approval ID, adds immutable `(id,revision)` history beside the current CAS projection and versions the opaque Run-bound cursor to `(created_at,id,revision)`. Migration 00012 backfills exactly one provable snapshot for each existing current row without inventing discarded revisions, and new writers update projection plus history atomically. Compatibility is `public_api=minor` and `persistent_state=minor`: old projection-only writers are drained and fenced before new revision writes, ambiguous legacy cursors fail closed, and post-cutover switchback requires a history-capable candidate.
+
 ## References
 
 - [Requirements](SPEC.md)

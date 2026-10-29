@@ -266,12 +266,73 @@ func isolatedApplicationDatabase(t *testing.T) string {
 			t.Errorf("drop owned application test schema: %v", err)
 		}
 	})
-	connection, err := pgx.ParseConfig(cfg.URL)
+	connectionURL, err := applicationDatabaseWithSchema(cfg.URL, schema)
 	if err != nil {
-		t.Fatal("parse test database configuration")
+		t.Fatal(err)
 	}
-	connection.RuntimeParams["search_path"] = schema
-	return connection.ConnString()
+	probe, err := database.Open(ctx, database.Config{URL: connectionURL, MaxConns: 1})
+	if err != nil {
+		t.Fatal("open isolated application test connection")
+	}
+	defer probe.Close()
+	var actualSchema string
+	if err := probe.Pool().QueryRow(ctx, "SELECT current_schema()").Scan(&actualSchema); err != nil {
+		t.Fatal("verify application test schema")
+	}
+	if actualSchema != schema {
+		t.Fatal("application test connection escaped its owned schema")
+	}
+	if err := probe.Migrate(ctx); err != nil {
+		t.Fatalf("migrate application test schema: %v", err)
+	}
+	migrator := database.NewApprovalHistoryMigrator(probe.Pool(), database.ApprovalHistoryMigratorConfig{LeaseOwner: "application-integration-test"})
+	options := database.ApprovalHistoryMigrationOptions{
+		BatchSize:          32,
+		WorkBudget:         10000,
+		PreDrainBatchSize:  32,
+		PreDrainWorkBudget: 10000,
+		FinalRowBudget:     100,
+		FinalWorkBudget:    300,
+	}
+	if _, err := migrator.RunBackfill(ctx, options); err != nil {
+		t.Fatalf("backfill application test schema: %v", err)
+	}
+	if _, err := migrator.Validate(ctx, options); err != nil {
+		t.Fatalf("validate application test schema: %v", err)
+	}
+	if _, err := migrator.BuildIndexes(ctx, options); err != nil {
+		t.Fatalf("build application test schema indexes: %v", err)
+	}
+	if _, err := migrator.Cutover(ctx, options); err != nil {
+		t.Fatalf("cut over application test schema: %v", err)
+	}
+	return connectionURL
+}
+
+// pgx.ConnConfig.ConnString returns its original input; changing RuntimeParams
+// does not change that string. Encode the owned schema into the actual DSN
+// used by every production connection opened during this exercise.
+func applicationDatabaseWithSchema(raw, schema string) (string, error) {
+	if schema == "" || strings.Trim(schema, "abcdefghijklmnopqrstuvwxyz0123456789_") != "" || (schema[0] >= '0' && schema[0] <= '9') {
+		return "", fmt.Errorf("invalid owned application test schema")
+	}
+	raw = strings.TrimSpace(raw)
+	if _, err := pgx.ParseConfig(raw); err != nil {
+		return "", fmt.Errorf("invalid application test database configuration")
+	}
+	if strings.HasPrefix(raw, "postgres://") || strings.HasPrefix(raw, "postgresql://") {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid application test database URL")
+		}
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		return parsed.String(), nil
+	}
+	// Schema is restricted above to an owned, unquoted PostgreSQL identifier.
+	// A final keyword replaces an earlier search_path in a keyword/value DSN.
+	return raw + " search_path='" + schema + "'", nil
 }
 
 func startApplicationTestServer(t *testing.T, cfg platform.Config) (string, func()) {
@@ -335,8 +396,11 @@ func applicationBrowser(t *testing.T) *http.Client {
 	return &http.Client{Jar: jar, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func applicationRequest(t *testing.T, client *http.Client, method, target string, body any, headers map[string]string, status int) *http.Response {
+func applicationRequest(t *testing.T, client *http.Client, method, target string, body any, headers map[string]string, statuses ...int) *http.Response {
 	t.Helper()
+	if len(statuses) == 0 {
+		t.Fatal("application request requires at least one expected status")
+	}
 	var input io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -365,14 +429,21 @@ func applicationRequest(t *testing.T, client *http.Client, method, target string
 		t.Fatal(err)
 	}
 	response.Body = io.NopCloser(bytes.NewReader(data))
-	if response.StatusCode != status {
+	statusAllowed := false
+	for _, status := range statuses {
+		if response.StatusCode == status {
+			statusAllowed = true
+			break
+		}
+	}
+	if !statusAllowed {
 		// Avoid printing credential/session payloads on a failing assertion.
-		t.Fatalf("%s %s returned %d, want %d", method, request.URL.Path, response.StatusCode, status)
+		t.Fatalf("%s %s returned %d, want one of %v", method, request.URL.Path, response.StatusCode, statuses)
 	}
 	if strings.HasPrefix(request.URL.Path, "/api/v1/") && response.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("%s response was cacheable", request.URL.Path)
 	}
-	if strings.HasPrefix(request.URL.Path, "/api/v1/") && status >= 400 {
+	if strings.HasPrefix(request.URL.Path, "/api/v1/") && response.StatusCode >= 400 {
 		var failure struct {
 			Code      string `json:"code"`
 			RequestID string `json:"request_id"`
@@ -381,7 +452,7 @@ func applicationRequest(t *testing.T, client *http.Client, method, target string
 			t.Fatalf("%s returned an invalid API error envelope", request.URL.Path)
 		}
 	}
-	if status == http.StatusNoContent && len(data) != 0 {
+	if response.StatusCode == http.StatusNoContent && len(data) != 0 {
 		t.Fatal("bodyless operation returned content")
 	}
 	return response

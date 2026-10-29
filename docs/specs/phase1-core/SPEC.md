@@ -39,6 +39,8 @@ The system MUST support creating a Codex session in the installation's configure
 
 An authorized user MUST be able to associate at most one direct session with a task, send input, observe streamed execution, approve or deny a pending request and interrupt a run. These conversation operations MUST also work without prior Task or Project association. Supported sub-agent activity MUST be inspectable within the conversation using actual available events. Stale or repeated approval responses MUST NOT authorize additional execution.
 
+Authenticated REST and MCP MUST expose every persisted approval revision for an authorized Run, including pending, approved, denied and expired states, with the stable durable/native `id`, `revision`, raw `context` and optional `requested_event_id`; the latter MUST identify the matching `approval.requested` event while the public event payload remains unchanged. The same approval ID MAY occur once per persisted revision. Approval history reads MUST use an explicitly versioned opaque Run-bound keyset cursor over `(created_at, id, revision)`, default to 50 items and reject explicit limits outside 1..200, duplicate or malformed parameters and cross-Run cursors. A legacy cursor over `(created_at,id)` MAY be accepted only when the persisted history proves one matching revision; ambiguous or missing positions MUST be rejected without guessing or skipping rows. Read authorization MUST be rechecked on every page, historical rows from an older execution generation MUST remain readable, and approval resolution MUST retain exact current Run/generation/revision/CAS checks so stale or repeated responses cannot authorize another execution.
+
 ### REQ-LH-004
 
 The system MUST persist command identity and ordered events across connection loss and Server, Worker or Connector restart. It MUST distinguish accepted, executing and finished work, deduplicate repeated delivery, and expose an explicit unknown result when an external side effect cannot yet be established. Recovery MUST reconcile before repeating an ambiguous operation.
@@ -199,11 +201,18 @@ The sixth capture is `assets/task-graph-storybook-desktop.png`, rendered from ca
 
 The TaskGraph image documents the current component presentation and does not establish authenticated production UI, backend authorization, relationship persistence or complete product UI approval. Its source-managed DOM preflight and exact-path comparison remain recorded in the external candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/batch16-0723f90`.
 
+### VER-LH-012
+
+- Method: real authenticated HTTP/MCP approval-history reads for a native approval request, ordered event reads, reconnect and Connector restart, then approve/deny, duplicate/old-revision/resolved/old-generation response attempts, permission/error and cache-header checks.
+- covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-008`, `REQ-LH-011`
+- Pass condition: the approval list returns every persisted revision, including repeated stable IDs at equal timestamps, with its revision, status, raw context and requested-event link; the matching public event retains the native raw payload; reconnect returns the same approval identity; exact current-generation approval resolution admits one response only; historical old-generation reads succeed while writes fail; version-2 cursors resume without skips, unique legacy positions decode, ambiguous legacy positions fail closed, and read authorization, 401/404/400/409/503 mappings, no-store headers, cursor bounds and duplicate parameters hold without client- or database-ID construction in the test helper.
+
 ## Related ADRs
 
 - [Control plane and host execution](../../adr/0001-control-plane-and-host-execution.md)
 - [Immutable candidates and state-compatible blue-green](../../adr/0002-immutable-candidates-and-blue-green.md)
 - [Versioned public protocol and reconciliation boundary](../../adr/0003-public-protocol-and-reconciliation.md)
+- [Durable approval revision history and cursor compatibility](../../adr/0011-durable-approval-revision-history.md)
 - [Bounded file publication and content input](../../adr/0005-bounded-file-publication-and-content-input.md)
 - [Scoped credential administration](../../adr/0006-scoped-credential-administration.md)
 - [Explicit session creation identity](../../adr/0007-explicit-session-creation-identity.md)

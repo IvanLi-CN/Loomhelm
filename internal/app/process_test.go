@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -41,10 +43,14 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 	}
 
 	connector, err := NewConnector(platform.Config{
-		Component:          platform.ComponentConnector,
-		Version:            "test",
-		ShutdownTimeout:    time.Second,
-		ConnectorServerURL: "https://platform.example.test",
+		Component:                 platform.ComponentConnector,
+		Version:                   "test",
+		ShutdownTimeout:           time.Second,
+		ConnectorServerURL:        "https://platform.example.test",
+		ConnectorHostID:           "host-test",
+		ConnectorToken:            "token-test",
+		ConnectorJournalPath:      connectorTestJournalPath(t),
+		ConnectorAppServerCommand: os.Args[0],
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewConnector() error = %v", err)
@@ -62,10 +68,14 @@ func TestWorkerAndConnectorStopOnContextCancellation(t *testing.T) {
 
 func TestConnectorPreCanceledContextStopsBeforeReadiness(t *testing.T) {
 	connector, err := NewConnector(platform.Config{
-		Component:          platform.ComponentConnector,
-		Version:            "test",
-		ShutdownTimeout:    time.Second,
-		ConnectorServerURL: "https://platform.example.test",
+		Component:                 platform.ComponentConnector,
+		Version:                   "test",
+		ShutdownTimeout:           time.Second,
+		ConnectorServerURL:        "https://platform.example.test",
+		ConnectorHostID:           "host-test",
+		ConnectorToken:            "token-test",
+		ConnectorJournalPath:      connectorTestJournalPath(t),
+		ConnectorAppServerCommand: os.Args[0],
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewConnector() error = %v", err)
@@ -82,10 +92,14 @@ func TestConnectorPreCanceledContextStopsBeforeReadiness(t *testing.T) {
 
 func TestConnectorRejectsSecondRunWithoutStoppingActiveProcess(t *testing.T) {
 	connector, err := NewConnector(platform.Config{
-		Component:          platform.ComponentConnector,
-		Version:            "test",
-		ShutdownTimeout:    time.Second,
-		ConnectorServerURL: "https://platform.example.test",
+		Component:                 platform.ComponentConnector,
+		Version:                   "test",
+		ShutdownTimeout:           time.Second,
+		ConnectorServerURL:        "https://platform.example.test",
+		ConnectorHostID:           "host-test",
+		ConnectorToken:            "token-test",
+		ConnectorJournalPath:      connectorTestJournalPath(t),
+		ConnectorAppServerCommand: os.Args[0],
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewConnector() error = %v", err)
@@ -132,6 +146,15 @@ func TestWorkerRejectsSecondRunWithoutReplacingGeneration(t *testing.T) {
 	}
 	cancelFirst()
 	waitForProcessResult(t, firstResult)
+}
+
+func connectorTestJournalPath(t *testing.T) string {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatalf("secure connector test journal directory: %v", err)
+	}
+	return filepath.Join(directory, "connector.jsonl")
 }
 
 func waitForLifecycleState(t *testing.T, lifecycle *platform.Lifecycle, want platform.State) {

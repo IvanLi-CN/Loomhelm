@@ -32,6 +32,7 @@ type ServerOptions struct {
 	MaxFrameBytes    int64
 	HandshakeTimeout time.Duration
 	EventHandler     EventHandler
+	AckHandler       CommandAckHandler
 }
 
 type Server struct {
@@ -52,6 +53,7 @@ type serverConnection struct {
 	connection hosts.Connection
 	maxFrame   int64
 	onEvent    EventHandler
+	onAck      CommandAckHandler
 
 	writeMu     sync.Mutex
 	done        chan struct{}
@@ -81,6 +83,7 @@ func NewServer(registry Registry, options ...ServerOptions) (*Server, error) {
 			config.HandshakeTimeout = options[0].HandshakeTimeout
 		}
 		config.EventHandler = options[0].EventHandler
+		config.AckHandler = options[0].AckHandler
 	}
 	if config.MaxFrameBytes <= 0 {
 		return nil, errors.New("gateway frame limit must be greater than zero")
@@ -175,6 +178,7 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		connection:  connection,
 		maxFrame:    s.options.MaxFrameBytes,
 		onEvent:     s.options.EventHandler,
+		onAck:       s.options.AckHandler,
 		done:        make(chan struct{}),
 		ready:       make(chan struct{}),
 		handlerDone: make(chan struct{}),
@@ -485,14 +489,16 @@ func (c *serverConnection) resolve(ctx context.Context, message Message) error {
 	if message.Generation != c.connection.Generation {
 		return hosts.ErrConnectionStale
 	}
-	c.pendingMu.Lock()
-	_, pending := c.pending[message.RequestID]
-	c.pendingMu.Unlock()
-	if !pending {
-		return nil
-	}
 	var response chan commandResponse
 	if err := c.registry.AuthorizeCommand(ctx, c.connection, func() error {
+		if c.onAck != nil {
+			if message.Ack == nil {
+				return errors.New("gateway acknowledgement payload is missing")
+			}
+			if err := c.onAck(ctx, c.connection, message.RequestID, message.SessionID, *message.Ack); err != nil {
+				return err
+			}
+		}
 		c.pendingMu.Lock()
 		response = c.pending[message.RequestID]
 		if response != nil {

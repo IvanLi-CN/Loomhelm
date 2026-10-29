@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,21 @@ import (
 	"testing"
 	"time"
 )
+
+func TestConnectorInitializationErrorClassOmitsPrivateDetails(t *testing.T) {
+	privatePath := filepath.Join(t.TempDir(), "connector-journal-secret")
+	err := fmt.Errorf("open connector journal: %w", &os.PathError{Op: "open", Path: privatePath, Err: os.ErrPermission})
+	got := connectorInitializationErrorClass(err)
+	if got != "permission_denied" {
+		t.Fatalf("permission error class = %q, want permission_denied", got)
+	}
+	if strings.Contains(got, privatePath) {
+		t.Fatalf("permission error class leaked private path %q", privatePath)
+	}
+	if got := connectorInitializationErrorClass(fmt.Errorf("journal missing: %w", os.ErrNotExist)); got != "not_found" {
+		t.Fatalf("not-found error class = %q, want not_found", got)
+	}
+}
 
 func TestConnectorEntrypointExitsOnSignal(t *testing.T) {
 	for _, test := range []struct {
@@ -34,11 +50,18 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 		t.Fatalf("create log file: %v", err)
 	}
 	defer logFile.Close()
+	if err := os.Chmod(filepath.Dir(logPath), 0o700); err != nil {
+		t.Fatalf("secure connector test directory: %v", err)
+	}
 
 	command := exec.Command(binary)
 	command.Env = commandEnv(map[string]string{
-		"LOOMHELM_VERSION":              "test",
-		"LOOMHELM_CONNECTOR_SERVER_URL": "https://platform.example.test",
+		"LOOMHELM_VERSION":                      "test",
+		"LOOMHELM_CONNECTOR_SERVER_URL":         "https://platform.example.test",
+		"LOOMHELM_CONNECTOR_HOST_ID":            "host-test",
+		"LOOMHELM_CONNECTOR_TOKEN":              "token-test",
+		"LOOMHELM_CONNECTOR_JOURNAL_PATH":       filepath.Join(filepath.Dir(logPath), "connector.jsonl"),
+		"LOOMHELM_CONNECTOR_APP_SERVER_COMMAND": "/bin/true",
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile

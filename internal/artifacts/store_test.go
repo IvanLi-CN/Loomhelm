@@ -153,7 +153,7 @@ func TestOpenStoredFileRejectsSymlink(t *testing.T) {
 }
 
 func TestStorePutMetadataOpenAndReopen(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openMigratedIntegrationStore(t, nil)
 	defer db.Close()
 	content := []byte{0x00, 0xff, '\n', '<', 's', 'c', 'r', 'i', 'p', 't', '>'}
 	runID := uniqueID("run")
@@ -218,7 +218,7 @@ func TestStorePutMetadataOpenAndReopen(t *testing.T) {
 }
 
 func TestStoreRejectsMismatchesAndInterruptedUploads(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("complete content")
 
@@ -267,7 +267,7 @@ func TestStageHonorsCancellationBeforeWriting(t *testing.T) {
 }
 
 func TestStoreStageFailureQueuesCleanupDebt(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("stage cleanup debt")
 	artifact := testArtifact(uniqueID("artifact-stage-cleanup"), nil, content)
@@ -317,7 +317,7 @@ func TestStoreStageFailureQueuesCleanupDebt(t *testing.T) {
 }
 
 func TestStoreRetriesImmutableArtifactAndRejectsConflicts(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("retryable content")
 	artifact := testArtifact(uniqueID("artifact-retry"), nil, content)
@@ -351,7 +351,7 @@ func TestStoreRetriesImmutableArtifactAndRejectsConflicts(t *testing.T) {
 }
 
 func TestStoreRejectsAssociationAndImmutableMetadataConflicts(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("immutable metadata")
 	artifact := testArtifact(uniqueID("artifact-metadata-conflicts"), nil, content)
@@ -391,7 +391,7 @@ func TestStoreRejectsAssociationAndImmutableMetadataConflicts(t *testing.T) {
 }
 
 func TestStorePutHidesCrossSessionArtifactExistence(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("cross-session artifact")
 	artifact := testArtifact(uniqueID("artifact-cross-session"), nil, content)
@@ -423,7 +423,7 @@ func TestStorePutHidesCrossSessionArtifactExistence(t *testing.T) {
 }
 
 func TestStoreRejectedStagingQueuesCleanupWithIdentity(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("cross-session cleanup identity")
 	artifact := testArtifact(uniqueID("artifact-cross-session-cleanup"), nil, content)
@@ -467,7 +467,7 @@ func TestStoreRejectedStagingQueuesCleanupWithIdentity(t *testing.T) {
 }
 
 func TestStorePutReauthorizesExistingArtifactWithSingleConnectionPool(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("single connection authorization")
 	artifact := testArtifact(uniqueID("artifact-single-connection"), nil, content)
@@ -499,7 +499,7 @@ func TestStorePutReauthorizesExistingArtifactWithSingleConnectionPool(t *testing
 }
 
 func TestStoreCancellationDuringExistingArtifactAuthorizationRetainsStaging(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("authorization cancellation")
 	artifact := testArtifact(uniqueID("artifact-auth-cancel"), nil, content)
@@ -560,7 +560,7 @@ func TestStoreCancellationDuringExistingArtifactAuthorizationRetainsStaging(t *t
 }
 
 func TestStorePutReauthorizesRepairAfterIdentityLock(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("repair authorization")
 	artifact := testArtifact(uniqueID("artifact-repair-auth"), nil, content)
@@ -602,7 +602,7 @@ func TestStorePutReauthorizesRepairAfterIdentityLock(t *testing.T) {
 }
 
 func TestStorePutRejectsRepairWhenAuthorizationRevokedDuringIdentityLockWait(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("repair authorization revoked during wait")
 	artifact := testArtifact(uniqueID("artifact-repair-auth-revoked"), nil, content)
@@ -708,7 +708,7 @@ func TestStorePutRejectsRepairWhenAuthorizationRevokedDuringIdentityLockWait(t *
 }
 
 func TestStorePutReauthorizesRepairAfterIdentityLockWait(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("repair authorization after wait")
 	artifact := testArtifact(uniqueID("artifact-repair-auth-wait"), nil, content)
@@ -847,7 +847,7 @@ func TestStorePutReauthorizesRepairAfterIdentityLockWait(t *testing.T) {
 }
 
 func TestStoreCancellationBeforeRejectedCleanupCommitRetainsStaging(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("rejected cleanup cancellation")
 	artifact := testArtifact(uniqueID("artifact-rejected-cleanup-cancel"), nil, content)
@@ -908,7 +908,7 @@ func TestStoreCancellationBeforeRejectedCleanupCommitRetainsStaging(t *testing.T
 }
 
 func TestStoreRetainsStagingWhenRecoveryConflictsAfterIntentCommit(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("post-commit conflict")
 	artifact := testArtifact(uniqueID("artifact-post-commit-conflict"), nil, content)
@@ -943,7 +943,7 @@ func TestStoreRetainsStagingWhenRecoveryConflictsAfterIntentCommit(t *testing.T)
 }
 
 func TestStoreRecoveryReclaimsReadyStagingAcrossBoundedBatches(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready staging cleanup")
 	artifactIDs := make([]string, 0, 2)
@@ -1009,7 +1009,7 @@ func TestStoreRecoveryReclaimsReadyStagingAcrossBoundedBatches(t *testing.T) {
 }
 
 func TestStoreRecoveryPreservesReadyStagingWhenFinalIsInvalid(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready staging must survive")
 	artifactIDs := make([]string, 0, 2)
@@ -1070,7 +1070,7 @@ func TestStoreRecoveryPreservesReadyStagingWhenFinalIsInvalid(t *testing.T) {
 }
 
 func TestStoreRecoveryRetiresInvalidReadyStagingCleanupWithoutRemovingStaging(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready cleanup debt")
 	artifact := testArtifact(uniqueID("artifact-ready-cleanup-debt"), nil, content)
@@ -1125,7 +1125,7 @@ func TestStoreRecoveryRetiresInvalidReadyStagingCleanupWithoutRemovingStaging(t 
 }
 
 func TestStoreRecoveryUsesSharedBatchLimit(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("shared recovery limit")
 
@@ -1182,7 +1182,7 @@ func TestStoreRecoveryUsesSharedBatchLimit(t *testing.T) {
 }
 
 func TestStoreRecoveryOrdersDueWorkAcrossQueues(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("recovery queue order")
 	ready := testArtifact(uniqueID("artifact-recovery-order-ready"), nil, content)
@@ -1253,7 +1253,7 @@ func TestStoreRecoveryOrdersDueWorkAcrossQueues(t *testing.T) {
 }
 
 func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready cleanup retry")
 	failed := testArtifact("artifact-reclaim-failed-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
@@ -1357,7 +1357,7 @@ func TestStoreRecoveryDefersFailedReadyCleanupWithoutStarvingRetry(t *testing.T)
 }
 
 func TestStoreRecoveryDefersArtifactAfterIdentityLockTimeout(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("identity lock timeout")
 	artifact := testArtifact(uniqueID("artifact-lock-timeout"), nil, content)
@@ -1466,7 +1466,7 @@ func TestStoreRecoveryDefersArtifactAfterIdentityLockTimeout(t *testing.T) {
 }
 
 func TestStoreRecoveryDefersFailedStagingCleanupWithoutStarvingLaterDebt(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("staging cleanup retry fairness")
 	badName := ".upload-staging-cleanup-starve-bad-" + fmt.Sprint(time.Now().UnixNano())
@@ -1533,7 +1533,7 @@ func TestStoreRecoveryDefersFailedStagingCleanupWithoutStarvingLaterDebt(t *test
 }
 
 func TestStoreRecoveryDefersPendingFailuresForFairness(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("pending cleanup retry")
 	failed := testArtifact("artifact-pending-failed-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
@@ -1606,7 +1606,7 @@ func TestStoreRecoveryDefersPendingFailuresForFairness(t *testing.T) {
 }
 
 func TestStoreRecoveryRechecksPersistedRetryDeadline(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("retry deadline recheck")
 	artifact := testArtifact(uniqueID("artifact-retry-recheck"), nil, content)
@@ -1651,7 +1651,7 @@ func TestStoreRecoveryRechecksPersistedRetryDeadline(t *testing.T) {
 }
 
 func TestStoreRecoveryRechecksReadyRetryDeadline(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready retry deadline recheck")
 	artifact := testArtifact(uniqueID("artifact-ready-retry-recheck"), nil, content)
@@ -1695,7 +1695,7 @@ func TestStoreRecoveryRechecksReadyRetryDeadline(t *testing.T) {
 }
 
 func TestStoreRecoveryDefersReadyFailuresForFairness(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready recovery retry")
 	failed := testArtifact("artifact-ready-failed-"+fmt.Sprint(time.Now().UnixNano()), nil, content)
@@ -1754,7 +1754,7 @@ func TestStoreRecoveryDefersReadyFailuresForFairness(t *testing.T) {
 }
 
 func TestStoreRetriesKnownUnreferencedStagingCleanupDebt(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	stagingName := ".upload-cleanup-debt-" + fmt.Sprint(time.Now().UnixNano())
 	stagingPath := filepath.Join(store.objects, stagingName)
@@ -1805,7 +1805,7 @@ func TestStoreRetriesKnownUnreferencedStagingCleanupDebt(t *testing.T) {
 }
 
 func TestStoreCleanupDebtSkipsActiveStagingReference(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("active staging reference")
 	stagingName := ".upload-cleanup-active-" + fmt.Sprint(time.Now().UnixNano())
@@ -1833,7 +1833,7 @@ func TestStoreCleanupDebtSkipsActiveStagingReference(t *testing.T) {
 }
 
 func TestStoreCleanupDebtRechecksRetryDeadline(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	stagingName := ".upload-cleanup-retry-recheck-" + fmt.Sprint(time.Now().UnixNano())
 	stagingPath := filepath.Join(store.objects, stagingName)
@@ -1866,7 +1866,7 @@ func TestStoreCleanupDebtRechecksRetryDeadline(t *testing.T) {
 }
 
 func TestStoreCleanupDebtMissingStagingRequiresDirectorySync(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	stagingName := ".upload-cleanup-missing-sync-" + fmt.Sprint(time.Now().UnixNano())
 	stagingPath := filepath.Join(store.objects, stagingName)
@@ -1910,7 +1910,7 @@ func TestStoreCleanupDebtMissingStagingRequiresDirectorySync(t *testing.T) {
 }
 
 func TestStoreCleanupDebtDoesNotRemoveReusedStaging(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	stagingName := ".upload-cleanup-reused-" + fmt.Sprint(time.Now().UnixNano())
 	stagingPath := filepath.Join(store.objects, stagingName)
@@ -1963,7 +1963,7 @@ func TestStoreCleanupDebtDoesNotRemoveReusedStaging(t *testing.T) {
 }
 
 func TestStoreCleanupDebtWithUnknownIdentityPreservesReplacement(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	stagingName := ".upload-cleanup-unknown-identity-" + fmt.Sprint(time.Now().UnixNano())
 	stagingPath := filepath.Join(store.objects, stagingName)
@@ -2033,7 +2033,7 @@ func TestStoreCleanupDebtWithUnknownIdentityPreservesReplacement(t *testing.T) {
 }
 
 func TestStoreCleanupDebtPreservesArtifactWithUnknownIdentity(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("unavailable artifact staging")
 	artifact := testArtifact(uniqueID("artifact-cleanup-unknown-artifact-identity"), nil, content)
@@ -2080,7 +2080,7 @@ func TestStoreCleanupDebtPreservesArtifactWithUnknownIdentity(t *testing.T) {
 }
 
 func TestStoreCleanupDebtPreservesReadyArtifactWithUnknownIdentity(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready artifact unknown identity")
 	artifact := testArtifact(uniqueID("artifact-ready-cleanup-unknown-identity"), nil, content)
@@ -2127,7 +2127,7 @@ func TestStoreCleanupDebtPreservesReadyArtifactWithUnknownIdentity(t *testing.T)
 }
 
 func TestStoreReadyReclamationPreservesReusedStaging(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready incarnation")
 	artifact := testArtifact(uniqueID("artifact-ready-incarnation"), nil, content)
@@ -2212,7 +2212,7 @@ func TestStoreReadyReclamationPreservesReusedStaging(t *testing.T) {
 }
 
 func TestStoreReadyReclamationPreservesUnidentifiedStaging(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("unidentified ready staging")
 	artifact := testArtifact(uniqueID("artifact-ready-unidentified"), nil, content)
@@ -2261,7 +2261,7 @@ func TestStoreReadyReclamationPreservesUnidentifiedStaging(t *testing.T) {
 }
 
 func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready cleanup lock")
 	artifact := testArtifact(uniqueID("artifact-reclaim-lock"), nil, content)
@@ -2465,7 +2465,7 @@ func TestStoreHoldsIdentityLockThroughReadyStagingRemoval(t *testing.T) {
 }
 
 func TestNewStoreCreatesPrivateNestedRoot(t *testing.T) {
-	db, _, ctx := openIntegrationStore(t, nil)
+	db, _, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	root := filepath.Join(t.TempDir(), "missing", "nested", "artifact-root")
 	store, err := NewStore(db.Pool(), Config{Root: root, Authorizer: allowAllAuthorizer{}})
@@ -2488,7 +2488,7 @@ func TestNewStoreCreatesPrivateNestedRoot(t *testing.T) {
 }
 
 func TestStorePutReclaimsUnmarkedReadyStaging(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready retry cleanup")
 	artifact := testArtifact(uniqueID("artifact-ready-retry"), nil, content)
@@ -2516,7 +2516,7 @@ func TestStorePutReclaimsUnmarkedReadyStaging(t *testing.T) {
 }
 
 func TestStoreEnforcesConfiguredMaxBytesAtBothBoundaries(t *testing.T) {
-	db, _, ctx := openIntegrationStore(t, nil)
+	db, _, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	store, err := NewStore(db.Pool(), Config{Root: t.TempDir(), MaxBytes: 8, Authorizer: allowAllAuthorizer{}})
 	if err != nil {
@@ -2542,7 +2542,7 @@ func TestStoreEnforcesConfiguredMaxBytesAtBothBoundaries(t *testing.T) {
 }
 
 func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("unavailable content")
 	artifact := testArtifact(uniqueID("artifact-unavailable"), nil, content)
@@ -2575,7 +2575,7 @@ func TestStoreRecoveryMarksMissingStagingUnavailable(t *testing.T) {
 }
 
 func TestStorePendingMetadataAndOpenReturnUnavailableWithoutIntegrity(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	artifact := testArtifact(uniqueID("artifact-pending-read"), nil, []byte("pending read"))
 	insertPendingArtifact(t, db.Pool(), ctx, artifact, ".upload-pending-read")
@@ -2622,7 +2622,7 @@ func TestRecoveryStateConvergenceRequiresReplacementBinding(t *testing.T) {
 }
 
 func TestStoreKeepsDurableStagingWhenDatabaseCommitIsUnavailable(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	content := []byte("preserve this staging")
 	artifact := testArtifact(uniqueID("artifact-db-down"), nil, content)
 	db.Close()
@@ -2639,7 +2639,7 @@ func TestStoreKeepsDurableStagingWhenDatabaseCommitIsUnavailable(t *testing.T) {
 }
 
 func TestStoreResolvesLostCommitResponsesFromDurableState(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	store.faults = &faultHooks{
 		CommitResponseLost: func() error { return errors.New("simulated commit response loss") },
@@ -2665,7 +2665,7 @@ func TestStoreResolvesLostCommitResponsesFromDurableState(t *testing.T) {
 }
 
 func TestStoreResolvesLostRepairIntentCommitResponse(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("lost repair response")
 	artifact := testArtifact(uniqueID("artifact-lost-repair"), nil, content)
@@ -2702,7 +2702,7 @@ func TestStoreRejectsLongContentTypeBeforeStaging(t *testing.T) {
 }
 
 func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	firstContext, cancelFirst := context.WithCancel(ctx)
 	defer cancelFirst()
@@ -2794,7 +2794,7 @@ func TestStoreCancellationAfterIntentDoesNotBlockOtherUpload(t *testing.T) {
 }
 
 func TestStoreCancellationUsesSharedCleanupDeadlineForBlockedIdentityLock(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	id := uniqueID("artifact-cleanup-lock")
 	holder, err := db.Pool().Begin(ctx)
@@ -2846,7 +2846,7 @@ func TestCleanupContextExtendsWhenCancellationStartsAfterAllocation(t *testing.T
 }
 
 func TestStoreRoundsCreatedAtToDatabasePrecision(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("timestamp precision")
 	artifact := testArtifact(uniqueID("artifact-time"), nil, content)
@@ -2880,7 +2880,7 @@ func TestStoreRedactsFilesystemPaths(t *testing.T) {
 }
 
 func TestStoreRejectsUnauthorizedMetadataAndOpen(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("authorized bytes")
 	artifact := testArtifact(uniqueID("artifact-auth"), nil, content)
@@ -2917,7 +2917,7 @@ func TestStoreRejectsUnauthorizedMetadataAndOpen(t *testing.T) {
 }
 
 func TestStoreClosesAdmittedSourceExactlyOnce(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("close once")
 	source := &countingReadCloser{Reader: bytes.NewReader(content)}
@@ -2930,7 +2930,7 @@ func TestStoreClosesAdmittedSourceExactlyOnce(t *testing.T) {
 }
 
 func TestStoreCancellationClosesBlockedSourceAndReturns(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	putContext, cancel := context.WithCancel(ctx)
 	source := newBlockingReadCloser()
@@ -2967,7 +2967,7 @@ func TestStoreCancellationClosesBlockedSourceAndReturns(t *testing.T) {
 }
 
 func TestStoreReadyReclamationMissingStagingRequiresDirectorySync(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready missing sync")
 	artifact := testArtifact(uniqueID("artifact-ready-missing-sync"), nil, content)
@@ -3022,7 +3022,7 @@ func TestStoreReadyReclamationMissingStagingRequiresDirectorySync(t *testing.T) 
 }
 
 func TestStoreReadyReclamationMissingUnrecordedStagingRequiresDirectorySync(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready missing unrecorded sync")
 	artifact := testArtifact(uniqueID("artifact-ready-missing-unrecorded-sync"), nil, content)
@@ -3084,7 +3084,7 @@ func TestStoreReadyReclamationMissingUnrecordedStagingRequiresDirectorySync(t *t
 }
 
 func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("ready bytes")
 	artifact := testArtifact(uniqueID("artifact-ready-loss"), nil, content)
@@ -3107,7 +3107,7 @@ func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.
 }
 
 func TestStoreReconcileRevalidatesReclaimedReadyBytes(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("reconcile ready bytes")
 	artifact := testArtifact(uniqueID("artifact-reconcile-ready-loss"), nil, content)
@@ -3133,7 +3133,7 @@ func TestStoreReconcileRevalidatesReclaimedReadyBytes(t *testing.T) {
 }
 
 func TestStoreMetadataDoesNotMutateWhenObjectDirectoryIsUnavailable(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("object directory outage")
 	artifact := testArtifact(uniqueID("artifact-object-directory-outage"), nil, content)
@@ -3159,7 +3159,7 @@ func TestStoreMetadataDoesNotMutateWhenObjectDirectoryIsUnavailable(t *testing.T
 }
 
 func TestStoreRecoveryDoesNotMarkReadyUnavailableWhenObjectDirectoryIsUnavailable(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("recovery object directory outage")
 	artifact := testArtifact(uniqueID("artifact-recovery-object-directory-outage"), nil, content)
@@ -3201,7 +3201,7 @@ func TestStoreRecoveryDoesNotMarkReadyUnavailableWhenObjectDirectoryIsUnavailabl
 }
 
 func TestStoreOpenMarksNonregularFinalUnavailable(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("nonregular final")
 	artifact := testArtifact(uniqueID("artifact-nonregular-final"), nil, content)
@@ -3232,7 +3232,7 @@ func TestStoreOpenMarksNonregularFinalUnavailable(t *testing.T) {
 }
 
 func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("repairable bytes")
 	artifact := testArtifact(uniqueID("artifact-repair"), nil, content)
@@ -3285,7 +3285,7 @@ func TestStoreRepairsOnlyNeverReadyMissingStaging(t *testing.T) {
 }
 
 func TestStorePutRepairsMissingPendingStagingInOneAttempt(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("pending staging replacement")
 	artifact := testArtifact(uniqueID("artifact-pending-repair"), nil, content)
@@ -3309,7 +3309,7 @@ func TestStorePutRepairsMissingPendingStagingInOneAttempt(t *testing.T) {
 }
 
 func TestStoreRejectsRepairForUnknownReasonOrConflictingFinal(t *testing.T) {
-	db, store, ctx := openIntegrationStore(t, nil)
+	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
 	content := []byte("repair rejection")
 	unknown := testArtifact(uniqueID("artifact-repair-unknown"), nil, content)
@@ -3440,7 +3440,7 @@ func TestArtifactIntegrationFixturesDoNotClearSiblingSchemaRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scope sibling integration database: %v", err)
 	}
-	if err := prepareArtifactTestDatabase(baseURL, sharedSchema, sharedURL); err != nil {
+	if err := prepareArtifactStoreFixtureSchema(baseURL, sharedURL, sharedSchema); err != nil {
 		t.Fatalf("prepare sibling integration database: %v", err)
 	}
 	t.Cleanup(func() {
@@ -3473,7 +3473,7 @@ func TestArtifactIntegrationFixturesDoNotClearSiblingSchemaRows(t *testing.T) {
 		t.Fatalf("insert shared cleanup sentinel: %v", err)
 	}
 
-	isolatedDB, _, _ := openIntegrationStore(t, nil)
+	isolatedDB, _, _ := openArtifactStoreFixture(t, nil)
 	isolatedDB.Close()
 
 	var artifactCount, cleanupCount int
@@ -3615,14 +3615,16 @@ func uniqueID(prefix string) string {
 }
 
 const (
-	artifactTestSchemaEnv    = "LOOMHELM_ARTIFACT_TEST_SCHEMA"
-	artifactTestBaseURLEnv   = "LOOMHELM_ARTIFACT_TEST_BASE_URL"
-	artifactTestHelperEnv    = "LOOMHELM_ARTIFACT_HELPER"
-	artifactHelperCapability = "loomhelm-artifact-helper-v1\n"
+	artifactTestSchemaEnv        = "LOOMHELM_ARTIFACT_TEST_SCHEMA"
+	artifactTestBaseURLEnv       = "LOOMHELM_ARTIFACT_TEST_BASE_URL"
+	artifactTestHelperEnv        = "LOOMHELM_ARTIFACT_HELPER"
+	artifactHelperCapability     = "loomhelm-artifact-helper-v1\n"
+	artifactTestCloneTablePrefix = "loomhelm_artifacts_canonical_"
 )
 
 var artifactTestSchemaSequence atomic.Uint64
 var artifactHelperProcess bool
+var artifactTestCanonicalSchema string
 
 func TestMain(m *testing.M) {
 	baseURL := strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
@@ -3635,7 +3637,27 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "set shared artifact database URL: %v\n", err)
 		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	canonicalSchema := fmt.Sprintf("%s%d_%d", artifactTestCloneTablePrefix, os.Getpid(), artifactTestSchemaSequence.Add(1))
+	canonicalURL, err := artifactTestDatabaseURL(baseURL, canonicalSchema)
+	if err == nil {
+		err = prepareArtifactTestDatabase(baseURL, canonicalSchema, canonicalURL)
+	}
+	if err == nil {
+		err = verifyArtifactTestMigrationState(canonicalURL)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "prepare canonical artifact integration schema: %v\n", err)
+		os.Exit(1)
+	}
+	artifactTestCanonicalSchema = canonicalSchema
+	code := m.Run()
+	if err := dropArtifactTestDatabase(baseURL, canonicalSchema); err != nil {
+		fmt.Fprintf(os.Stderr, "drop canonical artifact integration schema: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }
 
 var artifactTestDatabaseState = struct {
@@ -3667,7 +3689,7 @@ func ensureArtifactTestDatabase(t *testing.T) {
 	artifactTestDatabaseState.Unlock()
 	scopedURL, err := artifactTestDatabaseURL(baseURL, schema)
 	if err == nil {
-		err = prepareArtifactTestDatabase(baseURL, schema, scopedURL)
+		err = prepareArtifactStoreFixtureSchema(baseURL, scopedURL, schema)
 	}
 	if err != nil {
 		artifactTestDatabaseState.Lock()
@@ -3935,6 +3957,319 @@ func prepareArtifactTestDatabase(databaseURL, schema, scopedURL string) error {
 	return nil
 }
 
+var artifactStoreFixtureTables = []string{
+	"conversation_artifacts",
+	"conversation_artifact_staging_cleanup",
+}
+
+func prepareArtifactStoreFixtureSchema(databaseURL, scopedURL, schema string) error {
+	canonicalSchema := strings.TrimSpace(artifactTestCanonicalSchema)
+	if canonicalSchema == "" {
+		return errors.New("canonical artifact migration schema is not initialized")
+	}
+	return cloneArtifactStoreTables(databaseURL, scopedURL, canonicalSchema, schema)
+}
+
+func cloneArtifactStoreTables(databaseURL, scopedURL, sourceSchema, targetSchema string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.Pool().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin artifact test schema clone: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := verifyArtifactStoreSourceDependencies(ctx, tx, sourceSchema); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "CREATE SCHEMA "+quoteArtifactTestIdentifier(targetSchema)); err != nil {
+		return fmt.Errorf("create cloned schema: %w", err)
+	}
+	for _, table := range artifactStoreFixtureTables {
+		rowCount, err := artifactTestTableRowCount(ctx, tx, sourceSchema, table)
+		if err != nil {
+			return fmt.Errorf("count canonical %s rows: %w", table, err)
+		}
+		if rowCount != 0 {
+			return fmt.Errorf("canonical %s contains %d rows", table, rowCount)
+		}
+		cloneTable := fmt.Sprintf(
+			"CREATE TABLE %s.%s (LIKE %s.%s INCLUDING ALL)",
+			quoteArtifactTestIdentifier(targetSchema),
+			quoteArtifactTestIdentifier(table),
+			quoteArtifactTestIdentifier(sourceSchema),
+			quoteArtifactTestIdentifier(table),
+		)
+		if _, err := tx.Exec(ctx, cloneTable); err != nil {
+			return fmt.Errorf("clone %s: %w", table, err)
+		}
+		sourceSignature, err := artifactStoreTableCatalogSignature(ctx, tx, sourceSchema, table)
+		if err != nil {
+			return fmt.Errorf("read canonical %s catalog: %w", table, err)
+		}
+		targetSignature, err := artifactStoreTableCatalogSignature(ctx, tx, targetSchema, table)
+		if err != nil {
+			return fmt.Errorf("read cloned %s catalog: %w", table, err)
+		}
+		if sourceSignature != targetSignature {
+			sourceParts := strings.Split(sourceSignature, "\n")
+			targetParts := strings.Split(targetSignature, "\n")
+			mismatches := make([]string, 0, 3)
+			for index, name := range []string{"columns", "constraints", "indexes"} {
+				if index >= len(sourceParts) || index >= len(targetParts) || sourceParts[index] != targetParts[index] {
+					mismatches = append(mismatches, name)
+				}
+			}
+			return fmt.Errorf("cloned %s catalog differs from canonical: %s", table, strings.Join(mismatches, ","))
+		}
+		rowCount, err = artifactTestTableRowCount(ctx, tx, targetSchema, table)
+		if err != nil {
+			return fmt.Errorf("count cloned %s rows: %w", table, err)
+		}
+		if rowCount != 0 {
+			return fmt.Errorf("cloned %s contains %d rows", table, rowCount)
+		}
+	}
+	gooseExists, err := artifactTestTableExists(ctx, tx, targetSchema, "goose_db_version")
+	if err != nil {
+		return fmt.Errorf("check cloned migration ledger: %w", err)
+	}
+	if gooseExists {
+		return errors.New("fast artifact store fixture must not contain goose_db_version")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit cloned artifact schema: %w", err)
+	}
+	if err := verifyArtifactStoreSearchPath(scopedURL, targetSchema); err != nil {
+		_ = dropArtifactTestDatabase(databaseURL, targetSchema)
+		return err
+	}
+	return nil
+}
+
+func verifyArtifactStoreSourceDependencies(ctx context.Context, tx pgx.Tx, schema string) error {
+	foreignKeys, err := artifactTestCatalogCount(ctx, tx, `
+		SELECT count(*)
+		FROM pg_constraint c
+		JOIN pg_class r ON r.oid = c.conrelid
+		JOIN pg_namespace n ON n.oid = r.relnamespace
+		WHERE n.nspname = $1
+		  AND r.relname = ANY($2::text[])
+		  AND c.contype = 'f'
+	`, schema, artifactStoreFixtureTables)
+	if err != nil {
+		return fmt.Errorf("inspect artifact foreign-key dependencies: %w", err)
+	}
+	ownedSequences, err := artifactTestCatalogCount(ctx, tx, `
+		SELECT count(*)
+		FROM pg_class sequence_rel
+		JOIN pg_depend d ON d.objid = sequence_rel.oid AND d.deptype = 'a'
+		JOIN pg_class table_rel ON table_rel.oid = d.refobjid
+		JOIN pg_namespace table_ns ON table_ns.oid = table_rel.relnamespace
+		WHERE sequence_rel.relkind = 'S'
+		  AND table_ns.nspname = $1
+		  AND table_rel.relname = ANY($2::text[])
+	`, schema, artifactStoreFixtureTables)
+	if err != nil {
+		return fmt.Errorf("inspect artifact sequence dependencies: %w", err)
+	}
+	triggers, err := artifactTestCatalogCount(ctx, tx, `
+		SELECT count(*)
+		FROM pg_trigger tr
+		JOIN pg_class r ON r.oid = tr.tgrelid
+		JOIN pg_namespace n ON n.oid = r.relnamespace
+		WHERE n.nspname = $1
+		  AND r.relname = ANY($2::text[])
+		  AND NOT tr.tgisinternal
+	`, schema, artifactStoreFixtureTables)
+	if err != nil {
+		return fmt.Errorf("inspect artifact trigger dependencies: %w", err)
+	}
+	customFunctions, err := artifactTestCatalogCount(ctx, tx, `
+		SELECT count(*)
+		FROM pg_depend d
+		JOIN pg_proc p ON p.oid = d.refobjid
+		JOIN pg_namespace pn ON pn.oid = p.pronamespace
+		WHERE d.refclassid = 'pg_proc'::regclass
+		  AND pn.nspname <> 'pg_catalog'
+		  AND (
+			(d.classid = 'pg_attrdef'::regclass AND d.objid IN (
+				SELECT ad.oid
+				FROM pg_attrdef ad
+				JOIN pg_class r ON r.oid = ad.adrelid
+				JOIN pg_namespace n ON n.oid = r.relnamespace
+				WHERE n.nspname = $1 AND r.relname = ANY($2::text[])
+			))
+			OR (d.classid = 'pg_constraint'::regclass AND d.objid IN (
+				SELECT c.oid
+				FROM pg_constraint c
+				JOIN pg_class r ON r.oid = c.conrelid
+				JOIN pg_namespace n ON n.oid = r.relnamespace
+				WHERE n.nspname = $1 AND r.relname = ANY($2::text[])
+			))
+		  )
+	`, schema, artifactStoreFixtureTables)
+	if err != nil {
+		return fmt.Errorf("inspect artifact function dependencies: %w", err)
+	}
+	if foreignKeys != 0 || ownedSequences != 0 || triggers != 0 || customFunctions != 0 {
+		return fmt.Errorf("unsupported artifact fixture dependencies: foreign_keys=%d sequences=%d triggers=%d functions=%d", foreignKeys, ownedSequences, triggers, customFunctions)
+	}
+	return nil
+}
+
+func artifactTestCatalogCount(ctx context.Context, tx pgx.Tx, query string, args ...any) (int64, error) {
+	var count int64
+	if err := tx.QueryRow(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func artifactTestTableExists(ctx context.Context, tx pgx.Tx, schema, table string) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r'
+		)
+	`, schema, table).Scan(&exists)
+	return exists, err
+}
+
+func artifactTestTableRowCount(ctx context.Context, tx pgx.Tx, schema, table string) (int64, error) {
+	var count int64
+	query := "SELECT count(*) FROM " + quoteArtifactTestIdentifier(schema) + "." + quoteArtifactTestIdentifier(table)
+	if err := tx.QueryRow(ctx, query).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func artifactStoreTableCatalogSignature(ctx context.Context, tx pgx.Tx, schema, table string) (string, error) {
+	const query = `
+		SELECT
+			COALESCE((
+				SELECT jsonb_agg(
+					jsonb_build_array(
+						a.attname,
+						format_type(a.atttypid, a.atttypmod),
+						a.attnotnull,
+						COALESCE(pg_get_expr(d.adbin, d.adrelid, true), ''),
+						a.attidentity,
+						a.attgenerated
+					)
+					ORDER BY a.attnum
+				)::text
+				FROM pg_attribute a
+				JOIN pg_class r ON r.oid = a.attrelid
+				JOIN pg_namespace n ON n.oid = r.relnamespace
+				LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+				WHERE n.nspname = $1 AND r.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
+			), '[]'),
+			COALESCE((
+				SELECT jsonb_agg(
+					jsonb_build_array(
+						c.conname,
+						c.contype,
+						c.conkey::text,
+						c.confkey::text,
+						c.convalidated,
+						pg_get_constraintdef(c.oid, true)
+					)
+					ORDER BY c.conname
+				)::text
+				FROM pg_constraint c
+				JOIN pg_class r ON r.oid = c.conrelid
+				JOIN pg_namespace n ON n.oid = r.relnamespace
+				WHERE n.nspname = $1 AND r.relname = $2
+			), '[]'),
+			COALESCE((
+				SELECT jsonb_agg(
+					jsonb_build_array(
+						i.indisunique,
+						i.indisprimary,
+						i.indisexclusion,
+						i.indisvalid,
+						i.indisready,
+						i.indnkeyatts,
+						i.indnatts,
+						i.indkey::text,
+						i.indoption::text,
+						COALESCE(pg_get_expr(i.indpred, i.indrelid, true), ''),
+						COALESCE(pg_get_expr(i.indexprs, i.indrelid, true), ''),
+						COALESCE((
+							SELECT jsonb_agg(pg_get_indexdef(i.indexrelid, positions.position, true) ORDER BY positions.position)
+							FROM generate_series(1, i.indnatts) AS positions(position)
+						), '[]'::jsonb)
+					)
+					ORDER BY
+						i.indisprimary DESC,
+						i.indisunique DESC,
+						i.indkey::text,
+						i.indoption::text,
+						COALESCE(pg_get_expr(i.indpred, i.indrelid, true), ''),
+						COALESCE(pg_get_expr(i.indexprs, i.indrelid, true), '')
+				)::text
+				FROM pg_index i
+				JOIN pg_class r ON r.oid = i.indrelid
+				JOIN pg_namespace n ON n.oid = r.relnamespace
+				WHERE n.nspname = $1 AND r.relname = $2
+			), '[]')
+	`
+	var columns, constraints, indexes string
+	if err := tx.QueryRow(ctx, query, schema, table).Scan(&columns, &constraints, &indexes); err != nil {
+		return "", err
+	}
+	return columns + "\n" + constraints + "\n" + indexes, nil
+}
+
+func verifyArtifactStoreSearchPath(scopedURL, schema string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, database.Config{URL: scopedURL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		return fmt.Errorf("open scoped artifact fixture: %w", err)
+	}
+	defer db.Close()
+	var currentSchema, searchPath string
+	if err := db.Pool().QueryRow(ctx, "SELECT current_schema(), array_to_string(current_schemas(false), ',')").Scan(&currentSchema, &searchPath); err != nil {
+		return fmt.Errorf("read scoped artifact search_path: %w", err)
+	}
+	if currentSchema != schema || searchPath != schema+",public" {
+		return fmt.Errorf("artifact fixture search_path = %q/%q, want %q/%q", currentSchema, searchPath, schema, schema+",public")
+	}
+	return nil
+}
+
+func verifyArtifactTestMigrationState(scopedURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, database.Config{URL: scopedURL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		return fmt.Errorf("open migrated artifact schema: %w", err)
+	}
+	defer db.Close()
+	var count, maxVersion int64
+	var allApplied bool
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT count(*), COALESCE(max(version_id), -1), COALESCE(bool_and(is_applied), false)
+		FROM goose_db_version
+	`).Scan(&count, &maxVersion, &allApplied); err != nil {
+		return fmt.Errorf("read artifact migration history: %w", err)
+	}
+	if count != 13 || maxVersion != 12 || !allApplied {
+		return fmt.Errorf("artifact migration history = count %d/max %d/all_applied %t, want 13/12/true", count, maxVersion, allApplied)
+	}
+	return nil
+}
+
 func cleanupArtifactTestDatabase(databaseURL, schema string, cause error) error {
 	if err := dropArtifactTestDatabase(databaseURL, schema); err != nil {
 		return errors.Join(cause, fmt.Errorf("drop partially prepared artifact test schema: %w", err))
@@ -3960,7 +4295,7 @@ func quoteArtifactTestIdentifier(identifier string) string {
 	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
-func openIntegrationStore(t *testing.T, authorizer Authorizer) (*database.DB, *Store, context.Context) {
+func openArtifactStoreFixture(t *testing.T, authorizer Authorizer) (*database.DB, *Store, context.Context) {
 	t.Helper()
 	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
 		t.Skip("LOOMHELM_DATABASE_URL is not set")
@@ -3973,10 +4308,6 @@ func openIntegrationStore(t *testing.T, authorizer Authorizer) (*database.DB, *S
 	if err != nil {
 		t.Fatalf("open integration database: %v", err)
 	}
-	if err := db.Migrate(ctx); err != nil {
-		db.Close()
-		t.Fatalf("migrate integration database: %v", err)
-	}
 	if authorizer == nil {
 		authorizer = allowAllAuthorizer{}
 	}
@@ -3984,6 +4315,51 @@ func openIntegrationStore(t *testing.T, authorizer Authorizer) (*database.DB, *S
 	if err != nil {
 		db.Close()
 		t.Fatalf("create integration store: %v", err)
+	}
+	return db, store, ctx
+}
+
+func openMigratedIntegrationStore(t *testing.T, authorizer Authorizer) (*database.DB, *Store, context.Context) {
+	t.Helper()
+	baseURL := strings.TrimSpace(os.Getenv(artifactTestBaseURLEnv))
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL"))
+	}
+	if baseURL == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	schema := fmt.Sprintf("loomhelm_artifacts_migrated_%d_%d", os.Getpid(), artifactTestSchemaSequence.Add(1))
+	scopedURL, err := artifactTestDatabaseURL(baseURL, schema)
+	if err != nil {
+		t.Fatalf("scope migrated integration database: %v", err)
+	}
+	if err := prepareArtifactTestDatabase(baseURL, schema, scopedURL); err != nil {
+		t.Fatalf("prepare migrated integration database: %v", err)
+	}
+	if err := verifyArtifactTestMigrationState(scopedURL); err != nil {
+		_ = dropArtifactTestDatabase(baseURL, schema)
+		t.Fatalf("verify migrated integration database: %v", err)
+	}
+	t.Setenv("LOOMHELM_DATABASE_URL", scopedURL)
+	t.Setenv(artifactTestSchemaEnv, schema)
+	t.Cleanup(func() {
+		if err := dropArtifactTestDatabase(baseURL, schema); err != nil {
+			t.Errorf("drop migrated artifact integration schema: %v", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	db, err := database.Open(ctx, database.Config{URL: scopedURL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open migrated integration database: %v", err)
+	}
+	if authorizer == nil {
+		authorizer = allowAllAuthorizer{}
+	}
+	store, err := NewStore(db.Pool(), Config{Root: t.TempDir(), Authorizer: authorizer})
+	if err != nil {
+		db.Close()
+		t.Fatalf("create migrated integration store: %v", err)
 	}
 	return db, store, ctx
 }

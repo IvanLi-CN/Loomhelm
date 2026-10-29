@@ -11,15 +11,39 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/IvanLi-CN/Loomhelm/internal/tasks"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type applicationServices struct {
+	identity        *auth.Service
+	projects        *projects.Service
+	tasks           *tasks.Service
+	sessions        *sessions.Store
+	sessionCreation sessionCreationApplication
+}
+
 // newApplicationHandler returns relative routes for Server's /api/v1 mount.
 // Protection is applied here, before any session middleware or mutation, so a
 // browser capability response cannot outlive its actual enforcement boundary.
 func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig) (http.Handler, error) {
+	return newApplicationHandlerWithRunControl(ctx, pool, cfg, nil)
+}
+
+// The runtime supplies the real control service once its durable stores and
+// Host transport are ready. An absent dependency exposes explicit unavailable
+// responses, never a simulated command acknowledgement.
+func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, control runControlApplication) (http.Handler, error) {
+	services, err := newApplicationServices(ctx, pool, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return services.handler(control), nil
+}
+
+func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig) (*applicationServices, error) {
 	var provider auth.Provider
 	if cfg.OIDCEnabled() {
 		configured, err := auth.NewOIDCProvider(ctx, auth.OIDCConfig{
@@ -37,14 +61,24 @@ func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform
 		return nil, fmt.Errorf("initialize browser authentication: %w", err)
 	}
 	projectService := projects.NewService(pool, identity)
-	taskService := tasks.NewService(pool, identity, projectService)
+	return &applicationServices{
+		identity: identity,
+		projects: projectService,
+		tasks:    tasks.NewService(pool, identity, projectService),
+		sessions: sessions.NewStore(pool),
+	}, nil
+}
+
+func (s *applicationServices) handler(control runControlApplication) http.Handler {
 	router := chi.NewRouter()
-	identity.Mount(router)
-	identity.MountAPI(router)
-	projectService.Mount(router)
-	taskService.Mount(router)
+	s.identity.Mount(router)
+	s.identity.MountAPI(router)
+	s.projects.Mount(router)
+	s.tasks.Mount(router)
+	s.sessionAccess().mount(router)
+	(&runControlHTTP{principal: s.identity, service: control}).mount(router)
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
-		principal, err := identity.ResolvePrincipal(request.Context(), request)
+		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
 		if err != nil || principal.UserID == "" || principal.CredentialID != "" {
 			status := http.StatusUnauthorized
 			if err != nil && !errors.Is(err, auth.ErrUnauthenticated) {
@@ -71,11 +105,15 @@ func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform
 	protection.SetDenyHandler(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writeApplicationError(writer, request, http.StatusForbidden, "cross-origin browser request rejected")
 	}))
-	protected := protection.Handler(identity.Middleware(identity.ExpectedPrincipalMiddleware(browserOnly)))
+	protected := protection.Handler(s.identity.Middleware(s.identity.ExpectedPrincipalMiddleware(browserOnly)))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		protected.ServeHTTP(writer, request)
-	}), nil
+	})
+}
+
+func (s *applicationServices) sessionAccess() *sessionService {
+	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions, creation: s.sessionCreation, binding: s.sessions}
 }
 
 func writeApplicationError(writer http.ResponseWriter, request *http.Request, status int, message string) {

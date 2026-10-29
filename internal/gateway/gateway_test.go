@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1087,6 +1088,128 @@ func TestGatewayRejectsStaleCommandAcknowledgements(t *testing.T) {
 			t.Fatal("current acknowledgement did not resolve the pending command")
 		}
 	})
+}
+
+func TestGatewayLateCommandAckCallsDurableHandlerWithoutPending(t *testing.T) {
+	registry := newFakeRegistry()
+	connection, err := registry.OpenConnection(context.Background(), registry.credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	ack := &protocol.CommandAck{
+		CommandID:  "command_ack_late",
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateSucceeded,
+	}
+	called := 0
+	serverConnection := &serverConnection{
+		registry:   registry,
+		connection: connection,
+		pending:    map[string]chan commandResponse{},
+		onAck: func(_ context.Context, got hosts.Connection, requestID, _ string, gotAck protocol.CommandAck) error {
+			called++
+			if !reflect.DeepEqual(got, connection) {
+				t.Fatalf("durable ACK connection = %+v, want %+v", got, connection)
+			}
+			if requestID != "request_ack_late" || !reflect.DeepEqual(gotAck, *ack) {
+				t.Fatalf("durable ACK callback = request %q, ack %+v; want request_ack_late and %+v", requestID, gotAck, *ack)
+			}
+			return nil
+		},
+	}
+	if err := serverConnection.resolve(context.Background(), Message{
+		Type:       MessageCommandAck,
+		RequestID:  "request_ack_late",
+		Generation: connection.Generation,
+		Ack:        ack,
+	}); err != nil {
+		t.Fatalf("resolve(late) error = %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("durable ACK callback calls = %d, want 1", called)
+	}
+	registry.mu.Lock()
+	deliverCalls := registry.deliverCalls
+	registry.mu.Unlock()
+	if deliverCalls != 1 {
+		t.Fatalf("late ACK authorization calls = %d, want 1", deliverCalls)
+	}
+}
+
+func TestGatewayWSSLateCommandAckCallsDurableHandlerAfterPendingRemoval(t *testing.T) {
+	registry := newFakeRegistry()
+	ackCalls := make(chan struct {
+		requestID string
+		ack       protocol.CommandAck
+	}, 2)
+	server, err := NewServer(registry, ServerOptions{AckHandler: func(_ context.Context, _ hosts.Connection, requestID, _ string, ack protocol.CommandAck) error {
+		ackCalls <- struct {
+			requestID string
+			ack       protocol.CommandAck
+		}{requestID: requestID, ack: ack}
+		return nil
+	}})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client := newTestClient(t, httpServer, registry.credential.HostID, registry.token)
+	connection := connectTestClient(t, client)
+	t.Cleanup(func() { _ = connection.Close() })
+
+	command := protocol.Command{
+		CommandID: "cmd_gateway_late_ack",
+		IssuedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"text":"late"}`),
+		SessionID: "session_gateway_late_ack",
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, sendErr := server.SendCommand(context.Background(), registry.credential.HostID, command)
+		result <- sendErr
+	}()
+	message := readGatewayMessage(t, connection)
+	if message.Type != MessageCommand || message.Command == nil || message.Command.CommandID != command.CommandID {
+		t.Fatalf("gateway command message = %+v", message)
+	}
+	ack := protocol.CommandAck{
+		CommandID:  command.CommandID,
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateAccepted,
+	}
+	if err := connection.Acknowledge(context.Background(), message.RequestID, ack); err != nil {
+		t.Fatalf("first Acknowledge() error = %v", err)
+	}
+	select {
+	case call := <-ackCalls:
+		if call.requestID != message.RequestID || !reflect.DeepEqual(call.ack, ack) {
+			t.Fatalf("first ACK callback = %+v, want request %q and %+v", call, message.RequestID, ack)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first ACK callback was not invoked")
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("SendCommand() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SendCommand() did not receive the first acknowledgement")
+	}
+
+	if err := connection.Acknowledge(context.Background(), message.RequestID, ack); err != nil {
+		t.Fatalf("late Acknowledge() error = %v", err)
+	}
+	select {
+	case call := <-ackCalls:
+		if call.requestID != message.RequestID || !reflect.DeepEqual(call.ack, ack) {
+			t.Fatalf("late ACK callback = %+v, want request %q and %+v", call, message.RequestID, ack)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("late ACK callback was not invoked after pending removal")
+	}
 }
 
 func assertCommandAckRejected(t *testing.T, registry *fakeRegistry, connection hosts.Connection, generation int64, ack *protocol.CommandAck) {

@@ -22,22 +22,27 @@ const (
 )
 
 type Config struct {
-	Component          Component
-	Version            string
-	CandidateSourceSHA string
-	ArtifactDigest     string
-	HTTPAddr           string
-	WorkerHTTPAddr     string
-	DrainToken         string
-	ShutdownTimeout    time.Duration
-	StartupTimeout     time.Duration
-	DatabaseURL        string
-	DatabaseMinConns   int32
-	DatabaseMaxConns   int32
-	WorkerGeneration   uint64
-	WorkerLeaseKey     string
-	ConnectorServerURL string
-	BrowserAuth        BrowserAuthConfig
+	Component                 Component
+	Version                   string
+	CandidateSourceSHA        string
+	ArtifactDigest            string
+	HTTPAddr                  string
+	WorkerHTTPAddr            string
+	DrainToken                string
+	ShutdownTimeout           time.Duration
+	StartupTimeout            time.Duration
+	DatabaseURL               string
+	DatabaseMinConns          int32
+	DatabaseMaxConns          int32
+	WorkerGeneration          uint64
+	WorkerLeaseKey            string
+	ConnectorServerURL        string
+	ConnectorHostID           string
+	ConnectorToken            string
+	ConnectorJournalPath      string
+	ConnectorAppServerCommand string
+	ConnectorWorkingDir       string
+	BrowserAuth               BrowserAuthConfig
 }
 
 // DatabaseConfig is shared by processes and database-only tools so their
@@ -182,6 +187,10 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		config.WorkerLeaseKey = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"))
 	case ComponentConnector:
 		config.ConnectorServerURL = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_SERVER_URL", ""))
+		config.ConnectorHostID = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_HOST_ID", ""))
+		config.ConnectorToken = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_TOKEN", ""))
+		config.ConnectorJournalPath = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_JOURNAL_PATH", ""))
+		config.ConnectorAppServerCommand = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_APP_SERVER_COMMAND", "codex"))
 		if err := validateServerURL(config.ConnectorServerURL); err != nil {
 			return Config{}, fmt.Errorf("invalid LOOMHELM_CONNECTOR_SERVER_URL: %w", err)
 		}
@@ -248,6 +257,18 @@ func (c Config) Validate() error {
 	case ComponentConnector:
 		if err := validateServerURL(c.ConnectorServerURL); err != nil {
 			return fmt.Errorf("invalid connector server URL: %w", err)
+		}
+		if err := validateConnectorValue(c.ConnectorHostID, "connector host id", true); err != nil {
+			return err
+		}
+		if err := validateConnectorValue(c.ConnectorToken, "connector token", true); err != nil {
+			return err
+		}
+		if err := validateConnectorValue(c.ConnectorJournalPath, "connector journal path", false); err != nil {
+			return err
+		}
+		if err := validateConnectorValue(c.ConnectorAppServerCommand, "connector app-server command", false); err != nil {
+			return err
 		}
 	}
 	if c.Component != ComponentConnector {
@@ -408,6 +429,16 @@ func validateServerURL(raw string) error {
 		if err != nil || portNumber < 1 || portNumber > 65535 {
 			return fmt.Errorf("port must be an integer from 1 to 65535")
 		}
+	}
+	return nil
+}
+
+func validateConnectorValue(value, field string, rejectWhitespace bool) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	if rejectWhitespace && strings.ContainsAny(value, " \t\r\n") {
+		return fmt.Errorf("%s must not contain whitespace", field)
 	}
 	return nil
 }

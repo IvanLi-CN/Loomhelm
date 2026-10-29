@@ -30,7 +30,7 @@ func NewRunController(journal *Journal, adapter *Adapter) (*Controller, error) {
 }
 
 func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
-	if ack, found, err := c.journal.LookupCommandForRequest(command); err != nil {
+	if ack, found, err := c.journal.LookupCommandForRequestInNamespace(commandNamespaceForCommand(command), command); err != nil {
 		return ack, err
 	} else if found {
 		if ack.State == protocol.CommandStateUnknown {
@@ -45,30 +45,50 @@ func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command
 	return c.adapter.SendCommand(ctx, session, command)
 }
 
-func (c *Controller) LookupCommand(_ context.Context, commandID string) (protocol.CommandAck, error) {
-	return c.journal.LookupCommand(commandID)
+func (c *Controller) LookupCommand(_ context.Context, platformSessionID, commandID string) (protocol.CommandAck, error) {
+	alias, err := c.verifiedAdapterAlias(platformSessionID)
+	if err != nil {
+		return protocol.CommandAck{}, err
+	}
+	return c.journal.LookupCommandInNamespace(AdapterSessionCommandNamespace(alias.AdapterSessionID), commandID)
 }
 
 func (c *Controller) ReadEvents(_ context.Context, query protocol.EventQuery) (protocol.EventPage, error) {
 	return c.journal.ReadEvents(query)
 }
 
-func (c *Controller) ReconcileCommand(ctx context.Context, commandID string) (protocol.Reconciliation, error) {
-	command, ack, err := c.journal.Command(commandID)
+func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, commandID string) (protocol.Reconciliation, error) {
+	alias, err := c.verifiedAdapterAlias(platformSessionID)
 	if err != nil {
 		return protocol.Reconciliation{}, err
 	}
-	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
-		return c.adapter.ReconcileCommand(ctx, protocol.AdapterSession{SessionID: command.SessionID}, commandID)
+	command, ack, err := c.journal.CommandInNamespace(AdapterSessionCommandNamespace(alias.AdapterSessionID), commandID)
+	if err != nil {
+		return protocol.Reconciliation{}, err
 	}
-	session, ok := c.journal.Session(command.SessionID)
-	if !ok {
-		return protocol.Reconciliation{}, errors.New("command session is not present in the journal")
+	adapterSession := protocol.AdapterSession{SessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef}
+	if ack.State == protocol.CommandStateSucceeded || ack.State == protocol.CommandStateFailed || ack.State == protocol.CommandStateRejected {
+		return c.adapter.ReconcileCommand(ctx, adapterSession, commandID)
+	}
+	if command.SessionID != alias.AdapterSessionID {
+		return protocol.Reconciliation{}, fmt.Errorf("command %q is outside adapter alias for platform session %q: %w", commandID, platformSessionID, ErrCommandScopeUnknown)
+	}
+	session := protocol.AdapterSession{SessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef}
+	if stored, found := c.journal.Session(alias.AdapterSessionID); found {
+		session = stored
 	}
 	if err := c.ensureAdapterSession(ctx, session); err != nil {
 		return protocol.Reconciliation{}, err
 	}
 	return c.adapter.ReconcileCommand(ctx, session, commandID)
+}
+
+func (c *Controller) verifiedAdapterAlias(platformSessionID string) (SessionAlias, error) {
+	alias, ok := c.journal.SessionAlias(platformSessionID)
+	if !ok || alias.PlatformSessionID != platformSessionID || alias.AdapterSessionID == "" || alias.ExternalThreadRef == "" || alias.Generation == "" {
+		return SessionAlias{}, fmt.Errorf("platform session %q has no verified adapter alias: %w", platformSessionID, ErrCommandScopeUnknown)
+	}
+	return alias, nil
 }
 
 func (c *Controller) ensureAdapterSession(ctx context.Context, session protocol.AdapterSession) error {
@@ -106,10 +126,24 @@ func (c *Controller) ensureAdapterSession(ctx context.Context, session protocol.
 	if err != nil {
 		return err
 	}
-	_, err = c.adapter.bindRecoveredSessionLocked(recoveredGatewaySession, session.ExternalThreadRef, "thread/resume", c.adapter.recoveredSessionResult(session.ExternalThreadRef), transport)
-	if err == nil {
-		bound = true
+	boundSession, err := c.adapter.bindRecoveredSessionLocked(recoveredGatewaySession, session.ExternalThreadRef, "thread/resume", c.adapter.recoveredSessionResult(session.ExternalThreadRef), transport)
+	if err != nil {
+		return err
 	}
+	if alias, ok := c.journal.SessionAliasForAdapterSession(session.SessionID, session.ExternalThreadRef); ok {
+		err = c.journal.RotateSessionAlias(SessionAlias{
+			PlatformSessionID: alias.PlatformSessionID,
+			AdapterSessionID:  boundSession.SessionID,
+			ExternalThreadRef: boundSession.ExternalThreadRef,
+			Generation:        recoveredGatewaySession.Generation,
+			CommandID:         alias.CommandID,
+		})
+		if err != nil {
+			_ = c.adapter.CloseSession(ctx, boundSession)
+			return err
+		}
+	}
+	bound = true
 	return err
 }
 

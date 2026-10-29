@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
+	"github.com/IvanLi-CN/Loomhelm/internal/testsupport"
 )
 
 func TestServerEntrypointExitsOnSignal(t *testing.T) {
@@ -34,6 +35,7 @@ func TestServerEntrypointExitsOnSignal(t *testing.T) {
 
 func runServerSignalTest(t *testing.T, signal os.Signal) {
 	t.Helper()
+	databaseURL := testsupport.CutoverReadyDatabase(t)
 	binary := buildServerEntrypoint(t)
 	logPath := filepath.Join(t.TempDir(), "server.log")
 	logFile, err := os.Create(logPath)
@@ -44,9 +46,10 @@ func runServerSignalTest(t *testing.T, signal os.Signal) {
 
 	command := exec.Command(binary)
 	command.Env = commandEnvWithDatabase(t, map[string]string{
-		"LOOMHELM_VERSION":     "test",
-		"LOOMHELM_HTTP_ADDR":   "127.0.0.1:0",
-		"LOOMHELM_DRAIN_TOKEN": "test-token",
+		"LOOMHELM_DATABASE_URL": databaseURL,
+		"LOOMHELM_VERSION":      "test",
+		"LOOMHELM_HTTP_ADDR":    "127.0.0.1:0",
+		"LOOMHELM_DRAIN_TOKEN":  "test-token",
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -73,6 +76,7 @@ func runServerSignalTest(t *testing.T, signal os.Signal) {
 }
 
 func TestServerEntrypointServesHealthVersionAndDrain(t *testing.T) {
+	databaseURL := testsupport.CutoverReadyDatabase(t)
 	binary := buildServerEntrypoint(t)
 	logPath := filepath.Join(t.TempDir(), "server.log")
 	logFile, err := os.Create(logPath)
@@ -83,9 +87,10 @@ func TestServerEntrypointServesHealthVersionAndDrain(t *testing.T) {
 
 	command := exec.Command(binary)
 	command.Env = commandEnvWithDatabase(t, map[string]string{
-		"LOOMHELM_VERSION":     "test",
-		"LOOMHELM_HTTP_ADDR":   "127.0.0.1:0",
-		"LOOMHELM_DRAIN_TOKEN": "test-token",
+		"LOOMHELM_DATABASE_URL": databaseURL,
+		"LOOMHELM_VERSION":      "test",
+		"LOOMHELM_HTTP_ADDR":    "127.0.0.1:0",
+		"LOOMHELM_DRAIN_TOKEN":  "test-token",
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -159,6 +164,7 @@ func TestServerEntrypointRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestServerEntrypointReturnsRuntimeFailure(t *testing.T) {
+	databaseURL := testsupport.CutoverReadyDatabase(t)
 	binary := buildServerEntrypoint(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -168,8 +174,9 @@ func TestServerEntrypointReturnsRuntimeFailure(t *testing.T) {
 
 	command := exec.Command(binary)
 	command.Env = commandEnvWithDatabase(t, map[string]string{
-		"LOOMHELM_HTTP_ADDR":   listener.Addr().String(),
-		"LOOMHELM_DRAIN_TOKEN": "test-token",
+		"LOOMHELM_DATABASE_URL": databaseURL,
+		"LOOMHELM_HTTP_ADDR":    listener.Addr().String(),
+		"LOOMHELM_DRAIN_TOKEN":  "test-token",
 	})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 1)

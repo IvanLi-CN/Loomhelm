@@ -104,7 +104,7 @@ type RPCTransport interface {
 
 // ProcessTransportConfig starts one host-owned app-server child. The caller
 // supplies the exact CLI path. An explicit CommandEnv is passed through as-is;
-// the default environment is a small non-secret allowlist.
+// otherwise the default environment is a small non-secret allowlist.
 type ProcessTransportConfig struct {
 	CommandPath       string
 	CommandArgs       []string

@@ -36,6 +36,7 @@ type gatewaySession struct {
 type gatewayStartRecord struct {
 	session       protocol.GatewaySession
 	requestDigest string
+	namespace     CommandNamespace
 }
 
 type gatewayStartCall struct {
@@ -43,6 +44,7 @@ type gatewayStartCall struct {
 	waiterEntered chan struct{}
 	waiterOnce    sync.Once
 	requestDigest string
+	namespace     CommandNamespace
 	session       protocol.GatewaySession
 	err           error
 }
@@ -58,6 +60,13 @@ type Gateway struct {
 	startMu       sync.Mutex
 	startCalls    map[string]*gatewayStartCall
 	startSessions map[string]gatewayStartRecord
+}
+
+func gatewayStartKey(namespace CommandNamespace, commandID string) string {
+	if namespace.Kind == CommandNamespaceLegacy {
+		return commandID
+	}
+	return commandNamespaceKey(namespace, commandID)
 }
 
 func NewGateway(config GatewayConfig) (*Gateway, error) {
@@ -90,18 +99,32 @@ func NewGateway(config GatewayConfig) (*Gateway, error) {
 }
 
 func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessionRequest) (protocol.GatewaySession, error) {
+	return g.StartNewSessionInNamespace(ctx, LegacyCommandNamespace(request.CommandID), request)
+}
+
+// StartNewSessionInNamespace keeps gateway single-flight and cached creation
+// results inside the caller's platform namespace. The legacy wrapper above is
+// retained for protocol compatibility and tests that have no platform scope.
+func (g *Gateway) StartNewSessionInNamespace(ctx context.Context, namespace CommandNamespace, request protocol.NewSessionRequest) (protocol.GatewaySession, error) {
 	if ctx == nil {
 		return protocol.GatewaySession{}, errors.New("gateway context must not be nil")
 	}
 	if err := validateSessionCreationCommandID(request.CommandID); err != nil {
 		return protocol.GatewaySession{}, err
 	}
+	if err := namespace.validate(); err != nil {
+		return protocol.GatewaySession{}, err
+	}
+	if namespace.Kind != CommandNamespacePlatformSession && namespace.Kind != CommandNamespaceLegacy {
+		return protocol.GatewaySession{}, fmt.Errorf("gateway creation requires a platform session namespace: %w", ErrCommandScopeUnknown)
+	}
 	requestDigest, err := sessionStartPayloadDigest(request)
 	if err != nil {
 		return protocol.GatewaySession{}, fmt.Errorf("digest session start request: %w", err)
 	}
+	startKey := gatewayStartKey(namespace, request.CommandID)
 	g.startMu.Lock()
-	if record, ok := g.startSessions[request.CommandID]; ok {
+	if record, ok := g.startSessions[startKey]; ok {
 		if record.requestDigest != requestDigest {
 			g.startMu.Unlock()
 			return protocol.GatewaySession{}, protocol.ErrIdempotencyConflict
@@ -109,7 +132,7 @@ func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessi
 		g.startMu.Unlock()
 		return record.session, nil
 	}
-	if call, ok := g.startCalls[request.CommandID]; ok {
+	if call, ok := g.startCalls[startKey]; ok {
 		if call.requestDigest != requestDigest {
 			g.startMu.Unlock()
 			return protocol.GatewaySession{}, protocol.ErrIdempotencyConflict
@@ -123,17 +146,17 @@ func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessi
 			return protocol.GatewaySession{}, ctx.Err()
 		}
 	}
-	call := &gatewayStartCall{done: make(chan struct{}), waiterEntered: make(chan struct{}), requestDigest: requestDigest}
-	g.startCalls[request.CommandID] = call
+	call := &gatewayStartCall{done: make(chan struct{}), waiterEntered: make(chan struct{}), requestDigest: requestDigest, namespace: namespace}
+	g.startCalls[startKey] = call
 	g.startMu.Unlock()
 
 	transport, err := g.factory(ctx)
 	if err != nil {
-		return g.finishNewSessionStart(request.CommandID, call, protocol.GatewaySession{}, err)
+		return g.finishNewSessionStart(startKey, call, protocol.GatewaySession{}, err)
 	}
 	if err := g.initialize(ctx, transport); err != nil {
 		_ = transport.Close()
-		return g.finishNewSessionStart(request.CommandID, call, protocol.GatewaySession{}, err)
+		return g.finishNewSessionStart(startKey, call, protocol.GatewaySession{}, err)
 	}
 	session := protocol.GatewaySession{
 		Handle:     newOpaqueID("gateway"),
@@ -143,17 +166,17 @@ func (g *Gateway) StartNewSession(ctx context.Context, request protocol.NewSessi
 	g.mu.Lock()
 	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport}
 	g.mu.Unlock()
-	return g.finishNewSessionStart(request.CommandID, call, session, nil)
+	return g.finishNewSessionStart(startKey, call, session, nil)
 }
 
-func (g *Gateway) finishNewSessionStart(commandID string, call *gatewayStartCall, session protocol.GatewaySession, err error) (protocol.GatewaySession, error) {
+func (g *Gateway) finishNewSessionStart(startKey string, call *gatewayStartCall, session protocol.GatewaySession, err error) (protocol.GatewaySession, error) {
 	g.startMu.Lock()
 	defer g.startMu.Unlock()
-	delete(g.startCalls, commandID)
+	delete(g.startCalls, startKey)
 	call.session = session
 	call.err = err
 	if err == nil {
-		g.startSessions[commandID] = gatewayStartRecord{session: session, requestDigest: call.requestDigest}
+		g.startSessions[startKey] = gatewayStartRecord{session: session, requestDigest: call.requestDigest, namespace: call.namespace}
 	}
 	close(call.done)
 	return session, err
@@ -181,12 +204,12 @@ func (g *Gateway) SetExternalThreadRef(session protocol.GatewaySession, external
 	g.mu.Unlock()
 
 	g.startMu.Lock()
-	for commandID, cached := range g.startSessions {
+	for startKey, cached := range g.startSessions {
 		if cached.session.Handle != session.Handle {
 			continue
 		}
 		cached.session.ExternalThreadRef = externalThreadRef
-		g.startSessions[commandID] = cached
+		g.startSessions[startKey] = cached
 	}
 	g.startMu.Unlock()
 	return nil
@@ -252,13 +275,13 @@ func (g *Gateway) ReconcileSession(ctx context.Context, externalThreadRef string
 	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport, resumeResponse: append(json.RawMessage(nil), result.Raw...)}
 	g.mu.Unlock()
 	g.startMu.Lock()
-	for commandID, cached := range g.startSessions {
+	for startKey, cached := range g.startSessions {
 		_, replaced := previousHandles[cached.session.Handle]
 		if !replaced && cached.session.ExternalThreadRef != externalThreadRef {
 			continue
 		}
 		cached.session = session
-		g.startSessions[commandID] = cached
+		g.startSessions[startKey] = cached
 	}
 	g.startMu.Unlock()
 	for _, oldTransport := range previous {
@@ -306,9 +329,9 @@ func (g *Gateway) CloseSession(_ context.Context, session protocol.GatewaySessio
 	g.reconcileMu.Lock()
 	defer g.reconcileMu.Unlock()
 	g.startMu.Lock()
-	for commandID, cached := range g.startSessions {
+	for startKey, cached := range g.startSessions {
 		if cached.session.Handle == session.Handle {
-			delete(g.startSessions, commandID)
+			delete(g.startSessions, startKey)
 		}
 	}
 	g.startMu.Unlock()

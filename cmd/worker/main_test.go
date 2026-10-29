@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
+	"github.com/IvanLi-CN/Loomhelm/internal/testsupport"
 )
 
 func TestWorkerEntrypointExitsOnSignal(t *testing.T) {
@@ -30,6 +31,7 @@ func TestWorkerEntrypointExitsOnSignal(t *testing.T) {
 
 func runWorkerSignalTest(t *testing.T, signal os.Signal) {
 	t.Helper()
+	databaseURL := testsupport.CutoverReadyDatabase(t)
 	databaseValues := databaseEnvironmentForTest(t)
 	binary := buildWorkerEntrypoint(t)
 	logPath := filepath.Join(t.TempDir(), "worker.log")
@@ -41,6 +43,7 @@ func runWorkerSignalTest(t *testing.T, signal os.Signal) {
 
 	command := exec.Command(binary)
 	for key, value := range map[string]string{
+		"LOOMHELM_DATABASE_URL":      databaseURL,
 		"LOOMHELM_VERSION":           "test",
 		"LOOMHELM_WORKER_GENERATION": "9",
 	} {
