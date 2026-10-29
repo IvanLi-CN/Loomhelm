@@ -607,7 +607,6 @@ export function ProductionConversationWorkspace({
     routeVersionRef.current += 1;
     if (previousRunId.current === initialRunId) return;
     previousRunId.current = initialRunId;
-    seenEventIds.current = new Set();
     lastAppliedRunSequence.current = 0;
     setApprovals([]);
     setApprovalHistoryAvailable(false);
@@ -615,8 +614,11 @@ export function ProductionConversationWorkspace({
     setSessionReadUncertain(false);
     setRun(undefined);
     setCommandState(undefined);
-    setActivityNotice(null);
-  }, [initialRunId]);
+    const nextRunIntent = readRunIntent(getRunIntentKey(principalId, sessionId));
+    pendingRunSubmission.current = nextRunIntent ? { commandId: nextRunIntent.commandId, prompt: nextRunIntent.prompt } : undefined;
+    setUncertainRunCommandId(nextRunIntent?.uncertain ? nextRunIntent.commandId : undefined);
+    setActivityNotice(nextRunIntent?.uncertain ? "上一次 Run 命令结果不确定；请先完成对账，不会自动重复提交。" : null);
+  }, [initialRunId, principalId, sessionId]);
 
   useEffect(() => {
     if (!api || !adapters || !sessionId) {
@@ -690,9 +692,10 @@ export function ProductionConversationWorkspace({
         const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { connection: connectionRef.current, limit: 100 });
         if (!active) return;
         if (events.state === "received" && events.page) {
-          const identityVerifiedByPage = events.page.events.length > 0;
-          if (identityVerifiedByPage) setRunIdentityVerified(true);
-          const freshEvents = events.page.events.filter((event) => {
+          const observedEvents = events.stream?.events.length ? events.stream.events : events.page.events;
+          const identityVerifiedByEvents = observedEvents.length > 0;
+          if (identityVerifiedByEvents) setRunIdentityVerified(true);
+          const freshEvents = observedEvents.filter((event) => {
             const eventKey = `${activeRunId}:${event.event_id}`;
             if (seenEventIds.current.has(eventKey)) return false;
             seenEventIds.current.add(eventKey);
@@ -706,14 +709,13 @@ export function ProductionConversationWorkspace({
                 return left.sequence - right.sequence;
               });
             });
-            const stateEvents = freshEvents.filter((event) => event.sequence > lastAppliedRunSequence.current);
-            if (stateEvents.length > 0) {
-              setRun((current) => current ? stateEvents.reduce(applyRunEvent, current) : current);
-              lastAppliedRunSequence.current = Math.max(lastAppliedRunSequence.current, ...stateEvents.map((event) => event.sequence));
-            }
           }
-          lastAppliedRunSequence.current = Math.max(lastAppliedRunSequence.current, ...events.page.events.map((event) => event.sequence));
-          if (!runIdentityVerified && !identityVerifiedByPage) {
+          const stateEvents = observedEvents.filter((event) => event.sequence > lastAppliedRunSequence.current).sort((left, right) => left.sequence - right.sequence);
+          if (stateEvents.length > 0) {
+            setRun((current) => current ? stateEvents.reduce(applyRunEvent, current) : current);
+            lastAppliedRunSequence.current = Math.max(lastAppliedRunSequence.current, ...stateEvents.map((event) => event.sequence));
+          }
+          if (!runIdentityVerified && !identityVerifiedByEvents) {
             setApprovals([]);
             setApprovalHistoryAvailable(false);
             return;
@@ -824,7 +826,22 @@ export function ProductionConversationWorkspace({
     }
     pendingRunSubmission.current = { commandId, prompt };
     const result = await adapters.run.submitRun(sessionIdForSubmit, { command_id: commandId, prompt }, { connection, readOnly: effectiveReadOnly });
-    if (!mountedRef.current || currentSessionIdRef.current !== sessionIdForSubmit || routeVersionRef.current !== routeVersion) return;
+    const routeChanged = !mountedRef.current || currentSessionIdRef.current !== sessionIdForSubmit || routeVersionRef.current !== routeVersion;
+    if (routeChanged) {
+      const currentIntent = readRunIntent(intentKey);
+      if (!currentIntent || currentIntent.commandId === commandId) {
+        if (result.state === "failed") {
+          pendingRunSubmission.current = undefined;
+          clearStoredIntent(intentKey);
+        } else {
+          const recoveryKey = getRunRecoveryKey(principalId, sessionIdForSubmit);
+          const storedRecoveryId = readRunRecoveryId(recoveryKey);
+          if (result.ack?.run_id && (!storedRecoveryId || storedRecoveryId === result.ack.run_id)) writeRunRecoveryId(recoveryKey, result.ack.run_id);
+          writeRunIntent(intentKey, { commandId, prompt, uncertain: true });
+        }
+      }
+      return;
+    }
     if (result.state === "unknown") {
       const acknowledgedRun = result.ack ? runFromCommandAck(sessionForRoute, result.ack) : undefined;
       const recoveryPersisted = acknowledgedRun ? writeRunRecoveryId(getRunRecoveryKey(principalId, sessionIdForSubmit), acknowledgedRun.id) : false;
@@ -862,7 +879,6 @@ export function ProductionConversationWorkspace({
     if (result.ack) {
       if (nextRun) {
         if (previousRunId && previousRunId !== nextRun.id) {
-          seenEventIds.current = new Set();
           lastAppliedRunSequence.current = 0;
           setApprovals([]);
           setApprovalHistoryAvailable(false);
@@ -898,12 +914,24 @@ export function ProductionConversationWorkspace({
     if (storedControlIntent?.uncertain) throw new Error("审批命令结果未完成对账；请先确认服务事实，不会自动重复提交");
     if (storedControlIntent && storedControlIntent.commandId !== params.body.command_id) throw new Error("审批命令身份已变化，请刷新后重新核对");
     if (!writeControlIntent(controlIntentKey, { commandId: params.body.command_id, uncertain: true })) throw new Error("当前浏览器无法持久化审批命令身份；为避免未知结果下重复授权，请先恢复存储后再试");
+    const sessionIdForApproval = sessionForRoute.id;
+    const routeVersion = routeVersionRef.current;
     const result = await adapters.approval.resolve({
       approval,
       commandId: params.body.command_id,
       decision: params.body.decision,
-      sessionId: sessionForRoute.id
+      sessionId: sessionIdForApproval
     }, { connection, readOnly: effectiveReadOnly });
+    const routeChanged = !mountedRef.current || currentSessionIdRef.current !== sessionIdForApproval || routeVersionRef.current !== routeVersion;
+    if (routeChanged) {
+      if (result.state === "failed") {
+        approvalCommandIds.current.delete(`approval:${approval.id}:${approval.revision}:${params.body.decision}`);
+        clearStoredIntent(controlIntentKey);
+      } else {
+        writeControlIntent(controlIntentKey, { commandId: params.body.command_id, uncertain: result.state === "unknown" });
+      }
+      return;
+    }
     if (result.state === "failed") {
       approvalCommandIds.current.delete(`approval:${approval.id}:${approval.revision}:${params.body.decision}`);
       clearStoredIntent(controlIntentKey);
@@ -953,7 +981,20 @@ export function ProductionConversationWorkspace({
     if (storedInterruptIntent?.uncertain) throw new Error("中断命令结果未完成对账；请先确认服务事实，不会自动重复提交");
     if (storedInterruptIntent && storedInterruptIntent.commandId !== request.command_id) throw new Error("中断命令身份已变化，请刷新后重新核对");
     if (!writeControlIntent(interruptIntentKey, { commandId: request.command_id, uncertain: true })) throw new Error("当前浏览器无法持久化中断命令身份；为避免未知结果下重复中断，请先恢复存储后再试");
-    const result = await adapters.run.interruptRun(sessionForRoute.id, activeRun.id, request, { connection, readOnly: effectiveReadOnly });
+    const sessionIdForInterrupt = sessionForRoute.id;
+    const runIdForInterrupt = activeRun.id;
+    const routeVersion = routeVersionRef.current;
+    const result = await adapters.run.interruptRun(sessionIdForInterrupt, runIdForInterrupt, request, { connection, readOnly: effectiveReadOnly });
+    const routeChanged = !mountedRef.current || currentSessionIdRef.current !== sessionIdForInterrupt || routeVersionRef.current !== routeVersion;
+    if (routeChanged) {
+      if (result.state === "failed") {
+        approvalCommandIds.current.delete(`interrupt:${runIdForInterrupt}`);
+        clearStoredIntent(interruptIntentKey);
+      } else {
+        writeControlIntent(interruptIntentKey, { commandId: request.command_id, uncertain: result.state === "unknown" });
+      }
+      return;
+    }
     if (result.state === "failed") {
       approvalCommandIds.current.delete(`interrupt:${activeRun.id}`);
       clearStoredIntent(interruptIntentKey);
