@@ -435,7 +435,7 @@ func validProjectMemberRole(value protocol.ProjectMemberRole) bool {
 }
 
 func validTask(value protocol.Task) bool {
-	return value.ID != "" && value.ProjectID != "" && value.Title != "" && value.Goal != "" && validTaskStatus(value.Status) && value.CreatedAt != "" && value.UpdatedAt != ""
+	return value.ID != "" && value.ProjectID != "" && value.Title != "" && validTaskStatus(value.Status) && value.CreatedAt != "" && value.UpdatedAt != ""
 }
 
 func validTaskStatus(value protocol.TaskStatus) bool {

@@ -463,6 +463,13 @@ func TestServerReportsMalformedMutationEnvelopeAsUnknown(t *testing.T) {
 	}
 }
 
+func TestServerAcceptsTaskResponseWithEmptyGoal(t *testing.T) {
+	body := []byte(`{"task":{"id":"task-1","project_id":"project-1","title":"Task","goal":"","status":"todo","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}}`)
+	if !validToolResponse("createTask", body) {
+		t.Fatal("valid task response with an empty goal was rejected")
+	}
+}
+
 func TestServerReportsOversizedReadResponseAsServiceFailure(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
