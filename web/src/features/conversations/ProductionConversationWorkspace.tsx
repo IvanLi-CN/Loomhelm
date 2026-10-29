@@ -922,6 +922,7 @@ export function ProductionConversationWorkspace({
         const selected = (preferredRunId ? result.runs.find((candidate) => candidate.id === preferredRunId) : undefined) ?? (!preferredRunId ? result.runs.at(-1) : undefined);
         if (selected) {
           selectedRunIdRef.current = selected.id;
+          setRunIdentityVerified(true);
           if (activeRunIdRef.current !== selected.id) {
             seenEventIds.current = new Set();
             approvalCommandIds.current = new Map();
@@ -931,7 +932,6 @@ export function ProductionConversationWorkspace({
             setMessages([]);
             setApprovals([]);
             setApprovalHistoryAvailable(false);
-            setRunIdentityVerified(false);
             setRunReadUncertain(false);
             setRunReadFailure(null);
             setApprovalReadUncertain(false);
@@ -1696,7 +1696,7 @@ export function ProductionConversationWorkspace({
     setMessages([]);
     setApprovals([]);
     setApprovalHistoryAvailable(false);
-    setRunIdentityVerified(false);
+    setRunIdentityVerified(true);
     setRunReadUncertain(false);
     setRunReadFailure(null);
     setApprovalReadUncertain(false);
@@ -1740,6 +1740,7 @@ export function ProductionConversationWorkspace({
             directory: approvalContext.directory,
             impact: approvalContext.impact,
             rawContext: approvalContext.rawContext,
+            scope: approvalContext.scope,
             projectName,
             sessionId: sessionForRoute.id,
             task: task ? { id: task.id, title: task.title } : undefined

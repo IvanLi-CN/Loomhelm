@@ -154,6 +154,18 @@ export const IncompleteContextCannotAct: Story = {
   }
 };
 
+export const FileChangeScopeContext: Story = {
+  render: () => (
+    <EvidenceFrame>
+      <ApprovalRequestCard commandIds={{ approve: "cmd-file-change-approve", deny: "cmd-file-change-deny" }} onResolve={() => undefined} request={{ ...request, approval: { ...baseApproval, kind: "file_change", summary: "Review workspace file changes" }, context: { ...request.context, directory: undefined, impact: "A file change is ready for review", scope: "workspace" } }} />
+    </EvidenceFrame>
+  ),
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("范围：workspace")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "批准" })).toBeEnabled();
+  }
+};
+
 export const UnknownContextVisible: Story = {
   render: () => (
     <EvidenceFrame>

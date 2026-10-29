@@ -22,6 +22,7 @@ export interface ApprovalContextModel {
   directory?: string;
   impact?: string;
   rawContext?: string;
+  scope?: string;
 }
 export interface ApprovalRequestModel {
   approval: Approval;
@@ -152,6 +153,7 @@ export function ApprovalRequestCard({ request, commandIds = {}, connection = "on
         <div className="flex items-center gap-2 text-xs font-semibold"><FileCode2 className="size-4 text-[var(--accent)]" aria-hidden="true" />{incompleteContext ? "请求上下文不完整" : "完整请求上下文"}</div>
         <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 font-mono text-[11px] leading-6"><code>{context.command}</code></pre>
         {context.directory ? <p className="inline-flex min-w-0 items-start gap-2 text-xs leading-5 text-[var(--muted)]"><FolderOpen className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /><span>目录：<code className="break-all">{context.directory}</code></span></p> : null}
+        {context.scope ? <p className="text-xs leading-5 text-[var(--muted)]">范围：<code className="break-all">{context.scope}</code></p> : null}
         {context.impact ? <p className="text-xs leading-6 text-[var(--muted)]">影响范围：{context.impact}</p> : null}
         {context.rawContext ? <details className="rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs"><summary className="cursor-pointer font-semibold">查看未识别上下文原文</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-6"><code>{context.rawContext}</code></pre></details> : null}
       </div>
