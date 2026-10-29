@@ -1,10 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, within } from "storybook/test";
-import type { ReactNode } from "react";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { useState, type ReactNode } from "react";
 
 import type { Artifact } from "@loomhelm/protocol";
 
 import { ArtifactReference } from "./ArtifactReference";
+import type { ArtifactDownloadRequest } from "./api";
 
 const artifact: Artifact = {
   id: "artifact-report-1",
@@ -32,6 +33,10 @@ type Story = StoryObj<typeof meta>;
 
 const downloadArtifact = fn();
 const pendingDownload = fn(() => new Promise<void>(() => undefined));
+const pendingDownloadWithSignal = fn((_request: ArtifactDownloadRequest) => new Promise<void>(() => undefined));
+const failingDownload = fn(async () => {
+  throw new Error("download failed in story");
+});
 
 const loadArtifact = async () => artifact;
 const loadNever = () => new Promise<Artifact>(() => undefined);
@@ -41,6 +46,11 @@ const loadUnauthorized = async () => {
 
 function Surface({ children }: { children: ReactNode }) {
   return <div className="min-h-screen bg-[var(--canvas)] p-12" data-visual-evidence-surface><div className="mx-auto max-w-2xl" data-visual-evidence-target>{children}</div></div>;
+}
+
+function LoaderContextHarness() {
+  const [loaderKey, setLoaderKey] = useState("principal-a");
+  return <Surface><div className="grid gap-4"><button type="button" className="inline-flex min-h-[44px] items-center justify-center rounded-md border border-[var(--line)] px-3 text-sm font-semibold text-[var(--ink)]" onClick={() => setLoaderKey("principal-b")}>切换授权上下文</button><ArtifactReference artifactId={artifact.id} loadMetadata={loadArtifact} loaderKey={loaderKey} download={pendingDownloadWithSignal} /></div></Surface>;
 }
 
 export const MetadataOnly: Story = {
@@ -81,6 +91,29 @@ export const PendingDownload: Story = {
     await userEvent.click(await canvas.findByRole("button", { name: "下载文件" }));
     expect(canvas.getByRole("button", { name: "准备下载…" })).toBeDisabled();
     expect(canvas.getByRole("status")).toHaveTextContent("正在准备下载…");
+  }
+};
+
+export const DownloadFailure: Story = {
+  render: () => <Surface><ArtifactReference artifactId={artifact.id} loadMetadata={loadArtifact} download={failingDownload} /></Surface>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "下载文件" }));
+    expect(await canvas.findByText("下载失败，请重试。")).toBeInTheDocument();
+    expect(canvas.getByRole("button", { name: "下载文件" })).toBeEnabled();
+  }
+};
+
+export const LoaderContextChange: Story = {
+  render: () => <LoaderContextHarness />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const callCount = pendingDownloadWithSignal.mock.calls.length;
+    await userEvent.click(await canvas.findByRole("button", { name: "下载文件" }));
+    expect(canvas.getByRole("button", { name: "准备下载…" })).toBeDisabled();
+    await userEvent.click(canvas.getByRole("button", { name: "切换授权上下文" }));
+    expect(await canvas.findByText("正在读取授权产物…")).toBeInTheDocument();
+    await waitFor(() => expect(pendingDownloadWithSignal.mock.calls[callCount]?.[0]?.signal.aborted).toBe(true));
   }
 };
 

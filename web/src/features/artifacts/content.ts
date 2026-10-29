@@ -54,7 +54,7 @@ const sensitiveFieldNames = new Set([
 
 const privatePathFieldNames = new Set(["cwd", "filepath", "grantroot", "path", "root", "workspace"]);
 const inlineSecretPattern = /\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b\s*([:=])\s*(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+/gi;
-const inlinePrivatePathPattern = /(?:~\/|\\\\|[A-Za-z]:[\\/]|\/(?:Users|home|private|root|tmp|var|workspace)(?:\/|$))[^\s"'`<>,;}\]]*/gi;
+const inlinePrivatePathPattern = /(?:~\/|\\\\|[A-Za-z]:[\\/]|\/(?:Users|home|private|root|tmp|var|workspace)(?:\/|$))(?:(?:[^\s"'`<>,;}\]]+)|(?:\s+(?=[^\s"'`<>,;}\]]+\/)))*/gi;
 
 function normalizedFieldName(value: string): string {
   return value.toLowerCase().replaceAll("_", "").replaceAll("-", "");
@@ -99,6 +99,10 @@ function asRecord(value: JsonValue | undefined): JsonRecord | undefined {
 
 function asString(value: JsonValue | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function displayablePath(value: string | undefined): string | undefined {
+  return value ? asString(redactInspectableValue(value, "path")) : undefined;
 }
 
 function firstString(...values: Array<JsonValue | undefined>): string | undefined {
@@ -184,7 +188,7 @@ export function classifyConversationEvent(event: ConversationEvent): Conversatio
       kind: "code",
       code,
       language: firstString(item.language, params.language, payload.language),
-      filename: firstString(item.filename, item.path, params.filename, params.path, payload.filename, payload.path),
+      filename: displayablePath(firstString(item.filename, item.path, params.filename, params.path, payload.filename, payload.path)),
       raw: event.payload
     };
   }

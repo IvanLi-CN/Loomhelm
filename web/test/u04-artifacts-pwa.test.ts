@@ -101,7 +101,18 @@ describe("U04 conversation content classification", () => {
     expect(inspectableRawPayload({
       detail: "Authorization: Bearer secret-token cwd=/workspace/private-project"
     })).toEqual({ detail: "Authorization: [已隐藏] cwd=[路径已隐藏]" });
+    expect(inspectableRawPayload({
+      detail: "output path /Users/name/Library/Application Support/loomhelm/file.txt"
+    })).toEqual({ detail: "output path [路径已隐藏]" });
     expect(inspectableRawPayload({ detail: "tool output /opt/build/cache" })).toEqual({ detail: "tool output /opt/build/cache" });
+  });
+
+  test("protects absolute code filenames without changing the raw event", () => {
+    const raw = { type: "code", path: "/Users/name/private/example.go", code: "package example" } as const;
+    const content = classifyConversationEvent({ event_id: "code-private-path-1", type: "item.completed", payload: raw });
+
+    expect(content).toMatchObject({ kind: "code", filename: "[路径已隐藏]", code: "package example" });
+    expect(content.raw).toEqual(raw);
   });
 });
 
