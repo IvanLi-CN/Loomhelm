@@ -310,6 +310,33 @@
         "has_more": {"type": "boolean"}
       }
     },
+    "RunListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/Run"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "Draft": {
+      "type": "object",
+      "required": ["session_id", "content", "revision", "updated_at"],
+      "properties": {
+        "session_id": {"type": "string"},
+        "content": {"type": "string"},
+        "revision": {"type": "integer", "format": "int64"},
+        "mutation_id": {"type": "string"},
+        "client_id": {"type": "string"},
+        "client_sequence": {"type": "integer", "format": "int64"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "DraftResponse": {
+      "type": "object",
+      "required": ["draft"],
+      "properties": {"draft": {"$ref": "#/types/Draft"}}
+    },
     "Reconciliation": {
       "type": "object",
       "required": ["command_id", "state", "observed_at"],
@@ -450,6 +477,13 @@
         "limit": {"type": "integer", "format": "int64"}
       }
     },
+    "ListSessionRunsQuery": {
+      "type": "object",
+      "properties": {
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
     "CreateTaskRequest": {
       "type": "object",
       "required": ["project_id", "title", "goal"],
@@ -505,6 +539,16 @@
         "prompt": {"type": "string"},
         "model": {"type": "string"},
         "reasoning_effort": {"type": "string"}
+      }
+    },
+    "UpdateDraftRequest": {
+      "type": "object",
+      "required": ["mutation_id", "client_id", "client_sequence", "content"],
+      "properties": {
+        "mutation_id": {"type": "string"},
+        "client_id": {"type": "string"},
+        "client_sequence": {"type": "integer", "format": "int64"},
+        "content": {"type": "string"}
       }
     },
     "ResolveApprovalRequest": {
@@ -790,6 +834,35 @@
         "response_type": "CommandAckResponse",
         "summary": "Submit a run command",
         "mcp_tool": {"name": "loomhelm.submit_run", "description": "Submit one idempotent run command."}
+      },
+      {
+        "operation_id": "listSessionRuns",
+        "method": "GET",
+        "path": "/sessions/{session_id}/runs",
+        "path_params": {"session_id": "string"},
+        "query_type": "ListSessionRunsQuery",
+        "response_type": "RunListResponse",
+        "summary": "Read the durable run history for an authorized session after an opaque cursor",
+        "mcp_tool": {"name": "loomhelm.list_session_runs", "description": "Read the durable run history for an authorized session without changing execution state."}
+      },
+      {
+        "operation_id": "getDraft",
+        "method": "GET",
+        "path": "/sessions/{session_id}/draft",
+        "path_params": {"session_id": "string"},
+        "response_type": "DraftResponse",
+        "summary": "Read the private shared unsent draft for an authorized session",
+        "mcp_tool": {"name": "loomhelm.get_draft", "description": "Read the caller's private shared unsent draft for an authorized session."}
+      },
+      {
+        "operation_id": "updateDraft",
+        "method": "PUT",
+        "path": "/sessions/{session_id}/draft",
+        "path_params": {"session_id": "string"},
+        "body_type": "UpdateDraftRequest",
+        "response_type": "DraftResponse",
+        "summary": "Replace the private shared unsent draft with an idempotent last-accepted update; client_sequence increases per session/client, accepted order is Session lock order, and current mutation_id retries reuse the original request",
+        "mcp_tool": {"name": "loomhelm.update_draft", "description": "Update the caller's private shared unsent draft. The UTF-8 content is at most 1 MiB; client_sequence is positive and strictly increasing per session/client, stale sequences are rejected, and mutation_id is an idempotency key that must not be reused with different metadata or content. A matching retry for the current projection returns it without reapplying; a retry for an older revision is rejected as stale. Updates are durable and never submit a run."}
       },
       {
         "operation_id": "listRunApprovals",

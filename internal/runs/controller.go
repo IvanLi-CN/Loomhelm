@@ -421,6 +421,9 @@ func (c *Controller) hasOtherActiveCommand(commandID string) bool {
 }
 
 func (c *Controller) markCommandUnknown(ctx context.Context, intent CommandIntent, fallback protocol.CommandAck, cause error, lease *DurableLeaseIdentity) (protocol.CommandAck, error) {
+	persistCtx, cancel := UnknownOutcomeContext(ctx)
+	defer cancel()
+
 	var unknown CommandRecord
 	var err error
 	if unknownCommandPreservesRun(intent.Command.Kind) {
@@ -429,14 +432,14 @@ func (c *Controller) markCommandUnknown(ctx context.Context, intent CommandInten
 		// Run controllable so an explicit interrupt can still be delivered and a
 		// native terminal event can establish the actual Run outcome.
 		if lease != nil {
-			unknown, err = c.store.TransitionWithLease(ctx, intent.Command.CommandID, intent.Generation, protocol.CommandStateUnknown, "", nil, nil, *lease)
+			unknown, err = c.store.TransitionWithLease(persistCtx, intent.Command.CommandID, intent.Generation, protocol.CommandStateUnknown, "", nil, nil, *lease)
 		} else {
-			unknown, err = c.store.Transition(ctx, intent.Command.CommandID, intent.Generation, protocol.CommandStateUnknown, "", nil, nil)
+			unknown, err = c.store.Transition(persistCtx, intent.Command.CommandID, intent.Generation, protocol.CommandStateUnknown, "", nil, nil)
 		}
 	} else if lease != nil {
-		unknown, err = c.store.MarkCommandAndRunUnknownWithLease(ctx, intent.Command.CommandID, intent.Generation, "command delivery outcome is unknown", *lease)
+		unknown, err = c.store.MarkCommandAndRunUnknownWithLease(persistCtx, intent.Command.CommandID, intent.Generation, "command delivery outcome is unknown", *lease)
 	} else {
-		unknown, err = c.store.MarkCommandAndRunUnknown(ctx, intent.Command.CommandID, intent.Generation, "command delivery outcome is unknown")
+		unknown, err = c.store.MarkCommandAndRunUnknown(persistCtx, intent.Command.CommandID, intent.Generation, "command delivery outcome is unknown")
 	}
 	if err != nil {
 		return fallback, errors.Join(protocol.ErrUnknownCommandResult, cause, err)
