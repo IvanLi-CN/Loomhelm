@@ -1,4 +1,4 @@
-import type { GeneratedApiClient } from "@loomhelm/api-client";
+import { ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
 import type { CommandAck, EventPage, InterruptRunRequest, SubmitRunRequest } from "@loomhelm/protocol";
 
 import {
@@ -72,6 +72,12 @@ function getCommandFailureReason(reason: "blocked" | "duplicate" | "stale_sessio
   if (reason === "blocked") return blockReason ?? "unknown";
   if (reason === "uncertain") return "unknown";
   return reason;
+}
+
+function isAmbiguousCommandError(error: unknown): boolean {
+  if (!(error instanceof ApiClientError)) return true;
+  const body = error.body && typeof error.body === "object" ? error.body as { code?: unknown } : undefined;
+  return body?.code === "unknown_result" || error.status === 408 || error.status === 429 || error.status >= 500;
 }
 
 export class RunClientAdapter {
@@ -206,10 +212,14 @@ export class RunClientAdapter {
       const accepted = this.operations.acceptResponse(admission.token, response.ack);
       if (!accepted.accepted) return { state: "unknown", commandId: command.command_id, reason: accepted.reason === "stale" ? "stale_response" : "mismatched_response" };
       return { state: getClientCommandState(response.ack.state), commandId: command.command_id, ack: response.ack };
-    } catch {
+    } catch (error) {
       if (!this.operations.isCurrent(admission.token)) return { state: "unknown", commandId: command.command_id, reason: "stale_response" };
-      this.operations.markUncertain(admission.token);
-      return { state: "unknown", commandId: command.command_id, reason: "transport" };
+      if (isAmbiguousCommandError(error)) {
+        this.operations.markUncertain(admission.token);
+        return { state: "unknown", commandId: command.command_id, reason: "transport" };
+      }
+      this.operations.markFailed(admission.token);
+      return { state: "failed", commandId: command.command_id, reason: "unknown" };
     }
   }
 

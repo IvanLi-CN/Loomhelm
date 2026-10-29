@@ -129,6 +129,22 @@ describe("production session model", () => {
     })).toMatchObject({ complete: true, command: "codex inspect --workspace /workspace/loomhelm" });
   });
 
+  test("preserves unknown approval context instead of hiding fields", () => {
+    const context = approvalContextFromApproval({
+      context: { command: "codex inspect", scope: "workspace", payload: { write: true } },
+      id: "approval-unknown-context",
+      kind: "shell",
+      requested_at: "2026-10-27T00:00:00Z",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Inspect the requested workspace"
+    });
+    expect(context.complete).toBe(true);
+    expect(context.rawContext).toContain('"scope": "workspace"');
+    expect(context.rawContext).toContain('"write": true');
+  });
+
   test("maps session lifecycle states to control connection availability", () => {
     expect(connectionFromSessionState("active")).toBe("online");
     expect(connectionFromSessionState("reconciling")).toBe("reconnecting");

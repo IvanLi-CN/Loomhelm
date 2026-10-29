@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ApiClientError } from "@loomhelm/api-client";
 
 import { RunClientAdapter } from "./run-client-adapter";
 
@@ -196,5 +197,22 @@ describe("run client adapter", () => {
     await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
     expect(calls).toHaveLength(1);
     expect(adapter.resolveUncertainSubmit("command-submit-1")).toBe(true);
+  });
+
+  test("releases a command after a definite API rejection", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async (request) => {
+        calls.push(request);
+        throw new ApiClientError(403, { code: "unauthorized" });
+      },
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async () => ({ events: [], has_more: false })
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.submitRun("session-1", { command_id: "command-rejected-1", prompt: "run this" })).resolves.toMatchObject({ state: "failed" });
+    await expect(adapter.submitRun("session-1", { command_id: "command-rejected-2", prompt: "run this again" })).resolves.toMatchObject({ state: "failed" });
+    expect(calls).toHaveLength(2);
   });
 });

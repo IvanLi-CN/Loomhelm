@@ -153,3 +153,16 @@ export const IncompleteContextCannotAct: Story = {
     await expect(canvas.getByRole("button", { name: "拒绝" })).toBeDisabled();
   }
 };
+
+export const UnknownContextVisible: Story = {
+  render: () => (
+    <EvidenceFrame>
+      <ApprovalRequestCard commandIds={{ approve: "cmd-unknown-approve", deny: "cmd-unknown-deny" }} onResolve={() => undefined} request={{ ...request, context: { ...request.context, rawContext: JSON.stringify({ command: request.context.command, scope: "workspace", payload: { write: true } }, null, 2) } }} />
+    </EvidenceFrame>
+  ),
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(canvas.getByText("查看未识别上下文原文"));
+    await expect(canvas.getByText(/"scope": "workspace"/)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "批准" })).toBeEnabled();
+  }
+};

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ApiClientError } from "@loomhelm/api-client";
 
 import { ApprovalClientAdapter } from "./approval-client-adapter";
 
@@ -77,5 +78,21 @@ describe("approval client adapter", () => {
     expect(calls).toHaveLength(1);
     expect(adapter.resolveUncertain("approval-1", 3, "run-1", "command-approval-1")).toBe(true);
     expect(calls).toHaveLength(1);
+  });
+
+  test("releases an approval command after a definite API rejection", async () => {
+    const calls = [];
+    const adapter = new ApprovalClientAdapter({
+      resolveApproval: async (request) => {
+        calls.push(request);
+        throw new ApiClientError(409, { code: "conflict" });
+      }
+    });
+    const input = { sessionId: "session-1", approval: approval(), commandId: "command-approval-rejected", decision: "approve" };
+
+    adapter.selectSession("session-1");
+    await expect(adapter.resolve(input)).resolves.toMatchObject({ state: "failed" });
+    await expect(adapter.resolve({ ...input, commandId: "command-approval-rejected-2" })).resolves.toMatchObject({ state: "failed" });
+    expect(calls).toHaveLength(2);
   });
 });

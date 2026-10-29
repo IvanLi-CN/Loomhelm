@@ -143,6 +143,12 @@ export class ControlOperationGuard {
     return true;
   }
 
+  markFailed(token: OperationToken): boolean {
+    if (!this.isCurrent(token)) return false;
+    this.inFlight.delete(token.operationKey);
+    return true;
+  }
+
   resolveUncertain(operationKey: string, commandId: string, runId?: string): boolean {
     const token = this.uncertain.get(getControlOperationKey(operationKey, runId));
     if (token === undefined || token.commandId !== commandId) return false;

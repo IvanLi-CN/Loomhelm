@@ -21,6 +21,7 @@ export interface ApprovalContextModel {
   command: string;
   directory?: string;
   impact?: string;
+  rawContext?: string;
 }
 export interface ApprovalRequestModel {
   approval: Approval;
@@ -103,6 +104,8 @@ export function ApprovalRequestCard({ request, commandIds = {}, connection = "on
       ? "请求上下文不完整，不能安全批准或拒绝；请刷新并重新核对。"
     : approval.status !== "pending"
       ? `当前请求${getApprovalStatusLabel(approval.status)}，不能再次操作。`
+      : !canResolve
+        ? "当前审批历史或修订尚未完成核对，不能批准或拒绝。"
       : connection === "online"
         ? submitted
           ? "当前修订已提交，等待服务事件确认；不能再次提交。"
@@ -146,6 +149,7 @@ export function ApprovalRequestCard({ request, commandIds = {}, connection = "on
         <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 font-mono text-[11px] leading-6"><code>{context.command}</code></pre>
         {context.directory ? <p className="inline-flex min-w-0 items-start gap-2 text-xs leading-5 text-[var(--muted)]"><FolderOpen className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /><span>目录：<code className="break-all">{context.directory}</code></span></p> : null}
         {context.impact ? <p className="text-xs leading-6 text-[var(--muted)]">影响范围：{context.impact}</p> : null}
+        {context.rawContext ? <details className="rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs"><summary className="cursor-pointer font-semibold">查看未识别上下文原文</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-6"><code>{context.rawContext}</code></pre></details> : null}
       </div>
 
       <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status">

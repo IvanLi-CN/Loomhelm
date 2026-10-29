@@ -58,7 +58,7 @@ function ProductionCreateConversationRoute() {
       <ProductionConversationWorkspace
         api={api}
         conversationTitle="新建独立会话"
-        onSessionCreated={(sessionId) => navigate({ params: { conversationId: sessionId }, to: "/conversations/$conversationId" })}
+        onSessionCreated={(sessionId, initialRunId) => navigate({ params: { conversationId: sessionId }, search: initialRunId ? { runId: initialRunId } : {}, to: "/conversations/$conversationId" })}
         projectOptions={source?.projects}
         readOnly={assembly?.permissions.isReadOnly ?? true}
       />
@@ -120,6 +120,7 @@ const createConversationRoute = createRoute({
 const conversationWorkspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/conversations/$conversationId",
+  validateSearch: (search: Record<string, unknown>) => typeof search.runId === "string" ? { runId: search.runId } : {},
   component: ConversationWorkspaceRoute
 });
 

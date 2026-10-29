@@ -26,12 +26,12 @@ export function getRunUiPhase({ commandState, connection = "online", interruptRe
   if (connection !== "online" || sessionState === "disconnected") return "disconnected";
   if (runStatus === "unknown" || commandState === "unknown") return "unknown";
   if (runStatus === "interrupted") return "terminated";
+  if (runStatus === "completed") return "completed";
+  if (runStatus === "failed" || commandState === "failed" || commandState === "rejected") return "failed";
   if (interruptRequested) return "interrupt_requested";
   if (transport === "sending") return "sending";
   if (runStatus === "waiting_approval") return "waiting_approval";
   if (runStatus === "running") return "executing";
-  if (runStatus === "completed") return "completed";
-  if (runStatus === "failed" || commandState === "failed" || commandState === "rejected") return "failed";
   if (runStatus === "pending" || commandState === "accepted" || commandState === "executing") return "received";
   return "unknown";
 }
