@@ -165,13 +165,17 @@ export interface ApprovalContextFields {
 export function approvalContextFromApproval(approval: Approval): ApprovalContextFields {
   const context = asRecord(approval.context);
   const command = firstString(context, ["command", "cmd", "command_line"]);
-  const knownKeys = new Set(["command", "cmd", "command_line", "directory", "cwd", "workdir", "impact", "risk", "description"]);
+  const directory = firstString(context, ["directory", "cwd", "workdir", "grantRoot", "path"]);
+  const impact = firstString(context, ["impact", "risk", "description", "reason"]);
+  const knownKeys = new Set(["command", "cmd", "command_line", "directory", "cwd", "workdir", "grantRoot", "path", "impact", "risk", "description", "reason"]);
   const hasUnknownFields = context ? Object.keys(context).some((key) => !knownKeys.has(key)) : false;
+  const commandContextComplete = Boolean(command && directory);
+  const fileChangeContextComplete = approval.kind === "file_change" && Boolean(directory && impact);
   return {
-    complete: Boolean(context && command),
+    complete: Boolean(context && (commandContextComplete || fileChangeContextComplete)),
     command: command ?? approval.summary,
-    directory: firstString(context, ["directory", "cwd", "workdir"]),
-    impact: firstString(context, ["impact", "risk", "description"]),
+    directory,
+    impact,
     ...(hasUnknownFields ? { rawContext: JSON.stringify(context, null, 2) } : {})
   };
 }

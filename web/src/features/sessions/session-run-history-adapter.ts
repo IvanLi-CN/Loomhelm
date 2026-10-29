@@ -60,10 +60,6 @@ export class SessionRunHistoryClientAdapter {
     }
 
     const cached = this.cachedHistory.get(sessionId);
-    if (!forceRefresh && cached && cached.resumeCursor === undefined) {
-      this.requests.finish(admission.token);
-      return { state: "received", request: admission.token, runs: cached.runs };
-    }
 
     const requestKey = Symbol(sessionId);
     const pendingRead = (async (): Promise<SessionRunHistoryReadResult> => {

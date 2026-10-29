@@ -59,20 +59,21 @@ describe("session run history adapter", () => {
     await expect(duplicate).resolves.toMatchObject({ state: "unknown", reason: "stale_response" });
   });
 
-  test("caches a completed page and only refreshes it when requested", async () => {
+  test("refreshes a single page without replaying an unbounded history", async () => {
     const calls = [];
     const adapter = new SessionRunHistoryClientAdapter({
       listSessionRuns: async (request) => {
         calls.push(request);
-        return { has_more: false, items: [run(calls.length === 1 ? "run-1" : "run-2")] };
+        return { has_more: false, items: [run(["run-1", "run-2", "run-3"][calls.length - 1])] };
       },
     });
 
     adapter.selectSession("session-1");
     await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ runs: [{ id: "run-1" }] });
-    await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ runs: [{ id: "run-1" }] });
-    await expect(adapter.readRuns("session-1", { forceRefresh: true })).resolves.toMatchObject({ runs: [{ id: "run-2" }] });
+    await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ runs: [{ id: "run-2" }] });
+    await expect(adapter.readRuns("session-1", { forceRefresh: true })).resolves.toMatchObject({ runs: [{ id: "run-3" }] });
     expect(calls).toEqual([
+      { session_id: "session-1", limit: 200 },
       { session_id: "session-1", limit: 200 },
       { session_id: "session-1", limit: 200 },
     ]);

@@ -186,7 +186,29 @@ describe("production session model", () => {
       run_id: "run-1",
       status: "pending",
       summary: "Inspect the requested workspace"
-    })).toMatchObject({ complete: true, command: "codex inspect --workspace /workspace/loomhelm" });
+    })).toMatchObject({ complete: false, command: "codex inspect --workspace /workspace/loomhelm" });
+
+    expect(approvalContextFromApproval({
+      context: { command: "codex inspect --workspace /workspace/loomhelm", cwd: "/workspace/loomhelm" },
+      id: "approval-3",
+      kind: "command",
+      requested_at: "2026-10-27T00:00:00Z",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Inspect the requested workspace"
+    })).toMatchObject({ complete: true, command: "codex inspect --workspace /workspace/loomhelm", directory: "/workspace/loomhelm" });
+
+    expect(approvalContextFromApproval({
+      context: { grantRoot: "/workspace/loomhelm", reason: "A file change is ready for review" },
+      id: "approval-4",
+      kind: "file_change",
+      requested_at: "2026-10-27T00:00:00Z",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Review file changes"
+    })).toMatchObject({ complete: true, command: "Review file changes", directory: "/workspace/loomhelm", impact: "A file change is ready for review" });
   });
 
   test("preserves unknown approval context instead of hiding fields", () => {
@@ -200,7 +222,7 @@ describe("production session model", () => {
       status: "pending",
       summary: "Inspect the requested workspace"
     });
-    expect(context.complete).toBe(true);
+    expect(context.complete).toBe(false);
     expect(context.rawContext).toContain('"scope": "workspace"');
     expect(context.rawContext).toContain('"write": true');
   });
