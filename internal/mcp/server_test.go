@@ -672,6 +672,42 @@ func TestServerBoundsRESTDispatchLifetime(t *testing.T) {
 	}
 }
 
+func TestServerDoesNotReportTimedOutGETAsSuccess(t *testing.T) {
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			<-request.Context().Done()
+		}),
+		OperationTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      17,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+			},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusServiceUnavailable || result.StructuredContent.Error.Code != protocol.ErrorCodeServiceUnavailable {
+		t.Fatalf("timed-out download result = %#v, want service-unavailable error", result)
+	}
+}
+
 func TestServerReportsOversizedApplicationOutcomeAsUnknown(t *testing.T) {
 	calls := 0
 	server, err := NewServer(Config{
@@ -1627,6 +1663,32 @@ func TestServerResourceReadDelegatesParameterizedURI(t *testing.T) {
 	}
 	if len(result.Contents) != 1 || result.Contents[0].URI != "loomhelm://sessions/session-1" || result.Contents[0].MIMEType != "application/json" || result.Contents[0].Text == "" {
 		t.Fatalf("resource result = %#v", result.Contents)
+	}
+}
+
+func TestServerResourceReadPreservesRetryAfter(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Retry-After", "60")
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(writer).Encode(protocol.ApiError{
+			Code:    protocol.ErrorCodeServiceUnavailable,
+			Message: "artifact recovery is pending",
+		})
+	})
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      10,
+		"method":  "resources/read",
+		"params": map[string]any{
+			"uri": "loomhelm://artifacts/artifact-1",
+		},
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"retry_after":"60"`) {
+		t.Fatalf("resource retry-after response status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

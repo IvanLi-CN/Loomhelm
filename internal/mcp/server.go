@@ -347,8 +347,17 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 					Message: "application service response exceeds configured limit",
 				}), nil
 			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				if spec.route.method != http.MethodGet {
+					return unknownOutcomeResult(), nil
+				}
+				return toolError(http.StatusServiceUnavailable, protocol.ApiError{
+					Code:    protocol.ErrorCodeServiceUnavailable,
+					Message: "application service did not complete within the operation deadline",
+				}), nil
+			}
 			return toolError(http.StatusServiceUnavailable, protocol.ApiError{
-				Code:    protocol.ErrorCodeInvalidRequest,
+				Code:    protocol.ErrorCodeServiceUnavailable,
 				Message: "application service is unavailable",
 			}), nil
 		}
@@ -531,7 +540,11 @@ func (s *Server) resourceHandler(ctx context.Context, request *sdk.ReadResourceR
 	}
 	if response.status < http.StatusOK || response.status >= http.StatusMultipleChoices {
 		apiError := decodeAPIError(response.status, response.body)
-		data, _ := json.Marshal(map[string]any{"http_status": response.status, "error": apiError})
+		envelope := map[string]any{"http_status": response.status, "error": apiError}
+		if response.retryAfter != "" {
+			envelope["retry_after"] = response.retryAfter
+		}
+		data, _ := json.Marshal(envelope)
 		return nil, &jsonrpc.Error{Code: int64(rpcCodeForHTTP(response.status)), Message: apiError.Message, Data: data}
 	}
 	body := response.body
@@ -606,6 +619,9 @@ func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, rout
 	s.restHandler.ServeHTTP(response, internalRequest)
 	if response.tooLarge || int64(response.body.Len()) > s.maxResponse {
 		return restResponse{}, errResponseTooLarge
+	}
+	if err := operationCtx.Err(); err != nil {
+		return restResponse{}, err
 	}
 	return restResponse{status: response.status, body: response.body.Bytes(), retryAfter: response.Header().Get("Retry-After")}, nil
 }
