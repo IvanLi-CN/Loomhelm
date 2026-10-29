@@ -327,7 +327,7 @@ func safeDownloadFilename(name string) string {
 	var builder strings.Builder
 	for _, character := range name {
 		switch {
-		case character == '/' || character == '\\' || unicode.IsControl(character):
+		case character == '/' || character == '\\' || unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character):
 			builder.WriteByte('_')
 		default:
 			builder.WriteRune(character)

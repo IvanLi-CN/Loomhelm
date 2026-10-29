@@ -44,6 +44,16 @@ func TestValidateArtifactRejectsHostPathIdentifiers(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactRejectsBidiFilenameControls(t *testing.T) {
+	artifact := protocol.Artifact{
+		ID: "artifact-valid", SessionID: "session-valid", Name: "report\u202Etxt.txt",
+		Kind: protocol.ArtifactKindFile, Size: 1, ContentType: "application/octet-stream",
+	}
+	if _, _, err := validateArtifact(artifact, DefaultMaxBytes); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bidi filename validation error = %v, want %v", err, ErrInvalid)
+	}
+}
+
 func TestConfigValidateRejectsFilesystemRoot(t *testing.T) {
 	if _, err := (Config{Root: string(filepath.Separator)}).validate(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("filesystem root validation error = %v, want %v", err, ErrInvalid)

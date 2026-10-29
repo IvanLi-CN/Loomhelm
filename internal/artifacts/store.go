@@ -521,7 +521,7 @@ func validateArtifact(artifact protocol.Artifact, maxBytes int64) (protocol.Arti
 		return protocol.Artifact{}, "", fmt.Errorf("artifact name is invalid: %w", ErrInvalid)
 	}
 	for _, character := range artifact.Name {
-		if unicode.IsControl(character) {
+		if unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character) {
 			return protocol.Artifact{}, "", fmt.Errorf("artifact name contains a control character: %w", ErrInvalid)
 		}
 	}

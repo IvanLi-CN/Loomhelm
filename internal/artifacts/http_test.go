@@ -65,6 +65,13 @@ func TestDownloadHTTPHandlerStreamsVerifiedBytesWithSafeHeaders(t *testing.T) {
 	}
 }
 
+func TestContentDispositionRemovesBidiControls(t *testing.T) {
+	disposition := contentDisposition("report\u202Etxt.txt")
+	if strings.ContainsRune(disposition, '\u202E') || strings.Contains(disposition, "%E2%80%AE") {
+		t.Fatalf("content disposition retained a bidi control: %q", disposition)
+	}
+}
+
 func TestDownloadHTTPHandlerSupportsHeadWithoutBody(t *testing.T) {
 	content := []byte("head body is suppressed")
 	artifact := protocol.Artifact{
