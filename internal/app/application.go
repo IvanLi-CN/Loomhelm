@@ -177,6 +177,8 @@ func writeArtifactDownloadError(writer http.ResponseWriter, request *http.Reques
 	switch status {
 	case http.StatusServiceUnavailable:
 		apiErr = auth.ErrUnavailable
+	case http.StatusConflict:
+		apiErr = auth.ErrConflict
 	case http.StatusUnauthorized:
 		apiErr = auth.ErrUnauthenticated
 	case http.StatusNotFound:

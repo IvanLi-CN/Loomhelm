@@ -366,6 +366,41 @@ func TestServerToolCallPreservesRESTErrorAsToolError(t *testing.T) {
 	}
 }
 
+func TestServerToolCallPreservesRESTConflictAndRetryAfter(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Retry-After", "60")
+		writer.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(writer).Encode(protocol.ApiError{
+			Code:    protocol.ErrorCodeConflict,
+			Message: "artifact content changed",
+		})
+	})
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      9,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "loomhelm.list_projects",
+			"arguments": map[string]any{},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int    `json:"http_status"`
+			RetryAfter string `json:"retry_after"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeConflict || result.StructuredContent.RetryAfter != "60" {
+		t.Fatalf("conflict/retry-after tool error = %#v", result)
+	}
+}
+
 func TestServerPreservesRESTQueryValidation(t *testing.T) {
 	var seenPath string
 	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {

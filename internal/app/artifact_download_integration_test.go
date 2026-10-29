@@ -348,4 +348,14 @@ func TestWriteArtifactDownloadErrorUsesServiceUnavailableCode(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable || failure.Code != protocol.ErrorCodeServiceUnavailable {
 		t.Fatalf("service unavailable error = status %d/code %q", response.Code, failure.Code)
 	}
+
+	response = httptest.NewRecorder()
+	writeArtifactDownloadError(response, request, http.StatusConflict, artifacts.ErrContentChanged, "artifact content changed")
+	var conflict protocol.ApiError
+	if err := json.NewDecoder(response.Body).Decode(&conflict); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusConflict || conflict.Code != protocol.ErrorCodeConflict {
+		t.Fatalf("content conflict error = status %d/code %q", response.Code, conflict.Code)
+	}
 }

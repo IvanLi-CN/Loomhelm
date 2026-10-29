@@ -355,7 +355,7 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 			if response.status >= http.StatusInternalServerError && response.status < 600 && spec.route.method != http.MethodGet {
 				return unknownOutcomeResult(), nil
 			}
-			return toolError(response.status, decodeAPIError(response.status, response.body)), nil
+			return toolError(response.status, decodeAPIError(response.status, response.body), response.retryAfter), nil
 		}
 		if !validToolResponse(spec.operationID, response.body) {
 			return unknownOutcomeResult(), nil
@@ -602,12 +602,13 @@ func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, rout
 	if response.tooLarge || int64(response.body.Len()) > s.maxResponse {
 		return restResponse{}, errResponseTooLarge
 	}
-	return restResponse{status: response.status, body: response.body.Bytes()}, nil
+	return restResponse{status: response.status, body: response.body.Bytes(), retryAfter: response.Header().Get("Retry-After")}, nil
 }
 
 type restResponse struct {
-	status int
-	body   []byte
+	status     int
+	body       []byte
+	retryAfter string
 }
 
 type argumentError struct {
@@ -685,7 +686,7 @@ func encodedResponseWithinBudget(value any, maxResponse int64) bool {
 	return err == nil && int64(len(data)) <= maxResponse/4
 }
 
-func toolError(status int, apiError protocol.ApiError) *sdk.CallToolResult {
+func toolError(status int, apiError protocol.ApiError, retryAfter ...string) *sdk.CallToolResult {
 	if apiError.Code == "" {
 		apiError.Code = errorCodeForHTTP(status)
 	}
@@ -695,7 +696,11 @@ func toolError(status int, apiError protocol.ApiError) *sdk.CallToolResult {
 	apiError.Details = nil
 	apiError.Message = truncateUTF8(apiError.Message, maxToolErrorMessageBytes)
 	apiError.RequestID = truncateUTF8(apiError.RequestID, maxToolErrorRequestIDBytes)
-	data, _ := json.Marshal(map[string]any{"http_status": status, "error": apiError})
+	envelope := map[string]any{"http_status": status, "error": apiError}
+	if len(retryAfter) > 0 && retryAfter[0] != "" {
+		envelope["retry_after"] = retryAfter[0]
+	}
+	data, _ := json.Marshal(envelope)
 	contentText := string(apiError.Code)
 	if contentText == "" {
 		contentText = "request failed"
