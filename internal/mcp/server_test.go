@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -561,10 +562,11 @@ func TestServerPreservesUnknownOutcomeForBoundedLegacyBatch(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
+	longID := strings.Repeat("x", 240)
 	body := mustJSON(t, []map[string]any{
 		{
 			"jsonrpc": "2.0",
-			"id":      18,
+			"id":      longID,
 			"method":  "tools/call",
 			"params": map[string]any{
 				"name":      "loomhelm.create_user_credential",
@@ -573,7 +575,7 @@ func TestServerPreservesUnknownOutcomeForBoundedLegacyBatch(t *testing.T) {
 		},
 		{
 			"jsonrpc": "2.0",
-			"id":      19,
+			"id":      longID + "y",
 			"method":  "tools/call",
 			"params": map[string]any{
 				"name":      "loomhelm.create_user_credential",
