@@ -125,3 +125,4 @@ services:
 
 volumes:
   loomhelm-preview-artifacts:
+    name: "${LOOMHELM_ARTIFACT_VOLUME_NAME:?LOOMHELM_ARTIFACT_VOLUME_NAME is required}"

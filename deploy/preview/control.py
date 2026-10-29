@@ -26,6 +26,7 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETAINED_KEY_RE = re.compile(r"^[0-9a-f]{40}-[0-9]+$")
 DURATION_PART_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ns|us|µs|ms|s|m|h)")
+VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class ContractError(Exception):
@@ -106,10 +107,15 @@ def load_state(state_dir: Path) -> dict[str, Any]:
     state.setdefault("pending_slot", None)
     state.setdefault("previous_retained_key", None)
     state.setdefault("next_worker_generation", 1)
+    state.setdefault("artifact_volume_name", None)
     state.setdefault("history", [])
     state.setdefault("retained", [])
     if not isinstance(state["retained"], list):
         die("preview state retained must be an array")
+    if state["artifact_volume_name"] is not None and (
+        not isinstance(state["artifact_volume_name"], str) or not VOLUME_NAME_RE.fullmatch(state["artifact_volume_name"])
+    ):
+        die("preview artifact_volume_name is invalid")
     return state
 
 
@@ -121,6 +127,7 @@ def empty_state() -> dict[str, Any]:
         "pending_slot": None,
         "previous_retained_key": None,
         "next_worker_generation": 1,
+        "artifact_volume_name": None,
         "slots": {slot: None for slot in SLOTS},
         "retained": [],
         "history": [],
@@ -606,10 +613,24 @@ def command_compose_env(args: argparse.Namespace) -> None:
         stop_grace = configured_grace if configured_grace_seconds >= derived_grace_seconds else derived_grace
     else:
         stop_grace = derived_grace
+    project_name = env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True)
+    configured_volume = os.environ.get("LOOMHELM_ARTIFACT_VOLUME_NAME", "").strip()
+    stored_volume = state.get("artifact_volume_name")
+    if stored_volume:
+        if configured_volume and configured_volume != stored_volume:
+            die("LOOMHELM_ARTIFACT_VOLUME_NAME does not match the initialized preview state")
+        artifact_volume_name = stored_volume
+    else:
+        artifact_volume_name = configured_volume or f"{project_name}_loomhelm-preview-artifacts"
+        if not VOLUME_NAME_RE.fullmatch(artifact_volume_name):
+            die("LOOMHELM_ARTIFACT_VOLUME_NAME must be a valid Docker volume name")
+        state["artifact_volume_name"] = artifact_volume_name
+        write_state(state_dir, state)
     values: dict[str, str] = {
         "LOOMHELM_PREVIEW_STATE_DIR": str(state_dir),
         "LOOMHELM_PREVIEW_WEB_DIR": str(web_dir(state_dir)),
-        "LOOMHELM_PREVIEW_PROJECT_NAME": env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True),
+        "LOOMHELM_PREVIEW_PROJECT_NAME": project_name,
+        "LOOMHELM_ARTIFACT_VOLUME_NAME": artifact_volume_name,
         "LOOMHELM_PREVIEW_HTTP_PORT": env_value("LOOMHELM_PREVIEW_HTTP_PORT", required=True),
         "LOOMHELM_PREVIEW_ADMIN_PORT": env_value("LOOMHELM_PREVIEW_ADMIN_PORT", required=True),
         "LOOMHELM_BLUE_SERVER_PORT": env_value("LOOMHELM_BLUE_SERVER_PORT", required=True),

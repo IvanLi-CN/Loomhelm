@@ -59,6 +59,10 @@ class PreviewControlTest(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 self.assertNotIn(required["LOOMHELM_DRAIN_TOKEN"], captured.getvalue())
                 self.assertNotIn(configured["LOOMHELM_OIDC_CLIENT_SECRET"], captured.getvalue())
+                with patch.dict(os.environ, {**required, "LOOMHELM_PREVIEW_PROJECT_NAME": "renamed-preview"}, clear=True):
+                    self.invoke("compose_env", state_dir, output=output)
+                renamed = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+                self.assertEqual(renamed["LOOMHELM_ARTIFACT_VOLUME_NAME"], actual["LOOMHELM_ARTIFACT_VOLUME_NAME"])
 
     def test_compose_grace_covers_a_longer_shutdown_timeout(self) -> None:
         self.assertEqual(control.default_stop_grace_period("1m30s"), "270s")
