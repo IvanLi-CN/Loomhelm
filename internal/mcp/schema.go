@@ -481,7 +481,7 @@ func routeQuery(names []string, arguments map[string]json.RawMessage) (string, e
 			values.Set(name, strings.TrimSpace(string(raw)))
 			continue
 		}
-		value, err := stringArgument(arguments, name)
+		value, err := queryStringArgument(arguments, name)
 		if err != nil {
 			return "", err
 		}
@@ -526,6 +526,18 @@ func stringArgument(arguments map[string]json.RawMessage, name string) (string, 
 	}
 	if value == "" {
 		return "", fmt.Errorf("MCP parameter %q must not be empty", name)
+	}
+	return value, nil
+}
+
+func queryStringArgument(arguments map[string]json.RawMessage, name string) (string, error) {
+	raw, ok := arguments[name]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", fmt.Errorf("MCP parameter %q is required", name)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("MCP parameter %q must be a string", name)
 	}
 	return value, nil
 }

@@ -330,6 +330,77 @@ func TestServerPreservesRESTQueryValidation(t *testing.T) {
 	}
 }
 
+func TestServerPreservesEmptyOptionalQueryValue(t *testing.T) {
+	var seenPath string
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		seenPath = request.URL.RequestURI()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"projects":[]}`))
+	})
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      11,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.list_projects",
+			"arguments": map[string]any{
+				"after_cursor": "",
+			},
+		},
+	})
+	var result struct {
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if result.IsError {
+		t.Fatalf("empty optional query result returned MCP error: %#v", result)
+	}
+	if seenPath != "/projects?after_cursor=" {
+		t.Fatalf("delegated empty cursor path = %q, want /projects?after_cursor=", seenPath)
+	}
+}
+
+func TestServerBoundsRESTDispatchLifetime(t *testing.T) {
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			<-request.Context().Done()
+		}),
+		OperationTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	started := time.Now()
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      12,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.create_project",
+			"arguments": map[string]any{
+				"name": "Loomhelm",
+			},
+		},
+	})
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("REST dispatch exceeded operation bound: %s", elapsed)
+	}
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("timed-out mutation result = %#v, want unknown outcome", result)
+	}
+}
+
 func TestServerReportsOversizedApplicationOutcomeAsUnknown(t *testing.T) {
 	calls := 0
 	server, err := NewServer(Config{

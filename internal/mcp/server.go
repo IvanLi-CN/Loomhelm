@@ -41,6 +41,7 @@ const (
 	maxMCPBatchRequests                 = 2
 	defaultMCPAdmissionWait             = 5 * time.Second
 	defaultRequestBodyReadTimeout       = 15 * time.Second
+	defaultMCPOperationTimeout          = 25 * time.Second
 	requestBodyCloseWait                = 100 * time.Millisecond
 	maxToolErrorMessageBytes            = 160
 	maxToolErrorRequestIDBytes          = 64
@@ -114,19 +115,24 @@ type Config struct {
 	// MaxResponseBytes must leave room for the structured unknown-result error
 	// envelope; values below minimumMaxResponseBytes are rejected.
 	MaxResponseBytes int64
+	// OperationTimeout bounds one REST delegation, including a host command
+	// acknowledgement wait. A mutation that reaches this deadline is reported
+	// as an unknown outcome by the existing application contract.
+	OperationTimeout time.Duration
 }
 
 // Server is an MCP endpoint backed by the official Go SDK's stateless
 // Streamable HTTP transport.
 type Server struct {
-	sdkServer      *sdk.Server
-	handler        http.Handler
-	restHandler    http.Handler
-	restPathPrefix string
-	maxResponse    int64
-	tools          []Tool
-	resources      []resourceSpec
-	toolByName     map[string]toolSpec
+	sdkServer        *sdk.Server
+	handler          http.Handler
+	restHandler      http.Handler
+	restPathPrefix   string
+	maxResponse      int64
+	operationTimeout time.Duration
+	tools            []Tool
+	resources        []resourceSpec
+	toolByName       map[string]toolSpec
 }
 
 // NewServer validates the MCP route catalog, registers all contract tools and
@@ -164,11 +170,17 @@ func NewServer(config Config) (*Server, error) {
 	if config.MaxResponseBytes == 0 {
 		config.MaxResponseBytes = defaultMaxResponseBytes
 	}
+	if config.OperationTimeout == 0 {
+		config.OperationTimeout = defaultMCPOperationTimeout
+	}
 	if config.MaxBodyBytes < 1 || config.MaxResponseBytes < 1 {
 		return nil, fmt.Errorf("MCP body and response limits must be positive")
 	}
 	if config.MaxResponseBytes < minimumMaxResponseBytes {
 		return nil, fmt.Errorf("MCP response limit must be at least %d bytes", minimumMaxResponseBytes)
+	}
+	if config.OperationTimeout < 1 {
+		return nil, fmt.Errorf("MCP operation timeout must be positive")
 	}
 
 	sdkServer := sdk.NewServer(
@@ -186,11 +198,12 @@ func NewServer(config Config) (*Server, error) {
 		},
 	)
 	server := &Server{
-		sdkServer:      sdkServer,
-		restHandler:    config.RESTHandler,
-		restPathPrefix: strings.TrimRight(config.RESTPathPrefix, "/"),
-		maxResponse:    config.MaxResponseBytes,
-		toolByName:     make(map[string]toolSpec, len(protocol.MCPTools)),
+		sdkServer:        sdkServer,
+		restHandler:      config.RESTHandler,
+		restPathPrefix:   strings.TrimRight(config.RESTPathPrefix, "/"),
+		maxResponse:      config.MaxResponseBytes,
+		operationTimeout: config.OperationTimeout,
+		toolByName:       make(map[string]toolSpec, len(protocol.MCPTools)),
 	}
 
 	for _, definition := range protocol.MCPTools {
@@ -554,7 +567,9 @@ func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, rout
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	internalRequest, err := http.NewRequestWithContext(ctx, route.method, path, bytes.NewReader(payload))
+	operationCtx, cancel := context.WithTimeout(ctx, s.operationTimeout)
+	defer cancel()
+	internalRequest, err := http.NewRequestWithContext(operationCtx, route.method, path, bytes.NewReader(payload))
 	if err != nil {
 		return restResponse{}, err
 	}
