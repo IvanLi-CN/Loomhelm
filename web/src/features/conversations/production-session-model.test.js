@@ -110,6 +110,10 @@ describe("production session model", () => {
     expect(eventToConversationMessage(event({ event_id: "unknown", payload: {}, type: "unknown" }))).toMatchObject({ kind: "unknown", content: "已接收事件：unknown" });
   });
 
+  test("keeps message identities distinct across runs in one session", () => {
+    expect(eventToConversationMessage(event({ run_id: "run-1" })).id).not.toBe(eventToConversationMessage(event({ run_id: "run-2" })).id);
+  });
+
   test("falls back to approval summary while preserving safe context fields", () => {
     expect(approvalContextFromApproval({
       context: { directory: "/workspace/loomhelm", impact: "writes a report" },

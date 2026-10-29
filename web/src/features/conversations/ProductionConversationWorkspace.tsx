@@ -608,7 +608,6 @@ export function ProductionConversationWorkspace({
     previousRunId.current = initialRunId;
     seenEventIds.current = new Set();
     lastAppliedRunSequence.current = 0;
-    setMessages([]);
     setApprovals([]);
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(false);
@@ -631,7 +630,6 @@ export function ProductionConversationWorkspace({
     let active = true;
     setSession(undefined);
     setRun(undefined);
-    setMessages([]);
     setApprovals([]);
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(false);
@@ -758,13 +756,17 @@ export function ProductionConversationWorkspace({
     const response = await api.createSession({ body: request });
     if (!mountedRef.current) return;
     const initialAck = response.initial_run_ack;
-    const initialRunId = initialAck?.run_id;
+    const initialPrompt = request.prompt?.trim() ?? "";
+    const initialAckMatchesRequest = Boolean(initialAck && initialAck.command_id === request.command_id);
+    const initialRunId = initialAckMatchesRequest ? initialAck?.run_id : undefined;
     if (initialRunId && !writeRunRecoveryId(getRunRecoveryKey(principalId, response.session.id), initialRunId)) {
       throw new Error("Session 已收到但首个 Run 恢复身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
-    const initialPrompt = request.prompt?.trim() ?? "";
-    const initialRunUncertain = Boolean(initialAck && (initialAck.state === "unknown" || !initialRunId));
-    if (initialRunUncertain && initialAck && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: initialAck.command_id, prompt: initialPrompt, uncertain: true })) {
+    const initialRunUncertain = Boolean(
+      (initialAck && (!initialAckMatchesRequest || initialAck.state === "unknown" || !initialRunId))
+      || (initialPrompt && !initialAck)
+    );
+    if (initialRunUncertain && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: request.command_id, prompt: initialPrompt, uncertain: true })) {
       throw new Error("Session 已收到但首个 Run 命令身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
     adapters.session.selectSession(response.session.id);
@@ -773,15 +775,27 @@ export function ProductionConversationWorkspace({
     setSession(response.session);
     setSessionFailure(null);
     if (initialAck) {
-      setCommandState(initialAck.state);
-      const initialRun = runFromCommandAck(response.session, initialAck);
+      setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
+      const initialRun = initialAckMatchesRequest ? runFromCommandAck(response.session, initialAck) : undefined;
       setRun(initialRun);
-      setRunIdentityVerified(Boolean(initialRun && initialAck.state !== "unknown"));
-      setUncertainRunCommandId(initialRunUncertain ? initialAck.command_id : undefined);
-      pendingRunSubmission.current = initialRunUncertain ? { commandId: initialAck.command_id, prompt: initialPrompt } : undefined;
+      setRunIdentityVerified(Boolean(initialRun && !initialRunUncertain));
+      setUncertainRunCommandId(initialRunUncertain ? request.command_id : undefined);
+      pendingRunSubmission.current = initialRunUncertain ? { commandId: request.command_id, prompt: initialPrompt } : undefined;
       setActivityNotice(initialRunUncertain ? "首条 Run 结果不确定；已保留同一命令身份，请先完成对账。" : initialRunId ? "首条提示已收到命令确认，等待实际 Run 事件。" : "Session 已创建；首条提示已提交，但服务尚未返回 Run ID。");
       if (!initialRunUncertain) clearStoredIntent(getRunIntentKey(principalId, response.session.id));
+    } else if (initialPrompt) {
+      setCommandState("unknown");
+      setRun(undefined);
+      setRunIdentityVerified(false);
+      setUncertainRunCommandId(request.command_id);
+      pendingRunSubmission.current = { commandId: request.command_id, prompt: initialPrompt };
+      setActivityNotice("首条提示已随 Session 提交，但服务没有返回 Run 命令确认；已保留同一命令身份，请先对账。");
     } else {
+      setCommandState(undefined);
+      setRun(undefined);
+      setRunIdentityVerified(false);
+      setUncertainRunCommandId(undefined);
+      pendingRunSubmission.current = undefined;
       setActivityNotice("Session 已创建；当前没有首条 Run 命令确认。");
     }
     await onSessionCreated?.(response.session.id, initialRunId);
@@ -848,7 +862,6 @@ export function ProductionConversationWorkspace({
         if (previousRunId && previousRunId !== nextRun.id) {
           seenEventIds.current = new Set();
           lastAppliedRunSequence.current = 0;
-          setMessages([]);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
         }

@@ -175,7 +175,7 @@ function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string
       <div className="workspace-layout workspace-panel-info">
         <section className="chat-panel" aria-label="任务工作区">
           <ProductionConversationWorkspace
-            key={`${displayedTask.id}:${assembly?.auth.principalId ?? "anonymous"}:${taskSessionId ?? "new"}:${initialRunId ?? "none"}`}
+            key={`${displayedTask.id}:${assembly?.auth.principalId ?? "anonymous"}:${taskSessionId ?? "new"}`}
             api={sessionApi}
             conversationTitle={displayedTask.title}
             initialRunId={initialRunId}
@@ -221,7 +221,7 @@ export function ConversationWorkspaceRoute() {
     const project = source?.getProject(task?.projectId);
     const projectPermissions = source?.getProjectPermissions(task?.projectId);
     if (source?.status === "loading") return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">CONVERSATION WORKSPACE</span><h1>正在读取对话上下文</h1><p>正在读取任务与项目权限，随后显示 Session 和 Host 状态。</p></section>;
-    return <section className="page-section"><ProductionConversationWorkspace key={`${conversationId}:${assembly?.auth.principalId ?? "anonymous"}:${runId ?? "none"}`} api={sessionApi} conversationTitle={task?.title ?? "独立会话"} initialRunId={runId} onRunCreated={(sessionId, nextRunId) => navigate({ params: { conversationId: sessionId }, search: { runId: nextRunId }, to: "/conversations/$conversationId" })} principalId={assembly?.auth.principalId} projectCanWrite={(projectId) => source?.getProjectPermissions(projectId).canWrite === true} projectId={task?.projectId} projectName={project?.name} projectOptions={source?.projects} readOnly={task ? projectPermissions?.canWrite !== true : assembly?.permissions.isReadOnly !== false} sessionId={conversationId} task={task} /></section>;
+    return <section className="page-section"><ProductionConversationWorkspace key={`${conversationId}:${assembly?.auth.principalId ?? "anonymous"}`} api={sessionApi} conversationTitle={task?.title ?? "独立会话"} initialRunId={runId} onRunCreated={(sessionId, nextRunId) => navigate({ params: { conversationId: sessionId }, search: { runId: nextRunId }, to: "/conversations/$conversationId" })} principalId={assembly?.auth.principalId} projectCanWrite={(projectId) => source?.getProjectPermissions(projectId).canWrite === true} projectId={task?.projectId} projectName={project?.name} projectOptions={source?.projects} readOnly={task ? projectPermissions?.canWrite !== true : assembly?.permissions.isReadOnly !== false} sessionId={conversationId} task={task} /></section>;
   }
   const conversation = getConversation(runtime.fixtures, conversationId);
   return <WorkspaceRoute taskId={conversation?.taskId} conversationId={conversationId} />;

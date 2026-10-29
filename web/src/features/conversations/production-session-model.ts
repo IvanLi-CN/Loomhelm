@@ -124,7 +124,7 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
     author: isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
     content: eventText(event, asRecord(event.payload)),
     eventType: event.type,
-    id: event.event_id,
+    id: `${event.session_id}:${event.run_id ?? "session"}:${event.event_id}`,
     kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",
     occurredAt: event.occurred_at,
     role: isMessage ? "assistant" : "system",
