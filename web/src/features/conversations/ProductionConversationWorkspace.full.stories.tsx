@@ -38,6 +38,7 @@ function ProductionWorkspaceStory() {
         api={api}
         conversationTitle="整理远程工作区边界"
         initialRunId="run-demo-u03"
+        principalId="storybook"
         projectId="loomhelm"
         projectName="Loomhelm"
         sessionId="session-demo-u03"

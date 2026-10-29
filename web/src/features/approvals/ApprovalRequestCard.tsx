@@ -32,8 +32,10 @@ export interface ApprovalRequestCardProps {
   request: ApprovalRequestModel;
   commandIds?: Partial<Record<ApprovalDecision, string>>;
   connection?: ConnectionAvailability;
+  recoveryDecision?: ApprovalDecision;
   readOnly?: boolean;
   canResolve?: boolean;
+  onReconcile?: (decision: ApprovalDecision) => void;
   onResolve?: (params: ResolveApprovalParams) => void | Promise<void>;
 }
 
@@ -61,7 +63,7 @@ function getApprovalStatusIcon(status: ApprovalStatus) {
   return ShieldAlert;
 }
 
-export function ApprovalRequestCard({ request, commandIds = {}, connection = "online", readOnly = false, canResolve = true, onResolve }: ApprovalRequestCardProps) {
+export function ApprovalRequestCard({ request, commandIds = {}, connection = "online", recoveryDecision, readOnly = false, canResolve = true, onReconcile, onResolve }: ApprovalRequestCardProps) {
   const [resolving, setResolving] = useState<ApprovalDecision | null>(null);
   const [submitted, setSubmitted] = useState<ApprovalDecision | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -104,6 +106,8 @@ export function ApprovalRequestCard({ request, commandIds = {}, connection = "on
       ? "请求上下文不完整，不能安全批准或拒绝；请刷新并重新核对。"
     : approval.status !== "pending"
       ? `当前请求${getApprovalStatusLabel(approval.status)}，不能再次操作。`
+      : recoveryDecision
+        ? `上一次${recoveryDecision === "approve" ? "批准" : "拒绝"}命令结果不确定；请先完成服务事实对账，再复用原命令身份。`
       : !canResolve
         ? "当前审批历史或修订尚未完成核对，不能批准或拒绝。"
       : connection === "online"
@@ -156,6 +160,7 @@ export function ApprovalRequestCard({ request, commandIds = {}, connection = "on
         {connection === "online" ? <LockKeyhole className="mt-0.5 size-4 shrink-0" aria-hidden="true" /> : <WifiOff className="mt-0.5 size-4 shrink-0" aria-hidden="true" />}
         <span>{unavailableReason}</span>
       </div>
+      {recoveryDecision && onReconcile ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>对账完成后只会复用同一 command_id，不会自动重复授权。</span><Button type="button" variant="secondary" onClick={() => onReconcile(recoveryDecision)}>我已对账，复用命令</Button></div> : null}
       {actionError ? <div className="rounded-[var(--radius-sm)] bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert">{actionError}</div> : null}
 
       <div className="grid grid-cols-1 gap-2 border-t border-[var(--line)] pt-4 sm:grid-cols-2">

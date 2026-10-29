@@ -27,6 +27,7 @@ export function DemoProductionConversationRoute() {
         api={api}
         conversationTitle={task?.title ?? "整理远程工作区边界"}
         initialRunId="run-demo-u03"
+        principalId="demo-u03"
         projectId={project?.id}
         projectName={project?.name}
         projectOptions={runtime.fixtures.projects}

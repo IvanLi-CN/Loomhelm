@@ -65,11 +65,13 @@ export interface RunStatusCardProps {
   interruptRequested?: boolean;
   interruptCommandId?: string;
   canControl?: boolean;
+  recoveryRequired?: boolean;
   readOnly?: boolean;
+  onReconcile?: () => void;
   onInterrupt?: (request: InterruptRunRequest) => void | Promise<void>;
 }
 
-export function RunStatusCard({ run, session, commandState, connection = "online", transport = "received", interruptRequested = false, interruptCommandId, canControl = true, readOnly = false, onInterrupt }: RunStatusCardProps) {
+export function RunStatusCard({ run, session, commandState, connection = "online", transport = "received", interruptRequested = false, interruptCommandId, canControl = true, recoveryRequired = false, readOnly = false, onReconcile, onInterrupt }: RunStatusCardProps) {
   const [interruptPending, setInterruptPending] = useState(false);
   const [localInterruptRequested, setLocalInterruptRequested] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -92,7 +94,7 @@ export function RunStatusCard({ run, session, commandState, connection = "online
   });
   const presentation = phasePresentations[phase];
   const Icon = presentation.icon;
-  const canInterrupt = phase === "executing" && Boolean(onInterrupt) && Boolean(interruptCommandId) && canControl && canSendControl(connection, readOnly) && !actionLock.current;
+  const canInterrupt = phase === "executing" && Boolean(onInterrupt) && Boolean(interruptCommandId) && canControl && !recoveryRequired && canSendControl(connection, readOnly) && !actionLock.current;
 
   const requestInterrupt = async () => {
     if (!canInterrupt || !onInterrupt || !interruptCommandId || actionLock.current) return;
@@ -141,6 +143,7 @@ export function RunStatusCard({ run, session, commandState, connection = "online
 
       {phase === "unknown" ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><CircleHelp className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>保留 unknown 事实，等待事件或人工对账；不会把它显示为失败或成功。</span></div> : null}
       {phase === "disconnected" ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><CloudOff className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>断线期间不发送、不排队，也不把中断请求当作已经终止。</span></div> : null}
+      {recoveryRequired && onReconcile ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>上一次中断命令结果不确定；对账完成后只会复用同一 command_id。</span><Button type="button" variant="secondary" onClick={onReconcile}>我已对账，复用命令</Button></div> : null}
       {actionError ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert"><Ban className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{actionError}</span></div> : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4">

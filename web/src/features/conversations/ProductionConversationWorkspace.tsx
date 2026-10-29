@@ -33,6 +33,8 @@ const NO_PROJECT = "__none__";
 const SESSION_CREATION_INTENT_PREFIX = "loomhelm:session-creation-intent:";
 const RUN_INTENT_PREFIX = "loomhelm:run-intent:";
 const RUN_RECOVERY_PREFIX = "loomhelm:run-recovery:";
+const DRAFT_PREFIX = "loomhelm:draft:";
+const CONTROL_INTENT_PREFIX = "loomhelm:control-intent:";
 
 type SessionCreationPayload = Omit<CreateSessionRequest, "command_id">;
 
@@ -46,6 +48,11 @@ interface SessionCreationIntent {
 interface RunIntent {
   commandId: string;
   prompt: string;
+  uncertain: boolean;
+}
+
+interface ControlIntent {
+  commandId: string;
   uncertain: boolean;
 }
 
@@ -98,17 +105,29 @@ function clearStoredIntent(key: string | undefined): void {
   }
 }
 
-function getSessionCreationIntentKey(conversationTitle: string, taskId?: string, projectId?: string): string | undefined {
+function getIdentityScope(principalId: string | undefined): string {
+  return encodeURIComponent(principalId?.trim() || "anonymous");
+}
+
+function getSessionCreationIntentKey(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string | undefined {
   if (typeof window === "undefined") return undefined;
-  return `${SESSION_CREATION_INTENT_PREFIX}${encodeURIComponent([window.location.pathname, conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
+  return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent([window.location.pathname, conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
 }
 
-function getRunIntentKey(sessionId: string | undefined): string | undefined {
-  return sessionId ? `${RUN_INTENT_PREFIX}${encodeURIComponent(sessionId)}` : undefined;
+function getRunIntentKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
+  return sessionId ? `${RUN_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}` : undefined;
 }
 
-function getRunRecoveryKey(sessionId: string | undefined): string | undefined {
-  return sessionId ? `${RUN_RECOVERY_PREFIX}${encodeURIComponent(sessionId)}` : undefined;
+function getRunRecoveryKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
+  return sessionId ? `${RUN_RECOVERY_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}` : undefined;
+}
+
+function getDraftKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
+  return sessionId ? `${DRAFT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}` : undefined;
+}
+
+function getControlIntentKey(principalId: string | undefined, sessionId: string | undefined, operationKey: string): string | undefined {
+  return sessionId ? `${CONTROL_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}:${encodeURIComponent(operationKey)}` : undefined;
 }
 
 function readRunRecoveryId(key: string | undefined): string | undefined {
@@ -127,6 +146,28 @@ function writeRunRecoveryId(key: string | undefined, runId: string): boolean {
   if (!key || !storage) return false;
   try {
     storage.setItem(key, runId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readDraft(key: string | undefined): string {
+  const storage = getSessionStorage();
+  if (!key || !storage) return "";
+  try {
+    return storage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeDraft(key: string | undefined, draft: string): boolean {
+  const storage = getSessionStorage();
+  if (!key || !storage) return false;
+  try {
+    if (draft) storage.setItem(key, draft);
+    else storage.removeItem(key);
     return true;
   } catch {
     return false;
@@ -160,6 +201,41 @@ function writeRunIntent(key: string | undefined, intent: RunIntent): boolean {
   }
 }
 
+function readControlIntent(key: string | undefined): ControlIntent | undefined {
+  const storage = getSessionStorage();
+  if (!key || !storage) return undefined;
+  try {
+    const value = storage.getItem(key);
+    if (!value) return undefined;
+    const parsed = JSON.parse(value) as Partial<ControlIntent>;
+    if (typeof parsed.commandId !== "string" || typeof parsed.uncertain !== "boolean") return undefined;
+    return { commandId: parsed.commandId, uncertain: parsed.uncertain };
+  } catch {
+    return undefined;
+  }
+}
+
+function writeControlIntent(key: string | undefined, intent: ControlIntent): boolean {
+  const storage = getSessionStorage();
+  if (!key || !storage) return false;
+  try {
+    storage.setItem(key, JSON.stringify(intent));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function controlIntentIsUncertain(principalId: string | undefined, sessionId: string | undefined, operationKey: string): boolean {
+  return readControlIntent(getControlIntentKey(principalId, sessionId, operationKey))?.uncertain === true;
+}
+
+function uncertainApprovalDecision(principalId: string | undefined, sessionId: string, approval: Approval): ApprovalDecision | undefined {
+  if (controlIntentIsUncertain(principalId, sessionId, `approval:${approval.id}:${approval.revision}:approve`)) return "approve";
+  if (controlIntentIsUncertain(principalId, sessionId, `approval:${approval.id}:${approval.revision}:deny`)) return "deny";
+  return undefined;
+}
+
 function isUnknownSessionCreationError(error: unknown): boolean {
   if (!(error instanceof ApiClientError)) return true;
   const body = error.body && typeof error.body === "object" ? error.body as { code?: unknown } : undefined;
@@ -177,6 +253,7 @@ export interface ProductionSessionCreationPanelProps {
   fixedProjectId?: string;
   fixedProjectName?: string;
   onCreate: (request: CreateSessionRequest) => void | Promise<void>;
+  principalId?: string;
   projectOptions?: readonly ProjectOption[];
   readOnly?: boolean;
   taskId?: string;
@@ -197,11 +274,12 @@ export function ProductionSessionCreationPanel({
   fixedProjectId,
   fixedProjectName,
   onCreate,
+  principalId,
   projectOptions = [],
   readOnly = false,
   taskId
 }: ProductionSessionCreationPanelProps) {
-  const storageKey = getSessionCreationIntentKey(conversationTitle, taskId, fixedProjectId);
+  const storageKey = getSessionCreationIntentKey(principalId, conversationTitle, taskId, fixedProjectId);
   const storedIntent = useMemo(() => readSessionCreationIntent(storageKey), [storageKey]);
   const [path, setPath] = useState<SessionPath>(() => storedIntent?.request.path ?? "new");
   const [activeThreadRef, setActiveThreadRef] = useState(() => storedIntent?.request.active_thread_ref ?? "");
@@ -357,6 +435,8 @@ export interface ProductionConversationWorkspaceProps {
   initialRunId?: string;
   onRunCreated?: (sessionId: string, runId: string) => void | Promise<void>;
   onSessionCreated?: (sessionId: string, initialRunId?: string) => void | Promise<void>;
+  principalId?: string;
+  projectCanWrite?: (projectId: string) => boolean;
   projectId?: string;
   projectName?: string;
   projectOptions?: readonly ProjectOption[];
@@ -409,6 +489,8 @@ export function ProductionConversationWorkspace({
   initialRunId,
   onRunCreated,
   onSessionCreated,
+  principalId,
+  projectCanWrite,
   projectId,
   projectName,
   projectOptions = [],
@@ -421,8 +503,9 @@ export function ProductionConversationWorkspace({
     run: new RunClientAdapter(api),
     session: new SessionClientAdapter(api)
   } : undefined, [api]);
-  const runIntentKey = getRunIntentKey(sessionId);
+  const runIntentKey = getRunIntentKey(principalId, sessionId);
   const storedRunIntent = useMemo(() => readRunIntent(runIntentKey), [runIntentKey]);
+  const draftKey = getDraftKey(principalId, sessionId);
   const [session, setSession] = useState<Session | undefined>();
   const [sessionLoading, setSessionLoading] = useState(Boolean(sessionId));
   const [sessionFailure, setSessionFailure] = useState<string | null>(null);
@@ -432,8 +515,10 @@ export function ProductionConversationWorkspace({
   const [approvals, setApprovals] = useState<readonly Approval[]>([]);
   const [approvalHistoryAvailable, setApprovalHistoryAvailable] = useState(false);
   const [runIdentityVerified, setRunIdentityVerified] = useState(false);
-  const [draft, setDraft] = useState(() => storedRunIntent?.prompt ?? "");
-  const [activityNotice, setActivityNotice] = useState<string | null>(null);
+  const [sessionReadUncertain, setSessionReadUncertain] = useState(false);
+  const [, setControlIntentRevision] = useState(0);
+  const [draft, setDraft] = useState(() => storedRunIntent?.prompt ?? readDraft(draftKey));
+  const [activityNotice, setActivityNotice] = useState<string | null>(() => storedRunIntent?.uncertain ? "上一次 Run 命令结果不确定；请先完成对账，不会自动重复提交。" : null);
   const [uncertainRunCommandId, setUncertainRunCommandId] = useState<string | undefined>(() => storedRunIntent?.uncertain ? storedRunIntent.commandId : undefined);
   const draftRef = useRef(draft);
   const seenEventIds = useRef(new Set<string>());
@@ -442,6 +527,7 @@ export function ProductionConversationWorkspace({
   const currentSessionIdRef = useRef<string | undefined>(sessionId);
   const previousSessionId = useRef<string | undefined>(undefined);
   const previousRunId = useRef<string | undefined>(initialRunId);
+  const lastAppliedRunSequence = useRef(0);
   const hasPreviousSessionId = useRef(false);
 
   const sessionForRoute = session && (sessionId === undefined || session.id === sessionId) ? session : undefined;
@@ -449,11 +535,14 @@ export function ProductionConversationWorkspace({
   const activeRun = run && run.session_id === activeSessionId ? run : undefined;
   const activeRunId = activeRun?.id;
   const connection: ConnectionAvailability = sessionForRoute ? connectionFromSessionState(sessionForRoute.state) : "online";
+  const sessionProjectReadOnly = Boolean(sessionForRoute?.project_id && projectCanWrite && !projectCanWrite(sessionForRoute.project_id));
+  const effectiveReadOnly = readOnly || sessionProjectReadOnly;
+  const effectiveCommandState = sessionReadUncertain ? "unknown" : commandState;
   const connectionRef = useRef<ConnectionAvailability>(connection);
   const currentConversationTitle = conversationTitle ?? task?.title ?? "独立会话";
   const taskSummary = mapTaskSummary(task);
   const context = sessionForRoute ? toSessionContextModel(sessionForRoute, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
-  const activeApprovals = activeRunId ? approvals.filter((approval) => approval.run_id === activeRunId) : [];
+  const activeApprovals = runIdentityVerified && activeRunId ? approvals.filter((approval) => approval.run_id === activeRunId) : [];
 
   useEffect(() => {
     connectionRef.current = connection;
@@ -477,30 +566,34 @@ export function ProductionConversationWorkspace({
     previousSessionId.current = sessionId;
     seenEventIds.current = new Set();
     approvalCommandIds.current = new Map();
+    lastAppliedRunSequence.current = 0;
     setMessages([]);
     setApprovals([]);
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(false);
+    setSessionReadUncertain(false);
     setRun(undefined);
     setCommandState(undefined);
     setActivityNotice(null);
     setSession(undefined);
     setSessionFailure(null);
     setSessionLoading(Boolean(sessionId));
-    const nextRunIntent = readRunIntent(getRunIntentKey(sessionId));
+    const nextRunIntent = readRunIntent(getRunIntentKey(principalId, sessionId));
     pendingRunSubmission.current = nextRunIntent ? { commandId: nextRunIntent.commandId, prompt: nextRunIntent.prompt } : undefined;
-    setDraft(nextRunIntent?.prompt ?? "");
+    setDraft(nextRunIntent?.prompt ?? readDraft(getDraftKey(principalId, sessionId)));
     setUncertainRunCommandId(nextRunIntent?.uncertain ? nextRunIntent.commandId : undefined);
-  }, [sessionId]);
+  }, [principalId, sessionId]);
 
   useEffect(() => {
     if (previousRunId.current === initialRunId) return;
     previousRunId.current = initialRunId;
     seenEventIds.current = new Set();
+    lastAppliedRunSequence.current = 0;
     setMessages([]);
     setApprovals([]);
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(false);
+    setSessionReadUncertain(false);
     setRun(undefined);
     setCommandState(undefined);
     setActivityNotice(null);
@@ -523,13 +616,15 @@ export function ProductionConversationWorkspace({
     setApprovals([]);
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(false);
+    setSessionReadUncertain(false);
+    lastAppliedRunSequence.current = 0;
     setSessionLoading(true);
     setSessionFailure(null);
     void adapters.session.readSession(sessionId).then((result) => {
       if (!active) return;
       if (result.state === "received" && result.session) {
         setSession(result.session);
-        const recoveredRunId = initialRunId ?? readRunRecoveryId(getRunRecoveryKey(sessionId));
+        const recoveredRunId = initialRunId ?? readRunRecoveryId(getRunRecoveryKey(principalId, sessionId));
         if (recoveredRunId) setRun(runFromRecoveredIdentity(result.session, recoveredRunId));
       } else {
         setSession(undefined);
@@ -540,7 +635,7 @@ export function ProductionConversationWorkspace({
     return () => {
       active = false;
     };
-  }, [adapters, api, initialRunId, sessionId]);
+  }, [adapters, api, initialRunId, principalId, sessionId]);
 
   useEffect(() => {
     if (!api || !adapters || !activeSessionId) return;
@@ -551,11 +646,12 @@ export function ProductionConversationWorkspace({
       if (result.state === "received" && result.session) {
         setSession(result.session);
         setSessionFailure(null);
+        setSessionReadUncertain(false);
         return;
       }
-      setSession(undefined);
-      setCommandState("unknown");
-      setSessionFailure(result.state === "unknown" ? "Session 响应结果不确定，当前不展示旧控制面板；请刷新或人工对账。" : "读取 Session 失败，请刷新后再试。");
+      if (result.state === "pending") return;
+      setSessionReadUncertain(true);
+      setSessionFailure(result.state === "unknown" ? "Session 响应结果不确定；已保留已观察事实，控制命令已暂停，请刷新或人工对账。" : "读取 Session 失败；已保留已观察事实，控制命令已暂停，请刷新后再试。");
     };
     const interval = setInterval(() => void refreshSession(), 4000);
     return () => {
@@ -576,19 +672,35 @@ export function ProductionConversationWorkspace({
         const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { connection: connectionRef.current, limit: 100 });
         if (!active) return;
         if (events.state === "received" && events.page) {
-          if (events.page.events.length > 0) setRunIdentityVerified(true);
+          const identityVerifiedByPage = events.page.events.length > 0;
+          if (identityVerifiedByPage) setRunIdentityVerified(true);
           const freshEvents = events.page.events.filter((event) => {
             const eventKey = `${activeRunId}:${event.event_id}`;
             if (seenEventIds.current.has(eventKey)) return false;
             seenEventIds.current.add(eventKey);
             return true;
-          });
+          }).sort((left, right) => left.sequence - right.sequence);
           if (freshEvents.length > 0) {
             setMessages((current) => [...current, ...freshEvents.map(eventToConversationMessage)]);
-            setRun((current) => current ? freshEvents.reduce(applyRunEvent, current) : current);
+            const stateEvents = freshEvents.filter((event) => event.sequence > lastAppliedRunSequence.current);
+            if (stateEvents.length > 0) {
+              setRun((current) => current ? stateEvents.reduce(applyRunEvent, current) : current);
+              lastAppliedRunSequence.current = Math.max(lastAppliedRunSequence.current, ...stateEvents.map((event) => event.sequence));
+            }
           }
+          lastAppliedRunSequence.current = Math.max(lastAppliedRunSequence.current, ...events.page.events.map((event) => event.sequence));
+          if (!runIdentityVerified && !identityVerifiedByPage) {
+            setApprovals([]);
+            setApprovalHistoryAvailable(false);
+            return;
+          }
+        } else if (events.state === "pending") {
+          return;
         } else if (events.state === "unknown" && events.reason !== "pending") {
           setActivityNotice("事件读取结果不确定；已保留当前事实，不会自动重试控制命令。请刷新或手动对账。");
+          setApprovals([]);
+          setApprovalHistoryAvailable(false);
+          return;
         }
 
         try {
@@ -614,36 +726,45 @@ export function ProductionConversationWorkspace({
       active = false;
       clearInterval(interval);
     };
-  }, [activeRunId, activeSessionId, adapters, api]);
+  }, [activeRunId, activeSessionId, adapters, api, runIdentityVerified]);
 
   const createSession = async (request: CreateSessionRequest) => {
     if (!api || !adapters) throw new Error("当前浏览器没有可用的会话服务");
     const response = await api.createSession({ body: request });
-    const initialRunId = response.initial_run_ack?.run_id;
-    if (initialRunId && !writeRunRecoveryId(getRunRecoveryKey(response.session.id), initialRunId)) {
+    const initialAck = response.initial_run_ack;
+    const initialRunId = initialAck?.run_id;
+    if (initialRunId && !writeRunRecoveryId(getRunRecoveryKey(principalId, response.session.id), initialRunId)) {
       throw new Error("Session 已收到但首个 Run 恢复身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
+    }
+    const initialPrompt = request.prompt?.trim() ?? "";
+    const initialRunUncertain = Boolean(initialAck && (initialAck.state === "unknown" || !initialRunId));
+    if (initialRunUncertain && initialAck && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: initialAck.command_id, prompt: initialPrompt, uncertain: true })) {
+      throw new Error("Session 已收到但首个 Run 命令身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
     adapters.session.selectSession(response.session.id);
     adapters.run.selectSession(response.session.id);
     adapters.approval.selectSession(response.session.id);
     setSession(response.session);
     setSessionFailure(null);
-    if (response.initial_run_ack) {
-      setCommandState(response.initial_run_ack.state);
-      const initialRun = runFromCommandAck(response.session, response.initial_run_ack);
+    if (initialAck) {
+      setCommandState(initialAck.state);
+      const initialRun = runFromCommandAck(response.session, initialAck);
       setRun(initialRun);
-      setRunIdentityVerified(Boolean(initialRun));
-      setActivityNotice(response.initial_run_ack.run_id ? "首条提示已收到命令确认，等待实际 Run 事件。" : "Session 已创建；首条提示已提交，但服务尚未返回 Run ID。");
+      setRunIdentityVerified(Boolean(initialRun && initialAck.state !== "unknown"));
+      setUncertainRunCommandId(initialRunUncertain ? initialAck.command_id : undefined);
+      pendingRunSubmission.current = initialRunUncertain ? { commandId: initialAck.command_id, prompt: initialPrompt } : undefined;
+      setActivityNotice(initialRunUncertain ? "首条 Run 结果不确定；已保留同一命令身份，请先完成对账。" : initialRunId ? "首条提示已收到命令确认，等待实际 Run 事件。" : "Session 已创建；首条提示已提交，但服务尚未返回 Run ID。");
+      if (!initialRunUncertain) clearStoredIntent(getRunIntentKey(principalId, response.session.id));
     } else {
       setActivityNotice("Session 已创建；当前没有首条 Run 命令确认。");
     }
-    await onSessionCreated?.(response.session.id, response.initial_run_ack?.run_id);
+    await onSessionCreated?.(response.session.id, initialRunId);
   };
 
   const send = async (prompt: string) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
-    if (!canSendControl(connection, readOnly) || sessionForRoute.state !== "active") throw new Error("当前 Session 不允许发送控制命令");
-    if (activeRun?.status === "unknown" || commandState === "unknown") {
+    if (!canSendControl(connection, effectiveReadOnly) || sessionForRoute.state !== "active") throw new Error("当前 Session 不允许发送控制命令");
+    if (sessionReadUncertain || activeRun?.status === "unknown" || commandState === "unknown") {
       setActivityNotice("当前 Run 结果不确定；请先完成对账，不能在未确认的执行上继续发送或授权。");
       return;
     }
@@ -652,14 +773,14 @@ export function ProductionConversationWorkspace({
       return;
     }
     const sessionIdForSubmit = sessionForRoute.id;
-    const intentKey = getRunIntentKey(sessionIdForSubmit);
+    const intentKey = getRunIntentKey(principalId, sessionIdForSubmit);
     const commandId = pendingRunSubmission.current?.prompt === prompt ? pendingRunSubmission.current.commandId : createCommandId("run");
     if (!writeRunIntent(intentKey, { commandId, prompt, uncertain: true })) {
       setActivityNotice("当前浏览器无法持久化 Run 命令身份；为避免未知结果下重复执行，请先恢复存储后再发送。");
       return;
     }
     pendingRunSubmission.current = { commandId, prompt };
-    const result = await adapters.run.submitRun(sessionIdForSubmit, { command_id: commandId, prompt }, { connection, readOnly });
+    const result = await adapters.run.submitRun(sessionIdForSubmit, { command_id: commandId, prompt }, { connection, readOnly: effectiveReadOnly });
     if (currentSessionIdRef.current !== sessionIdForSubmit) return;
     if (result.state === "unknown") {
       setUncertainRunCommandId(commandId);
@@ -679,7 +800,7 @@ export function ProductionConversationWorkspace({
     }
     const nextRun = result.ack ? runFromCommandAck(sessionForRoute, result.ack) : undefined;
     const previousRunId = activeRun?.id;
-    const recoveryPersisted = nextRun ? writeRunRecoveryId(getRunRecoveryKey(sessionIdForSubmit), nextRun.id) : false;
+    const recoveryPersisted = nextRun ? writeRunRecoveryId(getRunRecoveryKey(principalId, sessionIdForSubmit), nextRun.id) : false;
     const commandReconciled = Boolean(nextRun && recoveryPersisted);
     if (commandReconciled) {
       pendingRunSubmission.current = undefined;
@@ -692,6 +813,7 @@ export function ProductionConversationWorkspace({
       if (nextRun) {
         if (previousRunId && previousRunId !== nextRun.id) {
           seenEventIds.current = new Set();
+          lastAppliedRunSequence.current = 0;
           setMessages([]);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
@@ -704,7 +826,10 @@ export function ProductionConversationWorkspace({
     }
     if (commandReconciled) {
       setUncertainRunCommandId(undefined);
-      if (draftRef.current === prompt) setDraft("");
+      if (draftRef.current === prompt) {
+        setDraft("");
+        writeDraft(getDraftKey(principalId, sessionIdForSubmit), "");
+      }
       if (nextRun) void onRunCreated?.(sessionIdForSubmit, nextRun.id);
     }
   };
@@ -712,29 +837,53 @@ export function ProductionConversationWorkspace({
   const resolveApproval = async (params: ResolveApprovalParams) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
     if (!approvalHistoryAvailable) throw new Error("审批历史尚未通过当前 Run 核对，请刷新后再确认");
-    if (!runIdentityVerified || uncertainRunCommandId || activeRun?.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
-    if (sessionForRoute.state !== "active" || !canSendControl(connection, readOnly)) throw new Error("当前 Session 不允许提交审批控制命令");
+    if (!runIdentityVerified || sessionReadUncertain || uncertainRunCommandId || activeRun?.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
+    if (sessionForRoute.state !== "active" || !canSendControl(connection, effectiveReadOnly)) throw new Error("当前 Session 不允许提交审批控制命令");
     const approval = activeApprovals.find((item) => item.id === params.approval_id && item.revision === params.body.revision);
     if (!approval) throw new Error("审批修订已变化，请刷新后重新确认");
     const latestRevision = activeApprovals.filter((item) => item.id === approval.id).reduce((latest, item) => Math.max(latest, item.revision), 0);
     if (approval.revision !== latestRevision) throw new Error("审批修订已过期，请刷新后重新确认");
+    const operationKey = `approval:${approval.id}:${approval.revision}:${params.body.decision}`;
+    const controlIntentKey = getControlIntentKey(principalId, sessionForRoute.id, operationKey);
+    const storedControlIntent = readControlIntent(controlIntentKey);
+    if (storedControlIntent?.uncertain) throw new Error("审批命令结果未完成对账；请先确认服务事实，不会自动重复提交");
+    if (storedControlIntent && storedControlIntent.commandId !== params.body.command_id) throw new Error("审批命令身份已变化，请刷新后重新核对");
+    if (!writeControlIntent(controlIntentKey, { commandId: params.body.command_id, uncertain: true })) throw new Error("当前浏览器无法持久化审批命令身份；为避免未知结果下重复授权，请先恢复存储后再试");
     const result = await adapters.approval.resolve({
       approval,
       commandId: params.body.command_id,
       decision: params.body.decision,
       sessionId: sessionForRoute.id
-    }, { connection, readOnly });
+    }, { connection, readOnly: effectiveReadOnly });
     if (result.state === "failed") {
       approvalCommandIds.current.delete(`approval:${approval.id}:${approval.revision}:${params.body.decision}`);
+      clearStoredIntent(controlIntentKey);
       throw new Error("审批命令被服务拒绝；请确认当前修订后重试");
     }
-    if (result.state === "unknown") throw new Error("审批结果未被确认；请对账，不会自动重复提交");
+    if (result.state === "unknown") {
+      writeControlIntent(controlIntentKey, { commandId: params.body.command_id, uncertain: true });
+      throw new Error("审批结果未被确认；请对账，不会自动重复提交");
+    }
+    writeControlIntent(controlIntentKey, { commandId: params.body.command_id, uncertain: false });
     setActivityNotice("审批命令已收到，等待服务事件确认当前修订。");
+  };
+
+  const reconcileApproval = (approval: Approval, decision: ApprovalDecision) => {
+    if (!adapters || !sessionForRoute) return;
+    const operationKey = `approval:${approval.id}:${approval.revision}:${decision}`;
+    const controlIntentKey = getControlIntentKey(principalId, sessionForRoute.id, operationKey);
+    const intent = readControlIntent(controlIntentKey);
+    if (!intent) return;
+    adapters.approval.resolveUncertain(approval.id, approval.revision, approval.run_id, intent.commandId);
+    if (writeControlIntent(controlIntentKey, { ...intent, uncertain: false })) {
+      setControlIntentRevision((current) => current + 1);
+      setActivityNotice("已记录审批人工对账；下一次会复用同一 command_id，不会创建新的授权身份。");
+    }
   };
 
   const reconcileRunSubmission = () => {
     if (!adapters || !uncertainRunCommandId) return;
-    const intentKey = getRunIntentKey(activeSessionId);
+    const intentKey = getRunIntentKey(principalId, activeSessionId);
     const intent = readRunIntent(intentKey);
     if (adapters.run.resolveUncertainSubmit(uncertainRunCommandId) || intent?.commandId === uncertainRunCommandId) {
       setUncertainRunCommandId(undefined);
@@ -747,22 +896,46 @@ export function ProductionConversationWorkspace({
 
   const interrupt = async (request: { command_id: string; reason?: string }) => {
     if (!api || !adapters || !sessionForRoute || !activeRun) throw new Error("Run 尚未就绪");
-    if (sessionForRoute.state !== "active" || !canSendControl(connection, readOnly)) throw new Error("当前 Session 不允许提交中断控制命令");
-    if (!runIdentityVerified || uncertainRunCommandId || activeRun.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交中断控制命令");
-    const result = await adapters.run.interruptRun(sessionForRoute.id, activeRun.id, request, { connection, readOnly });
+    if (sessionForRoute.state !== "active" || !canSendControl(connection, effectiveReadOnly)) throw new Error("当前 Session 不允许提交中断控制命令");
+    const interruptOperationKey = `interrupt:${activeRun.id}`;
+    const interruptIntentKey = getControlIntentKey(principalId, sessionForRoute.id, interruptOperationKey);
+    const storedInterruptIntent = readControlIntent(interruptIntentKey);
+    if (!runIdentityVerified || sessionReadUncertain || uncertainRunCommandId || activeRun.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交中断控制命令");
+    if (storedInterruptIntent?.uncertain) throw new Error("中断命令结果未完成对账；请先确认服务事实，不会自动重复提交");
+    if (storedInterruptIntent && storedInterruptIntent.commandId !== request.command_id) throw new Error("中断命令身份已变化，请刷新后重新核对");
+    if (!writeControlIntent(interruptIntentKey, { commandId: request.command_id, uncertain: true })) throw new Error("当前浏览器无法持久化中断命令身份；为避免未知结果下重复中断，请先恢复存储后再试");
+    const result = await adapters.run.interruptRun(sessionForRoute.id, activeRun.id, request, { connection, readOnly: effectiveReadOnly });
     if (result.state === "failed") {
       approvalCommandIds.current.delete(`interrupt:${activeRun.id}`);
+      clearStoredIntent(interruptIntentKey);
       throw new Error("中断命令被服务拒绝；请重新观察 Run 状态后再试");
     }
-    if (result.state === "unknown") throw new Error("中断结果未被确认；请对账，不会自动重试");
+    if (result.state === "unknown") {
+      writeControlIntent(interruptIntentKey, { commandId: request.command_id, uncertain: true });
+      throw new Error("中断结果未被确认；请对账，不会自动重试");
+    }
+    writeControlIntent(interruptIntentKey, { commandId: request.command_id, uncertain: false });
     setCommandState(result.ack?.state);
     setActivityNotice("中断命令已收到，等待 run.interrupted 事件。");
+  };
+
+  const reconcileInterrupt = () => {
+    if (!adapters || !sessionForRoute || !activeRun) return;
+    const operationKey = `interrupt:${activeRun.id}`;
+    const controlIntentKey = getControlIntentKey(principalId, sessionForRoute.id, operationKey);
+    const intent = readControlIntent(controlIntentKey);
+    if (!intent) return;
+    adapters.run.resolveUncertainInterrupt(activeRun.id, intent.commandId);
+    if (writeControlIntent(controlIntentKey, { ...intent, uncertain: false })) {
+      setControlIntentRevision((current) => current + 1);
+      setActivityNotice("已记录中断人工对账；下一次会复用同一 command_id，不会自动重复中断。");
+    }
   };
 
   if (!sessionForRoute && !sessionId) {
     return (
       <section className="grid min-w-0 gap-5" aria-label="创建会话工作区">
-        {api ? <ProductionSessionCreationPanel conversationTitle={currentConversationTitle} existingActiveSupported={existingActiveSupported} fixedProjectId={projectId} fixedProjectName={projectName} onCreate={createSession} projectOptions={projectOptions} readOnly={readOnly} taskId={task?.id} /> : <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-5 text-sm text-[var(--muted)]"><h2 className="text-base font-semibold text-[var(--ink)]">会话服务不可用</h2><p>当前浏览器没有已认证的生产 API，不能创建 Session。</p></div>}
+        {api ? <ProductionSessionCreationPanel conversationTitle={currentConversationTitle} existingActiveSupported={existingActiveSupported} fixedProjectId={projectId} fixedProjectName={projectName} onCreate={createSession} principalId={principalId} projectOptions={projectOptions} readOnly={effectiveReadOnly} taskId={task?.id} /> : <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-5 text-sm text-[var(--muted)]"><h2 className="text-base font-semibold text-[var(--ink)]">会话服务不可用</h2><p>当前浏览器没有已认证的生产 API，不能创建 Session。</p></div>}
       </section>
     );
   }
@@ -780,7 +953,7 @@ export function ProductionConversationWorkspace({
       <SessionContextSummary connection={connection} context={context} />
       {activityNotice ? <div className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{activityNotice}</span>{uncertainRunCommandId ? <Button type="button" variant="secondary" onClick={reconcileRunSubmission}>我已对账，复用命令重试</Button> : null}</div> : null}
       <ConversationMessageStream connection={connection} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" messages={messages} />
-      {activeRun ? <RunStatusCard canControl={Boolean(api) && runIdentityVerified && !uncertainRunCommandId && activeRun.status !== "unknown" && commandState !== "unknown" && sessionForRoute.state === "active"} commandState={commandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current)} onInterrupt={interrupt} readOnly={readOnly} run={activeRun} session={sessionForRoute} /> : null}
+      {activeRun ? <RunStatusCard canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}
       {activeApprovals.map((approval) => {
         const approvalContext = approvalContextFromApproval(approval);
         const request: ApprovalRequestModel = {
@@ -798,27 +971,38 @@ export function ProductionConversationWorkspace({
           }
         };
         const latestRevision = activeApprovals.filter((candidate) => candidate.id === approval.id).reduce((latest, candidate) => Math.max(latest, candidate.revision), 0);
-        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current) }} connection={connection} canResolve={runIdentityVerified && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && commandState !== "unknown" && approval.revision === latestRevision} onResolve={resolveApproval} readOnly={readOnly} request={request} />;
+        const recoveryDecision = uncertainApprovalDecision(principalId, sessionForRoute.id, approval);
+        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || activeRun?.status === "unknown" || commandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={setDraft} onSend={send} readOnly={readOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || sessionReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { setDraft(value); writeDraft(draftKey, value); }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );
 }
 
-function createCommandIdForRun(runId: string, cache: Map<string, string>): string {
+function createCommandIdForRun(runId: string, cache: Map<string, string>, principalId: string | undefined, sessionId: string): string {
   const key = `interrupt:${runId}`;
   const existing = cache.get(key);
   if (existing) return existing;
+  const persisted = readControlIntent(getControlIntentKey(principalId, sessionId, key));
+  if (persisted) {
+    cache.set(key, persisted.commandId);
+    return persisted.commandId;
+  }
   const commandId = createCommandId("interrupt");
   cache.set(key, commandId);
   return commandId;
 }
 
-function commandIdForApproval(approval: Approval, decision: ApprovalDecision, cache: Map<string, string>): string {
+function commandIdForApproval(approval: Approval, decision: ApprovalDecision, cache: Map<string, string>, principalId: string | undefined, sessionId: string): string {
   const key = `approval:${approval.id}:${approval.revision}:${decision}`;
   const existing = cache.get(key);
   if (existing) return existing;
+  const persisted = readControlIntent(getControlIntentKey(principalId, sessionId, key));
+  if (persisted) {
+    cache.set(key, persisted.commandId);
+    return persisted.commandId;
+  }
   const commandId = createCommandId(`approval-${decision}`);
   cache.set(key, commandId);
   return commandId;

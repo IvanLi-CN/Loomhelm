@@ -8,6 +8,7 @@ const meta = {
   component: ProductionSessionCreationPanel,
   args: {
     onCreate: fn(),
+    principalId: "storybook",
     projectOptions: [
       { id: "loomhelm", name: "Loomhelm" },
       { id: "codex", name: "Codex 兼容性" }
