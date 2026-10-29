@@ -41,13 +41,8 @@ type Config struct {
 	ConnectorToken            string
 	ConnectorJournalPath      string
 	ConnectorAppServerCommand string
-	// ConnectorAppServerArgs and ConnectorAppServerEnv are programmatic-only
-	// overrides for an isolated host-owned app-server process. LoadConfig leaves
-	// them empty so normal Connector startup keeps the default command contract.
-	ConnectorAppServerArgs []string
-	ConnectorAppServerEnv  []string
-	ConnectorWorkingDir    string
-	BrowserAuth            BrowserAuthConfig
+	ConnectorWorkingDir       string
+	BrowserAuth               BrowserAuthConfig
 }
 
 // DatabaseConfig is shared by processes and database-only tools so their
