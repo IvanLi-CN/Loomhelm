@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -40,6 +41,8 @@ const (
 	maxMCPBatchRequests                 = 2
 	defaultMCPAdmissionWait             = 5 * time.Second
 	defaultRequestBodyReadTimeout       = 15 * time.Second
+	maxToolErrorMessageBytes            = 160
+	maxToolErrorRequestIDBytes          = 64
 )
 
 var (
@@ -305,6 +308,9 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 			}
 			return toolError(response.status, decodeAPIError(response.status, response.body)), nil
 		}
+		if !validToolResponse(spec.operationID, response.body) {
+			return unknownOutcomeResult(), nil
+		}
 		result, err := toolSuccess(response.body)
 		if err != nil {
 			if spec.route.method != http.MethodGet {
@@ -326,6 +332,14 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 		}
 		return result, nil
 	}
+}
+
+func validToolResponse(operationID string, body []byte) bool {
+	if operationID != "createUserCredential" {
+		return true
+	}
+	var response protocol.CreateUserCredentialResponse
+	return json.Unmarshal(body, &response) == nil && strings.TrimSpace(response.Credential.Token) != ""
 }
 
 func unknownOutcomeResult() *sdk.CallToolResult {
@@ -493,12 +507,26 @@ func toolError(status int, apiError protocol.ApiError) *sdk.CallToolResult {
 	if apiError.Message == "" {
 		apiError.Message = messageForHTTP(status)
 	}
+	apiError.Details = nil
+	apiError.Message = truncateUTF8(apiError.Message, maxToolErrorMessageBytes)
+	apiError.RequestID = truncateUTF8(apiError.RequestID, maxToolErrorRequestIDBytes)
 	data, _ := json.Marshal(map[string]any{"http_status": status, "error": apiError})
 	return &sdk.CallToolResult{
 		Content:           []sdk.Content{&sdk.TextContent{Text: string(data)}},
 		StructuredContent: json.RawMessage(data),
 		IsError:           true,
 	}
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	value = value[:maxBytes]
+	for len(value) > 0 && !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func normalizeProtocols(values []string) ([]string, error) {

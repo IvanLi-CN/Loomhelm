@@ -382,6 +382,46 @@ func TestServerReportsMutationServerFailureAsUnknown(t *testing.T) {
 	}
 }
 
+func TestServerReportsMalformedCredentialSuccessAsUnknown(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty":         "",
+		"null":          "null",
+		"missing_token": `{"credential":{"id":"credential-1","name":"automation"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+				writer.WriteHeader(http.StatusCreated)
+				_, _ = writer.Write([]byte(body))
+			})
+
+			response := callMCP(t, server, map[string]any{
+				"jsonrpc": "2.0",
+				"id":      23,
+				"method":  "tools/call",
+				"params": map[string]any{
+					"name": "loomhelm.create_user_credential",
+					"arguments": map[string]any{
+						"name": "automation",
+					},
+				},
+			})
+			var result struct {
+				StructuredContent struct {
+					HTTPStatus int `json:"http_status"`
+					Error      struct {
+						Code protocol.ErrorCode `json:"code"`
+					} `json:"error"`
+				} `json:"structuredContent"`
+				IsError bool `json:"isError"`
+			}
+			decodeResult(t, response, &result)
+			if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
+				t.Fatalf("malformed credential success = %#v, want unknown outcome", result)
+			}
+		})
+	}
+}
+
 func TestServerReportsOversizedReadResponseAsServiceFailure(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -554,7 +594,10 @@ func TestServerPreservesUnknownOutcomeForBoundedLegacyBatch(t *testing.T) {
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			calls.Add(1)
 			writer.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(writer).Encode(protocol.ApiError{Message: "credential transaction failed"})
+			_ = json.NewEncoder(writer).Encode(protocol.ApiError{
+				Message:   "credential transaction failed",
+				RequestID: strings.Repeat("r", 10000),
+			})
 		}),
 		MaxResponseBytes: 2048,
 	})

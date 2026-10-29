@@ -24,6 +24,7 @@ type routeSpec struct {
 }
 
 type toolSpec struct {
+	operationID string
 	name        string
 	description string
 	route       routeSpec
@@ -47,6 +48,7 @@ func toolSpecFor(operationID string) (toolSpec, bool) {
 	}
 	route.inputSchema, route.required, route.allowed = schemaForOperation(operationID)
 	return toolSpec{
+		operationID: operationID,
 		route:       route,
 		inputSchema: route.inputSchema,
 		required:    route.required,
