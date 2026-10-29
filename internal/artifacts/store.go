@@ -134,6 +134,37 @@ func (r *contentReader) contentVersion() string {
 	return r.version
 }
 
+// Read and Seek enforce the same file-incarnation check for the unbounded
+// browser download path that the bounded content endpoint performs around
+// every chunk. A rename leaves this descriptor on the original immutable
+// object; an in-place mutation is rejected before its bytes can be emitted.
+func (r *contentReader) Read(buffer []byte) (int, error) {
+	if err := r.verifyContentVersion(context.Background()); err != nil {
+		return 0, err
+	}
+	n, err := r.File.Read(buffer)
+	if n > 0 {
+		if versionErr := r.verifyContentVersion(context.Background()); versionErr != nil {
+			return 0, versionErr
+		}
+	}
+	return n, err
+}
+
+func (r *contentReader) Seek(offset int64, whence int) (int64, error) {
+	if err := r.verifyContentVersion(context.Background()); err != nil {
+		return 0, err
+	}
+	position, err := r.File.Seek(offset, whence)
+	if err != nil {
+		return position, err
+	}
+	if err := r.verifyContentVersion(context.Background()); err != nil {
+		return 0, err
+	}
+	return position, nil
+}
+
 func (r *contentReader) verifyContentVersion(ctx context.Context) error {
 	if r == nil || r.File == nil {
 		return ErrStoreUnavailable
@@ -160,6 +191,12 @@ func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Art
 	}
 	if err := verifyFile(ctx, r.File, artifact); err != nil {
 		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
+			// A transient in-place mutation must be reported as a cursor conflict,
+			// not persisted as a permanent unavailable state. Recheck the file
+			// incarnation before classifying the bytes as a durable mismatch.
+			if versionErr := r.verifyContentVersion(ctx); versionErr != nil {
+				return versionErr
+			}
 			if markErr := r.store.markReadyObjectUnavailable(ctx, r.id, "final-mismatch"); markErr != nil {
 				return markErr
 			}
@@ -483,7 +520,7 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 	if !verify {
 		return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: version}, nil
 	}
-	return record.Artifact, file, nil
+	return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: version}, nil
 }
 
 func (s *Store) authorize(ctx context.Context, operation Operation, artifact protocol.Artifact) error {

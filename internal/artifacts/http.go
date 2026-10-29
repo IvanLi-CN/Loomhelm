@@ -70,6 +70,13 @@ func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErr
 	return &DownloadHTTPHandler{store: store, writeError: writeError}, nil
 }
 
+// SafeDownloadFilename returns the filename representation suitable for
+// owner-facing artifact metadata and download headers. Legacy records are
+// sanitized at read time as well as new names being rejected at write time.
+func SafeDownloadFilename(name string) string {
+	return safeDownloadFilename(name)
+}
+
 func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if h == nil || h.store == nil {
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
@@ -210,6 +217,7 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		TotalSize:      artifact.Size,
 		Complete:       nextOffset == artifact.Size,
 	}
+	response.Artifact.Name = safeDownloadFilename(response.Artifact.Name)
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")

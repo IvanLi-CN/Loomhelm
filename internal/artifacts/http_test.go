@@ -65,6 +65,31 @@ func TestDownloadHTTPHandlerStreamsVerifiedBytesWithSafeHeaders(t *testing.T) {
 	}
 }
 
+func TestContentResponseSanitizesLegacyArtifactNames(t *testing.T) {
+	content := []byte("legacy content")
+	store := &contentHTTPArtifactStoreStub{
+		httpArtifactStoreStub: httpArtifactStoreStub{
+			artifact: protocol.Artifact{ID: "artifact-legacy-name", Name: "../report\u202Etxt.txt", Size: int64(len(content))},
+			reader:   writeArtifactReader(t, content),
+		},
+	}
+	handler, err := NewDownloadHTTPHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-legacy-name/content", nil))
+	var payload protocol.ArtifactContentResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(payload.Artifact.Name, "/\\") || strings.ContainsRune(payload.Artifact.Name, '\u202E') {
+		t.Fatalf("content response retained unsafe legacy name: %q", payload.Artifact.Name)
+	}
+}
+
 func TestContentDispositionRemovesBidiControls(t *testing.T) {
 	disposition := contentDisposition("report\u202Etxt.txt")
 	if strings.ContainsRune(disposition, '\u202E') || strings.Contains(disposition, "%E2%80%AE") {
@@ -227,6 +252,9 @@ func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := reader.Read(make([]byte, 4)); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("in-place content read error = %v, want ErrContentChanged", err)
 	}
 	if err := reader.verifyContentVersion(context.Background()); !errors.Is(err, ErrContentChanged) {
 		t.Fatalf("in-place content change error = %v, want ErrContentChanged", err)
