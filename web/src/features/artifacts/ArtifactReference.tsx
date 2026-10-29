@@ -1,5 +1,5 @@
 import { AlertTriangle, Download, FileArchive, FileCode2, FileText, LoaderCircle, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { Artifact } from "@loomhelm/protocol";
 
@@ -38,16 +38,28 @@ export function ArtifactReference({
   artifactId,
   loadMetadata,
   download,
+  loaderKey = "default",
   className = ""
 }: {
   artifactId: string;
   loadMetadata: ArtifactMetadataLoader;
   download?: ArtifactDownloader;
+  loaderKey?: string;
   className?: string;
 }) {
   const [retryKey, setRetryKey] = useState(0);
   const [downloadState, setDownloadState] = useState<DownloadState>({ artifactId, status: "idle" });
-  const metadata = useArtifactMetadata(artifactId, loadMetadata, retryKey);
+  const metadata = useArtifactMetadata(artifactId, loadMetadata, retryKey, loaderKey);
+  const downloadControllerRef = useRef<AbortController | null>(null);
+  const downloadEpochRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      downloadEpochRef.current += 1;
+      downloadControllerRef.current?.abort();
+      downloadControllerRef.current = null;
+    };
+  }, [artifactId, metadata.requestKey]);
 
   if (metadata.status === "idle" || metadata.status === "loading") {
     return <div className={`grid gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)] ${className}`} role="status" aria-live="polite" aria-busy="true"><span className="inline-flex items-center gap-2"><LoaderCircle className="animate-spin" size={16} aria-hidden="true" />正在读取授权产物…</span><span className="text-xs">文件仍留在对话上下文中，读取不会扩大权限范围。</span></div>;
@@ -62,14 +74,33 @@ export function ArtifactReference({
   const handleDownload = async () => {
     if (!download || currentDownloadState.status === "pending") return;
     const controller = new AbortController();
+    const epoch = downloadEpochRef.current;
+    downloadControllerRef.current?.abort();
+    downloadControllerRef.current = controller;
     setDownloadState({ artifactId: artifact.id, status: "pending" });
     try {
       await download({ artifact, signal: controller.signal });
-      setDownloadState((current) => current.artifactId === artifact.id ? { artifactId: artifact.id, status: "completed" } : current);
+      if (downloadEpochRef.current === epoch && downloadControllerRef.current === controller) {
+        setDownloadState((current) => current.artifactId === artifact.id ? { artifactId: artifact.id, status: "completed" } : current);
+      }
     } catch {
-      setDownloadState((current) => current.artifactId === artifact.id ? { artifactId: artifact.id, status: "error" } : current);
+      if (downloadEpochRef.current === epoch && downloadControllerRef.current === controller) {
+        setDownloadState((current) => current.artifactId === artifact.id ? { artifactId: artifact.id, status: "error" } : current);
+      }
+    } finally {
+      if (downloadControllerRef.current === controller) downloadControllerRef.current = null;
     }
   };
+
+  const downloadStatus = !download
+    ? "文件暂不可下载。"
+    : currentDownloadState.status === "pending"
+      ? "正在准备下载…"
+      : currentDownloadState.status === "error"
+        ? "下载失败，请重试。"
+        : currentDownloadState.status === "completed"
+          ? "下载请求已完成。"
+          : "仅在当前授权范围内读取。";
 
   return (
     <article className={`grid gap-4 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 text-[var(--ink)] shadow-[var(--shadow)] ${className}`} aria-label={`对话产物：${artifact.name}`}>
@@ -88,13 +119,11 @@ export function ArtifactReference({
         <dt className="text-[var(--muted)]">产物身份</dt><dd className="break-all font-mono text-[var(--ink)]">{artifact.id}</dd>
       </dl>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60" onClick={() => void handleDownload()} disabled={!download || currentDownloadState.status === "pending"} title={!download ? "文件暂不可下载" : undefined}>
+        <button type="button" className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60" onClick={() => void handleDownload()} disabled={!download || currentDownloadState.status === "pending"} aria-busy={currentDownloadState.status === "pending"} title={!download ? "文件暂不可下载" : undefined}>
           {currentDownloadState.status === "pending" ? <LoaderCircle className="animate-spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
           {currentDownloadState.status === "pending" ? "准备下载…" : currentDownloadState.status === "completed" ? "已请求下载" : "下载文件"}
         </button>
-        <span className="text-xs text-[var(--muted)]" aria-live="polite">
-          {!download ? "文件暂不可下载。" : currentDownloadState.status === "error" ? "下载失败，请重试。" : currentDownloadState.status === "completed" ? "下载请求已完成。" : "仅在当前授权范围内读取。"}
-        </span>
+        <span className="text-xs text-[var(--muted)]" role="status" aria-live="polite" aria-atomic="true">{downloadStatus}</span>
       </div>
     </article>
   );

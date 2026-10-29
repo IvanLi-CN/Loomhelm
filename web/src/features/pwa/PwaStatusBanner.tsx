@@ -5,6 +5,7 @@ export function PwaStatusBanner({
   updateAvailable,
   updateApplied = false,
   updating,
+  updateError = false,
   registrationError,
   onApplyUpdate,
   placement = "fixed"
@@ -13,6 +14,7 @@ export function PwaStatusBanner({
   updateAvailable: boolean;
   updateApplied?: boolean;
   updating: boolean;
+  updateError?: boolean;
   registrationError: boolean;
   onApplyUpdate: () => void;
   placement?: "fixed" | "inline";
@@ -32,7 +34,14 @@ export function PwaStatusBanner({
   }
 
   if (updateAvailable) {
-    return <div className={`${positionClass} flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 text-[var(--ink)] shadow-[var(--shadow)]`} role="status" aria-live="polite"><Download className="shrink-0 text-[var(--accent)]" size={18} aria-hidden="true" /><div className="grid min-w-0 flex-1 gap-1"><strong className="text-sm">有可用更新</strong><span className="text-xs leading-5 text-[var(--muted)]">应用更新不会强制重载当前页面；最新资源会在下次导航加载，未提交草稿不会被主动清空。</span></div><button type="button" className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-3 text-sm font-semibold text-[var(--accent-ink)] disabled:cursor-wait disabled:opacity-70" onClick={onApplyUpdate} disabled={updating}>{updating && <LoaderCircle className="animate-spin" size={15} aria-hidden="true" />}{updating ? "更新中…" : "应用更新"}</button></div>;
+    const title = updateError ? "更新未完成" : updating ? "正在等待更新生效" : "有可用更新";
+    const description = updateError
+      ? "更新请求未完成；当前页面继续使用，未提交草稿不会被主动清空。"
+      : updating
+        ? "正在等待新资源接管；当前页面不会被强制重载，未提交草稿不会被主动清空。"
+        : "应用更新不会强制重载当前页面；最新资源会在下次导航加载，未提交草稿不会被主动清空。";
+    const buttonLabel = updating ? "等待更新生效…" : updateError ? "重试更新" : "应用更新";
+    return <div className={`${positionClass} flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 text-[var(--ink)] shadow-[var(--shadow)]`} role="status" aria-live="polite"><Download className="shrink-0 text-[var(--accent)]" size={18} aria-hidden="true" /><div className="grid min-w-0 flex-1 gap-1"><strong className="text-sm">{title}</strong><span className="text-xs leading-5 text-[var(--muted)]">{description}</span></div><button type="button" className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-3 text-sm font-semibold text-[var(--accent-ink)] disabled:cursor-wait disabled:opacity-70" onClick={onApplyUpdate} disabled={updating} aria-busy={updating}>{updating && <LoaderCircle className="animate-spin" size={15} aria-hidden="true" />}{buttonLabel}</button></div>;
   }
 
   return null;

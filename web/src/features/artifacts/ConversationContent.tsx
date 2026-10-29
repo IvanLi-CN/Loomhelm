@@ -2,7 +2,7 @@ import { Braces, CircleHelp, CircleUserRound, Code2, LoaderCircle, Wrench } from
 import type { ReactNode } from "react";
 
 import type { ConversationContent, ConversationEvent, MessageContent, ToolContent, ToolStatus } from "./content";
-import { classifyConversationEvent } from "./content";
+import { classifyConversationEvent, inspectableRawPayload } from "./content";
 
 const toolStatusLabels: Record<ToolStatus, string> = {
   pending: "等待开始",
@@ -45,7 +45,7 @@ function ToolBlock({ content }: { content: ToolContent }) {
     <div className="grid gap-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <strong className="break-all text-sm font-semibold">{content.name}</strong>
-        <span className="rounded-full bg-[var(--selected)] px-2 py-1 text-xs font-medium text-[var(--ink)]">{statusLabel}</span>
+        <span className="rounded-full bg-[var(--selected)] px-2 py-1 text-xs font-medium text-[var(--ink)]" role="status" aria-live="polite" aria-atomic="true">{statusLabel}</span>
       </div>
       {content.summary && <p className="break-words text-xs leading-6 text-[var(--muted)]">{content.summary}</p>}
     </div>
@@ -60,7 +60,8 @@ function UnknownBlock({ content }: { content: Extract<ConversationContent, { kin
       <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold">查看原始字段（不会执行）</summary>
       <div className="mt-3 grid gap-2 text-[var(--muted)]">
         <span>类型：{content.label}</span>
-        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words text-[var(--ink)]">{JSON.stringify(content.raw, null, 2)}</pre>
+        <span className="text-[var(--muted)]">原始事件保留在授权上下文中；此处仅隐藏凭据和绝对路径，内容不会执行。</span>
+        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words text-[var(--ink)]">{JSON.stringify(inspectableRawPayload(content.raw), null, 2)}</pre>
       </div>
     </details>
   );

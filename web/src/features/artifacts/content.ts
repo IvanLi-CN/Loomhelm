@@ -40,6 +40,50 @@ export type ConversationContent = MessageContent | CodeContent | ToolContent | U
 
 type JsonRecord = { readonly [key: string]: JsonValue };
 
+const sensitiveFieldNames = new Set([
+  "accesskey",
+  "apikey",
+  "authorization",
+  "cookie",
+  "credential",
+  "password",
+  "privatekey",
+  "secret",
+  "token"
+]);
+
+const privatePathFieldNames = new Set(["cwd", "filepath", "grantroot", "path", "root", "workspace"]);
+
+function normalizedFieldName(value: string): string {
+  return value.toLowerCase().replaceAll("_", "").replaceAll("-", "");
+}
+
+function isSensitiveField(value: string): boolean {
+  const normalized = normalizedFieldName(value);
+  return sensitiveFieldNames.has(normalized) || [...sensitiveFieldNames].some((name) => normalized.endsWith(name));
+}
+
+function isPrivatePath(value: string): boolean {
+  return value.startsWith("~") || /^\\\\/.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\/(?:Users|home|private|root|tmp|var)(?:\/|$)/i.test(value);
+}
+
+function redactInspectableValue(value: JsonValue, fieldName?: string): JsonValue {
+  if (fieldName && isSensitiveField(fieldName)) return "[已隐藏]";
+  if (typeof value === "string") {
+    return fieldName && privatePathFieldNames.has(normalizedFieldName(fieldName)) && isPrivatePath(value) ? "[路径已隐藏]" : value;
+  }
+  if (Array.isArray(value)) return value.map((item) => redactInspectableValue(item));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactInspectableValue(item, key)]));
+  }
+  return value;
+}
+
+/** Preserve the lossless event in `raw`; only the user-facing inspection view is projected safely. */
+export function inspectableRawPayload(raw: JsonValue): JsonValue {
+  return redactInspectableValue(raw);
+}
+
 function asRecord(value: JsonValue | undefined): JsonRecord | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 }
@@ -56,8 +100,8 @@ function firstString(...values: Array<JsonValue | undefined>): string | undefine
   return undefined;
 }
 
-function asNestedItem(payload: JsonRecord): JsonRecord {
-  return asRecord(payload.item) ?? asRecord(payload.content) ?? payload;
+function asNestedItem(payload: JsonRecord, params: JsonRecord): JsonRecord {
+  return asRecord(params.item) ?? asRecord(payload.item) ?? asRecord(params.content) ?? asRecord(payload.content) ?? payload;
 }
 
 function isToolType(value: string | undefined): boolean {
@@ -69,12 +113,15 @@ function isCodeType(value: string | undefined): boolean {
   return value === "code" || value === "codeBlock" || value === "source";
 }
 
-function readToolStatus(value: JsonValue | undefined, eventType: Event["type"]): ToolStatus {
+function readToolStatus(value: JsonValue | undefined, eventType: Event["type"], method?: string): ToolStatus {
   const status = asString(value);
   if (status === "pending" || status === "queued") return "pending";
   if (status === "running" || status === "inProgress" || status === "started") return "running";
   if (status === "completed" || status === "succeeded" || status === "finished") return "completed";
   if (status === "failed" || status === "error" || status === "declined") return "failed";
+  if (method?.endsWith("/outputDelta")) return "running";
+  if (method === "item/started") return "running";
+  if (method === "item/completed") return "completed";
   if (eventType === "item.started") return "running";
   if (eventType === "item.completed") return "completed";
   return "unknown";
@@ -82,47 +129,53 @@ function readToolStatus(value: JsonValue | undefined, eventType: Event["type"]):
 
 export function classifyConversationEvent(event: ConversationEvent): ConversationContent {
   const payload = asRecord(event.payload) ?? {};
-  const item = asNestedItem(payload);
-  const itemType = firstString(item.type, payload.kind);
+  const params = asRecord(payload.params) ?? {};
+  const method = firstString(payload.method, payload.event);
+  const item = asNestedItem(payload, params);
+  const itemType = firstString(item.type, params.kind, payload.kind);
   const eventId = event.event_id;
 
   const messageText = firstString(
     item.text,
     item.delta,
     item.message,
+    params.text,
+    params.delta,
+    params.message,
     payload.text,
     payload.delta,
     payload.message
   );
-  const isMessage = event.type === "message.delta" || itemType === "agentMessage" || itemType === "userMessage" || itemType === "message";
+  const isToolMethod = Boolean(method && (method.includes("commandExecution") || method.includes("mcpTool") || method.includes("dynamicTool") || method.includes("collabTool") || method === "item/tool/call"));
+  const isMessage = !isToolMethod && (event.type === "message.delta" || method === "item/agentMessage/delta" || itemType === "agentMessage" || itemType === "userMessage" || itemType === "message");
   if (isMessage && messageText) {
-    const roleValue = firstString(item.role, payload.role);
+    const roleValue = firstString(item.role, params.role, payload.role);
     const role = roleValue === "user" || roleValue === "system" ? roleValue : "assistant";
     return { eventId, eventType: event.type, kind: "message", role, text: messageText, raw: event.payload };
   }
 
-  const code = firstString(item.code, payload.code, item.source, payload.source);
-  if (code && (isCodeType(itemType) || item.language !== undefined || payload.language !== undefined)) {
+  const code = firstString(item.code, item.source, params.code, params.source, payload.code, payload.source);
+  if (code && (isCodeType(itemType) || item.language !== undefined || params.language !== undefined || payload.language !== undefined)) {
     return {
       eventId,
       eventType: event.type,
       kind: "code",
       code,
-      language: firstString(item.language, payload.language),
-      filename: firstString(item.filename, item.path, payload.filename, payload.path),
+      language: firstString(item.language, params.language, payload.language),
+      filename: firstString(item.filename, item.path, params.filename, params.path, payload.filename, payload.path),
       raw: event.payload
     };
   }
 
-  const isTool = isToolType(itemType);
+  const isTool = isToolType(itemType) || isToolMethod;
   if (isTool) {
     return {
       eventId,
       eventType: event.type,
       kind: "tool",
-      name: firstString(item.tool, item.name, item.command, payload.tool, payload.name, itemType) ?? "未命名工具",
-      status: readToolStatus(item.status ?? payload.status, event.type),
-      summary: firstString(item.summary, item.description, payload.summary),
+      name: firstString(item.tool, item.name, item.command, params.tool, params.name, payload.tool, payload.name, itemType, method) ?? "未命名工具",
+      status: readToolStatus(item.status ?? params.status ?? payload.status, event.type, method),
+      summary: firstString(item.summary, item.description, params.summary, isToolMethod ? params.delta : undefined, payload.summary),
       raw: event.payload
     };
   }
@@ -131,7 +184,7 @@ export function classifyConversationEvent(event: ConversationEvent): Conversatio
     eventId,
     eventType: event.type,
     kind: "unknown",
-    label: itemType ?? event.type,
+    label: itemType ?? method ?? event.type,
     itemType,
     raw: event.payload
   };

@@ -35,14 +35,19 @@ const applyUpdate = fn();
 
 function RuntimeHarness({ register }: { register: PwaRegister }) {
   const runtime = usePwaRuntime(register);
-  return <PwaStatusBanner placement="inline" isOnline={runtime.isOnline} updateAvailable={runtime.updateAvailable} updateApplied={runtime.updateApplied} updating={runtime.updating} registrationError={runtime.registrationError} onApplyUpdate={() => void runtime.applyUpdate()} />;
+  return <PwaStatusBanner placement="inline" isOnline={runtime.isOnline} updateAvailable={runtime.updateAvailable} updateApplied={runtime.updateApplied} updating={runtime.updating} updateError={runtime.updateError} registrationError={runtime.registrationError} onApplyUpdate={() => void runtime.applyUpdate()} />;
 }
 
 const runtimeRegister: PwaRegister = (options) => {
   options.onNeedRefresh?.();
   return async () => {
-    options.onNeedReload?.();
+    setTimeout(() => options.onNeedReload?.(), 25);
   };
+};
+
+const waitingRuntimeRegister: PwaRegister = (options) => {
+  options.onNeedRefresh?.();
+  return async () => undefined;
 };
 
 const failingRuntimeRegister: PwaRegister = (options) => {
@@ -82,8 +87,19 @@ export const RuntimeUpdateFlow: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByRole("button", { name: "应用更新" }));
+    expect(canvas.getByRole("button", { name: "等待更新生效…" })).toBeDisabled();
     expect(await canvas.findByRole("status")).toHaveTextContent("更新已准备");
-    expect(canvas.queryByRole("button", { name: "应用更新" })).not.toBeInTheDocument();
+    expect(canvas.queryByRole("button", { name: "等待更新生效…" })).not.toBeInTheDocument();
+  }
+};
+
+export const RuntimeUpdateWaiting: Story = {
+  render: () => <Surface><RuntimeHarness register={waitingRuntimeRegister} /></Surface>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "应用更新" }));
+    expect(canvas.getByRole("status")).toHaveTextContent("正在等待更新生效");
+    expect(canvas.getByRole("button", { name: "等待更新生效…" })).toBeDisabled();
   }
 };
 
@@ -92,8 +108,8 @@ export const RuntimeUpdateFailure: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByRole("button", { name: "应用更新" }));
-    expect(await canvas.findByRole("status")).toHaveTextContent("离线更新服务暂不可用");
-    expect(canvas.queryByRole("button", { name: "应用更新" })).not.toBeInTheDocument();
+    expect(await canvas.findByRole("status")).toHaveTextContent("更新未完成");
+    expect(canvas.getByRole("button", { name: "重试更新" })).toBeEnabled();
   }
 };
 
