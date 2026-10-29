@@ -509,6 +509,69 @@ func TestServerDelegatesArtifactContentChunksAsStructuredOriginalBytes(t *testin
 	}
 }
 
+func TestServerDelegatesArtifactContentChunksForOlderProtocolAsText(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+	})
+	response := callMCPWithHeaders(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      17,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+				"offset":      0,
+				"limit":       4,
+			},
+		},
+	}, map[string]string{"Mcp-Protocol-Version": OlderProtocolVersion})
+	var result struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	decodeResult(t, response, &result)
+	want := `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`
+	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != want || len(result.StructuredContent) != 0 {
+		t.Fatalf("legacy artifact content tool result = %#v, want complete JSON text without structuredContent", result)
+	}
+}
+
+func TestArtifactContentToolSuccessPreservesLegacyTextContent(t *testing.T) {
+	body := []byte(`{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+	legacy, err := artifactContentToolSuccess(body, OlderProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyWire, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyResult struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(legacyWire, &legacyResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(legacyResult.Content) != 1 || legacyResult.Content[0].Text != string(body) || len(legacyResult.StructuredContent) != 0 {
+		t.Fatalf("legacy artifact content result = %s, want JSON text without structuredContent", legacyWire)
+	}
+	modern, err := artifactContentToolSuccess(body, ProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modern.StructuredContent == nil {
+		t.Fatal("modern artifact content result omitted structuredContent")
+	}
+}
+
 func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *testing.T) {
 	content := []byte{0, 1, 2, 255}
 	digest := sha256.Sum256(content)

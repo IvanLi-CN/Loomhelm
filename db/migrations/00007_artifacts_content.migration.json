@@ -10,7 +10,7 @@
     "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object and its filesystem incarnation, its staging recovery retry deadline and ready-row reclamation marker, the per-name cleanup debt for known-unreferenced staging objects, optionally retaining a filesystem incarnation when one is available, and the reason for an unavailable publication.",
     "staging_recovery": {
       "pending_row": "A pending row that encounters a transient recovery failure remains pending but receives a bounded retry deadline, so one failing identity cannot occupy every later recovery batch.",
-      "ready_row": "A ready row records the staging filesystem incarnation and records staging_reclaimed_at only after the matching staging object is removed and the containing directory is synced; a replaced or already-missing incarnation is preserved and the marker is advanced without deleting the replacement, while failed reclamation records a bounded retry deferral.",
+      "ready_row": "A ready row records the staging filesystem incarnation and records staging_reclaimed_at only after the matching staging object is removed and the containing directory is synced; a replaced or already-missing incarnation is preserved and the marker is advanced without deleting the replacement, while failed reclamation records a bounded retry deferral. A content transfer that detects a stable final-object mismatch records a recoverable content-mismatch quarantine and retains the staging bytes until revalidation succeeds or the bounded recovery retry remains pending.",
       "unknown_identity_ready_row": "When a ready row has no recorded staging incarnation but a staging path still exists, recovery preserves that diagnostic file, syncs the directory, and advances staging_reclaimed_at without deleting the unknown object; any cleanup debt for the same name is retired as diagnostic debt without deleting the current file. This intentional retention removes the row from ready reclamation but leaves the bytes for diagnosis.",
       "unreferenced_cleanup": "A caller-owned staging object whose database outcome is confirmed and whose name is proven absent from active publication rows may be recorded as cleanup debt before removal; recovery retries the exact name only when its recorded filesystem incarnation still matches, while a replaced object is preserved and the debt is deferred until an explicit enqueue refreshes the recorded incarnation. A pre-intent Put cancelled before its rejection cleanup transaction commits retains unconfirmed staging bytes for diagnosis without cleanup debt; if that transaction commits first, the resulting per-name debt is recoverable. An unauthorized pre-intent Put records debt only when the exact staging incarnation is known.",
       "pre_intent_crash": "A staging object without a committed intent is retained for diagnosis because recovery cannot prove that an active uploader is not still using it; it is not referenced by publication queries or identity coordination."
@@ -49,6 +49,11 @@
       {
         "reason": "final-mismatch",
         "meaning": "A previously ready final object fails the retained size or SHA-256 metadata.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "content-mismatch",
+        "meaning": "A bounded content transfer observes a retained size or SHA-256 mismatch after confirming that the final file incarnation did not change; recovery revalidates the final object and restores ready only after valid bytes are observed.",
         "identical_retry_repairable": false
       }
     ],
@@ -90,7 +95,7 @@
     ],
     "progress_signals": [
       "Goose records migration 00007 before artifact metadata is read or written.",
-      "A successful upload reports the persisted metadata only after a pending intent is committed, final bytes are hashed, synced, linked without overwrite, final bytes are revalidated, marked ready and its staging object is durably reclaimed.",
+      "A successful upload reports the persisted metadata only after a pending intent is committed, final bytes are hashed, synced, linked without overwrite, final bytes are revalidated, marked ready and its staging object is durably reclaimed. A content-read mismatch is quarantined only after a final file-incarnation recheck and is restored only by a later valid recovery inspection.",
       "Recover processes a bounded pending set under per-identity database coordination and records unavailable state for missing or corrupt bytes; it never invents replacement content.",
       "An explicit identical retry may replace only never-ready staging-missing or staging-corrupt state after reauthorization, exact metadata and byte validation, final absence confirmation and a durable pending repair intent.",
       "Metadata and Open expose only verified ready objects and revalidate the stored file size and SHA-256 before returning metadata or a reader.",

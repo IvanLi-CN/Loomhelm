@@ -596,6 +596,28 @@ def dotenv(value: str) -> str:
     return json.dumps(value, ensure_ascii=False).replace("$", "\\$")
 
 
+def previous_compose_project_name(state_dir: Path) -> str | None:
+    env_file = state_dir / "compose.env"
+    try:
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        die(f"cannot read preview Compose environment: {exc}")
+    prefix = "LOOMHELM_PREVIEW_PROJECT_NAME="
+    for line in lines:
+        if not line.startswith(prefix):
+            continue
+        value = line[len(prefix):]
+        if value.startswith('"'):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                die("preview Compose environment has an invalid project name")
+        return value or None
+    return None
+
+
 def command_compose_env(args: argparse.Namespace) -> None:
     state_dir = Path(args.state_dir).resolve()
     state = load_state(state_dir)
@@ -617,13 +639,18 @@ def command_compose_env(args: argparse.Namespace) -> None:
         stop_grace = derived_grace
     project_name = env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True)
     stored_project_name = state.get("compose_project_name")
+    if stored_project_name is None:
+        stored_project_name = previous_compose_project_name(state_dir)
+        if state.get("active_slot") or state.get("pending_slot"):
+            if stored_project_name is None:
+                die("preview state does not record the active Compose project name")
     if stored_project_name is not None and (
         not isinstance(stored_project_name, str) or not stored_project_name
     ):
         die("preview compose_project_name is invalid")
     if stored_project_name and stored_project_name != project_name and (state.get("active_slot") or state.get("pending_slot")):
         die("LOOMHELM_PREVIEW_PROJECT_NAME cannot change while a preview candidate is active")
-    state_changed = stored_project_name != project_name
+    state_changed = state.get("compose_project_name") != project_name
     state["compose_project_name"] = project_name
     configured_volume = os.environ.get("LOOMHELM_ARTIFACT_VOLUME_NAME", "").strip()
     stored_volume = state.get("artifact_volume_name")

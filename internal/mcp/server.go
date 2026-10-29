@@ -372,7 +372,7 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 		}
 		result, err := toolSuccess(response.body)
 		if spec.operationID == "downloadArtifactContent" {
-			result, err = artifactContentToolSuccess(response.body)
+			result, err = artifactContentToolSuccess(response.body, explicitProtocolVersion(request))
 		}
 		if err != nil {
 			if spec.route.method != http.MethodGet {
@@ -588,6 +588,10 @@ func requestHeaders(request interface{ GetExtra() *sdk.RequestExtra }) http.Head
 	return request.GetExtra().Header
 }
 
+func explicitProtocolVersion(request interface{ GetExtra() *sdk.RequestExtra }) string {
+	return requestHeaders(request).Get("Mcp-Protocol-Version")
+}
+
 func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, route routeSpec, arguments map[string]json.RawMessage) (restResponse, error) {
 	path, err := routePath(route.path, route.pathParams, arguments)
 	if err != nil {
@@ -699,12 +703,20 @@ func toolSuccess(body []byte) (*sdk.CallToolResult, error) {
 	}, nil
 }
 
-func artifactContentToolSuccess(body []byte) (*sdk.CallToolResult, error) {
+func artifactContentToolSuccess(body []byte, protocolVersion string) (*sdk.CallToolResult, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		body = []byte(`{}`)
 	}
 	if !json.Valid(body) {
 		return nil, errors.New("application service returned invalid JSON")
+	}
+	if protocolVersion != "" && protocolVersion < LegacyProtocolVersion {
+		// StructuredContent was not part of the older protocol revisions. Keep
+		// the complete JSON envelope in text so those clients can reassemble
+		// content_base64 chunks without receiving a duplicated large payload.
+		return &sdk.CallToolResult{
+			Content: []sdk.Content{&sdk.TextContent{Text: string(body)}},
+		}, nil
 	}
 	// The chunk is carried once in structuredContent. Duplicating a potentially
 	// large base64 field in human-readable text would halve the usable MCP

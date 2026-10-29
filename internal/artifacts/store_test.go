@@ -260,6 +260,52 @@ func TestStoreOpenDoesNotQuarantineContentChangedDuringVerification(t *testing.T
 	}
 }
 
+func TestStoreContentMismatchIsRecoverableAfterFinalVerification(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("recoverable artifact bytes")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-content-mismatch"), nil, content)
+	stagingName := ".upload-content-mismatch-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	_, reader, err := store.OpenContent(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentReader, ok := reader.(*contentReader)
+	if !ok {
+		_ = reader.Close()
+		t.Fatalf("content reader type = %T, want *contentReader", reader)
+	}
+	verifyErr := contentReader.verifyContent(ctx, artifact)
+	_ = reader.Close()
+	if !errors.Is(verifyErr, ErrUnavailable) || !errors.Is(verifyErr, ErrHashMismatch) {
+		t.Fatalf("content verification error = %v, want unavailable/hash-mismatch", verifyErr)
+	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `SELECT state, unavailable_reason FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationUnavailable) || reason != contentMismatchReason {
+		t.Fatalf("content mismatch state = %q/%q, want unavailable/%q", state, reason, contentMismatchReason)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Recover(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); err != nil {
+		t.Fatalf("recovered artifact metadata error = %v", err)
+	}
+}
+
 func TestStoreRejectsMismatchesAndInterruptedUploads(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()

@@ -85,6 +85,28 @@ class PreviewControlTest(unittest.TestCase):
                 with self.assertRaises(control.ContractError):
                     self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
 
+    def test_legacy_active_state_cannot_be_rebound_to_a_new_project(self) -> None:
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-legacy-project",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            self.invoke("init", state_dir)
+            self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+            state = control.load_state(state_dir)
+            state.pop("compose_project_name", None)
+            state["active_slot"] = "blue"
+            control.write_state(state_dir, state)
+            with patch.dict(os.environ, {**settings, "LOOMHELM_PREVIEW_PROJECT_NAME": "renamed-preview"}, clear=True):
+                with self.assertRaises(control.ContractError):
+                    self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+
     def test_compose_grace_covers_a_longer_shutdown_timeout(self) -> None:
         self.assertEqual(control.default_stop_grace_period("1m30s"), "270s")
         settings = {

@@ -191,11 +191,17 @@ func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Art
 	}
 	if err := verifyFile(ctx, r.File, artifact); err != nil {
 		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
-			// A streaming read cannot atomically couple an external file mutation
-			// with the database state transition below. Never poison a ready row
-			// from this path: return the verification failure and let a later
-			// metadata/open/recovery pass classify a stable mismatch.
-			return err
+			// Distinguish an in-place mutation from stable corruption before
+			// recording a recoverable content-mismatch state. Recovery revalidates
+			// the final object and restores ready when the bytes become valid, so
+			// the database cannot be permanently poisoned by this read race.
+			if versionErr := r.verifyContentVersion(ctx); versionErr != nil {
+				return versionErr
+			}
+			if markErr := r.store.markReadyObjectUnavailable(ctx, r.id, contentMismatchReason); markErr != nil {
+				return markErr
+			}
+			return unavailableError(err)
 		}
 		return err
 	}

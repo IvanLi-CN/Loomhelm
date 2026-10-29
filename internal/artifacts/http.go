@@ -20,7 +20,14 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const defaultDownloadContentType = "application/octet-stream"
+const (
+	defaultDownloadContentType = "application/octet-stream"
+	// The application Server keeps a 60-second default response deadline for
+	// ordinary APIs. Full artifact downloads are bounded to 64 MiB and may be
+	// deliberately slow, so extend only this route's write deadline without
+	// weakening the timeout for the rest of the Server.
+	downloadWriteTimeout = 10 * time.Minute
+)
 
 // DefaultContentChunkBytes keeps the JSON envelope below the default MCP
 // response budget while allowing the complete artifact to be reconstructed by
@@ -110,6 +117,9 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		writer.Header().Set("ETag", `"`+artifact.Sha256+`"`)
 	}
 	modTime := parseDownloadTime(artifact.CreatedAt)
+	responseController := http.NewResponseController(writer)
+	_ = responseController.SetWriteDeadline(time.Now().Add(downloadWriteTimeout))
+	defer func() { _ = responseController.SetWriteDeadline(time.Time{}) }()
 	http.ServeContent(writer, request, safeDownloadFilename(artifact.Name), modTime, reader)
 }
 
