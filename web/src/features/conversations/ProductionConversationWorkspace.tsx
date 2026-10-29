@@ -24,8 +24,10 @@ import {
   connectionFromSessionState,
   eventToConversationMessage,
   initialRunCommandId,
+  isSessionAccessFailure,
   runFromCommandAck,
   runFromRecoveredIdentity,
+  sessionReadFailureMessage,
   toSessionContextModel,
   type ProductionTaskSummary
 } from "./production-session-model";
@@ -648,7 +650,7 @@ export function ProductionConversationWorkspace({
         if (recoveredRunId) setRun(runFromRecoveredIdentity(result.session, recoveredRunId));
       } else {
         setSession(undefined);
-        setSessionFailure(result.reason === "transport" ? "读取 Session 失败，请刷新后再试。" : "Session 响应未通过身份核对，当前不展示猜测内容。");
+        setSessionFailure(sessionReadFailureMessage(result.reason));
       }
       setSessionLoading(false);
     });
@@ -670,8 +672,24 @@ export function ProductionConversationWorkspace({
         return;
       }
       if (result.state === "pending") return;
+      if (isSessionAccessFailure(result.reason)) {
+        seenEventIds.current = new Set();
+        approvalCommandIds.current = new Map();
+        lastAppliedRunSequence.current = 0;
+        setSession(undefined);
+        setMessages([]);
+        setApprovals([]);
+        setApprovalHistoryAvailable(false);
+        setRunIdentityVerified(false);
+        setSessionReadUncertain(false);
+        setRun(undefined);
+        setCommandState(undefined);
+        setActivityNotice(null);
+        setSessionFailure(sessionReadFailureMessage(result.reason));
+        return;
+      }
       setSessionReadUncertain(true);
-      setSessionFailure(result.state === "unknown" ? "Session 响应结果不确定；已保留已观察事实，控制命令已暂停，请刷新或人工对账。" : "读取 Session 失败；已保留已观察事实，控制命令已暂停，请刷新后再试。");
+      setSessionFailure(sessionReadFailureMessage(result.reason, true));
     };
     const interval = setInterval(() => void refreshSession(), 4000);
     return () => {
@@ -721,6 +739,22 @@ export function ProductionConversationWorkspace({
             return;
           }
         } else if (events.state === "pending") {
+          return;
+        } else if (events.state === "unknown" && isSessionAccessFailure(events.reason)) {
+          seenEventIds.current = new Set();
+          approvalCommandIds.current = new Map();
+          lastAppliedRunSequence.current = 0;
+          setMessages([]);
+          setApprovals([]);
+          setApprovalHistoryAvailable(false);
+          setRunIdentityVerified(false);
+          setSessionReadUncertain(true);
+          setRun(undefined);
+          setCommandState(undefined);
+          setActivityNotice(null);
+          setSessionFailure(events.reason === "forbidden"
+            ? "当前账户无权读取该 Run 的事件；当前会话消息已清除，控制命令已暂停，请返回会话列表。"
+            : "该 Run 不存在或已不可访问；当前会话消息已清除，控制命令已暂停，请刷新后再试。");
           return;
         } else if (events.state === "unknown" && events.reason !== "pending") {
           setActivityNotice("事件读取结果不确定；已保留当前事实，不会自动重试控制命令。请刷新或手动对账。");
@@ -1045,6 +1079,7 @@ export function ProductionConversationWorkspace({
     <section className="grid min-w-0 gap-5" aria-label="生产会话工作区">
       <SessionContextSummary connection={connection} context={context} />
       {activityNotice ? <div className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{activityNotice}</span>{uncertainRunCommandId ? <Button type="button" variant="secondary" onClick={reconcileRunSubmission}>我已对账，复用命令重试</Button> : null}</div> : null}
+      {sessionReadUncertain && sessionFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--danger)]/30 bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert" aria-live="assertive"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{sessionFailure}</span></div> : null}
       <ConversationMessageStream connection={connection} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" messages={messages} />
       {activeRun ? <RunStatusCard canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}
       {activeApprovals.map((approval) => {

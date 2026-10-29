@@ -6,8 +6,10 @@ import {
   connectionFromSessionState,
   eventToConversationMessage,
   initialRunCommandId,
+  isSessionAccessFailure,
   runFromCommandAck,
   runFromRecoveredIdentity,
+  sessionReadFailureMessage,
   taskStatusFromState,
   toSessionContextModel
 } from "./production-session-model";
@@ -58,6 +60,15 @@ describe("production session model", () => {
       session,
       task: { id: "LH-30", status: "in_progress" }
     });
+  });
+
+  test("distinguishes inaccessible sessions from uncertain transport failures", () => {
+    expect(isSessionAccessFailure("forbidden")).toBe(true);
+    expect(isSessionAccessFailure("not_found")).toBe(true);
+    expect(isSessionAccessFailure("transport")).toBe(false);
+    expect(sessionReadFailureMessage("forbidden")).toContain("无权");
+    expect(sessionReadFailureMessage("not_found")).toContain("不可访问");
+    expect(sessionReadFailureMessage("transport", true)).toContain("已保留已观察事实");
   });
 
   test("turns a command acknowledgement into a pending run without claiming completion", () => {

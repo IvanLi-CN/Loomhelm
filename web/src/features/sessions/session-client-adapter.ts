@@ -1,4 +1,4 @@
-import type { GeneratedApiClient } from "@loomhelm/api-client";
+import { ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
 import type { Session } from "@loomhelm/protocol";
 
 export type SessionReadClient = Pick<GeneratedApiClient, "getSession">;
@@ -62,7 +62,7 @@ export class SessionRequestFence {
 }
 
 export type SessionReadState = "received" | "pending" | "unknown";
-export type SessionReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "transport";
+export type SessionReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "transport" | "forbidden" | "not_found";
 
 export interface SessionReadResult {
   state: SessionReadState;
@@ -106,10 +106,15 @@ export class SessionClientAdapter {
         }
         this.requests.finish(admission.token);
         return { state: "received", session: response.session, request: admission.token };
-      } catch {
+      } catch (error) {
         if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
         this.requests.finish(admission.token);
-        return { state: "unknown", reason: "transport", request: admission.token };
+        const reason = error instanceof ApiClientError && error.status === 403
+          ? "forbidden"
+          : error instanceof ApiClientError && error.status === 404
+            ? "not_found"
+            : "transport";
+        return { state: "unknown", reason, request: admission.token };
       } finally {
         if (this.pendingReads.get(sessionId)?.key === requestKey) this.pendingReads.delete(sessionId);
       }

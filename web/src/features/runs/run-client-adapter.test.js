@@ -130,6 +130,21 @@ describe("run client adapter", () => {
     expect(adapter.getRecoveryCursorBaseline(subscription)).toEqual({ cursor: "cursor-10", sequence: 10 });
   });
 
+  test("preserves access failures when Run events are forbidden or missing", async () => {
+    for (const [status, reason] of [[403, "forbidden"], [404, "not_found"]]) {
+      const adapter = new RunClientAdapter({
+        submitRun: async () => ack("unused"),
+        interruptRun: async () => ack("unused"),
+        listRunEvents: async () => {
+          throw new ApiClientError(status, { code: reason });
+        },
+      });
+
+      adapter.selectSession("session-1");
+      await expect(adapter.readRunEvents(subscription)).resolves.toMatchObject({ state: "unknown", reason });
+    }
+  });
+
   test("guards duplicate submit clicks and does not call the client while offline", async () => {
     const submit = deferred();
     const calls = { submit: [], interrupt: [] };

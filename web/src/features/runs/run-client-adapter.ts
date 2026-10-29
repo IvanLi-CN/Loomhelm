@@ -50,7 +50,7 @@ export interface RunEventReadOptions {
 }
 
 export type RunEventReadState = "received" | "pending" | "unknown";
-export type RunEventReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "transport" | "offline" | "reconnecting" | "unknown";
+export type RunEventReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "transport" | "offline" | "reconnecting" | "unknown" | "forbidden" | "not_found";
 
 export interface RunEventReadResult {
   state: RunEventReadState;
@@ -169,10 +169,15 @@ export class RunClientAdapter {
 
       this.recovery = advanceRecoveryCursor(this.recovery, eventSubscription, page);
       return { state: "received", page, stream: applied.state, request: admission.token };
-    } catch {
+    } catch (error) {
       if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
       this.requests.finish(admission.token);
-      return { state: "unknown", reason: "transport", request: admission.token };
+      const reason = error instanceof ApiClientError && error.status === 403
+        ? "forbidden"
+        : error instanceof ApiClientError && error.status === 404
+          ? "not_found"
+          : "transport";
+      return { state: "unknown", reason, request: admission.token };
     }
   }
 

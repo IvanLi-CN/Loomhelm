@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { ApiClientError } from "@loomhelm/api-client";
+
 import { SessionClientAdapter } from "./session-client-adapter";
 
 function deferred() {
@@ -88,5 +90,18 @@ describe("session client adapter", () => {
 
     adapter.selectSession("session-1");
     await expect(adapter.readSession("session-1")).resolves.toMatchObject({ state: "unknown", reason: "foreign_response" });
+  });
+
+  test("preserves access failures when a session is forbidden or missing", async () => {
+    for (const [status, reason] of [[403, "forbidden"], [404, "not_found"]]) {
+      const adapter = new SessionClientAdapter({
+        getSession: async () => {
+          throw new ApiClientError(status, { code: reason });
+        },
+      });
+
+      adapter.selectSession(`session-${status}`);
+      await expect(adapter.readSession(`session-${status}`)).resolves.toMatchObject({ state: "unknown", reason });
+    }
   });
 });

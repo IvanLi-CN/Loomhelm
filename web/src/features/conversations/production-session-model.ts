@@ -2,6 +2,7 @@ import type { Approval, CommandAck, Event, Run, Session, Task, TaskStatus } from
 
 import type { ConversationMessage } from "./ConversationMessageStream";
 import type { ConnectionAvailability, SessionContextModel } from "../sessions/session-model";
+import type { SessionReadReason } from "../sessions/session-client-adapter";
 
 export interface ProductionTaskSummary {
   id: string;
@@ -48,6 +49,18 @@ export function toSessionContextModel(
     session,
     task: toSessionTask(task)
   };
+}
+
+export function isSessionAccessFailure(reason: string | undefined): boolean {
+  return reason === "forbidden" || reason === "not_found";
+}
+
+export function sessionReadFailureMessage(reason: SessionReadReason | undefined, retainedSession = false): string {
+  if (reason === "forbidden") return "当前账户无权读取此 Session；当前会话内容已清除，请返回会话列表。";
+  if (reason === "not_found") return "此 Session 不存在或已不可访问；当前会话内容已清除，请返回会话列表。";
+  if (retainedSession) return "读取 Session 失败；已保留已观察事实，控制命令已暂停，请刷新或人工对账。";
+  if (reason === "transport") return "读取 Session 失败，请刷新后再试。";
+  return "Session 响应未通过身份核对，当前不展示猜测内容。";
 }
 
 function runStatusFromCommandAck(ack: CommandAck): Run["status"] {
