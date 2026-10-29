@@ -1,4 +1,6 @@
 -- +goose Up
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE execution_commands
     ADD COLUMN exact_ack_state TEXT NOT NULL DEFAULT '';
 
@@ -22,7 +24,12 @@ CREATE INDEX conversation_draft_commands_pending_idx
     ON conversation_draft_commands (session_id, updated_at, command_id)
     WHERE state = 'pending';
 
+CREATE UNIQUE INDEX conversation_draft_commands_pending_revision_idx
+    ON conversation_draft_commands (session_id, expected_revision)
+    WHERE state = 'pending';
+
 -- +goose Down
+DROP INDEX IF EXISTS conversation_draft_commands_pending_revision_idx;
 DROP INDEX IF EXISTS conversation_draft_commands_pending_idx;
 DROP TABLE IF EXISTS conversation_draft_commands;
 ALTER TABLE execution_commands DROP CONSTRAINT IF EXISTS execution_commands_exact_ack_state_check;

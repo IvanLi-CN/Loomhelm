@@ -85,6 +85,33 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 	if err != nil {
 		t.Fatalf("accept draft command: %v", err)
 	}
+	duplicateCommand := protocol.Command{
+		CommandID: fixture.command + "-draft-duplicate-revision",
+		IssuedAt:  "2026-10-30T00:00:00Z",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"first input"}`),
+		SessionID: sessionID,
+	}
+	_, _, err = runStore.AcceptRunWithMutation(ctx, CommandIntent{Command: duplicateCommand, Generation: fixture.generation}, NewRunInput{
+		ID:         fixture.run + "-draft-duplicate-revision",
+		SessionID:  sessionID,
+		CommandID:  duplicateCommand.CommandID,
+		Generation: fixture.generation,
+	}, func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
+		return draftStore.PrepareCommandTx(mutationCtx, tx, drafts.CommandDraftInput{
+			CommandID:        duplicateCommand.CommandID,
+			SessionID:        sessionID,
+			OwnerUserID:      ownerID,
+			ExpectedRevision: first.Revision,
+			Content:          first.Content,
+		})
+	})
+	if !errors.Is(err, drafts.ErrDraftRevisionStale) {
+		t.Fatalf("duplicate draft revision admission error = %v, want %v", err, drafts.ErrDraftRevisionStale)
+	}
+	if _, err := runStore.Lookup(ctx, sessionID, duplicateCommand.CommandID); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("rolled-back duplicate draft command lookup error = %v, want %v", err, ErrCommandNotFound)
+	}
 
 	newer, err := draftStore.Apply(ctx, drafts.UpdateInput{
 		SessionID:      sessionID,
@@ -655,10 +682,18 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	}
 	var beforeContent string
 	var beforeRevision int64
+	var beforeState, beforeOperationID, beforeEventCursor, beforeReconciliationState string
+	var beforeResult []byte
 	if err := db.Pool().QueryRow(ctx, `
 		SELECT content, revision FROM conversation_drafts WHERE session_id = $1
 	`, sessionID).Scan(&beforeContent, &beforeRevision); err != nil {
 		t.Fatalf("read pre-00014 draft: %v", err)
+	}
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, operation_id, result, event_cursor, reconciliation_state
+		FROM execution_commands WHERE command_id = $1
+	`, commandID).Scan(&beforeState, &beforeOperationID, &beforeResult, &beforeEventCursor, &beforeReconciliationState); err != nil {
+		t.Fatalf("read pre-00014 command: %v", err)
 	}
 	if _, err := provider.UpTo(ctx, 14); err != nil {
 		t.Fatalf("apply 00014 migration: %v", err)
@@ -666,6 +701,8 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	var afterContent string
 	var afterRevision int64
 	var exactAckState string
+	var afterState, afterOperationID, afterEventCursor, afterReconciliationState string
+	var afterResult []byte
 	if err := db.Pool().QueryRow(ctx, `
 		SELECT content, revision FROM conversation_drafts WHERE session_id = $1
 	`, sessionID).Scan(&afterContent, &afterRevision); err != nil {
@@ -676,8 +713,16 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	`, commandID).Scan(&exactAckState); err != nil {
 		t.Fatalf("read post-00014 ACK marker: %v", err)
 	}
-	if afterContent != beforeContent || afterRevision != beforeRevision || exactAckState != "" {
-		t.Fatalf("post-00014 state = content %q revision %d exact_ack_state %q, want unchanged draft and empty marker", afterContent, afterRevision, exactAckState)
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, operation_id, result, event_cursor, reconciliation_state
+		FROM execution_commands WHERE command_id = $1
+	`, commandID).Scan(&afterState, &afterOperationID, &afterResult, &afterEventCursor, &afterReconciliationState); err != nil {
+		t.Fatalf("read post-00014 command: %v", err)
+	}
+	if afterContent != beforeContent || afterRevision != beforeRevision || exactAckState != "" ||
+		afterState != beforeState || afterOperationID != beforeOperationID || !bytes.Equal(afterResult, beforeResult) ||
+		afterEventCursor != beforeEventCursor || afterReconciliationState != beforeReconciliationState {
+		t.Fatalf("post-00014 state = draft %q/%d command state %q operation %q result %s cursor %q reconciliation %q exact_ack_state %q, want unchanged state", afterContent, afterRevision, afterState, afterOperationID, afterResult, afterEventCursor, afterReconciliationState, exactAckState)
 	}
 	var invalidMarkerCount int
 	if err := db.Pool().QueryRow(ctx, `

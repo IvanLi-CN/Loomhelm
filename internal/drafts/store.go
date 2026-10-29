@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -324,6 +325,10 @@ func (s *Store) PrepareCommandTx(ctx context.Context, tx pgx.Tx, input CommandDr
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $6)
 	`, input.CommandID, input.SessionID, input.OwnerUserID, input.ExpectedRevision, CommandDraftPending, now); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "conversation_draft_commands_pending_revision_idx" {
+			return ErrDraftRevisionStale
+		}
 		return fmt.Errorf("record draft command binding: %w", err)
 	}
 	return nil

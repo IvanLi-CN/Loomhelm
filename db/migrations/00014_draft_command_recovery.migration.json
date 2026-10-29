@@ -29,14 +29,14 @@
     "ddl_structural_changes": [
       {
         "id": "ddl-00014-exact-ack-marker",
-        "description": "Add the exact ACK state marker without rewriting existing commands or drafts; the CHECK is added NOT VALID so PostgreSQL does not scan or hold a long table lock over existing execution_commands rows, while new and updated rows remain constrained.",
+        "description": "Add the exact ACK state marker without rewriting existing commands or drafts; the migration uses a five-second transaction-local lock timeout, and the CHECK is added NOT VALID so PostgreSQL does not scan existing execution_commands rows, while new and updated rows remain constrained.",
         "order": 1,
         "observable": true,
         "pauseable": false
       },
       {
         "id": "ddl-00014-draft-command-recovery",
-        "description": "Create the command binding projection and pending-state index without rewriting existing commands or drafts.",
+        "description": "Create the command binding projection, its pending-state lookup index, and a unique pending reservation for each session and expected draft revision without rewriting existing commands or drafts.",
         "order": 2,
         "observable": true,
         "pauseable": false
@@ -58,7 +58,7 @@
       "A failed or not-found command with no prior delivery-confirmed exact ACK leaves the draft projection untouched; a later failed ACK cannot erase an earlier executing delivery fact."
     ],
     "pause_points": [
-      "Before applying 00014, verify the candidate source identity, PostgreSQL migration lock availability, and that the short DDL lock window is free of long-running execution_commands writers; the marker CHECK is intentionally NOT VALID to avoid an unbounded existing-row scan.",
+      "Before applying 00014, verify the candidate source identity, PostgreSQL migration lock availability, and that the short DDL lock window is free of long-running execution_commands readers or writers; the five-second transaction-local lock_timeout fails the migration fast when the lock cannot be acquired, and the marker CHECK is intentionally NOT VALID to avoid an unbounded existing-row scan.",
       "After the migration commits and before enabling draft-command admission, verify the binding foreign keys and pending-state index.",
       "Before enabling draft-command admission or rolling back to an earlier writer, disable new draft admission, drain and fence earlier writers, and verify that no pending draft bindings remain; if any pending binding remains, retain a draft-capable writer and block the earlier writer from touching it. Do not treat markerless executing rows as confirmed delivery."
     ]
