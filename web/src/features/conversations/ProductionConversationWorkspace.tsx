@@ -599,6 +599,7 @@ export function ProductionConversationWorkspace({
   const [sessionFailure, setSessionFailure] = useState<string | null>(null);
   const [sessionRunHistoryLoading, setSessionRunHistoryLoading] = useState(Boolean(sessionId));
   const [sessionRunHistoryFailure, setSessionRunHistoryFailure] = useState<string | null>(null);
+  const [sessionRunHistory, setSessionRunHistory] = useState<readonly Run[]>([]);
   const [run, setRun] = useState<Run | undefined>();
   const [commandState, setCommandState] = useState<CommandState | undefined>();
   const [messages, setMessages] = useState<readonly ConversationMessage[]>([]);
@@ -637,16 +638,17 @@ export function ProductionConversationWorkspace({
   const pendingDraftValueRef = useRef<string | undefined>(undefined);
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const draftSavePromiseRef = useRef<Promise<void> | undefined>(undefined);
+  const draftAccessBlockedRef = useRef(false);
 
   const sessionForRoute = session && (sessionId === undefined || session.id === sessionId) ? session : undefined;
   const activeSessionId = sessionForRoute?.id ?? sessionId;
-  const activeRun = run && run.session_id === activeSessionId && (!initialRunId || run.id === initialRunId) ? run : undefined;
+  const activeRun = run && run.session_id === activeSessionId ? run : undefined;
   const activeRunId = activeRun?.id;
   const connection: ConnectionAvailability = sessionForRoute ? connectionFromSessionState(sessionForRoute.state) : "online";
   const sessionProjectReadOnly = Boolean(sessionForRoute?.project_id && projectCanWrite && !projectCanWrite(sessionForRoute.project_id));
   const effectiveReadOnly = readOnly || sessionProjectReadOnly;
   const sessionRunHistoryBlocked = sessionRunHistoryLoading || Boolean(sessionRunHistoryFailure);
-  const effectiveCommandState = sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || draftAccessBlocked ? "unknown" : commandState;
+  const effectiveCommandState = sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain ? "unknown" : commandState;
   const readFailure = sessionAccessBlocked
     ? sessionAccessFailure
     : sessionReadUncertain
@@ -663,7 +665,9 @@ export function ProductionConversationWorkspace({
   const taskSummary = mapTaskSummary(task);
   const context = sessionForRoute ? toSessionContextModel(sessionForRoute, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
   const activeApprovals = runIdentityVerified && activeRunId ? approvals.filter((approval) => approval.run_id === activeRunId) : [];
+  const approvalHistoryBlocked = Boolean(activeRunId && !approvalHistoryAvailable);
   const runRouteUnverified = Boolean(initialRunId && (!activeRun || !runIdentityVerified));
+  const selectedHistoryRunId = activeRunId && sessionRunHistory.some((historyRun) => historyRun.id === activeRunId) ? activeRunId : undefined;
 
   useLayoutEffect(() => {
     mountedRef.current = true;
@@ -679,6 +683,10 @@ export function ProductionConversationWorkspace({
   useEffect(() => {
     activeRunIdRef.current = activeRunId;
   }, [activeRunId]);
+
+  useEffect(() => {
+    draftAccessBlockedRef.current = draftAccessBlocked;
+  }, [draftAccessBlocked]);
 
   useEffect(() => {
     draftRef.current = draft;
@@ -708,12 +716,14 @@ export function ProductionConversationWorkspace({
     setSessionAccessFailure(null);
     setSessionRunHistoryLoading(Boolean(sessionId));
     setSessionRunHistoryFailure(null);
+    setSessionRunHistory([]);
     setRunReadUncertain(false);
     setRunReadFailure(null);
     setApprovalReadUncertain(false);
     setApprovalReadFailure(null);
     setDraftReadUncertain(false);
     setDraftAccessBlocked(false);
+    draftAccessBlockedRef.current = false;
     setDraftFailure(null);
     setRun(undefined);
     setCommandState(undefined);
@@ -748,12 +758,14 @@ export function ProductionConversationWorkspace({
     setSessionAccessFailure(null);
     setSessionRunHistoryLoading(Boolean(sessionId));
     setSessionRunHistoryFailure(null);
+    setSessionRunHistory([]);
     setRunReadUncertain(false);
     setRunReadFailure(null);
     setApprovalReadUncertain(false);
     setApprovalReadFailure(null);
     setDraftReadUncertain(false);
     setDraftAccessBlocked(false);
+    draftAccessBlockedRef.current = false;
     setDraftFailure(null);
     setRun(undefined);
     setCommandState(undefined);
@@ -781,6 +793,7 @@ export function ProductionConversationWorkspace({
     setSession(undefined);
     setSessionRunHistoryLoading(true);
     setSessionRunHistoryFailure(null);
+    setSessionRunHistory([]);
     setRun(undefined);
     setApprovals([]);
     setApprovalHistoryAvailable(false);
@@ -794,6 +807,7 @@ export function ProductionConversationWorkspace({
     setApprovalReadFailure(null);
     setDraftReadUncertain(false);
     setDraftAccessBlocked(false);
+    draftAccessBlockedRef.current = false;
     setDraftFailure(null);
     draftRevisionRef.current = 0;
     draftDirtyRef.current = false;
@@ -836,6 +850,7 @@ export function ProductionConversationWorkspace({
       if (result.state === "received" && result.runs) {
         setSessionRunHistoryLoading(false);
         setSessionRunHistoryFailure(null);
+        setSessionRunHistory(result.runs);
         const preferredRunId = selectedRunIdRef.current ?? activeRunIdRef.current;
         const selected = (preferredRunId ? result.runs.find((candidate) => candidate.id === preferredRunId) : undefined) ?? (!preferredRunId ? result.runs.at(-1) : undefined);
         if (selected) {
@@ -868,6 +883,7 @@ export function ProductionConversationWorkspace({
 
       setSessionRunHistoryLoading(false);
       setSessionRunHistoryFailure(sessionRunHistoryFailureMessage(result.reason));
+      setSessionRunHistory([]);
       setRun(undefined);
       setMessages([]);
       setApprovals([]);
@@ -904,6 +920,7 @@ export function ProductionConversationWorkspace({
           draftRevisionRef.current = result.draft.revision;
           setDraftReadUncertain(false);
           setDraftAccessBlocked(false);
+          draftAccessBlockedRef.current = false;
           setDraftFailure(null);
           if (draftRef.current === nextValue) {
             draftDirtyRef.current = false;
@@ -919,6 +936,7 @@ export function ProductionConversationWorkspace({
           writeDraft(draftKey, "");
           setDraftReadUncertain(false);
           setDraftAccessBlocked(true);
+          draftAccessBlockedRef.current = true;
           setDraftFailure(draftFailureMessage(result.reason));
           return;
         }
@@ -952,9 +970,11 @@ export function ProductionConversationWorkspace({
       const result = await adapters.draft.readDraft(loadedSessionId);
       if (!active || result.state === "pending") return;
       if (result.state === "received" && result.draft) {
+        if (result.draft.revision < draftRevisionRef.current) return;
         draftRevisionRef.current = result.draft.revision;
         setDraftReadUncertain(false);
         setDraftAccessBlocked(false);
+        draftAccessBlockedRef.current = false;
         setDraftFailure(null);
         const localDraft = readDraft(draftKey);
         if (draftDirtyRef.current) {
@@ -987,6 +1007,7 @@ export function ProductionConversationWorkspace({
         writeDraft(draftKey, "");
         setDraftReadUncertain(false);
         setDraftAccessBlocked(true);
+        draftAccessBlockedRef.current = true;
         setDraftFailure(draftFailureMessage(result.reason));
         return;
       }
@@ -1202,12 +1223,20 @@ export function ProductionConversationWorkspace({
     setSessionFailure(null);
     setSessionRunHistoryLoading(true);
     setSessionRunHistoryFailure(null);
+    setSessionRunHistory([]);
     setSessionAccessBlocked(false);
     setSessionAccessFailure(null);
     setRunReadUncertain(false);
     setRunReadFailure(null);
     setApprovalReadUncertain(false);
     setApprovalReadFailure(null);
+    setDraftReadUncertain(false);
+    setDraftAccessBlocked(false);
+    draftAccessBlockedRef.current = false;
+    setDraftFailure(null);
+    draftRevisionRef.current = 0;
+    draftDirtyRef.current = false;
+    pendingDraftValueRef.current = undefined;
     if (initialAck) {
       setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
       const initialRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
@@ -1238,7 +1267,7 @@ export function ProductionConversationWorkspace({
   const send = async (prompt: string) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
     if (!canSendControl(connection, effectiveReadOnly) || sessionForRoute.state !== "active") throw new Error("当前 Session 不允许发送控制命令");
-    if (runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || draftAccessBlocked || activeRun?.status === "unknown" || effectiveCommandState === "unknown") {
+    if (runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || approvalHistoryBlocked || activeRun?.status === "unknown" || effectiveCommandState === "unknown") {
       setActivityNotice("当前 Run 结果不确定；请先完成对账，不能在未确认的执行上继续发送或授权。");
       return;
     }
@@ -1323,7 +1352,13 @@ export function ProductionConversationWorkspace({
     if (commandReconciled) {
       setUncertainRunCommandId(undefined);
       if (draftRef.current.trim() === prompt) {
-        setActivityNotice("Run 命令已收到；已发送内容暂保持为私有草稿，等待 revision-aware consume 接线，不会自动再次发送。");
+        if (draftAccessBlockedRef.current) {
+          draftRef.current = "";
+          setDraft("");
+          setActivityNotice("Run 命令已收到；当前账户没有可同步的私有草稿，已清除本地输入，不会自动再次发送。");
+        } else {
+          setActivityNotice("Run 命令已收到；已发送内容暂保持为私有草稿，等待 revision-aware consume 接线，不会自动再次发送。");
+        }
       }
       if (nextRun) void onRunCreated?.(sessionIdForSubmit, nextRun.id);
     }
@@ -1332,7 +1367,7 @@ export function ProductionConversationWorkspace({
   const resolveApproval = async (params: ResolveApprovalParams) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
     if (!approvalHistoryAvailable) throw new Error("审批历史尚未通过当前 Run 核对，请刷新后再确认");
-    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || draftAccessBlocked || uncertainRunCommandId || activeRun?.status === "unknown" || effectiveCommandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
+    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || approvalHistoryBlocked || uncertainRunCommandId || activeRun?.status === "unknown" || effectiveCommandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
     if (sessionForRoute.state !== "active" || !canSendControl(connection, effectiveReadOnly)) throw new Error("当前 Session 不允许提交审批控制命令");
     const approval = activeApprovals.find((item) => item.id === params.approval_id && item.revision === params.body.revision);
     if (!approval) throw new Error("审批修订已变化，请刷新后重新确认");
@@ -1408,7 +1443,7 @@ export function ProductionConversationWorkspace({
     const interruptOperationKey = `interrupt:${activeRun.id}`;
     const interruptIntentKey = getControlIntentKey(principalId, sessionForRoute.id, interruptOperationKey);
     const storedInterruptIntent = readControlIntent(interruptIntentKey);
-    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || draftAccessBlocked || uncertainRunCommandId || activeRun.status === "unknown" || effectiveCommandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交中断控制命令");
+    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || approvalHistoryBlocked || uncertainRunCommandId || activeRun.status === "unknown" || effectiveCommandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交中断控制命令");
     if (storedInterruptIntent?.uncertain) throw new Error("中断命令结果未完成对账；请先确认服务事实，不会自动重复提交");
     if (storedInterruptIntent && storedInterruptIntent.commandId !== request.command_id) throw new Error("中断命令身份已变化，请刷新后重新核对");
     if (!writeControlIntent(interruptIntentKey, { commandId: request.command_id, uncertain: true })) throw new Error("当前浏览器无法持久化中断命令身份；为避免未知结果下重复中断，请先恢复存储后再试");
@@ -1453,6 +1488,29 @@ export function ProductionConversationWorkspace({
     }
   };
 
+  const selectHistoricalRun = (runId: string) => {
+    if (!sessionForRoute) return;
+    const selected = sessionRunHistory.find((historyRun) => historyRun.id === runId);
+    if (!selected || selected.id === activeRunId) return;
+    routeVersionRef.current += 1;
+    selectedRunIdRef.current = selected.id;
+    activeRunIdRef.current = selected.id;
+    seenEventIds.current = new Set();
+    approvalCommandIds.current = new Map();
+    lastAppliedRunSequence.current = 0;
+    setRun(runFromHistory(sessionForRoute, selected));
+    setMessages([]);
+    setApprovals([]);
+    setApprovalHistoryAvailable(false);
+    setRunIdentityVerified(false);
+    setRunReadUncertain(false);
+    setRunReadFailure(null);
+    setApprovalReadUncertain(false);
+    setApprovalReadFailure(null);
+    setCommandState(undefined);
+    setActivityNotice("已切换 Run；正在重新核对事件和审批历史，核对完成前不会提交控制命令。");
+  };
+
   if (!sessionForRoute && !sessionId) {
     return (
       <section className="grid min-w-0 gap-5" aria-label="创建会话工作区">
@@ -1474,8 +1532,9 @@ export function ProductionConversationWorkspace({
       <SessionContextSummary connection={connection} context={context} />
       {activityNotice ? <div className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{activityNotice}</span>{uncertainRunCommandId ? <Button type="button" variant="secondary" onClick={reconcileRunSubmission}>我已对账，复用命令重试</Button> : null}</div> : null}
       {readFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--danger)]/30 bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert" aria-live="assertive"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{readFailure}</span></div> : null}
+      {sessionRunHistory.length > 1 ? <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface)] p-3" aria-label="Run 历史选择"><label className="text-xs font-medium text-[var(--ink)]" htmlFor="production-run-history">Run 历史</label><Select value={selectedHistoryRunId} onValueChange={selectHistoricalRun}><SelectTrigger className="min-w-0 max-w-full" id="production-run-history" size="sm"><SelectValue placeholder="选择已授权 Run" /></SelectTrigger><SelectContent>{sessionRunHistory.map((historyRun) => <SelectItem key={historyRun.id} value={historyRun.id}><span className="font-mono text-xs">{historyRun.id}</span><span className="text-xs text-[var(--muted)]">· {historyRun.created_at}</span></SelectItem>)}</SelectContent></Select><span className="text-[11px] leading-5 text-[var(--muted)]">每台设备独立选择；切换后会重新核对事件和审批。</span></div> : null}
       <ConversationMessageStream connection={connection} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" messages={messages} />
-      {activeRun ? <RunStatusCard canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !draftAccessBlocked && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}
+      {activeRun ? <RunStatusCard canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !approvalHistoryBlocked && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}
       {activeApprovals.map((approval) => {
         const approvalContext = approvalContextFromApproval(approval);
         const request: ApprovalRequestModel = {
@@ -1494,10 +1553,10 @@ export function ProductionConversationWorkspace({
         };
         const latestRevision = activeApprovals.filter((candidate) => candidate.id === approval.id).reduce((latest, candidate) => Math.max(latest, candidate.revision), 0);
         const recoveryDecision = uncertainApprovalDecision(principalId, sessionForRoute.id, approval);
-        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !draftAccessBlocked && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
+        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
       {draftFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{draftFailure}</span></div> : null}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || draftAccessBlocked || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; draftDirtyRef.current = true; setDraft(value); writeDraft(draftKey, value); scheduleDraftPersistence(sessionForRoute.id, value); }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; writeDraft(draftKey, value); scheduleDraftPersistence(sessionForRoute.id, value); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );
