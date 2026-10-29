@@ -1,0 +1,36 @@
+-- +goose Up
+SET LOCAL lock_timeout = '5s';
+
+ALTER TABLE execution_commands
+    ADD COLUMN exact_ack_state TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE execution_commands
+    ADD CONSTRAINT execution_commands_exact_ack_state_check
+        CHECK (exact_ack_state IN ('', 'executing', 'succeeded', 'failed', 'rejected'))
+        NOT VALID;
+
+CREATE TABLE conversation_draft_commands (
+    command_id TEXT PRIMARY KEY REFERENCES execution_commands (command_id) ON DELETE RESTRICT,
+    session_id TEXT NOT NULL REFERENCES execution_sessions (id) ON DELETE RESTRICT,
+    owner_user_id TEXT NOT NULL REFERENCES auth_users (id) ON DELETE RESTRICT,
+    expected_revision BIGINT NOT NULL CHECK (expected_revision > 0),
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'consumed', 'preserved')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finalized_at TIMESTAMPTZ
+);
+
+CREATE INDEX conversation_draft_commands_pending_idx
+    ON conversation_draft_commands (session_id, updated_at, command_id)
+    WHERE state = 'pending';
+
+CREATE UNIQUE INDEX conversation_draft_commands_pending_revision_idx
+    ON conversation_draft_commands (session_id, expected_revision)
+    WHERE state = 'pending';
+
+-- +goose Down
+DROP INDEX IF EXISTS conversation_draft_commands_pending_revision_idx;
+DROP INDEX IF EXISTS conversation_draft_commands_pending_idx;
+DROP TABLE IF EXISTS conversation_draft_commands;
+ALTER TABLE execution_commands DROP CONSTRAINT IF EXISTS execution_commands_exact_ack_state_check;
+ALTER TABLE execution_commands DROP COLUMN IF EXISTS exact_ack_state;

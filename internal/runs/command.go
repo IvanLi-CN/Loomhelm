@@ -27,9 +27,11 @@ var (
 // that owns its side effect. Generation is kept separate from protocol.Command
 // because it is an internal fencing fact, not a new public wire field.
 type CommandIntent struct {
-	Command    protocol.Command
-	Generation string
-	ReceivedAt string
+	Command       protocol.Command
+	Generation    string
+	ReceivedAt    string
+	DraftRevision *int64
+	DraftOwnerID  string
 }
 
 type CommandRecord struct {
@@ -40,6 +42,7 @@ type CommandRecord struct {
 	OperationID         string
 	EventCursor         string
 	ReconciliationState protocol.ReconciliationState
+	ExactAckState       protocol.CommandState
 	Result              json.RawMessage
 	Error               *protocol.ApiError
 }
@@ -141,19 +144,23 @@ func Fingerprint(intent CommandIntent) (string, error) {
 		return "", err
 	}
 	value := struct {
-		CommandID  string               `json:"command_id"`
-		Kind       protocol.CommandKind `json:"kind"`
-		Payload    json.RawMessage      `json:"payload"`
-		RunID      *string              `json:"run_id,omitempty"`
-		SessionID  string               `json:"session_id"`
-		Generation string               `json:"generation"`
+		CommandID     string               `json:"command_id"`
+		Kind          protocol.CommandKind `json:"kind"`
+		Payload       json.RawMessage      `json:"payload"`
+		RunID         *string              `json:"run_id,omitempty"`
+		SessionID     string               `json:"session_id"`
+		Generation    string               `json:"generation"`
+		DraftRevision *int64               `json:"draft_revision,omitempty"`
+		DraftOwnerID  string               `json:"draft_owner_id,omitempty"`
 	}{
-		CommandID:  intent.Command.CommandID,
-		Kind:       intent.Command.Kind,
-		Payload:    payload,
-		RunID:      intent.Command.RunID,
-		SessionID:  intent.Command.SessionID,
-		Generation: intent.Generation,
+		CommandID:     intent.Command.CommandID,
+		Kind:          intent.Command.Kind,
+		Payload:       payload,
+		RunID:         intent.Command.RunID,
+		SessionID:     intent.Command.SessionID,
+		Generation:    intent.Generation,
+		DraftRevision: intent.DraftRevision,
+		DraftOwnerID:  intent.DraftOwnerID,
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -351,6 +358,24 @@ func allowedCommandTransition(from, to protocol.CommandState) bool {
 	}
 }
 
+func allowedExactCommandTransition(from, to protocol.CommandState) bool {
+	return allowedCommandTransition(from, to) ||
+		(from == protocol.CommandStateExecuting && to == protocol.CommandStateRejected)
+}
+
+func isDeliveryConfirmedAckState(state protocol.CommandState) bool {
+	return state == protocol.CommandStateExecuting || state == protocol.CommandStateSucceeded
+}
+
+// DraftDeliveryConfirmed reports whether the durable command facts prove that
+// the command reached the Connector, including when a later exact failed ACK
+// follows an earlier executing ACK.
+func (record CommandRecord) DraftDeliveryConfirmed() bool {
+	return record.State == protocol.CommandStateExecuting ||
+		record.State == protocol.CommandStateSucceeded ||
+		isDeliveryConfirmedAckState(record.ExactAckState)
+}
+
 func allowedReconciliationState(state protocol.CommandState) bool {
 	return state == protocol.CommandStateExecuting || state == protocol.CommandStateSucceeded || state == protocol.CommandStateFailed || state == protocol.CommandStateRejected
 }
@@ -379,6 +404,10 @@ func optionalString(value string) *string {
 func cloneIntent(intent CommandIntent) CommandIntent {
 	intent.Command.Payload = append(json.RawMessage(nil), intent.Command.Payload...)
 	intent.Command.RunID = cloneStringPointer(intent.Command.RunID)
+	if intent.DraftRevision != nil {
+		revision := *intent.DraftRevision
+		intent.DraftRevision = &revision
+	}
 	return intent
 }
 

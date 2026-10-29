@@ -26,6 +26,12 @@ var (
 
 type RunJobEnqueuer func(context.Context, pgx.Tx, RunJobArgs) error
 
+// CommandAdmissionMutation runs inside the same transaction that accepts a
+// Run command and creates its pending Run. It is reserved for durable state
+// that must be bound to the command before any transport side effect starts.
+// The callback must not send commands or perform other external side effects.
+type CommandAdmissionMutation func(context.Context, pgx.Tx, AcceptResult) error
+
 type StoreConfig struct {
 	Now             func() time.Time
 	EnqueueRunJobTx RunJobEnqueuer
@@ -235,14 +241,25 @@ func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransaction
 // AcceptRun commits a command and its pending Run identity together. This is
 // the Server-side boundary used before a run is enqueued into River.
 func (s *Store) AcceptRun(ctx context.Context, intent CommandIntent, input NewRunInput) (AcceptResult, Run, error) {
-	return s.acceptRun(ctx, intent, input, nil)
+	return s.acceptRun(ctx, intent, input, nil, nil)
 }
 
 func (s *Store) AcceptRunWithLease(ctx context.Context, intent CommandIntent, input NewRunInput, lease DurableLeaseIdentity) (AcceptResult, Run, error) {
-	return s.acceptRun(ctx, intent, input, &lease)
+	return s.acceptRun(ctx, intent, input, &lease, nil)
 }
 
-func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRunInput, lease *DurableLeaseIdentity) (AcceptResult, Run, error) {
+// AcceptRunWithMutation admits a Run and invokes mutation inside the same
+// transaction as command/run acceptance. A deduplicated command never invokes
+// the callback: a retry must not bind or clear another draft revision.
+func (s *Store) AcceptRunWithMutation(ctx context.Context, intent CommandIntent, input NewRunInput, mutation CommandAdmissionMutation) (AcceptResult, Run, error) {
+	return s.acceptRun(ctx, intent, input, nil, mutation)
+}
+
+func (s *Store) AcceptRunWithLeaseAndMutation(ctx context.Context, intent CommandIntent, input NewRunInput, lease DurableLeaseIdentity, mutation CommandAdmissionMutation) (AcceptResult, Run, error) {
+	return s.acceptRun(ctx, intent, input, &lease, mutation)
+}
+
+func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRunInput, lease *DurableLeaseIdentity, mutation CommandAdmissionMutation) (AcceptResult, Run, error) {
 	if err := s.ready(ctx); err != nil {
 		return AcceptResult{}, Run{}, err
 	}
@@ -279,6 +296,11 @@ func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRu
 	}
 	if !sameRunIdentity(candidate, stored) {
 		return AcceptResult{}, Run{}, fmt.Errorf("%w: run %q", ErrRunConflict, candidate.ID)
+	}
+	if !accepted.Deduplicated && mutation != nil {
+		if err := mutation(ctx, tx, accepted); err != nil {
+			return AcceptResult{}, Run{}, err
+		}
 	}
 	if lease != nil && !accepted.Deduplicated {
 		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
@@ -353,11 +375,17 @@ func (s *Store) RecordExactCommandAck(ctx context.Context, platformSessionID str
 	incoming.EventCursor = optionalStringValue(ack.EventCursor)
 	incoming.Result = append(json.RawMessage(nil), ack.Result...)
 	incoming.Error = cloneAPIError(ack.Error)
-	incoming.ReconciliationState = ""
-	if commandFactPresent(record) {
-		if !sameCommandFact(record, incoming) {
-			return CommandRecord{}, fmt.Errorf("%w: command %q already has a different exact ACK", ErrCommandFactConflict, ack.CommandID)
-		}
+	incoming.ExactAckState = effectiveState
+	// An exact ACK is a durable fact. Mark it as reconciled so a concurrent
+	// unknown-outcome transition cannot erase an executing ACK that carries no
+	// optional operation, result or cursor fields. Delivery confirmation still
+	// requires an executing or succeeded exact ACK state.
+	incoming.ReconciliationState = protocol.ReconciliationStateConfirmed
+	incoming, err = mergeExactCommandAck(record, incoming)
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	if sameCommandFact(record, incoming) && record.ReconciliationState == incoming.ReconciliationState {
 		if err := tx.Commit(ctx); err != nil {
 			return CommandRecord{}, fmt.Errorf("commit duplicate exact command ACK: %w", err)
 		}
@@ -365,12 +393,6 @@ func (s *Store) RecordExactCommandAck(ctx context.Context, platformSessionID str
 			return record, err
 		}
 		return record, nil
-	}
-	if record.State != protocol.CommandStateUnknown && !allowedCommandTransition(record.State, effectiveState) && record.State != effectiveState {
-		return CommandRecord{}, fmt.Errorf("%w: %s -> %s", ErrCommandFactConflict, record.State, effectiveState)
-	}
-	if isTerminalCommandState(record.State) && record.State != effectiveState {
-		return CommandRecord{}, fmt.Errorf("%w: terminal command %q cannot become %q", ErrCommandFactConflict, ack.CommandID, effectiveState)
 	}
 	if err := updateCommandTx(ctx, tx, incoming, ""); err != nil {
 		return CommandRecord{}, err
@@ -473,11 +495,109 @@ func (s *Store) reconcileApprovalResumeAfterCommandAck(ctx context.Context, reco
 }
 
 func commandFactPresent(record CommandRecord) bool {
-	return isTerminalCommandState(record.State) || record.OperationID != "" || record.EventCursor != "" || len(record.Result) > 0 || record.Error != nil
+	return isTerminalCommandState(record.State) || record.ReconciliationState == protocol.ReconciliationStateNotFound || record.OperationID != "" || record.EventCursor != "" || len(record.Result) > 0 || record.Error != nil
+}
+
+func isMarkerlessExecuting(record CommandRecord) bool {
+	return record.State == protocol.CommandStateExecuting && record.ExactAckState == "" &&
+		(record.ReconciliationState == "" || record.ReconciliationState == protocol.ReconciliationStateUnknown)
+}
+
+func commandDeliveryConfirmed(record CommandRecord) bool {
+	return isDeliveryConfirmedAckState(record.ExactAckState) ||
+		(record.ReconciliationState == protocol.ReconciliationStateConfirmed &&
+			(record.State == protocol.CommandStateExecuting || record.State == protocol.CommandStateSucceeded))
 }
 
 func sameCommandFact(left, right CommandRecord) bool {
-	return left.State == right.State && left.OperationID == right.OperationID && left.EventCursor == right.EventCursor && bytes.Equal(left.Result, right.Result) && sameAPIError(left.Error, right.Error)
+	return left.State == right.State && left.ExactAckState == right.ExactAckState && left.OperationID == right.OperationID && left.EventCursor == right.EventCursor && bytes.Equal(left.Result, right.Result) && sameAPIError(left.Error, right.Error)
+}
+
+func mergeExactCommandAck(existing, incoming CommandRecord) (CommandRecord, error) {
+	if existing.State != incoming.State && existing.State != protocol.CommandStateUnknown && !allowedExactCommandTransition(existing.State, incoming.State) {
+		if isTerminalCommandState(existing.State) {
+			return CommandRecord{}, fmt.Errorf("%w: terminal command %q cannot become %q", ErrCommandFactConflict, incoming.Intent.Command.CommandID, incoming.State)
+		}
+		return CommandRecord{}, fmt.Errorf("%w: %s -> %s", ErrCommandFactConflict, existing.State, incoming.State)
+	}
+	if existing.ReconciliationState == protocol.ReconciliationStateNotFound && incoming.State != protocol.CommandStateRejected {
+		return CommandRecord{}, fmt.Errorf("%w: command %q was reconciled as not found", ErrCommandFactConflict, incoming.Intent.Command.CommandID)
+	}
+	var err error
+	incoming.ExactAckState, err = mergeExactAckState(existing.ExactAckState, incoming.ExactAckState, incoming.Intent.Command.CommandID)
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	incoming.OperationID, err = mergeExactString(existing.OperationID, incoming.OperationID, "operation id", incoming.Intent.Command.CommandID)
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	incoming.EventCursor, err = mergeExactString(existing.EventCursor, incoming.EventCursor, "event cursor", incoming.Intent.Command.CommandID)
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	incoming.Result, err = mergeExactBytes(existing.Result, incoming.Result, "result", incoming.Intent.Command.CommandID)
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	incoming.Error, err = mergeExactError(existing.Error, incoming.Error, incoming.Intent.Command.CommandID)
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	if existing.ReconciliationState == protocol.ReconciliationStateNotFound {
+		incoming.ReconciliationState = protocol.ReconciliationStateNotFound
+	}
+	return incoming, nil
+}
+
+func mergeExactAckState(existing, incoming protocol.CommandState, commandID string) (protocol.CommandState, error) {
+	if existing == "" {
+		return incoming, nil
+	}
+	if existing == incoming {
+		return existing, nil
+	}
+	if !allowedExactCommandTransition(existing, incoming) {
+		return "", fmt.Errorf("%w: command %q exact ACK state cannot become %q", ErrCommandFactConflict, commandID, incoming)
+	}
+	// An executing ACK is a durable delivery fact. A later failed or rejected
+	// ACK may describe the terminal outcome, but it must not erase that fact
+	// before a retried draft finalization can consume the already-sent revision.
+	if isDeliveryConfirmedAckState(existing) &&
+		(incoming == protocol.CommandStateFailed || incoming == protocol.CommandStateRejected) {
+		return existing, nil
+	}
+	return incoming, nil
+}
+
+func mergeExactString(existing, incoming, field, commandID string) (string, error) {
+	if existing != "" && incoming != "" && existing != incoming {
+		return "", fmt.Errorf("%w: command %q has conflicting %s", ErrCommandFactConflict, commandID, field)
+	}
+	if incoming != "" {
+		return incoming, nil
+	}
+	return existing, nil
+}
+
+func mergeExactBytes(existing, incoming []byte, field, commandID string) ([]byte, error) {
+	if len(existing) > 0 && len(incoming) > 0 && !bytes.Equal(existing, incoming) {
+		return nil, fmt.Errorf("%w: command %q has conflicting %s", ErrCommandFactConflict, commandID, field)
+	}
+	if len(incoming) > 0 {
+		return append(json.RawMessage(nil), incoming...), nil
+	}
+	return append(json.RawMessage(nil), existing...), nil
+}
+
+func mergeExactError(existing, incoming *protocol.ApiError, commandID string) (*protocol.ApiError, error) {
+	if existing != nil && incoming != nil && !sameAPIError(existing, incoming) {
+		return nil, fmt.Errorf("%w: command %q has conflicting error", ErrCommandFactConflict, commandID)
+	}
+	if incoming != nil {
+		return cloneAPIError(incoming), nil
+	}
+	return cloneAPIError(existing), nil
 }
 
 func sameAPIError(left, right *protocol.ApiError) bool {
@@ -647,16 +767,19 @@ func (s *Store) markUnknown(ctx context.Context, commandID, generation string, l
 			return CommandRecord{}, err
 		}
 	}
-	if record.State == protocol.CommandStateUnknown || isTerminalCommandState(record.State) {
+	markerlessExecuting := isMarkerlessExecuting(record)
+	if (commandFactPresent(record) && !markerlessExecuting) || commandDeliveryConfirmed(record) || record.State == protocol.CommandStateUnknown {
 		if err := tx.Commit(ctx); err != nil {
 			return CommandRecord{}, fmt.Errorf("commit existing command unknown transition: %w", err)
 		}
 		return record, nil
 	}
 	record.State = protocol.CommandStateUnknown
-	record.OperationID = ""
-	record.Result = nil
-	record.Error = nil
+	if !markerlessExecuting {
+		record.OperationID = ""
+		record.Result = nil
+		record.Error = nil
+	}
 	if err := updateCommandTx(ctx, tx, record, ""); err != nil {
 		return CommandRecord{}, err
 	}
@@ -699,12 +822,21 @@ func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generat
 			return CommandRecord{}, err
 		}
 	}
+	markerlessExecuting := isMarkerlessExecuting(record)
+	if (commandFactPresent(record) && !markerlessExecuting) || commandDeliveryConfirmed(record) {
+		if err := tx.Commit(ctx); err != nil {
+			return CommandRecord{}, fmt.Errorf("commit existing command fact unknown transition: %w", err)
+		}
+		return record, nil
+	}
 
 	if !isTerminalCommandState(record.State) && record.State != protocol.CommandStateUnknown {
 		record.State = protocol.CommandStateUnknown
-		record.OperationID = ""
-		record.Result = nil
-		record.Error = nil
+		if !markerlessExecuting {
+			record.OperationID = ""
+			record.Result = nil
+			record.Error = nil
+		}
 		if err := updateCommandTx(ctx, tx, record, ""); err != nil {
 			return CommandRecord{}, err
 		}
@@ -783,7 +915,8 @@ func (s *Store) reconcile(ctx context.Context, commandID, generation string, obs
 			return CommandRecord{}, err
 		}
 	}
-	if record.State != protocol.CommandStateUnknown {
+	confirmedExecuting := record.State == protocol.CommandStateExecuting && commandDeliveryConfirmed(record)
+	if record.State != protocol.CommandStateUnknown && !confirmedExecuting {
 		if isTerminalCommandState(record.State) {
 			if err := tx.Commit(ctx); err != nil {
 				return CommandRecord{}, fmt.Errorf("commit terminal reconciliation lookup: %w", err)
@@ -792,10 +925,24 @@ func (s *Store) reconcile(ctx context.Context, commandID, generation string, obs
 		}
 		return CommandRecord{}, ErrCommandNotUnknown
 	}
-	record.ReconciliationState = observation.Reconciliation
-	record.EventCursor = observation.EventCursor
+	if confirmedExecuting && observation.Reconciliation == protocol.ReconciliationStateUnknown {
+		if err := tx.Commit(ctx); err != nil {
+			return CommandRecord{}, fmt.Errorf("commit confirmed command reconciliation lookup: %w", err)
+		}
+		return record, fmt.Errorf("%w: command %q remains confirmed executing", protocol.ErrUnknownCommandResult, commandID)
+	}
+	if confirmedExecuting && observation.Reconciliation == protocol.ReconciliationStateNotFound {
+		if err := tx.Commit(ctx); err != nil {
+			return CommandRecord{}, fmt.Errorf("commit conflicting confirmed command reconciliation lookup: %w", err)
+		}
+		return record, fmt.Errorf("%w: command %q has an exact ACK and cannot be reconciled as not found", ErrCommandFactConflict, commandID)
+	}
 	switch observation.Reconciliation {
 	case protocol.ReconciliationStateUnknown:
+		record.ReconciliationState = observation.Reconciliation
+		if observation.EventCursor != "" {
+			record.EventCursor = observation.EventCursor
+		}
 		if err := updateCommandTx(ctx, tx, record, "unknown"); err != nil {
 			return CommandRecord{}, err
 		}
@@ -815,10 +962,38 @@ func (s *Store) reconcile(ctx context.Context, commandID, generation string, obs
 	if !allowedReconciliationState(observation.State) {
 		return CommandRecord{}, fmt.Errorf("%w: unknown -> %s", ErrCommandTransition, observation.State)
 	}
-	record.State = observation.State
-	record.OperationID = observation.OperationID
-	record.Result = append(json.RawMessage(nil), observation.Result...)
-	record.Error = cloneAPIError(observation.Error)
+	if record.ExactAckState == "" {
+		// A markerless record may contain optional facts from an earlier writer.
+		// Reconciliation is a newer observation: retain omitted fields, but let
+		// each supplied field advance the legacy record, including its cursor.
+		record.State = observation.State
+		record.ReconciliationState = observation.Reconciliation
+		if observation.OperationID != "" {
+			record.OperationID = observation.OperationID
+		}
+		if observation.EventCursor != "" {
+			record.EventCursor = observation.EventCursor
+		}
+		if len(observation.Result) > 0 {
+			record.Result = append(json.RawMessage(nil), observation.Result...)
+		}
+		if observation.Error != nil {
+			record.Error = cloneAPIError(observation.Error)
+		}
+	} else {
+		incoming := cloneRecord(record)
+		incoming.State = observation.State
+		incoming.OperationID = observation.OperationID
+		incoming.EventCursor = observation.EventCursor
+		incoming.Result = append(json.RawMessage(nil), observation.Result...)
+		incoming.Error = cloneAPIError(observation.Error)
+		incoming.ReconciliationState = observation.Reconciliation
+		merged, err := mergeExactCommandAck(record, incoming)
+		if err != nil {
+			return CommandRecord{}, err
+		}
+		record = merged
+	}
 	if err := updateCommandTx(ctx, tx, record, string(observation.Reconciliation)); err != nil {
 		return CommandRecord{}, err
 	}
@@ -1623,7 +1798,7 @@ const commandQuery = `
 	       command.generation, command.kind, command.issued_at,
 	       command.payload, command.digest, command.state, command.received_at,
 	       command.operation_id, command.result, command.error,
-	       command.event_cursor, command.reconciliation_state
+	       command.event_cursor, command.reconciliation_state, command.exact_ack_state
 	FROM execution_commands AS command
 `
 
@@ -1707,13 +1882,13 @@ func lockApprovalRunForAdmissionTx(ctx context.Context, tx pgx.Tx, request appro
 func scanCommand(row interface{ Scan(...any) error }) (CommandRecord, error) {
 	var record CommandRecord
 	var runID *string
-	var kind, digest, state, issuedAt, receivedAt, operationID, eventCursor, reconciliationState string
+	var kind, digest, state, issuedAt, receivedAt, operationID, eventCursor, reconciliationState, exactAckState string
 	var payload []byte
 	var resultPayload, errorPayload []byte
 	if err := row.Scan(
 		&record.Intent.Command.CommandID, &record.Intent.Command.SessionID, &runID,
 		&record.Intent.Generation, &kind, &issuedAt, &payload, &digest, &state,
-		&receivedAt, &operationID, &resultPayload, &errorPayload, &eventCursor, &reconciliationState,
+		&receivedAt, &operationID, &resultPayload, &errorPayload, &eventCursor, &reconciliationState, &exactAckState,
 	); err != nil {
 		return CommandRecord{}, err
 	}
@@ -1728,6 +1903,12 @@ func scanCommand(row interface{ Scan(...any) error }) (CommandRecord, error) {
 	record.OperationID = operationID
 	record.EventCursor = eventCursor
 	record.ReconciliationState = protocol.ReconciliationState(reconciliationState)
+	if exactAckState != "" {
+		record.ExactAckState = protocol.CommandState(exactAckState)
+		if record.State == protocol.CommandStateUnknown {
+			record.State = record.ExactAckState
+		}
+	}
 	record.Result = append(json.RawMessage(nil), resultPayload...)
 	if len(errorPayload) > 0 {
 		var apiError protocol.ApiError
@@ -1759,10 +1940,11 @@ func updateCommandTx(ctx context.Context, tx pgx.Tx, record CommandRecord, recon
 		    error = $5,
 		    event_cursor = $6,
 		    reconciliation_state = $7,
+		    exact_ack_state = $8,
 		    reconciled_at = CASE WHEN $7 <> '' THEN CURRENT_TIMESTAMP ELSE reconciled_at END,
 		    updated_at = CURRENT_TIMESTAMP
-		WHERE command_id = $1 AND generation = $8
-	`, record.Intent.Command.CommandID, record.State, record.OperationID, []byte(record.Result), errorPayload, record.EventCursor, reconciliationState, record.Intent.Generation)
+		WHERE command_id = $1 AND generation = $9
+	`, record.Intent.Command.CommandID, record.State, record.OperationID, []byte(record.Result), errorPayload, record.EventCursor, reconciliationState, record.ExactAckState, record.Intent.Generation)
 	if err != nil {
 		return fmt.Errorf("persist command state: %w", err)
 	}

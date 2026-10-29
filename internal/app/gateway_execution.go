@@ -29,11 +29,12 @@ var (
 )
 
 type gatewayExecutionTransport struct {
-	gateway    *gateway.Server
-	sessions   *sessions.Store
-	runs       *runs.Store
-	eventStore gatewayEventAppender
-	now        func() time.Time
+	gateway       *gateway.Server
+	sessions      *sessions.Store
+	runs          *runs.Store
+	draftCommands runs.DraftCommandLifecycle
+	eventStore    gatewayEventAppender
+	now           func() time.Time
 }
 
 type gatewayEventAppender interface {
@@ -133,8 +134,26 @@ func (t *gatewayExecutionTransport) HandleCommandAck(ctx context.Context, connec
 	} else if *ack.RunID != *record.Intent.Command.RunID {
 		return fmt.Errorf("%w: ACK run identity does not match command %q", hosts.ErrInvalid, ack.CommandID)
 	}
-	if _, err := t.runs.RecordExactCommandAck(ctx, platformSessionID, ack); err != nil && !errors.Is(err, protocol.ErrUnknownCommandResult) {
+	record, err = t.runs.RecordExactCommandAck(ctx, platformSessionID, ack)
+	if err != nil {
+		if errors.Is(err, protocol.ErrUnknownCommandResult) {
+			return nil
+		}
 		return err
+	}
+	return t.finalizeDraftCommand(ctx, record)
+}
+
+func (t *gatewayExecutionTransport) finalizeDraftCommand(ctx context.Context, record runs.CommandRecord) error {
+	if t == nil || t.draftCommands == nil {
+		return nil
+	}
+	if record.State != protocol.CommandStateExecuting && record.State != protocol.CommandStateSucceeded && record.State != protocol.CommandStateFailed && record.State != protocol.CommandStateRejected {
+		return nil
+	}
+	delivered := record.DraftDeliveryConfirmed()
+	if _, err := t.draftCommands.FinalizeCommand(ctx, record.Intent.Command.CommandID, delivered); err != nil {
+		return errors.Join(runs.ErrDraftRecoveryRequired, err)
 	}
 	return nil
 }

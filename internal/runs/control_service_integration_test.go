@@ -11,6 +11,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
@@ -78,6 +79,97 @@ func TestPersistentControlServiceAuthorizesActualSessionAndDeduplicatesSubmit(t 
 	}
 	if len(control.authorizer.calls()) != 3 {
 		t.Fatalf("authorization calls = %+v, want submit, duplicate, cross-project", control.authorizer.calls())
+	}
+}
+
+func TestPersistentControlServiceSubmitDraftFinalizesAfterDelivery(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture := newControlFixture(t, db, 1)
+	control := newControlServiceFixture(t, db, fixture)
+	draftStore := drafts.NewStore(db.Pool())
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, query := range []string{
+			`DELETE FROM conversation_draft_commands WHERE session_id = $1`,
+			`DELETE FROM conversation_draft_mutations WHERE session_id = $1`,
+			`DELETE FROM conversation_drafts WHERE session_id = $1`,
+		} {
+			if _, err := db.Pool().Exec(cleanupCtx, query, fixture.sessionIDs[0]); err != nil {
+				t.Errorf("cleanup draft rows with query %q: %v", query, err)
+			}
+		}
+	})
+
+	draft, err := draftStore.Apply(ctx, drafts.UpdateInput{
+		SessionID:      fixture.sessionIDs[0],
+		OwnerUserID:    fixture.userID,
+		MutationID:     "control-draft-first",
+		ClientID:       "desktop",
+		ClientSequence: 1,
+		Content:        "send from draft",
+	})
+	if err != nil {
+		t.Fatalf("seed control draft: %v", err)
+	}
+	principal := auth.Principal{UserID: fixture.userID, ProjectScope: map[string]struct{}{fixture.projectA: {}}}
+	request := protocol.SubmitRunRequest{CommandID: fixture.command + "-draft-submit", Prompt: draft.Content}
+	response, err := control.service.SubmitRunWithDraft(ctx, principal, fixture.sessionIDs[0], request, draft.Revision)
+	if err != nil {
+		t.Fatalf("submit draft run: %v", err)
+	}
+	if response.Ack.State != protocol.CommandStateSucceeded || response.Ack.Deduplicated {
+		t.Fatalf("draft submit ack = %+v", response.Ack)
+	}
+	current, err := draftStore.Get(ctx, fixture.sessionIDs[0], fixture.userID)
+	if err != nil {
+		t.Fatalf("read consumed control draft: %v", err)
+	}
+	if current.Content != "" || current.Revision != draft.Revision+1 {
+		t.Fatalf("consumed control draft = %+v, want empty revision %d", current, draft.Revision+1)
+	}
+	duplicate, err := control.service.SubmitRunWithDraft(ctx, principal, fixture.sessionIDs[0], request, draft.Revision)
+	if err != nil {
+		t.Fatalf("duplicate draft submit: %v", err)
+	}
+	if !duplicate.Ack.Deduplicated || control.transport.sendCount() != 1 {
+		t.Fatalf("duplicate draft submit ack = %+v, sends = %d", duplicate.Ack, control.transport.sendCount())
+	}
+	staleRequest := protocol.SubmitRunRequest{
+		CommandID: fixture.command + "-draft-stale",
+		Prompt:    draft.Content,
+	}
+	if _, err := control.service.SubmitRunWithDraft(ctx, principal, fixture.sessionIDs[0], staleRequest, draft.Revision); !errors.Is(err, drafts.ErrDraftRevisionStale) {
+		t.Fatalf("stale draft submit error = %v, want %v", err, drafts.ErrDraftRevisionStale)
+	}
+	if _, err := NewStore(db.Pool()).Lookup(ctx, fixture.sessionIDs[0], staleRequest.CommandID); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("stale draft command lookup error = %v, want %v", err, ErrCommandNotFound)
+	}
+	if control.transport.sendCount() != 1 {
+		t.Fatalf("transport sends after stale draft submit = %d, want 1", control.transport.sendCount())
+	}
+	bound, err := draftStore.Apply(ctx, drafts.UpdateInput{
+		SessionID:      fixture.sessionIDs[0],
+		OwnerUserID:    fixture.userID,
+		MutationID:     "control-draft-bound-mismatch",
+		ClientID:       "desktop",
+		ClientSequence: 2,
+		Content:        "bound draft content",
+	})
+	if err != nil {
+		t.Fatalf("seed same-revision mismatch draft: %v", err)
+	}
+	mismatchedRequest := protocol.SubmitRunRequest{CommandID: fixture.command + "-draft-content-mismatch", Prompt: "different command payload"}
+	if _, err := control.service.SubmitRunWithDraft(ctx, principal, fixture.sessionIDs[0], mismatchedRequest, bound.Revision); !errors.Is(err, drafts.ErrDraftRevisionStale) {
+		t.Fatalf("same-revision content mismatch error = %v, want %v", err, drafts.ErrDraftRevisionStale)
+	}
+	if _, err := NewStore(db.Pool()).Lookup(ctx, fixture.sessionIDs[0], mismatchedRequest.CommandID); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("same-revision mismatch command lookup error = %v, want %v", err, ErrCommandNotFound)
+	}
+	if control.transport.sendCount() != 1 {
+		t.Fatalf("transport sends after same-revision mismatch = %d, want 1", control.transport.sendCount())
 	}
 }
 
@@ -895,6 +987,7 @@ func newControlServiceFixture(t *testing.T, db *database.DB, fixture controlFixt
 	sessionStore := sessions.NewStore(db.Pool())
 	authorizer := &recordingAuthorizer{sessionStore: sessionStore}
 	controller, err := NewController(runStore, transport, ControllerConfig{
+		DraftCommands: drafts.NewStore(db.Pool()),
 		ResolveGeneration: func(ctx context.Context, sessionID string) (string, error) {
 			session, err := sessionStore.Get(ctx, sessionID)
 			if err != nil {

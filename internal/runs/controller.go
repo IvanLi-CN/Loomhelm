@@ -12,8 +12,12 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
+	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/jackc/pgx/v5"
 )
+
+var ErrDraftRecoveryRequired = errors.New("draft command recovery is required")
 
 type CommandTransport interface {
 	SendCommand(context.Context, protocol.Command) (protocol.CommandAck, error)
@@ -22,10 +26,20 @@ type CommandTransport interface {
 
 type GenerationResolver func(context.Context, string) (string, error)
 
+// DraftCommandLifecycle is the narrow durable seam between Run command
+// admission/recovery and the private draft store. Implementations must keep
+// PrepareCommandTx free of external side effects; FinalizeCommand is safe to
+// retry and must never send a command.
+type DraftCommandLifecycle interface {
+	PrepareCommandTx(context.Context, pgx.Tx, drafts.CommandDraftInput) error
+	FinalizeCommand(context.Context, string, bool) (drafts.CommandDraftResult, error)
+}
+
 type ControllerConfig struct {
 	Generation         string
 	ResolveGeneration  GenerationResolver
 	RunID              func(protocol.Command, string) string
+	DraftCommands      DraftCommandLifecycle
 	OwnerID            string
 	CandidateSourceSHA string
 	ArtifactDigest     string
@@ -41,6 +55,7 @@ type Controller struct {
 	generation         string
 	resolveGeneration  GenerationResolver
 	runID              func(protocol.Command, string) string
+	draftCommands      DraftCommandLifecycle
 	ownerID            string
 	candidateSourceSHA string
 	artifactDigest     string
@@ -77,6 +92,7 @@ func NewController(store *Store, transport CommandTransport, config ControllerCo
 		generation:         config.Generation,
 		resolveGeneration:  config.ResolveGeneration,
 		runID:              runID,
+		draftCommands:      config.DraftCommands,
 		ownerID:            ownerID,
 		candidateSourceSHA: firstNonEmpty(config.CandidateSourceSHA, "unknown-source"),
 		artifactDigest:     firstNonEmpty(config.ArtifactDigest, "unknown-artifact"),
@@ -86,6 +102,27 @@ func NewController(store *Store, transport CommandTransport, config ControllerCo
 }
 
 func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
+	return c.acceptCommand(ctx, command, nil)
+}
+
+// AcceptCommandWithDraft admits a Run send while binding the exact draft
+// revision carried by the command. The binding is durable before transport
+// delivery; a later ACK or reconciliation fact finalizes it without replaying
+// the command.
+func (c *Controller) AcceptCommandWithDraft(ctx context.Context, command protocol.Command, draft drafts.CommandDraftInput) (protocol.CommandAck, error) {
+	if c == nil || c.draftCommands == nil {
+		return protocol.CommandAck{}, fmt.Errorf("%w: draft command lifecycle is required", ErrDraftRecoveryRequired)
+	}
+	if command.Kind != protocol.CommandKindRunSend {
+		return protocol.CommandAck{}, fmt.Errorf("%w: draft binding requires %q", ErrInvalidCommand, protocol.CommandKindRunSend)
+	}
+	if draft.CommandID != command.CommandID || draft.SessionID != command.SessionID {
+		return protocol.CommandAck{}, fmt.Errorf("%w: command and draft identities do not match", ErrInvalidCommand)
+	}
+	return c.acceptCommand(ctx, command, &draft)
+}
+
+func (c *Controller) acceptCommand(ctx context.Context, command protocol.Command, draft *drafts.CommandDraftInput) (protocol.CommandAck, error) {
 	if c == nil || c.store == nil || c.transport == nil {
 		return protocol.CommandAck{}, errors.New("run controller is not initialized")
 	}
@@ -102,6 +139,11 @@ func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command
 		return protocol.CommandAck{}, err
 	}
 	intent := CommandIntent{Command: command, Generation: generation}
+	if draft != nil {
+		revision := draft.ExpectedRevision
+		intent.DraftRevision = &revision
+		intent.DraftOwnerID = draft.OwnerUserID
+	}
 	if command.Kind == protocol.CommandKindRunSend {
 		if command.RunID == nil || strings.TrimSpace(*command.RunID) == "" {
 			runID := c.runID(command, generation)
@@ -111,12 +153,18 @@ func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command
 			intent.Command.RunID = &runID
 		}
 		lease := c.leaseForIntent(intent)
-		accepted, _, err := c.store.AcceptRunWithLease(ctx, intent, NewRunInput{
+		var mutation CommandAdmissionMutation
+		if draft != nil {
+			mutation = func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
+				return c.draftCommands.PrepareCommandTx(mutationCtx, tx, *draft)
+			}
+		}
+		accepted, _, err := c.store.AcceptRunWithLeaseAndMutation(ctx, intent, NewRunInput{
 			ID:         optionalRunID(intent.Command.RunID),
 			SessionID:  command.SessionID,
 			CommandID:  command.CommandID,
 			Generation: generation,
-		}, *lease)
+		}, *lease, mutation)
 		if err != nil {
 			return protocol.CommandAck{}, err
 		}
@@ -232,7 +280,18 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 		return protocol.Reconciliation{}, err
 	}
 	if isTerminalCommandState(record.State) {
-		return terminalReconciliation(record), nil
+		reconciliation := terminalReconciliation(record)
+		if err := c.finalizeDraftCommand(ctx, record); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
+	}
+	if record.State == protocol.CommandStateExecuting && commandDeliveryConfirmed(record) {
+		reconciliation := confirmedCommandReconciliation(record)
+		if err := c.finalizeDraftCommand(ctx, record); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
 	}
 	lease := c.leaseForIntent(CommandIntent{Command: record.Intent.Command, Generation: record.Intent.Generation})
 	if lease != nil {
@@ -256,14 +315,28 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 		return protocol.Reconciliation{}, err
 	}
 	if isTerminalCommandState(record.State) {
-		return terminalReconciliation(record), nil
+		reconciliation := terminalReconciliation(record)
+		if err := c.finalizeDraftCommand(ctx, record); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
+	}
+	if record.State == protocol.CommandStateExecuting && commandDeliveryConfirmed(record) {
+		reconciliation := confirmedCommandReconciliation(record)
+		if err := c.finalizeDraftCommand(ctx, record); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
 	}
 	reconciliation, err := c.transport.ReconcileCommand(ctx, record.Intent.Command)
 	if err != nil {
 		return reconciliation, err
 	}
 	if reconciliation.CommandID == "" {
-		reconciliation.CommandID = commandID
+		return reconciliation, fmt.Errorf("transport returned an empty command id for %q", commandID)
+	}
+	if reconciliation.CommandID != commandID {
+		return reconciliation, fmt.Errorf("transport returned command id %q for %q", reconciliation.CommandID, commandID)
 	}
 	observation := CommandObservation{EventCursor: optionalStringValue(reconciliation.EventCursor)}
 	switch reconciliation.State {
@@ -285,7 +358,10 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 	} else {
 		reconciled, reconcileErr = c.store.Reconcile(ctx, commandID, record.Intent.Generation, observation)
 	}
-	_ = reconciled
+	if reconciled.Intent.Command.CommandID != "" &&
+		(isTerminalCommandState(reconciled.State) || reconciled.DraftDeliveryConfirmed()) {
+		reconcileErr = errors.Join(reconcileErr, c.finalizeDraftCommand(ctx, reconciled))
+	}
 	return reconciliation, reconcileErr
 }
 
@@ -306,6 +382,20 @@ func (c *Controller) currentGeneration(ctx context.Context, sessionID string) (s
 	return c.generation, nil
 }
 
+func (c *Controller) finalizeDraftCommand(ctx context.Context, record CommandRecord) error {
+	if c.draftCommands == nil {
+		return nil
+	}
+	if record.State != protocol.CommandStateExecuting && !isTerminalCommandState(record.State) {
+		return nil
+	}
+	delivered := record.DraftDeliveryConfirmed()
+	if _, err := c.draftCommands.FinalizeCommand(ctx, record.Intent.Command.CommandID, delivered); err != nil {
+		return errors.Join(ErrDraftRecoveryRequired, err)
+	}
+	return nil
+}
+
 func (c *Controller) dispatchAccepted(ctx context.Context, intent CommandIntent, accepted AcceptResult) (protocol.CommandAck, error) {
 	ack := accepted.Record.Ack()
 	ack.Deduplicated = accepted.Deduplicated
@@ -319,7 +409,7 @@ func (c *Controller) dispatchAccepted(ctx context.Context, intent CommandIntent,
 			}
 			return c.reconcileOrphanedCommand(ctx, accepted.Record)
 		}
-		return ack, nil
+		return ack, c.finalizeDraftCommand(ctx, accepted.Record)
 	}
 	if accepted.Record.State != protocol.CommandStateAccepted {
 		return ack, nil
@@ -352,7 +442,7 @@ func (c *Controller) dispatchAccepted(ctx context.Context, intent CommandIntent,
 			}
 			result := record.Ack()
 			result.Deduplicated = accepted.Deduplicated
-			return result, sendErr
+			return result, errors.Join(sendErr, c.finalizeDraftCommand(ctx, record))
 		}
 		if errors.Is(factErr, ErrCommandFactConflict) {
 			return ack, factErr
@@ -527,7 +617,10 @@ func (c *Controller) sendCommand(ctx context.Context, intent CommandIntent, leas
 }
 
 func normalizeTransportAck(command protocol.Command, ack protocol.CommandAck) (protocol.CommandAck, error) {
-	if ack.CommandID != "" && ack.CommandID != command.CommandID {
+	if ack.CommandID == "" {
+		return protocol.CommandAck{}, fmt.Errorf("transport returned an empty command id for %q", command.CommandID)
+	}
+	if ack.CommandID != command.CommandID {
 		return protocol.CommandAck{}, fmt.Errorf("transport returned command id %q for %q", ack.CommandID, command.CommandID)
 	}
 	ack.CommandID = command.CommandID
@@ -550,13 +643,21 @@ func normalizeTransportAck(command protocol.Command, ack protocol.CommandAck) (p
 
 func terminalReconciliation(record CommandRecord) protocol.Reconciliation {
 	state := protocol.ReconciliationStateConfirmed
-	if record.State == protocol.CommandStateFailed || record.State == protocol.CommandStateRejected {
+	if (record.State == protocol.CommandStateFailed || record.State == protocol.CommandStateRejected) && !commandDeliveryConfirmed(record) {
 		state = protocol.ReconciliationStateNotFound
 	}
 	return protocol.Reconciliation{
 		CommandID:   record.Intent.Command.CommandID,
 		EventCursor: optionalString(record.EventCursor),
 		State:       state,
+	}
+}
+
+func confirmedCommandReconciliation(record CommandRecord) protocol.Reconciliation {
+	return protocol.Reconciliation{
+		CommandID:   record.Intent.Command.CommandID,
+		EventCursor: optionalString(record.EventCursor),
+		State:       protocol.ReconciliationStateConfirmed,
 	}
 }
 

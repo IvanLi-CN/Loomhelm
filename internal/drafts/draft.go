@@ -18,6 +18,7 @@ var (
 	ErrDraftOwnerConflict = errors.New("draft owner conflicts with persisted state")
 	ErrDraftMutation      = errors.New("draft mutation conflicts with persisted state")
 	ErrDraftStaleMutation = errors.New("draft mutation is stale")
+	ErrDraftRevisionStale = errors.New("draft revision is stale")
 )
 
 const (
@@ -63,6 +64,38 @@ type ConsumeResult struct {
 	Consumed bool
 }
 
+// CommandDraftInput binds one durable run command to the exact draft body
+// that the caller put in its command payload. The binding is created in the
+// command admission transaction and finalized only after a transport fact or
+// a trusted reconciliation result exists.
+type CommandDraftInput struct {
+	CommandID        string
+	SessionID        string
+	OwnerUserID      string
+	ExpectedRevision int64
+	Content          string
+}
+
+// CommandDraftState records whether a bound draft was cleared after delivery
+// or deliberately retained because the command was not delivered or a newer
+// revision replaced it.
+type CommandDraftState string
+
+const (
+	CommandDraftPending   CommandDraftState = "pending"
+	CommandDraftConsumed  CommandDraftState = "consumed"
+	CommandDraftPreserved CommandDraftState = "preserved"
+)
+
+type CommandDraftResult struct {
+	CommandID string
+	SessionID string
+	State     CommandDraftState
+	Draft     Draft
+	Bound     bool
+	Consumed  bool
+}
+
 func (input UpdateInput) validate() error {
 	if err := validateIdentity(input.SessionID, "session id"); err != nil {
 		return err
@@ -103,6 +136,28 @@ func (input ConsumeInput) validate() error {
 	}
 	if input.ExpectedRevision <= 0 {
 		return fmt.Errorf("%w: expected revision must be positive", ErrInvalidDraft)
+	}
+	return nil
+}
+
+func (input CommandDraftInput) validate() error {
+	if err := validateIdentity(input.CommandID, "command id"); err != nil {
+		return err
+	}
+	if err := validateIdentity(input.SessionID, "session id"); err != nil {
+		return err
+	}
+	if err := validateIdentity(input.OwnerUserID, "owner user id"); err != nil {
+		return err
+	}
+	if input.ExpectedRevision <= 0 {
+		return fmt.Errorf("%w: expected revision must be positive", ErrInvalidDraft)
+	}
+	if !utf8.ValidString(input.Content) {
+		return fmt.Errorf("%w: content must be valid UTF-8", ErrInvalidDraft)
+	}
+	if len([]byte(input.Content)) > MaxContentBytes {
+		return fmt.Errorf("%w: content exceeds %d bytes", ErrInvalidDraft, MaxContentBytes)
 	}
 	return nil
 }

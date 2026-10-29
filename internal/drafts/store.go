@@ -2,11 +2,13 @@ package drafts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -176,6 +178,30 @@ func (s *Store) ConsumeIfCurrent(ctx context.Context, input ConsumeInput) (Consu
 		return ConsumeResult{}, fmt.Errorf("begin draft consume: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	result, err := s.ConsumeIfCurrentTx(ctx, tx, input)
+	if err != nil {
+		return ConsumeResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ConsumeResult{}, fmt.Errorf("commit draft consume: %w", err)
+	}
+	return result, nil
+}
+
+// ConsumeIfCurrentTx applies the exact-revision consume operation to the
+// caller-owned transaction. It never commits or rolls back tx. Callers that
+// admit a durable command can therefore keep the command's binding and the
+// conditional draft mutation in one transaction.
+func (s *Store) ConsumeIfCurrentTx(ctx context.Context, tx pgx.Tx, input ConsumeInput) (ConsumeResult, error) {
+	if err := s.ready(ctx); err != nil {
+		return ConsumeResult{}, err
+	}
+	if tx == nil {
+		return ConsumeResult{}, errors.New("draft transaction is required")
+	}
+	if err := input.validate(); err != nil {
+		return ConsumeResult{}, err
+	}
 	if err := ensureSessionOwnerTx(ctx, tx, input.SessionID, input.OwnerUserID); err != nil {
 		return ConsumeResult{}, err
 	}
@@ -198,9 +224,6 @@ func (s *Store) ConsumeIfCurrent(ctx context.Context, input ConsumeInput) (Consu
 		if mutation.OwnerUserID != input.OwnerUserID || mutation.Kind != mutationKindConsume || mutation.ClientID != "loomhelm" || mutation.ClientSequence != 0 || mutation.Revision != input.ExpectedRevision+1 {
 			return ConsumeResult{}, ErrDraftMutation
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return ConsumeResult{}, fmt.Errorf("commit duplicate draft consume: %w", err)
-		}
 		return ConsumeResult{Draft: current, Consumed: true}, nil
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
@@ -209,9 +232,6 @@ func (s *Store) ConsumeIfCurrent(ctx context.Context, input ConsumeInput) (Consu
 		return ConsumeResult{}, err
 	}
 	if !consumed {
-		if err := tx.Commit(ctx); err != nil {
-			return ConsumeResult{}, fmt.Errorf("commit unchanged draft consume: %w", err)
-		}
 		return ConsumeResult{Draft: draft, Consumed: false}, nil
 	}
 
@@ -232,10 +252,168 @@ func (s *Store) ConsumeIfCurrent(ctx context.Context, input ConsumeInput) (Consu
 	`, input.SessionID, draft.Revision, draft.MutationID, draft.ClientID, now); err != nil {
 		return ConsumeResult{}, fmt.Errorf("clear draft projection: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ConsumeResult{}, fmt.Errorf("commit draft consume: %w", err)
-	}
 	return ConsumeResult{Draft: draft, Consumed: true}, nil
+}
+
+// PrepareCommandTx records that a command carries one exact draft revision.
+// The current projection is checked while the Session row is locked, but the
+// projection is not cleared here: delivery may still fail or remain unknown.
+func (s *Store) PrepareCommandTx(ctx context.Context, tx pgx.Tx, input CommandDraftInput) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
+	if tx == nil {
+		return errors.New("draft transaction is required")
+	}
+	if err := input.validate(); err != nil {
+		return err
+	}
+	if err := ensureSessionOwnerTx(ctx, tx, input.SessionID, input.OwnerUserID); err != nil {
+		return err
+	}
+	var commandSessionID, commandKind string
+	var commandPayload []byte
+	err := tx.QueryRow(ctx, `
+		SELECT session_id, kind, payload
+		FROM execution_commands
+		WHERE command_id = $1
+		FOR UPDATE
+	`, input.CommandID).Scan(&commandSessionID, &commandKind, &commandPayload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrDraftMutation
+	}
+	if err != nil {
+		return fmt.Errorf("lock draft command identity: %w", err)
+	}
+	if commandSessionID != input.SessionID || commandKind != "run.send" {
+		return ErrDraftMutation
+	}
+	validateCommandPayload := func() error {
+		var commandRequest struct {
+			Prompt *string `json:"prompt"`
+		}
+		if err := json.Unmarshal(commandPayload, &commandRequest); err != nil || commandRequest.Prompt == nil || *commandRequest.Prompt != input.Content {
+			return ErrDraftMutation
+		}
+		return nil
+	}
+	binding, found, err := lockCommandDraftTx(ctx, tx, input.CommandID)
+	if err != nil {
+		return err
+	}
+	if found {
+		if binding.SessionID != input.SessionID || binding.OwnerUserID != input.OwnerUserID || binding.ExpectedRevision != input.ExpectedRevision {
+			return ErrDraftMutation
+		}
+		return validateCommandPayload()
+	}
+	current, found, err := lockDraftTx(ctx, tx, input.SessionID)
+	if err != nil {
+		return err
+	}
+	if !found || current.OwnerUserID != input.OwnerUserID || current.Revision != input.ExpectedRevision || current.Content != input.Content {
+		return ErrDraftRevisionStale
+	}
+	if err := validateCommandPayload(); err != nil {
+		return err
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO conversation_draft_commands (
+			command_id, session_id, owner_user_id, expected_revision,
+			state, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $6)
+	`, input.CommandID, input.SessionID, input.OwnerUserID, input.ExpectedRevision, CommandDraftPending, now); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "conversation_draft_commands_pending_revision_idx" {
+			return ErrDraftRevisionStale
+		}
+		return fmt.Errorf("record draft command binding: %w", err)
+	}
+	return nil
+}
+
+// FinalizeCommand applies the durable delivery fact to a previously prepared
+// command binding. A delivered command consumes only the bound revision; a
+// failed or not-found command preserves the draft. Finalization is idempotent
+// and deliberately does not send or reconcile a command.
+func (s *Store) FinalizeCommand(ctx context.Context, commandID string, delivered bool) (CommandDraftResult, error) {
+	if err := s.ready(ctx); err != nil {
+		return CommandDraftResult{}, err
+	}
+	if err := validateIdentity(commandID, "command id"); err != nil {
+		return CommandDraftResult{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CommandDraftResult{}, fmt.Errorf("begin draft command finalization: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	binding, found, err := readCommandDraftTx(ctx, tx, commandID)
+	if err != nil {
+		return CommandDraftResult{}, err
+	}
+	if !found {
+		if err := tx.Commit(ctx); err != nil {
+			return CommandDraftResult{}, fmt.Errorf("commit absent draft command finalization: %w", err)
+		}
+		return CommandDraftResult{CommandID: commandID}, nil
+	}
+	if err := ensureSessionOwnerTx(ctx, tx, binding.SessionID, binding.OwnerUserID); err != nil {
+		return CommandDraftResult{}, err
+	}
+	// The second lock observes the binding after the Session lock establishes
+	// the same order used by draft updates and command admission.
+	binding, found, err = lockCommandDraftTx(ctx, tx, commandID)
+	if err != nil {
+		return CommandDraftResult{}, err
+	}
+	if !found {
+		return CommandDraftResult{}, ErrDraftMutation
+	}
+	result := CommandDraftResult{
+		CommandID: commandID,
+		SessionID: binding.SessionID,
+		State:     CommandDraftState(binding.State),
+		Bound:     true,
+	}
+	if binding.State != string(CommandDraftPending) {
+		if err := tx.Commit(ctx); err != nil {
+			return CommandDraftResult{}, fmt.Errorf("commit duplicate draft command finalization: %w", err)
+		}
+		return result, nil
+	}
+	state := CommandDraftPreserved
+	if delivered {
+		consumed, err := s.ConsumeIfCurrentTx(ctx, tx, ConsumeInput{
+			SessionID:        binding.SessionID,
+			OwnerUserID:      binding.OwnerUserID,
+			ExpectedRevision: binding.ExpectedRevision,
+			CommandID:        commandID,
+		})
+		if err != nil {
+			return CommandDraftResult{}, err
+		}
+		result.Draft = consumed.Draft
+		result.Consumed = consumed.Consumed
+		if consumed.Consumed {
+			state = CommandDraftConsumed
+		}
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	if _, err := tx.Exec(ctx, `
+		UPDATE conversation_draft_commands
+		SET state = $2, updated_at = $3, finalized_at = $3
+		WHERE command_id = $1
+	`, commandID, state, now); err != nil {
+		return CommandDraftResult{}, fmt.Errorf("finalize draft command binding: %w", err)
+	}
+	result.State = state
+	if err := tx.Commit(ctx); err != nil {
+		return CommandDraftResult{}, fmt.Errorf("commit draft command finalization: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Store) ensureSessionOwner(ctx context.Context, sessionID, ownerUserID string) error {
@@ -279,6 +457,14 @@ type mutationRecord struct {
 	Revision       int64
 }
 
+type commandDraftRecord struct {
+	CommandID        string
+	SessionID        string
+	OwnerUserID      string
+	ExpectedRevision int64
+	State            string
+}
+
 const (
 	mutationKindUpdate  = "update"
 	mutationKindConsume = "consume"
@@ -297,6 +483,39 @@ func lockMutationTx(ctx context.Context, tx pgx.Tx, sessionID, mutationID string
 	}
 	if err != nil {
 		return mutationRecord{}, false, fmt.Errorf("lock draft mutation: %w", err)
+	}
+	return record, true, nil
+}
+
+func readCommandDraftTx(ctx context.Context, tx pgx.Tx, commandID string) (commandDraftRecord, bool, error) {
+	var record commandDraftRecord
+	err := tx.QueryRow(ctx, `
+		SELECT command_id, session_id, owner_user_id, expected_revision, state
+		FROM conversation_draft_commands
+		WHERE command_id = $1
+	`, commandID).Scan(&record.CommandID, &record.SessionID, &record.OwnerUserID, &record.ExpectedRevision, &record.State)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return commandDraftRecord{}, false, nil
+	}
+	if err != nil {
+		return commandDraftRecord{}, false, fmt.Errorf("read draft command binding: %w", err)
+	}
+	return record, true, nil
+}
+
+func lockCommandDraftTx(ctx context.Context, tx pgx.Tx, commandID string) (commandDraftRecord, bool, error) {
+	var record commandDraftRecord
+	err := tx.QueryRow(ctx, `
+		SELECT command_id, session_id, owner_user_id, expected_revision, state
+		FROM conversation_draft_commands
+		WHERE command_id = $1
+		FOR UPDATE
+	`, commandID).Scan(&record.CommandID, &record.SessionID, &record.OwnerUserID, &record.ExpectedRevision, &record.State)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return commandDraftRecord{}, false, nil
+	}
+	if err != nil {
+		return commandDraftRecord{}, false, fmt.Errorf("lock draft command binding: %w", err)
 	}
 	return record, true, nil
 }
