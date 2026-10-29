@@ -39,6 +39,28 @@ func TestBrowserAuthenticationDoesNotBecomeAnMCPTool(t *testing.T) {
 	t.Fatal("browser session operation missing from contract")
 }
 
+func TestValidateRejectsBodylessOperationWithoutResponseStatus(t *testing.T) {
+	data, err := os.ReadFile("../../contracts/loomhelm-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source contract
+	if err := json.Unmarshal(data, &source); err != nil {
+		t.Fatal(err)
+	}
+	for index := range source.REST.Operations {
+		if source.REST.Operations[index].OperationID != "listProjects" {
+			continue
+		}
+		source.REST.Operations[index].ResponseType = ""
+		if err := validate(source); err == nil || !strings.Contains(err.Error(), "must declare response_status or response_statuses") {
+			t.Fatalf("missing response contract accepted: %v", err)
+		}
+		return
+	}
+	t.Fatal("listProjects operation missing from contract")
+}
+
 func TestArtifactDownloadUsesBinaryBrowserClientResponse(t *testing.T) {
 	data, err := os.ReadFile("../../contracts/loomhelm-v1.json")
 	if err != nil {
@@ -94,6 +116,9 @@ func TestArtifactContentDownloadExposesCursorAddressedAPIMCPResponse(t *testing.
 		}
 		if operation.ResponseType != "ArtifactContentResponse" {
 			t.Fatalf("artifact content response type = %q", operation.ResponseType)
+		}
+		if !strings.Contains(operation.Summary, "content_version") || !strings.Contains(operation.Summary, "offset") {
+			t.Fatalf("artifact content summary omits cursor continuation rule: %q", operation.Summary)
 		}
 		generated := (generator{contract: source}).apiClientTypeScript()
 		if !strings.Contains(generated, "async downloadArtifactContent(request: DownloadArtifactContentParams): Promise<Protocol.ArtifactContentResponse>") || !strings.Contains(generated, "artifacts/${encodeURIComponent(request.artifact_id)}/content") {

@@ -201,6 +201,9 @@ func validate(source contract) error {
 			}
 		}
 		statuses := responseStatuses(operation)
+		if len(statuses) == 0 && operation.ResponseType == "" {
+			return fmt.Errorf("operation %s must declare response_status or response_statuses when it has no response type", operation.OperationID)
+		}
 		seenStatuses := map[int]bool{}
 		for _, status := range statuses {
 			if status < 200 || status > 299 {

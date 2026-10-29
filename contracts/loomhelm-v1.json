@@ -957,7 +957,7 @@
         "query_type": "DownloadArtifactContentQuery",
         "response_type": "ArtifactContentResponse",
         "response_status": 200,
-        "summary": "Download a cursor-addressed chunk of the authorized original artifact bytes",
+        "summary": "Download a cursor-addressed chunk of the authorized original artifact bytes. Start at offset 0; when offset is non-zero, content_version from the previous response is required; stop at complete=true and verify the reassembled bytes against artifact.sha256.",
         "mcp_tool": {"name": "loomhelm.download_artifact", "description": "Download bounded chunks of an authorized original artifact. Start at offset 0, pass content_version with each next_offset call, stop only at complete=true, and verify the reassembled bytes against artifact.sha256."}
       }
     ]
