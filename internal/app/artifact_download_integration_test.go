@@ -39,6 +39,11 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	if err := os.WriteFile(filepath.Join(objects, projectArtifactID), projectContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	runAuthorizedContent := []byte("run association in the same session is authorized")
+	runAuthorizedDigest := sha256.Sum256(runAuthorizedContent)
+	if err := os.WriteFile(filepath.Join(objects, "artifact-run-authorized"), runAuthorizedContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	runMismatchContent := []byte("run association must be authorized")
 	runMismatchDigest := sha256.Sum256(runMismatchContent)
 	if err := os.WriteFile(filepath.Join(objects, "artifact-run-mismatch"), runMismatchContent, 0o600); err != nil {
@@ -100,6 +105,12 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	if _, err := db.Pool().Exec(ctx, `
 		INSERT INTO projects (id, name, created_by) VALUES ('project-artifact-download', 'Artifact download project', $1)
 	`, aliceSession.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO execution_runs (id, session_id, command_id, generation, status)
+		VALUES ('run-artifact-authorized', 'session-artifact-download', 'command-artifact-authorized', 'generation-1', 'completed')
+	`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Pool().Exec(ctx, `
@@ -165,6 +176,17 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 			id, session_id, run_id, name, kind, size, sha256, content_type, created_at,
 			state, staging_name, staging_reclaim_after, staging_reclaimed_at, unavailable_reason
 		) VALUES (
+			'artifact-run-authorized', 'session-artifact-download', 'run-artifact-authorized', 'run.txt', 'file', $1, $2, 'text/plain', NOW(),
+			'ready', '.upload-artifact-run-authorized', NOW(), NOW(), ''
+		)
+	`, int64(len(runAuthorizedContent)), hex.EncodeToString(runAuthorizedDigest[:])); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO conversation_artifacts (
+			id, session_id, run_id, name, kind, size, sha256, content_type, created_at,
+			state, staging_name, staging_reclaim_after, staging_reclaimed_at, unavailable_reason
+		) VALUES (
 			'artifact-run-mismatch', 'session-artifact-download', 'run-artifact-other', 'mismatch.txt', 'file', $1, $2, 'text/plain', NOW(),
 			'ready', '.upload-artifact-mismatch', NOW(), NOW(), ''
 		)
@@ -204,6 +226,16 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	}
 	if string(projectBody) != string(projectContent) {
 		t.Fatalf("project download body = %q, want %q", projectBody, projectContent)
+	}
+
+	runAuthorizedResponse := applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/artifact-run-authorized/download", nil, nil, http.StatusOK)
+	runAuthorizedBody, err := io.ReadAll(runAuthorizedResponse.Body)
+	runAuthorizedResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(runAuthorizedBody) != string(runAuthorizedContent) {
+		t.Fatalf("run-authorized download body = %q, want %q", runAuthorizedBody, runAuthorizedContent)
 	}
 
 	applicationRequest(t, bob, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, nil, http.StatusNotFound)

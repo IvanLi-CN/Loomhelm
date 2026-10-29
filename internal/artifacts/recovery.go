@@ -576,6 +576,9 @@ func (s *Store) readAuthorizedReadyRecord(ctx context.Context, id string, operat
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return artifactRecord{}, err
 		}
+		if errors.Is(err, ErrStoreUnavailable) {
+			return artifactRecord{}, ErrStoreUnavailable
+		}
 		return artifactRecord{}, ErrNotFound
 	}
 	if record.State != publicationReady {

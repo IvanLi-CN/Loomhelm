@@ -397,6 +397,9 @@ func (s *Store) authorize(ctx context.Context, operation Operation, artifact pro
 		if errors.Is(err, ErrUnauthorized) {
 			return ErrUnauthorized
 		}
+		if errors.Is(err, ErrStoreUnavailable) {
+			return ErrStoreUnavailable
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}

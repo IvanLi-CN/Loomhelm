@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
 
@@ -78,6 +80,34 @@ func newTestWorker(cfg platform.Config, logger *slog.Logger) (*Worker, error) {
 		w.openRuntime = fakeFactory(&fakeRuntime{})
 	}
 	return w, err
+}
+
+type repeatedArtifactRecoveryStore struct {
+	calls atomic.Int32
+}
+
+func (s *repeatedArtifactRecoveryStore) Recover(context.Context, int) (artifacts.RecoveryReport, error) {
+	call := s.calls.Add(1)
+	return artifacts.RecoveryReport{Scanned: int(call)}, nil
+}
+
+func TestDatabaseRuntimeRepeatsArtifactRecoveryUntilClosed(t *testing.T) {
+	store := &repeatedArtifactRecoveryStore{}
+	runtime := &databaseRuntime{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	runtime.startArtifactRecoveryWithInterval(store, time.Millisecond)
+
+	deadline := time.After(time.Second)
+	for store.calls.Load() < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("artifact recovery calls = %d, want at least 2", store.calls.Load())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	runtime.stopArtifactRecovery()
+	if store.calls.Load() < 2 {
+		t.Fatalf("artifact recovery calls after stop = %d, want at least 2", store.calls.Load())
+	}
 }
 
 func TestServerPersistenceFailureRetainsCallerListener(t *testing.T) {

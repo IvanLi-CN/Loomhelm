@@ -39,13 +39,25 @@ type processRuntime interface {
 type runtimeFactory func(context.Context, platform.Config, *slog.Logger) (processRuntime, error)
 
 type databaseRuntime struct {
-	db              *database.DB
-	runner          *jobs.Runner
-	api             http.Handler
-	mcpHandler      http.Handler
-	gateway         *gateway.Server
-	shutdownTimeout time.Duration
+	db                     *database.DB
+	runner                 *jobs.Runner
+	api                    http.Handler
+	mcpHandler             http.Handler
+	gateway                *gateway.Server
+	logger                 *slog.Logger
+	shutdownTimeout        time.Duration
+	artifactRecoveryCancel context.CancelFunc
+	artifactRecoveryDone   chan struct{}
 }
+
+type artifactRecoveryStore interface {
+	Recover(context.Context, int) (artifacts.RecoveryReport, error)
+}
+
+const (
+	artifactRecoveryInterval   = time.Minute
+	artifactRecoveryPassBudget = 10 * time.Second
+)
 
 func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.Logger) (processRuntime, error) {
 	db, err := database.Open(ctx, database.Config{
@@ -124,7 +136,8 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			return err
 		}
 	}
-	runtime := &databaseRuntime{db: db, runner: runner, shutdownTimeout: cfg.ShutdownTimeout}
+	runtime := &databaseRuntime{db: db, runner: runner, logger: logger, shutdownTimeout: cfg.ShutdownTimeout}
+	var artifactRecovery artifactRecoveryStore
 	if cfg.Component == platform.ComponentServer {
 		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
@@ -154,6 +167,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 				return nil, fmt.Errorf("recover artifact store: %w", artifactErr)
 			}
 			services.artifactStore = artifactStore
+			artifactRecovery = artifactStore
 		}
 		transport := &gatewayExecutionTransport{
 			sessions:   sessionStore,
@@ -209,6 +223,9 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			return nil, fmt.Errorf("initialize MCP handler: %w", err)
 		}
 	}
+	if artifactRecovery != nil {
+		runtime.startArtifactRecovery(artifactRecovery)
+	}
 	return runtime, nil
 }
 
@@ -252,10 +269,64 @@ func (r *databaseRuntime) StopAndCancel(ctx context.Context) error {
 
 func (r *databaseRuntime) WaitStopped(ctx context.Context) error { return r.runner.WaitStopped(ctx) }
 
+func (r *databaseRuntime) startArtifactRecovery(store artifactRecoveryStore) {
+	r.startArtifactRecoveryWithInterval(store, artifactRecoveryInterval)
+}
+
+func (r *databaseRuntime) startArtifactRecoveryWithInterval(store artifactRecoveryStore, interval time.Duration) {
+	if r == nil || store == nil || interval <= 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	r.artifactRecoveryCancel = cancel
+	r.artifactRecoveryDone = done
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				recoveryCtx, cancelRecovery := context.WithTimeout(ctx, artifactRecoveryPassBudget)
+				report, err := store.Recover(recoveryCtx, artifacts.DefaultRecoveryLimit)
+				cancelRecovery()
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					if r.logger != nil {
+						r.logger.Warn("artifact recovery pass incomplete", "error", err)
+					}
+					continue
+				}
+				if report.Scanned > 0 && r.logger != nil {
+					r.logger.Info("artifact recovery pass completed", "scanned", report.Scanned, "ready", report.Ready, "unavailable", report.Unavailable, "cleaned", report.Cleaned)
+				}
+			}
+		}
+	}()
+}
+
+func (r *databaseRuntime) stopArtifactRecovery() {
+	if r == nil || r.artifactRecoveryCancel == nil {
+		return
+	}
+	r.artifactRecoveryCancel()
+	if r.artifactRecoveryDone != nil {
+		<-r.artifactRecoveryDone
+	}
+	r.artifactRecoveryCancel = nil
+	r.artifactRecoveryDone = nil
+}
+
 func (r *databaseRuntime) Close() {
 	if r == nil {
 		return
 	}
+	r.stopArtifactRecovery()
 	if r.gateway != nil {
 		timeout := r.shutdownTimeout
 		if timeout <= 0 {

@@ -73,6 +73,44 @@ func TestResolvedAuthorizerRequiresOwnershipAndScope(t *testing.T) {
 	}
 }
 
+func TestResolvedAuthorizerPreservesAuthorizationDependencyFailure(t *testing.T) {
+	artifact := protocol.Artifact{ID: "artifact-auth-unavailable", SessionID: "session-auth-unavailable"}
+	for _, test := range []struct {
+		name     string
+		resolver OwnershipResolver
+		scope    ScopeAuthorizer
+	}{
+		{
+			name: "ownership resolver",
+			resolver: OwnershipResolverFunc(func(context.Context, protocol.Artifact) (Ownership, error) {
+				return Ownership{}, ErrStoreUnavailable
+			}),
+			scope: ScopeAuthorizerFunc(func(context.Context, Operation, protocol.Artifact, Ownership) error {
+				return nil
+			}),
+		},
+		{
+			name: "scope authorizer",
+			resolver: OwnershipResolverFunc(func(context.Context, protocol.Artifact) (Ownership, error) {
+				return Ownership{SessionID: artifact.SessionID}, nil
+			}),
+			scope: ScopeAuthorizerFunc(func(context.Context, Operation, protocol.Artifact, Ownership) error {
+				return ErrStoreUnavailable
+			}),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := NewResolvedAuthorizer(test.resolver, test.scope).Authorize(context.Background(), OperationOpen, artifact)
+			if !errors.Is(err, ErrStoreUnavailable) {
+				t.Fatalf("authorization error = %v, want %v", err, ErrStoreUnavailable)
+			}
+			if errors.Is(err, ErrUnauthorized) {
+				t.Fatalf("authorization dependency error was folded into %v", ErrUnauthorized)
+			}
+		})
+	}
+}
+
 func TestDenyAllAuthorizerRejectsEveryOperation(t *testing.T) {
 	artifact := protocol.Artifact{ID: "artifact-deny-test", SessionID: "session-deny-test"}
 	for _, operation := range []Operation{OperationPut, OperationMetadata, OperationOpen} {
