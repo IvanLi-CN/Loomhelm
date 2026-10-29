@@ -31,8 +31,11 @@ const (
 	// OlderProtocolVersion is retained for older stateless HTTP clients.
 	OlderProtocolVersion = "2025-03-26"
 
-	defaultMaxBodyBytes     int64 = 1 << 20
-	defaultMaxResponseBytes int64 = 4 << 20
+	defaultMaxBodyBytes      int64 = 1 << 20
+	defaultMaxResponseBytes  int64 = 4 << 20
+	minimumMaxResponseBytes  int64 = 512
+	maxConcurrentMCPBytes    int64 = 32 << 20
+	maxConcurrentMCPRequests       = 64
 )
 
 var (
@@ -69,7 +72,9 @@ type Config struct {
 	// accepted because this endpoint may control real execution.
 	AllowedOrigins []string
 
-	MaxBodyBytes     int64
+	MaxBodyBytes int64
+	// MaxResponseBytes must leave room for the structured unknown-result error
+	// envelope; values below minimumMaxResponseBytes are rejected.
 	MaxResponseBytes int64
 }
 
@@ -123,6 +128,9 @@ func NewServer(config Config) (*Server, error) {
 	}
 	if config.MaxBodyBytes < 1 || config.MaxResponseBytes < 1 {
 		return nil, fmt.Errorf("MCP body and response limits must be positive")
+	}
+	if config.MaxResponseBytes < minimumMaxResponseBytes {
+		return nil, fmt.Errorf("MCP response limit must be at least %d bytes", minimumMaxResponseBytes)
 	}
 
 	sdkServer := sdk.NewServer(
@@ -185,17 +193,20 @@ func NewServer(config Config) (*Server, error) {
 			PropagateRequestCancellation: true,
 		},
 	)
-	server.handler = &noStoreHandler{next: &requestIDLimitHandler{
-		next: &responseLimitHandler{
-			next: &originHandler{
-				next:        transport,
-				allowed:     origins,
-				crossOrigin: http.NewCrossOriginProtection(),
+	server.handler = &noStoreHandler{next: &requestConcurrencyHandler{
+		next: &originHandler{
+			next: &requestIDLimitHandler{
+				next: &responseLimitHandler{
+					next: transport,
+					max:  config.MaxResponseBytes,
+				},
+				maxBody: config.MaxBodyBytes,
+				maxID:   config.MaxResponseBytes / 8,
 			},
-			max: config.MaxResponseBytes,
+			allowed:     origins,
+			crossOrigin: http.NewCrossOriginProtection(),
 		},
-		maxBody: config.MaxBodyBytes,
-		maxID:   config.MaxResponseBytes / 8,
+		slots: make(chan struct{}, concurrentMCPRequestSlots(config.MaxBodyBytes, config.MaxResponseBytes)),
 	}}
 	return server, nil
 }
@@ -270,9 +281,12 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 				}), nil
 			}
 			if errors.Is(err, errResponseTooLarge) {
-				return toolError(http.StatusConflict, protocol.ApiError{
-					Code:    protocol.ErrorCodeUnknownResult,
-					Message: "application outcome is unknown; do not blindly retry a non-idempotent operation",
+				if spec.route.method != http.MethodGet {
+					return unknownOutcomeResult(), nil
+				}
+				return toolError(http.StatusServiceUnavailable, protocol.ApiError{
+					Code:    protocol.ErrorCodeInvalidRequest,
+					Message: "application service response exceeds configured limit",
 				}), nil
 			}
 			return toolError(http.StatusServiceUnavailable, protocol.ApiError{
@@ -281,15 +295,15 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 			}), nil
 		}
 		if response.status < http.StatusOK || response.status >= http.StatusMultipleChoices {
+			if response.status >= http.StatusInternalServerError && response.status < 600 && spec.route.method != http.MethodGet {
+				return unknownOutcomeResult(), nil
+			}
 			return toolError(response.status, decodeAPIError(response.status, response.body)), nil
 		}
 		result, err := toolSuccess(response.body)
 		if err != nil {
 			if spec.route.method != http.MethodGet {
-				return toolError(http.StatusConflict, protocol.ApiError{
-					Code:    protocol.ErrorCodeUnknownResult,
-					Message: "application outcome is unknown; do not blindly retry a non-idempotent operation",
-				}), nil
+				return unknownOutcomeResult(), nil
 			}
 			return toolError(http.StatusServiceUnavailable, protocol.ApiError{
 				Code:    protocol.ErrorCodeInvalidRequest,
@@ -297,13 +311,23 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 			}), nil
 		}
 		if !encodedResponseWithinBudget(result, s.maxResponse) {
-			return toolError(http.StatusConflict, protocol.ApiError{
-				Code:    protocol.ErrorCodeUnknownResult,
-				Message: "application outcome is unknown; do not blindly retry a non-idempotent operation",
+			if spec.route.method != http.MethodGet {
+				return unknownOutcomeResult(), nil
+			}
+			return toolError(http.StatusServiceUnavailable, protocol.ApiError{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "application service response exceeds configured limit",
 			}), nil
 		}
 		return result, nil
 	}
+}
+
+func unknownOutcomeResult() *sdk.CallToolResult {
+	return toolError(http.StatusConflict, protocol.ApiError{
+		Code:    protocol.ErrorCodeUnknownResult,
+		Message: "application outcome is unknown; do not blindly retry a non-idempotent operation",
+	})
 }
 
 func (s *Server) resourceHandler(ctx context.Context, request *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
@@ -624,6 +648,42 @@ func copyHeader(destination, source http.Header) {
 		for _, value := range values {
 			destination.Add(name, value)
 		}
+	}
+}
+
+func concurrentMCPRequestSlots(maxBody, maxResponse int64) int {
+	if maxBody > 1<<62 || maxResponse > 1<<62 {
+		return 1
+	}
+	perRequest := maxBody*2 + maxResponse
+	if perRequest < 1 {
+		return 1
+	}
+	slots := int(maxConcurrentMCPBytes / perRequest)
+	if slots < 1 {
+		slots = 1
+	}
+	if slots > maxConcurrentMCPRequests {
+		slots = maxConcurrentMCPRequests
+	}
+	return slots
+}
+
+type requestConcurrencyHandler struct {
+	next  http.Handler
+	slots chan struct{}
+}
+
+func (h *requestConcurrencyHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if h.slots == nil {
+		h.next.ServeHTTP(writer, request)
+		return
+	}
+	select {
+	case h.slots <- struct{}{}:
+		defer func() { <-h.slots }()
+		h.next.ServeHTTP(writer, request)
+	case <-request.Context().Done():
 	}
 }
 

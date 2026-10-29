@@ -337,6 +337,98 @@ func TestServerReportsInvalidMutationResponseAsUnknown(t *testing.T) {
 	}
 }
 
+func TestServerReportsMutationServerFailureAsUnknown(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(writer).Encode(protocol.ApiError{
+			Code:    protocol.ErrorCodeInvalidRequest,
+			Message: "credential transaction failed",
+		})
+	})
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      16,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.create_user_credential",
+			"arguments": map[string]any{
+				"name": "automation",
+			},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code    protocol.ErrorCode `json:"code"`
+				Message string             `json:"message"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("mutation server failure result = %#v, want unknown outcome", result)
+	}
+	if result.StructuredContent.Error.Message == "credential transaction failed" {
+		t.Fatal("mutation server failure exposed a retryable ordinary error instead of unknown outcome")
+	}
+}
+
+func TestServerReportsOversizedReadResponseAsServiceFailure(t *testing.T) {
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = writer.Write(bytes.Repeat([]byte("x"), 600))
+		}),
+		MaxResponseBytes: 512,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      17,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "loomhelm.list_projects",
+			"arguments": map[string]any{},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusServiceUnavailable || result.StructuredContent.Error.Code == protocol.ErrorCodeUnknownResult {
+		t.Fatalf("oversized read response = %#v, want ordinary service failure", result)
+	}
+}
+
+func TestServerRejectsResponseLimitTooSmallForErrorEnvelope(t *testing.T) {
+	if _, err := NewServer(Config{RESTHandler: http.NotFoundHandler(), MaxResponseBytes: minimumMaxResponseBytes - 1}); err == nil {
+		t.Fatal("NewServer() succeeded with a response limit smaller than the error envelope")
+	}
+}
+
+func TestConcurrentMCPRequestSlotsBoundBufferedMemory(t *testing.T) {
+	if got, want := concurrentMCPRequestSlots(1<<20, 4<<20), 5; got != want {
+		t.Fatalf("default concurrent MCP request slots = %d, want %d", got, want)
+	}
+	if got, want := concurrentMCPRequestSlots(32<<20, 32<<20), 1; got != want {
+		t.Fatalf("large concurrent MCP request slots = %d, want %d", got, want)
+	}
+	if got, want := concurrentMCPRequestSlots(1, 1), maxConcurrentMCPRequests; got != want {
+		t.Fatalf("small concurrent MCP request slots = %d, want cap %d", got, want)
+	}
+}
+
 func TestServerBoundsEncodedToolResult(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -377,7 +469,7 @@ func TestServerBoundsEncodedToolResult(t *testing.T) {
 func TestServerCapsFinalWireResponseBody(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler:      http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {}),
-		MaxResponseBytes: 64,
+		MaxResponseBytes: 512,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -395,8 +487,8 @@ func TestServerCapsFinalWireResponseBody(t *testing.T) {
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized wire response status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
 	}
-	if len(recorder.Body.Bytes()) > 64 {
-		t.Fatalf("oversized wire response body = %d bytes, want at most 64", recorder.Body.Len())
+	if len(recorder.Body.Bytes()) > 512 {
+		t.Fatalf("oversized wire response body = %d bytes, want at most 512", recorder.Body.Len())
 	}
 	if got := recorder.Header().Get("X-Loomhelm-MCP-Response"); got != "too_large" {
 		t.Fatalf("oversized wire response marker = %q, want too_large", got)
