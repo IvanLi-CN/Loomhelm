@@ -171,14 +171,20 @@ export function applyApprovalResolutionEvents(
   resolutionEvents: readonly Event[] = observedEvents.filter((event) => event.type === "approval.resolved")
 ): ApprovalResolutionApplication {
   const requestedEventByRequestKey = new Map<string, string>();
-  observedEvents.filter((event) => event.type === "approval.requested").forEach((event) => {
-    const requestKey = eventRequestKey(event);
-    if (requestKey) requestedEventByRequestKey.set(requestKey, event.event_id);
-  });
+  const resolutionEventIDs = new Set(resolutionEvents.map((event) => event.event_id));
+  const orderedEvents = [...observedEvents].sort((left, right) => left.sequence - right.sequence || left.event_id.localeCompare(right.event_id));
   const byRevision = new Map(approvals.map((approval) => [`${approval.id}:${approval.revision}`, approval]));
   let matched = false;
   let unresolved = false;
-  resolutionEvents.forEach((event) => {
+  const processedResolutionIDs = new Set<string>();
+  orderedEvents.forEach((event) => {
+    if (event.type === "approval.requested") {
+      const requestKey = eventRequestKey(event);
+      if (requestKey) requestedEventByRequestKey.set(requestKey, event.event_id);
+      return;
+    }
+    if (event.type !== "approval.resolved" || !resolutionEventIDs.has(event.event_id)) return;
+    processedResolutionIDs.add(event.event_id);
     const status = eventResolution(event);
     const requestKey = eventRequestKey(event);
     const requestedEventID = requestKey ? requestedEventByRequestKey.get(requestKey) : undefined;
@@ -194,6 +200,9 @@ export function applyApprovalResolutionEvents(
     const approval = candidates[0];
     byRevision.set(`${approval.id}:${approval.revision}`, { ...approval, status });
     matched = true;
+  });
+  resolutionEvents.forEach((event) => {
+    if (!processedResolutionIDs.has(event.event_id)) unresolved = true;
   });
   return { approvals: [...byRevision.values()], matched, unresolved };
 }
@@ -229,10 +238,11 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
   const isMessage = event.type === "message.delta";
   const isUnknown = eventHasUnknownContent(event);
   const isTool = !isMessage && !isUnknown;
+  const hasInspectableItem = event.type === "item.started" || event.type === "item.completed";
   return {
     author: isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
     content: eventText(event, asRecord(event.payload)),
-    ...(isUnknown ? { detail: eventDetail(event) } : {}),
+    ...(isUnknown || hasInspectableItem ? { detail: eventDetail(event) } : {}),
     eventType: event.type,
     id: `${event.session_id}:${event.run_id ?? "session"}:${event.event_id}`,
     kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",

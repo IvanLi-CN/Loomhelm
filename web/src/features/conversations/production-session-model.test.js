@@ -159,6 +159,7 @@ describe("production session model", () => {
     expect(eventToConversationMessage(event())).toMatchObject({ author: "Codex", content: "hello", kind: "message", role: "assistant" });
     expect(eventToConversationMessage(event({ payload: { jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "nested hello" } } }))).toMatchObject({ content: "nested hello" });
     expect(eventToConversationMessage(event({ event_id: "tool", payload: {}, type: "item.completed" }))).toMatchObject({ kind: "tool", content: "已接收事件：item.completed" });
+    expect(eventToConversationMessage(event({ event_id: "known-item", payload: { params: { item: { command: "printf ok", type: "commandExecution" } } }, type: "item.completed" }))).toMatchObject({ detail: expect.stringContaining('"command": "printf ok"'), kind: "tool" });
     expect(eventToConversationMessage(event({ event_id: "unknown", payload: {}, type: "unknown" }))).toMatchObject({ kind: "unknown", content: "已接收事件：unknown" });
     expect(eventToConversationMessage(event({ event_id: "unknown-item", payload: { params: { item: { type: "futureContent", value: "preserve-me" } } }, type: "item.completed" }))).toMatchObject({ kind: "unknown" });
   });
@@ -187,6 +188,17 @@ describe("production session model", () => {
     const requested = event({ event_id: "approval-requested-event", payload: { id: 42 }, type: "approval.requested" });
     const resolved = event({ event_id: "approval-resolved-event", payload: { params: { requestId: 42, resolution: "accept" } }, type: "approval.resolved" });
     expect(applyApprovalResolutionEvents(approvals, [requested, resolved], [resolved])).toMatchObject({ matched: true, unresolved: false, approvals: [{ status: "approved" }] });
+
+    const oldRevision = { ...approvals[0], requested_event_id: "approval-requested-old" };
+    const newRevision = { ...approvals[0], requested_event_id: "approval-requested-new", revision: 2 };
+    const oldRequested = event({ event_id: "approval-requested-old", payload: { id: 42 }, sequence: 1, type: "approval.requested" });
+    const oldResolved = event({ event_id: "approval-resolved-old", payload: { params: { requestId: 42, resolution: "accept" } }, sequence: 2, type: "approval.resolved" });
+    const newRequested = event({ event_id: "approval-requested-new", payload: { id: 42 }, sequence: 3, type: "approval.requested" });
+    expect(applyApprovalResolutionEvents([oldRevision, newRevision], [newRequested, oldResolved, oldRequested], [oldResolved])).toMatchObject({
+      matched: true,
+      unresolved: false,
+      approvals: [{ status: "approved" }, { status: "pending" }]
+    });
   });
 
   test("keeps message identities distinct across runs in one session", () => {
