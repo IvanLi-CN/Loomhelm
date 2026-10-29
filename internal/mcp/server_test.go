@@ -686,7 +686,7 @@ func TestRequestBodyReadTimeoutDoesNotWaitForBlockingClose(t *testing.T) {
 	close(body.closed)
 }
 
-func TestRequestBodyCloseAfterCappedReadCompletesBeforeHandlerReturn(t *testing.T) {
+func TestRequestBodyCloseAfterCappedReadDoesNotHoldHandler(t *testing.T) {
 	body := &cappedBlockingCloseRequestBody{
 		data:     bytes.Repeat([]byte("x"), 5),
 		release:  make(chan struct{}),
@@ -709,25 +709,21 @@ func TestRequestBodyCloseAfterCappedReadCompletesBeforeHandlerReturn(t *testing.
 		handler.ServeHTTP(recorder, request)
 		close(done)
 	}()
-	releaseDelay := 300 * time.Millisecond
-	go func() {
-		time.Sleep(releaseDelay)
-		close(body.release)
-	}()
 
 	select {
 	case <-done:
-		if elapsed := time.Since(started); elapsed < releaseDelay/2 {
-			t.Fatalf("capped-read handler returned after %s before the original body Close completed", elapsed)
+		if elapsed := time.Since(started); elapsed > requestBodyCloseWait+500*time.Millisecond {
+			t.Fatalf("capped-read handler waited %s for a blocking Close, want bounded return", elapsed)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("capped-read handler did not return after the original body Close completed")
+		t.Fatal("capped-read handler did not return after the bounded body Close")
 	}
 	select {
 	case <-body.started:
 	default:
 		t.Fatal("capped-read handler did not close the original request body")
 	}
+	close(body.release)
 	select {
 	case <-body.finished:
 	case <-time.After(time.Second):

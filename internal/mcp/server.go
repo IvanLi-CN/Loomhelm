@@ -1055,7 +1055,12 @@ func (h *requestIDLimitHandler) ServeHTTP(writer http.ResponseWriter, request *h
 	clearReadDeadline := setRequestBodyReadDeadline(writer, defaultRequestBodyReadTimeout)
 	body, err := readRequestBody(request.Context(), request.Body, h.maxBody+1, defaultRequestBodyReadTimeout)
 	if err == nil {
-		if closeRequestBodyWithin(request.Body, defaultRequestBodyReadTimeout) {
+		// A capped read may leave a chunked body waiting for its terminating
+		// frame. Keep that cleanup bounded so one oversized request cannot hold
+		// the MCP admission slot for the entire body-read budget.
+		closeReadDeadline := setRequestBodyReadDeadline(writer, requestBodyCloseWait)
+		if closeRequestBodyWithin(request.Body, requestBodyCloseWait) {
+			closeReadDeadline()
 			clearReadDeadline()
 		}
 	}
