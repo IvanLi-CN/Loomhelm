@@ -84,6 +84,9 @@ const acceptedAck = (commandId: string, runId = run.id) => ({
   }
 });
 
+let demoDraftContent = "";
+let demoDraftRevision = 0;
+
 export function createProductionSessionDemoApi(): PublishedSessionApi {
   return {
     createSession: async ({ body }) => ({
@@ -102,11 +105,13 @@ export function createProductionSessionDemoApi(): PublishedSessionApi {
         task_id: body.task_id
       }
     }),
+    getDraft: async ({ session_id }) => ({ draft: { content: demoDraftContent, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } }),
     getArtifact: async () => {
       throw new Error("Demo artifact lookup is intentionally unavailable.");
     },
     getSession: async () => ({ session }),
     interruptRun: async ({ body }) => acceptedAck(body.command_id),
+    listSessionRuns: async ({ session_id }) => ({ has_more: false, items: [{ ...run, session_id }] }),
     listRunApprovals: async () => ({ has_more: false, items: [approval] }),
     listRunEvents: async ({ after_cursor }) => ({
       events: after_cursor ? [] : events,
@@ -114,6 +119,11 @@ export function createProductionSessionDemoApi(): PublishedSessionApi {
       next_cursor: events.at(-1)?.cursor
     }),
     resolveApproval: async ({ body }) => acceptedAck(body.command_id),
-    submitRun: async ({ body }) => acceptedAck(body.command_id)
+    submitRun: async ({ body }) => acceptedAck(body.command_id),
+    updateDraft: async ({ body, session_id }) => {
+      demoDraftContent = body.content;
+      demoDraftRevision += 1;
+      return { draft: { client_id: body.client_id, client_sequence: body.client_sequence, content: demoDraftContent, mutation_id: body.mutation_id, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } };
+    }
   };
 }

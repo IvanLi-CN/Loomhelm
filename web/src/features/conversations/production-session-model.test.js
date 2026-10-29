@@ -7,6 +7,7 @@ import {
   eventToConversationMessage,
   initialRunCommandId,
   isSessionAccessFailure,
+  runFromHistory,
   runFromCommandAck,
   runFromRecoveredIdentity,
   sessionReadFailureMessage,
@@ -109,6 +110,28 @@ describe("production session model", () => {
 
   test("keeps a recovered Run identity unknown until an event verifies it", () => {
     expect(runFromRecoveredIdentity(session, "run-recovered")).toMatchObject({ id: "run-recovered", session_id: "session-1", status: "unknown" });
+  });
+
+  test("restores durable Run facts without trusting the persisted status", () => {
+    expect(runFromHistory(session, {
+      command_id: "command-history",
+      created_at: "2026-10-27T00:00:04Z",
+      finished_at: "2026-10-27T00:00:06Z",
+      id: "run-history",
+      last_cursor: "cursor-history",
+      session_id: "foreign-session",
+      started_at: "2026-10-27T00:00:05Z",
+      status: "completed"
+    })).toEqual({
+      command_id: "command-history",
+      created_at: "2026-10-27T00:00:04Z",
+      finished_at: "2026-10-27T00:00:06Z",
+      id: "run-history",
+      last_cursor: "cursor-history",
+      session_id: "session-1",
+      started_at: "2026-10-27T00:00:05Z",
+      status: "unknown"
+    });
   });
 
   test("reduces terminal and approval events without inferring from transport", () => {

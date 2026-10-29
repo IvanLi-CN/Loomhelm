@@ -94,6 +94,10 @@ export function runFromRecoveredIdentity(session: Session, runId: string, create
   return { ...runFromIdentity(session, runId, createdAt), status: "unknown" };
 }
 
+export function runFromHistory(session: Session, run: Run): Run {
+  return { ...run, session_id: session.id, status: "unknown" };
+}
+
 export function initialRunCommandId(sessionId: string): string {
   return `${sessionId}:initial`;
 }
