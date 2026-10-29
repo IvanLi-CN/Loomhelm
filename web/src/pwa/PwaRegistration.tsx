@@ -8,5 +8,5 @@ const registerPwa: PwaRegister = (options) => registerSW(options);
 export function PwaRegistration() {
   const runtime = usePwaRuntime(registerPwa, import.meta.env.PROD);
 
-  return <PwaStatusBanner isOnline={runtime.isOnline} updateAvailable={runtime.updateAvailable} updating={runtime.updating} registrationError={runtime.registrationError} onApplyUpdate={() => void runtime.applyUpdate()} />;
+  return <PwaStatusBanner isOnline={runtime.isOnline} updateAvailable={runtime.updateAvailable} updateApplied={runtime.updateApplied} updating={runtime.updating} registrationError={runtime.registrationError} onApplyUpdate={() => void runtime.applyUpdate()} />;
 }

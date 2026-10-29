@@ -45,5 +45,11 @@ export const EventClassification: Story = {
     classifyConversationEvent({ event_id: "message", type: "message.delta", payload: { delta: "来自真实事件字段的消息" } }),
     classifyConversationEvent({ event_id: "tool", type: "item.completed", payload: { item: { type: "mcpToolCall", tool: "read_summary", status: "completed" } } }),
     classifyConversationEvent({ event_id: "future", type: "item.completed", payload: { item: { type: "futureContent", xFutureField: "keep" } } })
-  ]} /></Surface>
+  ]} /></Surface>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.getByRole("article", { name: "Agent 消息" })).toHaveTextContent("来自真实事件字段的消息");
+    expect(canvas.getByRole("article", { name: "工具状态" })).toHaveTextContent("已完成");
+    expect(canvas.getByRole("article", { name: "未知内容" })).toHaveTextContent("futureContent");
+  }
 };

@@ -6,6 +6,11 @@ import type { Artifact } from "@loomhelm/protocol";
 import type { ArtifactDownloader, ArtifactMetadataLoader } from "./api";
 import { useArtifactMetadata } from "./useArtifactMetadata";
 
+type DownloadState = {
+  artifactId: string;
+  status: "idle" | "pending" | "completed" | "error";
+};
+
 const kindLabels: Record<Artifact["kind"], string> = {
   file: "文件",
   diff: "差异",
@@ -41,11 +46,11 @@ export function ArtifactReference({
   className?: string;
 }) {
   const [retryKey, setRetryKey] = useState(0);
-  const [downloadState, setDownloadState] = useState<"idle" | "pending" | "completed" | "error">("idle");
+  const [downloadState, setDownloadState] = useState<DownloadState>({ artifactId, status: "idle" });
   const metadata = useArtifactMetadata(artifactId, loadMetadata, retryKey);
 
   if (metadata.status === "idle" || metadata.status === "loading") {
-    return <div className={`grid gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)] ${className}`} aria-busy="true" aria-label="正在读取产物"><span className="inline-flex items-center gap-2"><LoaderCircle className="animate-spin" size={16} aria-hidden="true" />正在读取授权产物…</span><span className="text-xs">文件仍留在对话上下文中，读取不会扩大权限范围。</span></div>;
+    return <div className={`grid gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)] ${className}`} role="status" aria-live="polite" aria-busy="true"><span className="inline-flex items-center gap-2"><LoaderCircle className="animate-spin" size={16} aria-hidden="true" />正在读取授权产物…</span><span className="text-xs">文件仍留在对话上下文中，读取不会扩大权限范围。</span></div>;
   }
 
   if (metadata.status === "error") {
@@ -53,15 +58,16 @@ export function ArtifactReference({
   }
 
   const artifact = metadata.artifact;
+  const currentDownloadState = downloadState.artifactId === artifact.id ? downloadState : { artifactId: artifact.id, status: "idle" as const };
   const handleDownload = async () => {
-    if (!download || downloadState === "pending") return;
+    if (!download || currentDownloadState.status === "pending") return;
     const controller = new AbortController();
-    setDownloadState("pending");
+    setDownloadState({ artifactId: artifact.id, status: "pending" });
     try {
       await download({ artifact, signal: controller.signal });
-      setDownloadState("completed");
+      setDownloadState((current) => current.artifactId === artifact.id ? { artifactId: artifact.id, status: "completed" } : current);
     } catch {
-      setDownloadState("error");
+      setDownloadState((current) => current.artifactId === artifact.id ? { artifactId: artifact.id, status: "error" } : current);
     }
   };
 
@@ -82,12 +88,12 @@ export function ArtifactReference({
         <dt className="text-[var(--muted)]">产物身份</dt><dd className="break-all font-mono text-[var(--ink)]">{artifact.id}</dd>
       </dl>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60" onClick={() => void handleDownload()} disabled={!download || downloadState === "pending"} title={!download ? "文件暂不可下载" : undefined}>
-          {downloadState === "pending" ? <LoaderCircle className="animate-spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
-          {downloadState === "pending" ? "准备下载…" : downloadState === "completed" ? "已请求下载" : "下载文件"}
+        <button type="button" className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60" onClick={() => void handleDownload()} disabled={!download || currentDownloadState.status === "pending"} title={!download ? "文件暂不可下载" : undefined}>
+          {currentDownloadState.status === "pending" ? <LoaderCircle className="animate-spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+          {currentDownloadState.status === "pending" ? "准备下载…" : currentDownloadState.status === "completed" ? "已请求下载" : "下载文件"}
         </button>
         <span className="text-xs text-[var(--muted)]" aria-live="polite">
-          {!download ? "文件暂不可下载。" : downloadState === "error" ? "下载失败，请重试。" : downloadState === "completed" ? "下载请求已完成。" : "仅在当前授权范围内读取。"}
+          {!download ? "文件暂不可下载。" : currentDownloadState.status === "error" ? "下载失败，请重试。" : currentDownloadState.status === "completed" ? "下载请求已完成。" : "仅在当前授权范围内读取。"}
         </span>
       </div>
     </article>

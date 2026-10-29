@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface PwaRegisterOptions {
   immediate?: boolean;
+  onNeedReload?: () => void;
   onNeedRefresh?: () => void;
   onOfflineReady?: () => void;
   onRegisterError?: (error: unknown) => void;
@@ -13,6 +14,7 @@ export type PwaRegister = (options: PwaRegisterOptions) => PwaUpdate;
 export interface PwaRuntimeState {
   isOnline: boolean;
   updateAvailable: boolean;
+  updateApplied: boolean;
   updating: boolean;
   offlineReady: boolean;
   registrationError: boolean;
@@ -22,6 +24,7 @@ export interface PwaRuntimeState {
 export function usePwaRuntime(register: PwaRegister, enabled = true): PwaRuntimeState {
   const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateApplied, setUpdateApplied] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [offlineReady, setOfflineReady] = useState(false);
   const [registrationError, setRegistrationError] = useState(false);
@@ -35,7 +38,15 @@ export function usePwaRuntime(register: PwaRegister, enabled = true): PwaRuntime
     window.addEventListener("offline", handleOffline);
     updateRef.current = register({
       immediate: true,
-      onNeedRefresh: () => setUpdateAvailable(true),
+      onNeedReload: () => {
+        setUpdateApplied(true);
+        setUpdateAvailable(false);
+        setUpdating(false);
+      },
+      onNeedRefresh: () => {
+        setUpdateApplied(false);
+        setUpdateAvailable(true);
+      },
       onOfflineReady: () => setOfflineReady(true),
       onRegisterError: () => setRegistrationError(true)
     });
@@ -51,12 +62,16 @@ export function usePwaRuntime(register: PwaRegister, enabled = true): PwaRuntime
     if (!update || updating) return;
     setUpdating(true);
     try {
-      await update(true);
+      await update(false);
+      setUpdateApplied(true);
+      setUpdateAvailable(false);
+      setUpdating(false);
     } catch {
       setUpdating(false);
+      setUpdateAvailable(false);
       setRegistrationError(true);
     }
   }, [updating]);
 
-  return { isOnline, updateAvailable, updating, offlineReady, registrationError, applyUpdate };
+  return { isOnline, updateAvailable, updateApplied, updating, offlineReady, registrationError, applyUpdate };
 }

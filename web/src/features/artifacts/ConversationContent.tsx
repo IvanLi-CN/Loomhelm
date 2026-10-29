@@ -57,7 +57,7 @@ function UnknownBlock({ content }: { content: Extract<ConversationContent, { kin
     "未知内容",
     <CircleHelp size={15} aria-hidden="true" />,
     <details className="rounded-lg border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs">
-      <summary className="cursor-pointer font-semibold">查看原始字段（不会执行）</summary>
+      <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold">查看原始字段（不会执行）</summary>
       <div className="mt-3 grid gap-2 text-[var(--muted)]">
         <span>类型：{content.label}</span>
         <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words text-[var(--ink)]">{JSON.stringify(content.raw, null, 2)}</pre>
