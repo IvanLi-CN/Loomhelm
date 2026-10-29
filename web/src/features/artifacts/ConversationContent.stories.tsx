@@ -40,6 +40,18 @@ export const BasicStates: Story = {
   }
 };
 
+export const RoleStates: Story = {
+  render: () => <Surface><ConversationContentStack contents={[
+    { eventId: "user-message", eventType: "item.completed", kind: "message", role: "user", text: "请检查这个变更。", raw: { type: "userMessage", content: [{ type: "text", text: "请检查这个变更。" }] } },
+    { eventId: "system-message", eventType: "item.completed", kind: "message", role: "system", text: "当前会话由授权的执行环境提供。", raw: { type: "systemMessage", text: "当前会话由授权的执行环境提供。" } }
+  ]} /></Surface>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.getByRole("article", { name: "用户消息" })).toHaveTextContent("请检查这个变更。");
+    expect(canvas.getByRole("article", { name: "系统消息" })).toHaveTextContent("当前会话由授权的执行环境提供。");
+  }
+};
+
 export const EventClassification: Story = {
   render: () => <Surface><ConversationContentStack contents={[
     classifyConversationEvent({ event_id: "message", type: "message.delta", payload: { method: "item/agentMessage/delta", params: { delta: "来自真实 Codex envelope 的消息" } } }),
