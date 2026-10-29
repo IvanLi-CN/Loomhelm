@@ -708,6 +708,58 @@ func TestServerDoesNotReportTimedOutGETAsSuccess(t *testing.T) {
 	}
 }
 
+func TestServerResourceReadReportsTimeoutAsServiceUnavailable(t *testing.T) {
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			<-request.Context().Done()
+		}),
+		OperationTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      18,
+		"method":  "resources/read",
+		"params": map[string]any{
+			"uri": "loomhelm://artifacts/artifact-1",
+		},
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("MCP response status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Error *struct {
+			Code    int64           `json:"code"`
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode MCP response: %v; body = %s", err, recorder.Body.String())
+	}
+	if response.Error == nil {
+		t.Fatalf("timed-out resource response = %s, want JSON-RPC error", recorder.Body.String())
+	}
+	var data struct {
+		HTTPStatus int `json:"http_status"`
+		Error      struct {
+			Code protocol.ErrorCode `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Error.Data, &data); err != nil {
+		t.Fatalf("decode timed-out resource error data: %v", err)
+	}
+	if data.HTTPStatus != http.StatusServiceUnavailable || data.Error.Code != protocol.ErrorCodeServiceUnavailable {
+		t.Fatalf("timed-out resource error data = %#v, want HTTP 503/service_unavailable", data)
+	}
+}
+
 func TestServerReportsOversizedApplicationOutcomeAsUnknown(t *testing.T) {
 	calls := 0
 	server, err := NewServer(Config{

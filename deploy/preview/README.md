@@ -30,6 +30,8 @@ scripts/preview status
 
 The artifact volume name is persisted in preview state and is explicit in Compose so changing the Compose project name does not silently attach a new empty volume. Keep it unique to the deployment/database; when adopting an existing preview, set it to the current Docker volume name before the first `scripts/preview compose-config` or `stage` invocation.
 
+The Compose project name is recorded with the preview state; it may change before activation, but `scripts/preview` rejects a project-name change once a candidate is active or pending so status, ports, Caddy and artifact storage cannot split across two Compose projects.
+
 `stage` selects the inactive slot, checks the candidate against the active state's read range and Web tree digest, copies the Web assets into that slot, validates the Server image and `/version` identity, then starts the Worker only after the Server is ready. A failed candidate is stopped, removed from pending state and followed by an active Worker restart so the old generation remains admitted.
 
 `promote` requires both slot readiness endpoints, validates the declared image references against the running containers and both `/version` identity responses, validates and reloads the candidate Caddy configuration, atomically updates the traceable state and Web symlinks, then drains and stops the old Server and Worker. An unhealthy or identity-mismatched candidate therefore cannot receive traffic.

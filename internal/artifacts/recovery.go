@@ -117,6 +117,7 @@ type faultHooks struct {
 	AfterReadyStagingRemoval   func()
 	BeforeStagingDirectorySync func() error
 	BeforeStagingCleanupCommit func()
+	BeforeOpenVerification     func()
 }
 
 func (s *Store) fault(point faultPoint) {

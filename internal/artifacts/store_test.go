@@ -227,6 +227,39 @@ func TestStorePutMetadataOpenAndReopen(t *testing.T) {
 	}
 }
 
+func TestStoreOpenDoesNotQuarantineContentChangedDuringVerification(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("stable artifact bytes")
+	replacement := []byte("changed artifact bytes")
+	artifact := testArtifact(uniqueID("artifact-open-version"), nil, content)
+	stagingName := ".upload-open-version-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeOpenVerification: func() {
+			if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), replacement, 0o600); err != nil {
+				t.Fatalf("replace artifact during open verification: %v", err)
+			}
+		},
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Open error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("content-change state = %q, want %q", state, publicationReady)
+	}
+}
+
 func TestStoreRejectsMismatchesAndInterruptedUploads(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()

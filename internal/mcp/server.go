@@ -536,16 +536,17 @@ func (s *Server) resourceHandler(ctx context.Context, request *sdk.ReadResourceR
 	}
 	response, err := s.invokeREST(ctx, requestHeaders(request), resource.route, arguments)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, resourceError(http.StatusServiceUnavailable, protocol.ApiError{
+				Code:    protocol.ErrorCodeServiceUnavailable,
+				Message: "application service did not complete within the operation deadline",
+			}, "")
+		}
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "application service is unavailable"}
 	}
 	if response.status < http.StatusOK || response.status >= http.StatusMultipleChoices {
 		apiError := decodeAPIError(response.status, response.body)
-		envelope := map[string]any{"http_status": response.status, "error": apiError}
-		if response.retryAfter != "" {
-			envelope["retry_after"] = response.retryAfter
-		}
-		data, _ := json.Marshal(envelope)
-		return nil, &jsonrpc.Error{Code: int64(rpcCodeForHTTP(response.status)), Message: apiError.Message, Data: data}
+		return nil, resourceError(response.status, apiError, response.retryAfter)
 	}
 	body := response.body
 	if len(bytes.TrimSpace(body)) == 0 {
@@ -563,6 +564,21 @@ func (s *Server) resourceHandler(ctx context.Context, request *sdk.ReadResourceR
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "application resource response exceeds configured limit"}
 	}
 	return result, nil
+}
+
+func resourceError(status int, apiError protocol.ApiError, retryAfter string) *jsonrpc.Error {
+	if apiError.Code == "" {
+		apiError.Code = errorCodeForHTTP(status)
+	}
+	if apiError.Message == "" {
+		apiError.Message = messageForHTTP(status)
+	}
+	envelope := map[string]any{"http_status": status, "error": apiError}
+	if retryAfter != "" {
+		envelope["retry_after"] = retryAfter
+	}
+	data, _ := json.Marshal(envelope)
+	return &jsonrpc.Error{Code: int64(rpcCodeForHTTP(status)), Message: apiError.Message, Data: data}
 }
 
 func requestHeaders(request interface{ GetExtra() *sdk.RequestExtra }) http.Header {

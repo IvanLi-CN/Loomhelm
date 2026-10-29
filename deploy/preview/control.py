@@ -108,6 +108,7 @@ def load_state(state_dir: Path) -> dict[str, Any]:
     state.setdefault("previous_retained_key", None)
     state.setdefault("next_worker_generation", 1)
     state.setdefault("artifact_volume_name", None)
+    state.setdefault("compose_project_name", None)
     state.setdefault("history", [])
     state.setdefault("retained", [])
     if not isinstance(state["retained"], list):
@@ -128,6 +129,7 @@ def empty_state() -> dict[str, Any]:
         "previous_retained_key": None,
         "next_worker_generation": 1,
         "artifact_volume_name": None,
+        "compose_project_name": None,
         "slots": {slot: None for slot in SLOTS},
         "retained": [],
         "history": [],
@@ -614,6 +616,15 @@ def command_compose_env(args: argparse.Namespace) -> None:
     else:
         stop_grace = derived_grace
     project_name = env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True)
+    stored_project_name = state.get("compose_project_name")
+    if stored_project_name is not None and (
+        not isinstance(stored_project_name, str) or not stored_project_name
+    ):
+        die("preview compose_project_name is invalid")
+    if stored_project_name and stored_project_name != project_name and (state.get("active_slot") or state.get("pending_slot")):
+        die("LOOMHELM_PREVIEW_PROJECT_NAME cannot change while a preview candidate is active")
+    state_changed = stored_project_name != project_name
+    state["compose_project_name"] = project_name
     configured_volume = os.environ.get("LOOMHELM_ARTIFACT_VOLUME_NAME", "").strip()
     stored_volume = state.get("artifact_volume_name")
     if stored_volume:
@@ -625,6 +636,8 @@ def command_compose_env(args: argparse.Namespace) -> None:
         if not VOLUME_NAME_RE.fullmatch(artifact_volume_name):
             die("LOOMHELM_ARTIFACT_VOLUME_NAME must be a valid Docker volume name")
         state["artifact_volume_name"] = artifact_volume_name
+        state_changed = True
+    if state_changed:
         write_state(state_dir, state)
     values: dict[str, str] = {
         "LOOMHELM_PREVIEW_STATE_DIR": str(state_dir),

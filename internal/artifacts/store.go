@@ -191,16 +191,11 @@ func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Art
 	}
 	if err := verifyFile(ctx, r.File, artifact); err != nil {
 		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
-			// A transient in-place mutation must be reported as a cursor conflict,
-			// not persisted as a permanent unavailable state. Recheck the file
-			// incarnation before classifying the bytes as a durable mismatch.
-			if versionErr := r.verifyContentVersion(ctx); versionErr != nil {
-				return versionErr
-			}
-			if markErr := r.store.markReadyObjectUnavailable(ctx, r.id, "final-mismatch"); markErr != nil {
-				return markErr
-			}
-			return unavailableError(err)
+			// A streaming read cannot atomically couple an external file mutation
+			// with the database state transition below. Never poison a ready row
+			// from this path: return the verification failure and let a later
+			// metadata/open/recovery pass classify a stable mismatch.
+			return err
 		}
 		return err
 	}
@@ -488,22 +483,6 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 		}
 		return protocol.Artifact{}, nil, err
 	}
-	var verifyErr error
-	if verify {
-		verifyErr = verifyFile(ctx, file, record.Artifact)
-	} else {
-		verifyErr = verifyFileSize(ctx, file, record.Artifact)
-	}
-	if verifyErr != nil {
-		_ = file.Close()
-		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
-				return protocol.Artifact{}, nil, markErr
-			}
-			return protocol.Artifact{}, nil, unavailableError(verifyErr)
-		}
-		return protocol.Artifact{}, nil, verifyErr
-	}
 	version, versionErr := fileContentVersion(file)
 	if versionErr != nil {
 		_ = file.Close()
@@ -513,14 +492,53 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 		_ = file.Close()
 		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot does not match: %w", ErrContentChanged)
 	}
+	if s.faults != nil && s.faults.BeforeOpenVerification != nil {
+		s.faults.BeforeOpenVerification()
+	}
+	var verifyErr error
+	if verify {
+		verifyErr = verifyFile(ctx, file, record.Artifact)
+	} else {
+		verifyErr = verifyFileSize(ctx, file, record.Artifact)
+	}
+	if verifyErr != nil {
+		currentVersion, currentVersionErr := fileContentVersion(file)
+		_ = file.Close()
+		if currentVersionErr != nil {
+			return protocol.Artifact{}, nil, currentVersionErr
+		}
+		if currentVersion != version {
+			return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot changed while opening: %w", ErrContentChanged)
+		}
+		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
+			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
+				return protocol.Artifact{}, nil, markErr
+			}
+			return protocol.Artifact{}, nil, unavailableError(verifyErr)
+		}
+		return protocol.Artifact{}, nil, verifyErr
+	}
+	currentVersion, currentVersionErr := fileContentVersion(file)
+	if currentVersionErr != nil {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, currentVersionErr
+	}
+	if currentVersion != version {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot changed while opening: %w", ErrContentChanged)
+	}
+	if expectedVersion != "" && expectedVersion != currentVersion {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot does not match: %w", ErrContentChanged)
+	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()
 		return protocol.Artifact{}, nil, fmt.Errorf("rewind artifact bytes: %w", ErrStoreUnavailable)
 	}
 	if !verify {
-		return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: version}, nil
+		return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: currentVersion}, nil
 	}
-	return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: version}, nil
+	return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: currentVersion}, nil
 }
 
 func (s *Store) authorize(ctx context.Context, operation Operation, artifact protocol.Artifact) error {

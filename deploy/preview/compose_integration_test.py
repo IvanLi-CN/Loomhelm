@@ -34,7 +34,8 @@ class ComposeAuthenticationTest(unittest.TestCase):
     def compose_model(self, directory: Path, settings: dict[str, str]) -> dict:
         state = directory / "state"
         output = directory / "compose.env"
-        with patch.dict(os.environ, {**self.environment(), **settings}, clear=True), contextlib.redirect_stdout(io.StringIO()):
+        volume_name = "loomhelm-test-artifacts-" + directory.name.lower().replace("_", "-")
+        with patch.dict(os.environ, {**self.environment(), **settings, "LOOMHELM_ARTIFACT_VOLUME_NAME": volume_name}, clear=True), contextlib.redirect_stdout(io.StringIO()):
             control.command_init(Namespace(state_dir=state))
             control.command_compose_env(Namespace(state_dir=state, output=output))
         environment = {key: value for key, value in os.environ.items() if not key.startswith("LOOMHELM_")}
@@ -107,6 +108,7 @@ class ComposeAuthenticationTest(unittest.TestCase):
             environment.update(self.environment())
             environment.update({
                 "LOOMHELM_PREVIEW_STATE_DIR": str(directory / "state"),
+                "LOOMHELM_ARTIFACT_VOLUME_NAME": "loomhelm-test-artifacts-" + directory.name.lower().replace("_", "-"),
                 "LOOMHELM_OIDC_CLIENT_SECRET": "fixture-private-client-secret",
                 "LOOMHELM_SHUTDOWN_TIMEOUT": "120s",
                 # This intentionally conflicts with the generated lower bound
