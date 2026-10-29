@@ -711,6 +711,8 @@ export function ProductionConversationWorkspace({
         setSession(result.session);
         setSessionFailure(null);
         setSessionReadUncertain(false);
+        setSessionAccessBlocked(false);
+        setSessionAccessFailure(null);
         return;
       }
       if (result.state === "pending") return;
@@ -726,11 +728,17 @@ export function ProductionConversationWorkspace({
         setSessionReadUncertain(false);
         setSessionAccessBlocked(true);
         setSessionAccessFailure(sessionReadFailureMessage(result.reason));
-        setRunReadUncertain(false);
-        setRunReadFailure(null);
+        if (activeRunId) {
+          setRunReadUncertain(true);
+          setRunReadFailure("当前 Run 状态无法核对；控制命令已暂停，请刷新或人工对账。");
+          setRun((current) => current ? { ...current, status: "unknown" } : current);
+        } else {
+          setRunReadUncertain(false);
+          setRunReadFailure(null);
+          setRun(undefined);
+        }
         setApprovalReadUncertain(false);
         setApprovalReadFailure(null);
-        setRun(undefined);
         setCommandState(undefined);
         setActivityNotice(null);
         setSessionFailure(sessionReadFailureMessage(result.reason));
@@ -744,7 +752,7 @@ export function ProductionConversationWorkspace({
       active = false;
       clearInterval(interval);
     };
-  }, [activeSessionId, adapters, api]);
+  }, [activeRunId, activeSessionId, adapters, api]);
 
   useEffect(() => {
     if (!api || !adapters || !activeSessionId || !activeRunId) return;
