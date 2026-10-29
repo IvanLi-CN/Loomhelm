@@ -8,10 +8,12 @@ import (
 	"net/http"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/IvanLi-CN/Loomhelm/internal/tasks"
 	"github.com/go-chi/chi/v5"
@@ -23,6 +25,8 @@ type applicationServices struct {
 	projects        *projects.Service
 	tasks           *tasks.Service
 	sessions        *sessions.Store
+	runHistory      sessionRunStore
+	drafts          draftStore
 	sessionCreation sessionCreationApplication
 }
 
@@ -63,10 +67,12 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 	}
 	projectService := projects.NewService(pool, identity)
 	return &applicationServices{
-		identity: identity,
-		projects: projectService,
-		tasks:    tasks.NewService(pool, identity, projectService),
-		sessions: sessions.NewStore(pool),
+		identity:   identity,
+		projects:   projectService,
+		tasks:      tasks.NewService(pool, identity, projectService),
+		sessions:   sessions.NewStore(pool),
+		runHistory: runs.NewStore(pool),
+		drafts:     drafts.NewStore(pool),
 	}, nil
 }
 
@@ -76,8 +82,11 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	s.identity.MountAPI(router)
 	s.projects.Mount(router)
 	s.tasks.Mount(router)
-	s.sessionAccess().mount(router)
+	sessionAccess := s.sessionAccess()
+	sessionAccess.mount(router)
 	(&runControlHTTP{principal: s.identity, service: control}).mount(router)
+	(&sessionRunHTTP{principal: s.identity, sessions: sessionAccess, runs: s.runHistory}).mount(router)
+	(&draftHTTP{principal: s.identity, sessions: sessionAccess, drafts: s.drafts}).mount(router)
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
 		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
 		if err != nil || principal.UserID == "" || principal.CredentialID != "" {

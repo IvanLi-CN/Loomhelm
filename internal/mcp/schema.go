@@ -116,6 +116,9 @@ func routeForOperation(operationID string) (routeSpec, bool) {
 		"getSession":           {method: "GET", path: "/sessions/{session_id}", pathParams: []string{"session_id"}},
 		"bindSessionTask":      {method: "POST", path: "/sessions/{session_id}/task", pathParams: []string{"session_id"}, body: true},
 		"submitRun":            {method: "POST", path: "/sessions/{session_id}/runs", pathParams: []string{"session_id"}, body: true},
+		"listSessionRuns":      {method: "GET", path: "/sessions/{session_id}/runs", pathParams: []string{"session_id"}, queryParams: []string{"after_cursor", "limit"}},
+		"getDraft":             {method: "GET", path: "/sessions/{session_id}/draft", pathParams: []string{"session_id"}},
+		"updateDraft":          {method: "PUT", path: "/sessions/{session_id}/draft", pathParams: []string{"session_id"}, body: true},
 		"listRunApprovals":     {method: "GET", path: "/runs/{run_id}/approvals", pathParams: []string{"run_id"}, queryParams: []string{"after_cursor", "limit"}},
 		"resolveApproval":      {method: "POST", path: "/runs/{run_id}/approvals/{approval_id}", pathParams: []string{"run_id", "approval_id"}, body: true},
 		"interruptRun":         {method: "POST", path: "/runs/{run_id}/interrupt", pathParams: []string{"run_id"}, body: true},
@@ -217,6 +220,18 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 		add("prompt", stringField(), true)
 		add("model", stringField(), false)
 		add("reasoning_effort", stringField(), false)
+	case "listSessionRuns":
+		add("session_id", stringField(), true)
+		add("after_cursor", stringField(), false)
+		add("limit", integerField(), false)
+	case "getDraft":
+		add("session_id", stringField(), true)
+	case "updateDraft":
+		add("session_id", stringField(), true)
+		add("mutation_id", stringField(), true)
+		add("client_id", stringField(), true)
+		add("client_sequence", integerField(), true)
+		add("content", stringField(), true)
 	case "listRunApprovals", "listRunEvents":
 		add("run_id", stringField(), true)
 		add("after_cursor", stringField(), false)

@@ -192,6 +192,71 @@ func TestServerToolCallDelegatesAuthenticationPathAndBody(t *testing.T) {
 	}
 }
 
+func TestServerSessionRunAndDraftToolsDelegateContractRoutes(t *testing.T) {
+	type delegatedRequest struct {
+		method string
+		path   string
+		body   map[string]any
+	}
+	seen := make([]delegatedRequest, 0, 3)
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		entry := delegatedRequest{method: request.Method, path: request.URL.RequestURI()}
+		if request.Method == http.MethodPut {
+			if err := json.NewDecoder(request.Body).Decode(&entry.body); err != nil {
+				t.Fatalf("decode delegated draft body: %v", err)
+			}
+		}
+		seen = append(seen, entry)
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/sessions/session-1/runs":
+			_, _ = writer.Write([]byte(`{"items":[],"has_more":false}`))
+		default:
+			_, _ = writer.Write([]byte(`{"draft":{"session_id":"session-1","content":"","revision":0,"updated_at":"2026-10-30T00:00:00Z"}}`))
+		}
+	})
+
+	for _, test := range []struct {
+		name      string
+		arguments map[string]any
+		method    string
+		path      string
+	}{
+		{name: "list session runs", arguments: map[string]any{"session_id": "session-1", "after_cursor": "opaque", "limit": 17}, method: http.MethodGet, path: "/sessions/session-1/runs?after_cursor=opaque&limit=17"},
+		{name: "get draft", arguments: map[string]any{"session_id": "session-1"}, method: http.MethodGet, path: "/sessions/session-1/draft"},
+		{name: "update draft", arguments: map[string]any{"session_id": "session-1", "mutation_id": "mutation-1", "client_id": "client-1", "client_sequence": 1, "content": "hello"}, method: http.MethodPut, path: "/sessions/session-1/draft"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := callMCP(t, server, map[string]any{
+				"jsonrpc": "2.0",
+				"id":      test.name,
+				"method":  "tools/call",
+				"params": map[string]any{
+					"name":      "loomhelm." + strings.ReplaceAll(test.name, " ", "_"),
+					"arguments": test.arguments,
+				},
+			})
+			var result struct {
+				IsError bool `json:"isError"`
+			}
+			decodeResult(t, response, &result)
+			if result.IsError {
+				t.Fatalf("MCP tool returned an error: %s", response)
+			}
+			if len(seen) == 0 {
+				t.Fatal("REST handler did not receive delegated request")
+			}
+			got := seen[len(seen)-1]
+			if got.method != test.method || got.path != test.path {
+				t.Fatalf("delegated request = %s %s, want %s %s", got.method, got.path, test.method, test.path)
+			}
+			if test.method == http.MethodPut && (got.body["mutation_id"] != "mutation-1" || got.body["client_id"] != "client-1" || got.body["client_sequence"] != float64(1) || got.body["content"] != "hello") {
+				t.Fatalf("delegated draft body = %#v", got.body)
+			}
+		})
+	}
+}
+
 func TestServerRejectsInvalidMutationArgumentsBeforeREST(t *testing.T) {
 	tests := []struct {
 		name      string
