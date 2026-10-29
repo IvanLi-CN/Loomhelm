@@ -313,6 +313,9 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 	if err != nil {
 		return reconciliation, err
 	}
+	if reconciliation.CommandID != "" && reconciliation.CommandID != commandID {
+		return reconciliation, fmt.Errorf("transport returned command id %q for %q", reconciliation.CommandID, commandID)
+	}
 	if reconciliation.CommandID == "" {
 		reconciliation.CommandID = commandID
 	}
