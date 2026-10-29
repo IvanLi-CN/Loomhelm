@@ -256,8 +256,9 @@ func NewServer(config Config) (*Server, error) {
 				maxBody: config.MaxBodyBytes,
 				maxID:   config.MaxResponseBytes / 8,
 			},
-			slots: make(chan struct{}, concurrentMCPRequestSlots(config.MaxBodyBytes, config.MaxResponseBytes)),
-			wait:  defaultMCPAdmissionWait,
+			slots:   make(chan struct{}, concurrentMCPRequestSlots(config.MaxBodyBytes, config.MaxResponseBytes)),
+			waiters: make(chan struct{}, maxConcurrentMCPRequests),
+			wait:    defaultMCPAdmissionWait,
 		},
 		allowed:     origins,
 		crossOrigin: http.NewCrossOriginProtection(),
@@ -977,15 +978,25 @@ func concurrentMCPRequestSlots(maxBody, maxResponse int64) int {
 }
 
 type requestConcurrencyHandler struct {
-	next  http.Handler
-	slots chan struct{}
-	wait  time.Duration
+	next    http.Handler
+	slots   chan struct{}
+	waiters chan struct{}
+	wait    time.Duration
 }
 
 func (h *requestConcurrencyHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if h.slots == nil {
 		h.next.ServeHTTP(writer, request)
 		return
+	}
+	if h.waiters != nil {
+		select {
+		case h.waiters <- struct{}{}:
+			defer func() { <-h.waiters }()
+		default:
+			rejectMCPAdmissionRequest(writer, request, "concurrency_queue_full")
+			return
+		}
 	}
 	wait := h.wait
 	if wait <= 0 {
@@ -998,11 +1009,25 @@ func (h *requestConcurrencyHandler) ServeHTTP(writer http.ResponseWriter, reques
 		defer func() { <-h.slots }()
 		h.next.ServeHTTP(writer, request)
 	case <-request.Context().Done():
+		rejectMCPAdmissionRequest(writer, request, "")
 	case <-timer.C:
-		writer.Header().Set("X-Loomhelm-MCP-Response", "concurrency_limited")
-		writer.Header().Set("Retry-After", "1")
-		writer.WriteHeader(http.StatusServiceUnavailable)
+		rejectMCPAdmissionRequest(writer, request, "concurrency_limited")
 	}
+}
+
+func rejectMCPAdmissionRequest(writer http.ResponseWriter, request *http.Request, marker string) {
+	if request != nil && request.Body != nil {
+		clearReadDeadline := setRequestBodyReadDeadline(writer, requestBodyCloseWait)
+		if closeRequestBodyWithin(request.Body, requestBodyCloseWait) {
+			clearReadDeadline()
+		}
+	}
+	if marker == "" || request == nil || request.Context().Err() != nil {
+		return
+	}
+	writer.Header().Set("X-Loomhelm-MCP-Response", marker)
+	writer.Header().Set("Retry-After", "1")
+	writer.WriteHeader(http.StatusServiceUnavailable)
 }
 
 type requestIDLimitHandler struct {

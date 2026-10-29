@@ -746,9 +746,41 @@ func TestRequestConcurrencyWaitTimeoutReturnsRetryableAdmissionError(t *testing.
 		wait:  10 * time.Millisecond,
 	}
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	body := &blockingRequestBody{closed: make(chan struct{})}
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/mcp", body))
 	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("X-Loomhelm-MCP-Response") != "concurrency_limited" {
 		t.Fatalf("concurrency admission status=%d marker=%q, want 503/concurrency_limited", recorder.Code, recorder.Header().Get("X-Loomhelm-MCP-Response"))
+	}
+	select {
+	case <-body.closed:
+	default:
+		t.Fatal("concurrency rejection did not close the original request body")
+	}
+}
+
+func TestRequestConcurrencyQueueLimitRejectsAndClosesBody(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	waiters := make(chan struct{}, 1)
+	waiters <- struct{}{}
+	handler := &requestConcurrencyHandler{
+		next: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("request entered a full concurrency gate")
+		}),
+		slots:   slots,
+		waiters: waiters,
+		wait:    time.Second,
+	}
+	recorder := httptest.NewRecorder()
+	body := &blockingRequestBody{closed: make(chan struct{})}
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/mcp", body))
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("X-Loomhelm-MCP-Response") != "concurrency_queue_full" {
+		t.Fatalf("full admission queue status=%d marker=%q, want 503/concurrency_queue_full", recorder.Code, recorder.Header().Get("X-Loomhelm-MCP-Response"))
+	}
+	select {
+	case <-body.closed:
+	default:
+		t.Fatal("full queue rejection did not close the original request body")
 	}
 }
 

@@ -191,10 +191,11 @@ func (s *Server) serveAdmitted(ctx context.Context, listener net.Listener) error
 	server := &http.Server{
 		Handler:           s.router,
 		ReadHeaderTimeout: 5 * time.Second,
-		// Bound slow request bodies and response writers, including MCP's
-		// pre-admission body read and bounded response write.
+		// Bound slow request bodies and response writers. MCP may spend up to
+		// 15 seconds reading a body and 25 seconds waiting on one delegated
+		// operation before it writes an unknown-outcome response.
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 60 * time.Second,
 	}
 	tracked := &trackedListener{Listener: listener}
 	serveResult := make(chan error, 1)
