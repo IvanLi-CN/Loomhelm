@@ -26,6 +26,12 @@ var (
 
 type RunJobEnqueuer func(context.Context, pgx.Tx, RunJobArgs) error
 
+// CommandAdmissionMutation runs inside the same transaction that accepts a
+// Run command and creates its pending Run. It is reserved for durable state
+// that must be bound to the command before any transport side effect starts.
+// The callback must not send commands or perform other external side effects.
+type CommandAdmissionMutation func(context.Context, pgx.Tx, AcceptResult) error
+
 type StoreConfig struct {
 	Now             func() time.Time
 	EnqueueRunJobTx RunJobEnqueuer
@@ -235,14 +241,25 @@ func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransaction
 // AcceptRun commits a command and its pending Run identity together. This is
 // the Server-side boundary used before a run is enqueued into River.
 func (s *Store) AcceptRun(ctx context.Context, intent CommandIntent, input NewRunInput) (AcceptResult, Run, error) {
-	return s.acceptRun(ctx, intent, input, nil)
+	return s.acceptRun(ctx, intent, input, nil, nil)
 }
 
 func (s *Store) AcceptRunWithLease(ctx context.Context, intent CommandIntent, input NewRunInput, lease DurableLeaseIdentity) (AcceptResult, Run, error) {
-	return s.acceptRun(ctx, intent, input, &lease)
+	return s.acceptRun(ctx, intent, input, &lease, nil)
 }
 
-func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRunInput, lease *DurableLeaseIdentity) (AcceptResult, Run, error) {
+// AcceptRunWithMutation admits a Run and invokes mutation inside the same
+// transaction as command/run acceptance. A deduplicated command never invokes
+// the callback: a retry must not bind or clear another draft revision.
+func (s *Store) AcceptRunWithMutation(ctx context.Context, intent CommandIntent, input NewRunInput, mutation CommandAdmissionMutation) (AcceptResult, Run, error) {
+	return s.acceptRun(ctx, intent, input, nil, mutation)
+}
+
+func (s *Store) AcceptRunWithLeaseAndMutation(ctx context.Context, intent CommandIntent, input NewRunInput, lease DurableLeaseIdentity, mutation CommandAdmissionMutation) (AcceptResult, Run, error) {
+	return s.acceptRun(ctx, intent, input, &lease, mutation)
+}
+
+func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRunInput, lease *DurableLeaseIdentity, mutation CommandAdmissionMutation) (AcceptResult, Run, error) {
 	if err := s.ready(ctx); err != nil {
 		return AcceptResult{}, Run{}, err
 	}
@@ -279,6 +296,11 @@ func (s *Store) acceptRun(ctx context.Context, intent CommandIntent, input NewRu
 	}
 	if !sameRunIdentity(candidate, stored) {
 		return AcceptResult{}, Run{}, fmt.Errorf("%w: run %q", ErrRunConflict, candidate.ID)
+	}
+	if !accepted.Deduplicated && mutation != nil {
+		if err := mutation(ctx, tx, accepted); err != nil {
+			return AcceptResult{}, Run{}, err
+		}
 	}
 	if lease != nil && !accepted.Deduplicated {
 		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {

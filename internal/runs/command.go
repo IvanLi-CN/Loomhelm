@@ -27,9 +27,10 @@ var (
 // that owns its side effect. Generation is kept separate from protocol.Command
 // because it is an internal fencing fact, not a new public wire field.
 type CommandIntent struct {
-	Command    protocol.Command
-	Generation string
-	ReceivedAt string
+	Command       protocol.Command
+	Generation    string
+	ReceivedAt    string
+	DraftRevision *int64
 }
 
 type CommandRecord struct {
@@ -141,19 +142,21 @@ func Fingerprint(intent CommandIntent) (string, error) {
 		return "", err
 	}
 	value := struct {
-		CommandID  string               `json:"command_id"`
-		Kind       protocol.CommandKind `json:"kind"`
-		Payload    json.RawMessage      `json:"payload"`
-		RunID      *string              `json:"run_id,omitempty"`
-		SessionID  string               `json:"session_id"`
-		Generation string               `json:"generation"`
+		CommandID     string               `json:"command_id"`
+		Kind          protocol.CommandKind `json:"kind"`
+		Payload       json.RawMessage      `json:"payload"`
+		RunID         *string              `json:"run_id,omitempty"`
+		SessionID     string               `json:"session_id"`
+		Generation    string               `json:"generation"`
+		DraftRevision *int64               `json:"draft_revision,omitempty"`
 	}{
-		CommandID:  intent.Command.CommandID,
-		Kind:       intent.Command.Kind,
-		Payload:    payload,
-		RunID:      intent.Command.RunID,
-		SessionID:  intent.Command.SessionID,
-		Generation: intent.Generation,
+		CommandID:     intent.Command.CommandID,
+		Kind:          intent.Command.Kind,
+		Payload:       payload,
+		RunID:         intent.Command.RunID,
+		SessionID:     intent.Command.SessionID,
+		Generation:    intent.Generation,
+		DraftRevision: intent.DraftRevision,
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -379,6 +382,10 @@ func optionalString(value string) *string {
 func cloneIntent(intent CommandIntent) CommandIntent {
 	intent.Command.Payload = append(json.RawMessage(nil), intent.Command.Payload...)
 	intent.Command.RunID = cloneStringPointer(intent.Command.RunID)
+	if intent.DraftRevision != nil {
+		revision := *intent.DraftRevision
+		intent.DraftRevision = &revision
+	}
 	return intent
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 )
@@ -112,6 +113,46 @@ func (s *ControlService) SubmitRun(ctx context.Context, principal auth.Principal
 		Kind:      protocol.CommandKindRunSend,
 		Payload:   payload,
 		SessionID: session.ID,
+	})
+	return protocol.CommandAckResponse{Ack: ack}, err
+}
+
+// SubmitRunWithDraft is the draft-aware admission seam for REST and MCP
+// adapters. The request prompt is the exact body bound to expectedRevision;
+// the draft projection is finalized only after delivery or reconciliation.
+func (s *ControlService) SubmitRunWithDraft(ctx context.Context, principal auth.Principal, sessionID string, request protocol.SubmitRunRequest, expectedRevision int64) (protocol.CommandAckResponse, error) {
+	if err := s.ready(ctx); err != nil {
+		return protocol.CommandAckResponse{}, err
+	}
+	if err := validateSubmitRunRequest(request); err != nil {
+		return protocol.CommandAckResponse{}, err
+	}
+	if err := validateIdentity(principal.UserID, "owner user id"); err != nil {
+		return protocol.CommandAckResponse{}, err
+	}
+	if expectedRevision <= 0 {
+		return protocol.CommandAckResponse{}, fmt.Errorf("%w: draft revision must be positive", ErrInvalidControlRequest)
+	}
+	session, err := s.authorizedSession(ctx, principal, sessionID, true)
+	if err != nil {
+		return protocol.CommandAckResponse{}, err
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return protocol.CommandAckResponse{}, fmt.Errorf("encode submit run payload: %w", err)
+	}
+	ack, err := s.controller.AcceptCommandWithDraft(ctx, protocol.Command{
+		CommandID: request.CommandID,
+		IssuedAt:  s.now().UTC().Format(time.RFC3339Nano),
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   payload,
+		SessionID: session.ID,
+	}, drafts.CommandDraftInput{
+		CommandID:        request.CommandID,
+		SessionID:        session.ID,
+		OwnerUserID:      principal.UserID,
+		ExpectedRevision: expectedRevision,
+		Content:          request.Prompt,
 	})
 	return protocol.CommandAckResponse{Ack: ack}, err
 }

@@ -48,6 +48,23 @@ func TestLedgerDeduplicatesCanonicalPayloadAndRejectsConflict(t *testing.T) {
 	}
 }
 
+func TestLedgerDraftRevisionIsPartOfCommandIdentity(t *testing.T) {
+	ledger := NewLedger()
+	revision := int64(3)
+	first := testIntent("cmd-draft-revision", "generation-1", `{"prompt":"hello"}`)
+	first.DraftRevision = &revision
+	if _, err := ledger.Accept(first); err != nil {
+		t.Fatalf("first draft accept error = %v", err)
+	}
+
+	changedRevision := int64(4)
+	retry := first
+	retry.DraftRevision = &changedRevision
+	if _, err := ledger.Accept(retry); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("draft revision conflict error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+}
+
 func TestLedgerUnknownRequiresReconciliationBeforeRetry(t *testing.T) {
 	ledger := NewLedger()
 	intent := testIntent("cmd-unknown", "generation-1", `{"prompt":"uncertain"}`)
