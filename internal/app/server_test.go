@@ -558,6 +558,18 @@ func TestServerForceClosesStuckRequestAfterDrainTimeout(t *testing.T) {
 	}
 }
 
+func TestServerMCPShutdownTimeoutPreservesOperationBudget(t *testing.T) {
+	server := &Server{cfg: platform.Config{ShutdownTimeout: time.Second}}
+	if got, want := server.httpShutdownTimeout(), time.Second; got != want {
+		t.Fatalf("inactive MCP HTTP shutdown timeout = %s, want %s", got, want)
+	}
+
+	server.activeMCPRequests.Store(1)
+	if got, want := server.httpShutdownTimeout(), mcpHTTPShutdownGracePeriod; got != want {
+		t.Fatalf("active MCP HTTP shutdown timeout = %s, want %s", got, want)
+	}
+}
+
 func TestServerCanceledRunStopsLifecycleBeforeListen(t *testing.T) {
 	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,

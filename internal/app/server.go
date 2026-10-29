@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -17,16 +18,23 @@ import (
 )
 
 type Server struct {
-	cfg         platform.Config
-	logger      *slog.Logger
-	lifecycle   *platform.Lifecycle
-	router      chi.Router
-	shutdown    chan struct{}
-	serveMu     sync.Mutex
-	openRuntime runtimeFactory
-	resourceMu  sync.RWMutex
-	resources   processRuntime
+	cfg               platform.Config
+	logger            *slog.Logger
+	lifecycle         *platform.Lifecycle
+	router            chi.Router
+	shutdown          chan struct{}
+	serveMu           sync.Mutex
+	openRuntime       runtimeFactory
+	resourceMu        sync.RWMutex
+	resources         processRuntime
+	activeMCPRequests atomic.Int64
 }
+
+// The production MCP path may spend up to 15 seconds reading a body and 25
+// seconds waiting for one delegated operation before returning an unknown
+// outcome. Preserve enough HTTP drain time for that response when MCP is busy;
+// ordinary requests retain the configured shutdown timeout.
+const mcpHTTPShutdownGracePeriod = 60 * time.Second
 
 type trackedListener struct {
 	net.Listener
@@ -191,6 +199,11 @@ func (s *Server) serveAdmitted(ctx context.Context, listener net.Listener) error
 	server := &http.Server{
 		Handler:           s.router,
 		ReadHeaderTimeout: 5 * time.Second,
+		// Bound slow request bodies and response writers. MCP may spend up to
+		// 15 seconds reading a body and 25 seconds waiting on one delegated
+		// operation before it writes an unknown-outcome response.
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
 	}
 	tracked := &trackedListener{Listener: listener}
 	serveResult := make(chan error, 1)
@@ -207,8 +220,8 @@ func (s *Server) serveAdmitted(ctx context.Context, listener net.Listener) error
 		return s.shutdownAndWait(server, tracked, serveResult, "HTTP drain request")
 	case err := <-serveResult:
 		s.BeginDrain("HTTP server stopped unexpectedly")
-		gatewayErr := s.shutdownGateway()
 		shutdownErr := s.shutdownHTTP(server)
+		gatewayErr := s.shutdownGateway()
 		closeErr := tracked.closeError()
 		s.lifecycle.Stop()
 		if combined := withListenerCloseError(combineServerErrors(err, errors.Join(gatewayErr, shutdownErr)), closeErr); combined != nil {
@@ -237,8 +250,8 @@ func (s *Server) BeginDrain(reason string) bool {
 
 func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener, serveResult <-chan error, reason string) error {
 	s.BeginDrain(reason)
-	gatewayErr := s.shutdownGateway()
 	shutdownErr := s.shutdownHTTP(server)
+	gatewayErr := s.shutdownGateway()
 	serveErr := <-serveResult
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		serveErr = nil
@@ -253,7 +266,7 @@ func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener,
 }
 
 func (s *Server) shutdownHTTP(server *http.Server) error {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.httpShutdownTimeout())
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		message := "server shutdown failed; forcing HTTP close"
@@ -267,6 +280,14 @@ func (s *Server) shutdownHTTP(server *http.Server) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) httpShutdownTimeout() time.Duration {
+	timeout := s.cfg.ShutdownTimeout
+	if s.activeMCPRequests.Load() > 0 && timeout < mcpHTTPShutdownGracePeriod {
+		return mcpHTTPShutdownGracePeriod
+	}
+	return timeout
 }
 
 func (s *Server) shutdownGateway() error {
@@ -311,6 +332,7 @@ func withListenerCloseError(base, closeErr error) error {
 
 func (s *Server) registerRoutes() {
 	s.router.Mount("/api/v1", http.HandlerFunc(s.handleApplication))
+	s.router.Handle("/mcp", http.HandlerFunc(s.handleMCP))
 	s.router.Handle(connectorGatewayPath, http.HandlerFunc(s.handleGateway))
 	s.router.Get("/livez", s.handleLive)
 	s.router.Get("/readyz", s.handleReady)

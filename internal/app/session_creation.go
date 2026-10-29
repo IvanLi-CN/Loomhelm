@@ -22,6 +22,18 @@ type sessionCreationApplication interface {
 	CreateSession(context.Context, auth.Principal, protocol.CreateSessionRequest) (protocol.SessionResponse, error)
 }
 
+const sessionUnknownOutcomePersistenceTimeout = 5 * time.Second
+
+// sessionUnknownOutcomeContext lets the durable creation marker finish after
+// the request deadline while retaining bounded persistence work and context
+// values used by the application boundary.
+func sessionUnknownOutcomeContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), sessionUnknownOutcomePersistenceTimeout)
+}
+
 type sessionCreationRecords interface {
 	CreateIntent(context.Context, sessions.CreationIntentInput) (sessions.CreationIntent, error)
 	MarkIntentUnknown(context.Context, sessions.UnknownIntentInput) (sessions.CreationIntent, error)
@@ -244,7 +256,9 @@ func (s *sessionCreationService) markUnknown(ctx context.Context, sessionID stri
 	if s.records == nil {
 		return errors.Join(protocol.ErrUnknownCommandResult, cause)
 	}
-	_, markErr := s.records.MarkIntentUnknown(ctx, sessions.UnknownIntentInput{SessionID: sessionID, Reason: cause.Error()})
+	persistCtx, cancel := sessionUnknownOutcomeContext(ctx)
+	defer cancel()
+	_, markErr := s.records.MarkIntentUnknown(persistCtx, sessions.UnknownIntentInput{SessionID: sessionID, Reason: cause.Error()})
 	return errors.Join(protocol.ErrUnknownCommandResult, cause, markErr)
 }
 
