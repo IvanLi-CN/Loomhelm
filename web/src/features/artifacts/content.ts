@@ -54,7 +54,7 @@ const sensitiveFieldNames = new Set([
 
 const privatePathFieldNames = new Set(["cwd", "filepath", "grantroot", "path", "root", "workspace"]);
 const inlineSecretPattern = /\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b\s*([:=])\s*(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+/gi;
-const inlinePrivatePathPattern = /(?:~\/|\\\\|[A-Za-z]:[\\/]|\/(?:Users|home|private|root|tmp|var|workspace)(?:\/|$))(?:(?:[^\s"'`<>,;}\]]+)|(?:\s+(?=[^\s"'`<>,;}\]]+\/)))*/gi;
+const inlinePrivatePathPattern = /(?:~\/|\\\\|[A-Za-z]:[\\/]|\/(?:Users|home|private|root|tmp|var|workspace)(?:\/|$))(?:(?:[^\s"'`<>,;}\]]+)|(?:\s+(?=(?:[^\s"'`<>,;}\]]+\/|[^\s"'`<>,;}\]]+\.[A-Za-z0-9]{1,12}(?:$|[\s,;}]|\])|[^\s"'`<>,;}\]]+$))))*/gi;
 
 function normalizedFieldName(value: string): string {
   return value.toLowerCase().replaceAll("_", "").replaceAll("-", "");

@@ -104,6 +104,9 @@ describe("U04 conversation content classification", () => {
     expect(inspectableRawPayload({
       detail: "output path /Users/name/Library/Application Support/loomhelm/file.txt"
     })).toEqual({ detail: "output path [路径已隐藏]" });
+    expect(inspectableRawPayload({
+      detail: "output path /Users/name/Documents/Secret File.txt"
+    })).toEqual({ detail: "output path [路径已隐藏]" });
     expect(inspectableRawPayload({ detail: "tool output /opt/build/cache" })).toEqual({ detail: "tool output /opt/build/cache" });
   });
 
