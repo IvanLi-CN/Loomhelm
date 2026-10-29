@@ -106,7 +106,6 @@ export function applyRunEvent(run: Run, event: Event): Run {
   const next: Run = { ...run, last_cursor: event.cursor };
   if (event.type === "run.started") return { ...next, started_at: event.occurred_at, status: "running" };
   if (event.type === "approval.requested") return { ...next, status: "waiting_approval" };
-  if (event.type === "approval.resolved" && run.status === "waiting_approval") return { ...next, status: "running" };
   if (event.type === "run.completed") return { ...next, finished_at: event.occurred_at, status: "completed" };
   if (event.type === "run.failed") return { ...next, finished_at: event.occurred_at, status: "failed" };
   if (event.type === "run.interrupted") return { ...next, finished_at: event.occurred_at, status: "interrupted" };

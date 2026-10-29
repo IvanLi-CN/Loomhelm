@@ -229,6 +229,11 @@ function readDraft(key: string | undefined): string {
   }
 }
 
+function readStoredDraft(key: string | undefined, stateKey: string | undefined): string {
+  const localState = readLocalDraftState(stateKey);
+  return localState ? localState.content : readDraft(key);
+}
+
 function writeDraft(key: string | undefined, draft: string): boolean {
   const storage = getSessionStorage();
   if (!key || !storage) return false;
@@ -277,13 +282,13 @@ function clearLocalDraftState(key: string | undefined): void {
 }
 
 function writeStoredDraft(key: string | undefined, stateKey: string | undefined, draft: string, state: LocalDraftState): boolean {
-  if (!writeDraft(key, draft)) return false;
-  return writeLocalDraftState(stateKey, state);
+  if (!writeLocalDraftState(stateKey, state)) return false;
+  return writeDraft(key, draft);
 }
 
-function clearStoredDraft(key: string | undefined, stateKey: string | undefined): void {
+function clearStoredDraft(key: string | undefined, stateKey: string | undefined, baseRevision = 0): void {
+  if (!writeLocalDraftState(stateKey, { baseRevision, content: "", dirty: false })) return;
   writeDraft(key, "");
-  clearLocalDraftState(stateKey);
 }
 
 function readRunIntent(key: string | undefined): RunIntent | undefined {
@@ -674,7 +679,7 @@ export function ProductionConversationWorkspace({
   const [draftAccessBlocked, setDraftAccessBlocked] = useState(false);
   const [draftFailure, setDraftFailure] = useState<string | null>(null);
   const [, setControlIntentRevision] = useState(0);
-  const [draft, setDraft] = useState(() => storedRunIntent?.prompt ?? readDraft(draftKey));
+  const [draft, setDraft] = useState(() => storedRunIntent?.prompt ?? readStoredDraft(draftKey, draftStateKey));
   const [activityNotice, setActivityNotice] = useState<string | null>(() => storedRunIntent?.uncertain ? "上一次 Run 命令结果不确定；请先完成对账，不会自动重复提交。" : null);
   const [uncertainRunCommandId, setUncertainRunCommandId] = useState<string | undefined>(() => storedRunIntent?.uncertain ? storedRunIntent.commandId : undefined);
   const draftRef = useRef(draft);
@@ -810,7 +815,9 @@ export function ProductionConversationWorkspace({
     if (draftSaveTimerRef.current !== undefined) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = undefined;
     draftSavePromiseRef.current = undefined;
-    setDraft(nextRunIntent?.prompt ?? readDraft(getDraftKey(principalId, sessionId)));
+    const nextDraftKey = getDraftKey(principalId, sessionId);
+    const nextDraftStateKey = getDraftStateKey(principalId, sessionId);
+    setDraft(nextRunIntent?.prompt ?? readStoredDraft(nextDraftKey, nextDraftStateKey));
     setUncertainRunCommandId(nextRunIntent?.uncertain ? nextRunIntent.commandId : undefined);
   }, [principalId, sessionId]);
 
@@ -946,6 +953,13 @@ export function ProductionConversationWorkspace({
             setApprovalReadUncertain(false);
             setApprovalReadFailure(null);
             setCommandState(undefined);
+          } else {
+            setRun((current) => {
+              if (!current || current.id !== selected.id || current.session_id !== loadedSession.id) return current;
+              const durableProgress = selected.status === "running" || selected.status === "completed" || selected.status === "failed" || selected.status === "interrupted";
+              if (current.status !== "unknown" && !(current.status === "waiting_approval" && durableProgress)) return current;
+              return { ...current, ...selected, session_id: loadedSession.id };
+            });
           }
         } else if (!activeRunIdRef.current) {
           fenceRunTransition(undefined);
@@ -997,17 +1011,28 @@ export function ProductionConversationWorkspace({
         if (currentSessionIdRef.current !== sessionIdForDraft) return;
         if (result.state === "received" && result.draft) {
           draftRevisionRef.current = result.draft.revision;
-          setDraftReadUncertain(false);
           setDraftAccessBlocked(false);
           draftAccessBlockedRef.current = false;
-          setDraftFailure(null);
           if (draftRef.current === nextValue && result.draft.content === nextValue) {
             draftDirtyRef.current = false;
             draftInputSinceReadRef.current = false;
-            writeStoredDraft(draftKey, draftStateKey, nextValue, { baseRevision: result.draft.revision, content: nextValue, dirty: false });
+            if (writeStoredDraft(draftKey, draftStateKey, nextValue, { baseRevision: result.draft.revision, content: nextValue, dirty: false })) {
+              setDraftReadUncertain(false);
+              setDraftFailure(null);
+            } else {
+              draftDirtyRef.current = true;
+              setDraftReadUncertain(true);
+              setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖或清除。请恢复浏览器存储后再试。");
+            }
           } else if (draftRef.current === nextValue) {
             draftDirtyRef.current = true;
-            writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: nextValue, dirty: true });
+            if (writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: nextValue, dirty: true })) {
+              setDraftReadUncertain(false);
+              setDraftFailure(null);
+            } else {
+              setDraftReadUncertain(true);
+              setDraftFailure("本地草稿状态无法持久化；当前输入已保留，未自动覆盖。请恢复浏览器存储后再试。");
+            }
           }
           continue;
         }
@@ -1059,16 +1084,21 @@ export function ProductionConversationWorkspace({
       if (result.state === "received" && result.draft) {
         if (result.draft.revision < draftRevisionRef.current) return;
         draftRevisionRef.current = result.draft.revision;
-        setDraftReadUncertain(false);
         setDraftAccessBlocked(false);
         draftAccessBlockedRef.current = false;
-        setDraftFailure(null);
-        const localDraft = readDraft(draftKey);
+        const localDraft = readStoredDraft(draftKey, draftStateKey);
         const localDraftState = readLocalDraftState(draftStateKey);
         const hasPendingLocalDraft = Boolean(localDraftState?.dirty && localDraftState.content === localDraft && draftRef.current === localDraft && localDraft !== result.draft.content);
         if (draftInputSinceReadRef.current && draftRef.current !== result.draft.content) {
           draftDirtyRef.current = true;
           scheduleDraftPersistence(loadedSessionId, draftRef.current);
+          return;
+        }
+        if (!localDraftState && draftRef.current === localDraft && localDraft !== result.draft.content) {
+          draftDirtyRef.current = true;
+          draftInputSinceReadRef.current = true;
+          setDraftReadUncertain(true);
+          setDraftFailure("本地草稿状态无法核对；当前输入已保留，未自动覆盖或重放。请恢复浏览器存储后再试。");
           return;
         }
         if (hasPendingLocalDraft) {
@@ -1088,7 +1118,14 @@ export function ProductionConversationWorkspace({
           if (draftRef.current === result.draft.content) {
             draftDirtyRef.current = false;
             draftInputSinceReadRef.current = false;
-            writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false });
+            if (writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false })) {
+              setDraftReadUncertain(false);
+              setDraftFailure(null);
+            } else {
+              draftDirtyRef.current = true;
+              setDraftReadUncertain(true);
+              setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖或清除。请恢复浏览器存储后再试。");
+            }
           } else {
             scheduleDraftPersistence(loadedSessionId, draftRef.current);
           }
@@ -1097,14 +1134,24 @@ export function ProductionConversationWorkspace({
           draftDirtyRef.current = true;
           draftInputSinceReadRef.current = true;
           setDraft(localDraft);
-          writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: localDraft, dirty: true });
+          if (!writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: localDraft, dirty: true })) {
+            setDraftReadUncertain(true);
+            setDraftFailure("本地草稿状态无法持久化；当前输入已保留，未自动覆盖。请恢复浏览器存储后再试。");
+            return;
+          }
           scheduleDraftPersistence(loadedSessionId, localDraft);
         } else {
           draftRef.current = result.draft.content;
           setDraft(result.draft.content);
           draftDirtyRef.current = false;
           draftInputSinceReadRef.current = false;
-          writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false });
+          if (writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false })) {
+            setDraftReadUncertain(false);
+            setDraftFailure(null);
+          } else {
+            setDraftReadUncertain(true);
+            setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖或清除。请恢复浏览器存储后再试。");
+          }
         }
         return;
       }
@@ -1697,7 +1744,7 @@ export function ProductionConversationWorkspace({
         return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status === "waiting_approval" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
       {draftFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{draftFailure}</span></div> : null}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; draftInputSinceReadRef.current = true; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; if (writeDraft(draftKey, value)) writeLocalDraftState(draftStateKey, { baseRevision: draftRevisionRef.current, content: value, dirty: true }); scheduleDraftPersistence(sessionForRoute.id, value); } else { clearLocalDraftState(draftStateKey); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; draftInputSinceReadRef.current = true; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; if (!writeStoredDraft(draftKey, draftStateKey, value, { baseRevision: draftRevisionRef.current, content: value, dirty: true })) { setDraftReadUncertain(true); setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖。请恢复浏览器存储后再试。"); } scheduleDraftPersistence(sessionForRoute.id, value); } else { clearLocalDraftState(draftStateKey); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );

@@ -134,7 +134,7 @@ describe("production session model", () => {
     });
   });
 
-  test("reduces terminal and approval events without inferring from transport", () => {
+  test("does not resume a Run from one approval resolution event", () => {
     const pending = runFromCommandAck(session, {
       command_id: "command-1",
       deduplicated: false,
@@ -149,7 +149,8 @@ describe("production session model", () => {
     const completed = applyRunEvent(waiting, event({ event_id: "completed", type: "run.completed", payload: {} }));
     expect(running.status).toBe("running");
     expect(waiting.status).toBe("waiting_approval");
-    expect(resumed.status).toBe("running");
+    expect(resumed.status).toBe("waiting_approval");
+    expect(applyRunEvent(resumed, event({ event_id: "resumed", type: "run.started", payload: {} })).status).toBe("running");
     expect(completed).toMatchObject({ finished_at: "2026-10-27T00:00:02Z", status: "completed" });
   });
 
