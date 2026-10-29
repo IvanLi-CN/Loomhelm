@@ -66,6 +66,7 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 
 	workspace := t.TempDir()
 	journalPath := filepath.Join(workspace, "journal", "connector.jsonl")
+	appServerArgs, appServerEnv := realC01AppServerOptions(t)
 	connectorConfig := platform.Config{
 		Component:                 platform.ComponentConnector,
 		Version:                   "real-platform-c01-interrupt-only",
@@ -75,6 +76,8 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 		ConnectorToken:            hostRegistration.Token,
 		ConnectorJournalPath:      journalPath,
 		ConnectorAppServerCommand: cli,
+		ConnectorAppServerArgs:    appServerArgs,
+		ConnectorAppServerEnv:     appServerEnv,
 		ConnectorWorkingDir:       workspace,
 	}
 	newConnector := func() (*Connector, error) {

@@ -70,6 +70,7 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		t.Fatalf("create secure connector journal directory: %v", err)
 	}
 	journalPath := filepath.Join(journalDir, "connector.jsonl")
+	appServerArgs, appServerEnv := realC01AppServerOptions(t)
 	connectorConfig := platform.Config{
 		Component:                 platform.ComponentConnector,
 		Version:                   "real-platform-c01",
@@ -79,6 +80,8 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		ConnectorToken:            hostRegistration.Token,
 		ConnectorJournalPath:      journalPath,
 		ConnectorAppServerCommand: cli,
+		ConnectorAppServerArgs:    appServerArgs,
+		ConnectorAppServerEnv:     appServerEnv,
 		ConnectorWorkingDir:       workspace,
 	}
 	newConnector := func() (*Connector, error) {
@@ -194,6 +197,33 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 	recoveredRun := submitRealPlatformRun(t, browser, baseURL, created.Session.ID, "real-platform-c01-recovered", "Reply exactly LOOMHELM_PLATFORM_C01_RECOVERED_OK and do not use tools.")
 	waitForRealPlatformEvent(t, ctx, browser, baseURL, recoveredRun, protocol.EventTypeRunCompleted)
 	t.Logf("real platform Connector closure passed: session=%s approve=%s deny=%s interrupt=%s recovered=%s", created.Session.ID, approveRun, denyRun, interruptRun, recoveredRun)
+}
+
+func realC01AppServerOptions(t *testing.T) ([]string, []string) {
+	t.Helper()
+	switch strings.TrimSpace(os.Getenv("LOOMHELM_REAL_CODEX_PROVIDER")) {
+	case "":
+		return nil, nil
+	case "dzw":
+		apiKey, ok := os.LookupEnv("DZW_API_KEY")
+		if !ok || strings.TrimSpace(apiKey) == "" {
+			t.Fatal("DZW_API_KEY is required when LOOMHELM_REAL_CODEX_PROVIDER=dzw")
+		}
+		return []string{
+			"app-server",
+			"-c", "model_provider=dzw",
+			"-c", "model_providers.dzw.name=OpenAI",
+			"-c", "model_providers.dzw.base_url=https://ai.dzw.io/v1",
+			"-c", "model_providers.dzw.wire_api=responses",
+			"-c", "model_providers.dzw.env_key=DZW_API_KEY",
+			"-c", "model_providers.dzw.requires_openai_auth=true",
+			"-c", "model_providers.dzw.supports_websockets=false",
+			"--listen", "stdio://",
+		}, []string{"DZW_API_KEY=" + apiKey}
+	default:
+		t.Fatalf("unsupported LOOMHELM_REAL_CODEX_PROVIDER")
+		return nil, nil
+	}
 }
 
 func submitRealPlatformRun(t *testing.T, browser *http.Client, baseURL, sessionID, commandID, prompt string) string {

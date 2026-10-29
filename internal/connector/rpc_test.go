@@ -396,6 +396,18 @@ func TestSanitizedCommandEnvExcludesSecrets(t *testing.T) {
 	}
 }
 
+func TestProcessTransportAddsExplicitCommandEnvironment(t *testing.T) {
+	t.Setenv("HOME", "/tmp/loomhelm-home")
+	env := processCommandEnvironment([]string{"DZW_API_KEY=test-only-value"})
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "DZW_API_KEY=test-only-value") {
+		t.Fatalf("explicit command environment was not added: %q", joined)
+	}
+	if !strings.Contains(joined, "HOME=/tmp/loomhelm-home") {
+		t.Fatalf("sanitized command environment omitted safe HOME: %q", joined)
+	}
+}
+
 func TestProcessTransportHelper(t *testing.T) {
 	if os.Getenv("LOOMHELM_RPC_HELPER") != "1" {
 		return

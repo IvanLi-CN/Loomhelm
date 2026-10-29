@@ -67,8 +67,10 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 
 	appGateway, err := connectorruntime.NewGateway(connectorruntime.GatewayConfig{
 		Process: connectorruntime.ProcessTransportConfig{
-			CommandPath: cfg.ConnectorAppServerCommand,
-			WorkingDir:  cfg.ConnectorWorkingDir,
+			CommandPath:          cfg.ConnectorAppServerCommand,
+			CommandArgs:          cfg.ConnectorAppServerArgs,
+			CommandEnvAdditional: cfg.ConnectorAppServerEnv,
+			WorkingDir:           cfg.ConnectorWorkingDir,
 		},
 		ClientInfo: connectorruntime.ClientInfo{
 			Name:    "loomhelm_connector",

@@ -104,15 +104,17 @@ type RPCTransport interface {
 
 // ProcessTransportConfig starts one host-owned app-server child. The caller
 // supplies the exact CLI path. An explicit CommandEnv is passed through as-is;
-// the default environment is a small non-secret allowlist.
+// otherwise the default environment is a small non-secret allowlist, optionally
+// extended with caller-owned entries for an isolated command wrapper.
 type ProcessTransportConfig struct {
-	CommandPath       string
-	CommandArgs       []string
-	CommandEnv        []string
-	WorkingDir        string
-	Stderr            io.Writer
-	MaxFrameBytes     int
-	afterRequestWrite func(string)
+	CommandPath          string
+	CommandArgs          []string
+	CommandEnv           []string
+	CommandEnvAdditional []string
+	WorkingDir           string
+	Stderr               io.Writer
+	MaxFrameBytes        int
+	afterRequestWrite    func(string)
 }
 
 func resolveProcessCommandPath(command string) (string, error) {
@@ -172,7 +174,7 @@ func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*P
 	if config.CommandEnv != nil {
 		command.Env = append([]string(nil), config.CommandEnv...)
 	} else {
-		command.Env = sanitizedCommandEnv()
+		command.Env = processCommandEnvironment(config.CommandEnvAdditional)
 	}
 	if config.WorkingDir != "" {
 		command.Dir = config.WorkingDir
@@ -1036,6 +1038,10 @@ func sanitizedCommandEnv() []string {
 		}
 	}
 	return env
+}
+
+func processCommandEnvironment(additional []string) []string {
+	return append(sanitizedCommandEnv(), additional...)
 }
 
 func mustJSON(value string) string {
