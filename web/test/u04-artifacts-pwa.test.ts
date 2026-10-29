@@ -67,6 +67,17 @@ describe("U04 conversation content classification", () => {
     expect(output).toMatchObject({ kind: "tool", status: "running", summary: "stdout line" });
   });
 
+  test("redacts credentials from recognized content projections while keeping raw output", () => {
+    const payload = {
+      method: "item/commandExecution/outputDelta",
+      params: { delta: "{\"Authorization\":\"Bearer secret-token\"}" }
+    } as const;
+    const content = classifyConversationEvent({ event_id: "tool-secret-1", type: "message.delta", payload });
+
+    expect(content).toMatchObject({ kind: "tool", summary: "{\"Authorization\": [已隐藏]}" });
+    expect(content.raw).toEqual(payload);
+  });
+
   test("keeps the legacy flat payload shape classifiable", () => {
     const content = classifyConversationEvent({
       event_id: "legacy-tool-1",
@@ -101,6 +112,7 @@ describe("U04 conversation content classification", () => {
     expect(inspectableRawPayload({
       detail: "Authorization: Bearer secret-token cwd=/workspace/private-project"
     })).toEqual({ detail: "Authorization: [已隐藏] cwd=/workspace/private-project" });
+    expect(inspectableRawPayload({ detail: "{\"Authorization\":\"Bearer secret-token\"}" })).toEqual({ detail: "{\"Authorization\": [已隐藏]}" });
     expect(inspectableRawPayload({ detail: "tool output /opt/build/cache" })).toEqual({ detail: "tool output /opt/build/cache" });
   });
 

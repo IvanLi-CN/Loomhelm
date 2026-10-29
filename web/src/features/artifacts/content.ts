@@ -52,7 +52,8 @@ const sensitiveFieldNames = new Set([
   "token"
 ]);
 
-const inlineSecretPattern = /\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b\s*([:=])\s*(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+/gi;
+const inlineSecretPattern =
+  /(["']?)\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b(["']?)\s*([:=])\s*(?:"(?:(?:bearer|basic|token)\s+)?[^"]*"|'(?:(?:bearer|basic|token)\s+)?[^']*'|(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+)/gi;
 
 function normalizedFieldName(value: string): string {
   return value.toLowerCase().replaceAll("_", "").replaceAll("-", "");
@@ -64,7 +65,11 @@ function isSensitiveField(value: string): boolean {
 }
 
 function redactInspectableString(value: string): string {
-  return value.replace(inlineSecretPattern, (_match, field: string, separator: string) => `${field}${separator} [已隐藏]`);
+  return value.replace(
+    inlineSecretPattern,
+    (_match, openingQuote: string, field: string, closingQuote: string, separator: string) =>
+      `${openingQuote}${field}${closingQuote}${separator} [已隐藏]`
+  );
 }
 
 function redactInspectableValue(value: JsonValue, fieldName?: string): JsonValue {
@@ -162,7 +167,7 @@ export function classifyConversationEvent(event: ConversationEvent): Conversatio
   if (isMessage && messageText) {
     const roleValue = firstString(item.role, params.role, payload.role);
     const role = roleValue === "user" || roleValue === "system" ? roleValue : itemType === "userMessage" ? "user" : "assistant";
-    return { eventId, eventType: event.type, kind: "message", role, text: messageText, raw: event.payload };
+    return { eventId, eventType: event.type, kind: "message", role, text: redactInspectableString(messageText), raw: event.payload };
   }
 
   const code = firstString(item.code, item.source, params.code, params.source, payload.code, payload.source);
@@ -171,7 +176,7 @@ export function classifyConversationEvent(event: ConversationEvent): Conversatio
       eventId,
       eventType: event.type,
       kind: "code",
-      code,
+      code: redactInspectableString(code),
       language: firstString(item.language, params.language, payload.language),
       filename: firstString(item.filename, item.path, params.filename, params.path, payload.filename, payload.path),
       raw: event.payload
@@ -180,13 +185,15 @@ export function classifyConversationEvent(event: ConversationEvent): Conversatio
 
   const isTool = isToolType(itemType) || isToolMethod;
   if (isTool) {
+    const name = firstString(item.tool, item.name, item.command, params.tool, params.name, payload.tool, payload.name, itemType, method) ?? "未命名工具";
+    const summary = firstString(item.summary, item.description, params.summary, isToolMethod ? params.delta : undefined, payload.summary);
     return {
       eventId,
       eventType: event.type,
       kind: "tool",
-      name: firstString(item.tool, item.name, item.command, params.tool, params.name, payload.tool, payload.name, itemType, method) ?? "未命名工具",
+      name: redactInspectableString(name),
       status: readToolStatus(item.status ?? params.status ?? payload.status, event.type, method),
-      summary: firstString(item.summary, item.description, params.summary, isToolMethod ? params.delta : undefined, payload.summary),
+      summary: summary ? redactInspectableString(summary) : undefined,
       raw: event.payload
     };
   }
