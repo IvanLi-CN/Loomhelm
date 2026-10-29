@@ -1011,7 +1011,21 @@ func requestBatchTooLarge(body []byte, maxRequests int) bool {
 }
 
 func rawIDTooLarge(raw json.RawMessage, maxBytes int64) bool {
-	return len(raw) != 0 && int64(len(raw)) > maxBytes
+	if len(raw) == 0 || maxBytes < 1 {
+		return false
+	}
+
+	// The SDK re-encodes the request ID in the response. Measure that encoded
+	// representation rather than the request token so characters such as
+	// U+2028 cannot bypass the legacy batch response budget.
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return true
+	}
+	encoded, err := json.Marshal(value)
+	return err != nil || int64(len(encoded)) > maxBytes
 }
 
 func decodeAPIError(status int, body []byte) protocol.ApiError {

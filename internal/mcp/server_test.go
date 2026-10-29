@@ -787,6 +787,39 @@ func TestServerRejectsOversizedRequestIDBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestServerRejectsEscapedRequestIDBeforeMutation(t *testing.T) {
+	calls := 0
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls++
+		}),
+		MaxResponseBytes: 2048,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	// The raw UTF-8 token is within the 256-byte request-ID bound, but the
+	// official JSON encoder expands each U+2028 to six ASCII bytes on output.
+	id := strings.Repeat("\u2028", 84)
+	body := append([]byte(`{"jsonrpc":"2.0","id":"`), []byte(id)...)
+	body = append(body, []byte(`","method":"tools/call","params":{"name":"loomhelm.create_project","arguments":{"name":"Loomhelm"}}}`)...)
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("escaped request ID status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+	}
+	if got := recorder.Header().Get("X-Loomhelm-MCP-Response"); got != "request_id_too_large" {
+		t.Fatalf("escaped request ID marker = %q, want request_id_too_large", got)
+	}
+	if calls != 0 {
+		t.Fatalf("REST invocation count = %d, want zero", calls)
+	}
+}
+
 func TestServerRejectsUnreadableRequestBodyBeforeMutation(t *testing.T) {
 	calls := 0
 	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
