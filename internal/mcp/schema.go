@@ -23,6 +23,12 @@ type routeSpec struct {
 	allowed     map[string]bool
 }
 
+type argumentDefinition struct {
+	kind     string
+	itemKind string
+	enum     map[string]struct{}
+}
+
 type toolSpec struct {
 	operationID string
 	name        string
@@ -31,6 +37,7 @@ type toolSpec struct {
 	inputSchema json.RawMessage
 	required    []string
 	allowed     map[string]bool
+	arguments   map[string]argumentDefinition
 }
 
 type resourceSpec struct {
@@ -46,13 +53,15 @@ func toolSpecFor(operationID string) (toolSpec, bool) {
 	if !ok {
 		return toolSpec{}, false
 	}
-	route.inputSchema, route.required, route.allowed = schemaForOperation(operationID)
+	var arguments map[string]argumentDefinition
+	route.inputSchema, route.required, route.allowed, arguments = schemaForOperation(operationID)
 	return toolSpec{
 		operationID: operationID,
 		route:       route,
 		inputSchema: route.inputSchema,
 		required:    route.required,
 		allowed:     route.allowed,
+		arguments:   arguments,
 	}, true
 }
 
@@ -117,7 +126,7 @@ func routeForOperation(operationID string) (routeSpec, bool) {
 	return route, ok
 }
 
-func schemaForOperation(operationID string) (json.RawMessage, []string, map[string]bool) {
+func schemaForOperation(operationID string) (json.RawMessage, []string, map[string]bool, map[string]argumentDefinition) {
 	stringField := func() map[string]any { return map[string]any{"type": "string"} }
 	integerField := func() map[string]any { return map[string]any{"type": "integer"} }
 	booleanField := func() map[string]any { return map[string]any{"type": "boolean"} }
@@ -232,7 +241,26 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 		properties[name] = field
 		allowed[name] = true
 	}
-	return objectSchema(required, properties), required, allowed
+	arguments := make(map[string]argumentDefinition, len(fields))
+	for name, field := range fields {
+		arguments[name] = argumentDefinitionFromSchema(field)
+	}
+	return objectSchema(required, properties), required, allowed, arguments
+}
+
+func argumentDefinitionFromSchema(field map[string]any) argumentDefinition {
+	definition, _ := field["type"].(string)
+	result := argumentDefinition{kind: definition}
+	if values, ok := field["enum"].([]string); ok {
+		result.enum = make(map[string]struct{}, len(values))
+		for _, value := range values {
+			result.enum[value] = struct{}{}
+		}
+	}
+	if items, ok := field["items"].(map[string]any); ok {
+		result.itemKind, _ = items["type"].(string)
+	}
+	return result
 }
 
 func objectSchema(required []string, properties map[string]any) json.RawMessage {
@@ -325,8 +353,73 @@ func decodeArguments(raw json.RawMessage, spec toolSpec) (map[string]json.RawMes
 		if !spec.allowed[name] {
 			return nil, fmt.Errorf("unknown MCP tool argument %q", name)
 		}
+		// Query values retain the REST handler's established validation and
+		// error messages. Body arguments must satisfy their declared schema
+		// before an operation can reach a side-effecting REST route.
+		if spec.route.body {
+			if err := validateArgument(name, arguments[name], spec.arguments[name]); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return arguments, nil
+}
+
+func validateArgument(name string, raw json.RawMessage, definition argumentDefinition) error {
+	value := bytes.TrimSpace(raw)
+	if len(value) == 0 || bytes.Equal(value, []byte("null")) {
+		return fmt.Errorf("MCP parameter %q must be a %s", name, definition.kind)
+	}
+
+	if definition.kind == "array" {
+		var items []json.RawMessage
+		if err := json.Unmarshal(value, &items); err != nil || items == nil {
+			return fmt.Errorf("MCP parameter %q must be an array", name)
+		}
+		for index, item := range items {
+			if err := validateJSONType(item, definition.itemKind); err != nil {
+				return fmt.Errorf("MCP parameter %q item %d %w", name, index, err)
+			}
+		}
+		return nil
+	}
+
+	if err := validateJSONType(value, definition.kind); err != nil {
+		return fmt.Errorf("MCP parameter %q %w", name, err)
+	}
+	if len(definition.enum) != 0 {
+		var enumValue string
+		if err := json.Unmarshal(value, &enumValue); err != nil {
+			return fmt.Errorf("MCP parameter %q must be a string", name)
+		}
+		if _, ok := definition.enum[enumValue]; !ok {
+			return fmt.Errorf("MCP parameter %q has an invalid value", name)
+		}
+	}
+	return nil
+}
+
+func validateJSONType(raw json.RawMessage, kind string) error {
+	switch kind {
+	case "string":
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return errors.New("must be a string")
+		}
+	case "integer":
+		var value int64
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return errors.New("must be an integer")
+		}
+	case "boolean":
+		var value bool
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return errors.New("must be a boolean")
+		}
+	default:
+		return fmt.Errorf("has unsupported schema type %q", kind)
+	}
+	return nil
 }
 
 func decodeObject(raw json.RawMessage, required []string) (map[string]json.RawMessage, error) {
