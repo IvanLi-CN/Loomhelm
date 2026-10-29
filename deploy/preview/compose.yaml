@@ -77,6 +77,7 @@ services:
 
   worker-blue:
     image: "${LOOMHELM_BLUE_WORKER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
     environment:
       LOOMHELM_VERSION: "${LOOMHELM_BLUE_SOURCE_SHA:-placeholder}"
       LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_BLUE_SOURCE_SHA:-placeholder}"
@@ -100,6 +101,7 @@ services:
 
   worker-green:
     image: "${LOOMHELM_GREEN_WORKER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
     environment:
       LOOMHELM_VERSION: "${LOOMHELM_GREEN_SOURCE_SHA:-placeholder}"
       LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_GREEN_SOURCE_SHA:-placeholder}"

@@ -956,7 +956,7 @@
         "response_type": "ArtifactContentResponse",
         "response_status": 200,
         "summary": "Download a cursor-addressed chunk of the authorized original artifact bytes",
-        "mcp_tool": {"name": "loomhelm.download_artifact", "description": "Download every chunk of an authorized original artifact and reassemble the original bytes."}
+        "mcp_tool": {"name": "loomhelm.download_artifact", "description": "Download one bounded chunk of an authorized original artifact; call again with next_offset until complete=true and reassemble content_base64."}
       }
     ]
   },

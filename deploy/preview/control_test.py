@@ -71,6 +71,7 @@ class PreviewControlTest(unittest.TestCase):
             "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
             "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
             "LOOMHELM_SHUTDOWN_TIMEOUT": "120s",
+            "LOOMHELM_STOP_GRACE_PERIOD": "5s",
         }
         with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
             state_dir = Path(raw_dir) / "state"
@@ -80,6 +81,23 @@ class PreviewControlTest(unittest.TestCase):
             actual = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
             self.assertEqual(actual["LOOMHELM_SHUTDOWN_TIMEOUT"], "120s")
             self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "260s")
+
+    def test_compose_environment_rejects_invalid_shutdown_and_grace_durations(self) -> None:
+        required = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-invalid-duration-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+        }
+        for name, invalid in (("LOOMHELM_SHUTDOWN_TIMEOUT", "not-a-duration"), ("LOOMHELM_STOP_GRACE_PERIOD", "0s")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {**required, name: invalid}, clear=True):
+                state_dir = Path(raw_dir) / "state"
+                self.invoke("init", state_dir)
+                with self.assertRaises(control.ContractError):
+                    self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
 
     def write_manifest(self, path: Path, value: dict) -> None:
         path.write_text(json.dumps(value), encoding="utf-8")

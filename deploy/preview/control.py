@@ -548,17 +548,25 @@ def env_value(name: str, default: str | None = None, required: bool = False) -> 
     return value or ""
 
 
-def default_stop_grace_period(shutdown_timeout: str) -> str:
-    """Cover HTTP, gateway and artifact-recovery shutdown budgets in Compose."""
+def parse_duration_seconds(value: str) -> float | None:
     position = 0
     seconds = 0.0
     units = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1, "m": 60, "h": 3600}
-    for match in DURATION_PART_RE.finditer(shutdown_timeout.strip()):
+    normalized = value.strip()
+    for match in DURATION_PART_RE.finditer(normalized):
         if match.start() != position:
-            return "90s"
+            return None
         seconds += float(match.group(1)) * units[match.group(2)]
         position = match.end()
-    if position != len(shutdown_timeout.strip()) or seconds <= 0:
+    if position != len(normalized) or seconds <= 0:
+        return None
+    return seconds
+
+
+def default_stop_grace_period(shutdown_timeout: str) -> str:
+    """Cover HTTP, gateway and artifact-recovery shutdown budgets in Compose."""
+    seconds = parse_duration_seconds(shutdown_timeout)
+    if seconds is None:
         return "90s"
     # HTTP may retain an MCP request for 60s, gateway shutdown has its own
     # configured budget, and recovery cleanup has a ten-second pass budget.
@@ -578,7 +586,21 @@ def dotenv(value: str) -> str:
 def command_compose_env(args: argparse.Namespace) -> None:
     state_dir = Path(args.state_dir).resolve()
     state = load_state(state_dir)
-    shutdown_timeout = env_value("LOOMHELM_SHUTDOWN_TIMEOUT", "10s")
+    shutdown_timeout = env_value("LOOMHELM_SHUTDOWN_TIMEOUT", "10s").strip()
+    shutdown_seconds = parse_duration_seconds(shutdown_timeout)
+    if shutdown_seconds is None:
+        die("LOOMHELM_SHUTDOWN_TIMEOUT must be a positive Go duration")
+    derived_grace_seconds = max(shutdown_seconds, 60.0) + shutdown_seconds + 20.0
+    derived_grace = f"{math.ceil(derived_grace_seconds)}s"
+    configured_grace = os.environ.get("LOOMHELM_STOP_GRACE_PERIOD")
+    if configured_grace:
+        configured_grace = configured_grace.strip()
+        configured_grace_seconds = parse_duration_seconds(configured_grace)
+        if configured_grace_seconds is None:
+            die("LOOMHELM_STOP_GRACE_PERIOD must be a positive Go duration")
+        stop_grace = configured_grace if configured_grace_seconds >= derived_grace_seconds else derived_grace
+    else:
+        stop_grace = derived_grace
     values: dict[str, str] = {
         "LOOMHELM_PREVIEW_STATE_DIR": str(state_dir),
         "LOOMHELM_PREVIEW_WEB_DIR": str(web_dir(state_dir)),
@@ -598,7 +620,7 @@ def command_compose_env(args: argparse.Namespace) -> None:
         "LOOMHELM_OIDC_REDIRECT_URL": env_value("LOOMHELM_OIDC_REDIRECT_URL", ""),
         "LOOMHELM_SESSION_COOKIE_SECURE": env_value("LOOMHELM_SESSION_COOKIE_SECURE", "true"),
         "LOOMHELM_SHUTDOWN_TIMEOUT": shutdown_timeout,
-        "LOOMHELM_STOP_GRACE_PERIOD": env_value("LOOMHELM_STOP_GRACE_PERIOD", default_stop_grace_period(shutdown_timeout)),
+        "LOOMHELM_STOP_GRACE_PERIOD": stop_grace,
         "LOOMHELM_STARTUP_TIMEOUT": env_value("LOOMHELM_STARTUP_TIMEOUT", "30s"),
         "LOOMHELM_WORKER_LEASE_KEY": env_value("LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"),
     }
