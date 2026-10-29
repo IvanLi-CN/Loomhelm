@@ -59,7 +59,7 @@ export class ApprovalClientAdapter {
       const response = await this.client.resolveApproval({ approval_id: approval.id, run_id: approval.run_id, body });
       const accepted = this.operations.acceptResponse(admission.token, response.ack);
       if (!accepted.accepted) {
-        if (accepted.reason === "mismatched_command") this.operations.markUncertain(admission.token);
+        if (accepted.reason === "mismatched_command" || accepted.reason === "mismatched_run") this.operations.markUncertain(admission.token);
         return { state: "unknown", commandId, reason: accepted.reason === "stale" ? "stale_response" : "mismatched_response" };
       }
       return { state: getClientCommandState(response.ack.state), commandId, ack: response.ack };

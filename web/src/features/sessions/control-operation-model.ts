@@ -70,7 +70,7 @@ export type BeginOperationResult =
 
 export type OperationResponseResult =
   | { accepted: true; state: CommandAck["state"]; inProgress: boolean }
-  | { accepted: false; reason: "stale" | "mismatched_command" | "not_in_flight" };
+  | { accepted: false; reason: "stale" | "mismatched_command" | "mismatched_run" | "not_in_flight" };
 
 function getControlOperationKey(operationKey: string, runId?: string): string {
   return JSON.stringify([operationKey, runId ?? null]);
@@ -131,9 +131,9 @@ export class ControlOperationGuard {
   acceptResponse(token: OperationToken, ack: CommandAck): OperationResponseResult {
     if (!this.isCurrent(token)) return { accepted: false, reason: "stale" };
     if (ack.command_id !== token.commandId) return { accepted: false, reason: "mismatched_command" };
-    if (token.runId !== undefined && ack.run_id !== undefined && ack.run_id !== token.runId) {
+    if (token.runId !== undefined && ack.run_id !== token.runId) {
       this.markUncertain(token);
-      return { accepted: false, reason: "mismatched_command" };
+      return { accepted: false, reason: "mismatched_run" };
     }
 
     const inProgress = commandIsInProgress(ack.state);

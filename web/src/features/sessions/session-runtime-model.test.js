@@ -43,6 +43,7 @@ function ack(overrides = {}) {
     command_id: "command-1",
     deduplicated: false,
     received_at: "2026-10-25T00:00:01Z",
+    run_id: "run-1",
     state: "succeeded",
     ...overrides,
   };

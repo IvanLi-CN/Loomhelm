@@ -80,6 +80,10 @@ export function runFromRecoveredIdentity(session: Session, runId: string, create
   return { ...runFromIdentity(session, runId, createdAt), status: "unknown" };
 }
 
+export function initialRunCommandId(sessionId: string): string {
+  return `${sessionId}:initial`;
+}
+
 export function applyRunEvent(run: Run, event: Event): Run {
   const next: Run = { ...run, last_cursor: event.cursor };
   if (event.type === "run.started") return { ...next, started_at: event.occurred_at, status: "running" };

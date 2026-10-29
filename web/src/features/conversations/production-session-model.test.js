@@ -5,6 +5,7 @@ import {
   approvalContextFromApproval,
   connectionFromSessionState,
   eventToConversationMessage,
+  initialRunCommandId,
   runFromCommandAck,
   runFromRecoveredIdentity,
   taskStatusFromState,
@@ -69,6 +70,10 @@ describe("production session model", () => {
       state: "succeeded"
     });
     expect(run).toMatchObject({ command_id: "command-1", id: "run-1", status: "pending" });
+  });
+
+  test("derives the server-owned command identity for the initial Run", () => {
+    expect(initialRunCommandId("session-1")).toBe("session-1:initial");
   });
 
   test("does not infer a terminal Run from a command acknowledgement", () => {

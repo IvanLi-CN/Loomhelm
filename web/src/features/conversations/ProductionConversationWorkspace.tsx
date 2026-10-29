@@ -23,6 +23,7 @@ import {
   applyRunEvent,
   connectionFromSessionState,
   eventToConversationMessage,
+  initialRunCommandId,
   runFromCommandAck,
   runFromRecoveredIdentity,
   toSessionContextModel,
@@ -757,16 +758,17 @@ export function ProductionConversationWorkspace({
     if (!mountedRef.current) return;
     const initialAck = response.initial_run_ack;
     const initialPrompt = request.prompt?.trim() ?? "";
-    const initialAckMatchesRequest = Boolean(initialAck && initialAck.command_id === request.command_id);
-    const initialRunId = initialAckMatchesRequest ? initialAck?.run_id : undefined;
+    const expectedInitialCommandId = initialRunCommandId(response.session.id);
+    const initialAckMatchesExpectedCommand = Boolean(initialAck && initialAck.command_id === expectedInitialCommandId);
+    const initialRunId = initialAckMatchesExpectedCommand ? initialAck?.run_id : undefined;
     if (initialRunId && !writeRunRecoveryId(getRunRecoveryKey(principalId, response.session.id), initialRunId)) {
       throw new Error("Session 已收到但首个 Run 恢复身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
     const initialRunUncertain = Boolean(
-      (initialAck && (!initialAckMatchesRequest || initialAck.state === "unknown" || !initialRunId))
+      (initialAck && (!initialAckMatchesExpectedCommand || initialAck.state === "unknown" || !initialRunId))
       || (initialPrompt && !initialAck)
     );
-    if (initialRunUncertain && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: request.command_id, prompt: initialPrompt, uncertain: true })) {
+    if (initialRunUncertain && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: expectedInitialCommandId, prompt: initialPrompt, uncertain: true })) {
       throw new Error("Session 已收到但首个 Run 命令身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
     adapters.session.selectSession(response.session.id);
@@ -776,19 +778,19 @@ export function ProductionConversationWorkspace({
     setSessionFailure(null);
     if (initialAck) {
       setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
-      const initialRun = initialAckMatchesRequest ? runFromCommandAck(response.session, initialAck) : undefined;
+      const initialRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
       setRun(initialRun);
       setRunIdentityVerified(Boolean(initialRun && !initialRunUncertain));
-      setUncertainRunCommandId(initialRunUncertain ? request.command_id : undefined);
-      pendingRunSubmission.current = initialRunUncertain ? { commandId: request.command_id, prompt: initialPrompt } : undefined;
+      setUncertainRunCommandId(initialRunUncertain ? expectedInitialCommandId : undefined);
+      pendingRunSubmission.current = initialRunUncertain ? { commandId: expectedInitialCommandId, prompt: initialPrompt } : undefined;
       setActivityNotice(initialRunUncertain ? "首条 Run 结果不确定；已保留同一命令身份，请先完成对账。" : initialRunId ? "首条提示已收到命令确认，等待实际 Run 事件。" : "Session 已创建；首条提示已提交，但服务尚未返回 Run ID。");
       if (!initialRunUncertain) clearStoredIntent(getRunIntentKey(principalId, response.session.id));
     } else if (initialPrompt) {
       setCommandState("unknown");
       setRun(undefined);
       setRunIdentityVerified(false);
-      setUncertainRunCommandId(request.command_id);
-      pendingRunSubmission.current = { commandId: request.command_id, prompt: initialPrompt };
+      setUncertainRunCommandId(expectedInitialCommandId);
+      pendingRunSubmission.current = { commandId: expectedInitialCommandId, prompt: initialPrompt };
       setActivityNotice("首条提示已随 Session 提交，但服务没有返回 Run 命令确认；已保留同一命令身份，请先对账。");
     } else {
       setCommandState(undefined);

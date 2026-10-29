@@ -26,12 +26,13 @@ function event(overrides = {}) {
   };
 }
 
-function ack(command_id, state = "succeeded") {
+function ack(command_id, state = "succeeded", run_id) {
   return {
     ack: {
       command_id,
       deduplicated: false,
       received_at: "2026-10-27T00:00:01Z",
+      ...(run_id ? { run_id } : {}),
       state,
     },
   };
@@ -231,6 +232,25 @@ describe("run client adapter", () => {
       listRunEvents: async () => ({ events: [], has_more: false }),
     });
     const body = { command_id: "command-interrupt-run-mismatch" };
+
+    adapter.selectSession("session-1");
+    await expect(adapter.interruptRun("session-1", "run-1", body)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
+    await expect(adapter.interruptRun("session-1", "run-1", body)).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls).toHaveLength(1);
+    expect(adapter.resolveUncertainInterrupt("run-1", body.command_id)).toBe(true);
+  });
+
+  test("keeps an interrupt acknowledgement without a Run identity uncertain", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async (request) => {
+        calls.push(request);
+        return ack(request.body.command_id, "accepted");
+      },
+      listRunEvents: async () => ({ events: [], has_more: false }),
+    });
+    const body = { command_id: "command-interrupt-run-missing" };
 
     adapter.selectSession("session-1");
     await expect(adapter.interruptRun("session-1", "run-1", body)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
