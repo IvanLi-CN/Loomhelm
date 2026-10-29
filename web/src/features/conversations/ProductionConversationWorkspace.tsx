@@ -1073,12 +1073,10 @@ export function ProductionConversationWorkspace({
         }
         if (hasPendingLocalDraft) {
           if (result.draft.revision !== localDraftState?.baseRevision) {
-            draftRef.current = result.draft.content;
-            draftDirtyRef.current = false;
-            draftInputSinceReadRef.current = false;
-            setDraft(result.draft.content);
-            writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false });
-            setActivityNotice("检测到其他设备的更新，已采用最新共享草稿。");
+            draftDirtyRef.current = true;
+            draftInputSinceReadRef.current = true;
+            setDraftReadUncertain(true);
+            setDraftFailure("共享草稿修订已变化；本地未同步输入已保留，当前 M01 合同无法可靠判断离线修改顺序，未自动覆盖或重放。");
             return;
           }
           draftDirtyRef.current = true;
