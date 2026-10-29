@@ -46,7 +46,6 @@ export interface OpaqueCursorBaseline {
 }
 
 export interface RunEventReadOptions {
-  connection?: ConnectionAvailability;
   limit?: number;
 }
 
@@ -124,10 +123,8 @@ export class RunClientAdapter {
     return this.streams.get(getEventSubscriptionKey(toEventSubscription(subscription)));
   }
 
-  async readRunEvents(subscription: RunEventSubscription, { connection = "online", limit }: RunEventReadOptions = {}): Promise<RunEventReadResult> {
+  async readRunEvents(subscription: RunEventSubscription, { limit }: RunEventReadOptions = {}): Promise<RunEventReadResult> {
     const eventSubscription = toEventSubscription(subscription);
-    const gate = getControlGate({ connection });
-    if (!gate.allowed) return { state: "unknown", reason: gate.blockReason === "offline" ? "offline" : gate.blockReason === "reconnecting" ? "reconnecting" : "unknown" };
 
     const key = getEventSubscriptionKey(eventSubscription);
     const stream = this.streams.get(key) ?? createEventStreamState(toScope(subscription), getRecoveryCursor(this.recovery, eventSubscription), getRecoveryCursorSequence(this.recovery, eventSubscription));

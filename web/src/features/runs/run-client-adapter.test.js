@@ -94,6 +94,22 @@ describe("run client adapter", () => {
     expect(result).toMatchObject({ state: "received", stream: { cursor: "cursor-1", cursorSequence: 1 } });
   });
 
+  test("reads persisted events while the Session connection is unavailable", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async (request) => {
+        calls.push(request);
+        return { events: [event()], has_more: false, next_cursor: "cursor-1" };
+      },
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.readRunEvents(subscription, { limit: 100 })).resolves.toMatchObject({ state: "received" });
+    expect(calls).toEqual([{ run_id: "run-1", limit: 100 }]);
+  });
+
   test("fences a late event page after switching sessions", async () => {
     const pending = deferred();
     const adapter = new RunClientAdapter({

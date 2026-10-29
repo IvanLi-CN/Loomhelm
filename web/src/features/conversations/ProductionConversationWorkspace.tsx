@@ -732,7 +732,6 @@ export function ProductionConversationWorkspace({
         : approvalReadUncertain
           ? approvalReadFailure
           : null;
-  const connectionRef = useRef<ConnectionAvailability>(connection);
   const currentConversationTitle = conversationTitle ?? task?.title ?? "独立会话";
   const taskSummary = mapTaskSummary(task);
   const context = sessionForRoute ? toSessionContextModel(sessionForRoute, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
@@ -751,10 +750,6 @@ export function ProductionConversationWorkspace({
   useLayoutEffect(() => {
     runGenerationRef.current += 1;
   }, [activeRunId, activeSessionId]);
-
-  useEffect(() => {
-    connectionRef.current = connection;
-  }, [connection]);
 
   useEffect(() => {
     activeRunIdRef.current = activeRunId;
@@ -1257,7 +1252,7 @@ export function ProductionConversationWorkspace({
       pollInFlight = true;
       try {
         let approvalEventObserved = false;
-        const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { connection: connectionRef.current, limit: 100 });
+        const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { limit: 100 });
         if (!isCurrentRun()) return;
         if (events.state === "received" && events.page) {
           const observedEvents = events.stream?.events.length ? events.stream.events : events.page.events;
