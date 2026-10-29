@@ -16,6 +16,7 @@ export {
   createEventStreamState,
   createRecoveryCursorState,
   eventBelongsToScope,
+  forgetRecoveryCursor,
   getEventIdentityKey,
   getEventStreamKey,
   getEventSubscriptionKey,

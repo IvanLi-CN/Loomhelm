@@ -145,6 +145,27 @@ describe("run client adapter", () => {
     }
   });
 
+  test("drops cached Run events and recovery cursors after an access denial", async () => {
+    let denied = false;
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async () => {
+        if (denied) throw new ApiClientError(403, { code: "forbidden" });
+        return { events: [event()], has_more: false, next_cursor: "cursor-1" };
+      },
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.readRunEvents(subscription)).resolves.toMatchObject({ state: "received" });
+    expect(adapter.getRecoveryCursorBaseline(subscription)).toEqual({ cursor: "cursor-1", sequence: 1 });
+
+    denied = true;
+    await expect(adapter.readRunEvents(subscription)).resolves.toMatchObject({ state: "unknown", reason: "forbidden" });
+    expect(adapter.getStreamState(subscription)).toBeUndefined();
+    expect(adapter.getRecoveryCursorBaseline(subscription)).toBeUndefined();
+  });
+
   test("guards duplicate submit clicks and does not call the client while offline", async () => {
     const submit = deferred();
     const calls = { submit: [], interrupt: [] };

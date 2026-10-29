@@ -531,8 +531,12 @@ export function ProductionConversationWorkspace({
   const [approvalHistoryAvailable, setApprovalHistoryAvailable] = useState(false);
   const [runIdentityVerified, setRunIdentityVerified] = useState(false);
   const [sessionReadUncertain, setSessionReadUncertain] = useState(false);
+  const [sessionAccessBlocked, setSessionAccessBlocked] = useState(false);
+  const [sessionAccessFailure, setSessionAccessFailure] = useState<string | null>(null);
   const [runReadUncertain, setRunReadUncertain] = useState(false);
   const [runReadFailure, setRunReadFailure] = useState<string | null>(null);
+  const [approvalReadUncertain, setApprovalReadUncertain] = useState(false);
+  const [approvalReadFailure, setApprovalReadFailure] = useState<string | null>(null);
   const [, setControlIntentRevision] = useState(0);
   const [draft, setDraft] = useState(() => storedRunIntent?.prompt ?? readDraft(draftKey));
   const [activityNotice, setActivityNotice] = useState<string | null>(() => storedRunIntent?.uncertain ? "上一次 Run 命令结果不确定；请先完成对账，不会自动重复提交。" : null);
@@ -556,8 +560,16 @@ export function ProductionConversationWorkspace({
   const connection: ConnectionAvailability = sessionForRoute ? connectionFromSessionState(sessionForRoute.state) : "online";
   const sessionProjectReadOnly = Boolean(sessionForRoute?.project_id && projectCanWrite && !projectCanWrite(sessionForRoute.project_id));
   const effectiveReadOnly = readOnly || sessionProjectReadOnly;
-  const effectiveCommandState = sessionReadUncertain || runReadUncertain ? "unknown" : commandState;
-  const readFailure = sessionReadUncertain ? sessionFailure : runReadUncertain ? runReadFailure : null;
+  const effectiveCommandState = sessionReadUncertain || sessionAccessBlocked || runReadUncertain || approvalReadUncertain ? "unknown" : commandState;
+  const readFailure = sessionAccessBlocked
+    ? sessionAccessFailure
+    : sessionReadUncertain
+      ? sessionFailure
+      : runReadUncertain
+        ? runReadFailure
+        : approvalReadUncertain
+          ? approvalReadFailure
+          : null;
   const connectionRef = useRef<ConnectionAvailability>(connection);
   const currentConversationTitle = conversationTitle ?? task?.title ?? "独立会话";
   const taskSummary = mapTaskSummary(task);
@@ -600,8 +612,12 @@ export function ProductionConversationWorkspace({
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(false);
     setSessionReadUncertain(false);
+    setSessionAccessBlocked(false);
+    setSessionAccessFailure(null);
     setRunReadUncertain(false);
     setRunReadFailure(null);
+    setApprovalReadUncertain(false);
+    setApprovalReadFailure(null);
     setRun(undefined);
     setCommandState(undefined);
     setActivityNotice(null);
@@ -623,8 +639,12 @@ export function ProductionConversationWorkspace({
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(false);
     setSessionReadUncertain(false);
+    setSessionAccessBlocked(false);
+    setSessionAccessFailure(null);
     setRunReadUncertain(false);
     setRunReadFailure(null);
+    setApprovalReadUncertain(false);
+    setApprovalReadFailure(null);
     setRun(undefined);
     setCommandState(undefined);
     const nextRunIntent = readRunIntent(getRunIntentKey(principalId, sessionId));
@@ -650,8 +670,12 @@ export function ProductionConversationWorkspace({
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(false);
     setSessionReadUncertain(false);
+    setSessionAccessBlocked(false);
+    setSessionAccessFailure(null);
     setRunReadUncertain(false);
     setRunReadFailure(null);
+    setApprovalReadUncertain(false);
+    setApprovalReadFailure(null);
     lastAppliedRunSequence.current = 0;
     setSessionLoading(true);
     setSessionFailure(null);
@@ -663,7 +687,12 @@ export function ProductionConversationWorkspace({
         if (recoveredRunId) setRun(runFromRecoveredIdentity(result.session, recoveredRunId));
       } else {
         setSession(undefined);
-        setSessionFailure(sessionReadFailureMessage(result.reason));
+        const failureMessage = sessionReadFailureMessage(result.reason);
+        if (isSessionAccessFailure(result.reason)) {
+          setSessionAccessBlocked(true);
+          setSessionAccessFailure(failureMessage);
+        }
+        setSessionFailure(failureMessage);
       }
       setSessionLoading(false);
     });
@@ -695,8 +724,12 @@ export function ProductionConversationWorkspace({
         setApprovalHistoryAvailable(false);
         setRunIdentityVerified(false);
         setSessionReadUncertain(false);
+        setSessionAccessBlocked(true);
+        setSessionAccessFailure(sessionReadFailureMessage(result.reason));
         setRunReadUncertain(false);
         setRunReadFailure(null);
+        setApprovalReadUncertain(false);
+        setApprovalReadFailure(null);
         setRun(undefined);
         setCommandState(undefined);
         setActivityNotice(null);
@@ -725,8 +758,6 @@ export function ProductionConversationWorkspace({
         const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { connection: connectionRef.current, limit: 100 });
         if (!active) return;
         if (events.state === "received" && events.page) {
-          setRunReadUncertain(false);
-          setRunReadFailure(null);
           const observedEvents = events.stream?.events.length ? events.stream.events : events.page.events;
           const identityVerifiedByEvents = observedEvents.length > 0;
           if (identityVerifiedByEvents) setRunIdentityVerified(true);
@@ -766,6 +797,7 @@ export function ProductionConversationWorkspace({
           setApprovalHistoryAvailable(false);
           setRunIdentityVerified(false);
           setRunReadUncertain(true);
+          setApprovalReadUncertain(true);
           setRun((current) => current ? { ...current, status: "unknown" } : current);
           setCommandState(undefined);
           setActivityNotice(null);
@@ -775,6 +807,7 @@ export function ProductionConversationWorkspace({
           return;
         } else if (events.state === "unknown" && events.reason !== "pending") {
           setRunReadUncertain(true);
+          setApprovalReadUncertain(true);
           setRunReadFailure("事件读取结果不确定；已保留当前事实，控制命令已暂停，请刷新或手动对账。");
           setActivityNotice(null);
           setApprovals([]);
@@ -789,6 +822,10 @@ export function ProductionConversationWorkspace({
           if (approvalItems.length !== responseApprovals.length) setActivityNotice("审批响应包含其他 Run 的记录；已丢弃越界事实。");
           setApprovals((current) => mergeApprovals(current, approvalItems));
           setApprovalHistoryAvailable(true);
+          setRunReadUncertain(false);
+          setRunReadFailure(null);
+          setApprovalReadUncertain(false);
+          setApprovalReadFailure(null);
         } catch (error) {
           if (active) {
             setApprovalHistoryAvailable(false);
@@ -800,12 +837,15 @@ export function ProductionConversationWorkspace({
               setApprovals([]);
               setRunIdentityVerified(false);
               setRunReadUncertain(true);
+              setApprovalReadUncertain(true);
               setRun((current) => current ? { ...current, status: "unknown" } : current);
               setCommandState(undefined);
               setActivityNotice(null);
-              setRunReadFailure(error instanceof ApiClientError && error.status === 403
+              const accessMessage = error instanceof ApiClientError && error.status === 403
                 ? "当前账户无权读取该 Run 的审批历史；当前会话消息已清除，控制命令已暂停，请返回会话列表。"
-                : "该 Run 的审批历史不存在或已不可访问；当前会话消息已清除，控制命令已暂停，请刷新后再试。");
+                : "该 Run 的审批历史不存在或已不可访问；当前会话消息已清除，控制命令已暂停，请刷新后再试。";
+              setRunReadFailure(accessMessage);
+              setApprovalReadFailure(accessMessage);
             } else {
               setActivityNotice("审批历史暂时无法读取；当前已展示的审批事实保持不变，审批控制已禁用。");
             }
@@ -849,8 +889,12 @@ export function ProductionConversationWorkspace({
     adapters.approval.selectSession(response.session.id);
     setSession(response.session);
     setSessionFailure(null);
+    setSessionAccessBlocked(false);
+    setSessionAccessFailure(null);
     setRunReadUncertain(false);
     setRunReadFailure(null);
+    setApprovalReadUncertain(false);
+    setApprovalReadFailure(null);
     if (initialAck) {
       setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
       const initialRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
@@ -881,7 +925,7 @@ export function ProductionConversationWorkspace({
   const send = async (prompt: string) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
     if (!canSendControl(connection, effectiveReadOnly) || sessionForRoute.state !== "active") throw new Error("当前 Session 不允许发送控制命令");
-    if (runRouteUnverified || sessionReadUncertain || runReadUncertain || activeRun?.status === "unknown" || commandState === "unknown") {
+    if (runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown") {
       setActivityNotice("当前 Run 结果不确定；请先完成对账，不能在未确认的执行上继续发送或授权。");
       return;
     }
@@ -975,7 +1019,7 @@ export function ProductionConversationWorkspace({
   const resolveApproval = async (params: ResolveApprovalParams) => {
     if (!api || !adapters || !sessionForRoute) throw new Error("Session 尚未就绪");
     if (!approvalHistoryAvailable) throw new Error("审批历史尚未通过当前 Run 核对，请刷新后再确认");
-    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || runReadUncertain || uncertainRunCommandId || activeRun?.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
+    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || sessionAccessBlocked || runReadUncertain || approvalReadUncertain || uncertainRunCommandId || activeRun?.status === "unknown" || effectiveCommandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交审批控制命令");
     if (sessionForRoute.state !== "active" || !canSendControl(connection, effectiveReadOnly)) throw new Error("当前 Session 不允许提交审批控制命令");
     const approval = activeApprovals.find((item) => item.id === params.approval_id && item.revision === params.body.revision);
     if (!approval) throw new Error("审批修订已变化，请刷新后重新确认");
@@ -1051,7 +1095,7 @@ export function ProductionConversationWorkspace({
     const interruptOperationKey = `interrupt:${activeRun.id}`;
     const interruptIntentKey = getControlIntentKey(principalId, sessionForRoute.id, interruptOperationKey);
     const storedInterruptIntent = readControlIntent(interruptIntentKey);
-    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || runReadUncertain || uncertainRunCommandId || activeRun.status === "unknown" || commandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交中断控制命令");
+    if (runRouteUnverified || !runIdentityVerified || sessionReadUncertain || sessionAccessBlocked || runReadUncertain || approvalReadUncertain || uncertainRunCommandId || activeRun.status === "unknown" || effectiveCommandState === "unknown") throw new Error("当前 Run 身份或结果未完成核对，不能继续提交中断控制命令");
     if (storedInterruptIntent?.uncertain) throw new Error("中断命令结果未完成对账；请先确认服务事实，不会自动重复提交");
     if (storedInterruptIntent && storedInterruptIntent.commandId !== request.command_id) throw new Error("中断命令身份已变化，请刷新后重新核对");
     if (!writeControlIntent(interruptIntentKey, { commandId: request.command_id, uncertain: true })) throw new Error("当前浏览器无法持久化中断命令身份；为避免未知结果下重复中断，请先恢复存储后再试");
@@ -1118,7 +1162,7 @@ export function ProductionConversationWorkspace({
       {activityNotice ? <div className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{activityNotice}</span>{uncertainRunCommandId ? <Button type="button" variant="secondary" onClick={reconcileRunSubmission}>我已对账，复用命令重试</Button> : null}</div> : null}
       {readFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--danger)]/30 bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert" aria-live="assertive"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{readFailure}</span></div> : null}
       <ConversationMessageStream connection={connection} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" messages={messages} />
-      {activeRun ? <RunStatusCard canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !runReadUncertain && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}
+      {activeRun ? <RunStatusCard canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}
       {activeApprovals.map((approval) => {
         const approvalContext = approvalContextFromApproval(approval);
         const request: ApprovalRequestModel = {
@@ -1137,9 +1181,9 @@ export function ProductionConversationWorkspace({
         };
         const latestRevision = activeApprovals.filter((candidate) => candidate.id === approval.id).reduce((latest, candidate) => Math.max(latest, candidate.revision), 0);
         const recoveryDecision = uncertainApprovalDecision(principalId, sessionForRoute.id, approval);
-        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !runReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
+        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || runReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; setDraft(value); writeDraft(draftKey, value); }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; setDraft(value); writeDraft(draftKey, value); }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );

@@ -14,6 +14,7 @@ import {
   createRecoveryCursorState,
   createEventStreamState,
   eventBelongsToScope,
+  forgetRecoveryCursor,
   getEventSubscriptionKey,
   getRecoveryCursor,
   getRecoveryCursorSequence,
@@ -177,6 +178,11 @@ export class RunClientAdapter {
         : error instanceof ApiClientError && error.status === 404
           ? "not_found"
           : "transport";
+      if (reason === "forbidden" || reason === "not_found") {
+        this.streams.delete(key);
+        this.streamVersions.delete(key);
+        this.recovery = forgetRecoveryCursor(this.recovery, eventSubscription);
+      }
       return { state: "unknown", reason, request: admission.token };
     }
   }

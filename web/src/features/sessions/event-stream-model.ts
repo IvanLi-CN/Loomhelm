@@ -142,6 +142,15 @@ export function rememberRecoveryCursor(state: RecoveryCursorState, subscription:
   return { entries, cursorSequences };
 }
 
+export function forgetRecoveryCursor(state: RecoveryCursorState, subscription: EventSubscription): RecoveryCursorState {
+  const key = getEventSubscriptionKey(subscription);
+  const entries = new Map(state.entries);
+  const cursorSequences = new Map(state.cursorSequences);
+  entries.delete(key);
+  cursorSequences.delete(key);
+  return { entries, cursorSequences };
+}
+
 export function advanceRecoveryCursor(state: RecoveryCursorState, subscription: EventSubscription, page: EventPage): RecoveryCursorState {
   if (page.events.length === 0 || page.events.some((event) => !eventBelongsToScope(event, subscription.scope))) return state;
 
