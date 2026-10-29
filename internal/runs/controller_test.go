@@ -1,10 +1,32 @@
 package runs
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
+
+func TestUnknownOutcomeContextRetainsValuesAfterCancellation(t *testing.T) {
+	type contextKey string
+	key := contextKey("request-id")
+	parent, cancelParent := context.WithCancel(context.WithValue(context.Background(), key, "request-1"))
+	cancelParent()
+
+	derived, cancelDerived := UnknownOutcomeContext(parent)
+	defer cancelDerived()
+	if got := derived.Value(key); got != "request-1" {
+		t.Fatalf("unknown outcome context value = %v, want request-1", got)
+	}
+	if err := derived.Err(); err != nil {
+		t.Fatalf("unknown outcome context is already canceled: %v", err)
+	}
+	deadline, ok := derived.Deadline()
+	if !ok || deadline.Before(time.Now()) || deadline.After(time.Now().Add(unknownOutcomePersistenceTimeout)) {
+		t.Fatalf("unknown outcome context deadline = %v, want bounded deadline within %s", deadline, unknownOutcomePersistenceTimeout)
+	}
+}
 
 func TestUnknownApprovalDeliveryPreservesRunControl(t *testing.T) {
 	tests := []struct {
