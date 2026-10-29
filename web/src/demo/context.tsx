@@ -32,6 +32,7 @@ interface DemoContextValue extends DemoBootstrapSnapshot {
   inspectorOpen: boolean;
   inspectorPosition: InspectorPosition | null;
   canWrite: boolean;
+  canManageProjects: boolean;
   isReadOnly: boolean;
   setScene: (scene: DemoScene) => void;
   setPersona: (persona: DemoPersona) => void;
@@ -99,6 +100,7 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
 
   const isReadOnly = persona === "viewer" || scene === "readonly" || scene === "approval-expired";
   const canWrite = network === "online" && persona !== "viewer" && scene !== "readonly" && scene !== "error" && scene !== "loading";
+  const canManageProjects = canWrite && persona === "owner";
 
   useEffect(() => {
     const root = document.documentElement;
@@ -163,7 +165,7 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
     setPersonaState(next);
     updateDemoQuery({ d_persona: next });
     refreshFixtures(next, dataMode, scene);
-    setNotice(`已切换演示身份：${next === "owner" ? "工作区主人" : next === "reviewer" ? "项目审阅者" : "只读访客"}。`);
+    setNotice(`已切换演示身份：${next === "owner" ? "工作区主人" : next === "operator" ? "项目操作员" : "只读访客"}。`);
   };
 
   const setNetwork = (next: DemoNetwork) => {
@@ -345,6 +347,7 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
     inspectorOpen,
     inspectorPosition,
     canWrite,
+    canManageProjects,
     isReadOnly,
     setScene,
     setPersona,
@@ -381,6 +384,7 @@ export function DemoProvider({ runtime, children }: PropsWithChildren<{ runtime:
     inspectorPosition,
     expandedInspectorMode,
     canWrite,
+    canManageProjects,
     isReadOnly
   ]);
 

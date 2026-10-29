@@ -32,6 +32,10 @@ var (
 	ErrInvalid         = errors.New("invalid request")
 )
 
+const ExpectedPrincipalHeader = "X-Loomhelm-Expected-Principal"
+
+type principalContextKey struct{}
+
 type Principal struct {
 	UserID       string
 	CredentialID string
@@ -159,6 +163,9 @@ func (s *Service) MountAPI(r chi.Router) {
 }
 
 func (s *Service) ResolvePrincipal(ctx context.Context, request *http.Request) (Principal, error) {
+	if principal, ok := ctx.Value(principalContextKey{}).(Principal); ok {
+		return principal, nil
+	}
 	if s == nil || s.pool == nil || s.sessions == nil || request == nil {
 		return Principal{}, ErrUnauthenticated
 	}
@@ -177,6 +184,50 @@ func (s *Service) ResolvePrincipal(ctx context.Context, request *http.Request) (
 		return Principal{}, ErrUnauthenticated
 	}
 	return Principal{UserID: userID}, nil
+}
+
+// ExpectedPrincipalMiddleware verifies the optional browser assembly binding
+// after the request session has been loaded and before protected handlers run.
+// Requests without the header retain the existing bearer/session behavior.
+func (s *Service) ExpectedPrincipalMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		values := request.Header.Values(ExpectedPrincipalHeader)
+		if len(values) == 0 {
+			next.ServeHTTP(writer, request)
+			return
+		}
+		if isUnboundBrowserBootstrapPath(request.URL.Path) || len(values) != 1 || !validExpectedPrincipal(values[0]) {
+			writeError(writer, request, http.StatusUnauthorized, ErrUnauthenticated, "authentication required")
+			return
+		}
+		principal, err := s.ResolvePrincipal(request.Context(), request)
+		if err != nil || !secureEqual(principal.UserID, values[0]) {
+			writeError(writer, request, http.StatusUnauthorized, ErrUnauthenticated, "authentication required")
+			return
+		}
+		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+	})
+}
+
+func isUnboundBrowserBootstrapPath(path string) bool {
+	switch path {
+	case "/auth/session", "/auth/oidc/start", "/auth/oidc/callback", "/api/v1/auth/session", "/api/v1/auth/oidc/start", "/api/v1/auth/oidc/callback":
+		return true
+	default:
+		return false
+	}
+}
+
+func validExpectedPrincipal(value string) bool {
+	if value == "" || len(value) > 128 || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x21 || character > 0x7e || character == ',' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) resolveCredential(ctx context.Context, raw string) (Principal, error) {

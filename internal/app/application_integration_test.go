@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/go-jose/go-jose/v4"
@@ -147,6 +148,89 @@ func TestServerBrowserAuthenticationAndCRUD(t *testing.T) {
 	baseURL, _ = startApplicationTestServer(t, cfg)
 	applicationRequest(t, applicationBrowser(t), http.MethodGet, baseURL+"/api/v1/auth/oidc/start", nil, nil, http.StatusServiceUnavailable)
 	applicationRequest(t, applicationBrowser(t), http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusUnauthorized)
+}
+
+func TestExpectedPrincipalBindingRejectsCookiePrincipalMismatch(t *testing.T) {
+	databaseURL := isolatedApplicationDatabase(t)
+	issuer := applicationTestIssuer(t)
+	cfg := platform.Config{
+		Component: platform.ComponentServer, Version: "integration", DrainToken: "test-drain",
+		ShutdownTimeout: 5 * time.Second, StartupTimeout: 30 * time.Second,
+		DatabaseURL: databaseURL, DatabaseMaxConns: 4,
+		BrowserAuth: platform.BrowserAuthConfig{OIDCIssuerURL: issuer.URL, OIDCClientID: "loomhelm-test", SecureCookies: false},
+	}
+	baseURL, stop := startApplicationTestServer(t, cfg)
+	defer stop()
+	alice := applicationBrowser(t)
+	bob := applicationBrowser(t)
+	loginApplicationBrowser(t, alice, baseURL, "alice")
+	loginApplicationBrowser(t, bob, baseURL, "bob")
+
+	var aliceSession, bobSession struct {
+		UserID string `json:"user_id"`
+	}
+	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusOK), &aliceSession)
+	decodeApplicationResponse(t, applicationRequest(t, bob, http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusOK), &bobSession)
+	if aliceSession.UserID == "" || bobSession.UserID == "" || aliceSession.UserID == bobSession.UserID {
+		t.Fatalf("test login did not establish distinct browser principals: alice=%q bob=%q", aliceSession.UserID, bobSession.UserID)
+	}
+
+	aliceBinding := map[string]string{auth.ExpectedPrincipalHeader: aliceSession.UserID}
+	bobBinding := map[string]string{auth.ExpectedPrincipalHeader: bobSession.UserID}
+	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/projects", nil, aliceBinding, http.StatusOK)
+	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/auth/session", nil, aliceBinding, http.StatusUnauthorized)
+	for _, test := range []struct {
+		value  string
+		status int
+	}{
+		{value: "", status: http.StatusUnauthorized},
+		// net/http trims optional header whitespace before the application sees it.
+		{value: " " + aliceSession.UserID, status: http.StatusOK},
+		{value: aliceSession.UserID + ",other", status: http.StatusUnauthorized},
+		{value: bobSession.UserID, status: http.StatusUnauthorized},
+	} {
+		applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/projects", nil, map[string]string{auth.ExpectedPrincipalHeader: test.value}, test.status)
+	}
+
+	duplicate, err := http.NewRequest(http.MethodGet, baseURL+"/api/v1/projects", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate.Header.Add(auth.ExpectedPrincipalHeader, aliceSession.UserID)
+	duplicate.Header.Add(auth.ExpectedPrincipalHeader, bobSession.UserID)
+	duplicateResponse, err := alice.Do(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateBody, err := io.ReadAll(duplicateResponse.Body)
+	duplicateResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicateResponse.StatusCode != http.StatusUnauthorized || strings.Contains(string(duplicateBody), aliceSession.UserID) || strings.Contains(string(duplicateBody), bobSession.UserID) {
+		t.Fatalf("duplicate expected-principal header was not rejected safely: status=%d body=%q", duplicateResponse.StatusCode, duplicateBody)
+	}
+
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliceCookies := append([]*http.Cookie(nil), alice.Jar.Cookies(base)...)
+	bobCookies := append([]*http.Cookie(nil), bob.Jar.Cookies(base)...)
+	alice.Jar.SetCookies(base, bobCookies)
+	staleMutationHeaders := map[string]string{"Origin": baseURL, auth.ExpectedPrincipalHeader: aliceSession.UserID}
+	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/projects", nil, aliceBinding, http.StatusUnauthorized)
+	applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/projects", map[string]string{"name": "stale must not persist"}, staleMutationHeaders, http.StatusUnauthorized)
+	alice.Jar.SetCookies(base, aliceCookies)
+
+	projectsResponse := applicationRequest(t, bob, http.MethodGet, baseURL+"/api/v1/projects", nil, bobBinding, http.StatusOK)
+	var projects struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	decodeApplicationResponse(t, projectsResponse, &projects)
+	if len(projects.Items) != 0 {
+		t.Fatalf("rejected stale mutation created project state: %d projects", len(projects.Items))
+	}
 }
 
 func isolatedApplicationDatabase(t *testing.T) string {

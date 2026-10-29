@@ -28,7 +28,7 @@ export const demoScenes = [
 ] as const;
 export type DemoScene = (typeof demoScenes)[number];
 
-export const demoPersonas = ["owner", "reviewer", "viewer"] as const;
+export const demoPersonas = ["owner", "operator", "viewer"] as const;
 export type DemoPersona = (typeof demoPersonas)[number];
 
 export const demoNetworks = ["online", "recovering", "offline"] as const;

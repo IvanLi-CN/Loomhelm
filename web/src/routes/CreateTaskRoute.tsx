@@ -1,46 +1,24 @@
-import { ArrowLeft, CheckCircle2 } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { ArrowLeft } from "lucide-react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { useDemoRuntime } from "@/demo/context";
+import { useOptionalProjectTaskSource } from "@/features/tasks/source";
+import { TaskForm } from "@/features/tasks/TaskForm";
 
 export function CreateTaskRoute() {
-  const runtime = useDemoRuntime();
   const navigate = useNavigate();
-  const [projectId, setProjectId] = useState(runtime.fixtures.projects[0]?.id ?? "");
-  const [title, setTitle] = useState("");
-  const [goal, setGoal] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const source = useOptionalProjectTaskSource();
+  const { projectId: requestedProjectId } = useSearch({ from: "/tasks/new" });
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    const taskId = runtime.createTask({ title: title.trim(), goal: goal.trim(), projectId });
-    if (taskId) {
-      setSubmitted(true);
-      void navigate({ to: "/tasks/$taskId", params: { taskId } });
-    }
-  };
+  if (!source) return <section className="page-section unavailable-page"><span className="eyebrow">TASK CREATION</span><h1>创建任务暂不可用</h1><p>任务创建需要先加载可用的项目范围，请稍后再试。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button></section>;
+  if (source.status === "loading") return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">TASK CREATION</span><h1>正在读取可用项目</h1><p>项目范围加载完成后即可创建任务，请稍候。</p></section>;
+  if (source.status === "error" || source.status === "permission-changed" || !source.projects.length) return <section className="page-section unavailable-page"><span className="eyebrow">TASK CREATION</span><h1>{source.projects.length ? "当前不能创建任务" : "当前没有可用项目"}</h1><p>{source.notice ?? "任务必须归属当前已授权项目；当前页面保持保护，不会创建没有项目边界的任务。"}</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button></section>;
 
   return (
     <section className="page-section create-page">
       <Link to="/tasks" className="back-link"><ArrowLeft size={15} aria-hidden="true" />返回任务</Link>
-      <div className="page-heading"><div><span className="eyebrow">SIMULATED WRITE</span><h1>新建任务</h1><p>这项任务只写入当前 Demo 的内存夹具，刷新或重置后恢复初始数据。</p></div><span className="demo-write-chip"><CheckCircle2 size={14} aria-hidden="true" />memory-only</span></div>
-      <form className="form-panel" onSubmit={submit}>
-        <label className="form-field"><span>项目</span><Select value={projectId} onValueChange={setProjectId} disabled={!runtime.canWrite}><SelectTrigger aria-label="项目"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{runtime.fixtures.projects.map((project) => <SelectItem value={project.id} key={project.id}>{project.name}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
-        <label className="form-field"><span>任务名称</span><Input required maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="这项任务要完成什么" disabled={!runtime.canWrite} /></label>
-        <label className="form-field"><span>目标与上下文</span><Textarea required rows={6} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="说明期望结果，以及需要保留的约束" disabled={!runtime.canWrite} /></label>
-        {!runtime.canWrite && <div className="inline-state inline-state-warning"><ShieldNote />当前身份或网络状态为只读，创建动作保持禁用。</div>}
-        <div className="form-actions"><Button type="submit" variant="default" className="button button-primary" disabled={!runtime.canWrite || !title.trim() || !goal.trim()}>保存模拟任务</Button><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">取消</Link></Button></div>
-        {submitted && <p className="form-success">模拟任务已创建，已进入任务工作区。</p>}
-      </form>
+      <div className="page-heading"><div><span className="eyebrow">TASK CREATION</span><h1>新建任务</h1><p>创建任务后会打开对应的任务工作区。</p></div></div>
+      <TaskForm source={source} mode="create" defaultProjectId={requestedProjectId && source.getProject(requestedProjectId) ? requestedProjectId : undefined} onSaved={(taskId) => { void navigate({ to: "/tasks/$taskId", params: { taskId } }); }} />
     </section>
   );
-}
-
-function ShieldNote() {
-  return <span aria-hidden="true">!</span>;
 }

@@ -2,8 +2,10 @@
 package projects
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -34,8 +37,9 @@ type Project struct {
 }
 
 type CreateRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID          *string `json:"id,omitempty"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
 }
 
 type UpdateRequest struct {
@@ -301,9 +305,17 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 	if len(principal.ProjectScope) > 0 {
 		return Project{}, auth.ErrForbidden
 	}
-	id, err := newID("project")
-	if err != nil {
-		return Project{}, err
+	id := ""
+	if request.ID == nil {
+		generatedID, err := newID("project")
+		if err != nil {
+			return Project{}, err
+		}
+		id = generatedID
+	} else if !validResourceID(*request.ID, "project") {
+		return Project{}, fmt.Errorf("%w: project id must match project_<32 lowercase hex characters>", auth.ErrInvalid)
+	} else {
+		id = *request.ID
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -318,11 +330,17 @@ func (s *Service) Create(ctx context.Context, principal auth.Principal, request 
 		RETURNING id, name, description, created_at, updated_at
 	`, id, name, strings.TrimSpace(request.Description), principal.UserID).Scan(&project.ID, &project.Name, &project.Description, &createdAt, &updatedAt)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return Project{}, auth.ErrConflict
+		}
 		return Project{}, fmt.Errorf("create project: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)
 	`, project.ID, principal.UserID, RoleOwner); err != nil {
+		if isUniqueViolation(err) {
+			return Project{}, auth.ErrConflict
+		}
 		return Project{}, fmt.Errorf("create project owner membership: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -569,6 +587,23 @@ func newID(prefix string) (string, error) {
 	return prefix + "_" + fmt.Sprintf("%x", value), nil
 }
 
+func validResourceID(value, prefix string) bool {
+	if len(value) != len(prefix)+1+16*2 || !strings.HasPrefix(value, prefix+"_") {
+		return false
+	}
+	for _, character := range value[len(prefix)+1:] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func isUniqueViolation(err error) bool {
+	var pgError *pgconn.PgError
+	return errors.As(err, &pgError) && pgError.Code == "23505"
+}
+
 func randomBytes(size int) ([]byte, error) {
 	value := make([]byte, size)
 	if _, err := rand.Read(value); err != nil {
@@ -629,8 +664,8 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 		auth.WriteError(writer, request, http.StatusUnauthorized, err, "authentication required")
 		return
 	}
-	var body CreateRequest
-	if err := auth.DecodeJSON(request, &body); err != nil {
+	body, err := decodeCreateRequest(request)
+	if err != nil {
 		auth.WriteError(writer, request, http.StatusBadRequest, err, "invalid project request")
 		return
 	}
@@ -640,6 +675,29 @@ func (s *Service) handleCreate(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	auth.WriteJSON(writer, http.StatusCreated, map[string]Project{"project": project})
+}
+
+func decodeCreateRequest(request *http.Request) (CreateRequest, error) {
+	var body struct {
+		ID          json.RawMessage `json:"id"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+	}
+	if err := auth.DecodeJSON(request, &body); err != nil {
+		return CreateRequest{}, err
+	}
+	var id *string
+	if body.ID != nil {
+		if bytes.Equal(bytes.TrimSpace(body.ID), []byte("null")) {
+			return CreateRequest{}, fmt.Errorf("%w: project id cannot be null", auth.ErrInvalid)
+		}
+		var value string
+		if err := json.Unmarshal(body.ID, &value); err != nil {
+			return CreateRequest{}, fmt.Errorf("%w: project id must be a string", auth.ErrInvalid)
+		}
+		id = &value
+	}
+	return CreateRequest{ID: id, Name: body.Name, Description: body.Description}, nil
 }
 
 func (s *Service) handleGet(writer http.ResponseWriter, request *http.Request) {

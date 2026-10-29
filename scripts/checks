@@ -159,7 +159,7 @@ check_database() {
 
 check_web() {
 	run_command "frozen Web dependency install" bun install --frozen-lockfile
-	run_command "generated API client transport tests" bun test packages/api-client/test
+	run_command "Web tests" bun test packages/api-client/test web/test
 	run_command "Web typecheck" bun run typecheck
 	run_command "Web production build" bun run build
 	run_command "Storybook build" bun run build:storybook

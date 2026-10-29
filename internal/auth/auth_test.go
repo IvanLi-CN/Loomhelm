@@ -33,6 +33,29 @@ func TestBearerToken(t *testing.T) {
 	}
 }
 
+func TestValidExpectedPrincipal(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "stable id", value: "user_0123456789abcdef", valid: true},
+		{name: "empty", value: "", valid: false},
+		{name: "leading whitespace", value: " user-1", valid: false},
+		{name: "trailing whitespace", value: "user-1 ", valid: false},
+		{name: "duplicate delimiter", value: "user-1,user-2", valid: false},
+		{name: "control character", value: "user-1\n", valid: false},
+		{name: "too long", value: strings.Repeat("x", 129), valid: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validExpectedPrincipal(test.value); got != test.valid {
+				t.Fatalf("validExpectedPrincipal(%q) = %t, want %t", test.value, got, test.valid)
+			}
+		})
+	}
+}
+
 func TestDecodeJSONRejectsUnknownAndTrailingValues(t *testing.T) {
 	for _, test := range []struct {
 		name string

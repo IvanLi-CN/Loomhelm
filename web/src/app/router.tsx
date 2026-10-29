@@ -3,7 +3,10 @@ import {
   createRoute,
   createRouter
 } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 
+import { useOptionalProductionApi } from "@/app/providers";
+import { Button } from "@/components/ui/button";
 import { useOptionalDemoRuntime } from "@/demo/context";
 import { AppShell } from "@/components/product/ProductShell";
 import { CreateConversationRoute } from "@/routes/CreateConversationRoute";
@@ -13,11 +16,31 @@ import { ProjectRoute } from "@/routes/ProjectRoute";
 import { StatusRoute } from "@/routes/StatusRoute";
 import { TasksRoute } from "@/routes/TasksRoute";
 import { ConversationWorkspaceRoute, TaskWorkspaceRoute } from "@/routes/WorkspaceRoute";
-import { VerificationRoute } from "@/routes/VerificationRoute";
 import { WorkbenchRoute } from "@/routes/WorkbenchRoute";
 
+function ProductionNotReadyRoute({ eyebrow, title, description, to = "/tasks", linkLabel = "查看任务" }: { eyebrow: string; title: string; description: string; to?: "/" | "/tasks"; linkLabel?: string }) {
+  return <section className="page-section unavailable-page"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p><Button asChild variant="secondary" className="button button-secondary"><Link to={to}>{linkLabel}</Link></Button></section>;
+}
+
+function ProductionWorkbenchRoute() {
+  const assembly = useOptionalProductionApi();
+  return <ProductionNotReadyRoute eyebrow="WORKBENCH" title="工作台等待会话接入" description={assembly?.auth.message ?? "当前已接入浏览器身份与项目、任务数据；会话、审批和执行能力将在服务可用后显示。"} />;
+}
+
 function RootRoute() {
-  return useOptionalDemoRuntime() ? <WorkbenchRoute /> : <VerificationRoute />;
+  return useOptionalDemoRuntime() ? <WorkbenchRoute /> : <ProductionWorkbenchRoute />;
+}
+
+function ConversationsEntryRoute() {
+  return useOptionalDemoRuntime()
+    ? <ConversationsRoute />
+    : <ProductionNotReadyRoute eyebrow="CONVERSATIONS" title="对话服务尚未接通" description="当前显示真实的项目和任务数据；对话功能将在服务可用后开放。" />;
+}
+
+function CreateConversationEntryRoute() {
+  return useOptionalDemoRuntime()
+    ? <CreateConversationRoute />
+    : <ProductionNotReadyRoute eyebrow="CONVERSATIONS" title="创建对话尚未接通" description="会话创建、历史共享和执行入口将在服务可用后开放。" to="/" linkLabel="返回工作台" />;
 }
 
 const rootRoute = createRootRoute({ component: AppShell });
@@ -43,6 +66,7 @@ const tasksRoute = createRoute({
 const createTaskRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks/new",
+  validateSearch: (search: Record<string, unknown>) => typeof search.projectId === "string" ? { projectId: search.projectId } : {},
   component: CreateTaskRoute
 });
 
@@ -55,13 +79,13 @@ const taskWorkspaceRoute = createRoute({
 const conversationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/conversations",
-  component: ConversationsRoute
+  component: ConversationsEntryRoute
 });
 
 const createConversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/conversations/new",
-  component: CreateConversationRoute
+  component: CreateConversationEntryRoute
 });
 
 const conversationWorkspaceRoute = createRoute({
