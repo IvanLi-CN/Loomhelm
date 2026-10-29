@@ -53,7 +53,7 @@ const sensitiveFieldNames = new Set([
 ]);
 
 const inlineSecretPattern =
-  /(["']?)\b((?:(?:[a-z0-9]+(?:[_-])?)?(?:secret|token))|access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key)\b(["']?)\s*([:=])\s*(?:"(?:(?:bearer|basic|token)\s+)?[^"]*"|'(?:(?:bearer|basic|token)\s+)?[^']*'|(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+)/gi;
+  /(["']?)\b([a-z][a-z0-9_-]*)\b(["']?)\s*([:=])\s*(?:"(?:(?:bearer|basic|token)\s+)?[^"]*"|'(?:(?:bearer|basic|token)\s+)?[^']*'|(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+)/gi;
 
 function normalizedFieldName(value: string): string {
   return value.toLowerCase().replaceAll("_", "").replaceAll("-", "");
@@ -67,8 +67,8 @@ function isSensitiveField(value: string): boolean {
 function redactInspectableString(value: string): string {
   return value.replace(
     inlineSecretPattern,
-    (_match, openingQuote: string, field: string, closingQuote: string, separator: string) =>
-      `${openingQuote}${field}${closingQuote}${separator} [已隐藏]`
+    (match: string, openingQuote: string, field: string, closingQuote: string, separator: string) =>
+      isSensitiveField(field) ? `${openingQuote}${field}${closingQuote}${separator} [已隐藏]` : match
   );
 }
 
