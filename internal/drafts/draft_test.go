@@ -36,24 +36,25 @@ func TestUpdateInputValidationRejectsOversizeAndNonPositiveSequence(t *testing.T
 	}
 }
 
+func TestUpdateInputValidationRejectsReservedConsumeMutationIDs(t *testing.T) {
+	input := UpdateInput{
+		SessionID:      "session-1",
+		OwnerUserID:    "user-1",
+		MutationID:     "consume:command-1",
+		ClientID:       "browser-1",
+		ClientSequence: 1,
+	}
+	if err := input.validate(); !errors.Is(err, ErrInvalidDraft) {
+		t.Fatalf("reserved mutation ID validation error = %v, want ErrInvalidDraft", err)
+	}
+}
+
 func TestConsumeMutationIDIsCommandScoped(t *testing.T) {
 	if got, want := consumeMutationID("command-1"), "consume:command-1"; got != want {
 		t.Fatalf("consumeMutationID() = %q, want %q", got, want)
 	}
 	if got := consumeMutationID("command-1"); got == consumeMutationID("command-2") {
 		t.Fatal("different command IDs must not share a consume mutation ID")
-	}
-}
-
-func TestContentDigestIsStableWithoutRetainingContent(t *testing.T) {
-	if got, want := contentDigest("draft"), contentDigest("draft"); got != want {
-		t.Fatalf("contentDigest() is not stable: %q != %q", got, want)
-	}
-	if contentDigest("draft") == contentDigest("changed") {
-		t.Fatal("different content must not share a digest")
-	}
-	if len(contentDigest("draft")) != 64 {
-		t.Fatalf("contentDigest() length = %d, want 64", len(contentDigest("draft")))
 	}
 }
 

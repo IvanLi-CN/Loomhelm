@@ -4,8 +4,6 @@
 package drafts
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -74,6 +72,9 @@ func (input UpdateInput) validate() error {
 	}
 	if err := validateIdentity(input.MutationID, "mutation id"); err != nil {
 		return err
+	}
+	if strings.HasPrefix(input.MutationID, consumeMutationPrefix) {
+		return fmt.Errorf("%w: mutation id uses a reserved consume namespace", ErrInvalidDraft)
 	}
 	if err := validateIdentity(input.ClientID, "client id"); err != nil {
 		return err
@@ -174,10 +175,7 @@ func validateIdentity(value, label string) error {
 }
 
 func consumeMutationID(commandID string) string {
-	return "consume:" + commandID
+	return consumeMutationPrefix + commandID
 }
 
-func contentDigest(content string) string {
-	digest := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(digest[:])
-}
+const consumeMutationPrefix = "consume:"

@@ -17,7 +17,6 @@ CREATE TABLE conversation_draft_mutations (
     kind TEXT NOT NULL CHECK (kind IN ('update', 'consume')),
     client_id TEXT NOT NULL CHECK (length(trim(client_id)) > 0),
     client_sequence BIGINT NOT NULL CHECK (client_sequence >= 0),
-    content_digest TEXT NOT NULL CHECK (content_digest ~ '^[0-9a-f]{64}$'),
     revision BIGINT NOT NULL CHECK (revision > 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (session_id, mutation_id)
