@@ -639,6 +639,7 @@ export function ProductionConversationWorkspace({
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const draftSavePromiseRef = useRef<Promise<void> | undefined>(undefined);
   const draftAccessBlockedRef = useRef(false);
+  const draftInputSinceReadRef = useRef(false);
 
   const sessionForRoute = session && (sessionId === undefined || session.id === sessionId) ? session : undefined;
   const activeSessionId = sessionForRoute?.id ?? sessionId;
@@ -736,6 +737,7 @@ export function ProductionConversationWorkspace({
     selectedRunIdRef.current = initialRunId ?? readRunRecoveryId(getRunRecoveryKey(principalId, sessionId));
     draftRevisionRef.current = 0;
     draftDirtyRef.current = false;
+    draftInputSinceReadRef.current = false;
     pendingDraftValueRef.current = undefined;
     if (draftSaveTimerRef.current !== undefined) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = undefined;
@@ -811,6 +813,7 @@ export function ProductionConversationWorkspace({
     setDraftFailure(null);
     draftRevisionRef.current = 0;
     draftDirtyRef.current = false;
+    draftInputSinceReadRef.current = false;
     pendingDraftValueRef.current = undefined;
     selectedRunIdRef.current = initialRunId ?? readRunRecoveryId(getRunRecoveryKey(principalId, sessionId));
     lastAppliedRunSequence.current = 0;
@@ -924,16 +927,20 @@ export function ProductionConversationWorkspace({
           setDraftFailure(null);
           if (draftRef.current === nextValue) {
             draftDirtyRef.current = false;
+            draftInputSinceReadRef.current = false;
             writeDraft(draftKey, nextValue);
           }
           continue;
         }
         if (result.reason === "forbidden" || result.reason === "not_found") {
+          const preserveFreshInput = draftInputSinceReadRef.current;
           draftDirtyRef.current = false;
           pendingDraftValueRef.current = undefined;
-          draftRef.current = "";
-          setDraft("");
-          writeDraft(draftKey, "");
+          if (!preserveFreshInput) {
+            draftRef.current = "";
+            setDraft("");
+            writeDraft(draftKey, "");
+          }
           setDraftReadUncertain(false);
           setDraftAccessBlocked(true);
           draftAccessBlockedRef.current = true;
@@ -965,6 +972,7 @@ export function ProductionConversationWorkspace({
     if (!api || !adapters || !sessionForRoute) return;
     const loadedSessionId = sessionForRoute.id;
     adapters.draft.selectSession(loadedSessionId);
+    draftInputSinceReadRef.current = false;
     let active = true;
     const refreshDraft = async () => {
       const result = await adapters.draft.readDraft(loadedSessionId);
@@ -977,9 +985,15 @@ export function ProductionConversationWorkspace({
         draftAccessBlockedRef.current = false;
         setDraftFailure(null);
         const localDraft = readDraft(draftKey);
+        if (draftInputSinceReadRef.current && draftRef.current !== result.draft.content) {
+          draftDirtyRef.current = true;
+          scheduleDraftPersistence(loadedSessionId, draftRef.current);
+          return;
+        }
         if (draftDirtyRef.current) {
           if (draftRef.current === result.draft.content) {
             draftDirtyRef.current = false;
+            draftInputSinceReadRef.current = false;
             writeDraft(draftKey, result.draft.content);
           } else {
             scheduleDraftPersistence(loadedSessionId, draftRef.current);
@@ -993,18 +1007,22 @@ export function ProductionConversationWorkspace({
           draftRef.current = result.draft.content;
           setDraft(result.draft.content);
           draftDirtyRef.current = false;
+          draftInputSinceReadRef.current = false;
           writeDraft(draftKey, result.draft.content);
         }
         return;
       }
       if (result.reason === "forbidden" || result.reason === "not_found") {
+        const preserveFreshInput = draftInputSinceReadRef.current;
         draftDirtyRef.current = false;
         pendingDraftValueRef.current = undefined;
         if (draftSaveTimerRef.current !== undefined) clearTimeout(draftSaveTimerRef.current);
         draftSaveTimerRef.current = undefined;
-        draftRef.current = "";
-        setDraft("");
-        writeDraft(draftKey, "");
+        if (!preserveFreshInput) {
+          draftRef.current = "";
+          setDraft("");
+          writeDraft(draftKey, "");
+        }
         setDraftReadUncertain(false);
         setDraftAccessBlocked(true);
         draftAccessBlockedRef.current = true;
@@ -1243,6 +1261,7 @@ export function ProductionConversationWorkspace({
     setDraftFailure(null);
     draftRevisionRef.current = 0;
     draftDirtyRef.current = false;
+    draftInputSinceReadRef.current = false;
     pendingDraftValueRef.current = undefined;
     if (initialAck) {
       setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
@@ -1362,6 +1381,8 @@ export function ProductionConversationWorkspace({
         if (draftAccessBlockedRef.current) {
           draftRef.current = "";
           setDraft("");
+          draftInputSinceReadRef.current = false;
+          writeDraft(draftKey, "");
           setActivityNotice("Run 命令已收到；当前账户没有可同步的私有草稿，已清除本地输入，不会自动再次发送。");
         } else {
           setActivityNotice("Run 命令已收到；已发送内容暂保持为私有草稿，等待 revision-aware consume 接线，不会自动再次发送。");
@@ -1563,7 +1584,7 @@ export function ProductionConversationWorkspace({
         return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
       {draftFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{draftFailure}</span></div> : null}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; writeDraft(draftKey, value); scheduleDraftPersistence(sessionForRoute.id, value); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; draftInputSinceReadRef.current = true; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; writeDraft(draftKey, value); scheduleDraftPersistence(sessionForRoute.id, value); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );
