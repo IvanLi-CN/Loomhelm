@@ -1001,10 +1001,13 @@ export function ProductionConversationWorkspace({
           setDraftAccessBlocked(false);
           draftAccessBlockedRef.current = false;
           setDraftFailure(null);
-          if (draftRef.current === nextValue) {
+          if (draftRef.current === nextValue && result.draft.content === nextValue) {
             draftDirtyRef.current = false;
             draftInputSinceReadRef.current = false;
             writeStoredDraft(draftKey, draftStateKey, nextValue, { baseRevision: result.draft.revision, content: nextValue, dirty: false });
+          } else if (draftRef.current === nextValue) {
+            draftDirtyRef.current = true;
+            writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: nextValue, dirty: true });
           }
           continue;
         }
@@ -1029,7 +1032,7 @@ export function ProductionConversationWorkspace({
         return;
       }
     })().finally(() => {
-      draftSavePromiseRef.current = undefined;
+      if (draftSavePromiseRef.current === operation) draftSavePromiseRef.current = undefined;
     });
     draftSavePromiseRef.current = operation;
     return operation;
