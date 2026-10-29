@@ -289,6 +289,36 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	if hex.EncodeToString(reassembledDigest[:]) != contentPayload.Artifact.Sha256 {
 		t.Fatalf("reassembled API artifact hash = %q, want %q", hex.EncodeToString(reassembledDigest[:]), contentPayload.Artifact.Sha256)
 	}
+	tamperedResponse := applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?limit=4", nil, bearer, http.StatusOK)
+	var tamperedPayload protocol.ArtifactContentResponse
+	decodeApplicationResponse(t, tamperedResponse, &tamperedPayload)
+	tamperedFirst, err := base64.StdEncoding.DecodeString(tamperedPayload.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := append([]byte(nil), content...)
+	replacement[8] ^= 0xff
+	replacementPath := filepath.Join(artifactRoot, "artifact-replacement")
+	if err := os.WriteFile(replacementPath, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementPath, filepath.Join(objects, artifactID)); err != nil {
+		t.Fatal(err)
+	}
+	tamperedReassembled := append([]byte(nil), tamperedFirst...)
+	for !tamperedPayload.Complete {
+		tamperedResponse = applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset="+strconv.FormatInt(tamperedPayload.NextOffset, 10)+"&limit=4", nil, bearer, http.StatusOK)
+		decodeApplicationResponse(t, tamperedResponse, &tamperedPayload)
+		nextContent, err := base64.StdEncoding.DecodeString(tamperedPayload.ContentBase64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tamperedReassembled = append(tamperedReassembled, nextContent...)
+	}
+	tamperedDigest := sha256.Sum256(tamperedReassembled)
+	if hex.EncodeToString(tamperedDigest[:]) == tamperedPayload.Artifact.Sha256 {
+		t.Fatal("API reassembly accepted a same-size artifact replacement without a canonical hash failure")
+	}
 	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset=999", nil, bearer, http.StatusBadRequest)
 }
 

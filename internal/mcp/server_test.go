@@ -3,6 +3,9 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -467,6 +470,76 @@ func TestServerDelegatesArtifactContentChunksAsStructuredOriginalBytes(t *testin
 	}
 	if seenPath != "/artifacts/artifact-1/content?limit=4&offset=0" || seenAccept != "application/json" {
 		t.Fatalf("artifact content delegation path=%q accept=%q", seenPath, seenAccept)
+	}
+}
+
+func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *testing.T) {
+	content := []byte{0, 1, 2, 255}
+	digest := sha256.Sum256(content)
+	var seenPaths []string
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		seenPaths = append(seenPaths, request.URL.RequestURI())
+		offset, err := strconv.ParseInt(request.URL.Query().Get("offset"), 10, 64)
+		if err != nil {
+			t.Fatalf("decode artifact content offset: %v", err)
+		}
+		if offset != 0 && offset != 2 {
+			t.Fatalf("artifact content offset = %d, want 0 or 2", offset)
+		}
+		chunk := content[int(offset) : int(offset)+2]
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(protocol.ArtifactContentResponse{
+			Artifact: protocol.Artifact{
+				ID: "artifact-1", SessionID: "session-1", Name: "original.bin", Kind: protocol.ArtifactKindFile,
+				Size: int64(len(content)), ContentType: "application/octet-stream", Sha256: hex.EncodeToString(digest[:]), CreatedAt: "2026-10-30T00:00:00Z",
+			},
+			ContentBase64: base64.StdEncoding.EncodeToString(chunk),
+			Offset:        offset, NextOffset: offset + int64(len(chunk)), TotalSize: int64(len(content)), Complete: offset+int64(len(chunk)) == int64(len(content)),
+		})
+	})
+
+	callChunk := func(id int, offset int64) protocol.ArtifactContentResponse {
+		response := callMCP(t, server, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      id,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name": "loomhelm.download_artifact",
+				"arguments": map[string]any{
+					"artifact_id": "artifact-1",
+					"offset":      offset,
+					"limit":       2,
+				},
+			},
+		})
+		var result struct {
+			IsError           bool                             `json:"isError"`
+			StructuredContent protocol.ArtifactContentResponse `json:"structuredContent"`
+		}
+		decodeResult(t, response, &result)
+		if result.IsError {
+			t.Fatalf("artifact content chunk %d returned MCP error", offset)
+		}
+		return result.StructuredContent
+	}
+
+	first := callChunk(14, 0)
+	second := callChunk(15, first.NextOffset)
+	firstBytes, err := base64.StdEncoding.DecodeString(first.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBytes, err := base64.StdEncoding.DecodeString(second.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reassembled := append(firstBytes, secondBytes...)
+	reassembledDigest := sha256.Sum256(reassembled)
+	if !second.Complete || string(reassembled) != string(content) || hex.EncodeToString(reassembledDigest[:]) != first.Artifact.Sha256 {
+		t.Fatalf("MCP reassembled content=%v complete=%v hash=%q, want %v/true/%q", reassembled, second.Complete, hex.EncodeToString(reassembledDigest[:]), content, first.Artifact.Sha256)
+	}
+	if got, want := strings.Join(seenPaths, ","), "/artifacts/artifact-1/content?limit=2&offset=0,/artifacts/artifact-1/content?limit=2&offset=2"; got != want {
+		t.Fatalf("MCP artifact content paths = %q, want %q", got, want)
 	}
 }
 
