@@ -20,6 +20,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArtifacts(t *testing.T) {
@@ -334,6 +335,80 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	replaceObject("artifact-replacement-before-restore", replacement)
 	restoreOriginal("artifact-original-after-interchunk-change")
 	applicationRequest(t, http.DefaultClient, http.MethodGet, contentURL(interChunkPayload.NextOffset, interChunkPayload.ContentVersion), nil, bearer, http.StatusConflict)
+
+	mcpHTTPClient := &http.Client{Timeout: 20 * time.Second, Transport: &mcpHeaderTransport{
+		base:          http.DefaultTransport,
+		authorization: bearer["Authorization"],
+	}}
+	mcpCtx, cancelMCP := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelMCP()
+	mcpClient := sdk.NewClient(&sdk.Implementation{Name: "loomhelm-artifact-integration", Version: "test"}, nil)
+	mcpSession, err := mcpClient.Connect(mcpCtx, &sdk.StreamableClientTransport{
+		Endpoint:             baseURL + "/mcp",
+		HTTPClient:           mcpHTTPClient,
+		MaxRetries:           -1,
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("official SDK MCP Connect() error = %v", err)
+	}
+	defer mcpSession.Close()
+
+	var mcpReassembled []byte
+	var mcpOffset int64
+	var mcpVersion string
+	for {
+		arguments := map[string]any{
+			"artifact_id": artifactID,
+			"offset":      mcpOffset,
+			"limit":       4,
+		}
+		if mcpVersion != "" {
+			arguments["content_version"] = mcpVersion
+		}
+		call, callErr := mcpSession.CallTool(mcpCtx, &sdk.CallToolParams{
+			Name:      "loomhelm.download_artifact",
+			Arguments: arguments,
+		})
+		if callErr != nil {
+			t.Fatalf("official SDK MCP artifact chunk at offset %d: %v", mcpOffset, callErr)
+		}
+		if call.IsError {
+			t.Fatalf("official SDK MCP artifact chunk at offset %d returned an error: %#v", mcpOffset, call)
+		}
+		structured, marshalErr := json.Marshal(call.StructuredContent)
+		if marshalErr != nil {
+			t.Fatalf("marshal MCP artifact chunk at offset %d: %v", mcpOffset, marshalErr)
+		}
+		var payload protocol.ArtifactContentResponse
+		if err := json.Unmarshal(structured, &payload); err != nil {
+			t.Fatalf("decode MCP artifact chunk at offset %d: %v", mcpOffset, err)
+		}
+		if payload.Offset != mcpOffset || payload.NextOffset <= payload.Offset || payload.ContentVersion == "" || payload.Artifact.Sha256 != hex.EncodeToString(digest[:]) {
+			t.Fatalf("MCP artifact chunk = %#v, want offset %d and canonical hash %q", payload, mcpOffset, hex.EncodeToString(digest[:]))
+		}
+		if mcpVersion == "" {
+			mcpVersion = payload.ContentVersion
+		} else if payload.ContentVersion != mcpVersion {
+			t.Fatalf("MCP artifact content version changed from %q to %q", mcpVersion, payload.ContentVersion)
+		}
+		chunk, decodeErr := base64.StdEncoding.DecodeString(payload.ContentBase64)
+		if decodeErr != nil {
+			t.Fatalf("decode MCP artifact chunk at offset %d: %v", mcpOffset, decodeErr)
+		}
+		mcpReassembled = append(mcpReassembled, chunk...)
+		if payload.Complete {
+			break
+		}
+		mcpOffset = payload.NextOffset
+	}
+	if string(mcpReassembled) != string(content) {
+		t.Fatalf("MCP reassembled artifact content = %q, want %q", mcpReassembled, content)
+	}
+	mcpDigest := sha256.Sum256(mcpReassembled)
+	if hex.EncodeToString(mcpDigest[:]) != hex.EncodeToString(digest[:]) {
+		t.Fatalf("MCP reassembled artifact hash = %q, want %q", hex.EncodeToString(mcpDigest[:]), hex.EncodeToString(digest[:]))
+	}
 }
 
 func TestWriteArtifactDownloadErrorUsesServiceUnavailableCode(t *testing.T) {
