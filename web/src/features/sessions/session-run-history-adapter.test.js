@@ -59,6 +59,46 @@ describe("session run history adapter", () => {
     await expect(duplicate).resolves.toMatchObject({ state: "unknown", reason: "stale_response" });
   });
 
+  test("caches a completed page and only refreshes it when requested", async () => {
+    const calls = [];
+    const adapter = new SessionRunHistoryClientAdapter({
+      listSessionRuns: async (request) => {
+        calls.push(request);
+        return { has_more: false, items: [run(calls.length === 1 ? "run-1" : "run-2")] };
+      },
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ runs: [{ id: "run-1" }] });
+    await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ runs: [{ id: "run-1" }] });
+    await expect(adapter.readRuns("session-1", { forceRefresh: true })).resolves.toMatchObject({ runs: [{ id: "run-2" }] });
+    expect(calls).toEqual([
+      { session_id: "session-1", limit: 200 },
+      { session_id: "session-1", limit: 200 },
+    ]);
+  });
+
+  test("resumes a multi-page history before the final cached page", async () => {
+    const calls = [];
+    const adapter = new SessionRunHistoryClientAdapter({
+      listSessionRuns: async (request) => {
+        calls.push(request);
+        if (calls.length === 1) return { has_more: true, items: [run("run-1")], next_cursor: "cursor-1" };
+        if (calls.length === 2) return { has_more: false, items: [run("run-2") ] };
+        return { has_more: false, items: [run("run-2"), run("run-3") ] };
+      },
+    });
+
+    adapter.selectSession("session-1");
+    await adapter.readRuns("session-1");
+    await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ runs: [{ id: "run-1" }, { id: "run-2" }, { id: "run-3" }] });
+    expect(calls).toEqual([
+      { session_id: "session-1", limit: 200 },
+      { session_id: "session-1", after_cursor: "cursor-1", limit: 200 },
+      { session_id: "session-1", after_cursor: "cursor-1", limit: 200 },
+    ]);
+  });
+
   test("rejects a page that crosses the requested session boundary", async () => {
     const adapter = new SessionRunHistoryClientAdapter({
       listSessionRuns: async () => ({ has_more: false, items: [run("foreign", { session_id: "session-2" })] }),

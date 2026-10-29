@@ -59,4 +59,4 @@ export type {
 export { DraftClientAdapter } from "./draft-client-adapter";
 export type { DraftClient, DraftClientAdapterOptions, DraftReadReason, DraftReadResult, DraftReadState } from "./draft-client-adapter";
 export { SessionRunHistoryClientAdapter } from "./session-run-history-adapter";
-export type { SessionRunHistoryClient, SessionRunHistoryReadReason, SessionRunHistoryReadResult, SessionRunHistoryReadState } from "./session-run-history-adapter";
+export type { SessionRunHistoryClient, SessionRunHistoryReadOptions, SessionRunHistoryReadReason, SessionRunHistoryReadResult, SessionRunHistoryReadState } from "./session-run-history-adapter";

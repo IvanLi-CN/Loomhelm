@@ -696,6 +696,8 @@ export function ProductionConversationWorkspace({
   const hasPreviousSessionId = useRef(false);
   const selectedRunIdRef = useRef<string | undefined>(initialRunId ?? readRunRecoveryId(getRunRecoveryKey(principalId, sessionId)));
   const activeRunIdRef = useRef<string | undefined>(undefined);
+  const forceRunHistoryRefreshRef = useRef(false);
+  const approvalHistoryLoadedRef = useRef(false);
   const draftRevisionRef = useRef(0);
   const draftDirtyRef = useRef(false);
   const pendingDraftValueRef = useRef<string | undefined>(undefined);
@@ -707,6 +709,7 @@ export function ProductionConversationWorkspace({
     if (activeRunIdRef.current === nextRunId) return;
     activeRunIdRef.current = nextRunId;
     runGenerationRef.current += 1;
+    forceRunHistoryRefreshRef.current = false;
   };
 
   const sessionForRoute = session && (sessionId === undefined || session.id === sessionId) ? session : undefined;
@@ -926,9 +929,13 @@ export function ProductionConversationWorkspace({
     const loadedSession = sessionForRoute;
     const loadedSessionId = loadedSession.id;
     adapters.history.selectSession(loadedSessionId);
+    let firstRefresh = true;
     let active = true;
     const refreshRunHistory = async () => {
-      const result = await adapters.history.readRuns(loadedSessionId);
+      const forceRefresh = firstRefresh || forceRunHistoryRefreshRef.current;
+      firstRefresh = false;
+      forceRunHistoryRefreshRef.current = false;
+      const result = await adapters.history.readRuns(loadedSessionId, { forceRefresh });
       if (!active || result.state === "pending") return;
       if (result.state === "received" && result.runs) {
         setSessionRunHistoryLoading(false);
@@ -967,6 +974,7 @@ export function ProductionConversationWorkspace({
           setMessages([]);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
+          approvalHistoryLoadedRef.current = false;
           setRunIdentityVerified(false);
           setCommandState(undefined);
         }
@@ -996,7 +1004,7 @@ export function ProductionConversationWorkspace({
       active = false;
       clearInterval(interval);
     };
-  }, [adapters, api, initialRunId, sessionForRoute?.id]);
+  }, [adapters, api, initialRunId, sessionForRoute?.id, sessionForRoute?.updated_at]);
 
   const persistDraftValue = (sessionIdForDraft: string, value: string): Promise<void> => {
     pendingDraftValueRef.current = value;
@@ -1242,11 +1250,13 @@ export function ProductionConversationWorkspace({
     let pollInFlight = false;
     const runGeneration = runGenerationRef.current;
     const isCurrentRun = () => active && runGenerationRef.current === runGeneration && activeRunIdRef.current === activeRunId;
+    approvalHistoryLoadedRef.current = false;
     setApprovalHistoryAvailable(false);
     const poll = async () => {
       if (pollInFlight) return;
       pollInFlight = true;
       try {
+        let approvalEventObserved = false;
         const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { connection: connectionRef.current, limit: 100 });
         if (!isCurrentRun()) return;
         if (events.state === "received" && events.page) {
@@ -1259,6 +1269,9 @@ export function ProductionConversationWorkspace({
             seenEventIds.current.add(eventKey);
             return true;
           }).sort((left, right) => left.sequence - right.sequence);
+          approvalEventObserved = freshEvents.some((event) => event.type === "approval.requested" || event.type === "approval.resolved");
+          if (approvalEventObserved) approvalHistoryLoadedRef.current = false;
+          if (freshEvents.some((event) => event.type === "approval.resolved")) forceRunHistoryRefreshRef.current = true;
           if (freshEvents.length > 0) {
             setMessages((current) => {
               const next = [...current, ...freshEvents.map(eventToConversationMessage)];
@@ -1287,6 +1300,7 @@ export function ProductionConversationWorkspace({
           setMessages([]);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
+          approvalHistoryLoadedRef.current = false;
           setRunIdentityVerified(false);
           setRunReadUncertain(true);
           setApprovalReadUncertain(true);
@@ -1304,8 +1318,11 @@ export function ProductionConversationWorkspace({
           setActivityNotice(null);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
+          approvalHistoryLoadedRef.current = false;
           return;
         }
+
+        if (!approvalEventObserved && approvalHistoryLoadedRef.current) return;
 
         try {
           const responseApprovals = await readAllApprovalPages(api, activeRunId, isCurrentRun);
@@ -1314,6 +1331,7 @@ export function ProductionConversationWorkspace({
           if (approvalItems.length !== responseApprovals.length) {
             setApprovals([]);
             setApprovalHistoryAvailable(false);
+            approvalHistoryLoadedRef.current = false;
             setApprovalReadUncertain(true);
             setApprovalReadFailure("审批响应包含其他 Run 的记录；审批历史未完成身份核对，控制命令已暂停。");
             setActivityNotice(null);
@@ -1321,6 +1339,7 @@ export function ProductionConversationWorkspace({
           }
           setApprovals((current) => mergeApprovals(current, approvalItems));
           setApprovalHistoryAvailable(true);
+          approvalHistoryLoadedRef.current = true;
           setRunReadUncertain(false);
           setRunReadFailure(null);
           setApprovalReadUncertain(false);
@@ -1328,6 +1347,7 @@ export function ProductionConversationWorkspace({
         } catch (error) {
           if (isCurrentRun()) {
             setApprovalHistoryAvailable(false);
+            approvalHistoryLoadedRef.current = false;
             if (isApiAccessFailure(error)) {
               seenEventIds.current = new Set();
               approvalCommandIds.current = new Map();
