@@ -12,9 +12,9 @@
     "reason": "The public contract adds additive Session draft operations and the database adds owner-scoped tables. Existing Sessions remain readable as empty revision-zero drafts until their first update; no existing rows are rewritten or backfilled."
   },
   "durable_state": {
-    "description": "conversation_drafts stores the current private projection. conversation_draft_mutations retains bounded mutation metadata for accepted replacements and versioned consume operations so retries remain idempotent without retaining superseded draft text or content fingerprints.",
+    "description": "conversation_drafts stores the current private projection. conversation_draft_mutations retains bounded mutation metadata for accepted replacements and versioned consume operations so current-mutation retries can be recognized and older mutation IDs rejected as stale without retaining superseded draft text or content fingerprints.",
     "storage_implementation": "PostgreSQL tables managed by embedded Goose migration 00013. A Session row lock serializes accepted updates and version increments; owner_user_id is retained on both projection and ledger for defense-in-depth privacy checks. The ledger stores mutation metadata only, never historical draft bodies or content-derived fingerprints.",
-    "retention_policy": "Mutation metadata is retained for the lifetime of the Session to make retries with older mutation IDs deterministic. Each accepted mutation contributes one bounded metadata row; draft bodies are retained only in the current owner-scoped projection and are replaced or cleared by later revisions. Session/database retention and capacity governance remain the owner of eventual lifecycle cleanup.",
+    "retention_policy": "Mutation metadata is retained for the lifetime of the Session so current-mutation retries can be recognized and older mutation IDs rejected as stale. Each accepted mutation contributes one bounded metadata row; draft bodies are retained only in the current owner-scoped projection and are replaced or cleared by later revisions. Session/database retention and capacity governance remain the owner of eventual lifecycle cleanup.",
     "source_compatibility_range": {
       "from_program_versions": "Phase-one execution-domain candidate containing migrations 00009 through 00012.",
       "to_program_version": "Phase-one private shared-draft candidate after migration 00013.",
@@ -64,7 +64,7 @@
       "required_test_evidence": [
         "A new candidate reads Sessions from the 00012 state as empty revision-zero drafts without rewriting historical rows.",
         "Accepted updates are owner-scoped, UTF-8 and size bounded, ordered by the Session lock/commit sequence, durable under retries, and retain mutation metadata rather than superseded draft bodies or content-derived fingerprints.",
-        "A repeated mutation ID is idempotent, a reused client sequence is rejected, and a cross-owner read or write cannot access the projection.",
+        "A repeated current mutation ID with the original content is idempotent, a current mutation ID with different content is rejected, an older mutation ID is rejected as stale, a reused client sequence is rejected, and a cross-owner read or write cannot access the projection.",
         "Conditional consume clears only the expected revision and preserves a newer update; retries of the same command remain idempotent.",
         "The migration is additive and re-entry does not rewrite existing execution state."
       ]

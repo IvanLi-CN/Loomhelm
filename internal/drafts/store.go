@@ -58,7 +58,9 @@ func (s *Store) Get(ctx context.Context, sessionID, ownerUserID string) (Draft, 
 
 // Apply accepts one complete replacement. Session serialization makes the
 // database commit order the deterministic last-writer-wins order. The
-// mutation ledger makes retries durable even after a newer update exists.
+// mutation ledger recognizes duplicate IDs without retaining historical
+// content: a current mutation can be retried idempotently, while an older
+// mutation is rejected as stale rather than replayed.
 func (s *Store) Apply(ctx context.Context, input UpdateInput) (Draft, error) {
 	if err := s.ready(ctx); err != nil {
 		return Draft{}, err
@@ -92,6 +94,12 @@ func (s *Store) Apply(ctx context.Context, input UpdateInput) (Draft, error) {
 		}
 		if !found {
 			return Draft{}, fmt.Errorf("%w: mutation has no current projection", ErrDraftMutation)
+		}
+		if mutation.Revision != current.Revision || current.MutationID != input.MutationID {
+			return Draft{}, fmt.Errorf("%w: mutation is no longer current", ErrDraftStaleMutation)
+		}
+		if current.Content != input.Content {
+			return Draft{}, ErrDraftMutation
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return Draft{}, fmt.Errorf("commit duplicate draft update: %w", err)
