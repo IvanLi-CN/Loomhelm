@@ -99,8 +99,9 @@ describe("U04 conversation content classification", () => {
 
   test("redacts inline secrets and private paths in unknown string fields", () => {
     expect(inspectableRawPayload({
-      detail: "token=secret-token cwd=/workspace/private-project"
-    })).toEqual({ detail: "token= [已隐藏] cwd=[路径已隐藏]" });
+      detail: "Authorization: Bearer secret-token cwd=/workspace/private-project"
+    })).toEqual({ detail: "Authorization: [已隐藏] cwd=[路径已隐藏]" });
+    expect(inspectableRawPayload({ detail: "tool output /opt/build/cache" })).toEqual({ detail: "tool output /opt/build/cache" });
   });
 });
 

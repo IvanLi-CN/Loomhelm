@@ -53,7 +53,7 @@ const sensitiveFieldNames = new Set([
 ]);
 
 const privatePathFieldNames = new Set(["cwd", "filepath", "grantroot", "path", "root", "workspace"]);
-const inlineSecretPattern = /\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b\s*[:=]\s*[^\s,;}\]]+/gi;
+const inlineSecretPattern = /\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b\s*([:=])\s*(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+/gi;
 const inlinePrivatePathPattern = /(?:~\/|\\\\|[A-Za-z]:[\\/]|\/(?:Users|home|private|root|tmp|var|workspace)(?:\/|$))[^\s"'`<>,;}\]]*/gi;
 
 function normalizedFieldName(value: string): string {
@@ -71,7 +71,7 @@ function isPrivatePath(value: string): boolean {
 
 function redactInspectableString(value: string): string {
   return value
-    .replace(inlineSecretPattern, (match) => match.replace(/([:=])\s*[^\s,;}\]]+$/, "$1 [已隐藏]"))
+    .replace(inlineSecretPattern, (_match, field: string, separator: string) => `${field}${separator} [已隐藏]`)
     .replace(inlinePrivatePathPattern, "[路径已隐藏]");
 }
 

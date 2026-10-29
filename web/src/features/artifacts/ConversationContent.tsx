@@ -60,7 +60,7 @@ function UnknownBlock({ content }: { content: Extract<ConversationContent, { kin
       <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold">查看原始字段（不会执行）</summary>
       <div className="mt-3 grid gap-2 text-[var(--muted)]">
         <span>类型：{content.label}</span>
-        <span className="text-[var(--muted)]">原始事件保留在授权上下文中；此处仅隐藏凭据和绝对路径，内容不会执行。</span>
+        <span className="text-[var(--muted)]">原始事件保留在授权上下文中；此处仅隐藏凭据和受保护路径字段，内容不会执行。</span>
         <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words text-[var(--ink)]">{JSON.stringify(inspectableRawPayload(content.raw), null, 2)}</pre>
       </div>
     </details>
