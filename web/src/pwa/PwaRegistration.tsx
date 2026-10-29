@@ -1,16 +1,12 @@
-import { useEffect } from "react";
 import { registerSW } from "virtual:pwa-register";
 
-function reportRegistrationError(error: unknown) {
-  console.error("Loomhelm PWA registration failed", error);
-}
+import { PwaStatusBanner } from "@/features/pwa/PwaStatusBanner";
+import { usePwaRuntime, type PwaRegister } from "@/features/pwa/usePwaRuntime";
+
+const registerPwa: PwaRegister = (options) => registerSW(options);
 
 export function PwaRegistration() {
-  useEffect(() => {
-    if (import.meta.env.PROD) {
-      registerSW({ immediate: true, onRegisterError: reportRegistrationError });
-    }
-  }, []);
+  const runtime = usePwaRuntime(registerPwa, import.meta.env.PROD);
 
-  return null;
+  return <PwaStatusBanner isOnline={runtime.isOnline} updateAvailable={runtime.updateAvailable} updating={runtime.updating} registrationError={runtime.registrationError} onApplyUpdate={() => void runtime.applyUpdate()} />;
 }
