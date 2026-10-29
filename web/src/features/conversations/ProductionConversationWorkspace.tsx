@@ -556,7 +556,7 @@ export function ProductionConversationWorkspace({
   const activeApprovals = runIdentityVerified && activeRunId ? approvals.filter((approval) => approval.run_id === activeRunId) : [];
   const runRouteUnverified = Boolean(initialRunId && (!activeRun || !runIdentityVerified));
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
@@ -782,7 +782,7 @@ export function ProductionConversationWorkspace({
       setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
       const initialRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
       setRun(initialRun);
-      setRunIdentityVerified(Boolean(initialRun && !initialRunUncertain));
+      setRunIdentityVerified(false);
       setUncertainRunCommandId(initialRunUncertain ? expectedInitialCommandId : undefined);
       pendingRunSubmission.current = initialRunUncertain ? { commandId: expectedInitialCommandId, prompt: initialPrompt } : undefined;
       setActivityNotice(initialRunUncertain ? "首条 Run 结果不确定；已保留同一命令身份，请先完成对账。" : initialRunId ? "首条提示已收到命令确认，等待实际 Run 事件。" : "Session 已创建；首条提示已提交，但服务尚未返回 Run ID。");
@@ -885,7 +885,7 @@ export function ProductionConversationWorkspace({
         }
         setCommandState(result.ack.state);
         setRun(nextRun);
-        setRunIdentityVerified(true);
+        setRunIdentityVerified(false);
       }
       setActivityNotice(commandReconciled ? "Run 命令已收到，等待实际事件。" : "命令已收到，但 Run 恢复身份未确认；请先对账，不会自动重复提交。");
     }
@@ -964,6 +964,7 @@ export function ProductionConversationWorkspace({
     const intent = readRunIntent(intentKey);
     if (adapters.run.resolveUncertainSubmit(uncertainRunCommandId) || intent?.commandId === uncertainRunCommandId) {
       setUncertainRunCommandId(undefined);
+      if (!activeRun || activeRun.status !== "unknown") setCommandState(undefined);
       if (intent) writeRunIntent(intentKey, { ...intent, uncertain: false });
       setActivityNotice("已记录人工对账；下一次发送会复用同一 command_id，不会创建新的 Run 身份。");
     } else {
