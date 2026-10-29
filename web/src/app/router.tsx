@@ -13,6 +13,7 @@ import { AppShell } from "@/components/product/ProductShell";
 import { CreateConversationRoute } from "@/routes/CreateConversationRoute";
 import { CreateTaskRoute } from "@/routes/CreateTaskRoute";
 import { ConversationsRoute } from "@/routes/ConversationsRoute";
+import { DemoProductionConversationRoute } from "@/routes/DemoProductionConversationRoute";
 import { ProjectRoute } from "@/routes/ProjectRoute";
 import { StatusRoute } from "@/routes/StatusRoute";
 import { TasksRoute } from "@/routes/TasksRoute";
@@ -79,6 +80,12 @@ const statusRoute = createRoute({
   component: StatusRoute
 });
 
+const demoProductionConversationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/demo/production-session",
+  component: DemoProductionConversationRoute
+});
+
 const tasksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks",
@@ -125,6 +132,7 @@ const projectRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   homeRoute,
   statusRoute,
+  demoProductionConversationRoute,
   tasksRoute,
   createTaskRoute,
   taskWorkspaceRoute,

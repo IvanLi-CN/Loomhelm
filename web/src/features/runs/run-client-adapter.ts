@@ -143,8 +143,10 @@ export class RunClientAdapter {
 
     try {
       const page = await this.client.listRunEvents(request);
-      if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
-      if (this.streamVersions.get(key) !== admission.token.baselineVersion) {
+      const requestIsCurrent = this.requests.isCurrent(admission.token);
+      const currentVersion = this.streamVersions.get(key) ?? 0;
+      if (!requestIsCurrent) return { state: "unknown", reason: "stale_response", request: admission.token };
+      if (currentVersion !== admission.token.baselineVersion) {
         this.requests.finish(admission.token);
         return { state: "unknown", reason: "stale_response", request: admission.token };
       }

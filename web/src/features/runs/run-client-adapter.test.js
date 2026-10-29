@@ -79,6 +79,19 @@ describe("run client adapter", () => {
     expect(adapter.getRecoveryCursorBaseline(subscription)).toEqual({ cursor: "persisted-cursor-2", sequence: 2 });
   });
 
+  test("accepts the first event page without a seeded cursor baseline", async () => {
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async () => ({ events: [event()], has_more: false, next_cursor: "cursor-1" })
+    });
+
+    adapter.selectSession("session-1");
+    const result = await adapter.readRunEvents(subscription);
+
+    expect(result).toMatchObject({ state: "received", stream: { cursor: "cursor-1", cursorSequence: 1 } });
+  });
+
   test("fences a late event page after switching sessions", async () => {
     const pending = deferred();
     const adapter = new RunClientAdapter({

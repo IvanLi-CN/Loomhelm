@@ -219,6 +219,7 @@ export function ProductionConversationWorkspace({
   const [activityNotice, setActivityNotice] = useState<string | null>(null);
   const seenEventIds = useRef(new Set<string>());
   const approvalCommandIds = useRef(new Map<string, string>());
+  const previousSessionId = useRef<string | undefined>(undefined);
 
   const activeSessionId = session?.id ?? sessionId;
   const activeRunId = run?.id;
@@ -228,6 +229,12 @@ export function ProductionConversationWorkspace({
   const context = session ? toSessionContextModel(session, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
 
   useEffect(() => {
+    if (previousSessionId.current === undefined) {
+      previousSessionId.current = sessionId;
+      return;
+    }
+    if (previousSessionId.current === sessionId) return;
+    previousSessionId.current = sessionId;
     seenEventIds.current = new Set();
     approvalCommandIds.current = new Map();
     setMessages([]);
@@ -254,7 +261,10 @@ export function ProductionConversationWorkspace({
       if (!active) return;
       if (result.state === "received" && result.session) {
         setSession(result.session);
-        if (initialRunId) setRun(runFromCommandAck(result.session, { command_id: "route-run", deduplicated: true, received_at: result.session.updated_at, run_id: initialRunId, state: "accepted" }));
+        if (initialRunId) {
+          const routeRun = runFromCommandAck(result.session, { command_id: "route-run", deduplicated: true, received_at: result.session.updated_at, run_id: initialRunId, state: "accepted" });
+          setRun(routeRun);
+        }
       } else {
         setSessionFailure(result.reason === "transport" ? "读取 Session 失败，请刷新后再试。" : "Session 响应未通过身份核对，当前不展示猜测内容。");
       }
