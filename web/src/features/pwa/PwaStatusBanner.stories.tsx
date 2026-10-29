@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import type { ReactNode } from "react";
 
 import { PwaStatusBanner } from "./PwaStatusBanner";
@@ -88,7 +88,7 @@ export const RuntimeUpdateFlow: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByRole("button", { name: "应用更新" }));
     expect(canvas.getByRole("button", { name: "等待更新生效…" })).toBeDisabled();
-    expect(await canvas.findByRole("status")).toHaveTextContent("更新已准备");
+    await waitFor(() => expect(canvas.getByRole("status")).toHaveTextContent("更新已准备"));
     expect(canvas.queryByRole("button", { name: "等待更新生效…" })).not.toBeInTheDocument();
   }
 };
