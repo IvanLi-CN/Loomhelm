@@ -422,6 +422,45 @@ func TestServerReportsMalformedCredentialSuccessAsUnknown(t *testing.T) {
 	}
 }
 
+func TestServerReportsMalformedMutationEnvelopeAsUnknown(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty_object":  `{}`,
+		"null":          `null`,
+		"null_project":  `{"project":null}`,
+		"array_project": `{"project":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+				writer.WriteHeader(http.StatusCreated)
+				_, _ = writer.Write([]byte(body))
+			})
+
+			response := callMCP(t, server, map[string]any{
+				"jsonrpc": "2.0",
+				"id":      24,
+				"method":  "tools/call",
+				"params": map[string]any{
+					"name":      "loomhelm.create_project",
+					"arguments": map[string]any{"name": "Loomhelm"},
+				},
+			})
+			var result struct {
+				StructuredContent struct {
+					HTTPStatus int `json:"http_status"`
+					Error      struct {
+						Code protocol.ErrorCode `json:"code"`
+					} `json:"error"`
+				} `json:"structuredContent"`
+				IsError bool `json:"isError"`
+			}
+			decodeResult(t, response, &result)
+			if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
+				t.Fatalf("malformed project success = %#v, want unknown outcome", result)
+			}
+		})
+	}
+}
+
 func TestServerReportsOversizedReadResponseAsServiceFailure(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -464,7 +503,7 @@ func TestServerRejectsResponseLimitTooSmallForErrorEnvelope(t *testing.T) {
 }
 
 func TestConcurrentMCPRequestSlotsBoundBufferedMemory(t *testing.T) {
-	if got, want := concurrentMCPRequestSlots(1<<20, 4<<20), 2; got != want {
+	if got, want := concurrentMCPRequestSlots(1<<20, 4<<20), 1; got != want {
 		t.Fatalf("default concurrent MCP request slots = %d, want %d", got, want)
 	}
 	if got, want := concurrentMCPRequestSlots(32<<20, 32<<20), 1; got != want {
@@ -488,6 +527,20 @@ func TestRequestBodyReadTimeoutClosesBody(t *testing.T) {
 	}
 }
 
+func TestRequestBodyReadTimeoutDoesNotWaitForBlockingClose(t *testing.T) {
+	body := &blockingCloseRequestBody{release: make(chan struct{}), closed: make(chan struct{})}
+	started := time.Now()
+	_, err := readRequestBody(context.Background(), body, 1024, 10*time.Millisecond)
+	if !errors.Is(err, errRequestBodyReadTimeout) {
+		t.Fatalf("readRequestBody() error = %v, want timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > requestBodyCloseWait+500*time.Millisecond {
+		t.Fatalf("readRequestBody() waited %s for a blocking Close, want bounded return", elapsed)
+	}
+	close(body.release)
+	close(body.closed)
+}
+
 func TestRequestConcurrencyWaitTimeoutReturnsRetryableAdmissionError(t *testing.T) {
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
@@ -508,6 +561,21 @@ func TestRequestConcurrencyWaitTimeoutReturnsRetryableAdmissionError(t *testing.
 type blockingRequestBody struct {
 	closed chan struct{}
 	once   sync.Once
+}
+
+type blockingCloseRequestBody struct {
+	release chan struct{}
+	closed  chan struct{}
+}
+
+func (b *blockingCloseRequestBody) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, io.EOF
+}
+
+func (b *blockingCloseRequestBody) Close() error {
+	<-b.release
+	return nil
 }
 
 func (b *blockingRequestBody) Read([]byte) (int, error) {

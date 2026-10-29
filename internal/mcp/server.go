@@ -41,6 +41,7 @@ const (
 	maxMCPBatchRequests                 = 2
 	defaultMCPAdmissionWait             = 5 * time.Second
 	defaultRequestBodyReadTimeout       = 15 * time.Second
+	requestBodyCloseWait                = 100 * time.Millisecond
 	maxToolErrorMessageBytes            = 160
 	maxToolErrorRequestIDBytes          = 64
 )
@@ -48,6 +49,23 @@ const (
 var (
 	errRESTHandlerRequired = errors.New("MCP REST application handler is required")
 	errResponseTooLarge    = errors.New("MCP application response is too large")
+
+	// These operations have a durable mutation result whose envelope is needed
+	// to distinguish a confirmed response from a malformed or ambiguous one.
+	// Empty-response mutations intentionally remain outside this map.
+	mutationResponseFields = map[string]string{
+		"createUserCredential": "credential",
+		"createProject":        "project",
+		"updateProject":        "project",
+		"grantProjectMember":   "member",
+		"createTask":           "task",
+		"updateTask":           "task",
+		"createSession":        "session",
+		"bindSessionTask":      "session",
+		"submitRun":            "ack",
+		"resolveApproval":      "ack",
+		"interruptRun":         "ack",
+	}
 )
 
 // Tool and ResourceTemplate are aliases to the official SDK's discovery types.
@@ -335,6 +353,22 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 }
 
 func validToolResponse(operationID string, body []byte) bool {
+	field, required := mutationResponseFields[operationID]
+	if !required {
+		return true
+	}
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil || envelope == nil {
+		return false
+	}
+	value, ok := envelope[field]
+	if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(value, &object) != nil || object == nil {
+		return false
+	}
 	if operationID != "createUserCredential" {
 		return true
 	}
@@ -511,8 +545,15 @@ func toolError(status int, apiError protocol.ApiError) *sdk.CallToolResult {
 	apiError.Message = truncateUTF8(apiError.Message, maxToolErrorMessageBytes)
 	apiError.RequestID = truncateUTF8(apiError.RequestID, maxToolErrorRequestIDBytes)
 	data, _ := json.Marshal(map[string]any{"http_status": status, "error": apiError})
+	contentText := string(apiError.Code)
+	if contentText == "" {
+		contentText = "request failed"
+	}
 	return &sdk.CallToolResult{
-		Content:           []sdk.Content{&sdk.TextContent{Text: string(data)}},
+		// Keep human-readable content compact. The structured envelope carries
+		// the bounded diagnostic details; duplicating it here can exhaust the
+		// final wire-response budget for a legacy batch.
+		Content:           []sdk.Content{&sdk.TextContent{Text: contentText}},
 		StructuredContent: json.RawMessage(data),
 		IsError:           true,
 	}
@@ -685,10 +726,13 @@ func copyHeader(destination, source http.Header) {
 }
 
 func concurrentMCPRequestSlots(maxBody, maxResponse int64) int {
-	if maxBody > 1<<60 || maxResponse > 1<<61 {
+	// A legacy batch may execute two tool calls concurrently. Reserve for the
+	// request body, both per-call REST buffers, SDK result copies, and JSON
+	// encoding overhead before admitting another HTTP request.
+	if maxBody > 1<<59 || maxResponse > 1<<58 {
 		return 1
 	}
-	perRequest := maxBody*4 + maxResponse*2
+	perRequest := maxBody*4 + maxResponse*8
 	if perRequest < 1 {
 		return 1
 	}
@@ -742,8 +786,12 @@ func (h *requestIDLimitHandler) ServeHTTP(writer http.ResponseWriter, request *h
 		h.next.ServeHTTP(writer, request)
 		return
 	}
+	clearReadDeadline := setRequestBodyReadDeadline(writer, defaultRequestBodyReadTimeout)
 	body, err := readRequestBody(request.Context(), request.Body, h.maxBody+1, defaultRequestBodyReadTimeout)
-	_ = request.Body.Close()
+	if err == nil {
+		clearReadDeadline()
+		_ = request.Body.Close()
+	}
 	if errors.Is(err, errRequestBodyReadTimeout) {
 		writer.Header().Set("X-Loomhelm-MCP-Response", "request_body_timeout")
 		writer.WriteHeader(http.StatusRequestTimeout)
@@ -791,12 +839,43 @@ func readRequestBody(ctx context.Context, body io.ReadCloser, limit int64, timeo
 	defer timer.Stop()
 	select {
 	case outcome := <-result:
+		if outcome.err != nil {
+			closeRequestBody(body)
+		}
 		return outcome.body, outcome.err
 	case <-ctx.Done():
+		closeRequestBody(body)
 		return nil, ctx.Err()
 	case <-timer.C:
-		_ = body.Close()
+		closeRequestBody(body)
 		return nil, errRequestBodyReadTimeout
+	}
+}
+
+func closeRequestBody(body io.Closer) {
+	if body == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = body.Close()
+		close(done)
+	}()
+	timer := time.NewTimer(requestBodyCloseWait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+}
+
+func setRequestBodyReadDeadline(writer http.ResponseWriter, timeout time.Duration) func() {
+	controller := http.NewResponseController(writer)
+	if err := controller.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return func() {}
+	}
+	return func() {
+		_ = controller.SetReadDeadline(time.Time{})
 	}
 }
 
