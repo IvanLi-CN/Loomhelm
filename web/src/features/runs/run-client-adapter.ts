@@ -210,14 +210,15 @@ export class RunClientAdapter {
 
     try {
       const response = await request();
+      if (!this.operations.isCurrent(admission.token)) return { state: "unknown", commandId: command.command_id, reason: "stale_response" };
+      if (requireRunId && (typeof response.ack.run_id !== "string" || !response.ack.run_id.trim())) {
+        this.operations.markUncertain(admission.token);
+        return { state: "unknown", commandId: command.command_id, reason: "mismatched_response" };
+      }
       const accepted = this.operations.acceptResponse(admission.token, response.ack);
       if (!accepted.accepted) {
         if (accepted.reason === "mismatched_command" || accepted.reason === "mismatched_run") this.operations.markUncertain(admission.token);
         return { state: "unknown", commandId: command.command_id, reason: accepted.reason === "stale" ? "stale_response" : "mismatched_response" };
-      }
-      if (requireRunId && (typeof response.ack.run_id !== "string" || !response.ack.run_id.trim())) {
-        this.operations.markUncertain(admission.token);
-        return { state: "unknown", commandId: command.command_id, reason: "mismatched_response" };
       }
       return { state: getClientCommandState(response.ack.state), commandId: command.command_id, ack: response.ack };
     } catch (error) {
