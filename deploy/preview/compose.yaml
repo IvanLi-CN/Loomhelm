@@ -11,6 +11,9 @@ services:
 
   server-blue:
     image: "${LOOMHELM_BLUE_SERVER_IMAGE:-busybox:1.36}"
+    # The Server can spend up to 60s draining an active MCP request and then
+    # up to 10s waiting for canceled artifact recovery before closing storage.
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-90s}"
     ports:
       - "127.0.0.1:${LOOMHELM_BLUE_SERVER_PORT:?LOOMHELM_BLUE_SERVER_PORT is required}:8080"
     environment:
@@ -42,6 +45,7 @@ services:
 
   server-green:
     image: "${LOOMHELM_GREEN_SERVER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-90s}"
     ports:
       - "127.0.0.1:${LOOMHELM_GREEN_SERVER_PORT:?LOOMHELM_GREEN_SERVER_PORT is required}:8080"
     environment:

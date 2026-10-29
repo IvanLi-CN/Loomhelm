@@ -577,6 +577,7 @@ def command_compose_env(args: argparse.Namespace) -> None:
         "LOOMHELM_OIDC_REDIRECT_URL": env_value("LOOMHELM_OIDC_REDIRECT_URL", ""),
         "LOOMHELM_SESSION_COOKIE_SECURE": env_value("LOOMHELM_SESSION_COOKIE_SECURE", "true"),
         "LOOMHELM_SHUTDOWN_TIMEOUT": env_value("LOOMHELM_SHUTDOWN_TIMEOUT", "10s"),
+        "LOOMHELM_STOP_GRACE_PERIOD": env_value("LOOMHELM_STOP_GRACE_PERIOD", "90s"),
         "LOOMHELM_STARTUP_TIMEOUT": env_value("LOOMHELM_STARTUP_TIMEOUT", "30s"),
         "LOOMHELM_WORKER_LEASE_KEY": env_value("LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"),
     }
