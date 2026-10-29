@@ -201,6 +201,14 @@ The sixth capture is `assets/task-graph-storybook-desktop.png`, rendered from ca
 
 The TaskGraph image documents the current component presentation and does not establish authenticated production UI, backend authorization, relationship persistence or complete product UI approval. Its source-managed DOM preflight and exact-path comparison remain recorded in the external candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/batch16-0723f90`.
 
+### U04 Artifact and PWA component evidence
+
+The U04 visual evidence set contains three owner-confirmed mock-only Storybook canvas captures from candidate `19d16b1266bc8b2614c184ce89e5ddfa1f8f693b` against base `d5ab1040f792d798ba7c67c9b6e216bbcd0bcc0a`; each uses `capture_scope=element`, `target_program=mock-only`, `margin_policy=require_margin`, `evidence_surface=component`, `sensitive_exclusion=N/A`, `submission_gate=approved` and Storybook-managed source surfaces.
+
+- source_type: storybook_canvas; story_id_or_title: `Conversation/Content — BasicStates`; state: message, code, tool and unknown-content fallback; requested_viewport: none; viewport_strategy: storybook-viewport; evidence_note: verifies readable non-executing conversation content and preserved unknown fields; image: ![U04 conversation content](./assets/u04-conversation-basic.png); SHA-256: `ee9530ef91a004241af02d5264004ed1c7553a3c11f37d2c0139bba6499f291e`.
+- source_type: storybook_canvas; story_id_or_title: `Conversation/ArtifactReference — MetadataOnly`; state: authorized metadata with unavailable binary download; requested_viewport: none; viewport_strategy: storybook-viewport; evidence_note: verifies artifact identity and metadata presentation while the binary contract remains outside this PR; image: ![U04 artifact metadata](./assets/u04-artifact-metadata.png); SHA-256: `a675ec0601791759ede519c7dcf4847bc341a711e8997446c2f860d354e072f7`.
+- source_type: storybook_canvas; story_id_or_title: `PWA/PwaStatusBanner — OfflineShell`; state: mobile offline shell; requested_viewport: `393x852`; viewport_strategy: storybook-viewport; evidence_note: verifies the honest offline status for already-loaded content without implying cold-start offline support; image: ![U04 mobile offline status](./assets/u04-pwa-offline-mobile.png); SHA-256: `034790431df83ca880240f0563a043cd47bb03009aa8ab13281a712c123b6c63`.
+
 ### VER-LH-012
 
 - Method: real authenticated HTTP/MCP approval-history reads for a native approval request, ordered event reads, reconnect and Connector restart, then approve/deny, duplicate/old-revision/resolved/old-generation response attempts, permission/error and cache-header checks.
