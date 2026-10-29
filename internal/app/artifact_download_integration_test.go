@@ -353,6 +353,27 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 		t.Fatalf("official SDK MCP Connect() error = %v", err)
 	}
 	defer mcpSession.Close()
+	metadataCall, callErr := mcpSession.CallTool(mcpCtx, &sdk.CallToolParams{
+		Name:      "loomhelm.get_artifact",
+		Arguments: map[string]any{"artifact_id": artifactID},
+	})
+	if callErr != nil {
+		t.Fatalf("official SDK MCP artifact metadata call error = %v", callErr)
+	}
+	if metadataCall.IsError {
+		t.Fatalf("official SDK MCP artifact metadata call returned an error: %#v", metadataCall)
+	}
+	metadataJSON, marshalErr := json.Marshal(metadataCall.StructuredContent)
+	if marshalErr != nil {
+		t.Fatalf("marshal MCP artifact metadata: %v", marshalErr)
+	}
+	var metadataPayload protocol.ArtifactResponse
+	if err := json.Unmarshal(metadataJSON, &metadataPayload); err != nil {
+		t.Fatalf("decode MCP artifact metadata: %v", err)
+	}
+	if metadataPayload.Artifact.ID != artifactID || metadataPayload.Artifact.Name != "original.txt" {
+		t.Fatalf("MCP artifact metadata = %#v", metadataPayload)
+	}
 
 	var mcpReassembled []byte
 	var mcpOffset int64

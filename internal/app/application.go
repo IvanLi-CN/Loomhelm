@@ -102,6 +102,7 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	protectedDownload := s.artifactDownloadHandler(download)
 	router.Get("/artifacts/{artifact_id}/download", protectedDownload)
 	router.Head("/artifacts/{artifact_id}/download", protectedDownload)
+	router.Get("/artifacts/{artifact_id}", s.artifactMetadataHandler)
 	router.Get("/artifacts/{artifact_id}/content", s.artifactContentHandler(contentDownload))
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
 		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
@@ -170,6 +171,56 @@ func (s *applicationServices) artifactContentHandler(content http.Handler) http.
 		request = request.WithContext(context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal))
 		content.ServeHTTP(writer, request)
 	})
+}
+
+func (s *applicationServices) artifactMetadataHandler(writer http.ResponseWriter, request *http.Request) {
+	if s.artifactStore == nil {
+		unavailableArtifactDownload(writer, request)
+		return
+	}
+	principal, err := s.identity.ResolvePrincipal(request.Context(), request)
+	if err != nil || principal.UserID == "" {
+		if err == nil {
+			err = auth.ErrUnauthenticated
+		}
+		auth.WriteError(writer, request, auth.StatusForError(err), err, "authentication required")
+		return
+	}
+	metadataContext := context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal)
+	artifact, err := s.artifactStore.Metadata(metadataContext, chi.URLParam(request, "artifact_id"))
+	if err != nil {
+		writeArtifactStoreError(writer, request, err, "artifact metadata is unavailable")
+		return
+	}
+	artifact.Name = artifacts.SafeDownloadFilename(artifact.Name)
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(protocol.ArtifactResponse{Artifact: artifact})
+}
+
+func writeArtifactStoreError(writer http.ResponseWriter, request *http.Request, err error, message string) {
+	status := artifactStoreStatus(err)
+	if status == http.StatusServiceUnavailable && (errors.Is(err, artifacts.ErrRecoveryPending) || errors.Is(err, artifacts.ErrRecoveryIncomplete)) {
+		writer.Header().Set("Retry-After", "60")
+	}
+	writeArtifactDownloadError(writer, request, status, err, message)
+}
+
+func artifactStoreStatus(err error) int {
+	switch {
+	case errors.Is(err, artifacts.ErrInvalid):
+		return http.StatusBadRequest
+	case errors.Is(err, artifacts.ErrContentChanged):
+		return http.StatusConflict
+	case errors.Is(err, artifacts.ErrRecoveryPending), errors.Is(err, artifacts.ErrRecoveryIncomplete), errors.Is(err, artifacts.ErrStoreUnavailable):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, artifacts.ErrNotFound), errors.Is(err, artifacts.ErrUnauthorized), errors.Is(err, artifacts.ErrUnavailable), errors.Is(err, artifacts.ErrIntegrity), errors.Is(err, artifacts.ErrSizeMismatch), errors.Is(err, artifacts.ErrHashMismatch):
+		return http.StatusNotFound
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return http.StatusRequestTimeout
+	default:
+		return http.StatusServiceUnavailable
+	}
 }
 
 func writeArtifactDownloadError(writer http.ResponseWriter, request *http.Request, status int, err error, message string) {
