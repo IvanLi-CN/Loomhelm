@@ -18,11 +18,12 @@ import (
 )
 
 type fakeSessionCreationRecords struct {
-	intents     map[string]sessions.CreationIntent
-	sessions    map[string]sessions.Session
-	unknown     int
-	definite    []sessions.DefiniteFailureIntentInput
-	activations []sessions.ActivationInput
+	intents           map[string]sessions.CreationIntent
+	sessions          map[string]sessions.Session
+	unknown           int
+	unknownContextErr error
+	definite          []sessions.DefiniteFailureIntentInput
+	activations       []sessions.ActivationInput
 }
 
 func (f *fakeSessionCreationRecords) CreateIntent(_ context.Context, input sessions.CreationIntentInput) (sessions.CreationIntent, error) {
@@ -53,8 +54,9 @@ func (f *fakeSessionCreationRecords) CreateIntent(_ context.Context, input sessi
 	return intent, nil
 }
 
-func (f *fakeSessionCreationRecords) MarkIntentUnknown(_ context.Context, input sessions.UnknownIntentInput) (sessions.CreationIntent, error) {
+func (f *fakeSessionCreationRecords) MarkIntentUnknown(ctx context.Context, input sessions.UnknownIntentInput) (sessions.CreationIntent, error) {
 	f.unknown++
+	f.unknownContextErr = ctx.Err()
 	intent := f.intents[input.SessionID]
 	intent.State = sessions.IntentStateUnknown
 	intent.UnknownReason = input.Reason
@@ -249,12 +251,17 @@ func TestSessionCreationKeepsUnknownOutcomeUnknown(t *testing.T) {
 	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, &fakeSessionCreationHost{host: hosts.Host{ID: "host-1"}}, transport, nil)
 	service.newID = func() (string, error) { return "session-unknown", nil }
 
-	_, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, protocol.CreateSessionRequest{CommandID: "create-session-unknown", Path: protocol.SessionPathNew})
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := service.CreateSession(requestContext, auth.Principal{UserID: "user-1"}, protocol.CreateSessionRequest{CommandID: "create-session-unknown", Path: protocol.SessionPathNew})
 	if !errors.Is(err, protocol.ErrUnknownCommandResult) {
 		t.Fatalf("unknown creation error = %v", err)
 	}
 	if records.unknown != 1 || records.intents["session-unknown"].State != sessions.IntentStateUnknown {
 		t.Fatalf("unknown intent state = %+v, mark count = %d", records.intents["session-unknown"], records.unknown)
+	}
+	if records.unknownContextErr != nil {
+		t.Fatalf("unknown intent was persisted with canceled context: %v", records.unknownContextErr)
 	}
 }
 
