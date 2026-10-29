@@ -2,6 +2,7 @@ package drafts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -270,12 +271,13 @@ func (s *Store) PrepareCommandTx(ctx context.Context, tx pgx.Tx, input CommandDr
 		return err
 	}
 	var commandSessionID, commandKind string
+	var commandPayload []byte
 	err := tx.QueryRow(ctx, `
-		SELECT session_id, kind
+		SELECT session_id, kind, payload
 		FROM execution_commands
 		WHERE command_id = $1
 		FOR UPDATE
-	`, input.CommandID).Scan(&commandSessionID, &commandKind)
+	`, input.CommandID).Scan(&commandSessionID, &commandKind, &commandPayload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrDraftMutation
 	}
@@ -285,6 +287,15 @@ func (s *Store) PrepareCommandTx(ctx context.Context, tx pgx.Tx, input CommandDr
 	if commandSessionID != input.SessionID || commandKind != "run.send" {
 		return ErrDraftMutation
 	}
+	validateCommandPayload := func() error {
+		var commandRequest struct {
+			Prompt *string `json:"prompt"`
+		}
+		if err := json.Unmarshal(commandPayload, &commandRequest); err != nil || commandRequest.Prompt == nil || *commandRequest.Prompt != input.Content {
+			return ErrDraftMutation
+		}
+		return nil
+	}
 	binding, found, err := lockCommandDraftTx(ctx, tx, input.CommandID)
 	if err != nil {
 		return err
@@ -293,7 +304,7 @@ func (s *Store) PrepareCommandTx(ctx context.Context, tx pgx.Tx, input CommandDr
 		if binding.SessionID != input.SessionID || binding.OwnerUserID != input.OwnerUserID || binding.ExpectedRevision != input.ExpectedRevision {
 			return ErrDraftMutation
 		}
-		return nil
+		return validateCommandPayload()
 	}
 	current, found, err := lockDraftTx(ctx, tx, input.SessionID)
 	if err != nil {
@@ -301,6 +312,9 @@ func (s *Store) PrepareCommandTx(ctx context.Context, tx pgx.Tx, input CommandDr
 	}
 	if !found || current.OwnerUserID != input.OwnerUserID || current.Revision != input.ExpectedRevision || current.Content != input.Content {
 		return ErrDraftRevisionStale
+	}
+	if err := validateCommandPayload(); err != nil {
+		return err
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
 	if _, err := tx.Exec(ctx, `

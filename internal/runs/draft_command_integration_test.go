@@ -4,13 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/db/migrations"
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
+	"github.com/IvanLi-CN/Loomhelm/internal/platform"
+	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *testing.T) {
@@ -158,6 +166,34 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 	}
 	if current.Content != consumable.Content || current.Revision != consumable.Revision {
 		t.Fatalf("failed command changed draft = %+v, want %+v", current, consumable)
+	}
+
+	payloadMismatchCommand := protocol.Command{
+		CommandID: fixture.command + "-draft-payload-mismatch",
+		IssuedAt:  "2026-10-30T00:00:01Z",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"different persisted payload"}`),
+		SessionID: sessionID,
+	}
+	_, _, err = runStore.AcceptRunWithMutation(ctx, CommandIntent{Command: payloadMismatchCommand, Generation: fixture.generation}, NewRunInput{
+		ID:         fixture.run + "-draft-payload-mismatch",
+		SessionID:  sessionID,
+		CommandID:  payloadMismatchCommand.CommandID,
+		Generation: fixture.generation,
+	}, func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
+		return draftStore.PrepareCommandTx(mutationCtx, tx, drafts.CommandDraftInput{
+			CommandID:        payloadMismatchCommand.CommandID,
+			SessionID:        sessionID,
+			OwnerUserID:      ownerID,
+			ExpectedRevision: consumable.Revision,
+			Content:          consumable.Content,
+		})
+	})
+	if !errors.Is(err, drafts.ErrDraftMutation) {
+		t.Fatalf("payload/content mismatch admission error = %v, want %v", err, drafts.ErrDraftMutation)
+	}
+	if _, err := runStore.Lookup(ctx, sessionID, payloadMismatchCommand.CommandID); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("payload/content mismatch command lookup error = %v, want %v", err, ErrCommandNotFound)
 	}
 
 	staleCommand := protocol.Command{
@@ -338,11 +374,17 @@ func TestPersistentDraftCommandReconciliationFinalizesMatchingObservation(t *tes
 			if err != nil {
 				t.Fatalf("seed draft: %v", err)
 			}
+			payload, err := json.Marshal(struct {
+				Prompt string `json:"prompt"`
+			}{Prompt: draft.Content})
+			if err != nil {
+				t.Fatalf("encode draft command payload: %v", err)
+			}
 			command := protocol.Command{
 				CommandID: commandID,
 				IssuedAt:  "2026-10-30T00:00:05Z",
 				Kind:      protocol.CommandKindRunSend,
-				Payload:   json.RawMessage(`{"prompt":"draft reconciliation"}`),
+				Payload:   payload,
 				RunID:     &runID,
 				SessionID: sessionID,
 			}
@@ -531,6 +573,184 @@ func TestPersistentDraftCommandLegacyMarkerlessAckRemainsUnknown(t *testing.T) {
 	if transport.sendCalls != 0 {
 		t.Fatalf("markerless reconciliation sent %d commands, want 0", transport.sendCalls)
 	}
+}
+
+func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
+	db, provider := openDraftMigrationFixtureDatabaseThrough(t, 13)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const (
+		userID    = "e01-draft-migration-user"
+		sessionID = "e01-draft-migration-session"
+		commandID = "e01-draft-migration-command"
+	)
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO auth_users (id, issuer, subject)
+		VALUES ($1, 'https://issuer.example.test', $1)
+	`, userID); err != nil {
+		t.Fatalf("seed migration user: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO execution_sessions (id, external_thread_ref, path, state, generation)
+		VALUES ($1, $2, 'new', 'active', 'legacy-generation')
+	`, sessionID, "thread-"+sessionID); err != nil {
+		t.Fatalf("seed migration session: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO execution_commands (
+			command_id, session_id, generation, kind, issued_at, payload, digest,
+			received_at, state, operation_id, result, event_cursor, reconciliation_state
+		)
+		VALUES ($1, $2, 'legacy-generation', 'run.send', '2026-10-30T00:00:00Z',
+			$3, repeat('a', 64), '2026-10-30T00:00:00Z', 'executing',
+			'legacy-operation', convert_to('{"legacy":true}', 'UTF8'), 'legacy-cursor', '')
+	`, commandID, sessionID, []byte(`{"prompt":"legacy draft"}`)); err != nil {
+		t.Fatalf("seed migration command: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO conversation_drafts (
+			session_id, owner_user_id, content, revision, mutation_id, client_id, client_sequence
+		)
+		VALUES ($1, $2, 'legacy draft', 1, 'legacy-mutation', 'desktop', 1)
+	`, sessionID, userID); err != nil {
+		t.Fatalf("seed migration draft: %v", err)
+	}
+	var beforeContent string
+	var beforeRevision int64
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT content, revision FROM conversation_drafts WHERE session_id = $1
+	`, sessionID).Scan(&beforeContent, &beforeRevision); err != nil {
+		t.Fatalf("read pre-00014 draft: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 14); err != nil {
+		t.Fatalf("apply 00014 migration: %v", err)
+	}
+	var afterContent string
+	var afterRevision int64
+	var exactAckState string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT content, revision FROM conversation_drafts WHERE session_id = $1
+	`, sessionID).Scan(&afterContent, &afterRevision); err != nil {
+		t.Fatalf("read post-00014 draft: %v", err)
+	}
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT exact_ack_state FROM execution_commands WHERE command_id = $1
+	`, commandID).Scan(&exactAckState); err != nil {
+		t.Fatalf("read post-00014 ACK marker: %v", err)
+	}
+	if afterContent != beforeContent || afterRevision != beforeRevision || exactAckState != "" {
+		t.Fatalf("post-00014 state = content %q revision %d exact_ack_state %q, want unchanged draft and empty marker", afterContent, afterRevision, exactAckState)
+	}
+
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE execution_commands
+		SET exact_ack_state = 'executing'
+		WHERE command_id = $1
+	`, commandID); err != nil {
+		t.Fatalf("seed existing ACK marker: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE execution_commands
+		SET state = 'failed', operation_id = 'legacy-terminal-operation',
+		    result = convert_to('{"failed":true}', 'UTF8'), event_cursor = 'legacy-terminal-cursor',
+		    reconciliation_state = 'confirmed'
+		WHERE command_id = $1
+	`, commandID); err != nil {
+		t.Fatalf("simulate 00013 writer update: %v", err)
+	}
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT exact_ack_state FROM execution_commands WHERE command_id = $1
+	`, commandID).Scan(&exactAckState); err != nil {
+		t.Fatalf("read preserved ACK marker: %v", err)
+	}
+	if exactAckState != "executing" {
+		t.Fatalf("preserved ACK marker = %q, want executing", exactAckState)
+	}
+	if _, err := provider.UpTo(ctx, 14); err != nil {
+		t.Fatalf("re-enter 00014 migration: %v", err)
+	}
+}
+
+func openDraftMigrationFixtureDatabaseThrough(t *testing.T, targetVersion int64) (*database.DB, *goose.Provider) {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		t.Fatalf("load migration database configuration: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	root, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		t.Fatalf("open migration root database: %v", err)
+	}
+	schema := fmt.Sprintf("e01_draft_migration_%d", time.Now().UnixNano())
+	quotedSchema := quoteDraftMigrationIdentifier(schema)
+	if _, err := root.Pool().Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		root.Close()
+		t.Fatalf("create migration fixture schema: %v", err)
+	}
+	scopedURL, err := draftMigrationURLWithSearchPath(config.URL, schema)
+	if err != nil {
+		_, _ = root.Pool().Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
+		root.Close()
+		t.Fatalf("scope migration fixture database URL: %v", err)
+	}
+	scoped, err := database.Open(ctx, database.Config{URL: scopedURL, MinConns: 1, MaxConns: 2})
+	if err != nil {
+		_, _ = root.Pool().Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
+		root.Close()
+		t.Fatalf("open scoped migration fixture database: %v", err)
+	}
+	sqlDB := stdlib.OpenDBFromPool(scoped.Pool())
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		sqlDB.Close()
+		scoped.Close()
+		_, _ = root.Pool().Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
+		root.Close()
+		t.Fatalf("create migration fixture provider: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, targetVersion); err != nil {
+		provider.Close()
+		sqlDB.Close()
+		scoped.Close()
+		_, _ = root.Pool().Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
+		root.Close()
+		t.Fatalf("migrate fixture to %d: %v", targetVersion, err)
+	}
+	t.Cleanup(func() {
+		provider.Close()
+		sqlDB.Close()
+		scoped.Close()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := root.Pool().Exec(cleanupCtx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			t.Errorf("drop migration fixture schema: %v", err)
+		}
+		root.Close()
+	})
+	return scoped, provider
+}
+
+func draftMigrationURLWithSearchPath(rawURL, schema string) (string, error) {
+	if strings.Contains(rawURL, "://") {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return "", err
+		}
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		return parsed.String(), nil
+	}
+	return strings.TrimSpace(rawURL) + " search_path=" + schema, nil
+}
+
+func quoteDraftMigrationIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
 type mismatchedReconciliationTransport struct {

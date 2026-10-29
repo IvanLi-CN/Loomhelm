@@ -150,6 +150,27 @@ func TestPersistentControlServiceSubmitDraftFinalizesAfterDelivery(t *testing.T)
 	if control.transport.sendCount() != 1 {
 		t.Fatalf("transport sends after stale draft submit = %d, want 1", control.transport.sendCount())
 	}
+	bound, err := draftStore.Apply(ctx, drafts.UpdateInput{
+		SessionID:      fixture.sessionIDs[0],
+		OwnerUserID:    fixture.userID,
+		MutationID:     "control-draft-bound-mismatch",
+		ClientID:       "desktop",
+		ClientSequence: 2,
+		Content:        "bound draft content",
+	})
+	if err != nil {
+		t.Fatalf("seed same-revision mismatch draft: %v", err)
+	}
+	mismatchedRequest := protocol.SubmitRunRequest{CommandID: fixture.command + "-draft-content-mismatch", Prompt: "different command payload"}
+	if _, err := control.service.SubmitRunWithDraft(ctx, principal, fixture.sessionIDs[0], mismatchedRequest, bound.Revision); !errors.Is(err, drafts.ErrDraftRevisionStale) {
+		t.Fatalf("same-revision content mismatch error = %v, want %v", err, drafts.ErrDraftRevisionStale)
+	}
+	if _, err := NewStore(db.Pool()).Lookup(ctx, fixture.sessionIDs[0], mismatchedRequest.CommandID); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("same-revision mismatch command lookup error = %v, want %v", err, ErrCommandNotFound)
+	}
+	if control.transport.sendCount() != 1 {
+		t.Fatalf("transport sends after same-revision mismatch = %d, want 1", control.transport.sendCount())
+	}
 }
 
 func TestPersistentControlServiceInterruptUsesRunOwnerAndCommandIdentity(t *testing.T) {

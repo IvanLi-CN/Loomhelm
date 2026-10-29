@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -246,11 +247,44 @@ func TestMergeExactCommandAckAllowsRejectedAfterExecuting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge rejected exact ACK: %v", err)
 	}
-	if merged.State != protocol.CommandStateRejected || merged.ExactAckState != protocol.CommandStateRejected {
-		t.Fatalf("merged rejected exact ACK = %+v, want rejected state and marker", merged)
+	if merged.State != protocol.CommandStateRejected || merged.ExactAckState != protocol.CommandStateExecuting {
+		t.Fatalf("merged rejected exact ACK = %+v, want rejected state with executing delivery marker", merged)
 	}
-	if merged.DraftDeliveryConfirmed() {
-		t.Fatal("rejected exact ACK must preserve, not consume, the draft")
+	if !merged.DraftDeliveryConfirmed() {
+		t.Fatal("rejected exact ACK after executing delivery must retain delivery confirmation")
+	}
+
+	undelivered := CommandRecord{
+		Intent:              CommandIntent{Command: protocol.Command{CommandID: "cmd-rejected-before-delivery"}},
+		State:               protocol.CommandStateRejected,
+		ExactAckState:       protocol.CommandStateRejected,
+		ReconciliationState: protocol.ReconciliationStateConfirmed,
+	}
+	if commandDeliveryConfirmed(undelivered) {
+		t.Fatal("rejected ACK without delivery evidence must not confirm delivery")
+	}
+	if got := terminalReconciliation(undelivered); got.State != protocol.ReconciliationStateNotFound {
+		t.Fatalf("undelivered rejected ACK reconciliation = %+v, want not_found", got)
+	}
+
+	legacy := CommandRecord{
+		Intent:      CommandIntent{Command: protocol.Command{CommandID: "cmd-legacy-fields"}},
+		State:       protocol.CommandStateUnknown,
+		OperationID: "legacy-operation",
+		EventCursor: "legacy-cursor",
+		Result:      json.RawMessage(`{"legacy":true}`),
+		Error:       &protocol.ApiError{Code: protocol.ErrorCodeConflict},
+	}
+	merged, err = mergeExactCommandAck(legacy, CommandRecord{
+		Intent:              legacy.Intent,
+		State:               protocol.CommandStateSucceeded,
+		ReconciliationState: protocol.ReconciliationStateConfirmed,
+	})
+	if err != nil {
+		t.Fatalf("merge legacy reconciliation: %v", err)
+	}
+	if merged.OperationID != legacy.OperationID || merged.EventCursor != legacy.EventCursor || !bytes.Equal(merged.Result, legacy.Result) || !sameAPIError(merged.Error, legacy.Error) {
+		t.Fatalf("legacy reconciliation cleared optional facts = %+v, want preserved facts", merged)
 	}
 }
 

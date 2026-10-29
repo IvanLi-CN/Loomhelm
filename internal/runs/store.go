@@ -376,9 +376,10 @@ func (s *Store) RecordExactCommandAck(ctx context.Context, platformSessionID str
 	incoming.Result = append(json.RawMessage(nil), ack.Result...)
 	incoming.Error = cloneAPIError(ack.Error)
 	incoming.ExactAckState = effectiveState
-	// An exact ACK is a durable delivery fact. Mark it as confirmed so a
-	// concurrent unknown-outcome transition cannot erase an executing ACK that
-	// carries no optional operation, result or cursor fields.
+	// An exact ACK is a durable fact. Mark it as reconciled so a concurrent
+	// unknown-outcome transition cannot erase an executing ACK that carries no
+	// optional operation, result or cursor fields. Delivery confirmation still
+	// requires an executing or succeeded exact ACK state.
 	incoming.ReconciliationState = protocol.ReconciliationStateConfirmed
 	incoming, err = mergeExactCommandAck(record, incoming)
 	if err != nil {
@@ -503,7 +504,9 @@ func isMarkerlessExecuting(record CommandRecord) bool {
 }
 
 func commandDeliveryConfirmed(record CommandRecord) bool {
-	return record.ExactAckState != "" || record.ReconciliationState == protocol.ReconciliationStateConfirmed
+	return isDeliveryConfirmedAckState(record.ExactAckState) ||
+		(record.ReconciliationState == protocol.ReconciliationStateConfirmed &&
+			(record.State == protocol.CommandStateExecuting || record.State == protocol.CommandStateSucceeded))
 }
 
 func sameCommandFact(left, right CommandRecord) bool {
@@ -557,10 +560,11 @@ func mergeExactAckState(existing, incoming protocol.CommandState, commandID stri
 	if !allowedExactCommandTransition(existing, incoming) {
 		return "", fmt.Errorf("%w: command %q exact ACK state cannot become %q", ErrCommandFactConflict, commandID, incoming)
 	}
-	// An executing ACK is a durable delivery fact. A later failed ACK may
-	// describe the execution result, but it must not erase that fact before a
-	// retried draft finalization can consume the already-sent revision.
-	if isDeliveryConfirmedAckState(existing) && incoming == protocol.CommandStateFailed {
+	// An executing ACK is a durable delivery fact. A later failed or rejected
+	// ACK may describe the terminal outcome, but it must not erase that fact
+	// before a retried draft finalization can consume the already-sent revision.
+	if isDeliveryConfirmedAckState(existing) &&
+		(incoming == protocol.CommandStateFailed || incoming == protocol.CommandStateRejected) {
 		return existing, nil
 	}
 	return incoming, nil
@@ -958,27 +962,18 @@ func (s *Store) reconcile(ctx context.Context, commandID, generation string, obs
 	if !allowedReconciliationState(observation.State) {
 		return CommandRecord{}, fmt.Errorf("%w: unknown -> %s", ErrCommandTransition, observation.State)
 	}
-	if confirmedExecuting {
-		incoming := cloneRecord(record)
-		incoming.State = observation.State
-		incoming.OperationID = observation.OperationID
-		incoming.EventCursor = observation.EventCursor
-		incoming.Result = append(json.RawMessage(nil), observation.Result...)
-		incoming.Error = cloneAPIError(observation.Error)
-		incoming.ReconciliationState = observation.Reconciliation
-		merged, err := mergeExactCommandAck(record, incoming)
-		if err != nil {
-			return CommandRecord{}, err
-		}
-		record = merged
-	} else {
-		record.ReconciliationState = observation.Reconciliation
-		record.EventCursor = observation.EventCursor
-		record.State = observation.State
-		record.OperationID = observation.OperationID
-		record.Result = append(json.RawMessage(nil), observation.Result...)
-		record.Error = cloneAPIError(observation.Error)
+	incoming := cloneRecord(record)
+	incoming.State = observation.State
+	incoming.OperationID = observation.OperationID
+	incoming.EventCursor = observation.EventCursor
+	incoming.Result = append(json.RawMessage(nil), observation.Result...)
+	incoming.Error = cloneAPIError(observation.Error)
+	incoming.ReconciliationState = observation.Reconciliation
+	merged, err := mergeExactCommandAck(record, incoming)
+	if err != nil {
+		return CommandRecord{}, err
 	}
+	record = merged
 	if err := updateCommandTx(ctx, tx, record, string(observation.Reconciliation)); err != nil {
 		return CommandRecord{}, err
 	}
