@@ -264,10 +264,13 @@ export function ProductionConversationWorkspace({
   const activeRunId = run?.id;
   const connection: ConnectionAvailability = session ? connectionFromSessionState(session.state) : "online";
   const connectionRef = useRef<ConnectionAvailability>(connection);
-  connectionRef.current = connection;
   const currentConversationTitle = conversationTitle ?? task?.title ?? "独立会话";
   const taskSummary = mapTaskSummary(task);
   const context = session ? toSessionContextModel(session, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
+
+  useEffect(() => {
+    connectionRef.current = connection;
+  }, [connection]);
 
   useEffect(() => {
     if (!hasPreviousSessionId.current) {
