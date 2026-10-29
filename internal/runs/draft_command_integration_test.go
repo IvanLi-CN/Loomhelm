@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -334,26 +335,29 @@ func TestPersistentDraftCommandReconciliationFinalizesMatchingObservation(t *tes
 	})
 
 	cases := []struct {
-		name            string
-		sessionIndex    int
-		reconciliation  protocol.ReconciliationState
-		wantState       protocol.CommandState
-		wantContent     string
-		wantRevisionAdd int64
+		name             string
+		sessionIndex     int
+		reconciliation   protocol.ReconciliationState
+		wantState        protocol.CommandState
+		wantContent      string
+		wantRevisionAdd  int64
+		wantBindingState drafts.CommandDraftState
 	}{
 		{
-			name:            "confirmed",
-			sessionIndex:    0,
-			reconciliation:  protocol.ReconciliationStateConfirmed,
-			wantState:       protocol.CommandStateSucceeded,
-			wantRevisionAdd: 1,
+			name:             "confirmed",
+			sessionIndex:     0,
+			reconciliation:   protocol.ReconciliationStateConfirmed,
+			wantState:        protocol.CommandStateSucceeded,
+			wantRevisionAdd:  1,
+			wantBindingState: drafts.CommandDraftConsumed,
 		},
 		{
-			name:           "not-found",
-			sessionIndex:   1,
-			reconciliation: protocol.ReconciliationStateNotFound,
-			wantState:      protocol.CommandStateRejected,
-			wantContent:    "retain after not-found reconciliation",
+			name:             "not-found",
+			sessionIndex:     1,
+			reconciliation:   protocol.ReconciliationStateNotFound,
+			wantState:        protocol.CommandStateRejected,
+			wantContent:      "retain after not-found reconciliation",
+			wantBindingState: drafts.CommandDraftPreserved,
 		},
 	}
 	for _, tc := range cases {
@@ -434,6 +438,15 @@ func TestPersistentDraftCommandReconciliationFinalizesMatchingObservation(t *tes
 			if current.Content != tc.wantContent || current.Revision != draft.Revision+tc.wantRevisionAdd {
 				t.Fatalf("reconciled draft = %+v, want content %q revision %d", current, tc.wantContent, draft.Revision+tc.wantRevisionAdd)
 			}
+			var bindingState string
+			if err := db.Pool().QueryRow(ctx, `
+			SELECT state FROM conversation_draft_commands WHERE command_id = $1
+		`, commandID).Scan(&bindingState); err != nil {
+				t.Fatalf("read reconciled draft binding: %v", err)
+			}
+			if bindingState != string(tc.wantBindingState) {
+				t.Fatalf("reconciled draft binding state = %q, want %q", bindingState, tc.wantBindingState)
+			}
 		})
 	}
 }
@@ -499,12 +512,13 @@ func TestPersistentDraftCommandLegacyMarkerlessAckRemainsUnknown(t *testing.T) {
 		t.Fatalf("accept legacy markerless draft command: %v", err)
 	}
 
-	var beforeState, beforeMarker, beforeReconciliation string
+	var beforeState, beforeMarker, beforeReconciliation, beforeOperation, beforeCursor string
+	var beforeResult, beforeError []byte
 	if err := db.Pool().QueryRow(ctx, `
-		SELECT state, exact_ack_state, reconciliation_state
+		SELECT state, exact_ack_state, reconciliation_state, operation_id, event_cursor, result, error
 		FROM execution_commands
 		WHERE command_id = $1
-	`, commandID).Scan(&beforeState, &beforeMarker, &beforeReconciliation); err != nil {
+	`, commandID).Scan(&beforeState, &beforeMarker, &beforeReconciliation, &beforeOperation, &beforeCursor, &beforeResult, &beforeError); err != nil {
 		t.Fatalf("read command before migration re-entry: %v", err)
 	}
 	beforeDraft, err := draftStore.Get(ctx, sessionID, fixture.userID)
@@ -517,20 +531,21 @@ func TestPersistentDraftCommandLegacyMarkerlessAckRemainsUnknown(t *testing.T) {
 	if err := db.Migrate(ctx); err != nil {
 		t.Fatalf("second migration re-entry: %v", err)
 	}
-	var afterState, afterMarker, afterReconciliation string
+	var afterState, afterMarker, afterReconciliation, afterOperation, afterCursor string
+	var afterResult, afterError []byte
 	if err := db.Pool().QueryRow(ctx, `
-		SELECT state, exact_ack_state, reconciliation_state
+		SELECT state, exact_ack_state, reconciliation_state, operation_id, event_cursor, result, error
 		FROM execution_commands
 		WHERE command_id = $1
-	`, commandID).Scan(&afterState, &afterMarker, &afterReconciliation); err != nil {
+	`, commandID).Scan(&afterState, &afterMarker, &afterReconciliation, &afterOperation, &afterCursor, &afterResult, &afterError); err != nil {
 		t.Fatalf("read command after migration re-entry: %v", err)
 	}
 	afterDraft, err := draftStore.Get(ctx, sessionID, fixture.userID)
 	if err != nil {
 		t.Fatalf("read draft after migration re-entry: %v", err)
 	}
-	if afterState != beforeState || afterMarker != beforeMarker || afterReconciliation != beforeReconciliation || afterDraft != beforeDraft {
-		t.Fatalf("migration re-entry changed command or draft: before command=(%q,%q,%q) draft=%+v after command=(%q,%q,%q) draft=%+v", beforeState, beforeMarker, beforeReconciliation, beforeDraft, afterState, afterMarker, afterReconciliation, afterDraft)
+	if afterState != beforeState || afterMarker != beforeMarker || afterReconciliation != beforeReconciliation || afterOperation != beforeOperation || afterCursor != beforeCursor || !bytes.Equal(afterResult, beforeResult) || !bytes.Equal(afterError, beforeError) || afterDraft != beforeDraft {
+		t.Fatalf("migration re-entry changed command or draft: before command=(%q,%q,%q,%q,%q,%q,%q) draft=%+v after command=(%q,%q,%q,%q,%q,%q,%q) draft=%+v", beforeState, beforeMarker, beforeReconciliation, beforeOperation, beforeCursor, beforeResult, beforeError, beforeDraft, afterState, afterMarker, afterReconciliation, afterOperation, afterCursor, afterResult, afterError, afterDraft)
 	}
 
 	// A 00013 writer can record the first executing ACK without knowing the
@@ -572,6 +587,29 @@ func TestPersistentDraftCommandLegacyMarkerlessAckRemainsUnknown(t *testing.T) {
 	}
 	if transport.sendCalls != 0 {
 		t.Fatalf("markerless reconciliation sent %d commands, want 0", transport.sendCalls)
+	}
+
+	transport.state = protocol.ReconciliationStateConfirmed
+	transport.eventCursor = "recovered-cursor"
+	if _, err := controller.ReconcileCommand(ctx, sessionID, commandID); err != nil {
+		t.Fatalf("definitive markerless reconciliation: %v", err)
+	}
+	record, err = runStore.Lookup(ctx, sessionID, commandID)
+	if err != nil {
+		t.Fatalf("read definitively reconciled markerless command: %v", err)
+	}
+	if record.State != protocol.CommandStateSucceeded || record.EventCursor != "recovered-cursor" || record.OperationID != "legacy-operation" || string(record.Result) != `{"legacy":true}` {
+		t.Fatalf("definitively reconciled markerless command = %+v", record)
+	}
+	current, err = draftStore.Get(ctx, sessionID, fixture.userID)
+	if err != nil {
+		t.Fatalf("read finalized markerless legacy draft: %v", err)
+	}
+	if current.Content != "" || current.Revision != draft.Revision+1 {
+		t.Fatalf("finalized markerless legacy draft = %+v, want empty revision %d", current, draft.Revision+1)
+	}
+	if transport.sendCalls != 0 {
+		t.Fatalf("definitive markerless reconciliation sent %d commands, want 0", transport.sendCalls)
 	}
 }
 
@@ -640,6 +678,16 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	}
 	if afterContent != beforeContent || afterRevision != beforeRevision || exactAckState != "" {
 		t.Fatalf("post-00014 state = content %q revision %d exact_ack_state %q, want unchanged draft and empty marker", afterContent, afterRevision, exactAckState)
+	}
+	var invalidMarkerCount int
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT count(*) FROM execution_commands
+		WHERE exact_ack_state NOT IN ('', 'executing', 'succeeded', 'failed', 'rejected')
+	`).Scan(&invalidMarkerCount); err != nil {
+		t.Fatalf("validate migrated ACK markers: %v", err)
+	}
+	if invalidMarkerCount != 0 {
+		t.Fatalf("migrated invalid ACK marker rows = %d, want 0", invalidMarkerCount)
 	}
 
 	if _, err := db.Pool().Exec(ctx, `
@@ -766,8 +814,9 @@ func (t *mismatchedReconciliationTransport) ReconcileCommand(context.Context, pr
 }
 
 type matchingReconciliationTransport struct {
-	state     protocol.ReconciliationState
-	sendCalls int
+	state       protocol.ReconciliationState
+	eventCursor string
+	sendCalls   int
 }
 
 func (t *matchingReconciliationTransport) SendCommand(context.Context, protocol.Command) (protocol.CommandAck, error) {
@@ -776,5 +825,10 @@ func (t *matchingReconciliationTransport) SendCommand(context.Context, protocol.
 }
 
 func (t *matchingReconciliationTransport) ReconcileCommand(_ context.Context, command protocol.Command) (protocol.Reconciliation, error) {
-	return protocol.Reconciliation{CommandID: command.CommandID, State: t.state}, nil
+	var eventCursor *string
+	if t.eventCursor != "" {
+		cursor := t.eventCursor
+		eventCursor = &cursor
+	}
+	return protocol.Reconciliation{CommandID: command.CommandID, EventCursor: eventCursor, State: t.state}, nil
 }

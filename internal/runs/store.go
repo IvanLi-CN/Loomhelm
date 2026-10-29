@@ -962,18 +962,38 @@ func (s *Store) reconcile(ctx context.Context, commandID, generation string, obs
 	if !allowedReconciliationState(observation.State) {
 		return CommandRecord{}, fmt.Errorf("%w: unknown -> %s", ErrCommandTransition, observation.State)
 	}
-	incoming := cloneRecord(record)
-	incoming.State = observation.State
-	incoming.OperationID = observation.OperationID
-	incoming.EventCursor = observation.EventCursor
-	incoming.Result = append(json.RawMessage(nil), observation.Result...)
-	incoming.Error = cloneAPIError(observation.Error)
-	incoming.ReconciliationState = observation.Reconciliation
-	merged, err := mergeExactCommandAck(record, incoming)
-	if err != nil {
-		return CommandRecord{}, err
+	if record.ExactAckState == "" {
+		// A markerless record may contain optional facts from an earlier writer.
+		// Reconciliation is a newer observation: retain omitted fields, but let
+		// each supplied field advance the legacy record, including its cursor.
+		record.State = observation.State
+		record.ReconciliationState = observation.Reconciliation
+		if observation.OperationID != "" {
+			record.OperationID = observation.OperationID
+		}
+		if observation.EventCursor != "" {
+			record.EventCursor = observation.EventCursor
+		}
+		if len(observation.Result) > 0 {
+			record.Result = append(json.RawMessage(nil), observation.Result...)
+		}
+		if observation.Error != nil {
+			record.Error = cloneAPIError(observation.Error)
+		}
+	} else {
+		incoming := cloneRecord(record)
+		incoming.State = observation.State
+		incoming.OperationID = observation.OperationID
+		incoming.EventCursor = observation.EventCursor
+		incoming.Result = append(json.RawMessage(nil), observation.Result...)
+		incoming.Error = cloneAPIError(observation.Error)
+		incoming.ReconciliationState = observation.Reconciliation
+		merged, err := mergeExactCommandAck(record, incoming)
+		if err != nil {
+			return CommandRecord{}, err
+		}
+		record = merged
 	}
-	record = merged
 	if err := updateCommandTx(ctx, tx, record, string(observation.Reconciliation)); err != nil {
 		return CommandRecord{}, err
 	}

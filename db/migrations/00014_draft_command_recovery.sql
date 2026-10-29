@@ -1,7 +1,11 @@
 -- +goose Up
 ALTER TABLE execution_commands
-    ADD COLUMN exact_ack_state TEXT NOT NULL DEFAULT ''
-        CHECK (exact_ack_state IN ('', 'executing', 'succeeded', 'failed', 'rejected'));
+    ADD COLUMN exact_ack_state TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE execution_commands
+    ADD CONSTRAINT execution_commands_exact_ack_state_check
+        CHECK (exact_ack_state IN ('', 'executing', 'succeeded', 'failed', 'rejected'))
+        NOT VALID;
 
 CREATE TABLE conversation_draft_commands (
     command_id TEXT PRIMARY KEY REFERENCES execution_commands (command_id) ON DELETE RESTRICT,
@@ -21,4 +25,5 @@ CREATE INDEX conversation_draft_commands_pending_idx
 -- +goose Down
 DROP INDEX IF EXISTS conversation_draft_commands_pending_idx;
 DROP TABLE IF EXISTS conversation_draft_commands;
+ALTER TABLE execution_commands DROP CONSTRAINT IF EXISTS execution_commands_exact_ack_state_check;
 ALTER TABLE execution_commands DROP COLUMN IF EXISTS exact_ack_state;

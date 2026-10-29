@@ -358,7 +358,8 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 	} else {
 		reconciled, reconcileErr = c.store.Reconcile(ctx, commandID, record.Intent.Generation, observation)
 	}
-	if reconciled.Intent.Command.CommandID != "" && reconciled.DraftDeliveryConfirmed() {
+	if reconciled.Intent.Command.CommandID != "" &&
+		(isTerminalCommandState(reconciled.State) || reconciled.DraftDeliveryConfirmed()) {
 		reconcileErr = errors.Join(reconcileErr, c.finalizeDraftCommand(ctx, reconciled))
 	}
 	return reconciliation, reconcileErr
