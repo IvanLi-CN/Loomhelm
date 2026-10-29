@@ -51,6 +51,10 @@ type contentVerifier interface {
 	verifyContent(context.Context, protocol.Artifact) error
 }
 
+type contentVersionVerifier interface {
+	verifyContentVersion(context.Context) error
+}
+
 // NewDownloadHTTPHandler constructs a handler over the existing ArtifactStore
 // contract. Browser downloads use Store.Open's full verification path; the
 // production Store additionally implements the snapshot-bound content path,
@@ -169,6 +173,15 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		}
 		if int64(len(content)) != chunkSize {
 			h.writeError(writer, request, http.StatusNotFound, ErrSizeMismatch, "artifact content is incomplete")
+			return
+		}
+	}
+	if verifier, ok := reader.(contentVersionVerifier); ok {
+		if err := verifier.verifyContentVersion(request.Context()); err != nil {
+			if request.Context().Err() != nil {
+				return
+			}
+			h.writeStoreError(writer, request, err, "artifact content verification failed")
 			return
 		}
 	}

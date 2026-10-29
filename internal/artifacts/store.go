@@ -134,9 +134,29 @@ func (r *contentReader) contentVersion() string {
 	return r.version
 }
 
+func (r *contentReader) verifyContentVersion(ctx context.Context) error {
+	if r == nil || r.File == nil {
+		return ErrStoreUnavailable
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	version, err := fileContentVersion(r.File)
+	if err != nil {
+		return err
+	}
+	if version != r.version {
+		return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+	}
+	return nil
+}
+
 func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Artifact) error {
 	if r == nil || r.File == nil || r.store == nil {
 		return ErrStoreUnavailable
+	}
+	if err := r.verifyContentVersion(ctx); err != nil {
+		return err
 	}
 	if err := verifyFile(ctx, r.File, artifact); err != nil {
 		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
@@ -147,7 +167,7 @@ func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Art
 		}
 		return err
 	}
-	return nil
+	return r.verifyContentVersion(ctx)
 }
 
 var _ protocol.ArtifactStore = (*Store)(nil)

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/go-chi/chi/v5"
@@ -182,6 +183,46 @@ func TestDownloadHTTPHandlerUsesBoundedContentOpenPath(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-content-open/content?limit=4", nil))
 	if response.Code != http.StatusOK || store.contentOpens != 1 || store.fullOpens != 0 {
 		t.Fatalf("content response status=%d/content opens=%d/full opens=%d", response.Code, store.contentOpens, store.fullOpens)
+	}
+}
+
+func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	original := []byte("original content")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	version, err := fileContentVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &contentReader{File: file, version: version}
+	if _, err := io.ReadFull(reader, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteAt([]byte{'X'}, 0); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, err := writer.WriteAt(original[:1], 0); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.verifyContentVersion(context.Background()); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("in-place content change error = %v, want ErrContentChanged", err)
 	}
 }
 
