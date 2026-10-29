@@ -37,6 +37,7 @@ interface ProjectOption {
 
 export interface ProductionSessionCreationPanelProps {
   conversationTitle?: string;
+  existingActiveSupported?: boolean;
   fixedProjectId?: string;
   fixedProjectName?: string;
   onCreate: (request: CreateSessionRequest) => void | Promise<void>;
@@ -56,6 +57,7 @@ function errorMessage(error: unknown, operation: string): string {
 
 export function ProductionSessionCreationPanel({
   conversationTitle = "新建独立会话",
+  existingActiveSupported = false,
   fixedProjectId,
   fixedProjectName,
   onCreate,
@@ -69,21 +71,34 @@ export function ProductionSessionCreationPanel({
   const [selectedProjectId, setSelectedProjectId] = useState(fixedProjectId ?? NO_PROJECT);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const commandRef = useRef<{ commandId: string; fingerprint: string } | undefined>(undefined);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (pending || readOnly) return;
+    const submitPath = path;
+    if (submitPath === "existing_active" && !existingActiveSupported) {
+      setFailure("当前服务暂不支持接入现有活跃对话；入口保留用于展示一期缺口，不会提交请求。");
+      return;
+    }
     setPending(true);
     setFailure(null);
+    const requestWithoutCommand = {
+      ...(activeThreadRef.trim() && submitPath === "existing_active" ? { active_thread_ref: activeThreadRef.trim() } : {}),
+      ...(selectedProjectId !== NO_PROJECT ? { project_id: selectedProjectId } : {}),
+      ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
+      ...(taskId ? { task_id: taskId } : {}),
+      path: submitPath
+    } satisfies Omit<CreateSessionRequest, "command_id">;
+    const fingerprint = JSON.stringify(requestWithoutCommand);
+    const commandId = commandRef.current?.fingerprint === fingerprint ? commandRef.current.commandId : createCommandId("session");
+    commandRef.current = { commandId, fingerprint };
     try {
       await onCreate({
-        ...(activeThreadRef.trim() && path === "existing_active" ? { active_thread_ref: activeThreadRef.trim() } : {}),
-        command_id: createCommandId("session"),
-        ...(selectedProjectId !== NO_PROJECT ? { project_id: selectedProjectId } : {}),
-        ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
-        ...(taskId ? { task_id: taskId } : {}),
-        path
+        ...requestWithoutCommand,
+        command_id: commandId
       });
+      commandRef.current = undefined;
     } catch (error) {
       setFailure(errorMessage(error, "创建会话"));
     } finally {
@@ -120,6 +135,7 @@ export function ProductionSessionCreationPanel({
             <input id="production-active-thread-ref" className="h-10 rounded-[var(--radius-sm)] border border-[var(--line-strong)] bg-[var(--surface-glass)] px-3 text-sm font-normal text-[var(--ink)] outline-none focus:border-[var(--accent)]" value={activeThreadRef} onChange={(event) => setActiveThreadRef(event.target.value)} placeholder="例如 thread-abc" disabled={pending || readOnly} required />
           </label>
         ) : null}
+        {path === "existing_active" && !existingActiveSupported ? <div className="rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status">当前后端尚未支持 existing_active；入口和 thread ref 保留，但提交按钮会禁用，避免把新建会话误报为接入现有活跃对话。</div> : null}
 
         {fixedProjectId ? (
           <div className="grid gap-2 text-xs">
@@ -154,7 +170,7 @@ export function ProductionSessionCreationPanel({
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
           <span className="text-[11px] leading-5 text-[var(--muted)]">不会自动发送草稿；创建请求只提交一次 command_id。</span>
-          <Button type="submit" disabled={pending || readOnly}>
+          <Button type="submit" disabled={pending || readOnly || (path === "existing_active" && !existingActiveSupported)}>
             {pending ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
             {pending ? "正在创建" : "创建会话"}
           </Button>
@@ -167,6 +183,7 @@ export function ProductionSessionCreationPanel({
 export interface ProductionConversationWorkspaceProps {
   api?: PublishedSessionApi;
   conversationTitle?: string;
+  existingActiveSupported?: boolean;
   initialRunId?: string;
   onSessionCreated?: (sessionId: string, initialRunId?: string) => void | Promise<void>;
   projectId?: string;
@@ -187,6 +204,24 @@ function mergeApprovals(current: readonly Approval[], incoming: readonly Approva
   });
 }
 
+async function readAllApprovalPages(api: Pick<PublishedSessionApi, "listRunApprovals">, runId: string): Promise<readonly Approval[]> {
+  const approvals: Approval[] = [];
+  const seenCursors = new Set<string>();
+  let afterCursor: string | undefined;
+
+  for (let pageNumber = 0; pageNumber < 1000; pageNumber += 1) {
+    const page = await api.listRunApprovals({ run_id: runId, limit: 200, ...(afterCursor ? { after_cursor: afterCursor } : {}) });
+    approvals.push(...page.items);
+    if (!page.has_more) return approvals;
+    const nextCursor = page.next_cursor?.trim();
+    if (!nextCursor || seenCursors.has(nextCursor)) throw new Error("审批历史分页游标未前进");
+    seenCursors.add(nextCursor);
+    afterCursor = nextCursor;
+  }
+
+  throw new Error("审批历史分页超过安全页数限制");
+}
+
 function mapTaskSummary(task: ProductionConversationWorkspaceProps["task"]): ProductionTaskSummary | undefined {
   return task ? { goal: task.goal, id: task.id, state: task.state, title: task.title } : undefined;
 }
@@ -194,6 +229,7 @@ function mapTaskSummary(task: ProductionConversationWorkspaceProps["task"]): Pro
 export function ProductionConversationWorkspace({
   api,
   conversationTitle,
+  existingActiveSupported = false,
   initialRunId,
   onSessionCreated,
   projectId,
@@ -217,19 +253,25 @@ export function ProductionConversationWorkspace({
   const [approvals, setApprovals] = useState<readonly Approval[]>([]);
   const [draft, setDraft] = useState("");
   const [activityNotice, setActivityNotice] = useState<string | null>(null);
+  const [uncertainRunCommandId, setUncertainRunCommandId] = useState<string | undefined>();
   const seenEventIds = useRef(new Set<string>());
   const approvalCommandIds = useRef(new Map<string, string>());
+  const pendingRunSubmission = useRef<{ commandId: string; prompt: string } | undefined>(undefined);
   const previousSessionId = useRef<string | undefined>(undefined);
+  const hasPreviousSessionId = useRef(false);
 
   const activeSessionId = session?.id ?? sessionId;
   const activeRunId = run?.id;
   const connection: ConnectionAvailability = session ? connectionFromSessionState(session.state) : "online";
+  const connectionRef = useRef<ConnectionAvailability>(connection);
+  connectionRef.current = connection;
   const currentConversationTitle = conversationTitle ?? task?.title ?? "独立会话";
   const taskSummary = mapTaskSummary(task);
   const context = session ? toSessionContextModel(session, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
 
   useEffect(() => {
-    if (previousSessionId.current === undefined) {
+    if (!hasPreviousSessionId.current) {
+      hasPreviousSessionId.current = true;
       previousSessionId.current = sessionId;
       return;
     }
@@ -242,12 +284,17 @@ export function ProductionConversationWorkspace({
     setRun(undefined);
     setCommandState(undefined);
     setActivityNotice(null);
+    setSession(undefined);
+    setSessionFailure(null);
+    setSessionLoading(Boolean(sessionId));
+    pendingRunSubmission.current = undefined;
+    setUncertainRunCommandId(undefined);
   }, [sessionId]);
 
   useEffect(() => {
     if (!api || !adapters || !sessionId) {
       setSessionLoading(false);
-      if (!sessionId) setSession(undefined);
+      if (!sessionId || !api) setSession(undefined);
       if (sessionId && !api) setSessionFailure("当前浏览器没有可用的会话服务。");
       return;
     }
@@ -255,6 +302,7 @@ export function ProductionConversationWorkspace({
     adapters.run.selectSession(sessionId);
     adapters.approval.selectSession(sessionId);
     let active = true;
+    setSession(undefined);
     setSessionLoading(true);
     setSessionFailure(null);
     void adapters.session.readSession(sessionId).then((result) => {
@@ -266,6 +314,7 @@ export function ProductionConversationWorkspace({
           setRun(routeRun);
         }
       } else {
+        setSession(undefined);
         setSessionFailure(result.reason === "transport" ? "读取 Session 失败，请刷新后再试。" : "Session 响应未通过身份核对，当前不展示猜测内容。");
       }
       setSessionLoading(false);
@@ -294,7 +343,7 @@ export function ProductionConversationWorkspace({
     if (!api || !adapters || !activeSessionId || !activeRunId) return;
     let active = true;
     const poll = async () => {
-      const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { connection, limit: 100 });
+      const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { connection: connectionRef.current, limit: 100 });
       if (!active) return;
       if (events.state === "received" && events.page) {
         const freshEvents = events.page.events.filter((event) => {
@@ -312,8 +361,8 @@ export function ProductionConversationWorkspace({
       }
 
       try {
-        const approvalPage = await api.listRunApprovals({ limit: 100, run_id: activeRunId });
-        if (active) setApprovals((current) => mergeApprovals(current, approvalPage.items));
+        const approvalItems = await readAllApprovalPages(api, activeRunId);
+        if (active) setApprovals((current) => mergeApprovals(current, approvalItems));
       } catch {
         if (active) setActivityNotice("审批历史暂时无法读取；当前已展示的审批事实保持不变。");
       }
@@ -324,7 +373,7 @@ export function ProductionConversationWorkspace({
       active = false;
       clearInterval(interval);
     };
-  }, [activeRunId, activeSessionId, adapters, api, connection]);
+  }, [activeRunId, activeSessionId, adapters, api]);
 
   const createSession = async (request: CreateSessionRequest) => {
     if (!api || !adapters) throw new Error("当前浏览器没有可用的会话服务");
@@ -347,15 +396,31 @@ export function ProductionConversationWorkspace({
   const send = async (prompt: string) => {
     if (!api || !adapters || !session) throw new Error("Session 尚未就绪");
     if (!canSendControl(connection, readOnly) || session.state !== "active") throw new Error("当前 Session 不允许发送控制命令");
-    const result = await adapters.run.submitRun(session.id, { command_id: createCommandId("run"), prompt }, { connection, readOnly });
+    if (uncertainRunCommandId) {
+      setActivityNotice("上一次 Run 结果不确定；请刷新或手动对账后再发送新的控制命令。");
+      return;
+    }
+    const commandId = pendingRunSubmission.current?.prompt === prompt ? pendingRunSubmission.current.commandId : createCommandId("run");
+    pendingRunSubmission.current = { commandId, prompt };
+    const result = await adapters.run.submitRun(session.id, { command_id: commandId, prompt }, { connection, readOnly });
     setCommandState(result.ack?.state);
-    if (result.state === "unknown") throw new Error("发送结果不确定；请对账后再决定是否继续");
-    if (result.state === "failed") throw new Error("Run 命令被服务拒绝");
+    if (result.state === "unknown") {
+      setUncertainRunCommandId(commandId);
+      setActivityNotice("发送结果不确定；请刷新或手动对账后再决定是否继续。相同意图不会自动重复提交。");
+      return;
+    }
+    if (result.state === "failed") {
+      pendingRunSubmission.current = undefined;
+      setActivityNotice("Run 命令被服务拒绝；草稿仍保留，可以修改后重新发送。");
+      return;
+    }
+    pendingRunSubmission.current = undefined;
     if (result.ack) {
       const nextRun = runFromCommandAck(session, result.ack);
       if (nextRun) setRun(nextRun);
       setActivityNotice(nextRun ? "Run 命令已收到，等待实际事件。" : "命令已收到，但服务尚未返回 Run ID。");
     }
+    setUncertainRunCommandId(undefined);
     setDraft("");
   };
 
@@ -364,6 +429,8 @@ export function ProductionConversationWorkspace({
     if (session.state !== "active" || !canSendControl(connection, readOnly)) throw new Error("当前 Session 不允许提交审批控制命令");
     const approval = approvals.find((item) => item.id === params.approval_id && item.revision === params.body.revision);
     if (!approval) throw new Error("审批修订已变化，请刷新后重新确认");
+    const latestRevision = approvals.filter((item) => item.id === approval.id).reduce((latest, item) => Math.max(latest, item.revision), 0);
+    if (approval.revision !== latestRevision) throw new Error("审批修订已过期，请刷新后重新确认");
     const result = await adapters.approval.resolve({
       approval,
       commandId: params.body.command_id,
@@ -372,6 +439,16 @@ export function ProductionConversationWorkspace({
     }, { connection, readOnly });
     if (result.state === "unknown" || result.state === "failed") throw new Error("审批结果未被确认；请对账，不会自动重复提交");
     setActivityNotice("审批命令已收到，等待服务事件确认当前修订。");
+  };
+
+  const reconcileRunSubmission = () => {
+    if (!adapters || !uncertainRunCommandId) return;
+    if (adapters.run.resolveUncertainSubmit(uncertainRunCommandId)) {
+      setUncertainRunCommandId(undefined);
+      setActivityNotice("已记录人工对账；下一次发送会复用同一 command_id，不会创建新的 Run 身份。");
+    } else {
+      setActivityNotice("本地未知命令状态已变化，请刷新后重新核对。");
+    }
   };
 
   const interrupt = async (request: { command_id: string; reason?: string }) => {
@@ -386,7 +463,7 @@ export function ProductionConversationWorkspace({
   if (!session && !sessionId) {
     return (
       <section className="grid min-w-0 gap-5" aria-label="创建会话工作区">
-        {api ? <ProductionSessionCreationPanel conversationTitle={currentConversationTitle} fixedProjectId={projectId} fixedProjectName={projectName} onCreate={createSession} projectOptions={projectOptions} readOnly={readOnly} taskId={task?.id} /> : <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-5 text-sm text-[var(--muted)]"><h2 className="text-base font-semibold text-[var(--ink)]">会话服务不可用</h2><p>当前浏览器没有已认证的生产 API，不能创建 Session。</p></div>}
+        {api ? <ProductionSessionCreationPanel conversationTitle={currentConversationTitle} existingActiveSupported={existingActiveSupported} fixedProjectId={projectId} fixedProjectName={projectName} onCreate={createSession} projectOptions={projectOptions} readOnly={readOnly} taskId={task?.id} /> : <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-5 text-sm text-[var(--muted)]"><h2 className="text-base font-semibold text-[var(--ink)]">会话服务不可用</h2><p>当前浏览器没有已认证的生产 API，不能创建 Session。</p></div>}
       </section>
     );
   }
@@ -402,7 +479,7 @@ export function ProductionConversationWorkspace({
   return (
     <section className="grid min-w-0 gap-5" aria-label="生产会话工作区">
       <SessionContextSummary connection={connection} context={context} />
-      {activityNotice ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{activityNotice}</span></div> : null}
+      {activityNotice ? <div className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{activityNotice}</span>{uncertainRunCommandId ? <Button type="button" variant="secondary" onClick={reconcileRunSubmission}>我已对账，复用命令重试</Button> : null}</div> : null}
       <ConversationMessageStream connection={connection} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" messages={messages} />
       {run ? <RunStatusCard canControl={Boolean(api) && session.state === "active"} commandState={commandState} connection={connection} interruptCommandId={createCommandIdForRun(run.id, approvalCommandIds.current)} onInterrupt={interrupt} readOnly={readOnly} run={run} session={session} /> : null}
       {approvals.map((approval) => {
@@ -411,6 +488,7 @@ export function ProductionConversationWorkspace({
           approval,
           context: {
             command: approvalContext.command,
+            complete: approvalContext.complete,
             conversationTitle: currentConversationTitle,
             directory: approvalContext.directory,
             impact: approvalContext.impact,
@@ -419,9 +497,10 @@ export function ProductionConversationWorkspace({
             task: task ? { id: task.id, title: task.title } : undefined
           }
         };
-        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current) }} connection={connection} canResolve={session.state === "active"} onResolve={resolveApproval} readOnly={readOnly} request={request} />;
+        const latestRevision = approvals.filter((candidate) => candidate.id === approval.id).reduce((latest, candidate) => Math.max(latest, candidate.revision), 0);
+        return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current) }} connection={connection} canResolve={session.state === "active" && approval.revision === latestRevision} onResolve={resolveApproval} readOnly={readOnly} request={request} />;
       })}
-      <ConversationComposer connection={connection} disabled={!api || session.state !== "active"} onChange={setDraft} onSend={send} readOnly={readOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || session.state !== "active" || Boolean(uncertainRunCommandId)} onChange={setDraft} onSend={send} readOnly={readOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );

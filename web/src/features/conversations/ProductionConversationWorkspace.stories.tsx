@@ -64,6 +64,9 @@ export const ExplicitCreate: Story = {
 };
 
 export const ExistingActiveHost: Story = {
+  args: {
+    existingActiveSupported: true
+  },
   render: (args) => (
     <EvidenceFrame>
       <ProductionSessionCreationPanel {...args} />
@@ -73,5 +76,19 @@ export const ExistingActiveHost: Story = {
     await userEvent.click(canvas.getByRole("combobox", { name: "Host 路径" }));
     await userEvent.click(within(document.body).getByRole("option", { name: "接入现有活跃对话" }));
     await expect(canvas.getByRole("textbox", { name: "现有 Host thread ref" })).toBeInTheDocument();
+  }
+};
+
+export const ExistingActiveUnavailable: Story = {
+  render: (args) => (
+    <EvidenceFrame>
+      <ProductionSessionCreationPanel {...args} />
+    </EvidenceFrame>
+  ),
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(canvas.getByRole("combobox", { name: "Host 路径" }));
+    await userEvent.click(within(document.body).getByRole("option", { name: "接入现有活跃对话" }));
+    await expect(canvas.getByRole("status")).toHaveTextContent("当前后端尚未支持 existing_active");
+    await expect(canvas.getByRole("button", { name: "创建会话" })).toBeDisabled();
   }
 };

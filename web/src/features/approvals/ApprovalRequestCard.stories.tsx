@@ -140,3 +140,16 @@ export const OfflineCannotQueue: Story = {
     await expect(canvas.getByText("已断线，审批不会发送或排队。")).toBeInTheDocument();
   }
 };
+
+export const IncompleteContextCannotAct: Story = {
+  render: () => (
+    <EvidenceFrame>
+      <ApprovalRequestCard commandIds={{ approve: "cmd-incomplete-approve", deny: "cmd-incomplete-deny" }} onResolve={() => undefined} request={{ ...request, context: { ...request.context, complete: false } }} />
+    </EvidenceFrame>
+  ),
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("请求上下文不完整")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "批准" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "拒绝" })).toBeDisabled();
+  }
+};

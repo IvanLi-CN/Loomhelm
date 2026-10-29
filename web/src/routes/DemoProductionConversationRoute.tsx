@@ -2,11 +2,14 @@ import { useMemo } from "react";
 
 import { ProductionConversationWorkspace } from "@/features/conversations/ProductionConversationWorkspace";
 import { createProductionSessionDemoApi } from "@/features/conversations/production-session-demo-api";
-import { useDemoRuntime } from "@/demo/context";
+import { useOptionalDemoRuntime } from "@/demo/context";
 
 export function DemoProductionConversationRoute() {
-  const runtime = useDemoRuntime();
+  const runtime = useOptionalDemoRuntime();
   const api = useMemo(() => createProductionSessionDemoApi(), []);
+  if (!runtime) {
+    return <section className="page-section unavailable-page" aria-label="Demo route unavailable"><span className="eyebrow">DEMO ONLY</span><h1>Demo 会话页不可用</h1><p>当前运行环境没有加载 mock runtime；生产路由不会启用 demo 数据。</p></section>;
+  }
   const project = runtime.fixtures.projects.find((candidate) => candidate.id === "loomhelm");
   const task = runtime.fixtures.tasks.find((candidate) => candidate.id === "LH-30");
 

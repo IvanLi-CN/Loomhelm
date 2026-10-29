@@ -51,7 +51,6 @@ export function toSessionContextModel(
 }
 
 function runStatusFromCommandAck(ack: CommandAck): Run["status"] {
-  if (ack.state === "failed" || ack.state === "rejected") return "failed";
   if (ack.state === "unknown") return "unknown";
   return "pending";
 }
@@ -81,6 +80,7 @@ export function applyRunEvent(run: Run, event: Event): Run {
   const next: Run = { ...run, last_cursor: event.cursor };
   if (event.type === "run.started") return { ...next, started_at: event.occurred_at, status: "running" };
   if (event.type === "approval.requested") return { ...next, status: "waiting_approval" };
+  if (event.type === "approval.resolved" && run.status === "waiting_approval") return { ...next, status: "running" };
   if (event.type === "run.completed") return { ...next, finished_at: event.occurred_at, status: "completed" };
   if (event.type === "run.failed") return { ...next, finished_at: event.occurred_at, status: "failed" };
   if (event.type === "run.interrupted") return { ...next, finished_at: event.occurred_at, status: "interrupted" };
@@ -128,6 +128,7 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
 }
 
 export interface ApprovalContextFields {
+  complete: boolean;
   command: string;
   directory?: string;
   impact?: string;
@@ -135,8 +136,10 @@ export interface ApprovalContextFields {
 
 export function approvalContextFromApproval(approval: Approval): ApprovalContextFields {
   const context = asRecord(approval.context);
+  const command = firstString(context, ["command", "cmd", "command_line"]);
   return {
-    command: firstString(context, ["command", "cmd", "command_line"]) ?? approval.summary,
+    complete: Boolean(command),
+    command: command ?? approval.summary,
     directory: firstString(context, ["directory", "cwd", "workdir"]),
     impact: firstString(context, ["impact", "risk", "description"])
   };

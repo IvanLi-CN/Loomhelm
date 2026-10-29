@@ -70,6 +70,16 @@ describe("production session model", () => {
     expect(run).toMatchObject({ command_id: "command-1", id: "run-1", status: "pending" });
   });
 
+  test("does not infer a terminal Run from a command acknowledgement", () => {
+    expect(runFromCommandAck(session, {
+      command_id: "command-rejected",
+      deduplicated: false,
+      received_at: "2026-10-27T00:00:03Z",
+      run_id: "run-rejected",
+      state: "rejected"
+    })).toMatchObject({ id: "run-rejected", status: "pending" });
+  });
+
   test("reduces terminal and approval events without inferring from transport", () => {
     const pending = runFromCommandAck(session, {
       command_id: "command-1",
@@ -81,9 +91,11 @@ describe("production session model", () => {
     expect(pending).toBeDefined();
     const running = applyRunEvent(pending, event({ event_id: "started", type: "run.started", payload: {} }));
     const waiting = applyRunEvent(running, event({ event_id: "approval", type: "approval.requested", payload: {} }));
+    const resumed = applyRunEvent(waiting, event({ event_id: "approval-resolved", type: "approval.resolved", payload: {} }));
     const completed = applyRunEvent(waiting, event({ event_id: "completed", type: "run.completed", payload: {} }));
     expect(running.status).toBe("running");
     expect(waiting.status).toBe("waiting_approval");
+    expect(resumed.status).toBe("running");
     expect(completed).toMatchObject({ finished_at: "2026-10-27T00:00:02Z", status: "completed" });
   });
 
@@ -103,7 +115,18 @@ describe("production session model", () => {
       run_id: "run-1",
       status: "pending",
       summary: "Run the requested command"
-    })).toEqual({ command: "Run the requested command", directory: "/workspace/loomhelm", impact: "writes a report" });
+    })).toEqual({ complete: false, command: "Run the requested command", directory: "/workspace/loomhelm", impact: "writes a report" });
+
+    expect(approvalContextFromApproval({
+      context: { command: "codex inspect --workspace /workspace/loomhelm" },
+      id: "approval-2",
+      kind: "shell",
+      requested_at: "2026-10-27T00:00:00Z",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Inspect the requested workspace"
+    })).toMatchObject({ complete: true, command: "codex inspect --workspace /workspace/loomhelm" });
   });
 
   test("maps session lifecycle states to control connection availability", () => {

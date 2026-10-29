@@ -17,6 +17,7 @@ export interface ApprovalContextModel {
   sessionId: string;
   projectName?: string;
   task?: Pick<Task, "id" | "title">;
+  complete?: boolean;
   command: string;
   directory?: string;
   impact?: string;
@@ -67,7 +68,8 @@ export function ApprovalRequestCard({ request, commandIds = {}, connection = "on
   const { approval, context } = request;
   const StatusIcon = getApprovalStatusIcon(approval.status);
   const isPending = approval.status === "pending";
-  const actionBlocked = !isPending || readOnly || !canResolve || !canSendControl(connection) || Boolean(submitted) || Boolean(resolving) || !onResolve;
+  const incompleteContext = context.complete === false;
+  const actionBlocked = !isPending || incompleteContext || readOnly || !canResolve || !canSendControl(connection) || Boolean(submitted) || Boolean(resolving) || !onResolve;
 
   useEffect(() => {
     setResolving(null);
@@ -97,6 +99,8 @@ export function ApprovalRequestCard({ request, commandIds = {}, connection = "on
 
   const unavailableReason = readOnly
     ? "当前身份只读，保留请求事实但不能批准或拒绝。"
+    : incompleteContext
+      ? "请求上下文不完整，不能安全批准或拒绝；请刷新并重新核对。"
     : approval.status !== "pending"
       ? `当前请求${getApprovalStatusLabel(approval.status)}，不能再次操作。`
       : connection === "online"
@@ -138,7 +142,7 @@ export function ApprovalRequestCard({ request, commandIds = {}, connection = "on
       </dl>
 
       <div className="grid gap-3 border-t border-[var(--line)] pt-4">
-        <div className="flex items-center gap-2 text-xs font-semibold"><FileCode2 className="size-4 text-[var(--accent)]" aria-hidden="true" />完整请求上下文</div>
+        <div className="flex items-center gap-2 text-xs font-semibold"><FileCode2 className="size-4 text-[var(--accent)]" aria-hidden="true" />{incompleteContext ? "请求上下文不完整" : "完整请求上下文"}</div>
         <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 font-mono text-[11px] leading-6"><code>{context.command}</code></pre>
         {context.directory ? <p className="inline-flex min-w-0 items-start gap-2 text-xs leading-5 text-[var(--muted)]"><FolderOpen className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /><span>目录：<code className="break-all">{context.directory}</code></span></p> : null}
         {context.impact ? <p className="text-xs leading-6 text-[var(--muted)]">影响范围：{context.impact}</p> : null}
