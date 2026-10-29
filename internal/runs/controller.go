@@ -240,9 +240,17 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 			return protocol.Reconciliation{}, err
 		}
 		defer c.releaseLease(context.Background(), *lease)
-		record, err = c.store.MarkCommandAndRunUnknownWithLease(ctx, commandID, record.Intent.Generation, "command delivery outcome is unknown", *lease)
+		if unknownCommandPreservesRun(record.Intent.Command.Kind) {
+			record, err = c.store.TransitionWithLease(ctx, commandID, record.Intent.Generation, protocol.CommandStateUnknown, "", nil, nil, *lease)
+		} else {
+			record, err = c.store.MarkCommandAndRunUnknownWithLease(ctx, commandID, record.Intent.Generation, "command delivery outcome is unknown", *lease)
+		}
 	} else {
-		record, err = c.store.MarkCommandAndRunUnknown(ctx, commandID, record.Intent.Generation, "command delivery outcome is unknown")
+		if unknownCommandPreservesRun(record.Intent.Command.Kind) {
+			record, err = c.store.Transition(ctx, commandID, record.Intent.Generation, protocol.CommandStateUnknown, "", nil, nil)
+		} else {
+			record, err = c.store.MarkCommandAndRunUnknown(ctx, commandID, record.Intent.Generation, "command delivery outcome is unknown")
+		}
 	}
 	if err != nil {
 		return protocol.Reconciliation{}, err

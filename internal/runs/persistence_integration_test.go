@@ -473,6 +473,102 @@ func TestApprovalAdmissionDuplicateAcceptedSurvivesTerminalRun(t *testing.T) {
 	}
 }
 
+func TestPersistentControllerReconcileUnknownApprovalPreservesRunControl(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ids := executionTestIDs()
+	cleanupExecutionRows(t, &db, ids)
+	sessionStore := sessions.NewStore(db.Pool())
+	runStore := NewStore(db.Pool())
+	approvalStore := approvals.NewStore(db.Pool())
+	if _, err := sessionStore.Create(ctx, sessions.NewInput{
+		ID:                ids.session,
+		Path:              protocol.SessionPathNew,
+		ExternalThreadRef: ids.thread,
+		Generation:        "1",
+	}); err != nil {
+		t.Fatalf("create recovery session: %v", err)
+	}
+	run, err := runStore.CreateRun(ctx, NewRunInput{ID: ids.run, SessionID: ids.session, CommandID: ids.command, Generation: "1"})
+	if err != nil {
+		t.Fatalf("create recovery run: %v", err)
+	}
+	if _, err := runStore.Start(ctx, run.ID, "1", "recovery-start"); err != nil {
+		t.Fatalf("start recovery run: %v", err)
+	}
+	approval, err := approvalStore.Create(ctx, approvals.CreateRequest{
+		NewInput: approvals.NewInput{
+			ID:          ids.approval,
+			RunID:       ids.run,
+			SessionID:   ids.session,
+			Generation:  "1",
+			Revision:    1,
+			Kind:        "command",
+			RequestedAt: "2026-10-29T00:00:00Z",
+		},
+		Context: json.RawMessage(`{"scope":"write"}`),
+	})
+	if err != nil {
+		t.Fatalf("create recovery approval: %v", err)
+	}
+	runID := ids.run
+	command := protocol.Command{
+		CommandID: ids.approvalCommand,
+		Kind:      protocol.CommandKindRunApprove,
+		Payload:   json.RawMessage(fmt.Sprintf(`{"approval_id":%q}`, approval.ID)),
+		RunID:     &runID,
+		SessionID: ids.session,
+	}
+	request := approvals.ResolveRequest{
+		ApprovalID: ids.approval,
+		RunID:      ids.run,
+		SessionID:  ids.session,
+		Generation: "1",
+		Request: protocol.ResolveApprovalRequest{
+			CommandID: ids.approvalCommand,
+			Decision:  protocol.ApprovalDecisionApprove,
+			Revision:  1,
+		},
+	}
+	accepted, _, err := runStore.AcceptApproval(ctx, approvalStore, CommandIntent{Command: command, Generation: "1"}, request)
+	if err != nil {
+		t.Fatalf("accept recovery approval: %v", err)
+	}
+	if accepted.Deduplicated || accepted.Record.State != protocol.CommandStateAccepted {
+		t.Fatalf("accepted recovery approval = %+v", accepted)
+	}
+	if _, err := runStore.Transition(ctx, command.CommandID, "1", protocol.CommandStateExecuting, "", nil, nil); err != nil {
+		t.Fatalf("persist executing recovery approval: %v", err)
+	}
+
+	controller, err := NewController(runStore, &integrationCommandTransport{}, ControllerConfig{Generation: "1"})
+	if err != nil {
+		t.Fatalf("create recovery controller: %v", err)
+	}
+	if _, err := controller.ReconcileCommand(ctx, command.SessionID, command.CommandID); !errors.Is(err, protocol.ErrUnknownCommandResult) {
+		t.Fatalf("unknown approval reconciliation error = %v, want unknown result", err)
+	}
+	storedRun, err := runStore.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("read controlled recovery run: %v", err)
+	}
+	if storedRun.Status != protocol.RunStatusRunning || storedRun.Interrupt != InterruptNone {
+		t.Fatalf("controlled recovery run = %+v, want running without an interrupt reservation", storedRun)
+	}
+	if _, err := runStore.RequestInterrupt(ctx, run.ID, "1"); err != nil {
+		t.Fatalf("request interrupt after unknown approval recovery: %v", err)
+	}
+	storedRun, err = runStore.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("read interrupted recovery run: %v", err)
+	}
+	if storedRun.Interrupt != InterruptRequested {
+		t.Fatalf("interrupted recovery run = %+v, want interrupt requested", storedRun)
+	}
+}
+
 type countingApprovalResolver struct {
 	store *approvals.Store
 	calls int
