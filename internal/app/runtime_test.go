@@ -20,6 +20,7 @@ type fakeRuntime struct {
 	start  func(context.Context, *platform.GenerationController, *platform.Lifecycle) error
 	stop   func(context.Context) error
 	wait   func(context.Context) error
+	mcp    http.Handler
 	closed atomic.Bool
 }
 
@@ -54,7 +55,8 @@ func (r *fakeRuntime) WaitStopped(ctx context.Context) error {
 	}
 	return nil
 }
-func (r *fakeRuntime) Close() { r.closed.Store(true) }
+func (r *fakeRuntime) Close()                   { r.closed.Store(true) }
+func (r *fakeRuntime) MCPHandler() http.Handler { return r.mcp }
 
 func fakeFactory(r *fakeRuntime) runtimeFactory {
 	return func(context.Context, platform.Config, *slog.Logger) (processRuntime, error) { return r, nil }

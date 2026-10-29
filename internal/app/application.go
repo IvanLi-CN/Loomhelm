@@ -143,3 +143,21 @@ func (s *Server) handleApplication(writer http.ResponseWriter, request *http.Req
 	// not prevent lifecycle/drain coordination from progressing.
 	handler.ServeHTTP(writer, request)
 }
+
+func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
+	s.resourceMu.RLock()
+	var handler http.Handler
+	if runtime, ok := s.resources.(interface{ MCPHandler() http.Handler }); ok {
+		handler = runtime.MCPHandler()
+	}
+	s.resourceMu.RUnlock()
+	if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("Retry-After", "1")
+		writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
+		return
+	}
+	// MCP shares the application handler and lifecycle admission boundary with
+	// REST; the MCP adapter adds only protocol discovery and delegation.
+	handler.ServeHTTP(writer, request)
+}

@@ -191,6 +191,8 @@ func (s *Server) serveAdmitted(ctx context.Context, listener net.Listener) error
 	server := &http.Server{
 		Handler:           s.router,
 		ReadHeaderTimeout: 5 * time.Second,
+		// Bound slow request bodies, including MCP's pre-admission body read.
+		ReadTimeout: 30 * time.Second,
 	}
 	tracked := &trackedListener{Listener: listener}
 	serveResult := make(chan error, 1)
@@ -311,6 +313,7 @@ func withListenerCloseError(base, closeErr error) error {
 
 func (s *Server) registerRoutes() {
 	s.router.Mount("/api/v1", http.HandlerFunc(s.handleApplication))
+	s.router.Handle("/mcp", http.HandlerFunc(s.handleMCP))
 	s.router.Handle(connectorGatewayPath, http.HandlerFunc(s.handleGateway))
 	s.router.Get("/livez", s.handleLive)
 	s.router.Get("/readyz", s.handleReady)

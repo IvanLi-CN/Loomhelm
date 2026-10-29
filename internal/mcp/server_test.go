@@ -149,7 +149,7 @@ func TestServerToolCallDelegatesAuthenticationPathAndBody(t *testing.T) {
 			t.Fatalf("decode delegated REST body: %v", err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"project":{"id":"p-1","name":"Loomhelm"}}`))
+		_, _ = writer.Write([]byte(`{"project":{"id":"p-1","name":"Loomhelm","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}}`))
 	})
 
 	response := callMCPWithHeaders(t, server, map[string]any{
@@ -387,6 +387,7 @@ func TestServerReportsMalformedCredentialSuccessAsUnknown(t *testing.T) {
 		"empty":         "",
 		"null":          "null",
 		"missing_token": `{"credential":{"id":"credential-1","name":"automation"}}`,
+		"missing_id":    `{"credential":{"name":"automation","project_ids":[],"created_at":"2026-01-01T00:00:00Z","token":"secret"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
@@ -428,6 +429,7 @@ func TestServerReportsMalformedMutationEnvelopeAsUnknown(t *testing.T) {
 		"null":          `null`,
 		"null_project":  `{"project":null}`,
 		"array_project": `{"project":[]}`,
+		"empty_project": `{"project":{}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {

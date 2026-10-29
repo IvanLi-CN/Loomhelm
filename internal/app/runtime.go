@@ -13,6 +13,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
+	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
@@ -40,6 +41,7 @@ type databaseRuntime struct {
 	db              *database.DB
 	runner          *jobs.Runner
 	api             http.Handler
+	mcpHandler      http.Handler
 	gateway         *gateway.Server
 	shutdownTimeout time.Duration
 }
@@ -179,11 +181,29 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		}
 		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, hostRegistry, transport, control)
 		runtime.api = services.handler(control)
+		runtime.mcpHandler, err = newMCPHandler(runtime.api, cfg.Version)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize MCP handler: %w", err)
+		}
 	}
 	return runtime, nil
 }
 
+func newMCPHandler(api http.Handler, version string) (http.Handler, error) {
+	// The application handler is mounted below /api/v1 by the outer router and
+	// registers relative paths, so MCP delegates to it without re-adding that
+	// public mount prefix.
+	return loomhelmMCP.NewHandler(loomhelmMCP.Config{
+		RESTHandler:   api,
+		ServerName:    "loomhelm",
+		ServerVersion: version,
+	})
+}
+
 func (r *databaseRuntime) APIHandler() http.Handler { return r.api }
+
+func (r *databaseRuntime) MCPHandler() http.Handler { return r.mcpHandler }
 
 func (r *databaseRuntime) GatewayHandler() http.Handler { return r.gateway }
 

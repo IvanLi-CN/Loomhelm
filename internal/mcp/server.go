@@ -66,6 +66,19 @@ var (
 		"resolveApproval":      "ack",
 		"interruptRun":         "ack",
 	}
+	mutationResponseRequiredFields = map[string][]string{
+		"createUserCredential": {"id", "name", "project_ids", "created_at", "token"},
+		"createProject":        {"id", "name", "created_at", "updated_at"},
+		"updateProject":        {"id", "name", "created_at", "updated_at"},
+		"grantProjectMember":   {"project_id", "user_id", "role", "created_at"},
+		"createTask":           {"id", "project_id", "title", "goal", "status", "created_at", "updated_at"},
+		"updateTask":           {"id", "project_id", "title", "goal", "status", "created_at", "updated_at"},
+		"createSession":        {"id", "path", "state", "external_thread_ref", "created_at", "updated_at"},
+		"bindSessionTask":      {"id", "path", "state", "external_thread_ref", "created_at", "updated_at"},
+		"submitRun":            {"command_id", "state", "received_at", "deduplicated"},
+		"resolveApproval":      {"command_id", "state", "received_at", "deduplicated"},
+		"interruptRun":         {"command_id", "state", "received_at", "deduplicated"},
+	}
 )
 
 // Tool and ResourceTemplate are aliases to the official SDK's discovery types.
@@ -357,6 +370,7 @@ func validToolResponse(operationID string, body []byte) bool {
 	if !required {
 		return true
 	}
+	requiredFields := mutationResponseRequiredFields[operationID]
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(body, &envelope) != nil || envelope == nil {
 		return false
@@ -369,11 +383,102 @@ func validToolResponse(operationID string, body []byte) bool {
 	if json.Unmarshal(value, &object) != nil || object == nil {
 		return false
 	}
-	if operationID != "createUserCredential" {
-		return true
+	for _, name := range requiredFields {
+		value, ok := object[name]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return false
+		}
 	}
-	var response protocol.CreateUserCredentialResponse
-	return json.Unmarshal(body, &response) == nil && strings.TrimSpace(response.Credential.Token) != ""
+	switch operationID {
+	case "createUserCredential":
+		var response protocol.CreateUserCredentialResponse
+		return json.Unmarshal(body, &response) == nil && validCreatedCredential(response.Credential)
+	case "createProject", "updateProject":
+		var response protocol.ProjectResponse
+		return json.Unmarshal(body, &response) == nil && validProject(response.Project)
+	case "grantProjectMember":
+		var response protocol.ProjectMemberResponse
+		return json.Unmarshal(body, &response) == nil && validProjectMember(response.Member)
+	case "createTask", "updateTask":
+		var response protocol.TaskResponse
+		return json.Unmarshal(body, &response) == nil && validTask(response.Task)
+	case "createSession", "bindSessionTask":
+		var response protocol.SessionResponse
+		return json.Unmarshal(body, &response) == nil && validSession(response.Session)
+	case "submitRun", "resolveApproval", "interruptRun":
+		var response protocol.CommandAckResponse
+		return json.Unmarshal(body, &response) == nil && validCommandAck(response.Ack)
+	default:
+		return false
+	}
+}
+
+func validCreatedCredential(value protocol.CreatedUserCredential) bool {
+	return value.ID != "" && value.Name != "" && value.CreatedAt != "" && value.ProjectIds != nil && value.Token != ""
+}
+
+func validProject(value protocol.Project) bool {
+	return value.ID != "" && value.Name != "" && value.CreatedAt != "" && value.UpdatedAt != ""
+}
+
+func validProjectMember(value protocol.ProjectMember) bool {
+	return value.ProjectID != "" && value.UserID != "" && validProjectMemberRole(value.Role) && value.CreatedAt != ""
+}
+
+func validProjectMemberRole(value protocol.ProjectMemberRole) bool {
+	switch value {
+	case protocol.ProjectMemberRoleViewer, protocol.ProjectMemberRoleOperator, protocol.ProjectMemberRoleOwner:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTask(value protocol.Task) bool {
+	return value.ID != "" && value.ProjectID != "" && value.Title != "" && value.Goal != "" && validTaskStatus(value.Status) && value.CreatedAt != "" && value.UpdatedAt != ""
+}
+
+func validTaskStatus(value protocol.TaskStatus) bool {
+	switch value {
+	case protocol.TaskStatusTodo, protocol.TaskStatusInProgress, protocol.TaskStatusBlocked, protocol.TaskStatusDone, protocol.TaskStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func validSession(value protocol.Session) bool {
+	return value.ID != "" && validSessionPath(value.Path) && validSessionState(value.State) && value.ExternalThreadRef != "" && value.CreatedAt != "" && value.UpdatedAt != ""
+}
+
+func validSessionPath(value protocol.SessionPath) bool {
+	switch value {
+	case protocol.SessionPathNew, protocol.SessionPathExistingActive:
+		return true
+	default:
+		return false
+	}
+}
+
+func validSessionState(value protocol.SessionState) bool {
+	switch value {
+	case protocol.SessionStateStarting, protocol.SessionStateActive, protocol.SessionStateReconciling, protocol.SessionStateDisconnected, protocol.SessionStateClosed, protocol.SessionStateUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+func validCommandAck(value protocol.CommandAck) bool {
+	if value.CommandID == "" || value.ReceivedAt == "" {
+		return false
+	}
+	switch value.State {
+	case protocol.CommandStateAccepted, protocol.CommandStateExecuting, protocol.CommandStateSucceeded, protocol.CommandStateFailed, protocol.CommandStateUnknown, protocol.CommandStateRejected:
+		return true
+	default:
+		return false
+	}
 }
 
 func unknownOutcomeResult() *sdk.CallToolResult {
