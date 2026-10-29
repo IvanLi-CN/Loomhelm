@@ -60,24 +60,27 @@ func TestConsumeMutationIDIsCommandScoped(t *testing.T) {
 
 func TestApplyProjectionUsesDeterministicRevisionOrder(t *testing.T) {
 	now := time.Date(2026, 10, 29, 8, 30, 0, 0, time.UTC)
+	firstOrder := ModificationOrder{PhysicalMillis: now.UnixMilli(), ClientID: "desktop"}
 	first, err := applyProjection(Draft{}, false, UpdateInput{
-		SessionID:      "session-1",
-		OwnerUserID:    "user-1",
-		MutationID:     "mutation-1",
-		ClientID:       "desktop",
-		ClientSequence: 1,
-		Content:        "desktop draft",
+		SessionID:         "session-1",
+		OwnerUserID:       "user-1",
+		MutationID:        "mutation-1",
+		ClientID:          "desktop",
+		ClientSequence:    1,
+		Content:           "desktop draft",
+		ModificationOrder: &firstOrder,
 	}, now)
 	if err != nil {
 		t.Fatalf("first applyProjection() error = %v", err)
 	}
 	second, err := applyProjection(first, true, UpdateInput{
-		SessionID:      "session-1",
-		OwnerUserID:    "user-1",
-		MutationID:     "mutation-2",
-		ClientID:       "mobile",
-		ClientSequence: 1,
-		Content:        "mobile draft wins",
+		SessionID:         "session-1",
+		OwnerUserID:       "user-1",
+		MutationID:        "mutation-2",
+		ClientID:          "mobile",
+		ClientSequence:    1,
+		Content:           "mobile draft wins",
+		ModificationOrder: &ModificationOrder{PhysicalMillis: now.Add(time.Second).UnixMilli(), ClientID: "mobile"},
 	}, now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("second applyProjection() error = %v", err)
@@ -89,8 +92,9 @@ func TestApplyProjectionUsesDeterministicRevisionOrder(t *testing.T) {
 
 func TestConsumeProjectionPreservesNewerInput(t *testing.T) {
 	now := time.Date(2026, 10, 29, 8, 30, 0, 0, time.UTC)
-	current := Draft{SessionID: "session-1", OwnerUserID: "user-1", Content: "newer input", Revision: 3, MutationID: "mutation-3", ClientID: "mobile", ClientSequence: 2}
-	unchanged, consumed, err := consumeProjection(current, true, ConsumeInput{SessionID: "session-1", OwnerUserID: "user-1", ExpectedRevision: 2, CommandID: "command-1"}, now)
+	current := Draft{SessionID: "session-1", OwnerUserID: "user-1", Content: "newer input", Revision: 3, MutationID: "mutation-3", ClientID: "mobile", ClientSequence: 2, ModificationOrder: ModificationOrder{PhysicalMillis: now.UnixMilli(), ClientID: "mobile"}}
+	consumeOrder := ModificationOrder{PhysicalMillis: now.Add(time.Second).UnixMilli(), ClientID: "loomhelm"}
+	unchanged, consumed, err := consumeProjection(current, true, ConsumeInput{SessionID: "session-1", OwnerUserID: "user-1", ExpectedRevision: 2, CommandID: "command-1"}, now, consumeOrder)
 	if err != nil {
 		t.Fatalf("stale consume error = %v", err)
 	}
@@ -98,11 +102,41 @@ func TestConsumeProjectionPreservesNewerInput(t *testing.T) {
 		t.Fatalf("stale consume = %+v, consumed %v; want unchanged current", unchanged, consumed)
 	}
 
-	cleared, consumed, err := consumeProjection(current, true, ConsumeInput{SessionID: "session-1", OwnerUserID: "user-1", ExpectedRevision: 3, CommandID: "command-1"}, now)
+	cleared, consumed, err := consumeProjection(current, true, ConsumeInput{SessionID: "session-1", OwnerUserID: "user-1", ExpectedRevision: 3, CommandID: "command-1"}, now, consumeOrder)
 	if err != nil {
 		t.Fatalf("current consume error = %v", err)
 	}
 	if !consumed || cleared.Content != "" || cleared.Revision != 4 || cleared.MutationID != "consume:command-1" {
 		t.Fatalf("current consume = %+v, consumed %v; want cleared revision 4", cleared, consumed)
+	}
+}
+
+func TestModificationOrderUsesStableTieBreak(t *testing.T) {
+	base := ModificationOrder{PhysicalMillis: 100, LogicalCounter: 2, ClientID: "desktop"}
+	if got := base.Compare(ModificationOrder{PhysicalMillis: 100, LogicalCounter: 2, ClientID: "mobile"}); got >= 0 {
+		t.Fatalf("desktop order compare = %d, want negative stable tie-break", got)
+	}
+	if !base.Equal(base) {
+		t.Fatal("a modification order must equal itself")
+	}
+}
+
+func TestResolveModificationOrderRejectsLegacyFallbackAndFutureClock(t *testing.T) {
+	now := time.Date(2026, 10, 30, 8, 30, 0, 0, time.UTC)
+	input := UpdateInput{SessionID: "session-1", OwnerUserID: "user-1", MutationID: "mutation-1", ClientID: "desktop", ClientSequence: 1, Content: "draft"}
+	current := Draft{ModificationOrder: ModificationOrder{PhysicalMillis: now.UnixMilli(), ClientID: "mobile"}}
+	if _, err := resolveModificationOrder(current, input, now); !errors.Is(err, ErrDraftOrderRequired) {
+		t.Fatalf("missing order error = %v, want ErrDraftOrderRequired", err)
+	}
+
+	future := ModificationOrder{PhysicalMillis: now.Add(maxModificationClockSkew + time.Millisecond).UnixMilli(), ClientID: "desktop"}
+	input.ModificationOrder = &future
+	_, err := resolveModificationOrder(Draft{}, input, now)
+	if !errors.Is(err, ErrDraftClockSkew) {
+		t.Fatalf("future order error = %v, want ErrDraftClockSkew", err)
+	}
+	var clockSkew *ClockSkewError
+	if !errors.As(err, &clockSkew) || !clockSkew.ServerTime.Equal(now) || clockSkew.MaxFutureSkew != maxModificationClockSkew {
+		t.Fatalf("future order error details = %+v, want server time and bound", clockSkew)
 	}
 }
