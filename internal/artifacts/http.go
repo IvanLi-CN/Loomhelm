@@ -136,7 +136,7 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 	}
 	content := make([]byte, 0, chunkSize)
 	if chunkSize > 0 {
-		content, err = io.ReadAll(io.LimitReader(reader, chunkSize+1))
+		content, err = io.ReadAll(io.LimitReader(reader, chunkSize))
 		if err != nil {
 			if request.Context().Err() != nil {
 				return
