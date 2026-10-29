@@ -221,6 +221,27 @@ describe("run client adapter", () => {
     expect(calls).toHaveLength(2);
   });
 
+  test("keeps a submit acknowledgement without a Run identity uncertain", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async (request) => {
+        calls.push(request);
+        return ack(request.body.command_id, "accepted");
+      },
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async () => ({ events: [], has_more: false }),
+    });
+    const body = { command_id: "command-submit-run-missing", prompt: "run this" };
+
+    adapter.selectSession("session-1");
+    await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
+    await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "unknown" });
+    expect(calls).toHaveLength(1);
+    expect(adapter.resolveUncertainSubmit(body.command_id)).toBe(true);
+    await expect(adapter.submitRun("session-1", body)).resolves.toMatchObject({ state: "unknown", reason: "mismatched_response" });
+    expect(calls).toHaveLength(2);
+  });
+
   test("keeps an interrupt acknowledgement for another Run uncertain", async () => {
     const calls = [];
     const adapter = new RunClientAdapter({

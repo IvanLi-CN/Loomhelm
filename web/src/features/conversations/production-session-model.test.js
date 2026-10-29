@@ -72,6 +72,16 @@ describe("production session model", () => {
     expect(run).toMatchObject({ command_id: "command-1", id: "run-1", status: "pending" });
   });
 
+  test("rejects blank Run identities from command acknowledgements", () => {
+    expect(runFromCommandAck(session, {
+      command_id: "command-blank-run",
+      deduplicated: false,
+      received_at: "2026-10-27T00:00:03Z",
+      run_id: "   ",
+      state: "accepted"
+    })).toBeUndefined();
+  });
+
   test("derives the server-owned command identity for the initial Run", () => {
     expect(initialRunCommandId("session-1")).toBe("session-1:initial");
   });
@@ -111,6 +121,7 @@ describe("production session model", () => {
 
   test("defensively renders message, tool, and unknown payloads", () => {
     expect(eventToConversationMessage(event())).toMatchObject({ author: "Codex", content: "hello", kind: "message", role: "assistant" });
+    expect(eventToConversationMessage(event({ payload: { jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "nested hello" } } }))).toMatchObject({ content: "nested hello" });
     expect(eventToConversationMessage(event({ event_id: "tool", payload: {}, type: "item.completed" }))).toMatchObject({ kind: "tool", content: "已接收事件：item.completed" });
     expect(eventToConversationMessage(event({ event_id: "unknown", payload: {}, type: "unknown" }))).toMatchObject({ kind: "unknown", content: "已接收事件：unknown" });
   });

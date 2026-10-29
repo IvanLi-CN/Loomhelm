@@ -757,12 +757,11 @@ export function ProductionConversationWorkspace({
   const createSession = async (request: CreateSessionRequest) => {
     if (!api || !adapters) throw new Error("当前浏览器没有可用的会话服务");
     const response = await api.createSession({ body: request });
-    if (!mountedRef.current) return;
     const initialAck = response.initial_run_ack;
     const initialPrompt = request.prompt?.trim() ?? "";
     const expectedInitialCommandId = initialRunCommandId(response.session.id);
     const initialAckMatchesExpectedCommand = Boolean(initialAck && initialAck.command_id === expectedInitialCommandId);
-    const initialRunId = initialAckMatchesExpectedCommand ? initialAck?.run_id : undefined;
+    const initialRunId = initialAckMatchesExpectedCommand && typeof initialAck?.run_id === "string" && initialAck.run_id.trim() ? initialAck.run_id.trim() : undefined;
     if (initialRunId && !writeRunRecoveryId(getRunRecoveryKey(principalId, response.session.id), initialRunId)) {
       throw new Error("Session 已收到但首个 Run 恢复身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
@@ -773,6 +772,7 @@ export function ProductionConversationWorkspace({
     if (initialRunUncertain && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: expectedInitialCommandId, prompt: initialPrompt, uncertain: true })) {
       throw new Error("Session 已收到但首个 Run 命令身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
+    if (!mountedRef.current) return;
     adapters.session.selectSession(response.session.id);
     adapters.run.selectSession(response.session.id);
     adapters.approval.selectSession(response.session.id);
@@ -891,7 +891,7 @@ export function ProductionConversationWorkspace({
     }
     if (commandReconciled) {
       setUncertainRunCommandId(undefined);
-      if (draftRef.current === prompt) {
+      if (draftRef.current.trim() === prompt) {
         setDraft("");
         writeDraft(getDraftKey(principalId, sessionIdForSubmit), "");
       }
@@ -1065,7 +1065,7 @@ export function ProductionConversationWorkspace({
         const recoveryDecision = uncertainApprovalDecision(principalId, sessionForRoute.id, approval);
         return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { setDraft(value); writeDraft(draftKey, value); }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; setDraft(value); writeDraft(draftKey, value); }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );

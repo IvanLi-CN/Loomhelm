@@ -181,7 +181,8 @@ export class RunClientAdapter {
       `run.submit:${body.command_id}`,
       { command_id: body.command_id, session_id: sessionId },
       { connection, readOnly },
-      () => this.client.submitRun({ session_id: sessionId, body })
+      () => this.client.submitRun({ session_id: sessionId, body }),
+      true
     );
   }
 
@@ -194,7 +195,7 @@ export class RunClientAdapter {
     );
   }
 
-  private async executeCommand(operationKey: string, command: { command_id: string; session_id: string; run_id?: string }, options: CommandControlOptions, request: () => Promise<{ ack: CommandAck }>): Promise<ClientCommandResult> {
+  private async executeCommand(operationKey: string, command: { command_id: string; session_id: string; run_id?: string }, options: CommandControlOptions, request: () => Promise<{ ack: CommandAck }>, requireRunId = false): Promise<ClientCommandResult> {
     const gate = getControlGate(options);
     if (!gate.allowed) return { state: "unknown", commandId: command.command_id, reason: gate.blockReason ?? "unknown" };
 
@@ -213,6 +214,10 @@ export class RunClientAdapter {
       if (!accepted.accepted) {
         if (accepted.reason === "mismatched_command" || accepted.reason === "mismatched_run") this.operations.markUncertain(admission.token);
         return { state: "unknown", commandId: command.command_id, reason: accepted.reason === "stale" ? "stale_response" : "mismatched_response" };
+      }
+      if (requireRunId && (typeof response.ack.run_id !== "string" || !response.ack.run_id.trim())) {
+        this.operations.markUncertain(admission.token);
+        return { state: "unknown", commandId: command.command_id, reason: "mismatched_response" };
       }
       return { state: getClientCommandState(response.ack.state), commandId: command.command_id, ack: response.ack };
     } catch (error) {

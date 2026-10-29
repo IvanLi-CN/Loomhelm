@@ -56,11 +56,12 @@ function runStatusFromCommandAck(ack: CommandAck): Run["status"] {
 }
 
 export function runFromCommandAck(session: Session, ack: CommandAck): Run | undefined {
-  if (!ack.run_id) return undefined;
+  const runId = typeof ack.run_id === "string" ? ack.run_id.trim() : "";
+  if (!runId) return undefined;
   return {
     command_id: ack.command_id,
     created_at: ack.received_at,
-    id: ack.run_id,
+    id: runId,
     last_cursor: ack.event_cursor,
     session_id: session.id,
     status: runStatusFromCommandAck(ack)
@@ -110,7 +111,8 @@ function firstString(record: Record<string, unknown> | undefined, keys: readonly
 }
 
 function eventText(event: Event, payload: Record<string, unknown> | undefined): string {
-  const text = firstString(payload, ["content", "text", "delta", "message", "summary", "description"]);
+  const text = firstString(payload, ["content", "text", "delta", "message", "summary", "description"])
+    ?? firstString(asRecord(payload?.params), ["content", "text", "delta", "message", "summary", "description"]);
   if (text) return text;
   if (event.type === "message.delta") return "已接收消息事件，但 payload 未提供可显示文本。";
   if (event.type === "approval.requested") return "已接收到新的审批请求。";
