@@ -450,10 +450,11 @@
     },
     "ArtifactContentResponse": {
       "type": "object",
-      "required": ["artifact", "content_base64", "offset", "next_offset", "total_size", "complete"],
+      "required": ["artifact", "content_base64", "content_version", "offset", "next_offset", "total_size", "complete"],
       "properties": {
         "artifact": {"$ref": "#/types/Artifact"},
         "content_base64": {"type": "string"},
+        "content_version": {"type": "string"},
         "offset": {"type": "integer"},
         "next_offset": {"type": "integer"},
         "total_size": {"type": "integer"},
@@ -463,6 +464,7 @@
     "DownloadArtifactContentQuery": {
       "type": "object",
       "properties": {
+        "content_version": {"type": "string"},
         "offset": {"type": "integer"},
         "limit": {"type": "integer"}
       }
@@ -956,7 +958,7 @@
         "response_type": "ArtifactContentResponse",
         "response_status": 200,
         "summary": "Download a cursor-addressed chunk of the authorized original artifact bytes",
-        "mcp_tool": {"name": "loomhelm.download_artifact", "description": "Download one bounded chunk of an authorized original artifact; call again with next_offset until complete=true and reassemble content_base64."}
+        "mcp_tool": {"name": "loomhelm.download_artifact", "description": "Download bounded chunks of an authorized original artifact. Start at offset 0, pass content_version with each next_offset call, stop only at complete=true, and verify the reassembled bytes against artifact.sha256."}
       }
     ]
   },

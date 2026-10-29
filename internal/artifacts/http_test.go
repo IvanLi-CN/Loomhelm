@@ -136,6 +136,7 @@ func TestDownloadHTTPHandlerMapsMissingUnauthorizedAndInvalidAccess(t *testing.T
 		{name: "missing", err: ErrNotFound, status: http.StatusNotFound},
 		{name: "unauthorized", err: ErrUnauthorized, status: http.StatusNotFound},
 		{name: "recovery pending", err: ErrRecoveryPending, status: http.StatusServiceUnavailable, retryAfter: "60"},
+		{name: "content changed", err: ErrContentChanged, status: http.StatusConflict},
 		{name: "invalid path", err: ErrInvalid, status: http.StatusBadRequest},
 		{name: "store unavailable", err: ErrStoreUnavailable, status: http.StatusServiceUnavailable},
 	}
@@ -246,9 +247,22 @@ func (s *contentHTTPArtifactStoreStub) Open(ctx context.Context, id string) (pro
 	return s.httpArtifactStoreStub.Open(ctx, id)
 }
 
-func (s *contentHTTPArtifactStoreStub) OpenContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+func (s *contentHTTPArtifactStoreStub) OpenContentAt(ctx context.Context, id, _ string) (protocol.Artifact, protocol.ArtifactReader, error) {
 	s.contentOpens++
-	return s.httpArtifactStoreStub.Open(ctx, id)
+	artifact, reader, err := s.httpArtifactStoreStub.Open(ctx, id)
+	if err != nil {
+		return protocol.Artifact{}, nil, err
+	}
+	return artifact, &contentVersionReaderStub{ArtifactReader: reader, version: "v1-test"}, nil
+}
+
+type contentVersionReaderStub struct {
+	protocol.ArtifactReader
+	version string
+}
+
+func (r *contentVersionReaderStub) contentVersion() string {
+	return r.version
 }
 
 func (s httpArtifactStoreStub) Put(context.Context, protocol.Artifact, io.Reader) (protocol.Artifact, error) {

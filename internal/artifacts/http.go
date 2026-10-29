@@ -39,8 +39,12 @@ type DownloadHTTPHandler struct {
 	writeError DownloadErrorWriter
 }
 
-type contentArtifactStore interface {
-	OpenContent(context.Context, string) (protocol.Artifact, protocol.ArtifactReader, error)
+type contentSnapshotStore interface {
+	OpenContentAt(context.Context, string, string) (protocol.Artifact, protocol.ArtifactReader, error)
+}
+
+type contentVersionReader interface {
+	contentVersion() string
 }
 
 type contentVerifier interface {
@@ -48,10 +52,10 @@ type contentVerifier interface {
 }
 
 // NewDownloadHTTPHandler constructs a handler over the existing ArtifactStore
-// contract. Browser downloads use Store.Open's full verification path; stores
-// that implement contentArtifactStore may use the bounded content path, which
-// preserves authorization and file identity checks without rehashing every
-// chunk.
+// contract. Browser downloads use Store.Open's full verification path; the
+// production Store additionally implements the snapshot-bound content path,
+// which preserves authorization and file identity checks without rehashing
+// every chunk.
 func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErrorWriter) (*DownloadHTTPHandler, error) {
 	if store == nil {
 		return nil, fmt.Errorf("artifact download store is required: %w", ErrStoreUnavailable)
@@ -100,9 +104,9 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
 // MCP callers. The content store repeats authorization, ready-state, regular
-// file and exact-size checks for every request; publication verifies the
-// canonical SHA-256 before readiness and the final chunk rechecks that hash
-// before reporting complete=true.
+// file and exact-size checks for every request; content_version binds later
+// cursors to the same file incarnation, and the final chunk rechecks the
+// canonical SHA-256 before reporting complete=true.
 func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, request *http.Request) {
 	if h == nil || h.store == nil {
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
@@ -118,12 +122,16 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusNotFound, ErrNotFound, "artifact was not found")
 		return
 	}
-	offset, limit, err := contentChunkQuery(request)
+	offset, limit, expectedVersion, err := contentChunkQuery(request)
 	if err != nil {
 		h.writeError(writer, request, http.StatusBadRequest, ErrInvalid, err.Error())
 		return
 	}
-	artifact, reader, err := h.openContent(request.Context(), id)
+	if offset > 0 && expectedVersion == "" {
+		h.writeError(writer, request, http.StatusBadRequest, ErrInvalid, "artifact content_version is required when offset is non-zero")
+		return
+	}
+	artifact, reader, version, versioned, err := h.openContent(request.Context(), id, expectedVersion)
 	if err != nil {
 		if request.Context().Err() != nil {
 			return
@@ -134,6 +142,10 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 	defer reader.Close()
 	if offset > artifact.Size {
 		h.writeError(writer, request, http.StatusBadRequest, ErrInvalid, "artifact content offset exceeds artifact size")
+		return
+	}
+	if offset > 0 && !versioned {
+		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content snapshot is unavailable")
 		return
 	}
 	remaining := artifact.Size - offset
@@ -161,6 +173,10 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		}
 	}
 	nextOffset := offset + int64(len(content))
+	if nextOffset < artifact.Size && !versioned {
+		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content snapshot is unavailable")
+		return
+	}
 	if nextOffset == artifact.Size {
 		if verifier, ok := reader.(contentVerifier); ok {
 			if err := verifier.verifyContent(request.Context(), artifact); err != nil {
@@ -173,12 +189,13 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		}
 	}
 	response := protocol.ArtifactContentResponse{
-		Artifact:      artifact,
-		ContentBase64: base64.StdEncoding.EncodeToString(content),
-		Offset:        offset,
-		NextOffset:    nextOffset,
-		TotalSize:     artifact.Size,
-		Complete:      nextOffset == artifact.Size,
+		Artifact:       artifact,
+		ContentBase64:  base64.StdEncoding.EncodeToString(content),
+		ContentVersion: version,
+		Offset:         offset,
+		NextOffset:     nextOffset,
+		TotalSize:      artifact.Size,
+		Complete:       nextOffset == artifact.Size,
 	}
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "application/json")
@@ -188,11 +205,28 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 	}
 }
 
-func (h *DownloadHTTPHandler) openContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
-	if store, ok := h.store.(contentArtifactStore); ok {
-		return store.OpenContent(ctx, id)
+func (h *DownloadHTTPHandler) openContent(ctx context.Context, id, expectedVersion string) (protocol.Artifact, protocol.ArtifactReader, string, bool, error) {
+	if store, ok := h.store.(contentSnapshotStore); ok {
+		artifact, reader, err := store.OpenContentAt(ctx, id, expectedVersion)
+		if err != nil {
+			return protocol.Artifact{}, nil, "", false, err
+		}
+		versionReader, ok := reader.(contentVersionReader)
+		if !ok || versionReader.contentVersion() == "" {
+			_ = reader.Close()
+			return protocol.Artifact{}, nil, "", false, fmt.Errorf("artifact content snapshot is unavailable: %w", ErrStoreUnavailable)
+		}
+		return artifact, reader, versionReader.contentVersion(), true, nil
 	}
-	return h.store.Open(ctx, id)
+	artifact, reader, err := h.store.Open(ctx, id)
+	if err != nil {
+		return protocol.Artifact{}, nil, "", false, err
+	}
+	version := "verified"
+	if artifact.Sha256 != "" {
+		version += "-" + artifact.Sha256
+	}
+	return artifact, reader, version, false, nil
 }
 
 func (h *DownloadHTTPHandler) writeStoreError(writer http.ResponseWriter, request *http.Request, err error, message string) {
@@ -202,13 +236,13 @@ func (h *DownloadHTTPHandler) writeStoreError(writer http.ResponseWriter, reques
 	h.writeError(writer, request, downloadStatus(err), err, message)
 }
 
-func contentChunkQuery(request *http.Request) (int64, int64, error) {
+func contentChunkQuery(request *http.Request) (int64, int64, string, error) {
 	query := request.URL.Query()
 	offset := int64(0)
 	if value := query.Get("offset"); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || parsed < 0 {
-			return 0, 0, fmt.Errorf("artifact content offset must be a non-negative integer")
+			return 0, 0, "", fmt.Errorf("artifact content offset must be a non-negative integer")
 		}
 		offset = parsed
 	}
@@ -216,17 +250,23 @@ func contentChunkQuery(request *http.Request) (int64, int64, error) {
 	if value := query.Get("limit"); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || parsed < 1 || parsed > DefaultContentChunkBytes {
-			return 0, 0, fmt.Errorf("artifact content limit must be between 1 and %d bytes", DefaultContentChunkBytes)
+			return 0, 0, "", fmt.Errorf("artifact content limit must be between 1 and %d bytes", DefaultContentChunkBytes)
 		}
 		limit = parsed
 	}
-	return offset, limit, nil
+	contentVersion := query.Get("content_version")
+	if len(contentVersion) > 128 {
+		return 0, 0, "", fmt.Errorf("artifact content_version is too long")
+	}
+	return offset, limit, contentVersion, nil
 }
 
 func downloadStatus(err error) int {
 	switch {
 	case errors.Is(err, ErrInvalid):
 		return http.StatusBadRequest
+	case errors.Is(err, ErrContentChanged):
+		return http.StatusConflict
 	case errors.Is(err, ErrRecoveryPending), errors.Is(err, ErrRecoveryIncomplete):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrUnauthorized), errors.Is(err, ErrUnavailable),

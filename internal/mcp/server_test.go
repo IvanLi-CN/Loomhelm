@@ -441,7 +441,7 @@ func TestServerDelegatesArtifactContentChunksAsStructuredOriginalBytes(t *testin
 		seenPath = request.URL.RequestURI()
 		seenAccept = request.Header.Get("Accept")
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"artifact":{"id":"artifact-1","session_id":"session-1","name":"original.bin","kind":"file","size":4,"content_type":"application/octet-stream","sha256":"","created_at":"2026-10-30T00:00:00Z"},"content_base64":"AAEC/w==","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+		_, _ = io.WriteString(writer, `{"artifact":{"id":"artifact-1","session_id":"session-1","name":"original.bin","kind":"file","size":4,"content_type":"application/octet-stream","sha256":"","created_at":"2026-10-30T00:00:00Z"},"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
 	})
 
 	response := callMCP(t, server, map[string]any{
@@ -486,6 +486,9 @@ func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *t
 		if offset != 0 && offset != 2 {
 			t.Fatalf("artifact content offset = %d, want 0 or 2", offset)
 		}
+		if got := request.URL.Query().Get("content_version"); offset == 0 && got != "" || offset == 2 && got != "v1-test" {
+			t.Fatalf("artifact content version at offset %d = %q", offset, got)
+		}
 		chunk := content[int(offset) : int(offset)+2]
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(protocol.ArtifactContentResponse{
@@ -493,23 +496,28 @@ func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *t
 				ID: "artifact-1", SessionID: "session-1", Name: "original.bin", Kind: protocol.ArtifactKindFile,
 				Size: int64(len(content)), ContentType: "application/octet-stream", Sha256: hex.EncodeToString(digest[:]), CreatedAt: "2026-10-30T00:00:00Z",
 			},
-			ContentBase64: base64.StdEncoding.EncodeToString(chunk),
-			Offset:        offset, NextOffset: offset + int64(len(chunk)), TotalSize: int64(len(content)), Complete: offset+int64(len(chunk)) == int64(len(content)),
+			ContentBase64:  base64.StdEncoding.EncodeToString(chunk),
+			ContentVersion: "v1-test",
+			Offset:         offset, NextOffset: offset + int64(len(chunk)), TotalSize: int64(len(content)), Complete: offset+int64(len(chunk)) == int64(len(content)),
 		})
 	})
 
-	callChunk := func(id int, offset int64) protocol.ArtifactContentResponse {
+	callChunk := func(id int, offset int64, contentVersion string) protocol.ArtifactContentResponse {
+		arguments := map[string]any{
+			"artifact_id": "artifact-1",
+			"offset":      offset,
+			"limit":       2,
+		}
+		if contentVersion != "" {
+			arguments["content_version"] = contentVersion
+		}
 		response := callMCP(t, server, map[string]any{
 			"jsonrpc": "2.0",
 			"id":      id,
 			"method":  "tools/call",
 			"params": map[string]any{
-				"name": "loomhelm.download_artifact",
-				"arguments": map[string]any{
-					"artifact_id": "artifact-1",
-					"offset":      offset,
-					"limit":       2,
-				},
+				"name":      "loomhelm.download_artifact",
+				"arguments": arguments,
 			},
 		})
 		var result struct {
@@ -523,8 +531,8 @@ func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *t
 		return result.StructuredContent
 	}
 
-	first := callChunk(14, 0)
-	second := callChunk(15, first.NextOffset)
+	first := callChunk(14, 0, "")
+	second := callChunk(15, first.NextOffset, first.ContentVersion)
 	firstBytes, err := base64.StdEncoding.DecodeString(first.ContentBase64)
 	if err != nil {
 		t.Fatal(err)
@@ -538,7 +546,7 @@ func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *t
 	if !second.Complete || string(reassembled) != string(content) || hex.EncodeToString(reassembledDigest[:]) != first.Artifact.Sha256 {
 		t.Fatalf("MCP reassembled content=%v complete=%v hash=%q, want %v/true/%q", reassembled, second.Complete, hex.EncodeToString(reassembledDigest[:]), content, first.Artifact.Sha256)
 	}
-	if got, want := strings.Join(seenPaths, ","), "/artifacts/artifact-1/content?limit=2&offset=0,/artifacts/artifact-1/content?limit=2&offset=2"; got != want {
+	if got, want := strings.Join(seenPaths, ","), "/artifacts/artifact-1/content?limit=2&offset=0,/artifacts/artifact-1/content?content_version=v1-test&limit=2&offset=2"; got != want {
 		t.Fatalf("MCP artifact content paths = %q, want %q", got, want)
 	}
 }

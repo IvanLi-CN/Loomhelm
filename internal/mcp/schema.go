@@ -124,7 +124,7 @@ func routeForOperation(operationID string) (routeSpec, bool) {
 		"interruptRun":            {method: "POST", path: "/runs/{run_id}/interrupt", pathParams: []string{"run_id"}, body: true},
 		"listRunEvents":           {method: "GET", path: "/runs/{run_id}/events", pathParams: []string{"run_id"}, queryParams: []string{"after_cursor", "limit"}},
 		"getArtifact":             {method: "GET", path: "/artifacts/{artifact_id}", pathParams: []string{"artifact_id"}},
-		"downloadArtifactContent": {method: "GET", path: "/artifacts/{artifact_id}/content", pathParams: []string{"artifact_id"}, queryParams: []string{"offset", "limit"}},
+		"downloadArtifactContent": {method: "GET", path: "/artifacts/{artifact_id}/content", pathParams: []string{"artifact_id"}, queryParams: []string{"content_version", "offset", "limit"}},
 	}
 	route, ok := routes[operationID]
 	return route, ok
@@ -251,6 +251,7 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 		add("artifact_id", stringField(), true)
 	case "downloadArtifactContent":
 		add("artifact_id", stringField(), true)
+		add("content_version", stringField(), false)
 		add("offset", integerField(), false)
 		add("limit", integerField(), false)
 	}

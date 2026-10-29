@@ -11,6 +11,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"syscall"
@@ -36,6 +37,7 @@ var (
 	ErrIntegrity           = errors.New("artifact integrity check failed")
 	ErrSizeMismatch        = errors.New("artifact size does not match metadata")
 	ErrHashMismatch        = errors.New("artifact hash does not match metadata")
+	ErrContentChanged      = errors.New("artifact content changed during download")
 	ErrTooLarge            = errors.New("artifact exceeds the configured size limit")
 	ErrStoreUnavailable    = errors.New("artifact store is unavailable")
 	ErrInputNotCancellable = errors.New("artifact source does not support cancellation")
@@ -120,8 +122,16 @@ type Store struct {
 
 type contentReader struct {
 	*os.File
-	store *Store
-	id    string
+	store   *Store
+	id      string
+	version string
+}
+
+func (r *contentReader) contentVersion() string {
+	if r == nil {
+		return ""
+	}
+	return r.version
 }
 
 func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Artifact) error {
@@ -358,23 +368,33 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 }
 
 func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
-	return s.openReadyArtifact(ctx, id, true)
+	return s.openReadyArtifact(ctx, id, true, "")
 }
 
 // OpenContent opens an authorized, immutable ready object for a bounded
 // content transfer. Publication verifies the complete SHA-256 before the
 // object enters the ready state and final objects are never overwritten by
 // Store. This path repeats authorization, regular-file and exact-size checks
-// for every request. The final chunk calls verifyContent once, so the server
-// rejects a changed object before reporting complete=true; the response also
-// carries the canonical SHA-256 for caller-side reassembly verification. Open
-// remains the fully verifying path for browser downloads and callers that need
-// a server-side full hash check before the first byte.
+// for every request. OpenContentAt additionally binds each request to the
+// previous file incarnation without a server-side transfer cache. The final
+// chunk calls verifyContent once, so the server rejects a changed object before
+// reporting complete=true; the response also carries the canonical SHA-256
+// for caller-side reassembly verification. Open remains the fully verifying
+// path for browser downloads and callers that need a server-side full hash
+// check before the first byte.
 func (s *Store) OpenContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
-	return s.openReadyArtifact(ctx, id, false)
+	return s.openReadyArtifact(ctx, id, false, "")
 }
 
-func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool) (protocol.Artifact, protocol.ArtifactReader, error) {
+// OpenContentAt resumes a bounded content transfer only when the current
+// object is the same filesystem incarnation that produced expectedVersion.
+// The token is stateless and opaque; it binds requests without keeping a
+// server-side transfer cache.
+func (s *Store) OpenContentAt(ctx context.Context, id, expectedVersion string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	return s.openReadyArtifact(ctx, id, false, expectedVersion)
+}
+
+func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, expectedVersion string) (protocol.Artifact, protocol.ArtifactReader, error) {
 	if s == nil {
 		return protocol.Artifact{}, nil, ErrStoreUnavailable
 	}
@@ -427,12 +447,21 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool) (
 		}
 		return protocol.Artifact{}, nil, verifyErr
 	}
+	version, versionErr := fileContentVersion(file)
+	if versionErr != nil {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, versionErr
+	}
+	if expectedVersion != "" && expectedVersion != version {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot does not match: %w", ErrContentChanged)
+	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()
 		return protocol.Artifact{}, nil, fmt.Errorf("rewind artifact bytes: %w", ErrStoreUnavailable)
 	}
 	if !verify {
-		return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID}, nil
+		return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: version}, nil
 	}
 	return record.Artifact, file, nil
 }
@@ -686,6 +715,50 @@ func verifyFileSize(ctx context.Context, file *os.File, artifact protocol.Artifa
 		return fmt.Errorf("got %d bytes, want %d: %w", info.Size(), artifact.Size, ErrSizeMismatch)
 	}
 	return nil
+}
+
+func fileContentVersion(file *os.File) (string, error) {
+	if file == nil {
+		return "", ErrIntegrity
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat artifact content version: %w", ErrStoreUnavailable)
+	}
+	system := info.Sys()
+	identity := fmt.Sprintf(
+		"%T|dev=%s|ino=%s|mode=%s|size=%d|mtime=%s|ctime=%s|modtime=%d",
+		system,
+		statField(system, "Dev"),
+		statField(system, "Ino"),
+		statField(system, "Mode"),
+		info.Size(),
+		statField(system, "Mtim", "Mtimespec"),
+		statField(system, "Ctim", "Ctimespec"),
+		info.ModTime().UnixNano(),
+	)
+	digest := sha256.Sum256([]byte(identity))
+	return "v1-" + hex.EncodeToString(digest[:]), nil
+}
+
+func statField(system any, names ...string) string {
+	value := reflect.ValueOf(system)
+	if !value.IsValid() {
+		return ""
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return ""
+		}
+		value = value.Elem()
+	}
+	for _, name := range names {
+		field := value.FieldByName(name)
+		if field.IsValid() && field.CanInterface() {
+			return fmt.Sprintf("%#v", field.Interface())
+		}
+	}
+	return ""
 }
 
 func syncDirectory(path string) error {

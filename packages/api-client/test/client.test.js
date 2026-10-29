@@ -105,9 +105,9 @@ describe("generated API artifact content transport", () => {
       },
     });
 
-    expect(await client.downloadArtifactContent({ artifact_id: "artifact/1", limit: 4 })).toEqual(payload);
+    expect(await client.downloadArtifactContent({ artifact_id: "artifact/1", content_version: "v1-test", limit: 4 })).toEqual(payload);
     expect(calls).toEqual([{
-      path: "/api/v1/artifacts/artifact%2F1/content?limit=4",
+      path: "/api/v1/artifacts/artifact%2F1/content?content_version=v1-test&limit=4",
       method: "GET",
       accept: "application/json",
     }]);
