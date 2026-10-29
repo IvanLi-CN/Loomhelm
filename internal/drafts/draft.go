@@ -4,6 +4,8 @@
 package drafts
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -173,4 +175,9 @@ func validateIdentity(value, label string) error {
 
 func consumeMutationID(commandID string) string {
 	return "consume:" + commandID
+}
+
+func contentDigest(content string) string {
+	digest := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(digest[:])
 }

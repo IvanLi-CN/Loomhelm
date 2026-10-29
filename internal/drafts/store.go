@@ -87,7 +87,7 @@ func (s *Store) Apply(ctx context.Context, input UpdateInput) (Draft, error) {
 		return Draft{}, err
 	}
 	if foundMutation {
-		if mutation.OwnerUserID != input.OwnerUserID || mutation.Kind != mutationKindUpdate || mutation.ClientID != input.ClientID || mutation.ClientSequence != input.ClientSequence || mutation.Content != input.Content {
+		if mutation.OwnerUserID != input.OwnerUserID || mutation.Kind != mutationKindUpdate || mutation.ClientID != input.ClientID || mutation.ClientSequence != input.ClientSequence || mutation.ContentDigest != contentDigest(input.Content) {
 			return Draft{}, ErrDraftMutation
 		}
 		if !found {
@@ -119,10 +119,10 @@ func (s *Store) Apply(ctx context.Context, input UpdateInput) (Draft, error) {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO conversation_draft_mutations (
 			session_id, owner_user_id, mutation_id, kind, client_id,
-			client_sequence, content, revision, created_at
+			client_sequence, content_digest, revision, created_at
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, input.SessionID, input.OwnerUserID, input.MutationID, mutationKindUpdate, input.ClientID, input.ClientSequence, input.Content, draft.Revision, now); err != nil {
+	`, input.SessionID, input.OwnerUserID, input.MutationID, mutationKindUpdate, input.ClientID, input.ClientSequence, contentDigest(input.Content), draft.Revision, now); err != nil {
 		return Draft{}, fmt.Errorf("record draft update: %w", err)
 	}
 
@@ -187,7 +187,7 @@ func (s *Store) ConsumeIfCurrent(ctx context.Context, input ConsumeInput) (Consu
 		return ConsumeResult{}, err
 	}
 	if foundMutation {
-		if mutation.OwnerUserID != input.OwnerUserID || mutation.Kind != mutationKindConsume {
+		if mutation.OwnerUserID != input.OwnerUserID || mutation.Kind != mutationKindConsume || mutation.ClientID != "loomhelm" || mutation.ClientSequence != 0 || mutation.ContentDigest != contentDigest("") || mutation.Revision != input.ExpectedRevision+1 {
 			return ConsumeResult{}, ErrDraftMutation
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -210,10 +210,10 @@ func (s *Store) ConsumeIfCurrent(ctx context.Context, input ConsumeInput) (Consu
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO conversation_draft_mutations (
 			session_id, owner_user_id, mutation_id, kind, client_id,
-			client_sequence, content, revision, created_at
+			client_sequence, content_digest, revision, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, 0, '', $6, $7)
-	`, input.SessionID, input.OwnerUserID, mutationID, mutationKindConsume, draft.ClientID, draft.Revision, now); err != nil {
+		VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8)
+	`, input.SessionID, input.OwnerUserID, mutationID, mutationKindConsume, draft.ClientID, contentDigest(""), draft.Revision, now); err != nil {
 		return ConsumeResult{}, fmt.Errorf("record draft consume: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -268,7 +268,8 @@ type mutationRecord struct {
 	Kind           string
 	ClientID       string
 	ClientSequence int64
-	Content        string
+	ContentDigest  string
+	Revision       int64
 }
 
 const (
@@ -279,11 +280,11 @@ const (
 func lockMutationTx(ctx context.Context, tx pgx.Tx, sessionID, mutationID string) (mutationRecord, bool, error) {
 	var record mutationRecord
 	err := tx.QueryRow(ctx, `
-		SELECT owner_user_id, kind, client_id, client_sequence, content
+		SELECT owner_user_id, kind, client_id, client_sequence, content_digest, revision
 		FROM conversation_draft_mutations
 		WHERE session_id = $1 AND mutation_id = $2
 		FOR UPDATE
-	`, sessionID, mutationID).Scan(&record.OwnerUserID, &record.Kind, &record.ClientID, &record.ClientSequence, &record.Content)
+	`, sessionID, mutationID).Scan(&record.OwnerUserID, &record.Kind, &record.ClientID, &record.ClientSequence, &record.ContentDigest, &record.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return mutationRecord{}, false, nil
 	}

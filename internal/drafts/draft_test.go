@@ -45,6 +45,18 @@ func TestConsumeMutationIDIsCommandScoped(t *testing.T) {
 	}
 }
 
+func TestContentDigestIsStableWithoutRetainingContent(t *testing.T) {
+	if got, want := contentDigest("draft"), contentDigest("draft"); got != want {
+		t.Fatalf("contentDigest() is not stable: %q != %q", got, want)
+	}
+	if contentDigest("draft") == contentDigest("changed") {
+		t.Fatal("different content must not share a digest")
+	}
+	if len(contentDigest("draft")) != 64 {
+		t.Fatalf("contentDigest() length = %d, want 64", len(contentDigest("draft")))
+	}
+}
+
 func TestApplyProjectionUsesDeterministicRevisionOrder(t *testing.T) {
 	now := time.Date(2026, 10, 29, 8, 30, 0, 0, time.UTC)
 	first, err := applyProjection(Draft{}, false, UpdateInput{
