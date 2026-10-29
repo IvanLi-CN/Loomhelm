@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/go-chi/chi/v5"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
@@ -583,6 +584,51 @@ func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *t
 	}
 	if got, want := strings.Join(seenPaths, ","), "/artifacts/artifact-1/content?limit=2&offset=0,/artifacts/artifact-1/content?content_version=v1-test&limit=2&offset=2"; got != want {
 		t.Fatalf("MCP artifact content paths = %q, want %q", got, want)
+	}
+}
+
+func TestServerDelegationResetsParentChiRouteContext(t *testing.T) {
+	var reached bool
+	restRouter := chi.NewRouter()
+	restRouter.Get("/artifacts/{artifact_id}/content", func(writer http.ResponseWriter, request *http.Request) {
+		reached = true
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"reached":true}`)
+	})
+	server := newTestServer(t, restRouter.ServeHTTP)
+	outerRouter := chi.NewRouter()
+	outerRouter.Handle("/mcp", server)
+
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      16,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+				"limit":       4,
+			},
+		},
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	outerRouter.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("MCP response status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Result struct {
+			IsError           bool           `json:"isError"`
+			StructuredContent map[string]any `json:"structuredContent"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode MCP response: %v; body = %s", err, recorder.Body.String())
+	}
+	if response.Result.IsError || !reached || response.Result.StructuredContent["reached"] != true {
+		t.Fatalf("delegated result = %#v, reached=%v; want successful nested chi route", response.Result, reached)
 	}
 }
 

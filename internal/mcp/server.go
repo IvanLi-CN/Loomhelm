@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/go-chi/chi/v5"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -582,7 +583,11 @@ func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, rout
 	}
 	operationCtx, cancel := context.WithTimeout(ctx, s.operationTimeout)
 	defer cancel()
-	internalRequest, err := http.NewRequestWithContext(operationCtx, route.method, path, bytes.NewReader(payload))
+	// The MCP endpoint may itself be mounted inside a chi router. The delegated
+	// application handler is another chi router, so prevent it from reusing the
+	// outer /mcp route context instead of matching its relative REST path.
+	delegatedContext := context.WithValue(operationCtx, chi.RouteCtxKey, struct{}{})
+	internalRequest, err := http.NewRequestWithContext(delegatedContext, route.method, path, bytes.NewReader(payload))
 	if err != nil {
 		return restResponse{}, err
 	}
