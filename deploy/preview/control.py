@@ -651,7 +651,6 @@ def command_compose_env(args: argparse.Namespace) -> None:
     if stored_project_name and stored_project_name != project_name and (state.get("active_slot") or state.get("pending_slot")):
         die("LOOMHELM_PREVIEW_PROJECT_NAME cannot change while a preview candidate is active")
     state_changed = state.get("compose_project_name") != project_name
-    state["compose_project_name"] = project_name
     configured_volume = os.environ.get("LOOMHELM_ARTIFACT_VOLUME_NAME", "").strip()
     stored_volume = state.get("artifact_volume_name")
     if stored_volume:
@@ -662,10 +661,7 @@ def command_compose_env(args: argparse.Namespace) -> None:
         artifact_volume_name = configured_volume or f"{project_name}_loomhelm-preview-artifacts"
         if not VOLUME_NAME_RE.fullmatch(artifact_volume_name):
             die("LOOMHELM_ARTIFACT_VOLUME_NAME must be a valid Docker volume name")
-        state["artifact_volume_name"] = artifact_volume_name
         state_changed = True
-    if state_changed:
-        write_state(state_dir, state)
     values: dict[str, str] = {
         "LOOMHELM_PREVIEW_STATE_DIR": str(state_dir),
         "LOOMHELM_PREVIEW_WEB_DIR": str(web_dir(state_dir)),
@@ -700,6 +696,11 @@ def command_compose_env(args: argparse.Namespace) -> None:
         values[f"LOOMHELM_{prefix}_WORKER_GENERATION"] = str(record["generation"] if record else state["next_worker_generation"])
     output = Path(args.output).resolve()
     atomic_write(output, "".join(f"{key}={dotenv(value)}\n" for key, value in sorted(values.items())))
+    if state_changed:
+        state["compose_project_name"] = project_name
+        if not stored_volume:
+            state["artifact_volume_name"] = artifact_volume_name
+        write_state(state_dir, state)
     print(f"env={output}")
 
 

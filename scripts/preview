@@ -307,7 +307,6 @@ case "$command" in
 		;;
 	status)
 		load_local_environment
-		refresh_env
 		control status
 		if [ -f "$env_file" ]; then
 			compose ps

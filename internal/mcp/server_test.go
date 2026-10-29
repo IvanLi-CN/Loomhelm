@@ -480,7 +480,7 @@ func TestServerDelegatesArtifactContentChunksAsStructuredOriginalBytes(t *testin
 		_, _ = io.WriteString(writer, `{"artifact":{"id":"artifact-1","session_id":"session-1","name":"original.bin","kind":"file","size":4,"content_type":"application/octet-stream","sha256":"","created_at":"2026-10-30T00:00:00Z"},"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
 	})
 
-	response := callMCP(t, server, map[string]any{
+	response := callMCPWithHeaders(t, server, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      13,
 		"method":  "tools/call",
@@ -492,7 +492,7 @@ func TestServerDelegatesArtifactContentChunksAsStructuredOriginalBytes(t *testin
 				"limit":       4,
 			},
 		},
-	})
+	}, map[string]string{"Mcp-Protocol-Version": ProtocolVersion})
 	var result struct {
 		IsError           bool `json:"isError"`
 		StructuredContent struct {
@@ -538,6 +538,38 @@ func TestServerDelegatesArtifactContentChunksForOlderProtocolAsText(t *testing.T
 	want := `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`
 	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != want || len(result.StructuredContent) != 0 {
 		t.Fatalf("legacy artifact content tool result = %#v, want complete JSON text without structuredContent", result)
+	}
+}
+
+func TestServerDelegatesArtifactContentChunksWithoutProtocolHeaderAsText(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+	})
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      18,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+				"offset":      0,
+				"limit":       4,
+			},
+		},
+	})
+	var result struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	decodeResult(t, response, &result)
+	want := `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`
+	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != want || len(result.StructuredContent) != 0 {
+		t.Fatalf("headerless artifact content tool result = %#v, want complete JSON text without structuredContent", result)
 	}
 }
 
@@ -610,7 +642,7 @@ func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *t
 		if contentVersion != "" {
 			arguments["content_version"] = contentVersion
 		}
-		response := callMCP(t, server, map[string]any{
+		response := callMCPWithHeaders(t, server, map[string]any{
 			"jsonrpc": "2.0",
 			"id":      id,
 			"method":  "tools/call",
@@ -618,7 +650,7 @@ func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *t
 				"name":      "loomhelm.download_artifact",
 				"arguments": arguments,
 			},
-		})
+		}, map[string]string{"Mcp-Protocol-Version": ProtocolVersion})
 		var result struct {
 			IsError           bool                             `json:"isError"`
 			StructuredContent protocol.ArtifactContentResponse `json:"structuredContent"`
@@ -676,6 +708,7 @@ func TestServerDelegationResetsParentChiRouteContext(t *testing.T) {
 	})))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Protocol-Version", ProtocolVersion)
 	recorder := httptest.NewRecorder()
 	outerRouter.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {

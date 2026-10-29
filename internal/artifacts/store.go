@@ -182,11 +182,43 @@ func (r *contentReader) verifyContentVersion(ctx context.Context) error {
 	return nil
 }
 
+func (r *contentReader) verifyCanonicalContentVersion(ctx context.Context) error {
+	if r == nil || r.File == nil || r.store == nil {
+		return ErrStoreUnavailable
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	path, err := r.store.objectPath(r.id)
+	if err != nil {
+		return err
+	}
+	file, err := openStoredFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrIntegrity) {
+			return fmt.Errorf("artifact content path changed while reading: %w", ErrContentChanged)
+		}
+		return err
+	}
+	defer file.Close()
+	version, err := fileContentVersion(file)
+	if err != nil {
+		return err
+	}
+	if version != r.version {
+		return fmt.Errorf("artifact content path changed while reading: %w", ErrContentChanged)
+	}
+	return nil
+}
+
 func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Artifact) error {
 	if r == nil || r.File == nil || r.store == nil {
 		return ErrStoreUnavailable
 	}
 	if err := r.verifyContentVersion(ctx); err != nil {
+		return err
+	}
+	if err := r.verifyCanonicalContentVersion(ctx); err != nil {
 		return err
 	}
 	if err := verifyFile(ctx, r.File, artifact); err != nil {
@@ -198,6 +230,9 @@ func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Art
 			if versionErr := r.verifyContentVersion(ctx); versionErr != nil {
 				return versionErr
 			}
+			if pathErr := r.verifyCanonicalContentVersion(ctx); pathErr != nil {
+				return pathErr
+			}
 			if markErr := r.store.markReadyObjectUnavailable(ctx, r.id, contentMismatchReason); markErr != nil {
 				return markErr
 			}
@@ -205,7 +240,10 @@ func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Art
 		}
 		return err
 	}
-	return r.verifyContentVersion(ctx)
+	if err := r.verifyContentVersion(ctx); err != nil {
+		return err
+	}
+	return r.verifyCanonicalContentVersion(ctx)
 }
 
 var _ protocol.ArtifactStore = (*Store)(nil)

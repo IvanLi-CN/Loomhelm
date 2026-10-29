@@ -218,6 +218,36 @@ func TestDownloadHTTPHandlerUsesBoundedContentOpenPath(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerMapsInChunkContentChangesToConflict(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		reader *contentErrorReader
+	}{
+		{name: "seek", reader: &contentErrorReader{seekErr: ErrContentChanged}},
+		{name: "read", reader: &contentErrorReader{readErr: ErrContentChanged}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &contentHTTPArtifactStoreStub{
+				httpArtifactStoreStub: httpArtifactStoreStub{
+					artifact: protocol.Artifact{ID: "artifact-content-change", Name: "content.bin", Size: 4},
+					reader:   test.reader,
+				},
+			}
+			handler, err := NewDownloadHTTPHandler(store, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-content-change/content?limit=4", nil))
+			if response.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusConflict, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "artifact")
 	original := []byte("original content")
@@ -336,6 +366,31 @@ type contentVersionReaderStub struct {
 	protocol.ArtifactReader
 	version string
 }
+
+type contentErrorReader struct {
+	seekErr error
+	readErr error
+}
+
+func (r *contentErrorReader) Read([]byte) (int, error) {
+	if r.readErr != nil {
+		return 0, r.readErr
+	}
+	return 0, io.EOF
+}
+
+func (r *contentErrorReader) ReadAt([]byte, int64) (int, error) {
+	if r.readErr != nil {
+		return 0, r.readErr
+	}
+	return 0, io.EOF
+}
+
+func (r *contentErrorReader) Seek(int64, int) (int64, error) {
+	return 0, r.seekErr
+}
+
+func (r *contentErrorReader) Close() error { return nil }
 
 func (r *contentVersionReaderStub) contentVersion() string {
 	return r.version

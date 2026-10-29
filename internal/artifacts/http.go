@@ -175,7 +175,10 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		chunkSize = limit
 	}
 	if _, err := reader.Seek(offset, io.SeekStart); err != nil {
-		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content seek failed")
+		if request.Context().Err() != nil {
+			return
+		}
+		h.writeStoreError(writer, request, err, "artifact content seek failed")
 		return
 	}
 	content := make([]byte, 0, chunkSize)
@@ -185,7 +188,7 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 			if request.Context().Err() != nil {
 				return
 			}
-			h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content read failed")
+			h.writeStoreError(writer, request, err, "artifact content read failed")
 			return
 		}
 		if int64(len(content)) != chunkSize {

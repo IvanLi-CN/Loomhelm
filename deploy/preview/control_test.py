@@ -146,6 +146,25 @@ class PreviewControlTest(unittest.TestCase):
                 with self.assertRaises(control.ContractError):
                     self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
 
+    def test_failed_compose_environment_does_not_persist_derived_state(self) -> None:
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-atomic-state-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            output = state_dir / "compose.env"
+            self.invoke("init", state_dir)
+            with self.assertRaises(control.ContractError):
+                self.invoke("compose_env", state_dir, output=output)
+            state = control.load_state(state_dir)
+            self.assertIsNone(state["compose_project_name"])
+            self.assertIsNone(state["artifact_volume_name"])
+            self.assertFalse(output.exists())
+
     def write_manifest(self, path: Path, value: dict) -> None:
         path.write_text(json.dumps(value), encoding="utf-8")
 

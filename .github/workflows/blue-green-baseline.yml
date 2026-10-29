@@ -16,6 +16,8 @@ on:
       - scripts/preview
       - scripts/rehearse-blue-green
       - .github/workflows/blue-green-baseline.yml
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read

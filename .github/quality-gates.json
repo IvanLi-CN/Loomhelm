@@ -17,7 +17,8 @@
     "Bootstrap Verification",
     "React Doctor",
     "Repository Verification",
-    "Candidate Build"
+    "Candidate Build",
+    "Blue-Green Control Contract"
   ],
   "informational_checks": [
     "Candidate Reproducibility"
@@ -33,6 +34,12 @@
         "Repository Verification",
         "Candidate Build",
         "Candidate Reproducibility"
+      ]
+    },
+    {
+      "workflow": "Blue-Green Baseline",
+      "jobs": [
+        "Blue-Green Control Contract"
       ]
     }
   ]

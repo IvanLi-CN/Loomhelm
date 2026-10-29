@@ -372,7 +372,7 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 		}
 		result, err := toolSuccess(response.body)
 		if spec.operationID == "downloadArtifactContent" {
-			result, err = artifactContentToolSuccess(response.body, explicitProtocolVersion(request))
+			result, err = artifactContentToolSuccess(response.body, artifactProtocolVersion(request))
 		}
 		if err != nil {
 			if spec.route.method != http.MethodGet {
@@ -588,8 +588,17 @@ func requestHeaders(request interface{ GetExtra() *sdk.RequestExtra }) http.Head
 	return request.GetExtra().Header
 }
 
-func explicitProtocolVersion(request interface{ GetExtra() *sdk.RequestExtra }) string {
-	return requestHeaders(request).Get("Mcp-Protocol-Version")
+func artifactProtocolVersion(request *sdk.CallToolRequest) string {
+	if request == nil {
+		return OlderProtocolVersion
+	}
+	if version := request.ProtocolVersion(); version != "" {
+		return version
+	}
+	// Stateless requests without an initialize handshake have no negotiated
+	// version. Keep the complete JSON envelope in text for those clients so
+	// legacy callers can still reassemble content chunks.
+	return OlderProtocolVersion
 }
 
 func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, route routeSpec, arguments map[string]json.RawMessage) (restResponse, error) {
