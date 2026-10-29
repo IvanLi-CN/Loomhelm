@@ -2,12 +2,17 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
@@ -264,9 +269,9 @@ func TestServerReportsOversizedApplicationOutcomeAsUnknown(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			calls++
-			_, _ = writer.Write(bytes.Repeat([]byte("x"), 600))
+			_, _ = writer.Write(bytes.Repeat([]byte("x"), 2200))
 		}),
-		MaxResponseBytes: 512,
+		MaxResponseBytes: 2048,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -379,9 +384,9 @@ func TestServerReportsMutationServerFailureAsUnknown(t *testing.T) {
 func TestServerReportsOversizedReadResponseAsServiceFailure(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			_, _ = writer.Write(bytes.Repeat([]byte("x"), 600))
+			_, _ = writer.Write(bytes.Repeat([]byte("x"), 2200))
 		}),
-		MaxResponseBytes: 512,
+		MaxResponseBytes: 2048,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -418,7 +423,7 @@ func TestServerRejectsResponseLimitTooSmallForErrorEnvelope(t *testing.T) {
 }
 
 func TestConcurrentMCPRequestSlotsBoundBufferedMemory(t *testing.T) {
-	if got, want := concurrentMCPRequestSlots(1<<20, 4<<20), 5; got != want {
+	if got, want := concurrentMCPRequestSlots(1<<20, 4<<20), 2; got != want {
 		t.Fatalf("default concurrent MCP request slots = %d, want %d", got, want)
 	}
 	if got, want := concurrentMCPRequestSlots(32<<20, 32<<20), 1; got != want {
@@ -429,12 +434,59 @@ func TestConcurrentMCPRequestSlotsBoundBufferedMemory(t *testing.T) {
 	}
 }
 
+func TestRequestBodyReadTimeoutClosesBody(t *testing.T) {
+	body := &blockingRequestBody{closed: make(chan struct{})}
+	_, err := readRequestBody(context.Background(), body, 1024, 10*time.Millisecond)
+	if !errors.Is(err, errRequestBodyReadTimeout) {
+		t.Fatalf("readRequestBody() error = %v, want timeout", err)
+	}
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("request body was not closed after read timeout")
+	}
+}
+
+func TestRequestConcurrencyWaitTimeoutReturnsRetryableAdmissionError(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	handler := &requestConcurrencyHandler{
+		next: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("request entered a full concurrency gate")
+		}),
+		slots: slots,
+		wait:  10 * time.Millisecond,
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("X-Loomhelm-MCP-Response") != "concurrency_limited" {
+		t.Fatalf("concurrency admission status=%d marker=%q, want 503/concurrency_limited", recorder.Code, recorder.Header().Get("X-Loomhelm-MCP-Response"))
+	}
+}
+
+type blockingRequestBody struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (b *blockingRequestBody) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, io.EOF
+}
+
+func (b *blockingRequestBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
 func TestServerBoundsEncodedToolResult(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			_, _ = writer.Write([]byte(`{"value":"12345678901234567890123456789012345678901234567890"}`))
+			_ = json.NewEncoder(writer).Encode(map[string]string{
+				"value": string(bytes.Repeat([]byte("x"), 600)),
+			})
 		}),
-		MaxResponseBytes: 512,
+		MaxResponseBytes: 2048,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -469,7 +521,7 @@ func TestServerBoundsEncodedToolResult(t *testing.T) {
 func TestServerCapsFinalWireResponseBody(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler:      http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {}),
-		MaxResponseBytes: 512,
+		MaxResponseBytes: 2048,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -487,11 +539,95 @@ func TestServerCapsFinalWireResponseBody(t *testing.T) {
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized wire response status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
 	}
-	if len(recorder.Body.Bytes()) > 512 {
-		t.Fatalf("oversized wire response body = %d bytes, want at most 512", recorder.Body.Len())
+	if len(recorder.Body.Bytes()) > 2048 {
+		t.Fatalf("oversized wire response body = %d bytes, want at most 2048", recorder.Body.Len())
 	}
 	if got := recorder.Header().Get("X-Loomhelm-MCP-Response"); got != "too_large" {
 		t.Fatalf("oversized wire response marker = %q, want too_large", got)
+	}
+}
+
+func TestServerPreservesUnknownOutcomeForBoundedLegacyBatch(t *testing.T) {
+	var calls atomic.Int32
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls.Add(1)
+			writer.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(writer).Encode(protocol.ApiError{Message: "credential transaction failed"})
+		}),
+		MaxResponseBytes: 2048,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	body := mustJSON(t, []map[string]any{
+		{
+			"jsonrpc": "2.0",
+			"id":      18,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "loomhelm.create_user_credential",
+				"arguments": map[string]any{"name": "first"},
+			},
+		},
+		{
+			"jsonrpc": "2.0",
+			"id":      19,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "loomhelm.create_user_credential",
+				"arguments": map[string]any{"name": "second"},
+			},
+		},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Protocol-Version", OlderProtocolVersion)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("legacy batch status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Body.Len() > 2048 {
+		t.Fatalf("legacy batch response body = %d bytes, want at most 2048", recorder.Body.Len())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(string(protocol.ErrorCodeUnknownResult))) {
+		t.Fatalf("legacy batch response = %s, want unknown_result", recorder.Body.String())
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("legacy batch REST invocation count = %d, want 2", calls.Load())
+	}
+}
+
+func TestServerRejectsOversizedBatchBeforeMutation(t *testing.T) {
+	calls := 0
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls++
+		}),
+		MaxResponseBytes: 2048,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	body := mustJSON(t, []map[string]any{
+		{"jsonrpc": "2.0", "id": 20, "method": "ping"},
+		{"jsonrpc": "2.0", "id": 21, "method": "ping"},
+		{"jsonrpc": "2.0", "id": 22, "method": "ping"},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Protocol-Version", OlderProtocolVersion)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusRequestEntityTooLarge || recorder.Header().Get("X-Loomhelm-MCP-Response") != "batch_too_large" {
+		t.Fatalf("oversized batch status=%d marker=%q, want 413/batch_too_large", recorder.Code, recorder.Header().Get("X-Loomhelm-MCP-Response"))
+	}
+	if calls != 0 {
+		t.Fatalf("oversized batch REST invocation count = %d, want zero", calls)
 	}
 }
 
@@ -501,14 +637,14 @@ func TestServerRejectsOversizedRequestIDBeforeMutation(t *testing.T) {
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			calls++
 		}),
-		MaxResponseBytes: 512,
+		MaxResponseBytes: 2048,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
 	body := []byte(`{"jsonrpc":"2.0","id":"`)
-	body = append(body, bytes.Repeat([]byte("x"), 100)...)
+	body = append(body, bytes.Repeat([]byte("x"), 300)...)
 	body = append(body, []byte(`","method":"tools/call","params":{"name":"loomhelm.create_project","arguments":{"name":"Loomhelm"}}}`)...)
 	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -518,8 +654,8 @@ func TestServerRejectsOversizedRequestIDBeforeMutation(t *testing.T) {
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized request ID status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
 	}
-	if recorder.Body.Len() > 512 {
-		t.Fatalf("oversized request ID response body = %d bytes, want at most 512", recorder.Body.Len())
+	if recorder.Body.Len() > 2048 {
+		t.Fatalf("oversized request ID response body = %d bytes, want at most 2048", recorder.Body.Len())
 	}
 	if got := recorder.Header().Get("X-Loomhelm-MCP-Response"); got != "request_id_too_large" {
 		t.Fatalf("oversized request ID marker = %q, want request_id_too_large", got)

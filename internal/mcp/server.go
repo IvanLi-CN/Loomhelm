@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -31,11 +32,14 @@ const (
 	// OlderProtocolVersion is retained for older stateless HTTP clients.
 	OlderProtocolVersion = "2025-03-26"
 
-	defaultMaxBodyBytes      int64 = 1 << 20
-	defaultMaxResponseBytes  int64 = 4 << 20
-	minimumMaxResponseBytes  int64 = 512
-	maxConcurrentMCPBytes    int64 = 32 << 20
-	maxConcurrentMCPRequests       = 64
+	defaultMaxBodyBytes           int64 = 1 << 20
+	defaultMaxResponseBytes       int64 = 4 << 20
+	minimumMaxResponseBytes       int64 = 2048
+	maxConcurrentMCPBytes         int64 = 32 << 20
+	maxConcurrentMCPRequests            = 64
+	maxMCPBatchRequests                 = 2
+	defaultMCPAdmissionWait             = 5 * time.Second
+	defaultRequestBodyReadTimeout       = 15 * time.Second
 )
 
 var (
@@ -193,8 +197,8 @@ func NewServer(config Config) (*Server, error) {
 			PropagateRequestCancellation: true,
 		},
 	)
-	server.handler = &noStoreHandler{next: &requestConcurrencyHandler{
-		next: &originHandler{
+	server.handler = &noStoreHandler{next: &originHandler{
+		next: &requestConcurrencyHandler{
 			next: &requestIDLimitHandler{
 				next: &responseLimitHandler{
 					next: transport,
@@ -203,10 +207,11 @@ func NewServer(config Config) (*Server, error) {
 				maxBody: config.MaxBodyBytes,
 				maxID:   config.MaxResponseBytes / 8,
 			},
-			allowed:     origins,
-			crossOrigin: http.NewCrossOriginProtection(),
+			slots: make(chan struct{}, concurrentMCPRequestSlots(config.MaxBodyBytes, config.MaxResponseBytes)),
+			wait:  defaultMCPAdmissionWait,
 		},
-		slots: make(chan struct{}, concurrentMCPRequestSlots(config.MaxBodyBytes, config.MaxResponseBytes)),
+		allowed:     origins,
+		crossOrigin: http.NewCrossOriginProtection(),
 	}}
 	return server, nil
 }
@@ -652,10 +657,10 @@ func copyHeader(destination, source http.Header) {
 }
 
 func concurrentMCPRequestSlots(maxBody, maxResponse int64) int {
-	if maxBody > 1<<62 || maxResponse > 1<<62 {
+	if maxBody > 1<<60 || maxResponse > 1<<61 {
 		return 1
 	}
-	perRequest := maxBody*2 + maxResponse
+	perRequest := maxBody*4 + maxResponse*2
 	if perRequest < 1 {
 		return 1
 	}
@@ -672,6 +677,7 @@ func concurrentMCPRequestSlots(maxBody, maxResponse int64) int {
 type requestConcurrencyHandler struct {
 	next  http.Handler
 	slots chan struct{}
+	wait  time.Duration
 }
 
 func (h *requestConcurrencyHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -679,11 +685,21 @@ func (h *requestConcurrencyHandler) ServeHTTP(writer http.ResponseWriter, reques
 		h.next.ServeHTTP(writer, request)
 		return
 	}
+	wait := h.wait
+	if wait <= 0 {
+		wait = defaultMCPAdmissionWait
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
 	select {
 	case h.slots <- struct{}{}:
 		defer func() { <-h.slots }()
 		h.next.ServeHTTP(writer, request)
 	case <-request.Context().Done():
+	case <-timer.C:
+		writer.Header().Set("X-Loomhelm-MCP-Response", "concurrency_limited")
+		writer.Header().Set("Retry-After", "1")
+		writer.WriteHeader(http.StatusServiceUnavailable)
 	}
 }
 
@@ -698,20 +714,62 @@ func (h *requestIDLimitHandler) ServeHTTP(writer http.ResponseWriter, request *h
 		h.next.ServeHTTP(writer, request)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(request.Body, h.maxBody+1))
+	body, err := readRequestBody(request.Context(), request.Body, h.maxBody+1, defaultRequestBodyReadTimeout)
 	_ = request.Body.Close()
+	if errors.Is(err, errRequestBodyReadTimeout) {
+		writer.Header().Set("X-Loomhelm-MCP-Response", "request_body_timeout")
+		writer.WriteHeader(http.StatusRequestTimeout)
+		return
+	}
 	if err != nil {
+		if request.Context().Err() != nil {
+			return
+		}
 		writer.Header().Set("X-Loomhelm-MCP-Response", "request_body_unreadable")
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	request.Body = io.NopCloser(bytes.NewReader(body))
-	if int64(len(body)) <= h.maxBody && requestIDTooLarge(body, h.maxID) {
-		writer.Header().Set("X-Loomhelm-MCP-Response", "request_id_too_large")
-		writer.WriteHeader(http.StatusRequestEntityTooLarge)
-		return
+	if int64(len(body)) <= h.maxBody {
+		if requestBatchTooLarge(body, maxMCPBatchRequests) {
+			writer.Header().Set("X-Loomhelm-MCP-Response", "batch_too_large")
+			writer.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		if requestIDTooLarge(body, h.maxID) {
+			writer.Header().Set("X-Loomhelm-MCP-Response", "request_id_too_large")
+			writer.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
 	}
 	h.next.ServeHTTP(writer, request)
+}
+
+var errRequestBodyReadTimeout = errors.New("MCP request body read timed out")
+
+func readRequestBody(ctx context.Context, body io.ReadCloser, limit int64, timeout time.Duration) ([]byte, error) {
+	result := make(chan struct {
+		body []byte
+		err  error
+	}, 1)
+	go func() {
+		data, err := io.ReadAll(io.LimitReader(body, limit))
+		result <- struct {
+			body []byte
+			err  error
+		}{body: data, err: err}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case outcome := <-result:
+		return outcome.body, outcome.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		_ = body.Close()
+		return nil, errRequestBodyReadTimeout
+	}
 }
 
 func requestIDTooLarge(body []byte, maxBytes int64) bool {
@@ -730,6 +788,14 @@ func requestIDTooLarge(body []byte, maxBytes int64) bool {
 		}
 	}
 	return false
+}
+
+func requestBatchTooLarge(body []byte, maxRequests int) bool {
+	var batch []json.RawMessage
+	if err := json.Unmarshal(body, &batch); err != nil {
+		return false
+	}
+	return len(batch) > maxRequests
 }
 
 func rawIDTooLarge(raw json.RawMessage, maxBytes int64) bool {
