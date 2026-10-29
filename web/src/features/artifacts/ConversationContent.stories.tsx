@@ -33,7 +33,7 @@ export const BasicStates: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     expect(canvas.getByRole("article", { name: "Agent 消息" })).toBeInTheDocument();
-    expect(canvas.getByRole("article", { name: "代码" })).toBeInTheDocument();
+    expect(canvas.getByRole("article", { name: "代码 · internal/example.go" })).toBeInTheDocument();
     expect(canvas.getByRole("article", { name: "工具状态" })).toBeInTheDocument();
     expect(canvas.getByRole("article", { name: "未知内容" })).toBeInTheDocument();
     expect(canvas.getByText("查看原始字段（不会执行）")).toBeInTheDocument();
