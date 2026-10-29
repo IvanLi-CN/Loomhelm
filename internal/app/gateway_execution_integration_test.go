@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
+	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -20,6 +21,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -589,6 +591,130 @@ func TestGatewayLateSessionCreationFailurePersistsDefiniteMarker(t *testing.T) {
 				t.Fatalf("late %s ACK intent = %+v, want pending marker %q", state, intent, wantReason)
 			}
 		})
+	}
+}
+
+func TestGatewayCommandAckFinalizesDraftAndFencesUnknown(t *testing.T) {
+	databaseURL := isolatedApplicationDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	persistence, err := database.Open(ctx, database.Config{URL: databaseURL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open fixture persistence: %v", err)
+	}
+	t.Cleanup(persistence.Close)
+	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+		Name:           "h01 draft ACK finalization",
+		CredentialName: "draft-ack-finalization-fixture",
+	})
+	if err != nil {
+		t.Fatalf("register fixture host: %v", err)
+	}
+	const (
+		userID    = "user-draft-ack-finalization"
+		sessionID = "session-draft-ack-finalization"
+		commandID = "command-draft-ack-finalization"
+		runID     = "run-draft-ack-finalization"
+	)
+	if _, err := persistence.Pool().Exec(ctx, `
+		INSERT INTO auth_users (id, issuer, subject)
+		VALUES ($1, 'https://issuer.example.test', $1)
+	`, userID); err != nil {
+		t.Fatalf("create draft ACK user: %v", err)
+	}
+	sessionStore := sessions.NewStore(persistence.Pool())
+	if _, err := sessionStore.CreateIntent(ctx, sessions.CreationIntentInput{
+		SessionID:     sessionID,
+		CommandID:     "create-" + sessionID,
+		CreatorUserID: userID,
+		HostID:        hostRegistration.Host.ID,
+		Path:          protocol.SessionPathNew,
+		Parameters:    []byte(`{"prompt":"draft ACK"}`),
+		Summary:       "draft ACK finalization fixture",
+	}); err != nil {
+		t.Fatalf("create draft ACK session intent: %v", err)
+	}
+	if _, err := sessionStore.ActivateIntent(ctx, sessions.ActivationInput{
+		SessionID:           sessionID,
+		ExternalThreadRef:   "thread-" + sessionID,
+		ExecutionGeneration: "generation-" + sessionID,
+	}); err != nil {
+		t.Fatalf("activate draft ACK session: %v", err)
+	}
+	draftStore := drafts.NewStore(persistence.Pool())
+	draft, err := draftStore.Apply(ctx, drafts.UpdateInput{
+		SessionID:      sessionID,
+		OwnerUserID:    userID,
+		MutationID:     "mutation-" + sessionID,
+		ClientID:       "desktop",
+		ClientSequence: 1,
+		Content:        "draft ACK content",
+	})
+	if err != nil {
+		t.Fatalf("create draft ACK draft: %v", err)
+	}
+	runStore := runs.NewStore(persistence.Pool())
+	command := protocol.Command{
+		CommandID: commandID,
+		IssuedAt:  "2026-10-30T00:00:04Z",
+		Kind:      protocol.CommandKindRunSend,
+		Payload:   json.RawMessage(`{"prompt":"draft ACK content"}`),
+		RunID:     stringPointer(runID),
+		SessionID: sessionID,
+	}
+	_, _, err = runStore.AcceptRunWithMutation(ctx, runs.CommandIntent{Command: command, Generation: "generation-" + sessionID}, runs.NewRunInput{
+		ID:         runID,
+		SessionID:  sessionID,
+		CommandID:  commandID,
+		Generation: "generation-" + sessionID,
+	}, func(mutationCtx context.Context, tx pgx.Tx, _ runs.AcceptResult) error {
+		return draftStore.PrepareCommandTx(mutationCtx, tx, drafts.CommandDraftInput{
+			CommandID:        commandID,
+			SessionID:        sessionID,
+			OwnerUserID:      userID,
+			ExpectedRevision: draft.Revision,
+			Content:          draft.Content,
+		})
+	})
+	if err != nil {
+		t.Fatalf("accept draft ACK command: %v", err)
+	}
+	transport := &gatewayExecutionTransport{
+		sessions:      sessionStore,
+		runs:          runStore,
+		draftCommands: draftStore,
+	}
+	if err := transport.HandleCommandAck(ctx, hosts.Connection{HostID: hostRegistration.Host.ID}, "", sessionID, protocol.CommandAck{
+		CommandID:  commandID,
+		RunID:      stringPointer(runID),
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		State:      protocol.CommandStateExecuting,
+	}); err != nil {
+		t.Fatalf("handle draft ACK: %v", err)
+	}
+	current, err := draftStore.Get(ctx, sessionID, userID)
+	if err != nil {
+		t.Fatalf("read finalized draft: %v", err)
+	}
+	if current.Content != "" || current.Revision != draft.Revision+1 {
+		t.Fatalf("finalized draft = %+v, want empty revision %d", current, draft.Revision+1)
+	}
+	record, err := runStore.Lookup(ctx, sessionID, commandID)
+	if err != nil {
+		t.Fatalf("read ACK command: %v", err)
+	}
+	if record.State != protocol.CommandStateExecuting || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
+		t.Fatalf("ACK command = %+v, want executing confirmed", record)
+	}
+	if _, err := runStore.MarkCommandAndRunUnknown(ctx, commandID, "generation-"+sessionID, "late send timeout"); err != nil {
+		t.Fatalf("fence unknown transition after exact ACK: %v", err)
+	}
+	record, err = runStore.Lookup(ctx, sessionID, commandID)
+	if err != nil {
+		t.Fatalf("read fenced command: %v", err)
+	}
+	if record.State != protocol.CommandStateExecuting || record.ReconciliationState != protocol.ReconciliationStateConfirmed {
+		t.Fatalf("fenced command = %+v, want executing confirmed", record)
 	}
 }
 

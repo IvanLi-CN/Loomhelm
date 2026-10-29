@@ -375,7 +375,10 @@ func (s *Store) RecordExactCommandAck(ctx context.Context, platformSessionID str
 	incoming.EventCursor = optionalStringValue(ack.EventCursor)
 	incoming.Result = append(json.RawMessage(nil), ack.Result...)
 	incoming.Error = cloneAPIError(ack.Error)
-	incoming.ReconciliationState = ""
+	// An exact ACK is a durable delivery fact. Mark it as confirmed so a
+	// concurrent unknown-outcome transition cannot erase an executing ACK that
+	// carries no optional operation, result or cursor fields.
+	incoming.ReconciliationState = protocol.ReconciliationStateConfirmed
 	if commandFactPresent(record) {
 		if !sameCommandFact(record, incoming) {
 			return CommandRecord{}, fmt.Errorf("%w: command %q already has a different exact ACK", ErrCommandFactConflict, ack.CommandID)
@@ -495,7 +498,7 @@ func (s *Store) reconcileApprovalResumeAfterCommandAck(ctx context.Context, reco
 }
 
 func commandFactPresent(record CommandRecord) bool {
-	return isTerminalCommandState(record.State) || record.OperationID != "" || record.EventCursor != "" || len(record.Result) > 0 || record.Error != nil
+	return isTerminalCommandState(record.State) || record.ReconciliationState == protocol.ReconciliationStateConfirmed || record.ReconciliationState == protocol.ReconciliationStateNotFound || record.OperationID != "" || record.EventCursor != "" || len(record.Result) > 0 || record.Error != nil
 }
 
 func sameCommandFact(left, right CommandRecord) bool {
@@ -669,7 +672,7 @@ func (s *Store) markUnknown(ctx context.Context, commandID, generation string, l
 			return CommandRecord{}, err
 		}
 	}
-	if record.State == protocol.CommandStateUnknown || isTerminalCommandState(record.State) {
+	if commandFactPresent(record) || record.State == protocol.CommandStateUnknown || isTerminalCommandState(record.State) {
 		if err := tx.Commit(ctx); err != nil {
 			return CommandRecord{}, fmt.Errorf("commit existing command unknown transition: %w", err)
 		}
@@ -720,6 +723,12 @@ func (s *Store) markCommandAndRunUnknown(ctx context.Context, commandID, generat
 		if err := leaseMatchesCommand(record, *lease); err != nil {
 			return CommandRecord{}, err
 		}
+	}
+	if commandFactPresent(record) {
+		if err := tx.Commit(ctx); err != nil {
+			return CommandRecord{}, fmt.Errorf("commit existing command fact unknown transition: %w", err)
+		}
+		return record, nil
 	}
 
 	if !isTerminalCommandState(record.State) && record.State != protocol.CommandStateUnknown {
