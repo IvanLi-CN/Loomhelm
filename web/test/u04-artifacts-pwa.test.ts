@@ -113,6 +113,7 @@ describe("U04 conversation content classification", () => {
       detail: "Authorization: Bearer secret-token cwd=/workspace/private-project"
     })).toEqual({ detail: "Authorization: [已隐藏] cwd=/workspace/private-project" });
     expect(inspectableRawPayload({ detail: "{\"Authorization\":\"Bearer secret-token\"}" })).toEqual({ detail: "{\"Authorization\": [已隐藏]}" });
+    expect(inspectableRawPayload({ detail: "client_secret=secret-value access_token=access-value" })).toEqual({ detail: "client_secret= [已隐藏] access_token= [已隐藏]" });
     expect(inspectableRawPayload({ detail: "tool output /opt/build/cache" })).toEqual({ detail: "tool output /opt/build/cache" });
   });
 

@@ -53,7 +53,7 @@ const sensitiveFieldNames = new Set([
 ]);
 
 const inlineSecretPattern =
-  /(["']?)\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b(["']?)\s*([:=])\s*(?:"(?:(?:bearer|basic|token)\s+)?[^"]*"|'(?:(?:bearer|basic|token)\s+)?[^']*'|(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+)/gi;
+  /(["']?)\b((?:(?:[a-z0-9]+(?:[_-])?)?(?:secret|token))|access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key)\b(["']?)\s*([:=])\s*(?:"(?:(?:bearer|basic|token)\s+)?[^"]*"|'(?:(?:bearer|basic|token)\s+)?[^']*'|(?:(?:bearer|basic|token)\s+)?[^\s,;}\]]+)/gi;
 
 function normalizedFieldName(value: string): string {
   return value.toLowerCase().replaceAll("_", "").replaceAll("-", "");
