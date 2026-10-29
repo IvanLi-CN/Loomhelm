@@ -101,11 +101,28 @@ func TestMCPRouteRejectsBeforeRuntimeIsReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTestServer() error = %v", err)
 	}
+	request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	body := &mcpTestRequestBody{}
+	request.Body = body
 	response := httptest.NewRecorder()
-	server.Router().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	server.Router().ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Retry-After") != "1" {
 		t.Fatalf("unready MCP response status=%d cache=%q retry=%q", response.Code, response.Header().Get("Cache-Control"), response.Header().Get("Retry-After"))
 	}
+	if !body.closed {
+		t.Fatal("unready MCP rejection did not close the request body")
+	}
+}
+
+type mcpTestRequestBody struct {
+	closed bool
+}
+
+func (b *mcpTestRequestBody) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (b *mcpTestRequestBody) Close() error {
+	b.closed = true
+	return nil
 }
 
 type mcpHeaderTransport struct {

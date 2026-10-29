@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -145,6 +146,8 @@ func (s *Server) handleApplication(writer http.ResponseWriter, request *http.Req
 }
 
 func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
+	s.activeMCPRequests.Add(1)
+	defer s.activeMCPRequests.Add(-1)
 	s.resourceMu.RLock()
 	var handler http.Handler
 	if runtime, ok := s.resources.(interface{ MCPHandler() http.Handler }); ok {
@@ -152,6 +155,7 @@ func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
 	}
 	s.resourceMu.RUnlock()
 	if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
+		loomhelmMCP.CloseRejectedRequestBody(writer, request)
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("Retry-After", "1")
 		writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")

@@ -731,11 +731,13 @@ type originHandler struct {
 func (h *originHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if origin := request.Header.Get("Origin"); origin != "" {
 		if _, ok := h.allowed[origin]; !ok {
+			CloseRejectedRequestBody(writer, request)
 			http.Error(writer, "MCP request origin is not allowed", http.StatusForbidden)
 			return
 		}
 	} else if h.crossOrigin != nil {
 		if err := h.crossOrigin.Check(request); err != nil {
+			CloseRejectedRequestBody(writer, request)
 			http.Error(writer, err.Error(), http.StatusForbidden)
 			return
 		}
@@ -1016,18 +1018,27 @@ func (h *requestConcurrencyHandler) ServeHTTP(writer http.ResponseWriter, reques
 }
 
 func rejectMCPAdmissionRequest(writer http.ResponseWriter, request *http.Request, marker string) {
-	if request != nil && request.Body != nil {
-		clearReadDeadline := setRequestBodyReadDeadline(writer, requestBodyCloseWait)
-		if closeRequestBodyWithin(request.Body, requestBodyCloseWait) {
-			clearReadDeadline()
-		}
-	}
+	CloseRejectedRequestBody(writer, request)
 	if marker == "" || request == nil || request.Context().Err() != nil {
 		return
 	}
 	writer.Header().Set("X-Loomhelm-MCP-Response", marker)
 	writer.Header().Set("Retry-After", "1")
 	writer.WriteHeader(http.StatusServiceUnavailable)
+}
+
+// CloseRejectedRequestBody bounds the body cleanup needed when an MCP request
+// is rejected before the adapter can read it. Keeping the read deadline active
+// when Close blocks lets net/http finish the request without an unbounded body
+// drain on a rejected HTTP/1.1 connection.
+func CloseRejectedRequestBody(writer http.ResponseWriter, request *http.Request) {
+	if request == nil || request.Body == nil {
+		return
+	}
+	clearReadDeadline := setRequestBodyReadDeadline(writer, requestBodyCloseWait)
+	if closeRequestBodyWithin(request.Body, requestBodyCloseWait) {
+		clearReadDeadline()
+	}
 }
 
 type requestIDLimitHandler struct {

@@ -1339,7 +1339,9 @@ func TestServerRejectsUntrustedOriginAndNonPost(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	originRequest := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)))
+	originRequest := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	originBody := &failingRequestBody{body: []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)}
+	originRequest.Body = originBody
 	originRequest.Header.Set("Content-Type", "application/json")
 	originRequest.Header.Set("Accept", "application/json, text/event-stream")
 	originRequest.Header.Set("Origin", "https://attacker.example")
@@ -1348,8 +1350,13 @@ func TestServerRejectsUntrustedOriginAndNonPost(t *testing.T) {
 	if originRecorder.Code != http.StatusForbidden {
 		t.Fatalf("untrusted origin status = %d, want %d", originRecorder.Code, http.StatusForbidden)
 	}
+	if !originBody.close {
+		t.Fatal("untrusted origin rejection did not close the request body")
+	}
 
-	crossSiteRequest := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)))
+	crossSiteRequest := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	crossSiteBody := &failingRequestBody{body: []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)}
+	crossSiteRequest.Body = crossSiteBody
 	crossSiteRequest.Header.Set("Content-Type", "application/json")
 	crossSiteRequest.Header.Set("Accept", "application/json, text/event-stream")
 	crossSiteRequest.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -1357,6 +1364,9 @@ func TestServerRejectsUntrustedOriginAndNonPost(t *testing.T) {
 	server.ServeHTTP(crossSiteRecorder, crossSiteRequest)
 	if crossSiteRecorder.Code != http.StatusForbidden {
 		t.Fatalf("cross-site request status = %d, want %d", crossSiteRecorder.Code, http.StatusForbidden)
+	}
+	if !crossSiteBody.close {
+		t.Fatal("cross-site rejection did not close the request body")
 	}
 
 	getRecorder := httptest.NewRecorder()
