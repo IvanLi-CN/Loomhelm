@@ -98,7 +98,7 @@ export function ConversationMessageStream({ messages, connection = "online", emp
                   </header>
                   <p className={cn("wrap-anywhere whitespace-pre-wrap text-[13px] leading-7", isUnknown ? "text-[var(--muted)]" : "text-[var(--ink)]")}>{message.content}</p>
                   {message.eventType ? <code className="w-fit max-w-full wrap-anywhere rounded-[var(--radius-sm)] bg-[var(--surface-soft)] px-2 py-1 text-[10px] text-[var(--muted)]">{message.eventType}</code> : null}
-                  {message.detail ? <details className="border-t border-[var(--line)] pt-2 text-xs leading-6 text-[var(--muted)]"><summary className="cursor-pointer">查看过程</summary><p className="mt-2 whitespace-pre-wrap">{message.detail}</p></details> : null}
+                  {message.detail ? <details className="border-t border-[var(--line)] pt-2 text-xs leading-6 text-[var(--muted)]"><summary className="cursor-pointer">{isUnknown ? "查看原始事件" : "查看过程"}</summary><p className="mt-2 whitespace-pre-wrap">{message.detail}</p></details> : null}
                   {isUnknown ? <p className="text-[11px] leading-5 text-[var(--muted)]">该内容保留为 unknown，不推断为成功或失败。</p> : null}
                 </article>
               </li>

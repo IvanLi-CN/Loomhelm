@@ -36,6 +36,7 @@ const messages: readonly ConversationMessage[] = [
   {
     author: "未识别内容",
     content: "当前事件类型没有可用的专用渲染器。",
+    detail: "事件元数据\n{\n  \"event_id\": \"event-unknown-1\"\n}\n\n原始 payload\n{\n  \"futureField\": true\n}",
     eventType: "unknown",
     id: "message-unknown-1",
     kind: "unknown",

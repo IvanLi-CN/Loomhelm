@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   applyRunEvent,
+  applyApprovalResolutionEvents,
   approvalContextFromApproval,
   connectionFromSessionState,
   eventToConversationMessage,
@@ -159,6 +160,29 @@ describe("production session model", () => {
     expect(eventToConversationMessage(event({ payload: { jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "nested hello" } } }))).toMatchObject({ content: "nested hello" });
     expect(eventToConversationMessage(event({ event_id: "tool", payload: {}, type: "item.completed" }))).toMatchObject({ kind: "tool", content: "已接收事件：item.completed" });
     expect(eventToConversationMessage(event({ event_id: "unknown", payload: {}, type: "unknown" }))).toMatchObject({ kind: "unknown", content: "已接收事件：unknown" });
+  });
+
+  test("keeps raw payload and metadata inspectable for unknown events", () => {
+    const message = eventToConversationMessage(event({ event_id: "unknown-raw", payload: { futureField: true }, type: "unknown" }));
+    expect(message.detail).toContain('"event_id": "unknown-raw"');
+    expect(message.detail).toContain('"futureField": true');
+  });
+
+  test("correlates approval resolutions through the durable requested-event identity", () => {
+    const approvals = [{
+      context: { command: "printf ok", cwd: "/workspace" },
+      id: "approval-1",
+      kind: "command",
+      requested_at: "2026-10-27T00:00:00Z",
+      requested_event_id: "approval-requested-event",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Run a harmless command"
+    }];
+    const requested = event({ event_id: "approval-requested-event", payload: { id: 42 }, type: "approval.requested" });
+    const resolved = event({ event_id: "approval-resolved-event", payload: { params: { requestId: 42, resolution: "accept" } }, type: "approval.resolved" });
+    expect(applyApprovalResolutionEvents(approvals, [requested, resolved], [resolved])).toMatchObject({ matched: true, unresolved: false, approvals: [{ status: "approved" }] });
   });
 
   test("keeps message identities distinct across runs in one session", () => {

@@ -11,6 +11,7 @@ export { ProductionConversationWorkspace, ProductionSessionCreationPanel } from 
 export type { ProductionConversationWorkspaceProps, ProductionSessionCreationPanelProps } from "./ProductionConversationWorkspace";
 export {
   approvalContextFromApproval,
+  applyApprovalResolutionEvents,
   applyRunEvent,
   connectionFromSessionState,
   eventToConversationMessage,
@@ -21,4 +22,4 @@ export {
   toSessionContextModel,
   toSessionTask
 } from "./production-session-model";
-export type { ApprovalContextFields, ProductionTaskSummary } from "./production-session-model";
+export type { ApprovalContextFields, ApprovalResolutionApplication, ProductionTaskSummary } from "./production-session-model";

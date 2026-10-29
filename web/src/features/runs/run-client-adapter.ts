@@ -50,7 +50,7 @@ export interface RunEventReadOptions {
 }
 
 export type RunEventReadState = "received" | "pending" | "unknown";
-export type RunEventReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "transport" | "offline" | "reconnecting" | "unknown" | "forbidden" | "not_found";
+export type RunEventReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "transport" | "offline" | "reconnecting" | "unknown" | "forbidden" | "not_found" | "cursor_expired";
 
 export interface RunEventReadResult {
   state: RunEventReadState;
@@ -78,6 +78,12 @@ function isAmbiguousCommandError(error: unknown): boolean {
   if (!(error instanceof ApiClientError)) return true;
   const body = error.body && typeof error.body === "object" ? error.body as { code?: unknown } : undefined;
   return body?.code === "unknown_result" || error.status === 408 || error.status === 429 || error.status >= 500;
+}
+
+function isCursorExpiredError(error: unknown): boolean {
+  if (!(error instanceof ApiClientError)) return false;
+  const body = error.body && typeof error.body === "object" ? error.body as { code?: unknown } : undefined;
+  return body?.code === "cursor_expired";
 }
 
 export class RunClientAdapter {
@@ -124,6 +130,10 @@ export class RunClientAdapter {
   }
 
   async readRunEvents(subscription: RunEventSubscription, { limit }: RunEventReadOptions = {}): Promise<RunEventReadResult> {
+    return this.readRunEventsFromCursor(subscription, limit, true);
+  }
+
+  private async readRunEventsFromCursor(subscription: RunEventSubscription, limit: number | undefined, retryAfterCursorExpiry: boolean): Promise<RunEventReadResult> {
     const eventSubscription = toEventSubscription(subscription);
 
     const key = getEventSubscriptionKey(eventSubscription);
@@ -174,11 +184,16 @@ export class RunClientAdapter {
         ? "forbidden"
         : error instanceof ApiClientError && error.status === 404
           ? "not_found"
+          : isCursorExpiredError(error)
+            ? "cursor_expired"
           : "transport";
-      if (reason === "forbidden" || reason === "not_found") {
+      if (reason === "forbidden" || reason === "not_found" || reason === "cursor_expired") {
         this.streams.delete(key);
         this.streamVersions.delete(key);
         this.recovery = forgetRecoveryCursor(this.recovery, eventSubscription);
+      }
+      if (reason === "cursor_expired" && retryAfterCursorExpiry) {
+        return this.readRunEventsFromCursor(subscription, limit, false);
       }
       return { state: "unknown", reason, request: admission.token };
     }

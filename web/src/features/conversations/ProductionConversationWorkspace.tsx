@@ -11,6 +11,7 @@ import type { TaskRecord } from "@/features/tasks/types";
 
 import { ApprovalRequestCard, type ApprovalRequestModel } from "../approvals/ApprovalRequestCard";
 import { ApprovalClientAdapter } from "../approvals/approval-client-adapter";
+import { ApprovalHistoryClientAdapter } from "../approvals/approval-history-adapter";
 import { ConversationComposer, ConversationMessageStream, type ConversationMessage } from "./ConversationMessageStream";
 import type { PublishedSessionApi } from "../sessions/api";
 import { DraftClientAdapter, type DraftReadReason } from "../sessions/draft-client-adapter";
@@ -22,6 +23,7 @@ import { SessionRunHistoryClientAdapter, type SessionRunHistoryReadReason } from
 import { canSendControl, type ConnectionAvailability } from "../sessions/session-model";
 import {
   approvalContextFromApproval,
+  applyApprovalResolutionEvents,
   applyRunEvent,
   connectionFromSessionState,
   eventToConversationMessage,
@@ -601,25 +603,6 @@ function mergeApprovals(current: readonly Approval[], incoming: readonly Approva
   });
 }
 
-async function readAllApprovalPages(api: Pick<PublishedSessionApi, "listRunApprovals">, runId: string, shouldContinue: () => boolean = () => true): Promise<readonly Approval[]> {
-  const approvals: Approval[] = [];
-  const seenCursors = new Set<string>();
-  let afterCursor: string | undefined;
-
-  for (let pageNumber = 0; pageNumber < 1000; pageNumber += 1) {
-    if (!shouldContinue()) return approvals;
-    const page = await api.listRunApprovals({ run_id: runId, limit: 200, ...(afterCursor ? { after_cursor: afterCursor } : {}) });
-    approvals.push(...page.items);
-    if (!page.has_more) return approvals;
-    const nextCursor = page.next_cursor?.trim();
-    if (!nextCursor || seenCursors.has(nextCursor)) throw new Error("审批历史分页游标未前进");
-    seenCursors.add(nextCursor);
-    afterCursor = nextCursor;
-  }
-
-  throw new Error("审批历史分页超过安全页数限制");
-}
-
 function mapTaskSummary(task: ProductionConversationWorkspaceProps["task"]): ProductionTaskSummary | undefined {
   return task ? { goal: task.goal, id: task.id, state: task.state, title: task.title } : undefined;
 }
@@ -643,6 +626,7 @@ export function ProductionConversationWorkspace({
   const draftClientId = useMemo(() => sessionId ? readStoredDraftClientId(principalId, sessionId) : undefined, [principalId, sessionId]);
   const adapters = useMemo(() => api ? {
     approval: new ApprovalClientAdapter(api),
+    approvalHistory: new ApprovalHistoryClientAdapter(api),
     draft: new DraftClientAdapter(api, {
       clientId: draftClientId ?? "loomhelm-draft-anonymous",
       readSequence: (currentSessionId) => readStoredDraftSequence(principalId, currentSessionId),
@@ -696,7 +680,6 @@ export function ProductionConversationWorkspace({
   const hasPreviousSessionId = useRef(false);
   const selectedRunIdRef = useRef<string | undefined>(initialRunId ?? readRunRecoveryId(getRunRecoveryKey(principalId, sessionId)));
   const activeRunIdRef = useRef<string | undefined>(undefined);
-  const forceRunHistoryRefreshRef = useRef(false);
   const approvalHistoryLoadedRef = useRef(false);
   const draftRevisionRef = useRef(0);
   const draftDirtyRef = useRef(false);
@@ -709,7 +692,6 @@ export function ProductionConversationWorkspace({
     if (activeRunIdRef.current === nextRunId) return;
     activeRunIdRef.current = nextRunId;
     runGenerationRef.current += 1;
-    forceRunHistoryRefreshRef.current = false;
   };
 
   const sessionForRoute = session && (sessionId === undefined || session.id === sessionId) ? session : undefined;
@@ -862,6 +844,7 @@ export function ProductionConversationWorkspace({
     }
     adapters.session.selectSession(sessionId);
     adapters.history.selectSession(sessionId);
+    adapters.approvalHistory.clear();
     adapters.draft.selectSession(sessionId);
     adapters.run.selectSession(sessionId);
     adapters.approval.selectSession(sessionId);
@@ -927,9 +910,8 @@ export function ProductionConversationWorkspace({
     let firstRefresh = true;
     let active = true;
     const refreshRunHistory = async () => {
-      const forceRefresh = firstRefresh || forceRunHistoryRefreshRef.current;
+      const forceRefresh = firstRefresh;
       firstRefresh = false;
-      forceRunHistoryRefreshRef.current = false;
       const result = await adapters.history.readRuns(loadedSessionId, { forceRefresh });
       if (!active || result.state === "pending") return;
       if (result.state === "received" && result.runs) {
@@ -1251,7 +1233,8 @@ export function ProductionConversationWorkspace({
       if (pollInFlight) return;
       pollInFlight = true;
       try {
-        let approvalEventObserved = false;
+        let approvalHistoryReadRequired = !approvalHistoryLoadedRef.current;
+        let forceApprovalHistoryRefresh = false;
         const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { limit: 100 });
         if (!isCurrentRun()) return;
         if (events.state === "received" && events.page) {
@@ -1264,9 +1247,17 @@ export function ProductionConversationWorkspace({
             seenEventIds.current.add(eventKey);
             return true;
           }).sort((left, right) => left.sequence - right.sequence);
-          approvalEventObserved = freshEvents.some((event) => event.type === "approval.requested" || event.type === "approval.resolved");
-          if (approvalEventObserved) approvalHistoryLoadedRef.current = false;
-          if (freshEvents.some((event) => event.type === "approval.resolved")) forceRunHistoryRefreshRef.current = true;
+          const approvalRequestedObserved = freshEvents.some((event) => event.type === "approval.requested");
+          const approvalResolutionEvents = freshEvents.filter((event) => event.type === "approval.resolved");
+          if (approvalRequestedObserved) approvalHistoryReadRequired = true;
+          if (approvalResolutionEvents.length > 0) {
+            const resolution = applyApprovalResolutionEvents(approvals, observedEvents, approvalResolutionEvents);
+            if (resolution.matched) setApprovals((current) => mergeApprovals(current, resolution.approvals));
+            if (resolution.unresolved) {
+              approvalHistoryReadRequired = true;
+              forceApprovalHistoryRefresh = true;
+            }
+          }
           if (freshEvents.length > 0) {
             setMessages((current) => {
               const next = [...current, ...freshEvents.map(eventToConversationMessage)];
@@ -1317,10 +1308,10 @@ export function ProductionConversationWorkspace({
           return;
         }
 
-        if (!approvalEventObserved && approvalHistoryLoadedRef.current) return;
+        if (!approvalHistoryReadRequired && approvalHistoryLoadedRef.current) return;
 
         try {
-          const responseApprovals = await readAllApprovalPages(api, activeRunId, isCurrentRun);
+          const responseApprovals = await adapters.approvalHistory.readApprovals(activeRunId, { forceRefresh: forceApprovalHistoryRefresh, shouldContinue: isCurrentRun });
           if (!isCurrentRun()) return;
           const approvalItems = responseApprovals.filter((approval) => approval.run_id === activeRunId);
           if (approvalItems.length !== responseApprovals.length) {

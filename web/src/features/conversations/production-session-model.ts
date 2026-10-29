@@ -138,6 +138,81 @@ function eventText(event: Event, payload: Record<string, unknown> | undefined): 
   return `已接收事件：${event.type}`;
 }
 
+function rawValueKey(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function eventRequestKey(event: Event): string | undefined {
+  const payload = asRecord(event.payload);
+  const params = asRecord(payload?.params);
+  return rawValueKey(params?.requestId) ?? rawValueKey(payload?.id);
+}
+
+function eventResolution(event: Event): "approved" | "denied" | undefined {
+  const payload = asRecord(event.payload);
+  const params = asRecord(payload?.params);
+  const resolution = firstString(params, ["resolution", "decision"]) ?? firstString(payload, ["resolution", "decision"]);
+  if (resolution === "accept" || resolution === "approve") return "approved";
+  if (resolution === "decline" || resolution === "deny") return "denied";
+  return undefined;
+}
+
+export interface ApprovalResolutionApplication {
+  approvals: readonly Approval[];
+  matched: boolean;
+  unresolved: boolean;
+}
+
+export function applyApprovalResolutionEvents(
+  approvals: readonly Approval[],
+  observedEvents: readonly Event[],
+  resolutionEvents: readonly Event[] = observedEvents.filter((event) => event.type === "approval.resolved")
+): ApprovalResolutionApplication {
+  const requestedEventByRequestKey = new Map<string, string>();
+  observedEvents.filter((event) => event.type === "approval.requested").forEach((event) => {
+    const requestKey = eventRequestKey(event);
+    if (requestKey) requestedEventByRequestKey.set(requestKey, event.event_id);
+  });
+  const byRevision = new Map(approvals.map((approval) => [`${approval.id}:${approval.revision}`, approval]));
+  let matched = false;
+  let unresolved = false;
+  resolutionEvents.forEach((event) => {
+    const status = eventResolution(event);
+    const requestKey = eventRequestKey(event);
+    const requestedEventID = requestKey ? requestedEventByRequestKey.get(requestKey) : undefined;
+    if (!status || !requestedEventID) {
+      unresolved = true;
+      return;
+    }
+    const candidates = approvals.filter((approval) => approval.requested_event_id === requestedEventID);
+    if (candidates.length !== 1) {
+      unresolved = true;
+      return;
+    }
+    const approval = candidates[0];
+    byRevision.set(`${approval.id}:${approval.revision}`, { ...approval, status });
+    matched = true;
+  });
+  return { approvals: [...byRevision.values()], matched, unresolved };
+}
+
+function eventDetail(event: Event): string {
+  const metadata = JSON.stringify({
+    cursor: event.cursor,
+    event_id: event.event_id,
+    occurred_at: event.occurred_at,
+    run_id: event.run_id,
+    sequence: event.sequence,
+    session_id: event.session_id,
+    source: event.source,
+    type: event.type
+  }, null, 2);
+  const payload = JSON.stringify(event.payload, null, 2);
+  return `事件元数据\n${metadata}\n\n原始 payload\n${payload}`;
+}
+
 export function eventToConversationMessage(event: Event): ConversationMessage {
   const isMessage = event.type === "message.delta";
   const isUnknown = event.type === "unknown" || event.type.startsWith("reconciliation.");
@@ -145,6 +220,7 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
   return {
     author: isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
     content: eventText(event, asRecord(event.payload)),
+    ...(isUnknown ? { detail: eventDetail(event) } : {}),
     eventType: event.type,
     id: `${event.session_id}:${event.run_id ?? "session"}:${event.event_id}`,
     kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",

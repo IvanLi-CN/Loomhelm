@@ -161,6 +161,28 @@ describe("run client adapter", () => {
     }
   });
 
+  test("clears an expired cursor and retries from a fresh durable position", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async (request) => {
+        calls.push(request);
+        if (calls.length === 1) throw new ApiClientError(409, { code: "cursor_expired" });
+        return { events: [event({ cursor: "fresh-cursor" })], has_more: false, next_cursor: "fresh-cursor" };
+      },
+    });
+
+    adapter.selectSession("session-1");
+    adapter.seedRecoveryCursor(subscription, { cursor: "expired-cursor", sequence: 1 });
+    await expect(adapter.readRunEvents(subscription)).resolves.toMatchObject({ state: "received", stream: { cursor: "fresh-cursor" } });
+    expect(calls).toEqual([
+      { run_id: "run-1", after_cursor: "expired-cursor" },
+      { run_id: "run-1" },
+    ]);
+    expect(adapter.getRecoveryCursorBaseline(subscription)).toEqual({ cursor: "fresh-cursor", sequence: 1 });
+  });
+
   test("drops cached Run events and recovery cursors after an access denial", async () => {
     let denied = false;
     const adapter = new RunClientAdapter({
