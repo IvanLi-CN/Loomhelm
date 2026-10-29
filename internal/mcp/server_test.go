@@ -550,6 +550,53 @@ func TestRequestBodyReadTimeoutDoesNotWaitForBlockingClose(t *testing.T) {
 	close(body.closed)
 }
 
+func TestRequestBodyCloseAfterCappedReadIsBounded(t *testing.T) {
+	body := &cappedBlockingCloseRequestBody{
+		data:     bytes.Repeat([]byte("x"), 5),
+		release:  make(chan struct{}),
+		started:  make(chan struct{}),
+		finished: make(chan struct{}),
+	}
+	handler := &requestIDLimitHandler{
+		next: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(http.StatusNoContent)
+		}),
+		maxBody: 4,
+		maxID:   256,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/mcp", body)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	started := time.Now()
+	go func() {
+		handler.ServeHTTP(recorder, request)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if elapsed := time.Since(started); elapsed > requestBodyCloseWait+500*time.Millisecond {
+			t.Fatalf("capped-read handler waited %s for a blocking Close, want bounded return", elapsed)
+		}
+	case <-time.After(requestBodyCloseWait + 500*time.Millisecond):
+		close(body.release)
+		<-done
+		t.Fatal("capped-read handler waited for a blocking Close")
+	}
+	select {
+	case <-body.started:
+	default:
+		t.Fatal("capped-read handler did not close the original request body")
+	}
+	close(body.release)
+	select {
+	case <-body.finished:
+	case <-time.After(time.Second):
+		t.Fatal("blocking request body Close did not finish after release")
+	}
+}
+
 func TestRequestConcurrencyWaitTimeoutReturnsRetryableAdmissionError(t *testing.T) {
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
@@ -577,6 +624,14 @@ type blockingCloseRequestBody struct {
 	closed  chan struct{}
 }
 
+type cappedBlockingCloseRequestBody struct {
+	data     []byte
+	release  chan struct{}
+	started  chan struct{}
+	finished chan struct{}
+	once     sync.Once
+}
+
 func (b *blockingCloseRequestBody) Read([]byte) (int, error) {
 	<-b.closed
 	return 0, io.EOF
@@ -584,6 +639,22 @@ func (b *blockingCloseRequestBody) Read([]byte) (int, error) {
 
 func (b *blockingCloseRequestBody) Close() error {
 	<-b.release
+	return nil
+}
+
+func (b *cappedBlockingCloseRequestBody) Read(data []byte) (int, error) {
+	if len(b.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(data, b.data)
+	b.data = b.data[n:]
+	return n, nil
+}
+
+func (b *cappedBlockingCloseRequestBody) Close() error {
+	b.once.Do(func() { close(b.started) })
+	<-b.release
+	close(b.finished)
 	return nil
 }
 
@@ -720,6 +791,54 @@ func TestServerPreservesUnknownOutcomeForBoundedLegacyBatch(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("legacy batch REST invocation count = %d, want 2", calls.Load())
+	}
+}
+
+func TestServerPreservesUnknownOutcomeWhenBoundedBatchResponseOverflows(t *testing.T) {
+	var calls atomic.Int32
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls.Add(1)
+			writer.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(writer).Encode(protocol.ApiError{Message: "credential transaction failed"})
+		}),
+		MaxResponseBytes: 2048,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	body := mustJSON(t, []map[string]any{
+		{"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+		{
+			"jsonrpc": "2.0",
+			"id":      2,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "loomhelm.create_user_credential",
+				"arguments": map[string]any{"name": "first"},
+			},
+		},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Protocol-Version", OlderProtocolVersion)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("overflowed legacy batch status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Body.Len() > 2048 {
+		t.Fatalf("overflowed legacy batch response body = %d bytes, want at most 2048", recorder.Body.Len())
+	}
+	if got := recorder.Header().Get("X-Loomhelm-MCP-Response"); got != "too_large_fallback" {
+		t.Fatalf("overflowed legacy batch marker = %q, want too_large_fallback", got)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(string(protocol.ErrorCodeUnknownResult))) {
+		t.Fatalf("overflowed legacy batch response = %s, want unknown_result", recorder.Body.String())
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("overflowed legacy batch REST invocation count = %d, want 1", calls.Load())
 	}
 }
 

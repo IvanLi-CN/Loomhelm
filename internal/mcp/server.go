@@ -231,13 +231,15 @@ func NewServer(config Config) (*Server, error) {
 			PropagateRequestCancellation: true,
 		},
 	)
+	responseLimiter := &responseLimitHandler{
+		next:     transport,
+		max:      config.MaxResponseBytes,
+		fallback: server.oversizedBatchResponse,
+	}
 	server.handler = &noStoreHandler{next: &originHandler{
 		next: &requestConcurrencyHandler{
 			next: &requestIDLimitHandler{
-				next: &responseLimitHandler{
-					next: transport,
-					max:  config.MaxResponseBytes,
-				},
+				next:    responseLimiter,
 				maxBody: config.MaxBodyBytes,
 				maxID:   config.MaxResponseBytes / 8,
 			},
@@ -768,8 +770,89 @@ func (w *noStoreResponseWriter) Unwrap() http.ResponseWriter {
 }
 
 type responseLimitHandler struct {
-	next http.Handler
-	max  int64
+	next     http.Handler
+	max      int64
+	fallback func(*http.Request) ([]byte, bool)
+}
+
+type requestBodyContextKey struct{}
+
+type oversizedRPCRequest struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
+}
+
+type oversizedRPCResponse struct {
+	JSONRPC string             `json:"jsonrpc"`
+	ID      json.RawMessage    `json:"id"`
+	Result  any                `json:"result,omitempty"`
+	Error   *oversizedRPCError `json:"error,omitempty"`
+}
+
+type oversizedRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (s *Server) oversizedBatchResponse(request *http.Request) ([]byte, bool) {
+	if request == nil {
+		return nil, false
+	}
+	body, ok := request.Context().Value(requestBodyContextKey{}).([]byte)
+	if !ok || len(body) == 0 {
+		return nil, false
+	}
+	var batch []json.RawMessage
+	if err := json.Unmarshal(body, &batch); err != nil || len(batch) < 2 {
+		return nil, false
+	}
+
+	responses := make([]json.RawMessage, 0, len(batch))
+	for _, item := range batch {
+		var rpcRequest oversizedRPCRequest
+		if err := json.Unmarshal(item, &rpcRequest); err != nil {
+			return nil, false
+		}
+		if len(rpcRequest.ID) == 0 {
+			continue
+		}
+		encodedID, ok := encodedJSONValue(rpcRequest.ID)
+		if !ok {
+			return nil, false
+		}
+
+		response := oversizedRPCResponse{JSONRPC: "2.0", ID: encodedID}
+		if rpcRequest.Method == "tools/call" {
+			var params struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(rpcRequest.Params, &params) == nil {
+				if spec, exists := s.toolByName[params.Name]; exists && spec.route.method != http.MethodGet {
+					response.Result = unknownOutcomeResult()
+				}
+			}
+		}
+		if response.Result == nil {
+			response.Error = &oversizedRPCError{
+				Code:    jsonrpc.CodeInternalError,
+				Message: "MCP response exceeds configured limit",
+			}
+		}
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			return nil, false
+		}
+		responses = append(responses, encoded)
+	}
+	if len(responses) == 0 {
+		return nil, false
+	}
+	encoded, err := json.Marshal(responses)
+	if err != nil || int64(len(encoded)) > s.maxResponse {
+		return nil, false
+	}
+	return encoded, true
 }
 
 func (h *responseLimitHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -781,6 +864,15 @@ func (h *responseLimitHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 	}
 	h.next.ServeHTTP(buffer, request)
 	if buffer.tooLarge || int64(buffer.body.Len()) > h.max {
+		if h.fallback != nil {
+			if body, ok := h.fallback(request); ok {
+				writer.Header().Set("X-Loomhelm-MCP-Response", "too_large_fallback")
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(http.StatusOK)
+				_, _ = writer.Write(body)
+				return
+			}
+		}
 		writer.Header().Set("X-Loomhelm-MCP-Response", "too_large")
 		writer.WriteHeader(http.StatusRequestEntityTooLarge)
 		return
@@ -894,8 +986,9 @@ func (h *requestIDLimitHandler) ServeHTTP(writer http.ResponseWriter, request *h
 	clearReadDeadline := setRequestBodyReadDeadline(writer, defaultRequestBodyReadTimeout)
 	body, err := readRequestBody(request.Context(), request.Body, h.maxBody+1, defaultRequestBodyReadTimeout)
 	if err == nil {
-		clearReadDeadline()
-		_ = request.Body.Close()
+		if closeRequestBody(request.Body) {
+			clearReadDeadline()
+		}
 	}
 	if errors.Is(err, errRequestBodyReadTimeout) {
 		writer.Header().Set("X-Loomhelm-MCP-Response", "request_body_timeout")
@@ -911,6 +1004,7 @@ func (h *requestIDLimitHandler) ServeHTTP(writer http.ResponseWriter, request *h
 		return
 	}
 	request.Body = io.NopCloser(bytes.NewReader(body))
+	request = request.WithContext(context.WithValue(request.Context(), requestBodyContextKey{}, body))
 	if int64(len(body)) <= h.maxBody {
 		if requestBatchTooLarge(body, maxMCPBatchRequests) {
 			writer.Header().Set("X-Loomhelm-MCP-Response", "batch_too_large")
@@ -957,9 +1051,9 @@ func readRequestBody(ctx context.Context, body io.ReadCloser, limit int64, timeo
 	}
 }
 
-func closeRequestBody(body io.Closer) {
+func closeRequestBody(body io.Closer) bool {
 	if body == nil {
-		return
+		return true
 	}
 	done := make(chan struct{})
 	go func() {
@@ -970,7 +1064,9 @@ func closeRequestBody(body io.Closer) {
 	defer timer.Stop()
 	select {
 	case <-done:
+		return true
 	case <-timer.C:
+		return false
 	}
 }
 
@@ -1018,14 +1114,19 @@ func rawIDTooLarge(raw json.RawMessage, maxBytes int64) bool {
 	// The SDK re-encodes the request ID in the response. Measure that encoded
 	// representation rather than the request token so characters such as
 	// U+2028 cannot bypass the legacy batch response budget.
+	encoded, ok := encodedJSONValue(raw)
+	return !ok || int64(len(encoded)) > maxBytes
+}
+
+func encodedJSONValue(raw json.RawMessage) ([]byte, bool) {
 	var value any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&value); err != nil {
-		return true
+		return nil, false
 	}
 	encoded, err := json.Marshal(value)
-	return err != nil || int64(len(encoded)) > maxBytes
+	return encoded, err == nil
 }
 
 func decodeAPIError(status int, body []byte) protocol.ApiError {
