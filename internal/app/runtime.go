@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
@@ -48,6 +49,7 @@ type databaseRuntime struct {
 	shutdownTimeout        time.Duration
 	artifactRecoveryCancel context.CancelFunc
 	artifactRecoveryDone   chan struct{}
+	closeOnce              sync.Once
 }
 
 type artifactRecoveryStore interface {
@@ -310,33 +312,62 @@ func (r *databaseRuntime) startArtifactRecoveryWithInterval(store artifactRecove
 	}()
 }
 
-func (r *databaseRuntime) stopArtifactRecovery() {
+func (r *databaseRuntime) stopArtifactRecovery() bool {
 	if r == nil || r.artifactRecoveryCancel == nil {
-		return
+		return true
 	}
 	r.artifactRecoveryCancel()
 	if r.artifactRecoveryDone != nil {
-		<-r.artifactRecoveryDone
+		timeout := r.shutdownTimeout
+		if timeout <= 0 {
+			timeout = artifactRecoveryPassBudget
+		}
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-r.artifactRecoveryDone:
+		case <-timer.C:
+			if r.logger != nil {
+				r.logger.Error("artifact recovery shutdown exceeded budget")
+			}
+			return false
+		}
 	}
 	r.artifactRecoveryCancel = nil
 	r.artifactRecoveryDone = nil
+	return true
 }
 
 func (r *databaseRuntime) Close() {
 	if r == nil {
 		return
 	}
-	r.stopArtifactRecovery()
-	if r.gateway != nil {
-		timeout := r.shutdownTimeout
-		if timeout <= 0 {
-			timeout = 10 * time.Second
+	r.closeOnce.Do(func() {
+		recoveryStopped := r.stopArtifactRecovery()
+		if r.gateway != nil {
+			timeout := r.shutdownTimeout
+			if timeout <= 0 {
+				timeout = 10 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			_ = r.gateway.Shutdown(ctx)
+			cancel()
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		_ = r.gateway.Shutdown(ctx)
-		cancel()
-	}
-	if r.db != nil {
-		r.db.Close()
-	}
+		if r.db == nil {
+			return
+		}
+		if recoveryStopped {
+			r.db.Close()
+			return
+		}
+		// Keep the pool alive until the canceled recovery pass exits. This
+		// avoids racing a late filesystem/database operation with db.Close;
+		// the process-level shutdown budget has already been honored above.
+		done := r.artifactRecoveryDone
+		db := r.db
+		go func() {
+			<-done
+			db.Close()
+		}()
+	})
 }

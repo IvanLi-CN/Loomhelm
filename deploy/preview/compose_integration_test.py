@@ -59,7 +59,7 @@ class ComposeAuthenticationTest(unittest.TestCase):
                 )
                 self.assertEqual(delivered.returncode, 0, "Compose did not deliver the literal synthetic credential")
             finally:
-                cleanup = subprocess.run([*compose, "down", "--remove-orphans"], env=environment, capture_output=True, text=True, timeout=30)
+                cleanup = subprocess.run([*compose, "down", "--remove-orphans", "--volumes"], env=environment, capture_output=True, text=True, timeout=30)
                 self.assertEqual(cleanup.returncode, 0, "Could not clean up this fixture's Compose resources")
         return json.loads(result.stdout)
 

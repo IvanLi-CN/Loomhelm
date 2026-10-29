@@ -109,6 +109,22 @@ func TestStatusForError(t *testing.T) {
 	}
 }
 
+func TestUnavailableAuthErrorPreservesServiceErrorMapping(t *testing.T) {
+	err := unavailableAuthError("resolve session user", errors.New("database connection refused"))
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unavailable auth error = %v, want ErrUnavailable", err)
+	}
+	if got := statusForError(err); got != 503 {
+		t.Fatalf("unavailable auth status = %d, want 503", got)
+	}
+	request := httptest.NewRequest("GET", "/", nil)
+	response := httptest.NewRecorder()
+	writeError(response, request, statusForError(err), err, "authentication is temporarily unavailable")
+	if !strings.Contains(response.Body.String(), string(protocol.ErrorCodeServiceUnavailable)) {
+		t.Fatalf("unavailable auth response = %q, want service_unavailable", response.Body.String())
+	}
+}
+
 func TestWriteErrorUsesRequestIDAndProtocolCode(t *testing.T) {
 	request := httptest.NewRequest("GET", "/", nil)
 	request.Header.Set("X-Request-ID", "req-test")

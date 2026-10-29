@@ -95,6 +95,7 @@ func TestDatabaseRuntimeRepeatsArtifactRecoveryUntilClosed(t *testing.T) {
 	store := &repeatedArtifactRecoveryStore{}
 	runtime := &databaseRuntime{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	runtime.startArtifactRecoveryWithInterval(store, time.Millisecond)
+	t.Cleanup(func() { runtime.stopArtifactRecovery() })
 
 	deadline := time.After(time.Second)
 	for store.calls.Load() < 2 {
@@ -105,8 +106,10 @@ func TestDatabaseRuntimeRepeatsArtifactRecoveryUntilClosed(t *testing.T) {
 		}
 	}
 	runtime.stopArtifactRecovery()
-	if store.calls.Load() < 2 {
-		t.Fatalf("artifact recovery calls after stop = %d, want at least 2", store.calls.Load())
+	callsAtStop := store.calls.Load()
+	time.Sleep(10 * time.Millisecond)
+	if store.calls.Load() != callsAtStop {
+		t.Fatalf("artifact recovery calls continued after stop: before=%d after=%d", callsAtStop, store.calls.Load())
 	}
 }
 

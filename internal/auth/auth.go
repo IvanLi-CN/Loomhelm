@@ -179,7 +179,7 @@ func (s *Service) ResolvePrincipal(ctx context.Context, request *http.Request) (
 	}
 	var exists bool
 	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM auth_users WHERE id = $1)`, userID).Scan(&exists); err != nil {
-		return Principal{}, fmt.Errorf("resolve session user: %w", err)
+		return Principal{}, unavailableAuthError("resolve session user", err)
 	}
 	if !exists {
 		return Principal{}, ErrUnauthenticated
@@ -202,12 +202,25 @@ func (s *Service) ExpectedPrincipalMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		principal, err := s.ResolvePrincipal(request.Context(), request)
-		if err != nil || !secureEqual(principal.UserID, values[0]) {
+		if err != nil {
+			status := statusForError(err)
+			message := "authentication required"
+			if errors.Is(err, ErrUnavailable) {
+				message = "authentication is temporarily unavailable"
+			}
+			writeError(writer, request, status, err, message)
+			return
+		}
+		if !secureEqual(principal.UserID, values[0]) {
 			writeError(writer, request, http.StatusUnauthorized, ErrUnauthenticated, "authentication required")
 			return
 		}
 		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
 	})
+}
+
+func unavailableAuthError(operation string, err error) error {
+	return fmt.Errorf("%w: %s: %v", ErrUnavailable, operation, err)
 }
 
 func isUnboundBrowserBootstrapPath(path string) bool {
@@ -243,7 +256,7 @@ func (s *Service) resolveCredential(ctx context.Context, raw string) (Principal,
 		ORDER BY scope.project_id
 	`, hash[:])
 	if err != nil {
-		return Principal{}, fmt.Errorf("resolve API credential: %w", err)
+		return Principal{}, unavailableAuthError("resolve API credential", err)
 	}
 	defer rows.Close()
 	found := false
@@ -252,7 +265,7 @@ func (s *Service) resolveCredential(ctx context.Context, raw string) (Principal,
 		var credentialID, userID string
 		var projectID *string
 		if err := rows.Scan(&credentialID, &userID, &projectID); err != nil {
-			return Principal{}, fmt.Errorf("scan API credential: %w", err)
+			return Principal{}, unavailableAuthError("scan API credential", err)
 		}
 		if !found {
 			principal.CredentialID = credentialID
@@ -264,13 +277,13 @@ func (s *Service) resolveCredential(ctx context.Context, raw string) (Principal,
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return Principal{}, fmt.Errorf("read API credential: %w", err)
+		return Principal{}, unavailableAuthError("read API credential", err)
 	}
 	if !found {
 		return Principal{}, ErrUnauthenticated
 	}
 	if _, err := s.pool.Exec(ctx, `UPDATE auth_api_credentials SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1`, principal.CredentialID); err != nil {
-		return Principal{}, fmt.Errorf("record API credential use: %w", err)
+		return Principal{}, unavailableAuthError("record API credential use", err)
 	}
 	if len(principal.ProjectScope) == 0 {
 		principal.ProjectScope = nil

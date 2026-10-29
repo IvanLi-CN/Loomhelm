@@ -47,7 +47,7 @@ func (r artifactOwnershipResolver) ResolveArtifactOwnership(ctx context.Context,
 		return artifacts.Ownership{}, classifyArtifactAuthorizationError(err)
 	}
 	if run.ID != *artifact.RunID || run.SessionID != artifact.SessionID {
-		return artifacts.Ownership{}, errors.New("artifact run is not owned by its session")
+		return artifacts.Ownership{}, artifacts.ErrUnauthorized
 	}
 	runID := run.ID
 	ownership.RunID = &runID

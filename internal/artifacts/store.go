@@ -230,7 +230,7 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 	}
 	switch record.State {
 	case publicationReady:
-		check, inspectErr := s.inspectReady(record)
+		check, inspectErr := s.inspectReady(ctx, record)
 		if inspectErr != nil {
 			return protocol.Artifact{}, inspectErr
 		}
@@ -319,7 +319,7 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 	if err := s.ensureObjectDirectory(); err != nil {
 		return protocol.Artifact{}, err
 	}
-	check, inspectErr := s.inspectReady(record)
+	check, inspectErr := s.inspectReady(ctx, record)
 	if inspectErr != nil {
 		return protocol.Artifact{}, inspectErr
 	}
@@ -372,7 +372,7 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 		}
 		return protocol.Artifact{}, nil, err
 	}
-	if err := verifyFile(file, record.Artifact); err != nil {
+	if err := verifyFile(ctx, file, record.Artifact); err != nil {
 		_ = file.Close()
 		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
 			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
@@ -587,9 +587,12 @@ func openStoredFile(path string) (*os.File, error) {
 	return file, nil
 }
 
-func verifyFile(file *os.File, artifact protocol.Artifact) error {
+func verifyFile(ctx context.Context, file *os.File, artifact protocol.Artifact) error {
 	if file == nil {
 		return ErrIntegrity
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -605,7 +608,10 @@ func verifyFile(file *os.File, artifact protocol.Artifact) error {
 		return fmt.Errorf("rewind artifact bytes for verification: %w", ErrStoreUnavailable)
 	}
 	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
+	if _, err := io.Copy(hasher, contextReader{ctx: ctx, reader: file}); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
 		return fmt.Errorf("hash artifact bytes: %w", ErrStoreUnavailable)
 	}
 	if hex.EncodeToString(hasher.Sum(nil)) != artifact.Sha256 {

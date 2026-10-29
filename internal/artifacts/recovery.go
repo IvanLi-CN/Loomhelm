@@ -590,12 +590,12 @@ func (s *Store) readAuthorizedReadyRecord(ctx context.Context, id string, operat
 	return record, nil
 }
 
-func (s *Store) inspectReady(record artifactRecord) (fileCheck, error) {
+func (s *Store) inspectReady(ctx context.Context, record artifactRecord) (fileCheck, error) {
 	path, err := s.objectPath(record.Artifact.ID)
 	if err != nil {
 		return fileUnknown, err
 	}
-	return inspectArtifactFile(path, record.Artifact)
+	return inspectArtifactFile(ctx, path, record.Artifact)
 }
 
 func sameArtifactMetadata(candidate, existing protocol.Artifact) bool {
@@ -783,7 +783,7 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	finalCheck, err := inspectArtifactFile(finalPath, existing.Artifact)
+	finalCheck, err := inspectArtifactFile(ctx, finalPath, existing.Artifact)
 	if err != nil {
 		return artifactRecord{}, err
 	}
@@ -818,7 +818,7 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	stagingCheck, err := inspectArtifactFile(stagingPath, candidate)
+	stagingCheck, err := inspectArtifactFile(ctx, stagingPath, candidate)
 	if err != nil {
 		return artifactRecord{}, err
 	}
@@ -994,7 +994,10 @@ func (s *Store) stagingPath(name string) (string, error) {
 	return path, nil
 }
 
-func inspectArtifactFile(path string, artifact protocol.Artifact) (fileCheck, error) {
+func inspectArtifactFile(ctx context.Context, path string, artifact protocol.Artifact) (fileCheck, error) {
+	if err := requireContext(ctx); err != nil {
+		return fileUnknown, err
+	}
 	file, err := openStoredFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1006,7 +1009,7 @@ func inspectArtifactFile(path string, artifact protocol.Artifact) (fileCheck, er
 		return fileUnknown, err
 	}
 	defer file.Close()
-	if err := verifyFile(file, artifact); err != nil {
+	if err := verifyFile(ctx, file, artifact); err != nil {
 		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
 			return fileInvalid, nil
 		}
@@ -1072,7 +1075,7 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 	if record.State != publicationPending {
 		if record.State == publicationReady {
 			if record.StagingReclaimed {
-				finalCheck, inspectErr := s.inspectReady(record)
+				finalCheck, inspectErr := s.inspectReady(ctx, record)
 				if inspectErr != nil {
 					return artifactRecord{}, recoveryPending, inspectErr
 				}
@@ -1208,7 +1211,7 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 		}
 		return confirmed, recoveryUnavailable, nil
 	}
-	finalCheck, err := s.inspectReady(record)
+	finalCheck, err := s.inspectReady(ctx, record)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1244,7 +1247,7 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 	// Recheck while the identity lock is still held. The lock must remain held
 	// through deletion and marker publication so another reconciler cannot
 	// transition the row while this process is removing its staging copy.
-	finalCheck, err = s.inspectReady(record)
+	finalCheck, err = s.inspectReady(ctx, record)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1356,7 +1359,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
-	finalCheck, err := inspectArtifactFile(finalPath, record.Artifact)
+	finalCheck, err := inspectArtifactFile(ctx, finalPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1376,7 +1379,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	if err != nil {
 		return s.updatePublicationState(ctx, tx, record, publicationUnavailable, "staging-invalid")
 	}
-	stagingCheck, err := inspectArtifactFile(stagingPath, record.Artifact)
+	stagingCheck, err := inspectArtifactFile(ctx, stagingPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1394,7 +1397,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	}
 	if err := os.Link(stagingPath, finalPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			finalCheck, inspectErr := inspectArtifactFile(finalPath, record.Artifact)
+			finalCheck, inspectErr := inspectArtifactFile(ctx, finalPath, record.Artifact)
 			if inspectErr != nil {
 				return artifactRecord{}, recoveryPending, inspectErr
 			}
@@ -1413,7 +1416,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 		return artifactRecord{}, recoveryPending, fmt.Errorf("sync final artifact directory: %w", ErrStoreUnavailable)
 	}
 	s.fault(faultAfterFinalPublication)
-	finalCheck, err = inspectArtifactFile(finalPath, record.Artifact)
+	finalCheck, err = inspectArtifactFile(ctx, finalPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
