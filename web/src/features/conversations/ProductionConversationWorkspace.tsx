@@ -630,6 +630,7 @@ export function ProductionConversationWorkspace({
   const previousSessionId = useRef<string | undefined>(undefined);
   const previousRunId = useRef<string | undefined>(initialRunId);
   const lastAppliedRunSequence = useRef(0);
+  const runGenerationRef = useRef(0);
   const hasPreviousSessionId = useRef(false);
   const selectedRunIdRef = useRef<string | undefined>(initialRunId ?? readRunRecoveryId(getRunRecoveryKey(principalId, sessionId)));
   const activeRunIdRef = useRef<string | undefined>(undefined);
@@ -676,6 +677,10 @@ export function ProductionConversationWorkspace({
       mountedRef.current = false;
     };
   }, []);
+
+  useLayoutEffect(() => {
+    runGenerationRef.current += 1;
+  }, [activeRunId, activeSessionId]);
 
   useEffect(() => {
     connectionRef.current = connection;
@@ -1097,13 +1102,15 @@ export function ProductionConversationWorkspace({
     if (!api || !adapters || !activeSessionId || !activeRunId) return;
     let active = true;
     let pollInFlight = false;
+    const runGeneration = runGenerationRef.current;
+    const isCurrentRun = () => active && runGenerationRef.current === runGeneration && activeRunIdRef.current === activeRunId;
     setApprovalHistoryAvailable(false);
     const poll = async () => {
       if (pollInFlight) return;
       pollInFlight = true;
       try {
         const events = await adapters.run.readRunEvents({ id: "production-conversation", runId: activeRunId, sessionId: activeSessionId }, { connection: connectionRef.current, limit: 100 });
-        if (!active) return;
+        if (!isCurrentRun()) return;
         if (events.state === "received" && events.page) {
           const observedEvents = events.stream?.events.length ? events.stream.events : events.page.events;
           const identityVerifiedByEvents = observedEvents.length > 0;
@@ -1163,8 +1170,8 @@ export function ProductionConversationWorkspace({
         }
 
         try {
-          const responseApprovals = await readAllApprovalPages(api, activeRunId, () => active);
-          if (!active) return;
+          const responseApprovals = await readAllApprovalPages(api, activeRunId, isCurrentRun);
+          if (!isCurrentRun()) return;
           const approvalItems = responseApprovals.filter((approval) => approval.run_id === activeRunId);
           if (approvalItems.length !== responseApprovals.length) {
             setApprovals([]);
@@ -1181,7 +1188,7 @@ export function ProductionConversationWorkspace({
           setApprovalReadUncertain(false);
           setApprovalReadFailure(null);
         } catch (error) {
-          if (active) {
+          if (isCurrentRun()) {
             setApprovalHistoryAvailable(false);
             if (isApiAccessFailure(error)) {
               seenEventIds.current = new Set();
