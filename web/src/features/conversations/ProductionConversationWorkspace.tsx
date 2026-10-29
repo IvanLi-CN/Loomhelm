@@ -1,5 +1,5 @@
 import { Info, LoaderCircle, MonitorCog, Send, ShieldCheck, WifiOff } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiClientError, type ResolveApprovalParams } from "@loomhelm/api-client";
 import type { Approval, ApprovalDecision, CommandState, CreateSessionRequest, Run, Session, SessionPath } from "@loomhelm/protocol";
@@ -603,7 +603,7 @@ export function ProductionConversationWorkspace({
     setUncertainRunCommandId(nextRunIntent?.uncertain ? nextRunIntent.commandId : undefined);
   }, [principalId, sessionId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     routeVersionRef.current += 1;
     if (previousRunId.current === initialRunId) return;
     previousRunId.current = initialRunId;
