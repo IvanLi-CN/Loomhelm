@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -366,11 +367,19 @@ func routeQuery(names []string, arguments map[string]json.RawMessage) (string, e
 			continue
 		}
 		if name == "limit" {
-			value, err := intArgument(raw, name)
-			if err != nil {
-				return "", err
+			var value int64
+			if err := json.Unmarshal(raw, &value); err == nil {
+				values.Set(name, strconv.FormatInt(value, 10))
+				continue
 			}
-			values.Set(name, fmt.Sprintf("%d", value))
+			var stringValue string
+			if err := json.Unmarshal(raw, &stringValue); err == nil {
+				values.Set(name, stringValue)
+				continue
+			}
+			// Preserve malformed values for the REST parser so that its established
+			// 400 response and validation message remain authoritative.
+			values.Set(name, strings.TrimSpace(string(raw)))
 			continue
 		}
 		value, err := stringArgument(arguments, name)
@@ -418,14 +427,6 @@ func stringArgument(arguments map[string]json.RawMessage, name string) (string, 
 	}
 	if value == "" {
 		return "", fmt.Errorf("MCP parameter %q must not be empty", name)
-	}
-	return value, nil
-}
-
-func intArgument(raw json.RawMessage, name string) (int64, error) {
-	var value int64
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return 0, fmt.Errorf("MCP parameter %q must be an integer", name)
 	}
 	return value, nil
 }

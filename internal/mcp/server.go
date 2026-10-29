@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -56,7 +57,11 @@ type Config struct {
 	ServerVersion  string
 
 	// ProtocolVersions narrows the official SDK's supported protocol versions.
-	// An empty value uses the SDK's current supported list.
+	// An empty value uses the SDK's current supported list. The SDK propagates
+	// HTTP disconnect cancellation only for protocol versions from 2026-07-28
+	// onward; older stateless protocol sessions may continue after disconnect,
+	// so callers must apply each operation's retry rule and must not blindly
+	// retry non-idempotent operations such as credential creation.
 	ProtocolVersions []string
 
 	// AllowedOrigins is an exact allowlist. An absent Origin header is accepted;
@@ -123,7 +128,14 @@ func NewServer(config Config) (*Server, error) {
 	sdkServer := sdk.NewServer(
 		&sdk.Implementation{Name: config.ServerName, Version: config.ServerVersion},
 		&sdk.ServerOptions{
-			Capabilities:              &sdk.ServerCapabilities{},
+			// The catalog is immutable after construction and this endpoint does
+			// not implement long-lived list-change subscriptions. Explicitly keep
+			// those flags false so the SDK does not advertise a stream that the
+			// bounded JSON response transport cannot safely buffer.
+			Capabilities: &sdk.ServerCapabilities{
+				Tools:     &sdk.ToolCapabilities{},
+				Resources: &sdk.ResourceCapabilities{},
+			},
 			SupportedProtocolVersions: protocols,
 		},
 	)
@@ -173,7 +185,18 @@ func NewServer(config Config) (*Server, error) {
 			PropagateRequestCancellation: true,
 		},
 	)
-	server.handler = &originHandler{next: transport, allowed: origins}
+	server.handler = &noStoreHandler{next: &requestIDLimitHandler{
+		next: &responseLimitHandler{
+			next: &originHandler{
+				next:        transport,
+				allowed:     origins,
+				crossOrigin: http.NewCrossOriginProtection(),
+			},
+			max: config.MaxResponseBytes,
+		},
+		maxBody: config.MaxBodyBytes,
+		maxID:   config.MaxResponseBytes / 8,
+	}}
 	return server, nil
 }
 
@@ -239,6 +262,19 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 		}
 		response, err := s.invokeREST(ctx, requestHeaders(request), spec.route, arguments)
 		if err != nil {
+			var argumentErr *argumentError
+			if errors.As(err, &argumentErr) {
+				return toolError(http.StatusBadRequest, protocol.ApiError{
+					Code:    protocol.ErrorCodeInvalidRequest,
+					Message: argumentErr.Error(),
+				}), nil
+			}
+			if errors.Is(err, errResponseTooLarge) {
+				return toolError(http.StatusConflict, protocol.ApiError{
+					Code:    protocol.ErrorCodeUnknownResult,
+					Message: "application outcome is unknown; do not blindly retry a non-idempotent operation",
+				}), nil
+			}
 			return toolError(http.StatusServiceUnavailable, protocol.ApiError{
 				Code:    protocol.ErrorCodeInvalidRequest,
 				Message: "application service is unavailable",
@@ -247,7 +283,26 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 		if response.status < http.StatusOK || response.status >= http.StatusMultipleChoices {
 			return toolError(response.status, decodeAPIError(response.status, response.body)), nil
 		}
-		return toolSuccess(response.body)
+		result, err := toolSuccess(response.body)
+		if err != nil {
+			if spec.route.method != http.MethodGet {
+				return toolError(http.StatusConflict, protocol.ApiError{
+					Code:    protocol.ErrorCodeUnknownResult,
+					Message: "application outcome is unknown; do not blindly retry a non-idempotent operation",
+				}), nil
+			}
+			return toolError(http.StatusServiceUnavailable, protocol.ApiError{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "application service returned invalid JSON",
+			}), nil
+		}
+		if !encodedResponseWithinBudget(result, s.maxResponse) {
+			return toolError(http.StatusConflict, protocol.ApiError{
+				Code:    protocol.ErrorCodeUnknownResult,
+				Message: "application outcome is unknown; do not blindly retry a non-idempotent operation",
+			}), nil
+		}
+		return result, nil
 	}
 }
 
@@ -275,11 +330,15 @@ func (s *Server) resourceHandler(ctx context.Context, request *sdk.ReadResourceR
 	if !json.Valid(body) {
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "application service returned invalid JSON"}
 	}
-	return &sdk.ReadResourceResult{Contents: []*sdk.ResourceContents{{
+	result := &sdk.ReadResourceResult{Contents: []*sdk.ResourceContents{{
 		URI:      request.Params.URI,
 		MIMEType: "application/json",
 		Text:     string(body),
-	}}}, nil
+	}}}
+	if !encodedResponseWithinBudget(result, s.maxResponse) {
+		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "application resource response exceeds configured limit"}
+	}
+	return result, nil
 }
 
 func requestHeaders(request interface{ GetExtra() *sdk.RequestExtra }) http.Header {
@@ -292,11 +351,11 @@ func requestHeaders(request interface{ GetExtra() *sdk.RequestExtra }) http.Head
 func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, route routeSpec, arguments map[string]json.RawMessage) (restResponse, error) {
 	path, err := routePath(route.path, route.pathParams, arguments)
 	if err != nil {
-		return restResponse{}, err
+		return restResponse{}, &argumentError{err: err}
 	}
 	query, err := routeQuery(route.queryParams, arguments)
 	if err != nil {
-		return restResponse{}, err
+		return restResponse{}, &argumentError{err: err}
 	}
 	if s.restPathPrefix != "" {
 		path = s.restPathPrefix + "/" + strings.TrimLeft(path, "/")
@@ -306,7 +365,7 @@ func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, rout
 	}
 	payload, err := routeBody(route, arguments)
 	if err != nil {
-		return restResponse{}, err
+		return restResponse{}, &argumentError{err: err}
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -338,6 +397,14 @@ type restResponse struct {
 	status int
 	body   []byte
 }
+
+type argumentError struct {
+	err error
+}
+
+func (e *argumentError) Error() string { return e.err.Error() }
+
+func (e *argumentError) Unwrap() error { return e.err }
 
 type responseRecorder struct {
 	header      http.Header
@@ -380,6 +447,14 @@ func toolSuccess(body []byte) (*sdk.CallToolResult, error) {
 		Content:           []sdk.Content{&sdk.TextContent{Text: string(body)}},
 		StructuredContent: json.RawMessage(body),
 	}, nil
+}
+
+func encodedResponseWithinBudget(value any, maxResponse int64) bool {
+	if maxResponse < 4 {
+		return false
+	}
+	data, err := json.Marshal(value)
+	return err == nil && int64(len(data)) <= maxResponse/4
 }
 
 func toolError(status int, apiError protocol.ApiError) *sdk.CallToolResult {
@@ -427,8 +502,9 @@ func containsString(values []string, target string) bool {
 }
 
 type originHandler struct {
-	next    http.Handler
-	allowed map[string]struct{}
+	next        http.Handler
+	allowed     map[string]struct{}
+	crossOrigin *http.CrossOriginProtection
 }
 
 func (h *originHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -437,8 +513,167 @@ func (h *originHandler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			http.Error(writer, "MCP request origin is not allowed", http.StatusForbidden)
 			return
 		}
+	} else if h.crossOrigin != nil {
+		if err := h.crossOrigin.Check(request); err != nil {
+			http.Error(writer, err.Error(), http.StatusForbidden)
+			return
+		}
 	}
 	h.next.ServeHTTP(writer, request)
+}
+
+type noStoreHandler struct {
+	next http.Handler
+}
+
+func (h *noStoreHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	h.next.ServeHTTP(&noStoreResponseWriter{ResponseWriter: writer}, request)
+}
+
+type noStoreResponseWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *noStoreResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	w.Header().Set("Cache-Control", "no-store")
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *noStoreResponseWriter) Write(data []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *noStoreResponseWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *noStoreResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+type responseLimitHandler struct {
+	next http.Handler
+	max  int64
+}
+
+func (h *responseLimitHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	buffer := &responseBuffer{
+		header:   make(http.Header),
+		body:     bytes.NewBuffer(nil),
+		status:   http.StatusOK,
+		maxBytes: h.max,
+	}
+	h.next.ServeHTTP(buffer, request)
+	if buffer.tooLarge || int64(buffer.body.Len()) > h.max {
+		writer.Header().Set("X-Loomhelm-MCP-Response", "too_large")
+		writer.WriteHeader(http.StatusRequestEntityTooLarge)
+		return
+	}
+	copyHeader(writer.Header(), buffer.header)
+	writer.WriteHeader(buffer.status)
+	_, _ = writer.Write(buffer.body.Bytes())
+}
+
+type responseBuffer struct {
+	header      http.Header
+	body        *bytes.Buffer
+	status      int
+	wroteHeader bool
+	tooLarge    bool
+	maxBytes    int64
+}
+
+func (r *responseBuffer) Header() http.Header { return r.header }
+
+func (r *responseBuffer) WriteHeader(status int) {
+	if r.wroteHeader {
+		return
+	}
+	r.wroteHeader = true
+	r.status = status
+}
+
+func (r *responseBuffer) Write(data []byte) (int, error) {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	if r.maxBytes > 0 && int64(r.body.Len())+int64(len(data)) > r.maxBytes {
+		r.tooLarge = true
+		return 0, errResponseTooLarge
+	}
+	return r.body.Write(data)
+}
+
+func (r *responseBuffer) Flush() {}
+
+func copyHeader(destination, source http.Header) {
+	for name, values := range source {
+		for _, value := range values {
+			destination.Add(name, value)
+		}
+	}
+}
+
+type requestIDLimitHandler struct {
+	next    http.Handler
+	maxBody int64
+	maxID   int64
+}
+
+func (h *requestIDLimitHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.Body == nil || h.maxBody < 1 || h.maxID < 1 {
+		h.next.ServeHTTP(writer, request)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, h.maxBody+1))
+	_ = request.Body.Close()
+	if err != nil {
+		writer.Header().Set("X-Loomhelm-MCP-Response", "request_body_unreadable")
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	if int64(len(body)) <= h.maxBody && requestIDTooLarge(body, h.maxID) {
+		writer.Header().Set("X-Loomhelm-MCP-Response", "request_id_too_large")
+		writer.WriteHeader(http.StatusRequestEntityTooLarge)
+		return
+	}
+	h.next.ServeHTTP(writer, request)
+}
+
+func requestIDTooLarge(body []byte, maxBytes int64) bool {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(body, &object); err == nil {
+		return rawIDTooLarge(object["id"], maxBytes)
+	}
+	var batch []json.RawMessage
+	if err := json.Unmarshal(body, &batch); err != nil {
+		return false
+	}
+	for _, item := range batch {
+		var entry map[string]json.RawMessage
+		if json.Unmarshal(item, &entry) == nil && rawIDTooLarge(entry["id"], maxBytes) {
+			return true
+		}
+	}
+	return false
+}
+
+func rawIDTooLarge(raw json.RawMessage, maxBytes int64) bool {
+	return len(raw) != 0 && int64(len(raw)) > maxBytes
 }
 
 func decodeAPIError(status int, body []byte) protocol.ApiError {

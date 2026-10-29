@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -221,6 +222,273 @@ func TestServerToolCallPreservesRESTErrorAsToolError(t *testing.T) {
 	}
 }
 
+func TestServerPreservesRESTQueryValidation(t *testing.T) {
+	var seenPath string
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		seenPath = request.URL.RequestURI()
+		writer.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(writer).Encode(protocol.ApiError{
+			Code:    protocol.ErrorCodeInvalidRequest,
+			Message: "invalid project list query",
+		})
+	})
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      10,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.list_projects",
+			"arguments": map[string]any{
+				"limit": "bad",
+			},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("query validation result = %#v, want MCP tool error with HTTP 400", result)
+	}
+	if seenPath != "/projects?limit=bad" {
+		t.Fatalf("delegated malformed query path = %q, want /projects?limit=bad", seenPath)
+	}
+}
+
+func TestServerReportsOversizedApplicationOutcomeAsUnknown(t *testing.T) {
+	calls := 0
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls++
+			_, _ = writer.Write(bytes.Repeat([]byte("x"), 600))
+		}),
+		MaxResponseBytes: 512,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      11,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.create_project",
+			"arguments": map[string]any{
+				"name": "Loomhelm",
+			},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("oversized response result = %#v, want unknown outcome", result)
+	}
+	if calls != 1 {
+		t.Fatalf("REST invocation count = %d, want exactly one", calls)
+	}
+}
+
+func TestServerReportsInvalidMutationResponseAsUnknown(t *testing.T) {
+	calls := 0
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		_, _ = writer.Write([]byte("not-json"))
+	})
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      12,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.create_user_credential",
+			"arguments": map[string]any{
+				"name": "automation",
+			},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("invalid mutation response = %#v, want unknown outcome", result)
+	}
+	if calls != 1 {
+		t.Fatalf("REST invocation count = %d, want exactly one", calls)
+	}
+}
+
+func TestServerBoundsEncodedToolResult(t *testing.T) {
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = writer.Write([]byte(`{"value":"12345678901234567890123456789012345678901234567890"}`))
+		}),
+		MaxResponseBytes: 512,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      13,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.create_project",
+			"arguments": map[string]any{
+				"name": "Loomhelm",
+			},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
+		t.Fatalf("encoded tool result = %#v, want unknown outcome", result)
+	}
+}
+
+func TestServerCapsFinalWireResponseBody(t *testing.T) {
+	server, err := NewServer(Config{
+		RESTHandler:      http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {}),
+		MaxResponseBytes: 64,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      14,
+		"method":  "tools/list",
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized wire response status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+	}
+	if len(recorder.Body.Bytes()) > 64 {
+		t.Fatalf("oversized wire response body = %d bytes, want at most 64", recorder.Body.Len())
+	}
+	if got := recorder.Header().Get("X-Loomhelm-MCP-Response"); got != "too_large" {
+		t.Fatalf("oversized wire response marker = %q, want too_large", got)
+	}
+}
+
+func TestServerRejectsOversizedRequestIDBeforeMutation(t *testing.T) {
+	calls := 0
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls++
+		}),
+		MaxResponseBytes: 512,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	body := []byte(`{"jsonrpc":"2.0","id":"`)
+	body = append(body, bytes.Repeat([]byte("x"), 100)...)
+	body = append(body, []byte(`","method":"tools/call","params":{"name":"loomhelm.create_project","arguments":{"name":"Loomhelm"}}}`)...)
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized request ID status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+	}
+	if recorder.Body.Len() > 512 {
+		t.Fatalf("oversized request ID response body = %d bytes, want at most 512", recorder.Body.Len())
+	}
+	if got := recorder.Header().Get("X-Loomhelm-MCP-Response"); got != "request_id_too_large" {
+		t.Fatalf("oversized request ID marker = %q, want request_id_too_large", got)
+	}
+	if calls != 0 {
+		t.Fatalf("REST invocation count = %d, want zero", calls)
+	}
+}
+
+func TestServerRejectsUnreadableRequestBodyBeforeMutation(t *testing.T) {
+	calls := 0
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+	})
+	body := mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      15,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.create_project",
+			"arguments": map[string]any{
+				"name": "Loomhelm",
+			},
+		},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	request.Body = &failingRequestBody{body: body}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unreadable request body status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if got := recorder.Header().Get("X-Loomhelm-MCP-Response"); got != "request_body_unreadable" {
+		t.Fatalf("unreadable request body marker = %q, want request_body_unreadable", got)
+	}
+	if calls != 0 {
+		t.Fatalf("REST invocation count = %d, want zero", calls)
+	}
+}
+
+type failingRequestBody struct {
+	body  []byte
+	read  bool
+	close bool
+}
+
+func (b *failingRequestBody) Read(destination []byte) (int, error) {
+	if b.read {
+		return 0, errors.New("request body read failed")
+	}
+	b.read = true
+	return copy(destination, b.body), errors.New("request body read failed")
+}
+
+func (b *failingRequestBody) Close() error {
+	b.close = true
+	return nil
+}
+
 func TestServerResourceReadDelegatesParameterizedURI(t *testing.T) {
 	var seenPath string
 	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
@@ -272,6 +540,16 @@ func TestServerRejectsUntrustedOriginAndNonPost(t *testing.T) {
 		t.Fatalf("untrusted origin status = %d, want %d", originRecorder.Code, http.StatusForbidden)
 	}
 
+	crossSiteRequest := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)))
+	crossSiteRequest.Header.Set("Content-Type", "application/json")
+	crossSiteRequest.Header.Set("Accept", "application/json, text/event-stream")
+	crossSiteRequest.Header.Set("Sec-Fetch-Site", "cross-site")
+	crossSiteRecorder := httptest.NewRecorder()
+	server.ServeHTTP(crossSiteRecorder, crossSiteRequest)
+	if crossSiteRecorder.Code != http.StatusForbidden {
+		t.Fatalf("cross-site request status = %d, want %d", crossSiteRecorder.Code, http.StatusForbidden)
+	}
+
 	getRecorder := httptest.NewRecorder()
 	server.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/mcp", nil))
 	if getRecorder.Code != http.StatusMethodNotAllowed || getRecorder.Header().Get("Allow") != http.MethodPost {
@@ -304,6 +582,9 @@ func callMCPWithHeaders(t *testing.T, server *Server, message map[string]any, he
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("MCP response status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("MCP Cache-Control = %q, want no-store", got)
 	}
 	var response map[string]any
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
