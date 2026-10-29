@@ -109,6 +109,15 @@ describe("session run history adapter", () => {
     await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ state: "unknown", reason: "foreign_response" });
   });
 
+  test("rejects a page without the required pagination flag", async () => {
+    const adapter = new SessionRunHistoryClientAdapter({
+      listSessionRuns: async () => ({ items: [run("run-1")] }),
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ state: "unknown", reason: "invalid_response" });
+  });
+
   test("preserves forbidden and missing-session failures", async () => {
     for (const [status, reason] of [[403, "forbidden"], [404, "not_found"]]) {
       const adapter = new SessionRunHistoryClientAdapter({

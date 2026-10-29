@@ -72,6 +72,10 @@ export class SessionRunHistoryClientAdapter {
           if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
           const page = await this.client.listSessionRuns({ session_id: sessionId, limit: 200, ...(afterCursor ? { after_cursor: afterCursor } : {}) });
           if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
+          if (typeof page.has_more !== "boolean") {
+            this.requests.finish(admission.token);
+            return { state: "unknown", reason: "invalid_response", request: admission.token };
+          }
           if (!Array.isArray(page.items) || page.items.some((run) => run.session_id !== sessionId)) {
             this.requests.finish(admission.token);
             return { state: "unknown", reason: "foreign_response", request: admission.token };
