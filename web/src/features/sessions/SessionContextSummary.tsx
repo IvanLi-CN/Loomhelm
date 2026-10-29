@@ -55,6 +55,8 @@ export function SessionContextSummary({ context, connection = "online" }: Sessio
       <dl className="grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-3 text-xs leading-5">
         <dt className="text-[var(--muted)]">Session</dt>
         <dd className="min-w-0 wrap-anywhere font-mono text-[11px]">{context.session.id}</dd>
+        <dt className="text-[var(--muted)]">Host thread</dt>
+        <dd className="min-w-0 wrap-anywhere font-mono text-[11px]">{context.session.external_thread_ref}</dd>
         <dt className="text-[var(--muted)]">路径</dt>
         <dd>{getSessionPathLabel(context.session.path)}</dd>
         <dt className="text-[var(--muted)]">状态</dt>

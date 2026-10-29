@@ -7,6 +7,7 @@ export interface PublishedSessionApi {
   createSession: GeneratedApiClient["createSession"];
   getSession: GeneratedApiClient["getSession"];
   submitRun: GeneratedApiClient["submitRun"];
+  listRunApprovals: GeneratedApiClient["listRunApprovals"];
   resolveApproval: GeneratedApiClient["resolveApproval"];
   interruptRun: GeneratedApiClient["interruptRun"];
   listRunEvents: GeneratedApiClient["listRunEvents"];
@@ -18,6 +19,7 @@ export function createPublishedSessionApi(client: GeneratedApiClient = createGen
     createSession: (request) => client.createSession(request),
     getSession: (request) => client.getSession(request),
     submitRun: (request) => client.submitRun(request),
+    listRunApprovals: (request) => client.listRunApprovals(request),
     resolveApproval: (request) => client.resolveApproval(request),
     interruptRun: (request) => client.interruptRun(request),
     listRunEvents: (request) => client.listRunEvents(request),

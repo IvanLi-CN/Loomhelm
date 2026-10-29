@@ -3,7 +3,8 @@ import {
   createRoute,
   createRouter
 } from "@tanstack/react-router";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { useMemo } from "react";
 
 import { useOptionalProductionApi } from "@/app/providers";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,9 @@ import { StatusRoute } from "@/routes/StatusRoute";
 import { TasksRoute } from "@/routes/TasksRoute";
 import { ConversationWorkspaceRoute, TaskWorkspaceRoute } from "@/routes/WorkspaceRoute";
 import { WorkbenchRoute } from "@/routes/WorkbenchRoute";
+import { ProductionConversationWorkspace } from "@/features/conversations/ProductionConversationWorkspace";
+import { createPublishedSessionApi } from "@/features/sessions/api";
+import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 
 function ProductionNotReadyRoute({ eyebrow, title, description, to = "/tasks", linkLabel = "查看任务" }: { eyebrow: string; title: string; description: string; to?: "/" | "/tasks"; linkLabel?: string }) {
   return <section className="page-section unavailable-page"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p><Button asChild variant="secondary" className="button button-secondary"><Link to={to}>{linkLabel}</Link></Button></section>;
@@ -40,7 +44,25 @@ function ConversationsEntryRoute() {
 function CreateConversationEntryRoute() {
   return useOptionalDemoRuntime()
     ? <CreateConversationRoute />
-    : <ProductionNotReadyRoute eyebrow="CONVERSATIONS" title="创建对话尚未接通" description="会话创建、历史共享和执行入口将在服务可用后开放。" to="/" linkLabel="返回工作台" />;
+    : <ProductionCreateConversationRoute />;
+}
+
+function ProductionCreateConversationRoute() {
+  const navigate = useNavigate();
+  const assembly = useOptionalProductionApi();
+  const source = useOptionalProjectTaskSource();
+  const api = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
+  return (
+    <section className="page-section">
+      <ProductionConversationWorkspace
+        api={api}
+        conversationTitle="新建独立会话"
+        onSessionCreated={(sessionId) => navigate({ params: { conversationId: sessionId }, to: "/conversations/$conversationId" })}
+        projectOptions={source?.projects}
+        readOnly={assembly?.permissions.isReadOnly ?? true}
+      />
+    </section>
+  );
 }
 
 const rootRoute = createRootRoute({ component: AppShell });
