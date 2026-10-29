@@ -60,7 +60,7 @@
     "pause_points": [
       "Before applying 00014, verify the candidate source identity and PostgreSQL migration lock availability.",
       "After the migration commits and before enabling draft-command admission, verify the binding foreign keys and pending-state index.",
-      "Before enabling draft-command admission or rolling back to an earlier writer, drain and fence earlier writers from commands with pending draft bindings; do not treat markerless executing rows as confirmed delivery."
+      "Before enabling draft-command admission or rolling back to an earlier writer, disable new draft admission, drain and fence earlier writers, and verify that no pending draft bindings remain; if any pending binding remains, retain a draft-capable writer and block the earlier writer from touching it. Do not treat markerless executing rows as confirmed delivery."
     ]
   },
   "recovery": {

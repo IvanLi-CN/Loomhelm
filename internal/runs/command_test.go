@@ -218,6 +218,21 @@ func TestCommandObservationNotFoundBecomesRejected(t *testing.T) {
 	}
 }
 
+func TestTerminalReconciliationPreservesExactDeliveryFact(t *testing.T) {
+	record := CommandRecord{
+		Intent:        CommandIntent{Command: protocol.Command{CommandID: "cmd-failed-after-delivery"}},
+		State:         protocol.CommandStateFailed,
+		ExactAckState: protocol.CommandStateExecuting,
+	}
+	if got := terminalReconciliation(record); got.State != protocol.ReconciliationStateConfirmed {
+		t.Fatalf("failed command with executing ACK = %+v, want confirmed reconciliation", got)
+	}
+	record.ExactAckState = ""
+	if got := terminalReconciliation(record); got.State != protocol.ReconciliationStateNotFound {
+		t.Fatalf("markerless failed command = %+v, want not-found reconciliation", got)
+	}
+}
+
 func TestCommandAckClonesMutablePayloads(t *testing.T) {
 	ledger := NewLedger()
 	intent := testIntent("cmd-clone", "generation-1", `{"prompt":"clone"}`)

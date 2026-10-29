@@ -52,7 +52,7 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 	}
 
 	command := protocol.Command{
-		CommandID: "draft-command-delivered",
+		CommandID: fixture.command + "-draft-delivered",
 		IssuedAt:  "2026-10-30T00:00:00Z",
 		Kind:      protocol.CommandKindRunSend,
 		Payload:   json.RawMessage(`{"prompt":"first input"}`),
@@ -122,7 +122,7 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 		t.Fatalf("apply consumable draft: %v", err)
 	}
 	failedCommand := protocol.Command{
-		CommandID: "draft-command-failed",
+		CommandID: fixture.command + "-draft-failed",
 		IssuedAt:  "2026-10-30T00:00:01Z",
 		Kind:      protocol.CommandKindRunSend,
 		Payload:   json.RawMessage(`{"prompt":"consume me"}`),
@@ -161,7 +161,7 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 	}
 
 	staleCommand := protocol.Command{
-		CommandID: "draft-command-stale",
+		CommandID: fixture.command + "-draft-stale",
 		IssuedAt:  "2026-10-30T00:00:02Z",
 		Kind:      protocol.CommandKindRunSend,
 		Payload:   json.RawMessage(`{"prompt":"old input"}`),
@@ -223,7 +223,7 @@ func TestPersistentDraftCommandReconciliationRejectsMismatchedCommandID(t *testi
 		t.Fatalf("seed draft: %v", err)
 	}
 	command := protocol.Command{
-		CommandID: "draft-command-reconcile-mismatch",
+		CommandID: fixture.command + "-draft-reconcile-mismatch",
 		IssuedAt:  "2026-10-30T00:00:03Z",
 		Kind:      protocol.CommandKindRunSend,
 		Payload:   json.RawMessage(`{"prompt":"retain after mismatched reconciliation"}`),

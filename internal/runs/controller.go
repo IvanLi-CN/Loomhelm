@@ -642,7 +642,7 @@ func normalizeTransportAck(command protocol.Command, ack protocol.CommandAck) (p
 
 func terminalReconciliation(record CommandRecord) protocol.Reconciliation {
 	state := protocol.ReconciliationStateConfirmed
-	if record.State == protocol.CommandStateFailed || record.State == protocol.CommandStateRejected {
+	if (record.State == protocol.CommandStateFailed || record.State == protocol.CommandStateRejected) && !commandDeliveryConfirmed(record) {
 		state = protocol.ReconciliationStateNotFound
 	}
 	return protocol.Reconciliation{

@@ -137,6 +137,19 @@ func TestPersistentControlServiceSubmitDraftFinalizesAfterDelivery(t *testing.T)
 	if !duplicate.Ack.Deduplicated || control.transport.sendCount() != 1 {
 		t.Fatalf("duplicate draft submit ack = %+v, sends = %d", duplicate.Ack, control.transport.sendCount())
 	}
+	staleRequest := protocol.SubmitRunRequest{
+		CommandID: fixture.command + "-draft-stale",
+		Prompt:    draft.Content,
+	}
+	if _, err := control.service.SubmitRunWithDraft(ctx, principal, fixture.sessionIDs[0], staleRequest, draft.Revision); !errors.Is(err, drafts.ErrDraftRevisionStale) {
+		t.Fatalf("stale draft submit error = %v, want %v", err, drafts.ErrDraftRevisionStale)
+	}
+	if _, err := NewStore(db.Pool()).Lookup(ctx, fixture.sessionIDs[0], staleRequest.CommandID); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("stale draft command lookup error = %v, want %v", err, ErrCommandNotFound)
+	}
+	if control.transport.sendCount() != 1 {
+		t.Fatalf("transport sends after stale draft submit = %d, want 1", control.transport.sendCount())
+	}
 }
 
 func TestPersistentControlServiceInterruptUsesRunOwnerAndCommandIdentity(t *testing.T) {
