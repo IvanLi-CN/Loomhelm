@@ -2,6 +2,8 @@ package artifacts
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -85,6 +87,42 @@ func TestDownloadHTTPHandlerSupportsHeadWithoutBody(t *testing.T) {
 	}
 	if response.Header().Get("Content-Length") != "23" {
 		t.Fatalf("HEAD content length = %q", response.Header().Get("Content-Length"))
+	}
+}
+
+func TestDownloadHTTPHandlerReturnsCompleteContentChunkAsBase64JSON(t *testing.T) {
+	content := []byte{0, 1, 2, 255}
+	artifact := protocol.Artifact{
+		ID:          "artifact-content",
+		Name:        "content.bin",
+		Kind:        protocol.ArtifactKindFile,
+		Size:        int64(len(content)),
+		ContentType: "application/octet-stream",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID+"/content?limit=4", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+	var payload protocol.ArtifactContentResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != string(content) || payload.Offset != 0 || payload.NextOffset != int64(len(content)) || payload.TotalSize != int64(len(content)) || !payload.Complete {
+		t.Fatalf("content response = %#v, decoded=%v", payload, decoded)
+	}
+	if response.Header().Get("Content-Type") != "application/json" || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("content response headers = %#v", response.Header())
 	}
 }
 

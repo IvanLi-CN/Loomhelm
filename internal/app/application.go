@@ -92,14 +92,17 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	(&sessionRunHTTP{principal: s.identity, sessions: sessionAccess, runs: s.runHistory}).mount(router)
 	(&draftHTTP{principal: s.identity, sessions: sessionAccess, drafts: s.drafts}).mount(router)
 	var download http.Handler = http.HandlerFunc(unavailableArtifactDownload)
+	var contentDownload http.Handler = http.HandlerFunc(unavailableArtifactDownload)
 	if s.artifactStore != nil {
 		if handler, err := artifacts.NewDownloadHTTPHandler(s.artifactStore, writeArtifactDownloadError); err == nil {
 			download = handler
+			contentDownload = http.HandlerFunc(handler.ServeContentHTTP)
 		}
 	}
 	protectedDownload := s.artifactDownloadHandler(download)
 	router.Get("/artifacts/{artifact_id}/download", protectedDownload)
 	router.Head("/artifacts/{artifact_id}/download", protectedDownload)
+	router.Get("/artifacts/{artifact_id}/content", s.artifactContentHandler(contentDownload))
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
 		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
 		if err != nil {
@@ -137,6 +140,10 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 
 func (s *applicationServices) artifactDownloadHandler(download http.Handler) http.HandlerFunc {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if len(request.Header.Values("Authorization")) != 0 {
+			auth.WriteError(writer, request, http.StatusUnauthorized, auth.ErrUnauthenticated, "browser session required")
+			return
+		}
 		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
 		if err != nil || principal.UserID == "" {
 			if err == nil {
@@ -147,6 +154,21 @@ func (s *applicationServices) artifactDownloadHandler(download http.Handler) htt
 		}
 		request = request.WithContext(context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal))
 		download.ServeHTTP(writer, request)
+	})
+}
+
+func (s *applicationServices) artifactContentHandler(content http.Handler) http.HandlerFunc {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
+		if err != nil || principal.UserID == "" {
+			if err == nil {
+				err = auth.ErrUnauthenticated
+			}
+			auth.WriteError(writer, request, auth.StatusForError(err), err, "authentication required")
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal))
+		content.ServeHTTP(writer, request)
 	})
 }
 

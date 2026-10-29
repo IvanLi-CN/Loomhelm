@@ -448,6 +448,25 @@
       "required": ["artifact"],
       "properties": {"artifact": {"$ref": "#/types/Artifact"}}
     },
+    "ArtifactContentResponse": {
+      "type": "object",
+      "required": ["artifact", "content_base64", "offset", "next_offset", "total_size", "complete"],
+      "properties": {
+        "artifact": {"$ref": "#/types/Artifact"},
+        "content_base64": {"type": "string"},
+        "offset": {"type": "integer"},
+        "next_offset": {"type": "integer"},
+        "total_size": {"type": "integer"},
+        "complete": {"type": "boolean"}
+      }
+    },
+    "DownloadArtifactContentQuery": {
+      "type": "object",
+      "properties": {
+        "offset": {"type": "integer"},
+        "limit": {"type": "integer"}
+      }
+    },
     "ArtifactDownload": {
       "kind": "binary"
     },
@@ -927,6 +946,17 @@
         "response_status": 200,
         "response_statuses": [200, 206],
         "summary": "Download the authorized original artifact bytes"
+      },
+      {
+        "operation_id": "downloadArtifactContent",
+        "method": "GET",
+        "path": "/artifacts/{artifact_id}/content",
+        "path_params": {"artifact_id": "string"},
+        "query_type": "DownloadArtifactContentQuery",
+        "response_type": "ArtifactContentResponse",
+        "response_status": 200,
+        "summary": "Download a cursor-addressed chunk of the authorized original artifact bytes",
+        "mcp_tool": {"name": "loomhelm.download_artifact", "description": "Download every chunk of an authorized original artifact and reassemble the original bytes."}
       }
     ]
   },

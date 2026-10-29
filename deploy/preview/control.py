@@ -8,6 +8,7 @@ import copy
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -24,6 +25,7 @@ SOURCE_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETAINED_KEY_RE = re.compile(r"^[0-9a-f]{40}-[0-9]+$")
+DURATION_PART_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ns|us|µs|ms|s|m|h)")
 
 
 class ContractError(Exception):
@@ -546,6 +548,24 @@ def env_value(name: str, default: str | None = None, required: bool = False) -> 
     return value or ""
 
 
+def default_stop_grace_period(shutdown_timeout: str) -> str:
+    """Cover HTTP, gateway and artifact-recovery shutdown budgets in Compose."""
+    position = 0
+    seconds = 0.0
+    units = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1, "m": 60, "h": 3600}
+    for match in DURATION_PART_RE.finditer(shutdown_timeout.strip()):
+        if match.start() != position:
+            return "90s"
+        seconds += float(match.group(1)) * units[match.group(2)]
+        position = match.end()
+    if position != len(shutdown_timeout.strip()) or seconds <= 0:
+        return "90s"
+    # HTTP may retain an MCP request for 60s, gateway shutdown has its own
+    # configured budget, and recovery cleanup has a ten-second pass budget.
+    total = max(seconds, 60.0) + seconds + 20.0
+    return f"{math.ceil(total)}s"
+
+
 def dotenv(value: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9_./:@?=&+,-]*", value):
         return value
@@ -558,6 +578,7 @@ def dotenv(value: str) -> str:
 def command_compose_env(args: argparse.Namespace) -> None:
     state_dir = Path(args.state_dir).resolve()
     state = load_state(state_dir)
+    shutdown_timeout = env_value("LOOMHELM_SHUTDOWN_TIMEOUT", "10s")
     values: dict[str, str] = {
         "LOOMHELM_PREVIEW_STATE_DIR": str(state_dir),
         "LOOMHELM_PREVIEW_WEB_DIR": str(web_dir(state_dir)),
@@ -576,8 +597,8 @@ def command_compose_env(args: argparse.Namespace) -> None:
         "LOOMHELM_OIDC_CLIENT_SECRET": env_value("LOOMHELM_OIDC_CLIENT_SECRET", ""),
         "LOOMHELM_OIDC_REDIRECT_URL": env_value("LOOMHELM_OIDC_REDIRECT_URL", ""),
         "LOOMHELM_SESSION_COOKIE_SECURE": env_value("LOOMHELM_SESSION_COOKIE_SECURE", "true"),
-        "LOOMHELM_SHUTDOWN_TIMEOUT": env_value("LOOMHELM_SHUTDOWN_TIMEOUT", "10s"),
-        "LOOMHELM_STOP_GRACE_PERIOD": env_value("LOOMHELM_STOP_GRACE_PERIOD", "90s"),
+        "LOOMHELM_SHUTDOWN_TIMEOUT": shutdown_timeout,
+        "LOOMHELM_STOP_GRACE_PERIOD": env_value("LOOMHELM_STOP_GRACE_PERIOD", default_stop_grace_period(shutdown_timeout)),
         "LOOMHELM_STARTUP_TIMEOUT": env_value("LOOMHELM_STARTUP_TIMEOUT", "30s"),
         "LOOMHELM_WORKER_LEASE_KEY": env_value("LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"),
     }

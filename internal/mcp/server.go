@@ -361,6 +361,9 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 			return unknownOutcomeResult(), nil
 		}
 		result, err := toolSuccess(response.body)
+		if spec.operationID == "downloadArtifactContent" {
+			result, err = artifactContentToolSuccess(response.body)
+		}
 		if err != nil {
 			if spec.route.method != http.MethodGet {
 				return unknownOutcomeResult(), nil
@@ -654,6 +657,22 @@ func toolSuccess(body []byte) (*sdk.CallToolResult, error) {
 	}
 	return &sdk.CallToolResult{
 		Content:           []sdk.Content{&sdk.TextContent{Text: string(body)}},
+		StructuredContent: json.RawMessage(body),
+	}, nil
+}
+
+func artifactContentToolSuccess(body []byte) (*sdk.CallToolResult, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		body = []byte(`{}`)
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("application service returned invalid JSON")
+	}
+	// The chunk is carried once in structuredContent. Duplicating a potentially
+	// large base64 field in human-readable text would halve the usable MCP
+	// transfer budget without adding information.
+	return &sdk.CallToolResult{
+		Content:           []sdk.Content{&sdk.TextContent{Text: "artifact content chunk retrieved"}},
 		StructuredContent: json.RawMessage(body),
 	}, nil
 }

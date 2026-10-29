@@ -431,6 +431,45 @@ func TestServerPreservesEmptyOptionalQueryValue(t *testing.T) {
 	}
 }
 
+func TestServerDelegatesArtifactContentChunksAsStructuredOriginalBytes(t *testing.T) {
+	var seenPath string
+	var seenAccept string
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		seenPath = request.URL.RequestURI()
+		seenAccept = request.Header.Get("Accept")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"artifact":{"id":"artifact-1","session_id":"session-1","name":"original.bin","kind":"file","size":4,"content_type":"application/octet-stream","sha256":"","created_at":"2026-10-30T00:00:00Z"},"content_base64":"AAEC/w==","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+	})
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      13,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+				"offset":      0,
+				"limit":       4,
+			},
+		},
+	})
+	var result struct {
+		IsError           bool `json:"isError"`
+		StructuredContent struct {
+			ContentBase64 string `json:"content_base64"`
+			Complete      bool   `json:"complete"`
+		} `json:"structuredContent"`
+	}
+	decodeResult(t, response, &result)
+	if result.IsError || result.StructuredContent.ContentBase64 != "AAEC/w==" || !result.StructuredContent.Complete {
+		t.Fatalf("artifact content tool result = %#v, want original chunk", result)
+	}
+	if seenPath != "/artifacts/artifact-1/content?limit=4&offset=0" || seenAccept != "application/json" {
+		t.Fatalf("artifact content delegation path=%q accept=%q", seenPath, seenAccept)
+	}
+}
+
 func TestServerBoundsRESTDispatchLifetime(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

@@ -47,6 +47,7 @@ type databaseRuntime struct {
 	gateway                *gateway.Server
 	logger                 *slog.Logger
 	shutdownTimeout        time.Duration
+	artifactRecoveryMu     sync.Mutex
 	artifactRecoveryCancel context.CancelFunc
 	artifactRecoveryDone   chan struct{}
 	closeOnce              sync.Once
@@ -278,8 +279,14 @@ func (r *databaseRuntime) startArtifactRecovery(store artifactRecoveryStore) {
 // RequestShutdown cancels background recovery as soon as the server enters
 // drain. Close still waits for the canceled pass before releasing the pool.
 func (r *databaseRuntime) RequestShutdown() {
-	if r != nil && r.artifactRecoveryCancel != nil {
-		r.artifactRecoveryCancel()
+	if r == nil {
+		return
+	}
+	r.artifactRecoveryMu.Lock()
+	cancel := r.artifactRecoveryCancel
+	r.artifactRecoveryMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -289,8 +296,10 @@ func (r *databaseRuntime) startArtifactRecoveryWithInterval(store artifactRecove
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	r.artifactRecoveryMu.Lock()
 	r.artifactRecoveryCancel = cancel
 	r.artifactRecoveryDone = done
+	r.artifactRecoveryMu.Unlock()
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(interval)
@@ -321,11 +330,18 @@ func (r *databaseRuntime) startArtifactRecoveryWithInterval(store artifactRecove
 }
 
 func (r *databaseRuntime) stopArtifactRecovery() bool {
-	if r == nil || r.artifactRecoveryCancel == nil {
+	if r == nil {
 		return true
 	}
-	r.artifactRecoveryCancel()
-	if r.artifactRecoveryDone != nil {
+	r.artifactRecoveryMu.Lock()
+	cancel := r.artifactRecoveryCancel
+	done := r.artifactRecoveryDone
+	r.artifactRecoveryMu.Unlock()
+	if cancel == nil {
+		return true
+	}
+	cancel()
+	if done != nil {
 		timeout := artifactRecoveryPassBudget
 		if r.shutdownTimeout > 0 && r.shutdownTimeout < timeout {
 			timeout = r.shutdownTimeout
@@ -333,7 +349,7 @@ func (r *databaseRuntime) stopArtifactRecovery() bool {
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
 		select {
-		case <-r.artifactRecoveryDone:
+		case <-done:
 		case <-timer.C:
 			if r.logger != nil {
 				r.logger.Error("artifact recovery shutdown exceeded budget")
@@ -341,8 +357,10 @@ func (r *databaseRuntime) stopArtifactRecovery() bool {
 			return false
 		}
 	}
+	r.artifactRecoveryMu.Lock()
 	r.artifactRecoveryCancel = nil
 	r.artifactRecoveryDone = nil
+	r.artifactRecoveryMu.Unlock()
 	return true
 }
 
@@ -371,7 +389,9 @@ func (r *databaseRuntime) Close() {
 		// Keep the pool alive until the canceled recovery pass exits. This
 		// avoids racing a late filesystem/database operation with db.Close;
 		// the process-level shutdown budget has already been honored above.
+		r.artifactRecoveryMu.Lock()
 		done := r.artifactRecoveryDone
+		r.artifactRecoveryMu.Unlock()
 		db := r.db
 		go func() {
 			<-done

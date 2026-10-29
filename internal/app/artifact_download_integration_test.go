@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -81,6 +83,15 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	decodeApplicationResponse(t, applicationRequest(t, bob, http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusOK), &bobIdentity)
 	if bobIdentity.UserID == "" {
 		t.Fatal("Bob session omitted user identity")
+	}
+	var credential struct {
+		Credential struct {
+			Token string `json:"token"`
+		} `json:"credential"`
+	}
+	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/credentials", map[string]string{"name": "artifact-download-native"}, map[string]string{"Origin": baseURL}, http.StatusCreated), &credential)
+	if credential.Credential.Token == "" {
+		t.Fatal("artifact download credential omitted token")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -242,6 +253,36 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/artifact-run-mismatch/download", nil, nil, http.StatusNotFound)
 	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/artifact-unconfirmed/download", nil, nil, http.StatusNotFound)
 	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, nil, http.StatusUnauthorized)
+	bearer := map[string]string{"Authorization": "Bearer " + credential.Credential.Token}
+	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, bearer, http.StatusUnauthorized)
+	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, bearer, http.StatusUnauthorized)
+	contentResponse := applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?limit=4", nil, bearer, http.StatusOK)
+	var contentPayload protocol.ArtifactContentResponse
+	decodeApplicationResponse(t, contentResponse, &contentPayload)
+	decodedContent, err := base64.StdEncoding.DecodeString(contentPayload.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decodedContent) != string(content[:4]) || contentPayload.Offset != 0 || contentPayload.NextOffset != 4 || contentPayload.TotalSize != int64(len(content)) || contentPayload.Complete {
+		t.Fatalf("API artifact content chunk = %#v, decoded=%q", contentPayload, decodedContent)
+	}
+	reassembled := append([]byte(nil), decodedContent...)
+	for !contentPayload.Complete {
+		contentResponse = applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset="+strconv.FormatInt(contentPayload.NextOffset, 10)+"&limit=4", nil, bearer, http.StatusOK)
+		decodeApplicationResponse(t, contentResponse, &contentPayload)
+		if contentPayload.Offset != int64(len(reassembled)) || contentPayload.NextOffset <= contentPayload.Offset || contentPayload.TotalSize != int64(len(content)) {
+			t.Fatalf("API artifact content cursor = %#v", contentPayload)
+		}
+		nextContent, err := base64.StdEncoding.DecodeString(contentPayload.ContentBase64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reassembled = append(reassembled, nextContent...)
+	}
+	if string(reassembled) != string(content) {
+		t.Fatalf("reassembled API artifact content = %q, want %q", reassembled, content)
+	}
+	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset=999", nil, bearer, http.StatusBadRequest)
 }
 
 func TestWriteArtifactDownloadErrorUsesServiceUnavailableCode(t *testing.T) {

@@ -72,3 +72,34 @@ func TestArtifactDownloadUsesBinaryBrowserClientResponse(t *testing.T) {
 		t.Fatal("artifact download operation missing from contract")
 	}
 }
+
+func TestArtifactContentDownloadExposesCursorAddressedAPIMCPResponse(t *testing.T) {
+	data, err := os.ReadFile("../../contracts/loomhelm-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source contract
+	if err := json.Unmarshal(data, &source); err != nil {
+		t.Fatal(err)
+	}
+	if err := validate(source); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range source.REST.Operations {
+		if operation.OperationID != "downloadArtifactContent" {
+			continue
+		}
+		if operation.BrowserOnly || operation.MCPTool == nil || operation.QueryType != "DownloadArtifactContentQuery" {
+			t.Fatalf("artifact content operation is not an API/MCP query: %#v", operation)
+		}
+		if operation.ResponseType != "ArtifactContentResponse" {
+			t.Fatalf("artifact content response type = %q", operation.ResponseType)
+		}
+		generated := (generator{contract: source}).apiClientTypeScript()
+		if !strings.Contains(generated, "async downloadArtifactContent(request: DownloadArtifactContentParams): Promise<Protocol.ArtifactContentResponse>") || !strings.Contains(generated, "artifacts/${encodeURIComponent(request.artifact_id)}/content") {
+			t.Fatal("generated artifact content client does not preserve the API response and cursor path")
+		}
+		return
+	}
+	t.Fatal("artifact content download operation missing from contract")
+}

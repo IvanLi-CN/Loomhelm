@@ -55,9 +55,31 @@ class PreviewControlTest(unittest.TestCase):
                 for key in configured:
                     self.assertEqual(actual[key], auth.get(key, ""))
                 self.assertEqual(actual["LOOMHELM_SESSION_COOKIE_SECURE"], auth.get("LOOMHELM_SESSION_COOKIE_SECURE", "true"))
+                self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "90s")
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 self.assertNotIn(required["LOOMHELM_DRAIN_TOKEN"], captured.getvalue())
                 self.assertNotIn(configured["LOOMHELM_OIDC_CLIENT_SECRET"], captured.getvalue())
+
+    def test_compose_grace_covers_a_longer_shutdown_timeout(self) -> None:
+        self.assertEqual(control.default_stop_grace_period("1m30s"), "200s")
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-grace-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+            "LOOMHELM_SHUTDOWN_TIMEOUT": "120s",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            output = state_dir / "compose.env"
+            self.invoke("init", state_dir)
+            self.invoke("compose_env", state_dir, output=output)
+            actual = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+            self.assertEqual(actual["LOOMHELM_SHUTDOWN_TIMEOUT"], "120s")
+            self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "260s")
 
     def write_manifest(self, path: Path, value: dict) -> None:
         path.write_text(json.dumps(value), encoding="utf-8")

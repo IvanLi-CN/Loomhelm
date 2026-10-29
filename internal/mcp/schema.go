@@ -91,39 +91,40 @@ func resourceSpecFor(definition protocol.MCPResourceDefinition) (resourceSpec, b
 
 func routeForOperation(operationID string) (routeSpec, bool) {
 	routes := map[string]routeSpec{
-		"listUserCredentials":  {method: "GET", path: "/credentials"},
-		"createUserCredential": {method: "POST", path: "/credentials", body: true},
-		"revokeUserCredential": {method: "DELETE", path: "/credentials/{credential_id}", pathParams: []string{"credential_id"}},
-		"listProjects":         {method: "GET", path: "/projects", queryParams: []string{"after_cursor", "limit"}},
-		"createProject":        {method: "POST", path: "/projects", body: true},
-		"getProject":           {method: "GET", path: "/projects/{project_id}", pathParams: []string{"project_id"}},
-		"updateProject":        {method: "PATCH", path: "/projects/{project_id}", pathParams: []string{"project_id"}, body: true},
-		"deleteProject":        {method: "DELETE", path: "/projects/{project_id}", pathParams: []string{"project_id"}},
-		"listProjectMembers":   {method: "GET", path: "/projects/{project_id}/members", pathParams: []string{"project_id"}},
-		"grantProjectMember":   {method: "PUT", path: "/projects/{project_id}/members/{user_id}", pathParams: []string{"project_id", "user_id"}, body: true},
-		"revokeProjectMember":  {method: "DELETE", path: "/projects/{project_id}/members/{user_id}", pathParams: []string{"project_id", "user_id"}},
-		"listTasks":            {method: "GET", path: "/tasks", queryParams: []string{"project_id", "after_cursor", "limit"}},
-		"createTask":           {method: "POST", path: "/tasks", body: true},
-		"getTask":              {method: "GET", path: "/tasks/{task_id}", pathParams: []string{"task_id"}},
-		"updateTask":           {method: "PATCH", path: "/tasks/{task_id}", pathParams: []string{"task_id"}, body: true},
-		"deleteTask":           {method: "DELETE", path: "/tasks/{task_id}", pathParams: []string{"task_id"}},
-		"getTaskRelationships": {method: "GET", path: "/tasks/{task_id}/relationships", pathParams: []string{"task_id"}},
-		"addTaskParent":        {method: "POST", path: "/tasks/{task_id}/parents/{parent_task_id}", pathParams: []string{"task_id", "parent_task_id"}},
-		"removeTaskParent":     {method: "DELETE", path: "/tasks/{task_id}/parents/{parent_task_id}", pathParams: []string{"task_id", "parent_task_id"}},
-		"addTaskDependency":    {method: "POST", path: "/tasks/{task_id}/dependencies/{prerequisite_task_id}", pathParams: []string{"task_id", "prerequisite_task_id"}},
-		"removeTaskDependency": {method: "DELETE", path: "/tasks/{task_id}/dependencies/{prerequisite_task_id}", pathParams: []string{"task_id", "prerequisite_task_id"}},
-		"createSession":        {method: "POST", path: "/sessions", body: true},
-		"getSession":           {method: "GET", path: "/sessions/{session_id}", pathParams: []string{"session_id"}},
-		"bindSessionTask":      {method: "POST", path: "/sessions/{session_id}/task", pathParams: []string{"session_id"}, body: true},
-		"submitRun":            {method: "POST", path: "/sessions/{session_id}/runs", pathParams: []string{"session_id"}, body: true},
-		"listSessionRuns":      {method: "GET", path: "/sessions/{session_id}/runs", pathParams: []string{"session_id"}, queryParams: []string{"after_cursor", "limit"}},
-		"getDraft":             {method: "GET", path: "/sessions/{session_id}/draft", pathParams: []string{"session_id"}},
-		"updateDraft":          {method: "PUT", path: "/sessions/{session_id}/draft", pathParams: []string{"session_id"}, body: true},
-		"listRunApprovals":     {method: "GET", path: "/runs/{run_id}/approvals", pathParams: []string{"run_id"}, queryParams: []string{"after_cursor", "limit"}},
-		"resolveApproval":      {method: "POST", path: "/runs/{run_id}/approvals/{approval_id}", pathParams: []string{"run_id", "approval_id"}, body: true},
-		"interruptRun":         {method: "POST", path: "/runs/{run_id}/interrupt", pathParams: []string{"run_id"}, body: true},
-		"listRunEvents":        {method: "GET", path: "/runs/{run_id}/events", pathParams: []string{"run_id"}, queryParams: []string{"after_cursor", "limit"}},
-		"getArtifact":          {method: "GET", path: "/artifacts/{artifact_id}", pathParams: []string{"artifact_id"}},
+		"listUserCredentials":     {method: "GET", path: "/credentials"},
+		"createUserCredential":    {method: "POST", path: "/credentials", body: true},
+		"revokeUserCredential":    {method: "DELETE", path: "/credentials/{credential_id}", pathParams: []string{"credential_id"}},
+		"listProjects":            {method: "GET", path: "/projects", queryParams: []string{"after_cursor", "limit"}},
+		"createProject":           {method: "POST", path: "/projects", body: true},
+		"getProject":              {method: "GET", path: "/projects/{project_id}", pathParams: []string{"project_id"}},
+		"updateProject":           {method: "PATCH", path: "/projects/{project_id}", pathParams: []string{"project_id"}, body: true},
+		"deleteProject":           {method: "DELETE", path: "/projects/{project_id}", pathParams: []string{"project_id"}},
+		"listProjectMembers":      {method: "GET", path: "/projects/{project_id}/members", pathParams: []string{"project_id"}},
+		"grantProjectMember":      {method: "PUT", path: "/projects/{project_id}/members/{user_id}", pathParams: []string{"project_id", "user_id"}, body: true},
+		"revokeProjectMember":     {method: "DELETE", path: "/projects/{project_id}/members/{user_id}", pathParams: []string{"project_id", "user_id"}},
+		"listTasks":               {method: "GET", path: "/tasks", queryParams: []string{"project_id", "after_cursor", "limit"}},
+		"createTask":              {method: "POST", path: "/tasks", body: true},
+		"getTask":                 {method: "GET", path: "/tasks/{task_id}", pathParams: []string{"task_id"}},
+		"updateTask":              {method: "PATCH", path: "/tasks/{task_id}", pathParams: []string{"task_id"}, body: true},
+		"deleteTask":              {method: "DELETE", path: "/tasks/{task_id}", pathParams: []string{"task_id"}},
+		"getTaskRelationships":    {method: "GET", path: "/tasks/{task_id}/relationships", pathParams: []string{"task_id"}},
+		"addTaskParent":           {method: "POST", path: "/tasks/{task_id}/parents/{parent_task_id}", pathParams: []string{"task_id", "parent_task_id"}},
+		"removeTaskParent":        {method: "DELETE", path: "/tasks/{task_id}/parents/{parent_task_id}", pathParams: []string{"task_id", "parent_task_id"}},
+		"addTaskDependency":       {method: "POST", path: "/tasks/{task_id}/dependencies/{prerequisite_task_id}", pathParams: []string{"task_id", "prerequisite_task_id"}},
+		"removeTaskDependency":    {method: "DELETE", path: "/tasks/{task_id}/dependencies/{prerequisite_task_id}", pathParams: []string{"task_id", "prerequisite_task_id"}},
+		"createSession":           {method: "POST", path: "/sessions", body: true},
+		"getSession":              {method: "GET", path: "/sessions/{session_id}", pathParams: []string{"session_id"}},
+		"bindSessionTask":         {method: "POST", path: "/sessions/{session_id}/task", pathParams: []string{"session_id"}, body: true},
+		"submitRun":               {method: "POST", path: "/sessions/{session_id}/runs", pathParams: []string{"session_id"}, body: true},
+		"listSessionRuns":         {method: "GET", path: "/sessions/{session_id}/runs", pathParams: []string{"session_id"}, queryParams: []string{"after_cursor", "limit"}},
+		"getDraft":                {method: "GET", path: "/sessions/{session_id}/draft", pathParams: []string{"session_id"}},
+		"updateDraft":             {method: "PUT", path: "/sessions/{session_id}/draft", pathParams: []string{"session_id"}, body: true},
+		"listRunApprovals":        {method: "GET", path: "/runs/{run_id}/approvals", pathParams: []string{"run_id"}, queryParams: []string{"after_cursor", "limit"}},
+		"resolveApproval":         {method: "POST", path: "/runs/{run_id}/approvals/{approval_id}", pathParams: []string{"run_id", "approval_id"}, body: true},
+		"interruptRun":            {method: "POST", path: "/runs/{run_id}/interrupt", pathParams: []string{"run_id"}, body: true},
+		"listRunEvents":           {method: "GET", path: "/runs/{run_id}/events", pathParams: []string{"run_id"}, queryParams: []string{"after_cursor", "limit"}},
+		"getArtifact":             {method: "GET", path: "/artifacts/{artifact_id}", pathParams: []string{"artifact_id"}},
+		"downloadArtifactContent": {method: "GET", path: "/artifacts/{artifact_id}/content", pathParams: []string{"artifact_id"}, queryParams: []string{"offset", "limit"}},
 	}
 	route, ok := routes[operationID]
 	return route, ok
@@ -248,6 +249,10 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 		add("reason", stringField(), false)
 	case "getArtifact":
 		add("artifact_id", stringField(), true)
+	case "downloadArtifactContent":
+		add("artifact_id", stringField(), true)
+		add("offset", integerField(), false)
+		add("limit", integerField(), false)
 	}
 
 	properties := make(map[string]any, len(fields))
@@ -480,7 +485,7 @@ func routeQuery(names []string, arguments map[string]json.RawMessage) (string, e
 		if !ok {
 			continue
 		}
-		if name == "limit" {
+		if name == "limit" || name == "offset" {
 			var value int64
 			if err := json.Unmarshal(raw, &value); err == nil {
 				values.Set(name, strconv.FormatInt(value, 10))
