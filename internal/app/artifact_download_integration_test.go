@@ -289,6 +289,7 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	if hex.EncodeToString(reassembledDigest[:]) != contentPayload.Artifact.Sha256 {
 		t.Fatalf("reassembled API artifact hash = %q, want %q", hex.EncodeToString(reassembledDigest[:]), contentPayload.Artifact.Sha256)
 	}
+	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset=999", nil, bearer, http.StatusBadRequest)
 	tamperedResponse := applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?limit=4", nil, bearer, http.StatusOK)
 	var tamperedPayload protocol.ArtifactContentResponse
 	decodeApplicationResponse(t, tamperedResponse, &tamperedPayload)
@@ -305,21 +306,32 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	if err := os.Rename(replacementPath, filepath.Join(objects, artifactID)); err != nil {
 		t.Fatal(err)
 	}
-	tamperedReassembled := append([]byte(nil), tamperedFirst...)
+	if string(tamperedFirst) != string(content[:4]) {
+		t.Fatalf("first chunk before replacement = %q, want original bytes", tamperedFirst)
+	}
+	verificationFailed := false
 	for !tamperedPayload.Complete {
-		tamperedResponse = applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset="+strconv.FormatInt(tamperedPayload.NextOffset, 10)+"&limit=4", nil, bearer, http.StatusOK)
+		expectedStatus := http.StatusOK
+		if tamperedPayload.NextOffset+4 >= tamperedPayload.TotalSize {
+			expectedStatus = http.StatusNotFound
+		}
+		tamperedResponse = applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset="+strconv.FormatInt(tamperedPayload.NextOffset, 10)+"&limit=4", nil, bearer, expectedStatus)
+		if expectedStatus != http.StatusOK {
+			verificationFailed = true
+			break
+		}
 		decodeApplicationResponse(t, tamperedResponse, &tamperedPayload)
 		nextContent, err := base64.StdEncoding.DecodeString(tamperedPayload.ContentBase64)
 		if err != nil {
 			t.Fatal(err)
 		}
-		tamperedReassembled = append(tamperedReassembled, nextContent...)
+		if len(nextContent) == 0 {
+			t.Fatal("tampered content chunk was empty before completion")
+		}
 	}
-	tamperedDigest := sha256.Sum256(tamperedReassembled)
-	if hex.EncodeToString(tamperedDigest[:]) == tamperedPayload.Artifact.Sha256 {
-		t.Fatal("API reassembly accepted a same-size artifact replacement without a canonical hash failure")
+	if !verificationFailed {
+		t.Fatal("API completed a same-size artifact replacement without a canonical hash failure")
 	}
-	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset=999", nil, bearer, http.StatusBadRequest)
 }
 
 func TestWriteArtifactDownloadErrorUsesServiceUnavailableCode(t *testing.T) {

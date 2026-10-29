@@ -61,7 +61,7 @@ class PreviewControlTest(unittest.TestCase):
                 self.assertNotIn(configured["LOOMHELM_OIDC_CLIENT_SECRET"], captured.getvalue())
 
     def test_compose_grace_covers_a_longer_shutdown_timeout(self) -> None:
-        self.assertEqual(control.default_stop_grace_period("1m30s"), "200s")
+        self.assertEqual(control.default_stop_grace_period("1m30s"), "270s")
         settings = {
             "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-grace-test",
             "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
@@ -80,7 +80,7 @@ class PreviewControlTest(unittest.TestCase):
             self.invoke("compose_env", state_dir, output=output)
             actual = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
             self.assertEqual(actual["LOOMHELM_SHUTDOWN_TIMEOUT"], "120s")
-            self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "260s")
+            self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "360s")
 
     def test_compose_environment_rejects_invalid_shutdown_and_grace_durations(self) -> None:
         required = {

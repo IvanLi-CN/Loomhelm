@@ -568,9 +568,13 @@ def default_stop_grace_period(shutdown_timeout: str) -> str:
     seconds = parse_duration_seconds(shutdown_timeout)
     if seconds is None:
         return "90s"
-    # HTTP may retain an MCP request for 60s, gateway shutdown has its own
-    # configured budget, and recovery cleanup has a ten-second pass budget.
-    total = max(seconds, 60.0) + seconds + 20.0
+    # The Server path may retain an MCP request for 60s, then spend its
+    # configured gateway budget and a recovery cleanup pass. A Worker can
+    # spend that budget stopping its health server, its runner, and the
+    # forced runner cancellation, so Compose must cover the larger path.
+    server_budget = max(seconds, 60.0) + seconds + 20.0
+    worker_budget = 3.0 * seconds
+    total = max(server_budget, worker_budget)
     return f"{math.ceil(total)}s"
 
 
@@ -590,7 +594,8 @@ def command_compose_env(args: argparse.Namespace) -> None:
     shutdown_seconds = parse_duration_seconds(shutdown_timeout)
     if shutdown_seconds is None:
         die("LOOMHELM_SHUTDOWN_TIMEOUT must be a positive Go duration")
-    derived_grace_seconds = max(shutdown_seconds, 60.0) + shutdown_seconds + 20.0
+    server_grace_seconds = max(shutdown_seconds, 60.0) + shutdown_seconds + 20.0
+    derived_grace_seconds = max(server_grace_seconds, 3.0 * shutdown_seconds)
     derived_grace = f"{math.ceil(derived_grace_seconds)}s"
     configured_grace = os.environ.get("LOOMHELM_STOP_GRACE_PERIOD")
     if configured_grace:

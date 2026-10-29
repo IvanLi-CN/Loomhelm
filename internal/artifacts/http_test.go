@@ -135,7 +135,7 @@ func TestDownloadHTTPHandlerMapsMissingUnauthorizedAndInvalidAccess(t *testing.T
 	}{
 		{name: "missing", err: ErrNotFound, status: http.StatusNotFound},
 		{name: "unauthorized", err: ErrUnauthorized, status: http.StatusNotFound},
-		{name: "recovery pending", err: ErrRecoveryPending, status: http.StatusServiceUnavailable, retryAfter: "1"},
+		{name: "recovery pending", err: ErrRecoveryPending, status: http.StatusServiceUnavailable, retryAfter: "60"},
 		{name: "invalid path", err: ErrInvalid, status: http.StatusBadRequest},
 		{name: "store unavailable", err: ErrStoreUnavailable, status: http.StatusServiceUnavailable},
 	}

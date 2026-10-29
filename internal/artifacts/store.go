@@ -118,6 +118,28 @@ type Store struct {
 	faults     *faultHooks
 }
 
+type contentReader struct {
+	*os.File
+	store *Store
+	id    string
+}
+
+func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Artifact) error {
+	if r == nil || r.File == nil || r.store == nil {
+		return ErrStoreUnavailable
+	}
+	if err := verifyFile(ctx, r.File, artifact); err != nil {
+		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
+			if markErr := r.store.markReadyObjectUnavailable(ctx, r.id, "final-mismatch"); markErr != nil {
+				return markErr
+			}
+			return unavailableError(err)
+		}
+		return err
+	}
+	return nil
+}
+
 var _ protocol.ArtifactStore = (*Store)(nil)
 
 func NewStore(pool *pgxpool.Pool, cfg Config) (*Store, error) {
@@ -343,10 +365,11 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 // content transfer. Publication verifies the complete SHA-256 before the
 // object enters the ready state and final objects are never overwritten by
 // Store. This path repeats authorization, regular-file and exact-size checks
-// for every request, while the response carries the canonical SHA-256 so a
-// caller can verify the reassembled original bytes without rescanning the
-// object for every chunk. Open remains the fully verifying path for browser
-// downloads and callers that need a server-side full hash check.
+// for every request. The final chunk calls verifyContent once, so the server
+// rejects a changed object before reporting complete=true; the response also
+// carries the canonical SHA-256 for caller-side reassembly verification. Open
+// remains the fully verifying path for browser downloads and callers that need
+// a server-side full hash check before the first byte.
 func (s *Store) OpenContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
 	return s.openReadyArtifact(ctx, id, false)
 }
@@ -407,6 +430,9 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool) (
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()
 		return protocol.Artifact{}, nil, fmt.Errorf("rewind artifact bytes: %w", ErrStoreUnavailable)
+	}
+	if !verify {
+		return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID}, nil
 	}
 	return record.Artifact, file, nil
 }

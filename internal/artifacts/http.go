@@ -43,6 +43,10 @@ type contentArtifactStore interface {
 	OpenContent(context.Context, string) (protocol.Artifact, protocol.ArtifactReader, error)
 }
 
+type contentVerifier interface {
+	verifyContent(context.Context, protocol.Artifact) error
+}
+
 // NewDownloadHTTPHandler constructs a handler over the existing ArtifactStore
 // contract. Browser downloads use Store.Open's full verification path; stores
 // that implement contentArtifactStore may use the bounded content path, which
@@ -97,8 +101,8 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
 // MCP callers. The content store repeats authorization, ready-state, regular
 // file and exact-size checks for every request; publication verifies the
-// canonical SHA-256 before readiness and the response carries that hash for
-// whole-result verification after reassembly.
+// canonical SHA-256 before readiness and the final chunk rechecks that hash
+// before reporting complete=true.
 func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, request *http.Request) {
 	if h == nil || h.store == nil {
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
@@ -157,6 +161,17 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		}
 	}
 	nextOffset := offset + int64(len(content))
+	if nextOffset == artifact.Size {
+		if verifier, ok := reader.(contentVerifier); ok {
+			if err := verifier.verifyContent(request.Context(), artifact); err != nil {
+				if request.Context().Err() != nil {
+					return
+				}
+				h.writeStoreError(writer, request, err, "artifact content verification failed")
+				return
+			}
+		}
+	}
 	response := protocol.ArtifactContentResponse{
 		Artifact:      artifact,
 		ContentBase64: base64.StdEncoding.EncodeToString(content),
@@ -182,7 +197,7 @@ func (h *DownloadHTTPHandler) openContent(ctx context.Context, id string) (proto
 
 func (h *DownloadHTTPHandler) writeStoreError(writer http.ResponseWriter, request *http.Request, err error, message string) {
 	if errors.Is(err, ErrRecoveryPending) || errors.Is(err, ErrRecoveryIncomplete) {
-		writer.Header().Set("Retry-After", "1")
+		writer.Header().Set("Retry-After", "60")
 	}
 	h.writeError(writer, request, downloadStatus(err), err, message)
 }
