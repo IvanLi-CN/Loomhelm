@@ -33,8 +33,8 @@ function Surface({ children }: { children: ReactNode }) {
 
 const applyUpdate = fn();
 
-function RuntimeHarness({ register }: { register: PwaRegister }) {
-  const runtime = usePwaRuntime(register);
+function RuntimeHarness({ register, activationTimeoutMs }: { register: PwaRegister; activationTimeoutMs?: number }) {
+  const runtime = usePwaRuntime(register, true, activationTimeoutMs);
   return <PwaStatusBanner placement="inline" isOnline={runtime.isOnline} updateAvailable={runtime.updateAvailable} updateApplied={runtime.updateApplied} updating={runtime.updating} updateError={runtime.updateError} registrationError={runtime.registrationError} onApplyUpdate={() => void runtime.applyUpdate()} />;
 }
 
@@ -100,6 +100,16 @@ export const RuntimeUpdateWaiting: Story = {
     await userEvent.click(await canvas.findByRole("button", { name: "应用更新" }));
     expect(canvas.getByRole("status")).toHaveTextContent("正在等待更新生效");
     expect(canvas.getByRole("button", { name: "等待更新生效…" })).toBeDisabled();
+  }
+};
+
+export const RuntimeUpdateTimeout: Story = {
+  render: () => <Surface><RuntimeHarness register={waitingRuntimeRegister} activationTimeoutMs={25} /></Surface>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "应用更新" }));
+    expect(await canvas.findByRole("button", { name: "重试更新" })).toBeEnabled();
+    expect(canvas.getByRole("status")).toHaveTextContent("更新未完成");
   }
 };
 

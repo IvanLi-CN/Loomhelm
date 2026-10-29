@@ -10,6 +10,7 @@ export interface PwaRegisterOptions {
 
 export type PwaUpdate = (reloadPage?: boolean) => void | Promise<void>;
 export type PwaRegister = (options: PwaRegisterOptions) => PwaUpdate;
+export const DEFAULT_PWA_UPDATE_ACTIVATION_TIMEOUT_MS = 10_000;
 
 export interface PwaUpdateState {
   available: boolean;
@@ -55,13 +56,21 @@ export interface PwaRuntimeState {
   applyUpdate: () => Promise<void>;
 }
 
-export function usePwaRuntime(register: PwaRegister, enabled = true): PwaRuntimeState {
+export function usePwaRuntime(register: PwaRegister, enabled = true, activationTimeoutMs = DEFAULT_PWA_UPDATE_ACTIVATION_TIMEOUT_MS): PwaRuntimeState {
   const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [updateState, dispatchUpdate] = useReducer(reducePwaUpdateState, initialPwaUpdateState);
   const [offlineReady, setOfflineReady] = useState(false);
   const [registrationError, setRegistrationError] = useState(false);
   const updateRef = useRef<PwaUpdate | null>(null);
   const mountedRef = useRef(false);
+  const awaitingActivationRef = useRef(false);
+  const activationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearActivationTimeout = () => {
+    if (activationTimeoutRef.current === null) return;
+    clearTimeout(activationTimeoutRef.current);
+    activationTimeoutRef.current = null;
+  };
 
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return;
@@ -76,7 +85,11 @@ export function usePwaRuntime(register: PwaRegister, enabled = true): PwaRuntime
     try {
       updateRef.current = register({
         immediate: true,
-        onNeedReload: () => dispatchIfMounted({ type: "activated" }),
+        onNeedReload: () => {
+          awaitingActivationRef.current = false;
+          clearActivationTimeout();
+          dispatchIfMounted({ type: "activated" });
+        },
         onNeedRefresh: () => dispatchIfMounted({ type: "available" }),
         onOfflineReady: () => {
           if (mountedRef.current) setOfflineReady(true);
@@ -91,6 +104,8 @@ export function usePwaRuntime(register: PwaRegister, enabled = true): PwaRuntime
     }
     return () => {
       mountedRef.current = false;
+      awaitingActivationRef.current = false;
+      clearActivationTimeout();
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
       updateRef.current = null;
@@ -100,13 +115,25 @@ export function usePwaRuntime(register: PwaRegister, enabled = true): PwaRuntime
   const applyUpdate = useCallback(async () => {
     const update = updateRef.current;
     if (!update || updateState.updating) return;
+    awaitingActivationRef.current = true;
+    clearActivationTimeout();
     dispatchUpdate({ type: "request" });
     try {
       await update(false);
+      if (mountedRef.current && awaitingActivationRef.current) {
+        activationTimeoutRef.current = setTimeout(() => {
+          activationTimeoutRef.current = null;
+          if (!mountedRef.current || !awaitingActivationRef.current) return;
+          awaitingActivationRef.current = false;
+          dispatchUpdate({ type: "failed" });
+        }, Math.max(0, activationTimeoutMs));
+      }
     } catch {
+      awaitingActivationRef.current = false;
+      clearActivationTimeout();
       if (mountedRef.current) dispatchUpdate({ type: "failed" });
     }
-  }, [updateState.updating]);
+  }, [activationTimeoutMs, updateState.updating]);
 
   return {
     isOnline,

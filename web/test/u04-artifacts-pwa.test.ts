@@ -22,6 +22,32 @@ describe("U04 conversation content classification", () => {
     expect(content.raw).toEqual(payload);
   });
 
+  test("reads native message content arrays from the persisted item envelope", () => {
+    const payload = {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "agentMessage",
+          content: [{ type: "text", text: "第一段" }, { type: "text", text: "第二段" }]
+        }
+      }
+    } as const;
+    const content = classifyConversationEvent({ event_id: "message-content-1", type: "item.completed", payload });
+
+    expect(content).toMatchObject({ kind: "message", role: "assistant", text: "第一段第二段" });
+    expect(content.raw).toEqual(payload);
+  });
+
+  test("preserves the user role for native user message items", () => {
+    const content = classifyConversationEvent({
+      event_id: "user-message-1",
+      type: "item.completed",
+      payload: { params: { item: { type: "userMessage", content: [{ type: "text", text: "用户输入" }] } } }
+    });
+
+    expect(content).toMatchObject({ kind: "message", role: "user", text: "用户输入" });
+  });
+
   test("reads nested tool items and command output without misclassifying them as messages", () => {
     const tool = classifyConversationEvent({
       event_id: "tool-1",
@@ -69,6 +95,12 @@ describe("U04 conversation content classification", () => {
         item: { type: "futureContent", cwd: "[路径已隐藏]", xFutureField: { keep: true } }
       }
     });
+  });
+
+  test("redacts inline secrets and private paths in unknown string fields", () => {
+    expect(inspectableRawPayload({
+      detail: "token=secret-token cwd=/workspace/private-project"
+    })).toEqual({ detail: "token= [已隐藏] cwd=[路径已隐藏]" });
   });
 });
 

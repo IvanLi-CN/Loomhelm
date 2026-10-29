@@ -54,6 +54,7 @@ export function ArtifactReference({
   const downloadEpochRef = useRef(0);
 
   useEffect(() => {
+    setDownloadState({ artifactId, status: "idle" });
     return () => {
       downloadEpochRef.current += 1;
       downloadControllerRef.current?.abort();

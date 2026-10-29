@@ -53,6 +53,8 @@ const sensitiveFieldNames = new Set([
 ]);
 
 const privatePathFieldNames = new Set(["cwd", "filepath", "grantroot", "path", "root", "workspace"]);
+const inlineSecretPattern = /\b(access[_-]?key|api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)\b\s*[:=]\s*[^\s,;}\]]+/gi;
+const inlinePrivatePathPattern = /(?:~\/|\\\\|[A-Za-z]:[\\/]|\/(?:Users|home|private|root|tmp|var|workspace)(?:\/|$))[^\s"'`<>,;}\]]*/gi;
 
 function normalizedFieldName(value: string): string {
   return value.toLowerCase().replaceAll("_", "").replaceAll("-", "");
@@ -67,10 +69,17 @@ function isPrivatePath(value: string): boolean {
   return value.startsWith("~") || /^\\\\/.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\/(?:Users|home|private|root|tmp|var)(?:\/|$)/i.test(value);
 }
 
+function redactInspectableString(value: string): string {
+  return value
+    .replace(inlineSecretPattern, (match) => match.replace(/([:=])\s*[^\s,;}\]]+$/, "$1 [已隐藏]"))
+    .replace(inlinePrivatePathPattern, "[路径已隐藏]");
+}
+
 function redactInspectableValue(value: JsonValue, fieldName?: string): JsonValue {
   if (fieldName && isSensitiveField(fieldName)) return "[已隐藏]";
   if (typeof value === "string") {
-    return fieldName && privatePathFieldNames.has(normalizedFieldName(fieldName)) && isPrivatePath(value) ? "[路径已隐藏]" : value;
+    if (fieldName && privatePathFieldNames.has(normalizedFieldName(fieldName)) && isPrivatePath(value)) return "[路径已隐藏]";
+    return redactInspectableString(value);
   }
   if (Array.isArray(value)) return value.map((item) => redactInspectableValue(item));
   if (value !== null && typeof value === "object") {
@@ -102,6 +111,16 @@ function firstString(...values: Array<JsonValue | undefined>): string | undefine
 
 function asNestedItem(payload: JsonRecord, params: JsonRecord): JsonRecord {
   return asRecord(params.item) ?? asRecord(payload.item) ?? asRecord(params.content) ?? asRecord(payload.content) ?? payload;
+}
+
+function readContentText(value: JsonValue | undefined): string | undefined {
+  if (!Array.isArray(value)) return asString(value);
+  const parts = value.flatMap((entry) => {
+    if (typeof entry === "string") return [entry];
+    const record = asRecord(entry);
+    return record ? [firstString(record.text, record.delta, record.message)] : [];
+  }).filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join("") : undefined;
 }
 
 function isToolType(value: string | undefined): boolean {
@@ -139,18 +158,21 @@ export function classifyConversationEvent(event: ConversationEvent): Conversatio
     item.text,
     item.delta,
     item.message,
+    readContentText(item.content),
     params.text,
     params.delta,
     params.message,
+    readContentText(params.content),
     payload.text,
     payload.delta,
-    payload.message
+    payload.message,
+    readContentText(payload.content)
   );
   const isToolMethod = Boolean(method && (method.includes("commandExecution") || method.includes("mcpTool") || method.includes("dynamicTool") || method.includes("collabTool") || method === "item/tool/call"));
   const isMessage = !isToolMethod && (event.type === "message.delta" || method === "item/agentMessage/delta" || itemType === "agentMessage" || itemType === "userMessage" || itemType === "message");
   if (isMessage && messageText) {
     const roleValue = firstString(item.role, params.role, payload.role);
-    const role = roleValue === "user" || roleValue === "system" ? roleValue : "assistant";
+    const role = roleValue === "user" || roleValue === "system" ? roleValue : itemType === "userMessage" ? "user" : "assistant";
     return { eventId, eventType: event.type, kind: "message", role, text: messageText, raw: event.payload };
   }
 
