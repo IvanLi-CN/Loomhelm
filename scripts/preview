@@ -32,7 +32,9 @@ control() {
 
 compose() {
 	require_preview_settings
-	docker compose --project-name "$LOOMHELM_PREVIEW_PROJECT_NAME" --env-file "$env_file" -f deploy/preview/compose.yaml "$@"
+	# compose.env contains derived candidate values, including the shutdown
+	# grace lower bound; do not let a stale host export override that file.
+	env -u LOOMHELM_STOP_GRACE_PERIOD docker compose --project-name "$LOOMHELM_PREVIEW_PROJECT_NAME" --env-file "$env_file" -f deploy/preview/compose.yaml "$@"
 }
 
 load_local_environment() {

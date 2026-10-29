@@ -39,9 +39,15 @@ type DownloadHTTPHandler struct {
 	writeError DownloadErrorWriter
 }
 
+type contentArtifactStore interface {
+	OpenContent(context.Context, string) (protocol.Artifact, protocol.ArtifactReader, error)
+}
+
 // NewDownloadHTTPHandler constructs a handler over the existing ArtifactStore
-// contract. Store.Open remains the only authorization and byte-verification
-// boundary.
+// contract. Browser downloads use Store.Open's full verification path; stores
+// that implement contentArtifactStore may use the bounded content path, which
+// preserves authorization and file identity checks without rehashing every
+// chunk.
 func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErrorWriter) (*DownloadHTTPHandler, error) {
 	if store == nil {
 		return nil, fmt.Errorf("artifact download store is required: %w", ErrStoreUnavailable)
@@ -72,7 +78,7 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		if request.Context().Err() != nil {
 			return
 		}
-		h.writeError(writer, request, downloadStatus(err), err, "artifact download is unavailable")
+		h.writeStoreError(writer, request, err, "artifact download is unavailable")
 		return
 	}
 	defer reader.Close()
@@ -89,9 +95,10 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 }
 
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
-// MCP callers. The Store.Open authorization and verification boundary is the
-// same as the browser download path; the cursor only controls how verified
-// bytes are transferred.
+// MCP callers. The content store repeats authorization, ready-state, regular
+// file and exact-size checks for every request; publication verifies the
+// canonical SHA-256 before readiness and the response carries that hash for
+// whole-result verification after reassembly.
 func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, request *http.Request) {
 	if h == nil || h.store == nil {
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
@@ -112,12 +119,12 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusBadRequest, ErrInvalid, err.Error())
 		return
 	}
-	artifact, reader, err := h.store.Open(request.Context(), id)
+	artifact, reader, err := h.openContent(request.Context(), id)
 	if err != nil {
 		if request.Context().Err() != nil {
 			return
 		}
-		h.writeError(writer, request, downloadStatus(err), err, "artifact download is unavailable")
+		h.writeStoreError(writer, request, err, "artifact download is unavailable")
 		return
 	}
 	defer reader.Close()
@@ -166,6 +173,20 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 	}
 }
 
+func (h *DownloadHTTPHandler) openContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	if store, ok := h.store.(contentArtifactStore); ok {
+		return store.OpenContent(ctx, id)
+	}
+	return h.store.Open(ctx, id)
+}
+
+func (h *DownloadHTTPHandler) writeStoreError(writer http.ResponseWriter, request *http.Request, err error, message string) {
+	if errors.Is(err, ErrRecoveryPending) || errors.Is(err, ErrRecoveryIncomplete) {
+		writer.Header().Set("Retry-After", "1")
+	}
+	h.writeError(writer, request, downloadStatus(err), err, message)
+}
+
 func contentChunkQuery(request *http.Request) (int64, int64, error) {
 	query := request.URL.Query()
 	offset := int64(0)
@@ -191,6 +212,8 @@ func downloadStatus(err error) int {
 	switch {
 	case errors.Is(err, ErrInvalid):
 		return http.StatusBadRequest
+	case errors.Is(err, ErrRecoveryPending), errors.Is(err, ErrRecoveryIncomplete):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrUnauthorized), errors.Is(err, ErrUnavailable),
 		errors.Is(err, ErrIntegrity), errors.Is(err, ErrSizeMismatch), errors.Is(err, ErrHashMismatch):
 		return http.StatusNotFound

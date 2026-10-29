@@ -26,6 +26,7 @@ const (
 
 var (
 	ErrUnavailable        = errors.New("artifact is unavailable")
+	ErrRecoveryPending    = errors.New("artifact recovery is pending")
 	ErrRecoveryIncomplete = errors.New("artifact recovery incomplete")
 )
 
@@ -583,7 +584,7 @@ func (s *Store) readAuthorizedReadyRecord(ctx context.Context, id string, operat
 	}
 	if record.State != publicationReady {
 		if record.State == publicationPending {
-			return artifactRecord{}, ErrUnavailable
+			return artifactRecord{}, fmt.Errorf("%w: %w", ErrRecoveryPending, ErrUnavailable)
 		}
 		return artifactRecord{}, unavailableError(ErrIntegrity)
 	}

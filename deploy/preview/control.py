@@ -558,7 +558,7 @@ def parse_duration_seconds(value: str) -> float | None:
             return None
         seconds += float(match.group(1)) * units[match.group(2)]
         position = match.end()
-    if position != len(normalized) or seconds <= 0:
+    if position != len(normalized) or seconds <= 0 or seconds * 1_000_000_000 < 1:
         return None
     return seconds
 

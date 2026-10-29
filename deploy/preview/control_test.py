@@ -92,7 +92,7 @@ class PreviewControlTest(unittest.TestCase):
             "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
             "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
         }
-        for name, invalid in (("LOOMHELM_SHUTDOWN_TIMEOUT", "not-a-duration"), ("LOOMHELM_STOP_GRACE_PERIOD", "0s")):
+        for name, invalid in (("LOOMHELM_SHUTDOWN_TIMEOUT", "not-a-duration"), ("LOOMHELM_STOP_GRACE_PERIOD", "0s"), ("LOOMHELM_STOP_GRACE_PERIOD", "0.1ns")):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {**required, name: invalid}, clear=True):
                 state_dir = Path(raw_dir) / "state"
                 self.invoke("init", state_dir)

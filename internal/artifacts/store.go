@@ -336,6 +336,22 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 }
 
 func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	return s.openReadyArtifact(ctx, id, true)
+}
+
+// OpenContent opens an authorized, immutable ready object for a bounded
+// content transfer. Publication verifies the complete SHA-256 before the
+// object enters the ready state and final objects are never overwritten by
+// Store. This path repeats authorization, regular-file and exact-size checks
+// for every request, while the response carries the canonical SHA-256 so a
+// caller can verify the reassembled original bytes without rescanning the
+// object for every chunk. Open remains the fully verifying path for browser
+// downloads and callers that need a server-side full hash check.
+func (s *Store) OpenContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	return s.openReadyArtifact(ctx, id, false)
+}
+
+func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool) (protocol.Artifact, protocol.ArtifactReader, error) {
 	if s == nil {
 		return protocol.Artifact{}, nil, ErrStoreUnavailable
 	}
@@ -372,15 +388,21 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 		}
 		return protocol.Artifact{}, nil, err
 	}
-	if err := verifyFile(ctx, file, record.Artifact); err != nil {
+	var verifyErr error
+	if verify {
+		verifyErr = verifyFile(ctx, file, record.Artifact)
+	} else {
+		verifyErr = verifyFileSize(ctx, file, record.Artifact)
+	}
+	if verifyErr != nil {
 		_ = file.Close()
-		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
+		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
 			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
 				return protocol.Artifact{}, nil, markErr
 			}
-			return protocol.Artifact{}, nil, unavailableError(err)
+			return protocol.Artifact{}, nil, unavailableError(verifyErr)
 		}
-		return protocol.Artifact{}, nil, err
+		return protocol.Artifact{}, nil, verifyErr
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()
@@ -616,6 +638,26 @@ func verifyFile(ctx context.Context, file *os.File, artifact protocol.Artifact) 
 	}
 	if hex.EncodeToString(hasher.Sum(nil)) != artifact.Sha256 {
 		return ErrHashMismatch
+	}
+	return nil
+}
+
+func verifyFileSize(ctx context.Context, file *os.File, artifact protocol.Artifact) error {
+	if file == nil {
+		return ErrIntegrity
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat artifact bytes: %w", ErrStoreUnavailable)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("artifact bytes are not regular: %w", ErrIntegrity)
+	}
+	if info.Size() != artifact.Size {
+		return fmt.Errorf("got %d bytes, want %d: %w", info.Size(), artifact.Size, ErrSizeMismatch)
 	}
 	return nil
 }

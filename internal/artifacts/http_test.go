@@ -128,12 +128,14 @@ func TestDownloadHTTPHandlerReturnsCompleteContentChunkAsBase64JSON(t *testing.T
 
 func TestDownloadHTTPHandlerMapsMissingUnauthorizedAndInvalidAccess(t *testing.T) {
 	tests := []struct {
-		name   string
-		err    error
-		status int
+		name       string
+		err        error
+		status     int
+		retryAfter string
 	}{
 		{name: "missing", err: ErrNotFound, status: http.StatusNotFound},
 		{name: "unauthorized", err: ErrUnauthorized, status: http.StatusNotFound},
+		{name: "recovery pending", err: ErrRecoveryPending, status: http.StatusServiceUnavailable, retryAfter: "1"},
 		{name: "invalid path", err: ErrInvalid, status: http.StatusBadRequest},
 		{name: "store unavailable", err: ErrStoreUnavailable, status: http.StatusServiceUnavailable},
 	}
@@ -151,10 +153,34 @@ func TestDownloadHTTPHandlerMapsMissingUnauthorizedAndInvalidAccess(t *testing.T
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d; body=%q", response.Code, test.status, response.Body.String())
 			}
+			if response.Header().Get("Retry-After") != test.retryAfter {
+				t.Fatalf("retry-after = %q, want %q", response.Header().Get("Retry-After"), test.retryAfter)
+			}
 			if strings.Contains(response.Body.String(), test.err.Error()) && test.err != ErrInvalid {
 				t.Fatalf("response leaked storage error: %q", response.Body.String())
 			}
 		})
+	}
+}
+
+func TestDownloadHTTPHandlerUsesBoundedContentOpenPath(t *testing.T) {
+	content := []byte("bounded content")
+	store := &contentHTTPArtifactStoreStub{
+		httpArtifactStoreStub: httpArtifactStoreStub{
+			artifact: protocol.Artifact{ID: "artifact-content-open", Name: "content.bin", Size: int64(len(content))},
+			reader:   writeArtifactReader(t, content),
+		},
+	}
+	handler, err := NewDownloadHTTPHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-content-open/content?limit=4", nil))
+	if response.Code != http.StatusOK || store.contentOpens != 1 || store.fullOpens != 0 {
+		t.Fatalf("content response status=%d/content opens=%d/full opens=%d", response.Code, store.contentOpens, store.fullOpens)
 	}
 }
 
@@ -207,6 +233,22 @@ type httpArtifactStoreStub struct {
 	artifact protocol.Artifact
 	reader   protocol.ArtifactReader
 	err      error
+}
+
+type contentHTTPArtifactStoreStub struct {
+	httpArtifactStoreStub
+	contentOpens int
+	fullOpens    int
+}
+
+func (s *contentHTTPArtifactStoreStub) Open(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	s.fullOpens++
+	return s.httpArtifactStoreStub.Open(ctx, id)
+}
+
+func (s *contentHTTPArtifactStoreStub) OpenContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	s.contentOpens++
+	return s.httpArtifactStoreStub.Open(ctx, id)
 }
 
 func (s httpArtifactStoreStub) Put(context.Context, protocol.Artifact, io.Reader) (protocol.Artifact, error) {

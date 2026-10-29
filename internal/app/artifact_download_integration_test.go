@@ -266,6 +266,9 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	if string(decodedContent) != string(content[:4]) || contentPayload.Offset != 0 || contentPayload.NextOffset != 4 || contentPayload.TotalSize != int64(len(content)) || contentPayload.Complete {
 		t.Fatalf("API artifact content chunk = %#v, decoded=%q", contentPayload, decodedContent)
 	}
+	if contentPayload.Artifact.Sha256 != hex.EncodeToString(digest[:]) {
+		t.Fatalf("API artifact content hash = %q, want %q", contentPayload.Artifact.Sha256, hex.EncodeToString(digest[:]))
+	}
 	reassembled := append([]byte(nil), decodedContent...)
 	for !contentPayload.Complete {
 		contentResponse = applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset="+strconv.FormatInt(contentPayload.NextOffset, 10)+"&limit=4", nil, bearer, http.StatusOK)
@@ -281,6 +284,10 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	}
 	if string(reassembled) != string(content) {
 		t.Fatalf("reassembled API artifact content = %q, want %q", reassembled, content)
+	}
+	reassembledDigest := sha256.Sum256(reassembled)
+	if hex.EncodeToString(reassembledDigest[:]) != contentPayload.Artifact.Sha256 {
+		t.Fatalf("reassembled API artifact hash = %q, want %q", hex.EncodeToString(reassembledDigest[:]), contentPayload.Artifact.Sha256)
 	}
 	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset=999", nil, bearer, http.StatusBadRequest)
 }
