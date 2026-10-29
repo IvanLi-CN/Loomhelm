@@ -14,7 +14,7 @@
   "durable_state": {
     "description": "conversation_draft_commands records the owner, Session and exact draft revision bound to one accepted run command, then records whether delivery consumed that revision or preserved the projection.",
     "storage_implementation": "PostgreSQL table managed by embedded Goose migration 00014. Admission inserts the binding without clearing the projection; exact transport ACK or trusted reconciliation finalizes it through the draft store.",
-    "retention_policy": "Bindings remain for the lifetime of the command so duplicate ACKs and reconciliation can finalize idempotently. Command and Session retention remain the owner of eventual cleanup.",
+    "retention_policy": "Bindings remain for the lifetime of the command so duplicate ACKs and reconciliation can finalize idempotently. They are retained with command history; any future parent cleanup must delete binding rows before deleting the restricted command or Session rows.",
     "source_compatibility_range": {
       "from_program_versions": "Phase-one private shared-draft candidate after migration 00013.",
       "to_program_version": "Phase-one draft-command recovery candidate after migration 00014.",

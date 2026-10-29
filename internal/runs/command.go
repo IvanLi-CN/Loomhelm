@@ -31,6 +31,7 @@ type CommandIntent struct {
 	Generation    string
 	ReceivedAt    string
 	DraftRevision *int64
+	DraftOwnerID  string
 }
 
 type CommandRecord struct {
@@ -149,6 +150,7 @@ func Fingerprint(intent CommandIntent) (string, error) {
 		SessionID     string               `json:"session_id"`
 		Generation    string               `json:"generation"`
 		DraftRevision *int64               `json:"draft_revision,omitempty"`
+		DraftOwnerID  string               `json:"draft_owner_id,omitempty"`
 	}{
 		CommandID:     intent.Command.CommandID,
 		Kind:          intent.Command.Kind,
@@ -157,6 +159,7 @@ func Fingerprint(intent CommandIntent) (string, error) {
 		SessionID:     intent.Command.SessionID,
 		Generation:    intent.Generation,
 		DraftRevision: intent.DraftRevision,
+		DraftOwnerID:  intent.DraftOwnerID,
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {

@@ -142,6 +142,7 @@ func (c *Controller) acceptCommand(ctx context.Context, command protocol.Command
 	if draft != nil {
 		revision := draft.ExpectedRevision
 		intent.DraftRevision = &revision
+		intent.DraftOwnerID = draft.OwnerUserID
 	}
 	if command.Kind == protocol.CommandKindRunSend {
 		if command.RunID == nil || strings.TrimSpace(*command.RunID) == "" {
@@ -307,17 +308,21 @@ func (c *Controller) ReconcileCommand(ctx context.Context, platformSessionID, co
 		return protocol.Reconciliation{}, err
 	}
 	if isTerminalCommandState(record.State) {
-		return terminalReconciliation(record), nil
+		reconciliation := terminalReconciliation(record)
+		if err := c.finalizeDraftCommand(ctx, record); err != nil {
+			return reconciliation, err
+		}
+		return reconciliation, nil
 	}
 	reconciliation, err := c.transport.ReconcileCommand(ctx, record.Intent.Command)
 	if err != nil {
 		return reconciliation, err
 	}
-	if reconciliation.CommandID != "" && reconciliation.CommandID != commandID {
-		return reconciliation, fmt.Errorf("transport returned command id %q for %q", reconciliation.CommandID, commandID)
-	}
 	if reconciliation.CommandID == "" {
-		reconciliation.CommandID = commandID
+		return reconciliation, fmt.Errorf("transport returned an empty command id for %q", commandID)
+	}
+	if reconciliation.CommandID != commandID {
+		return reconciliation, fmt.Errorf("transport returned command id %q for %q", reconciliation.CommandID, commandID)
 	}
 	observation := CommandObservation{EventCursor: optionalStringValue(reconciliation.EventCursor)}
 	switch reconciliation.State {
@@ -602,7 +607,10 @@ func (c *Controller) sendCommand(ctx context.Context, intent CommandIntent, leas
 }
 
 func normalizeTransportAck(command protocol.Command, ack protocol.CommandAck) (protocol.CommandAck, error) {
-	if ack.CommandID != "" && ack.CommandID != command.CommandID {
+	if ack.CommandID == "" {
+		return protocol.CommandAck{}, fmt.Errorf("transport returned an empty command id for %q", command.CommandID)
+	}
+	if ack.CommandID != command.CommandID {
 		return protocol.CommandAck{}, fmt.Errorf("transport returned command id %q for %q", ack.CommandID, command.CommandID)
 	}
 	ack.CommandID = command.CommandID

@@ -63,6 +63,12 @@ func TestLedgerDraftRevisionIsPartOfCommandIdentity(t *testing.T) {
 	if _, err := ledger.Accept(retry); !errors.Is(err, protocol.ErrIdempotencyConflict) {
 		t.Fatalf("draft revision conflict error = %v, want %v", err, protocol.ErrIdempotencyConflict)
 	}
+
+	changedOwner := first
+	changedOwner.DraftOwnerID = "owner-2"
+	if _, err := ledger.Accept(changedOwner); !errors.Is(err, protocol.ErrIdempotencyConflict) {
+		t.Fatalf("draft owner conflict error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
 }
 
 func TestLedgerUnknownRequiresReconciliationBeforeRetry(t *testing.T) {
