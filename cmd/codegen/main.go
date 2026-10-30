@@ -34,6 +34,7 @@ type schema struct {
 	Type                 string            `json:"type"`
 	Format               string            `json:"format"`
 	Enum                 []string          `json:"enum"`
+	Extensible           bool              `json:"extensible"`
 	Required             []string          `json:"required"`
 	Properties           map[string]schema `json:"properties"`
 	Items                *schema           `json:"items"`
@@ -280,6 +281,9 @@ func validateSchema(types map[string]schema, value schema, location string) erro
 			}
 		}
 	}
+	if value.Extensible && value.Type != "string" {
+		return fmt.Errorf("%s extensible schemas must be strings", location)
+	}
 	if value.Type == "object" {
 		for property, child := range value.Properties {
 			if err := validateSchema(types, child, location+"."+property); err != nil {
@@ -471,7 +475,7 @@ func (g generator) protocolTypeScript() string {
 		if value.Kind == "json-value" || value.Kind == "raw-json" || value.Kind == "binary" {
 			continue
 		}
-		if len(value.Enum) > 0 {
+		if len(value.Enum) > 0 && !value.Extensible {
 			quoted := make([]string, len(value.Enum))
 			for i, item := range value.Enum {
 				quoted[i] = fmt.Sprintf("%q", item)

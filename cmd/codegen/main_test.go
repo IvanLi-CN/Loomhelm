@@ -128,3 +128,21 @@ func TestArtifactContentDownloadExposesCursorAddressedAPIMCPResponse(t *testing.
 	}
 	t.Fatal("artifact content download operation missing from contract")
 }
+
+func TestExtensibleErrorCodeRemainsOpenToFutureValues(t *testing.T) {
+	data, err := os.ReadFile("../../contracts/loomhelm-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source contract
+	if err := json.Unmarshal(data, &source); err != nil {
+		t.Fatal(err)
+	}
+	if !source.Types["ErrorCode"].Extensible {
+		t.Fatal("ErrorCode must be explicitly extensible")
+	}
+	generated := (generator{contract: source}).protocolTypeScript()
+	if !strings.Contains(generated, "export type ErrorCode = string;") {
+		t.Fatalf("generated ErrorCode is closed: %s", generated)
+	}
+}

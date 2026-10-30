@@ -136,6 +136,7 @@
     },
     "ErrorCode": {
       "type": "string",
+      "extensible": true,
       "enum": [
         "invalid_request",
         "service_unavailable",

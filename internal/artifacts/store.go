@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	DefaultMaxBytes = 64 << 20
-	maxIdentifier   = 128
-	maxNameBytes    = 1024
+	DefaultMaxBytes                   = 64 << 20
+	maxIdentifier                     = 128
+	maxNameBytes                      = 1024
+	maxConcurrentMetadataVerification = 2
 )
 
 var (
@@ -112,12 +113,13 @@ func (c Config) validate() (string, error) {
 }
 
 type Store struct {
-	pool       *pgxpool.Pool
-	root       string
-	objects    string
-	maxBytes   int64
-	authorizer Authorizer
-	faults     *faultHooks
+	pool                      *pgxpool.Pool
+	root                      string
+	objects                   string
+	maxBytes                  int64
+	authorizer                Authorizer
+	faults                    *faultHooks
+	metadataVerificationSlots chan struct{}
 }
 
 func (s *Store) maxArtifactBytes() int64 {
@@ -288,12 +290,13 @@ func NewStore(pool *pgxpool.Pool, cfg Config) (*Store, error) {
 		maxBytes = DefaultMaxBytes
 	}
 	return &Store{
-		pool:       pool,
-		root:       root,
-		objects:    objects,
-		maxBytes:   maxBytes,
-		authorizer: authorizer,
-		faults:     cfg.faults,
+		pool:                      pool,
+		root:                      root,
+		objects:                   objects,
+		maxBytes:                  maxBytes,
+		authorizer:                authorizer,
+		faults:                    cfg.faults,
+		metadataVerificationSlots: make(chan struct{}, maxConcurrentMetadataVerification),
 	}, nil
 }
 
@@ -366,7 +369,7 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 	}
 	switch record.State {
 	case publicationReady:
-		check, inspectErr := s.inspectReady(ctx, record)
+		check, pathVersion, inspectErr := s.inspectReadyWithVersion(ctx, record)
 		if inspectErr != nil {
 			return protocol.Artifact{}, inspectErr
 		}
@@ -375,7 +378,7 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 		}
 		if check != fileValid {
 			keepStaging = false
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check)); markErr != nil {
+			if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, pathVersion, finalReason(check)); markErr != nil {
 				return protocol.Artifact{}, markErr
 			}
 			return protocol.Artifact{}, unavailableError(ErrIntegrity)
@@ -452,10 +455,15 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 	if err != nil {
 		return protocol.Artifact{}, err
 	}
+	releaseVerification, err := s.acquireMetadataVerification(ctx)
+	if err != nil {
+		return protocol.Artifact{}, err
+	}
+	defer releaseVerification()
 	if err := s.ensureObjectDirectory(); err != nil {
 		return protocol.Artifact{}, err
 	}
-	check, inspectErr := s.inspectReady(ctx, record)
+	check, pathVersion, inspectErr := s.inspectReadyWithVersion(ctx, record)
 	if inspectErr != nil {
 		return protocol.Artifact{}, inspectErr
 	}
@@ -463,12 +471,26 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 		return protocol.Artifact{}, ErrStoreUnavailable
 	}
 	if check != fileValid {
-		if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check)); markErr != nil {
+		if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, pathVersion, finalReason(check)); markErr != nil {
 			return protocol.Artifact{}, markErr
 		}
 		return protocol.Artifact{}, unavailableError(ErrIntegrity)
 	}
 	return record.Artifact, nil
+}
+
+func (s *Store) acquireMetadataVerification(ctx context.Context) (func(), error) {
+	if s == nil || s.metadataVerificationSlots == nil {
+		return func() {}, nil
+	}
+	select {
+	case s.metadataVerificationSlots <- struct{}{}:
+		return func() { <-s.metadataVerificationSlots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, ErrStoreUnavailable
+	}
 }
 
 func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {

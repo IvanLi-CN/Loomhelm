@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,11 +32,10 @@ const (
 	// readers opened concurrently.
 	maxStagedDownloadBytes      = int64(DefaultMaxBytes)
 	maxConcurrentStagedDownload = 2
-	// The application Server keeps a 60-second default response deadline for
-	// ordinary APIs. Full artifact downloads may be deliberately slow, so extend
-	// only this route's write deadline without weakening the timeout for the
-	// rest of the Server.
-	downloadWriteTimeout = 10 * time.Minute
+	// Full artifact downloads may be deliberately slow, but an absolute deadline
+	// and shorter idle deadline keep a client from pinning transfer resources.
+	downloadWriteTimeout     = 2 * time.Minute
+	downloadWriteIdleTimeout = 30 * time.Second
 )
 
 // DefaultContentChunkBytes keeps the JSON envelope below the default MCP
@@ -84,6 +84,21 @@ type contentVersionVerifier interface {
 type downloadReadSeeker struct {
 	io.ReadSeeker
 	err error
+}
+
+type downloadDeadlineWriter struct {
+	http.ResponseWriter
+	controller *http.ResponseController
+	absolute   time.Time
+}
+
+func (w *downloadDeadlineWriter) Write(content []byte) (int, error) {
+	deadline := time.Now().Add(downloadWriteIdleTimeout)
+	if deadline.After(w.absolute) {
+		deadline = w.absolute
+	}
+	_ = w.controller.SetWriteDeadline(deadline)
+	return w.ResponseWriter.Write(content)
 }
 
 type downloadContextReader struct {
@@ -158,6 +173,7 @@ func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErr
 	if writeError == nil {
 		writeError = writeDownloadError
 	}
+	cleanupOrphanedDownloadStaging()
 	maxStagingBytes := maxStagedDownloadBytes
 	if boundedStore, ok := store.(artifactSizeLimit); ok {
 		if configuredLimit := boundedStore.maxArtifactBytes(); configuredLimit > 0 {
@@ -206,8 +222,10 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		h.writeError(writer, request, http.StatusNotFound, ErrNotFound, "artifact was not found")
 		return
 	}
+	var releaseSlot func()
 	if request.Method == http.MethodGet || request.Method == http.MethodHead {
-		releaseSlot, slotErr := h.acquireDownloadSlot(request.Context())
+		var slotErr error
+		releaseSlot, slotErr = h.acquireDownloadSlot(request.Context())
 		if slotErr != nil {
 			if request.Context().Err() != nil {
 				return
@@ -215,7 +233,11 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 			h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download capacity is temporarily exhausted")
 			return
 		}
-		defer releaseSlot()
+		defer func() {
+			if releaseSlot != nil {
+				releaseSlot()
+			}
+		}()
 	}
 	artifact, reader, err := h.store.Open(request.Context(), id)
 	if err != nil {
@@ -242,6 +264,10 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 			return
 		}
 	}
+	if releaseSlot != nil {
+		releaseSlot()
+		releaseSlot = nil
+	}
 
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Disposition", contentDisposition(artifact.Name))
@@ -257,7 +283,8 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	_ = responseController.SetWriteDeadline(time.Now().Add(downloadWriteTimeout))
 	defer func() { _ = responseController.SetWriteDeadline(time.Time{}) }()
 	if request.Method == http.MethodGet {
-		http.ServeContent(writer, request, safeDownloadFilename(artifact.Name), modTime, staged)
+		deadlineWriter := &downloadDeadlineWriter{ResponseWriter: writer, controller: responseController, absolute: time.Now().Add(downloadWriteTimeout)}
+		http.ServeContent(deadlineWriter, request, safeDownloadFilename(artifact.Name), modTime, staged)
 		return
 	}
 	trackedReader := &downloadReadSeeker{ReadSeeker: reader}
@@ -302,7 +329,12 @@ func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadS
 	}
 	release := func() {
 		_ = stagingFile.Close()
-		_ = os.Remove(stagingFile.Name())
+		if err := os.Remove(stagingFile.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// Keep the weighted budget occupied when cleanup fails. A later
+			// handler construction retries only stale files, so accounting cannot
+			// claim capacity that still has bytes on disk.
+			return
+		}
 		h.stagingBudget.Release(weight)
 	}
 	staged := false
@@ -348,6 +380,24 @@ func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadS
 	return stagingFile, release, nil
 }
 
+func cleanupOrphanedDownloadStaging() {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-(downloadWriteTimeout + downloadWriteIdleTimeout))
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "loomhelm-artifact-download-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(os.TempDir(), entry.Name()))
+	}
+}
+
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
 // MCP callers. The content store repeats authorization, ready-state, regular
 // file and exact-size checks for every request; content_version binds later
@@ -385,7 +435,11 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download capacity is temporarily exhausted")
 		return
 	}
-	defer releaseSlot()
+	defer func() {
+		if releaseSlot != nil {
+			releaseSlot()
+		}
+	}()
 	artifact, reader, version, versioned, err := h.openContent(request.Context(), id, expectedVersion)
 	if err != nil {
 		if request.Context().Err() != nil {
@@ -454,6 +508,10 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 				return
 			}
 		}
+	}
+	if releaseSlot != nil {
+		releaseSlot()
+		releaseSlot = nil
 	}
 	response := protocol.ArtifactContentResponse{
 		Artifact:       artifact,

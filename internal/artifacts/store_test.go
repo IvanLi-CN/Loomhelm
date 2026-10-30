@@ -3359,6 +3359,65 @@ func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.
 	assertNoStagingFiles(t, store.objects)
 }
 
+func TestStoreMetadataDoesNotQuarantineAfterCanonicalReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("metadata canonical replacement")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-metadata-path-race"), nil, content)
+	stagingName := ".upload-metadata-path-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeObjectUnavailableMark: func() {
+			replacementPath := objectPath + ".replacement"
+			if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
+				t.Fatalf("write metadata replacement: %v", err)
+			}
+			if err := os.Rename(replacementPath, objectPath); err != nil {
+				t.Fatalf("replace metadata canonical object: %v", err)
+			}
+		},
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Metadata error = %v, want %v", err, ErrContentChanged)
+	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `SELECT state, COALESCE(unavailable_reason, '') FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || reason != "" {
+		t.Fatalf("metadata replacement state = %q/%q, want ready/empty", state, reason)
+	}
+}
+
+func TestStoreMetadataVerificationRejectsWhenCapacityIsExhausted(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("metadata capacity")
+	artifact := testArtifact(uniqueID("artifact-metadata-capacity"), nil, content)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxConcurrentMetadataVerification; index++ {
+		store.metadataVerificationSlots <- struct{}{}
+	}
+	defer func() {
+		for index := 0; index < maxConcurrentMetadataVerification; index++ {
+			<-store.metadataVerificationSlots
+		}
+	}()
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("metadata capacity error = %v, want %v", err, ErrStoreUnavailable)
+	}
+}
+
 func TestStoreReconcileRevalidatesReclaimedReadyBytes(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
