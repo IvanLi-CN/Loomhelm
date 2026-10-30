@@ -198,7 +198,7 @@ verify_candidate_identity() {
 wait_server_ready() {
 	slot=$1
 	port=$(server_port "$slot")
-	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-90} ))
+	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-660} ))
 	while [ "$(date +%s)" -lt "$deadline" ]; do
 		if curl --fail --silent --show-error "http://127.0.0.1:$port/readyz" >/dev/null 2>&1 &&
 			version_matches "http://127.0.0.1:$port/version" "$(identity_field "$slot" source_sha)" "$(identity_field "$slot" artifact_digest)"; then
@@ -212,7 +212,7 @@ wait_server_ready() {
 
 wait_worker_ready() {
 	slot=$1
-	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-90} ))
+	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-660} ))
 	while [ "$(date +%s)" -lt "$deadline" ]; do
 		if worker_request "$slot" http://127.0.0.1:8081/readyz 2>/dev/null | grep -q '"ready":true' &&
 			worker_version_matches "$slot" "$(identity_field "$slot" source_sha)" "$(identity_field "$slot" artifact_digest)"; then

@@ -16,9 +16,10 @@ import (
 type Component string
 
 const (
-	ComponentServer    Component = "server"
-	ComponentWorker    Component = "worker"
-	ComponentConnector Component = "connector"
+	ComponentServer       Component = "server"
+	ComponentWorker       Component = "worker"
+	ComponentConnector    Component = "connector"
+	DefaultStartupTimeout           = 10 * time.Minute
 )
 
 type Config struct {
@@ -149,7 +150,7 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		ShutdownTimeout:    shutdownTimeout,
 	}
 	if component != ComponentConnector {
-		config.StartupTimeout, err = durationFromEnv(lookup, "LOOMHELM_STARTUP_TIMEOUT", 30*time.Second)
+		config.StartupTimeout, err = durationFromEnv(lookup, "LOOMHELM_STARTUP_TIMEOUT", DefaultStartupTimeout)
 		if err != nil {
 			return Config{}, err
 		}
@@ -312,7 +313,7 @@ func ValidateDevelopmentDatabaseTarget(databaseURL, postgresPort string) error {
 // StartupBudget supplies the same default for environment and programmatic callers.
 func (c Config) StartupBudget() time.Duration {
 	if c.StartupTimeout == 0 {
-		return 30 * time.Second
+		return DefaultStartupTimeout
 	}
 	return c.StartupTimeout
 }

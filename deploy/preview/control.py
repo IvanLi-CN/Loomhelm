@@ -718,7 +718,7 @@ def command_compose_env(args: argparse.Namespace) -> None:
         "LOOMHELM_SESSION_COOKIE_SECURE": env_value("LOOMHELM_SESSION_COOKIE_SECURE", "true"),
         "LOOMHELM_SHUTDOWN_TIMEOUT": shutdown_timeout,
         "LOOMHELM_STOP_GRACE_PERIOD": stop_grace,
-        "LOOMHELM_STARTUP_TIMEOUT": env_value("LOOMHELM_STARTUP_TIMEOUT", "30s"),
+        "LOOMHELM_STARTUP_TIMEOUT": env_value("LOOMHELM_STARTUP_TIMEOUT", "10m"),
         "LOOMHELM_WORKER_LEASE_KEY": env_value("LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"),
     }
     for slot in SLOTS:

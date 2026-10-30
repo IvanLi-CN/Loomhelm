@@ -323,10 +323,10 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	// Staging and network writes share one absolute request deadline so a slow
 	// source cannot consume the full transfer budget before response writes begin.
 	_ = responseController.SetWriteDeadline(downloadDeadline)
-	defer func() { _ = responseController.SetWriteDeadline(time.Time{}) }()
 	if request.Method == http.MethodGet {
 		deadlineWriter := &downloadDeadlineWriter{ResponseWriter: writer, controller: responseController, absolute: downloadDeadline}
 		http.ServeContent(deadlineWriter, request, safeDownloadFilename(artifact.Name), modTime, staged)
+		_ = responseController.Flush()
 		return
 	}
 	trackedReader := &downloadReadSeeker{ReadSeeker: reader}
@@ -347,6 +347,7 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		buffer.status = http.StatusOK
 	}
 	writer.WriteHeader(buffer.status)
+	_ = responseController.Flush()
 }
 
 func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadSeeker, size int64) (*os.File, func(), error) {
@@ -638,10 +639,10 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	responseController := http.NewResponseController(writer)
 	_ = responseController.SetWriteDeadline(downloadDeadline)
-	defer func() { _ = responseController.SetWriteDeadline(time.Time{}) }()
 	if err := json.NewEncoder(writer).Encode(response); err != nil && request.Context().Err() == nil {
 		return
 	}
+	_ = responseController.Flush()
 }
 
 func (h *DownloadHTTPHandler) openContent(ctx context.Context, id, expectedVersion string) (protocol.Artifact, protocol.ArtifactReader, string, bool, error) {

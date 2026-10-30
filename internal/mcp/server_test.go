@@ -509,6 +509,47 @@ func TestServerDelegatesArtifactContentChunksAsStructuredOriginalBytes(t *testin
 	}
 }
 
+func TestServerBoundsDefaultArtifactContentChunkToResponseBudget(t *testing.T) {
+	var seenLimit int64
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			parsedLimit, parseErr := strconv.ParseInt(request.URL.Query().Get("limit"), 10, 64)
+			if parseErr != nil {
+				t.Fatalf("parse delegated artifact content limit: %v", parseErr)
+			}
+			seenLimit = parsedLimit
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"content_base64":"AA==","content_version":"v1-test","offset":0,"next_offset":1,"total_size":1,"complete":true}`)
+		}),
+		MaxResponseBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	response := callMCPWithHeaders(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      19,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+			},
+		},
+	}, map[string]string{"Mcp-Protocol-Version": ProtocolVersion})
+	var result struct {
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if result.IsError {
+		t.Fatal("default artifact content chunk exceeded the MCP response budget")
+	}
+	if got, want := seenLimit, defaultArtifactContentLimit(1<<20); got != want {
+		t.Fatalf("default artifact content limit = %d, want %d", got, want)
+	}
+}
+
 func TestServerDelegatesArtifactContentChunksForOlderProtocolAsText(t *testing.T) {
 	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")

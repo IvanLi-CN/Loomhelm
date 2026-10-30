@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -329,6 +330,11 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 				Message: err.Error(),
 			}), nil
 		}
+		if spec.operationID == "downloadArtifactContent" {
+			if _, ok := arguments["limit"]; !ok {
+				arguments["limit"] = json.RawMessage(strconv.FormatInt(defaultArtifactContentLimit(s.maxResponse), 10))
+			}
+		}
 		response, err := s.invokeREST(ctx, requestHeaders(request), spec.route, arguments)
 		if err != nil {
 			var argumentErr *argumentError
@@ -394,6 +400,26 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 		}
 		return result, nil
 	}
+}
+
+const (
+	mcpArtifactContentChunkCap  int64 = 512 << 10
+	mcpArtifactResponseOverhead int64 = 8 << 10
+)
+
+func defaultArtifactContentLimit(maxResponse int64) int64 {
+	budget := maxResponse / 4
+	if budget <= mcpArtifactResponseOverhead {
+		return 1
+	}
+	limit := (budget - mcpArtifactResponseOverhead) * 3 / 4
+	if limit < 1 {
+		return 1
+	}
+	if limit > mcpArtifactContentChunkCap {
+		return mcpArtifactContentChunkCap
+	}
+	return limit
 }
 
 func validToolResponse(operationID string, body []byte) bool {

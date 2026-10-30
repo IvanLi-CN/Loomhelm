@@ -163,7 +163,7 @@ func TestDatabaseConfigurationBoundaries(t *testing.T) {
 			}
 			base["LOOMHELM_DATABASE_URL"] = "postgres://test@localhost/loomhelm"
 			cfg, err := LoadConfigWithLookup(component, envLookup(base))
-			if err != nil || cfg.DatabaseMaxConns != 4 || cfg.DatabaseMinConns != 0 || cfg.StartupBudget() != 30*time.Second {
+			if err != nil || cfg.DatabaseMaxConns != 4 || cfg.DatabaseMinConns != 0 || cfg.StartupBudget() != DefaultStartupTimeout {
 				t.Fatalf("default database configuration error = %v", err)
 			}
 			for _, test := range []struct{ key, value, want string }{

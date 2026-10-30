@@ -60,12 +60,13 @@ const (
 )
 
 type artifactRecord struct {
-	Artifact          protocol.Artifact
-	State             publicationState
-	StagingName       string
-	StagingIdentity   *string
-	StagingReclaimed  bool
-	UnavailableReason string
+	Artifact            protocol.Artifact
+	State               publicationState
+	StagingName         string
+	StagingIdentity     *string
+	StagingReclaimed    bool
+	StagingReclaimAfter time.Time
+	UnavailableReason   string
 }
 
 type rowQuerier interface {
@@ -494,7 +495,7 @@ func readArtifactRecord(ctx context.Context, queryer rowQuerier, id string) (art
 	if err := queryer.QueryRow(ctx, `
 		SELECT id, session_id, run_id, name, kind, size, sha256, content_type,
 		       created_at, state, staging_name, staging_identity, unavailable_reason,
-		       (staging_reclaimed_at IS NOT NULL)
+		       (staging_reclaimed_at IS NOT NULL), staging_reclaim_after
 		FROM conversation_artifacts
 		WHERE id = $1
 	`, id).Scan(
@@ -512,6 +513,7 @@ func readArtifactRecord(ctx context.Context, queryer rowQuerier, id string) (art
 		&record.StagingIdentity,
 		&record.UnavailableReason,
 		&record.StagingReclaimed,
+		&record.StagingReclaimAfter,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return artifactRecord{}, ErrNotFound
@@ -802,6 +804,10 @@ func (s *Store) rejectStagedPut(authErr error, stagingName string, stagingIdenti
 
 func repairableUnavailableReason(reason string) bool {
 	return reason == "staging-missing" || reason == "staging-corrupt"
+}
+
+func recheckableUnavailableReason(reason string) bool {
+	return reason == contentMismatchReason || reason == "final-missing" || reason == "final-mismatch"
 }
 
 func publicationStateMatchesIntent(state publicationState) bool {
@@ -1132,8 +1138,8 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 			return record, recoveryPending, nil
 		}
 	}
-	if record.State == publicationUnavailable && record.UnavailableReason == contentMismatchReason {
-		return s.reconcileContentMismatch(ctx, tx, record, cleanup)
+	if record.State == publicationUnavailable && recheckableUnavailableReason(record.UnavailableReason) {
+		return s.reconcileUnavailableObject(ctx, tx, record, cleanup)
 	}
 	reclaimReady := s.reclaimReadyStaging
 	if respectRetryAfter {
@@ -1205,7 +1211,8 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 	return confirmed, stateRecoveryStatus(confirmed.State), nil
 }
 
-func (s *Store) reconcileContentMismatch(ctx context.Context, tx pgx.Tx, record artifactRecord, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
+func (s *Store) reconcileUnavailableObject(ctx context.Context, tx pgx.Tx, record artifactRecord, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
+	reason := record.UnavailableReason
 	finalCheck, err := s.inspectReady(ctx, record)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
@@ -1215,12 +1222,12 @@ func (s *Store) reconcileContentMismatch(ctx context.Context, tx pgx.Tx, record 
 			UPDATE conversation_artifacts
 			SET staging_reclaim_after = clock_timestamp() + INTERVAL '1 minute'
 			WHERE id = $1 AND state = 'unavailable' AND unavailable_reason = $2
-		`, record.Artifact.ID, contentMismatchReason); err != nil {
+		`, record.Artifact.ID, reason); err != nil {
 			return artifactRecord{}, recoveryPending, databaseWriteError("defer artifact content verification", err)
 		}
 		if err := s.commit(ctx, tx); err != nil {
 			confirmed, confirmErr := s.confirmRecordWithCleanup(record.Artifact.ID, cleanup)
-			if confirmErr == nil && confirmed.State == publicationUnavailable && confirmed.UnavailableReason == contentMismatchReason {
+			if confirmErr == nil && confirmed.State == publicationUnavailable && confirmed.UnavailableReason == reason && confirmed.StagingReclaimAfter.After(time.Now()) {
 				return confirmed, recoveryPending, nil
 			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1232,7 +1239,7 @@ func (s *Store) reconcileContentMismatch(ctx context.Context, tx pgx.Tx, record 
 		if err != nil {
 			return artifactRecord{}, recoveryPending, err
 		}
-		if confirmed.State != publicationUnavailable || confirmed.UnavailableReason != contentMismatchReason {
+		if confirmed.State != publicationUnavailable || confirmed.UnavailableReason != reason {
 			return artifactRecord{}, recoveryPending, fmt.Errorf("artifact content verification state changed unexpectedly: %w", ErrStoreUnavailable)
 		}
 		return confirmed, recoveryPending, nil
@@ -1241,7 +1248,7 @@ func (s *Store) reconcileContentMismatch(ctx context.Context, tx pgx.Tx, record 
 		UPDATE conversation_artifacts
 		SET state = 'ready', unavailable_reason = '', staging_reclaim_after = NOW()
 		WHERE id = $1 AND state = 'unavailable' AND unavailable_reason = $2
-	`, record.Artifact.ID, contentMismatchReason); err != nil {
+		`, record.Artifact.ID, reason); err != nil {
 		return artifactRecord{}, recoveryPending, databaseWriteError("restore artifact after content verification", err)
 	}
 	if err := s.commit(ctx, tx); err != nil {
@@ -2040,7 +2047,7 @@ func (s *Store) listRecoveryWork(ctx context.Context, limit int) ([]recoveryWork
 			FROM (
 				SELECT 0 AS work_kind, id::text AS work_name, staging_reclaim_after AS due_at, created_at AS tie_at
 				FROM conversation_artifacts
-				WHERE state = 'unavailable' AND unavailable_reason = 'content-mismatch' AND staging_reclaim_after <= NOW()
+				WHERE state = 'unavailable' AND unavailable_reason IN ('content-mismatch', 'final-missing', 'final-mismatch') AND staging_reclaim_after <= NOW()
 				ORDER BY staging_reclaim_after, created_at, id
 				LIMIT $1
 			) AS content_mismatch_work
@@ -2105,7 +2112,7 @@ func (s *Store) deferArtifactRecovery(id string, cleanup *cleanupDeadline) error
 		UPDATE conversation_artifacts
 		SET staging_reclaim_after = clock_timestamp() + INTERVAL '1 minute'
 		WHERE id = $1
-		  AND (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL) OR (state = 'unavailable' AND unavailable_reason = 'content-mismatch'))
+		  AND (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL) OR (state = 'unavailable' AND unavailable_reason IN ('content-mismatch', 'final-missing', 'final-mismatch')))
 		  AND staging_reclaim_after <= clock_timestamp()
 	`, id); err != nil {
 		return databaseWriteError("defer artifact recovery", err)
@@ -2115,7 +2122,7 @@ func (s *Store) deferArtifactRecovery(id string, cleanup *cleanupDeadline) error
 		deferred := false
 		var confirmErr error
 		confirmErr = s.pool.QueryRow(confirmCtx, `
-			SELECT (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL) OR (state = 'unavailable' AND unavailable_reason = 'content-mismatch'))
+			SELECT (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL) OR (state = 'unavailable' AND unavailable_reason IN ('content-mismatch', 'final-missing', 'final-mismatch')))
 			       AND staging_reclaim_after > clock_timestamp()
 			FROM conversation_artifacts
 			WHERE id = $1

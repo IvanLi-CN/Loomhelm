@@ -3482,6 +3482,40 @@ func TestStoreReconcileRevalidatesReclaimedReadyBytes(t *testing.T) {
 	}
 }
 
+func TestStoreRecoveryRechecksFinalUnavailableObject(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("final object replacement")
+	artifact := testArtifact(uniqueID("artifact-final-object-recheck"), nil, content)
+	stagingName := ".upload-final-object-recheck-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertUnavailableArtifact(t, store, ctx, artifact, stagingName, "final-mismatch")
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_reclaim_after = NOW() WHERE id = $1`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := store.Recover(ctx, 1)
+	if err != nil {
+		t.Fatalf("final object recheck recovery err = %v", err)
+	}
+	var state string
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `SELECT state, staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state, &reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || !reclaimed || report.Ready != 1 {
+		t.Fatalf("final object recheck state = %q/%v report=%#v, want ready/reclaimed", state, reclaimed, report)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rechecked staging file stat error = %v, want removed", err)
+	}
+}
+
 func TestStoreMetadataDoesNotMutateWhenObjectDirectoryIsUnavailable(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
