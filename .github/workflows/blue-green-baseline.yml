@@ -34,7 +34,11 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      - name: Pull Compose fixture image
+        run: docker pull postgres:17-alpine
       - name: Run deterministic rehearsal
+        env:
+          LOOMHELM_TEST_COMPOSE: "1"
         run: |
           evidence="$RUNNER_TEMP/loomhelm-blue-green"
           scripts/rehearse-blue-green --control-only --evidence-dir "$evidence"

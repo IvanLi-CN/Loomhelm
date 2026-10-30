@@ -3,6 +3,7 @@ package database_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -64,6 +65,55 @@ func TestDatabaseMigrateAndReopen(t *testing.T) {
 	}
 	if got.Generation != 1 || got.Payload != payload {
 		t.Fatalf("unexpected result after reopen: %+v", got)
+	}
+}
+
+func TestDatabaseMigrateDoesNotLeakSessionSearchPathToPool(t *testing.T) {
+	baseConfig := databaseConfigForTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	admin, err := pgx.Connect(ctx, baseConfig.URL)
+	if err != nil {
+		t.Fatalf("open migration search-path admin connection: %v", err)
+	}
+	schema := fmt.Sprintf("loomhelm_migration_path_%d", time.Now().UnixNano())
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
+		admin.Close(context.Background())
+		t.Fatalf("create migration search-path schema: %v", err)
+	}
+	var db *database.DB
+	t.Cleanup(func() {
+		if db != nil {
+			db.Close()
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := admin.Exec(cleanupCtx, "DROP SCHEMA "+pgx.Identifier{schema}.Sanitize()+" CASCADE"); err != nil {
+			t.Errorf("drop migration search-path schema: %v", err)
+		}
+		admin.Close(cleanupCtx)
+	})
+
+	scopedConfig := database.Config{
+		URL:      withURLQuery(t, baseConfig.URL, "search_path", schema+",public"),
+		MinConns: 1,
+		MaxConns: 1,
+	}
+	db, err = database.Open(ctx, scopedConfig)
+	if err != nil {
+		t.Fatalf("open migration search-path database: %v", err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate migration search-path database: %v", err)
+	}
+
+	var searchPath string
+	if err := db.Pool().QueryRow(ctx, "SELECT current_setting('search_path')").Scan(&searchPath); err != nil {
+		t.Fatalf("read pooled search_path after migration: %v", err)
+	}
+	if !strings.Contains(searchPath, schema) || !strings.Contains(searchPath, "public") {
+		t.Fatalf("pooled search_path after migration = %q, want %q and public", searchPath, schema)
 	}
 }
 

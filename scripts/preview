@@ -390,7 +390,13 @@ case "$command" in
 		;;
 	compose-config)
 		refresh_env
-		compose config --quiet
+		if [ -n "${LOOMHELM_PREVIEW_TEST_COMPOSE_CONFIG_OUTPUT:-}" ]; then
+			# Test-only output keeps the normal command quiet while proving that
+			# this wrapper's environment sanitization reaches Compose.
+			compose config --format json >"$LOOMHELM_PREVIEW_TEST_COMPOSE_CONFIG_OUTPUT"
+		else
+			compose config --quiet
+		fi
 		;;
 	""|help|-h|--help)
 		usage

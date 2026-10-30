@@ -122,11 +122,13 @@ func (db *DB) migrate(ctx context.Context) error {
 		return errors.New("database context must not be nil")
 	}
 
-	sqlDB := stdlib.OpenDBFromPool(db.pool)
+	// Migrations may intentionally change session state while executing
+	// non-transactional DDL. Run them on a dedicated database/sql pool so any
+	// session changes are discarded when the migration provider closes.
+	sqlDB := stdlib.OpenDB(*db.connConfig.Copy())
 	defer sqlDB.Close()
-	// Migration 00016 narrows search_path to current_schema() before its
-	// schema-local concurrent index replacement. Keep every migration statement
-	// on that session so the narrowed path cannot be lost between Exec calls.
+	// Keep every migration statement on the dedicated session so migration
+	// 00016's narrowed search_path cannot be lost between Exec calls.
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)

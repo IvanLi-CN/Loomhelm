@@ -115,19 +115,19 @@ class ComposeAuthenticationTest(unittest.TestCase):
                 # so the wrapper must prove that compose.env wins.
                 "LOOMHELM_STOP_GRACE_PERIOD": "5s",
             })
-            for command in ("init", "compose-config"):
-                result = subprocess.run([str(repo / "scripts/preview"), command], cwd=repo, env=environment, capture_output=True, text=True, timeout=30)
-                self.assertEqual(result.returncode, 0, f"preview {command} failed for synthetic configuration")
-                for secret in (environment["LOOMHELM_OIDC_CLIENT_SECRET"], environment["LOOMHELM_DRAIN_TOKEN"], environment["LOOMHELM_DATABASE_URL"]):
-                    self.assertNotIn(secret, result.stdout + result.stderr)
-            compose = [
-                "docker", "compose", "--project-name", environment["LOOMHELM_PREVIEW_PROJECT_NAME"],
-                "--env-file", str(directory / "state" / "compose.env"),
-                "-f", str(repo / "deploy/preview/compose.yaml"), "config", "--format", "json",
-            ]
-            config = subprocess.run(["env", "-u", "LOOMHELM_STOP_GRACE_PERIOD", *compose], cwd=repo, env=environment, capture_output=True, text=True, timeout=30)
-            self.assertEqual(config.returncode, 0, "Compose could not resolve the generated shutdown grace period")
-            services = json.loads(config.stdout)["services"]
+            init = subprocess.run([str(repo / "scripts/preview"), "init"], cwd=repo, env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(init.returncode, 0, "preview init failed for synthetic configuration")
+            for secret in (environment["LOOMHELM_OIDC_CLIENT_SECRET"], environment["LOOMHELM_DRAIN_TOKEN"], environment["LOOMHELM_DATABASE_URL"]):
+                self.assertNotIn(secret, init.stdout + init.stderr)
+
+            wrapper_config = directory / "wrapper-compose.json"
+            compose_env = {**environment, "LOOMHELM_PREVIEW_TEST_COMPOSE_CONFIG_OUTPUT": str(wrapper_config)}
+            result = subprocess.run([str(repo / "scripts/preview"), "compose-config"], cwd=repo, env=compose_env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, "preview compose-config failed for synthetic configuration")
+            for secret in (environment["LOOMHELM_OIDC_CLIENT_SECRET"], environment["LOOMHELM_DRAIN_TOKEN"], environment["LOOMHELM_DATABASE_URL"]):
+                self.assertNotIn(secret, result.stdout + result.stderr)
+            self.assertTrue(wrapper_config.is_file(), "preview wrapper did not write its test config output")
+            services = json.loads(wrapper_config.read_text(encoding="utf-8"))["services"]
             for service in ("server-blue", "server-green", "worker-blue", "worker-green"):
                 self.assertEqual(services[service]["stop_grace_period"], "6m30s", service)
 
