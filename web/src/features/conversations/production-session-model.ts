@@ -65,6 +65,7 @@ export function sessionReadFailureMessage(reason: SessionReadReason | undefined,
 
 function runStatusFromCommandAck(ack: CommandAck): Run["status"] {
   if (ack.state === "unknown") return "unknown";
+  if (ack.state === "failed" || ack.state === "rejected") return "failed";
   return "pending";
 }
 
@@ -257,10 +258,14 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
   const isTool = !isMessage && !isUnknown;
   const hasInspectableItem = event.type === "item.started" || event.type === "item.completed";
   const itemID = isMessage ? eventItemID(event) : undefined;
+  const deltaParts = event.type === "message.delta" && typeof event.sequence === "number"
+    ? [{ content: eventText(event, asRecord(event.payload)), sequence: event.sequence }]
+    : undefined;
   return {
     author: isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
     content: eventText(event, asRecord(event.payload)),
     ...(isUnknown || hasInspectableItem ? { detail: eventDetail(event) } : {}),
+    ...(deltaParts ? { deltaParts } : {}),
     eventType: event.type,
     id: `${event.session_id}:${event.run_id ?? "session"}:${itemID ? `item:${itemID}` : event.event_id}`,
     kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",
@@ -287,13 +292,19 @@ export function mergeConversationMessages(current: readonly ConversationMessage[
       return;
     }
     if (existing.eventType === "item.completed") return;
+    const parts = new Map<number, string>();
+    for (const part of existing.deltaParts ?? (existing.sequence === undefined ? [] : [{ content: existing.content, sequence: existing.sequence }])) parts.set(part.sequence, part.content);
+    for (const part of message.deltaParts ?? (message.sequence === undefined ? [] : [{ content: message.content, sequence: message.sequence }])) parts.set(part.sequence, part.content);
+    const orderedParts = [...parts.entries()].sort(([left], [right]) => left - right).map(([, content]) => content);
+    const sequence = existing.sequence === undefined ? message.sequence : message.sequence === undefined ? existing.sequence : Math.max(existing.sequence, message.sequence);
     byID.set(message.id, {
       ...existing,
-      content: `${existing.content}${message.content}`,
+      content: orderedParts.join(""),
       detail: message.detail ?? existing.detail,
+      deltaParts: [...parts.entries()].sort(([left], [right]) => left - right).map(([sequence, content]) => ({ content, sequence })),
       eventType: message.eventType,
       occurredAt: message.occurredAt,
-      sequence: message.sequence
+      sequence
     });
   });
   return [...byID.values()].sort((left, right) => {

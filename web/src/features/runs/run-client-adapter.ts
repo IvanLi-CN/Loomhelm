@@ -50,7 +50,9 @@ export interface RunEventReadOptions {
 }
 
 export type RunEventReadState = "received" | "pending" | "unknown";
-export type RunEventReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "transport" | "offline" | "reconnecting" | "unknown" | "forbidden" | "not_found" | "cursor_expired";
+export type RunEventReadReason = "pending" | "stale_session" | "stale_response" | "foreign_response" | "invalid_response" | "transport" | "offline" | "reconnecting" | "unknown" | "forbidden" | "not_found" | "cursor_expired";
+
+const MAX_RUN_EVENT_PAGES = 1000;
 
 export interface RunEventReadResult {
   state: RunEventReadState;
@@ -84,6 +86,12 @@ function isCursorExpiredError(error: unknown): boolean {
   if (!(error instanceof ApiClientError)) return false;
   const body = error.body && typeof error.body === "object" ? error.body as { code?: unknown } : undefined;
   return body?.code === "cursor_expired";
+}
+
+function isValidEventPage(page: EventPage): boolean {
+  return Array.isArray(page.events)
+    && typeof page.has_more === "boolean"
+    && (!page.has_more || (typeof page.next_cursor === "string" && page.next_cursor.trim().length > 0));
 }
 
 export class RunClientAdapter {
@@ -148,35 +156,64 @@ export class RunClientAdapter {
       };
     }
 
-    const afterCursor = getRecoveryCursor(this.recovery, eventSubscription);
-    const request = {
-      run_id: subscription.runId,
-      ...(afterCursor === undefined ? {} : { after_cursor: afterCursor }),
-      ...(limit === undefined ? {} : { limit })
-    };
-
     try {
-      const page = await this.client.listRunEvents(request);
-      const requestIsCurrent = this.requests.isCurrent(admission.token);
-      const currentVersion = this.streamVersions.get(key) ?? 0;
-      if (!requestIsCurrent) return { state: "unknown", reason: "stale_response", request: admission.token };
-      if (currentVersion !== admission.token.baselineVersion) {
-        this.requests.finish(admission.token);
-        return { state: "unknown", reason: "stale_response", request: admission.token };
-      }
-      if (page.events.some((event) => !eventBelongsToScope(event, toScope(subscription)))) {
-        this.requests.finish(admission.token);
-        return { state: "unknown", reason: "foreign_response", page, request: admission.token };
+      let afterCursor = getRecoveryCursor(this.recovery, eventSubscription);
+      let currentStream = stream;
+      let currentRecovery = this.recovery;
+      let lastPage: EventPage | undefined;
+      const visitedCursors = new Set<string>(afterCursor === undefined ? [] : [afterCursor]);
+
+      for (let pageNumber = 0; pageNumber < MAX_RUN_EVENT_PAGES; pageNumber += 1) {
+        const request = {
+          run_id: subscription.runId,
+          ...(afterCursor === undefined ? {} : { after_cursor: afterCursor }),
+          ...(limit === undefined ? {} : { limit })
+        };
+        const page = await this.client.listRunEvents(request);
+        const requestIsCurrent = this.requests.isCurrent(admission.token);
+        const currentVersion = this.streamVersions.get(key) ?? 0;
+        if (!requestIsCurrent) return { state: "unknown", reason: "stale_response", request: admission.token };
+        if (currentVersion !== admission.token.baselineVersion) {
+          this.requests.finish(admission.token);
+          return { state: "unknown", reason: "stale_response", request: admission.token };
+        }
+        if (!isValidEventPage(page)) {
+          this.requests.finish(admission.token);
+          return { state: "unknown", reason: "invalid_response", request: admission.token };
+        }
+        if (page.events.some((event) => !eventBelongsToScope(event, toScope(subscription)))) {
+          this.requests.finish(admission.token);
+          return { state: "unknown", reason: "foreign_response", page, request: admission.token };
+        }
+
+        const applied = applyEventPage(currentStream, page);
+        currentStream = applied.state;
+        currentRecovery = advanceRecoveryCursor(currentRecovery, eventSubscription, page);
+        if (page.has_more && page.next_cursor !== undefined) {
+          currentStream = { ...currentStream, cursor: page.next_cursor };
+          currentRecovery = rememberRecoveryCursor(currentRecovery, eventSubscription, page.next_cursor, currentStream.cursorSequence);
+        }
+        lastPage = page;
+        if (!page.has_more) break;
+        const nextCursor = page.next_cursor;
+        if (nextCursor === undefined || visitedCursors.has(nextCursor)) {
+          this.requests.finish(admission.token);
+          return { state: "unknown", reason: "invalid_response", page, request: admission.token };
+        }
+        visitedCursors.add(nextCursor);
+        afterCursor = nextCursor;
       }
 
-      const currentStream = this.streams.get(key) ?? stream;
-      const applied = applyEventPage(currentStream, page);
-      this.streams.set(key, applied.state);
+      if (!lastPage || lastPage.has_more) {
+        this.requests.finish(admission.token);
+        return { state: "unknown", reason: "invalid_response", request: admission.token };
+      }
+
+      this.streams.set(key, currentStream);
       this.streamVersions.set(key, streamVersion + 1);
+      this.recovery = currentRecovery;
       this.requests.finish(admission.token);
-
-      this.recovery = advanceRecoveryCursor(this.recovery, eventSubscription, page);
-      return { state: "received", page, stream: applied.state, request: admission.token };
+      return { state: "received", page: lastPage, stream: currentStream, request: admission.token };
     } catch (error) {
       if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
       this.requests.finish(admission.token);

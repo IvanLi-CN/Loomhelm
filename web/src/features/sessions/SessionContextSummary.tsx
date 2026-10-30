@@ -26,6 +26,7 @@ function getSessionStateTone(state: SessionContextModel["session"]["state"]): st
 export function SessionContextSummary({ context, connection = "online" }: SessionContextSummaryProps) {
   const kind = getSessionContextKind(context);
   const isStandalone = kind === "standalone";
+  const isProjectScoped = kind === "project";
   const sessionState = context.session.state;
 
   return (
@@ -43,7 +44,9 @@ export function SessionContextSummary({ context, connection = "online" }: Sessio
           <p className="mt-2 max-w-[62ch] text-xs leading-6 text-[var(--muted)]">
             {isStandalone
               ? "可以先在没有项目或任务的情况下交流与执行；后续绑定任务时需要明确确认历史共享范围。"
-              : "任务目标、业务状态和 Run 状态分别保留；此会话是任务唯一的主会话。"}
+              : isProjectScoped
+                ? "会话属于当前项目并按项目权限共享；它尚未绑定具体任务。"
+                : "任务目标、业务状态和 Run 状态分别保留；此会话是任务唯一的主会话。"}
           </p>
         </div>
         <span className="inline-flex min-h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--selected)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)]">
@@ -84,6 +87,11 @@ export function SessionContextSummary({ context, connection = "online" }: Sessio
           <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--ink)]"><History className="size-3.5" aria-hidden="true" />任务主会话范围</span>
           <span className="text-[var(--muted)]">{context.task.goal}</span>
           <span className="text-[var(--muted)]">任务业务状态：{context.task.status}。一次 Run 的完成、中断或失败不会自动改变任务状态。</span>
+        </div>
+      ) : isProjectScoped ? (
+        <div className="grid gap-2 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs leading-5">
+          <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--ink)]"><FolderOpen className="size-3.5" aria-hidden="true" />项目会话范围</span>
+          <span className="text-[var(--muted)]">历史消息、执行和文件按项目授权共享；当前会话尚未关联具体任务。</span>
         </div>
       ) : (
         <div className="grid gap-2 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs leading-5">

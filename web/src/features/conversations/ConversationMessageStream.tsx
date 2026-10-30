@@ -28,6 +28,7 @@ export interface ConversationMessage {
   eventType?: EventType;
   kind?: ConversationMessageKind;
   occurredAt?: string;
+  deltaParts?: readonly { content: string; sequence: number }[];
 }
 export interface ConversationMessageStreamProps {
   messages: readonly ConversationMessage[];
@@ -73,7 +74,7 @@ export function ConversationMessageStream({ messages, connection = "online", emp
           {emptyMessage}
         </div>
       ) : (
-        <ol className="grid min-w-0 gap-4" data-testid="message-stream-list">
+        <ol className="grid min-w-0 gap-4" data-testid="message-stream-list" role="log" aria-live="polite" aria-relevant="additions text">
           {messages.map((message) => {
             const deliveryLabel = getDeliveryLabel(message.delivery);
             const isUnknown = message.kind === "unknown";
@@ -117,18 +118,19 @@ export interface ConversationComposerProps {
   connection?: ConnectionAvailability;
   readOnly?: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   placeholder?: string;
 }
 
-export function ConversationComposer({ value, onChange, onSend, connection = "online", readOnly = false, disabled = false, placeholder = "继续说明目标或补充上下文…" }: ConversationComposerProps) {
+export function ConversationComposer({ value, onChange, onSend, connection = "online", readOnly = false, disabled = false, disabledReason, placeholder = "继续说明目标或补充上下文…" }: ConversationComposerProps) {
   const submissionLock = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const canSubmit = Boolean(value.trim()) && canSendControl(connection, readOnly) && !disabled && !submitting;
-  const blockedReason = readOnly
+  const blockedReason = disabledReason ?? (readOnly
     ? "当前会话只读，草稿可以保留但不会发送。"
     : connection === "online"
       ? "发送需要明确点击；恢复连接不会自动发送草稿。"
-      : "连接不可用，不会发送或排队草稿。";
+      : "连接不可用，不会发送或排队草稿。");
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

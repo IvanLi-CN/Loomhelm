@@ -102,6 +102,19 @@ export const TaskMain: Story = {
   )
 };
 
+export const ProjectWithoutTask: Story = {
+  render: () => (
+    <EvidenceFrame>
+      <SessionContextSummary
+        context={{
+          conversationTitle: "项目内但尚未绑定任务",
+          session: { ...standaloneSession, id: "ses-project-01", project_id: "loomhelm" }
+        }}
+      />
+    </EvidenceFrame>
+  )
+};
+
 export const Disconnected: Story = {
   render: () => (
     <EvidenceFrame>

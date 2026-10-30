@@ -149,6 +149,16 @@ function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string
     return () => cancelAnimationFrame(frame);
   }, [currentDeleteState]);
 
+  const handleTaskSessionCreated = async (sessionId: string, runId?: string) => {
+    setCreatedSession({ sessionId, taskId });
+    try {
+      await source?.refresh();
+    } catch {
+      // The local session identity remains an immediate fallback; the source will retry on its normal refresh interval.
+    }
+    return navigate({ params: { taskId }, search: runId ? { runId } : {}, to: "/tasks/$taskId" });
+  };
+
   if (source?.status === "error" || source?.status === "permission-changed") {
     return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><TaskReadRecovery source={source} taskId={taskId} /></section>;
   }
@@ -179,8 +189,8 @@ function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string
             api={sessionApi}
             conversationTitle={displayedTask.title}
             initialRunId={initialRunId}
-            onRunCreated={(sessionId, runId) => { setCreatedSession({ sessionId, taskId }); return navigate({ params: { taskId }, search: { runId }, to: "/tasks/$taskId" }); }}
-            onSessionCreated={(sessionId, runId) => { setCreatedSession({ sessionId, taskId }); return navigate({ params: { taskId }, search: runId ? { runId } : {}, to: "/tasks/$taskId" }); }}
+            onRunCreated={handleTaskSessionCreated}
+            onSessionCreated={handleTaskSessionCreated}
             principalId={assembly?.auth.principalId}
             projectCanWrite={(projectId) => source.getProjectPermissions(projectId).canWrite}
             projectId={displayedTask.projectId}

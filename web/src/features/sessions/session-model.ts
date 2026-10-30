@@ -1,7 +1,7 @@
 import type { Session, SessionPath, SessionState, Task } from "@loomhelm/protocol";
 
 export type ConnectionAvailability = "online" | "offline" | "reconnecting";
-export type SessionContextKind = "standalone" | "task-main";
+export type SessionContextKind = "standalone" | "project" | "task-main";
 
 export interface SessionContextModel {
   session: Session;
@@ -10,11 +10,13 @@ export interface SessionContextModel {
   task?: Pick<Task, "id" | "title" | "goal" | "status">;
 }
 export function getSessionContextKind(context: SessionContextModel): SessionContextKind {
-  return context.task ? "task-main" : "standalone";
+  if (context.task) return "task-main";
+  return context.session.project_id ? "project" : "standalone";
 }
 
 export function getSessionContextLabel(kind: SessionContextKind): string {
-  return kind === "task-main" ? "任务主会话" : "独立会话";
+  if (kind === "task-main") return "任务主会话";
+  return kind === "project" ? "项目会话" : "独立会话";
 }
 
 export function getSessionStateLabel(state: SessionState): string {

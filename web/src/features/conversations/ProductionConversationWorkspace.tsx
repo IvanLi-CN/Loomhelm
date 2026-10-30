@@ -1,5 +1,5 @@
 import { Info, LoaderCircle, MonitorCog, Send, ShieldCheck, WifiOff } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiClientError, type ResolveApprovalParams } from "@loomhelm/api-client";
 import type { Approval, ApprovalDecision, CommandState, CreateSessionRequest, Run, Session, SessionPath } from "@loomhelm/protocol";
@@ -44,9 +44,9 @@ const RUN_INTENT_PREFIX = "loomhelm:run-intent:";
 const RUN_RECOVERY_PREFIX = "loomhelm:run-recovery:";
 const DRAFT_PREFIX = "loomhelm:draft:";
 const DRAFT_STATE_PREFIX = "loomhelm:draft-state:";
-const DRAFT_CLIENT_PREFIX = "loomhelm:draft-client:";
 const DRAFT_SEQUENCE_PREFIX = "loomhelm:draft-sequence:";
 const CONTROL_INTENT_PREFIX = "loomhelm:control-intent:";
+let browserContextDraftClientId: string | undefined;
 
 type SessionCreationPayload = Omit<CreateSessionRequest, "command_id">;
 
@@ -148,29 +148,16 @@ function getDraftStateKey(principalId: string | undefined, sessionId: string | u
   return sessionId ? `${DRAFT_STATE_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}` : undefined;
 }
 
-function getDraftClientKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
-  return sessionId ? `${DRAFT_CLIENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}` : undefined;
-}
-
 function getDraftSequenceKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
   return sessionId ? `${DRAFT_SEQUENCE_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(sessionId)}` : undefined;
 }
 
 function readStoredDraftClientId(principalId: string | undefined, sessionId: string | undefined): string {
-  const storage = getSessionStorage();
-  const key = getDraftClientKey(principalId, sessionId);
-  if (storage && key) {
-    try {
-      const stored = storage.getItem(key);
-      if (stored?.trim()) return stored;
-      const created = createCommandId("draft-client");
-      storage.setItem(key, created);
-      return created;
-    } catch {
-      // Fall through to an in-memory identity when browser storage is unavailable.
-    }
-  }
-  return createCommandId("draft-client");
+  // sessionStorage is copied into a newly opened tab. Keep the client identity
+  // in this JavaScript realm so each top-level browsing context gets a distinct
+  // (and session-scoped) identity instead of racing with its opener.
+  if (!browserContextDraftClientId) browserContextDraftClientId = createCommandId("draft-client");
+  return browserContextDraftClientId;
 }
 
 function readStoredDraftSequence(principalId: string | undefined, sessionId: string): number | undefined {
@@ -418,6 +405,7 @@ export function ProductionSessionCreationPanel({
   readOnly = false,
   taskId
 }: ProductionSessionCreationPanelProps) {
+  const promptId = useId();
   const storageKey = getSessionCreationIntentKey(principalId, conversationTitle, taskId, fixedProjectId);
   const storedIntent = useMemo(() => readSessionCreationIntent(storageKey), [storageKey]);
   const [path, setPath] = useState<SessionPath>(() => storedIntent?.request.path ?? "new");
@@ -552,9 +540,9 @@ export function ProductionSessionCreationPanel({
           </div>
         )}
 
-        <label className="grid gap-2 text-xs font-semibold" htmlFor="production-session-prompt">
+        <label className="grid gap-2 text-xs font-semibold" htmlFor={promptId}>
           <span>首条提示（可选）</span>
-          <Textarea id="production-session-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="明确说明要讨论或执行的目标…" disabled={pending || readOnly || creationUncertain} className="min-h-28 resize-y border-[var(--line-strong)] bg-[var(--surface-glass)] text-[var(--ink)] placeholder:text-[var(--muted)]" />
+          <Textarea id={promptId} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="明确说明要讨论或执行的目标…" disabled={pending || readOnly || creationUncertain} className="min-h-28 resize-y border-[var(--line-strong)] bg-[var(--surface-glass)] text-[var(--ink)] placeholder:text-[var(--muted)]" />
         </label>
 
         {readOnly ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><WifiOff className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>当前身份或项目权限为只读；表单保留展示，但不会创建 Session。</span></div> : null}
@@ -716,12 +704,21 @@ export function ProductionConversationWorkspace({
           ? approvalReadFailure
           : null;
   const currentConversationTitle = conversationTitle ?? task?.title ?? "独立会话";
+  const sessionProjectName = projectName ?? (sessionForRoute?.project_id
+    ? projectOptions.find((project) => project.id === sessionForRoute.project_id)?.name ?? sessionForRoute.project_id
+    : undefined);
   const taskSummary = mapTaskSummary(task);
-  const context = sessionForRoute ? toSessionContextModel(sessionForRoute, { conversationTitle: currentConversationTitle, projectName, task: taskSummary }) : undefined;
+  const context = sessionForRoute ? toSessionContextModel(sessionForRoute, { conversationTitle: currentConversationTitle, projectName: sessionProjectName, task: taskSummary }) : undefined;
   const activeApprovals = runIdentityVerified && activeRunId ? approvals.filter((approval) => approval.run_id === activeRunId) : [];
   const approvalHistoryBlocked = Boolean(activeRunId && !approvalHistoryAvailable);
   const runRouteUnverified = Boolean(initialRunId && (!activeRun || !runIdentityVerified));
   const selectedHistoryRunId = activeRunId && sessionRunHistory.some((historyRun) => historyRun.id === activeRunId) ? activeRunId : undefined;
+  const composerDisabled = !api || !sessionForRoute || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId);
+  const composerDisabledReason = sessionRunHistoryLoading
+    ? "正在核对 Run 历史；核对完成前不会发送命令。"
+    : sessionRunHistoryFailure
+      ? "Run 历史核对失败；请刷新并完成人工核对后再发送。"
+      : undefined;
 
   useLayoutEffect(() => {
     mountedRef.current = true;
@@ -1372,12 +1369,16 @@ export function ProductionConversationWorkspace({
     const expectedInitialCommandId = initialRunCommandId(response.session.id);
     const initialAckMatchesExpectedCommand = Boolean(initialAck && initialAck.command_id === expectedInitialCommandId);
     const initialRunId = initialAckMatchesExpectedCommand && typeof initialAck?.run_id === "string" && initialAck.run_id.trim() ? initialAck.run_id.trim() : undefined;
+    const initialRunFailed = initialAck?.state === "failed" || initialAck?.state === "rejected";
     if (initialRunId && !writeRunRecoveryId(getRunRecoveryKey(principalId, response.session.id), initialRunId)) {
       throw new Error("Session 已收到但首个 Run 恢复身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
     const initialRunUncertain = Boolean(
+      !initialRunFailed
+      && (
       (initialAck && (!initialAckMatchesExpectedCommand || initialAck.state === "unknown" || !initialRunId))
       || (initialPrompt && !initialAck)
+      )
     );
     if (initialRunUncertain && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: expectedInitialCommandId, prompt: initialPrompt, uncertain: true })) {
       throw new Error("Session 已收到但首个 Run 命令身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
@@ -1410,7 +1411,25 @@ export function ProductionConversationWorkspace({
     draftDirtyRef.current = false;
     draftInputSinceReadRef.current = false;
     pendingDraftValueRef.current = undefined;
-    if (initialAck) {
+    if (initialAck && initialRunFailed) {
+      const failedRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
+      setCommandState("failed");
+      fenceRunTransition(failedRun?.id);
+      setRun(failedRun);
+      setRunIdentityVerified(false);
+      setUncertainRunCommandId(undefined);
+      pendingRunSubmission.current = undefined;
+      if (initialPrompt) {
+        const createdDraftKey = getDraftKey(principalId, response.session.id);
+        const createdDraftStateKey = getDraftStateKey(principalId, response.session.id);
+        draftRef.current = initialPrompt;
+        draftInputSinceReadRef.current = true;
+        draftDirtyRef.current = true;
+        setDraft(initialPrompt);
+        writeStoredDraft(createdDraftKey, createdDraftStateKey, initialPrompt, { baseRevision: 0, content: initialPrompt, dirty: true });
+      }
+      setActivityNotice("首条提示未被服务接受；原始提示已保留为私有草稿，请显式修改或重试。");
+    } else if (initialAck) {
       setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
       const initialRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
       fenceRunTransition(initialRun?.id);
@@ -1720,6 +1739,7 @@ export function ProductionConversationWorkspace({
       <SessionContextSummary connection={connection} context={context} />
       {activityNotice ? <div className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{activityNotice}</span>{uncertainRunCommandId ? <Button type="button" variant="secondary" onClick={reconcileRunSubmission}>我已对账，复用命令重试</Button> : null}</div> : null}
       {readFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--danger)]/30 bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert" aria-live="assertive"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{readFailure}</span></div> : null}
+      {sessionRunHistoryLoading ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status" aria-live="polite" aria-busy="true"><LoaderCircle className="mt-0.5 size-4 shrink-0 animate-spin" aria-hidden="true" /><span>正在核对 Run 历史；核对完成前不会发送命令。</span></div> : null}
       {sessionRunHistory.length > 1 ? <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface)] p-3" aria-label="Run 历史选择"><label className="text-xs font-medium text-[var(--ink)]" htmlFor="production-run-history">Run 历史</label><Select value={selectedHistoryRunId} onValueChange={selectHistoricalRun}><SelectTrigger className="min-w-0 max-w-full" id="production-run-history" size="sm"><SelectValue placeholder="选择已授权 Run" /></SelectTrigger><SelectContent>{sessionRunHistory.map((historyRun) => <SelectItem key={historyRun.id} value={historyRun.id}><span className="font-mono text-xs">{historyRun.id}</span><span className="text-xs text-[var(--muted)]">· {historyRun.created_at}</span></SelectItem>)}</SelectContent></Select><span className="text-[11px] leading-5 text-[var(--muted)]">每台设备独立选择；切换后会重新核对事件和审批。</span></div> : null}
       <ConversationMessageStream connection={connection} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" messages={messages} />
       {activeRun ? <RunStatusCard key={activeRun.id} canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !approvalHistoryBlocked && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}
@@ -1735,7 +1755,7 @@ export function ProductionConversationWorkspace({
             impact: approvalContext.impact,
             rawContext: approvalContext.rawContext,
             scope: approvalContext.scope,
-            projectName,
+            projectName: sessionProjectName,
             sessionId: sessionForRoute.id,
             task: task ? { id: task.id, title: task.title } : undefined
           }
@@ -1745,7 +1765,7 @@ export function ProductionConversationWorkspace({
         return <ApprovalRequestCard key={`${approval.id}:${approval.revision}`} commandIds={{ approve: commandIdForApproval(approval, "approve", approvalCommandIds.current, principalId, sessionForRoute.id), deny: commandIdForApproval(approval, "deny", approvalCommandIds.current, principalId, sessionForRoute.id) }} connection={connection} canResolve={runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !uncertainRunCommandId && sessionForRoute.state === "active" && approvalHistoryAvailable && activeRun?.status === "waiting_approval" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:approve`) && !controlIntentIsUncertain(principalId, sessionForRoute.id, `approval:${approval.id}:${approval.revision}:deny`) && approval.revision === latestRevision} onReconcile={(decision) => reconcileApproval(approval, decision)} onResolve={resolveApproval} readOnly={effectiveReadOnly} recoveryDecision={recoveryDecision} request={request} />;
       })}
       {draftFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{draftFailure}</span></div> : null}
-      <ConversationComposer connection={connection} disabled={!api || sessionForRoute.state !== "active" || runRouteUnverified || sessionReadUncertain || sessionAccessBlocked || sessionRunHistoryBlocked || runReadUncertain || approvalReadUncertain || activeRun?.status === "unknown" || effectiveCommandState === "unknown" || Boolean(uncertainRunCommandId)} onChange={(value) => { draftRef.current = value; draftInputSinceReadRef.current = true; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; if (!writeStoredDraft(draftKey, draftStateKey, value, { baseRevision: draftRevisionRef.current, content: value, dirty: true })) { setDraftReadUncertain(true); setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖。请恢复浏览器存储后再试。"); } scheduleDraftPersistence(sessionForRoute.id, value); } else { clearLocalDraftState(draftStateKey); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
+      <ConversationComposer connection={connection} disabled={composerDisabled} disabledReason={composerDisabledReason} onChange={(value) => { draftRef.current = value; draftInputSinceReadRef.current = true; setDraft(value); if (!draftAccessBlockedRef.current) { draftDirtyRef.current = true; if (!writeStoredDraft(draftKey, draftStateKey, value, { baseRevision: draftRevisionRef.current, content: value, dirty: true })) { setDraftReadUncertain(true); setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖。请恢复浏览器存储后再试。"); } scheduleDraftPersistence(sessionForRoute.id, value); } else { clearLocalDraftState(draftStateKey); } }} onSend={send} readOnly={effectiveReadOnly} value={draft} />
       <div className="flex items-start gap-2 text-[11px] leading-5 text-[var(--muted)]"><ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-[var(--accent)]" aria-hidden="true" /><span>审批、Run 控制和消息发送都以当前 Session、Run、修订和连接状态为准；未知结果不会自动重试。</span></div>
     </section>
   );

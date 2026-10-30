@@ -121,7 +121,7 @@ export function RunStatusCard({ run, session, commandState, connection = "online
           <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--muted)]">Run 状态</span>
           <h2 className="mt-2 wrap-anywhere font-mono text-sm font-semibold">{run.id}</h2>
         </div>
-        <span className={cn("inline-flex min-h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 py-1 text-[11px] font-semibold", presentation.tone)} data-testid="run-phase">
+        <span className={cn("inline-flex min-h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 py-1 text-[11px] font-semibold", presentation.tone)} data-testid="run-phase" role="status" aria-live="polite">
           <Icon className={cn("size-3.5", phase === "sending" && "animate-spin")} aria-hidden="true" />
           {presentation.label}
         </span>

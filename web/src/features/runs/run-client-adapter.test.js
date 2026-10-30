@@ -94,6 +94,41 @@ describe("run client adapter", () => {
     expect(result).toMatchObject({ state: "received", stream: { cursor: "cursor-1", cursorSequence: 1 } });
   });
 
+  test("reads every durable event page before returning a verified stream", async () => {
+    const calls = [];
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async (request) => {
+        calls.push(request);
+        return calls.length === 1
+          ? { events: [event({ event_id: "event-1", cursor: "cursor-1", sequence: 1 })], has_more: true, next_cursor: " opaque cursor 1 " }
+          : { events: [event({ event_id: "event-2", cursor: "cursor-2", sequence: 2 })], has_more: false };
+      }
+    });
+
+    adapter.selectSession("session-1");
+    const result = await adapter.readRunEvents(subscription, { limit: 100 });
+
+    expect(calls).toEqual([
+      { run_id: "run-1", limit: 100 },
+      { run_id: "run-1", after_cursor: " opaque cursor 1 ", limit: 100 }
+    ]);
+    expect(result).toMatchObject({ state: "received", stream: { events: [{ event_id: "event-1" }, { event_id: "event-2" }], cursorSequence: 2 } });
+    expect(adapter.getRecoveryCursorBaseline(subscription)).toEqual({ cursor: "cursor-2", sequence: 2 });
+  });
+
+  test("keeps durable Run state unknown for malformed pagination", async () => {
+    const adapter = new RunClientAdapter({
+      submitRun: async () => ack("unused"),
+      interruptRun: async () => ack("unused"),
+      listRunEvents: async () => ({ events: [event()], has_more: true })
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.readRunEvents(subscription)).resolves.toMatchObject({ state: "unknown", reason: "invalid_response" });
+  });
+
   test("reads persisted events while the Session connection is unavailable", async () => {
     const calls = [];
     const adapter = new RunClientAdapter({

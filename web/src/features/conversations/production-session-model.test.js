@@ -100,14 +100,14 @@ describe("production session model", () => {
     expect(initialRunCommandId("session-1")).toBe("session-1:initial");
   });
 
-  test("does not infer a terminal Run from a command acknowledgement", () => {
+  test("preserves a rejected command acknowledgement as a failed Run", () => {
     expect(runFromCommandAck(session, {
       command_id: "command-rejected",
       deduplicated: false,
       received_at: "2026-10-27T00:00:03Z",
       run_id: "run-rejected",
       state: "rejected"
-    })).toMatchObject({ id: "run-rejected", status: "pending" });
+    })).toMatchObject({ id: "run-rejected", status: "failed" });
   });
 
   test("keeps a recovered Run identity unknown until an event verifies it", () => {
@@ -181,6 +181,14 @@ describe("production session model", () => {
     const merged = mergeConversationMessages([], [delta, final]);
     expect(merged).toHaveLength(1);
     expect(merged[0]).toMatchObject({ content: "final answer", eventType: "item.completed", kind: "message" });
+  });
+
+  test("reorders late message deltas by event sequence", () => {
+    const high = eventToConversationMessage(event({ event_id: "agent-delta-high", payload: { params: { delta: "second ", itemId: "item-agent" } }, sequence: 3, type: "message.delta" }));
+    const low = eventToConversationMessage(event({ event_id: "agent-delta-low", payload: { params: { delta: "first ", itemId: "item-agent" } }, sequence: 2, type: "message.delta" }));
+    const merged = mergeConversationMessages(mergeConversationMessages([], [high]), [low]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ content: "first second ", sequence: 3 });
   });
 
   test("correlates approval resolutions through the durable requested-event identity", () => {
