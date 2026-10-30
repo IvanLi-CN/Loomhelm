@@ -945,12 +945,24 @@
         "method": "GET",
         "path": "/artifacts/{artifact_id}/download",
         "path_params": {"artifact_id": "string"},
-        "request_headers": {"range": "Range"},
+        "request_headers": {"if_range": "If-Range", "range": "Range"},
         "response_type": "ArtifactDownload",
         "response_status": 200,
         "response_statuses": [200, 206],
-        "response_headers": {"Content-Range": "206 responses use bytes start-end/total; 416 responses use bytes */total."},
-        "summary": "Download the authorized original artifact bytes. Range supports satisfiable byte ranges, including multiple ranges; malformed or unsatisfiable byte ranges return 416 with Content-Range, while unknown range units are ignored."
+        "response_headers": {"Content-Range": "206 responses use bytes start-end/total; 416 responses use bytes */total.", "WWW-Authenticate": "401 responses include the Bearer authentication challenge."},
+        "summary": "Download the authorized original artifact bytes. Range supports satisfiable byte ranges, including multiple ranges; If-Range selects a range only when its strong ETag or HTTP-date validator matches; malformed or unsatisfiable byte ranges return 416 with Content-Range, while unknown range units are ignored."
+      },
+      {
+        "operation_id": "headArtifact",
+        "browser_only": true,
+        "method": "HEAD",
+        "path": "/artifacts/{artifact_id}/download",
+        "path_params": {"artifact_id": "string"},
+        "response_type": "ArtifactDownload",
+        "response_status": 200,
+        "response_statuses": [200],
+        "response_headers": {"Content-Length": "HEAD responses advertise the complete original byte length and never include a response body.", "WWW-Authenticate": "401 responses include the Bearer authentication challenge."},
+        "summary": "Read the authorized original artifact download metadata without transferring a response body. HEAD ignores Range and returns the complete representation metadata."
       },
       {
         "operation_id": "downloadArtifactContent",

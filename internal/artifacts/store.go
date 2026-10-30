@@ -629,6 +629,11 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 		_ = file.Close()
 		return protocol.Artifact{}, nil, versionErr
 	}
+	mutationVersion, mutationVersionErr := fileContentMutationVersion(file)
+	if mutationVersionErr != nil {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, mutationVersionErr
+	}
 	if s.faults != nil && s.faults.BeforeOpenVerification != nil {
 		s.faults.BeforeOpenVerification()
 	}
@@ -640,11 +645,15 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 	}
 	if verifyErr != nil {
 		currentVersion, currentVersionErr := filePathVersion(file)
+		currentMutationVersion, currentMutationVersionErr := fileContentMutationVersion(file)
 		_ = file.Close()
 		if currentVersionErr != nil {
 			return protocol.Artifact{}, nil, currentVersionErr
 		}
-		if currentVersion != version {
+		if currentMutationVersionErr != nil {
+			return protocol.Artifact{}, nil, currentMutationVersionErr
+		}
+		if currentVersion != version || currentMutationVersion != mutationVersion {
 			return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot changed while opening: %w", ErrContentChanged)
 		}
 		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
@@ -671,6 +680,10 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 	if currentMutationVersionErr != nil {
 		_ = file.Close()
 		return protocol.Artifact{}, nil, currentMutationVersionErr
+	}
+	if currentMutationVersion != mutationVersion {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot changed while opening: %w", ErrContentChanged)
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()

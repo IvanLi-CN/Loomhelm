@@ -260,6 +260,48 @@ func TestStoreOpenDoesNotQuarantineContentChangedDuringVerification(t *testing.T
 	}
 }
 
+func TestStoreOpenDetectsInPlaceRewriteWithRestoredModificationTime(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("stable artifact bytes")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-open-ctime-race"), nil, content)
+	stagingName := ".upload-open-ctime-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objectPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(objectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalModTime := info.ModTime()
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeOpenVerification: func() {
+			if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+				t.Fatalf("rewrite artifact during open verification: %v", err)
+			}
+			if err := os.Chtimes(objectPath, originalModTime, originalModTime); err != nil {
+				t.Fatalf("restore artifact modification time: %v", err)
+			}
+		},
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Open error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("ctime content-change state = %q, want %q", state, publicationReady)
+	}
+}
+
 func TestStoreOpenDoesNotQuarantineAfterCanonicalReplacement(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()

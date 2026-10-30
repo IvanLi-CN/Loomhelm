@@ -85,20 +85,35 @@ func TestArtifactDownloadUsesBinaryBrowserClientResponse(t *testing.T) {
 		if source.Types[operation.ResponseType].Kind != "binary" {
 			t.Fatalf("artifact download response kind = %q, want binary", source.Types[operation.ResponseType].Kind)
 		}
-		if operation.RequestHeaders["range"] != "Range" || operation.ResponseHeaders["Content-Range"] == "" {
+		if operation.RequestHeaders["range"] != "Range" || operation.RequestHeaders["if_range"] != "If-Range" || operation.ResponseHeaders["Content-Range"] == "" {
 			t.Fatalf("artifact download range contract is incomplete: %#v", operation)
 		}
 		generated := (generator{contract: source}).apiClientTypeScript()
-		if !strings.Contains(operation.Summary, "multiple ranges") || !strings.Contains(operation.Summary, "unknown range units") || !strings.Contains(operation.Summary, "416") {
+		if !strings.Contains(operation.Summary, "multiple ranges") || !strings.Contains(operation.Summary, "If-Range") || !strings.Contains(operation.Summary, "unknown range units") || !strings.Contains(operation.Summary, "416") {
 			t.Fatalf("artifact download range summary is incomplete: %q", operation.Summary)
 		}
-		if !strings.Contains(generated, "async downloadArtifact(request: DownloadArtifactParams): Promise<Response>") || !strings.Contains(generated, "range?: string;") || !strings.Contains(generated, "requestHeaders.set(\"Range\", String(request.range))") || !strings.Contains(generated, "undefined, [200, 206], true, requestHeaders") || !strings.Contains(generated, "readonly response?: Response") || !strings.Contains(generated, "new ApiClientError(response.status, parsed, response)") {
+		if !strings.Contains(generated, "async downloadArtifact(request: DownloadArtifactParams): Promise<Response>") || !strings.Contains(generated, "if_range?: string;") || !strings.Contains(generated, "range?: string;") || !strings.Contains(generated, "requestHeaders.set(\"If-Range\", String(request.if_range))") || !strings.Contains(generated, "requestHeaders.set(\"Range\", String(request.range))") || !strings.Contains(generated, "undefined, [200, 206], true, requestHeaders") || !strings.Contains(generated, "readonly response?: Response") || !strings.Contains(generated, "new ApiClientError(response.status, parsed, response)") {
 			t.Fatal("generated artifact download client does not preserve the binary response")
 		}
+		break
 	}
 	if !found {
 		t.Fatal("artifact download operation missing from contract")
 	}
+	for _, operation := range source.REST.Operations {
+		if operation.OperationID != "headArtifact" {
+			continue
+		}
+		if !operation.BrowserOnly || operation.Method != "HEAD" || operation.Path != "/artifacts/{artifact_id}/download" || operation.ResponseType != "ArtifactDownload" {
+			t.Fatalf("artifact HEAD operation is incomplete: %#v", operation)
+		}
+		generated := (generator{contract: source}).apiClientTypeScript()
+		if !strings.Contains(generated, "async headArtifact(request: HeadArtifactParams): Promise<Response>") || !strings.Contains(generated, "return this.request<Response>(\"HEAD\", requestPath, undefined, 200, true)") {
+			t.Fatal("generated artifact HEAD client is missing")
+		}
+		return
+	}
+	t.Fatal("artifact HEAD operation missing from contract")
 }
 
 func TestArtifactContentDownloadExposesCursorAddressedAPIMCPResponse(t *testing.T) {

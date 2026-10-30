@@ -148,7 +148,7 @@ func (s *applicationServices) handler(control runControlApplication) (http.Handl
 func (s *applicationServices) artifactDownloadHandler(download http.Handler) http.HandlerFunc {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if len(request.Header.Values("Authorization")) != 0 {
-			auth.WriteError(writer, request, http.StatusUnauthorized, auth.ErrUnauthenticated, "browser session required")
+			writeArtifactAuthenticationError(writer, request, http.StatusUnauthorized, auth.ErrUnauthenticated, "browser session required")
 			return
 		}
 		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
@@ -156,12 +156,19 @@ func (s *applicationServices) artifactDownloadHandler(download http.Handler) htt
 			if err == nil {
 				err = auth.ErrUnauthenticated
 			}
-			auth.WriteError(writer, request, auth.StatusForError(err), err, "authentication required")
+			writeArtifactAuthenticationError(writer, request, auth.StatusForError(err), err, "authentication required")
 			return
 		}
 		request = request.WithContext(context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal))
 		download.ServeHTTP(writer, request)
 	})
+}
+
+func writeArtifactAuthenticationError(writer http.ResponseWriter, request *http.Request, status int, err error, message string) {
+	if status == http.StatusUnauthorized {
+		writer.Header().Set("WWW-Authenticate", "Bearer")
+	}
+	auth.WriteError(writer, request, status, err, message)
 }
 
 func (s *applicationServices) artifactContentHandler(content http.Handler) http.HandlerFunc {

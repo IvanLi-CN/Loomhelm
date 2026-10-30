@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"mime"
 	"net/http"
 	"net/url"
@@ -737,37 +738,35 @@ func validateDownloadRange(request *http.Request, size int64, etag string, modTi
 		return nil
 	}
 	rangeValue := strings.TrimSpace(values[0])
-	if !strings.Contains(rangeValue, "=") {
+	unit, specification, ok := strings.Cut(rangeValue, "=")
+	if !ok {
 		return ErrRangeNotSatisfiable
 	}
-	if !strings.HasPrefix(rangeValue, "bytes=") {
+	if !strings.EqualFold(strings.TrimSpace(unit), "bytes") {
 		// RFC 9110 permits a server to ignore a Range unit it does not
 		// understand and return the complete representation.
 		request.Header.Del("Range")
 		return nil
 	}
-	specification := strings.TrimSpace(strings.TrimPrefix(rangeValue, "bytes="))
-	if strings.Contains(specification, ",") {
-		hasOverlap := false
-		for _, part := range strings.Split(specification, ",") {
-			overlaps, err := validateSingleDownloadRange(strings.TrimSpace(part), size)
-			if err != nil {
-				return err
-			}
-			hasOverlap = hasOverlap || overlaps
+	parts := strings.Split(strings.TrimSpace(specification), ",")
+	normalizedParts := make([]string, 0, len(parts))
+	hasOverlap := false
+	for _, part := range parts {
+		normalized, overlaps, err := normalizeSingleDownloadRange(strings.TrimSpace(part), size)
+		if err != nil {
+			return err
 		}
-		if !hasOverlap {
-			return ErrRangeNotSatisfiable
-		}
-		return nil
+		normalizedParts = append(normalizedParts, normalized)
+		hasOverlap = hasOverlap || overlaps
 	}
-	overlaps, err := validateSingleDownloadRange(specification, size)
-	if err != nil {
-		return err
-	}
-	if !overlaps {
+	if !hasOverlap {
 		return ErrRangeNotSatisfiable
 	}
+	// net/http's parser is intentionally strict about the wire spelling and
+	// int64 range numerals. Normalize equivalent RFC values before delegating
+	// response construction so case-insensitive units and oversized end or
+	// suffix numbers retain their defined clamping semantics.
+	request.Header.Set("Range", "bytes="+strings.Join(normalizedParts, ","))
 	return nil
 }
 
@@ -785,45 +784,60 @@ func downloadIfRangeMatches(value, etag string, modTime time.Time) bool {
 	return err == nil && parsed.Unix() == modTime.Unix()
 }
 
-func validateSingleDownloadRange(specification string, size int64) (bool, error) {
+func normalizeSingleDownloadRange(specification string, size int64) (string, bool, error) {
 	parts := strings.Split(specification, "-")
 	if len(parts) != 2 || specification == "-" || size < 0 {
-		return false, ErrRangeNotSatisfiable
+		return "", false, ErrRangeNotSatisfiable
 	}
 	if parts[0] == "" {
 		suffix, err := parseDownloadRangeNumber(parts[1])
-		if err != nil || suffix <= 0 || size == 0 {
-			return false, ErrRangeNotSatisfiable
+		if err != nil || suffix.Sign() <= 0 || size == 0 {
+			return "", false, ErrRangeNotSatisfiable
 		}
-		return true, nil
+		if suffix.Cmp(big.NewInt(size)) > 0 {
+			suffix.SetInt64(size)
+		}
+		return "-" + suffix.String(), true, nil
 	}
 	start, err := parseDownloadRangeNumber(parts[0])
-	if err != nil || start < 0 {
-		return false, ErrRangeNotSatisfiable
-	}
-	if start >= size {
-		return false, nil
+	if err != nil || start.Sign() < 0 {
+		return "", false, ErrRangeNotSatisfiable
 	}
 	if parts[1] == "" {
-		return true, nil
+		if start.Cmp(big.NewInt(size)) >= 0 {
+			return maxDownloadRangeNumber + "-", false, nil
+		}
+		return start.String() + "-", true, nil
 	}
 	end, err := parseDownloadRangeNumber(parts[1])
-	if err != nil || end < start {
-		return false, ErrRangeNotSatisfiable
+	if err != nil || end.Cmp(start) < 0 {
+		return "", false, ErrRangeNotSatisfiable
 	}
-	return true, nil
+	if start.Cmp(big.NewInt(size)) >= 0 {
+		return maxDownloadRangeNumber + "-" + maxDownloadRangeNumber, false, nil
+	}
+	if end.Cmp(big.NewInt(size)) >= 0 {
+		return start.String() + "-" + maxDownloadRangeNumber, true, nil
+	}
+	return start.String() + "-" + end.String(), true, nil
 }
 
-func parseDownloadRangeNumber(value string) (int64, error) {
+const maxDownloadRangeNumber = "9223372036854775807"
+
+func parseDownloadRangeNumber(value string) (*big.Int, error) {
 	if value == "" {
-		return 0, strconv.ErrSyntax
+		return nil, strconv.ErrSyntax
 	}
 	for index := 0; index < len(value); index++ {
 		if value[index] < '0' || value[index] > '9' {
-			return 0, strconv.ErrSyntax
+			return nil, strconv.ErrSyntax
 		}
 	}
-	return strconv.ParseInt(value, 10, 64)
+	parsed, ok := new(big.Int).SetString(value, 10)
+	if !ok {
+		return nil, strconv.ErrSyntax
+	}
+	return parsed, nil
 }
 
 func contentChunkQuery(request *http.Request) (int64, int64, string, error) {

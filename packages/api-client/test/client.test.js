@@ -76,7 +76,8 @@ describe("generated binary artifact transport", () => {
     const client = new LoomhelmApiClient({
       baseUrl: "https://loomhelm.example",
       fetch: async (url, init) => {
-        calls.push({ path: url.pathname, range: new Headers(init.headers).get("Range") });
+        const headers = new Headers(init.headers);
+        calls.push({ path: url.pathname, ifRange: headers.get("If-Range"), range: headers.get("Range") });
         return new Response(new Uint8Array([1, 2]), {
         status: 206,
         headers: { "Content-Range": "bytes 0-1/4", "Content-Type": "application/octet-stream" },
@@ -84,11 +85,27 @@ describe("generated binary artifact transport", () => {
       },
     });
 
-    const response = await client.downloadArtifact({ artifact_id: "artifact-range", range: "bytes=0-1" });
+    const response = await client.downloadArtifact({ artifact_id: "artifact-range", if_range: '"etag"', range: "bytes=0-1" });
     expect(response.status).toBe(206);
     expect(response.headers.get("Content-Range")).toBe("bytes 0-1/4");
     expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([1, 2]);
-    expect(calls).toEqual([{ path: "/api/v1/artifacts/artifact-range/download", range: "bytes=0-1" }]);
+    expect(calls).toEqual([{ path: "/api/v1/artifacts/artifact-range/download", ifRange: '"etag"', range: "bytes=0-1" }]);
+  });
+
+  test("requests artifact metadata with HEAD", async () => {
+    const calls = [];
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method, accept: new Headers(init.headers).get("Accept") });
+        return new Response(null, { status: 200, headers: { "Content-Length": "4", ETag: '"etag"' } });
+      },
+    });
+
+    const response = await client.headArtifact({ artifact_id: "artifact-head" });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("4");
+    expect(calls).toEqual([{ path: "/api/v1/artifacts/artifact-head/download", method: "HEAD", accept: "application/octet-stream" }]);
   });
 
   test("preserves Content-Range on an unsatisfiable range error", async () => {

@@ -247,6 +247,16 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 		t.Fatalf("range content = %q, want %q", rangeResponse.Header.Get("Content-Range"), wantRange)
 	}
 
+	headResponse := applicationRequest(t, alice, http.MethodHead, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, map[string]string{"Range": "bytes=99-100"}, http.StatusOK)
+	headBody, err := io.ReadAll(headResponse.Body)
+	headResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(headBody) != 0 || headResponse.Header.Get("Content-Length") != strconv.Itoa(len(content)) {
+		t.Fatalf("HEAD response body/length = %d/%q, want 0/%d", len(headBody), headResponse.Header.Get("Content-Length"), len(content))
+	}
+
 	projectResponse := applicationRequest(t, bob, http.MethodGet, baseURL+"/api/v1/artifacts/"+projectArtifactID+"/download", nil, nil, http.StatusOK)
 	projectBody, err := io.ReadAll(projectResponse.Body)
 	projectResponse.Body.Close()
@@ -270,7 +280,10 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	applicationRequest(t, bob, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, nil, http.StatusNotFound)
 	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/artifact-run-mismatch/download", nil, nil, http.StatusNotFound)
 	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/artifact-unconfirmed/download", nil, nil, http.StatusNotFound)
-	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, nil, http.StatusUnauthorized)
+	unauthorizedResponse := applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, nil, http.StatusUnauthorized)
+	if unauthorizedResponse.Header.Get("WWW-Authenticate") != "Bearer" {
+		t.Fatalf("unauthorized artifact download challenge = %q, want Bearer", unauthorizedResponse.Header.Get("WWW-Authenticate"))
+	}
 	bearer := map[string]string{"Authorization": "Bearer " + credential.Credential.Token}
 	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, bearer, http.StatusUnauthorized)
 	applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, bearer, http.StatusUnauthorized)

@@ -176,7 +176,7 @@ func validate(source contract) error {
 			return fmt.Errorf("REST operation ids must be unique and non-empty")
 		}
 		seenOperations[operation.OperationID] = true
-		if !map[string]bool{"GET": true, "POST": true, "PATCH": true, "PUT": true, "DELETE": true}[operation.Method] {
+		if !map[string]bool{"GET": true, "HEAD": true, "POST": true, "PATCH": true, "PUT": true, "DELETE": true}[operation.Method] {
 			return fmt.Errorf("operation %s has unsupported method %q", operation.OperationID, operation.Method)
 		}
 		if !strings.HasPrefix(operation.Path, "/") {

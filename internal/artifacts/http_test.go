@@ -157,6 +157,40 @@ func TestDownloadHTTPHandlerSupportsRangeRequests(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerNormalizesByteRangeVariants(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{ID: "artifact-range-normalization", Name: "range.txt", Size: int64(len(content))}
+	for _, test := range []struct {
+		name       string
+		rangeValue string
+		wantRange  string
+		wantBody   []byte
+	}{
+		{name: "case insensitive unit", rangeValue: "Bytes=2-6", wantRange: "bytes 2-6/19", wantBody: content[2:7]},
+		{name: "oversized end", rangeValue: "bytes=2-99999999999999999999", wantRange: "bytes 2-18/19", wantBody: content[2:]},
+		{name: "oversized suffix", rangeValue: "bytes=-99999999999999999999", wantRange: "bytes 0-18/19", wantBody: content},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+			request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+			request.Header.Set("Range", test.rangeValue)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusPartialContent {
+				t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusPartialContent, response.Body.String())
+			}
+			if response.Header().Get("Content-Range") != test.wantRange || !bytes.Equal(response.Body.Bytes(), test.wantBody) {
+				t.Fatalf("range response = %q/%q, want %q/%q", response.Header().Get("Content-Range"), response.Body.Bytes(), test.wantRange, test.wantBody)
+			}
+		})
+	}
+}
+
 func TestDownloadHTTPHandlerIgnoresRangeForHead(t *testing.T) {
 	content := []byte("range response body")
 	artifact := protocol.Artifact{ID: "artifact-head-range", Name: "range.txt", Size: int64(len(content))}
@@ -273,6 +307,34 @@ func TestDownloadHTTPHandlerIgnoresStaleIfRangeBeforeRangeValidation(t *testing.
 	}
 	if response.Body.String() != string(content) {
 		t.Fatalf("body = %q, want %q", response.Body.String(), content)
+	}
+}
+
+func TestDownloadHTTPHandlerHonorsMatchingIfRange(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{
+		ID:     "artifact-matching-if-range",
+		Name:   "range.txt",
+		Size:   int64(len(content)),
+		Sha256: "445fcfa7807064c0c66e933b2be15b70ace20c745d07564cb76cbaa421d1cdd5",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+	request.Header.Set("Range", "bytes=2-6")
+	request.Header.Set("If-Range", `"445fcfa7807064c0c66e933b2be15b70ace20c745d07564cb76cbaa421d1cdd5"`)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusPartialContent, response.Body.String())
+	}
+	if response.Header().Get("Content-Range") != "bytes 2-6/19" || response.Body.String() != string(content[2:7]) {
+		t.Fatalf("matching If-Range response = status %d, range %q, body %q", response.Code, response.Header().Get("Content-Range"), response.Body.String())
 	}
 }
 
