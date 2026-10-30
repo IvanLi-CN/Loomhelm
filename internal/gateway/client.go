@@ -39,8 +39,10 @@ type ClientConnection struct {
 	generation int64
 	resume     []hosts.Cursor
 
-	writeMu sync.Mutex
-	close   sync.Once
+	writeMu         sync.Mutex
+	close           sync.Once
+	artifactMu      sync.Mutex
+	artifactPending map[string]chan artifactUploadResponse
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
@@ -168,14 +170,28 @@ func (c *ClientConnection) Read(ctx context.Context) (Message, error) {
 	if c == nil || c.ws == nil {
 		return Message{}, ErrConnectionClosed
 	}
-	messageType, data, err := c.ws.Read(ctx)
-	if err != nil {
-		return Message{}, err
+	for {
+		messageType, data, err := c.ws.Read(ctx)
+		if err != nil {
+			c.failArtifactUploads(err)
+			return Message{}, err
+		}
+		if messageType != websocket.MessageText {
+			err := errors.New("gateway messages must be text frames")
+			c.failArtifactUploads(err)
+			return Message{}, err
+		}
+		message, err := decodeMessage(data, c.maxFrame)
+		if err != nil {
+			c.failArtifactUploads(err)
+			return Message{}, err
+		}
+		if message.Type == MessageArtifactAck {
+			c.resolveArtifactAck(message)
+			continue
+		}
+		return message, nil
 	}
-	if messageType != websocket.MessageText {
-		return Message{}, errors.New("gateway messages must be text frames")
-	}
-	return decodeMessage(data, c.maxFrame)
 }
 
 func (c *ClientConnection) SendEvent(ctx context.Context, event protocol.Event) error {
@@ -228,7 +244,10 @@ func (c *ClientConnection) Close() error {
 		return nil
 	}
 	var err error
-	c.close.Do(func() { err = c.ws.Close(websocket.StatusNormalClosure, "connector closed") })
+	c.close.Do(func() {
+		c.failArtifactUploads(ErrConnectionClosed)
+		err = c.ws.Close(websocket.StatusNormalClosure, "connector closed")
+	})
 	return err
 }
 

@@ -321,9 +321,18 @@
         "has_more": {"type": "boolean"}
       }
     },
+    "ModificationOrder": {
+      "type": "object",
+      "required": ["physical_millis", "logical_counter", "client_id"],
+      "properties": {
+        "physical_millis": {"type": "integer", "format": "int64"},
+        "logical_counter": {"type": "integer", "format": "int64"},
+        "client_id": {"type": "string"}
+      }
+    },
     "Draft": {
       "type": "object",
-      "required": ["session_id", "content", "revision", "updated_at"],
+      "required": ["session_id", "content", "revision", "modification_order", "updated_at"],
       "properties": {
         "session_id": {"type": "string"},
         "content": {"type": "string"},
@@ -331,6 +340,7 @@
         "mutation_id": {"type": "string"},
         "client_id": {"type": "string"},
         "client_sequence": {"type": "integer", "format": "int64"},
+        "modification_order": {"$ref": "#/types/ModificationOrder"},
         "updated_at": {"type": "string", "format": "date-time"}
       }
     },
@@ -569,12 +579,13 @@
     },
     "UpdateDraftRequest": {
       "type": "object",
-      "required": ["mutation_id", "client_id", "client_sequence", "content"],
+      "required": ["mutation_id", "client_id", "client_sequence", "content", "modification_order"],
       "properties": {
         "mutation_id": {"type": "string"},
         "client_id": {"type": "string"},
         "client_sequence": {"type": "integer", "format": "int64"},
-        "content": {"type": "string"}
+        "content": {"type": "string"},
+        "modification_order": {"$ref": "#/types/ModificationOrder"}
       }
     },
     "ResolveApprovalRequest": {
@@ -887,8 +898,8 @@
         "path_params": {"session_id": "string"},
         "body_type": "UpdateDraftRequest",
         "response_type": "DraftResponse",
-        "summary": "Replace the private shared unsent draft with an idempotent last-accepted update; client_sequence increases per session/client, accepted order is Session lock order, and current mutation_id retries reuse the original request",
-        "mcp_tool": {"name": "loomhelm.update_draft", "description": "Update the caller's private shared unsent draft. The UTF-8 content is at most 1 MiB; client_sequence is positive and strictly increasing per session/client, stale sequences are rejected, and mutation_id is an idempotency key that must not be reused with different metadata or content. A matching retry for the current projection returns it without reapplying; a retry for an older revision is rejected as stale. Updates are durable and never submit a run."}
+        "summary": "Replace the private shared unsent draft with an idempotent last-accepted update ordered by a client-provided hybrid logical clock; client_sequence increases per session/client and current mutation_id retries reuse the original request",
+        "mcp_tool": {"name": "loomhelm.update_draft", "description": "Update the caller's private shared unsent draft with a client-provided modification_order. The UTF-8 content is at most 1 MiB; client_sequence is positive and strictly increasing per session/client, stale sequences are rejected, and mutation_id is an idempotency key that must not be reused with different metadata or content. A matching retry for the current projection returns it without reapplying; a retry for an older revision is rejected as stale. Updates are durable and never submit a run."}
       },
       {
         "operation_id": "listRunApprovals",

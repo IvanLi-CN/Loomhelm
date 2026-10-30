@@ -89,6 +89,7 @@ func TestPersistentControlServiceSubmitDraftFinalizesAfterDelivery(t *testing.T)
 	fixture := newControlFixture(t, db, 1)
 	control := newControlServiceFixture(t, db, fixture)
 	draftStore := drafts.NewStore(db.Pool())
+	baseModificationMillis := time.Now().Add(-time.Second).UnixMilli()
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
@@ -110,6 +111,10 @@ func TestPersistentControlServiceSubmitDraftFinalizesAfterDelivery(t *testing.T)
 		ClientID:       "desktop",
 		ClientSequence: 1,
 		Content:        "send from draft",
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: baseModificationMillis,
+			ClientID:       "desktop",
+		},
 	})
 	if err != nil {
 		t.Fatalf("seed control draft: %v", err)
@@ -157,6 +162,10 @@ func TestPersistentControlServiceSubmitDraftFinalizesAfterDelivery(t *testing.T)
 		ClientID:       "desktop",
 		ClientSequence: 2,
 		Content:        "bound draft content",
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: baseModificationMillis + 1,
+			ClientID:       "desktop",
+		},
 	})
 	if err != nil {
 		t.Fatalf("seed same-revision mismatch draft: %v", err)

@@ -48,6 +48,7 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 	runStore := NewStore(db.Pool())
 	sessionID := fixture.sessionIDs[0]
 	ownerID := fixture.userID
+	baseModificationMillis := time.Now().Add(-time.Second).UnixMilli()
 	first, err := draftStore.Apply(ctx, drafts.UpdateInput{
 		SessionID:      sessionID,
 		OwnerUserID:    ownerID,
@@ -55,6 +56,10 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 		ClientID:       "desktop",
 		ClientSequence: 1,
 		Content:        "first input",
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: baseModificationMillis,
+			ClientID:       "desktop",
+		},
 	})
 	if err != nil {
 		t.Fatalf("seed first draft: %v", err)
@@ -120,6 +125,10 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 		ClientID:       "mobile",
 		ClientSequence: 1,
 		Content:        "newer input",
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: baseModificationMillis + 1,
+			ClientID:       "mobile",
+		},
 	})
 	if err != nil {
 		t.Fatalf("apply newer draft: %v", err)
@@ -153,6 +162,10 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 		ClientID:       "desktop",
 		ClientSequence: 2,
 		Content:        "consume me",
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: baseModificationMillis + 2,
+			ClientID:       "desktop",
+		},
 	})
 	if err != nil {
 		t.Fatalf("apply consumable draft: %v", err)
@@ -250,6 +263,75 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 	}
 	if _, err := runStore.Lookup(ctx, sessionID, staleCommand.CommandID); !errors.Is(err, ErrCommandNotFound) {
 		t.Fatalf("rolled-back stale command lookup error = %v, want %v", err, ErrCommandNotFound)
+	}
+}
+
+func TestPersistentDraftModificationOrderIgnoresLateArrival(t *testing.T) {
+	db := openExecutionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture := newControlFixture(t, db, 1)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, query := range []string{
+			`DELETE FROM conversation_draft_mutations WHERE session_id = $1`,
+			`DELETE FROM conversation_drafts WHERE session_id = $1`,
+		} {
+			if _, err := db.Pool().Exec(cleanupCtx, query, fixture.sessionIDs[0]); err != nil {
+				t.Errorf("cleanup draft rows with query %q: %v", query, err)
+			}
+		}
+	})
+
+	draftStore := drafts.NewStore(db.Pool())
+	baseMillis := time.Now().Add(-time.Second).UnixMilli()
+	higher := drafts.ModificationOrder{PhysicalMillis: baseMillis + 2, ClientID: "desktop"}
+	current, err := draftStore.Apply(ctx, drafts.UpdateInput{
+		SessionID:         fixture.sessionIDs[0],
+		OwnerUserID:       fixture.userID,
+		MutationID:        "draft-order-higher",
+		ClientID:          "desktop",
+		ClientSequence:    1,
+		Content:           "higher order",
+		ModificationOrder: &higher,
+	})
+	if err != nil {
+		t.Fatalf("apply higher-order draft: %v", err)
+	}
+
+	lower := drafts.ModificationOrder{PhysicalMillis: baseMillis + 1, ClientID: "mobile"}
+	stale, err := draftStore.Apply(ctx, drafts.UpdateInput{
+		SessionID:         fixture.sessionIDs[0],
+		OwnerUserID:       fixture.userID,
+		MutationID:        "draft-order-lower",
+		ClientID:          "mobile",
+		ClientSequence:    1,
+		Content:           "lower order",
+		ModificationOrder: &lower,
+	})
+	if err != nil {
+		t.Fatalf("apply late lower-order draft: %v", err)
+	}
+	if stale.Revision != current.Revision || stale.Content != current.Content || !stale.ModificationOrder.Equal(current.ModificationOrder) {
+		t.Fatalf("late lower-order draft = %+v, want unchanged higher-order projection %+v", stale, current)
+	}
+
+	latestOrder := drafts.ModificationOrder{PhysicalMillis: baseMillis + 3, ClientID: "mobile"}
+	latest, err := draftStore.Apply(ctx, drafts.UpdateInput{
+		SessionID:         fixture.sessionIDs[0],
+		OwnerUserID:       fixture.userID,
+		MutationID:        "draft-order-latest",
+		ClientID:          "mobile",
+		ClientSequence:    2,
+		Content:           "latest order",
+		ModificationOrder: &latestOrder,
+	})
+	if err != nil {
+		t.Fatalf("apply later higher-order draft: %v", err)
+	}
+	if latest.Revision != current.Revision+1 || latest.Content != "latest order" || !latest.ModificationOrder.Equal(latestOrder) {
+		t.Fatalf("later higher-order draft = %+v, want revision %d and latest content", latest, current.Revision+1)
 	}
 }
 
@@ -680,6 +762,14 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	`, sessionID, userID); err != nil {
 		t.Fatalf("seed migration draft: %v", err)
 	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO conversation_draft_mutations (
+			session_id, owner_user_id, mutation_id, kind, client_id, client_sequence, revision
+		)
+		VALUES ($1, $2, 'legacy-mutation', 'update', 'desktop', 1, 1)
+	`, sessionID, userID); err != nil {
+		t.Fatalf("seed migration draft mutation: %v", err)
+	}
 	var beforeContent string
 	var beforeRevision int64
 	var beforeState, beforeOperationID, beforeEventCursor, beforeReconciliationState string
@@ -695,18 +785,22 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	`, commandID).Scan(&beforeState, &beforeOperationID, &beforeResult, &beforeEventCursor, &beforeReconciliationState); err != nil {
 		t.Fatalf("read pre-00014 command: %v", err)
 	}
-	if _, err := provider.UpTo(ctx, 14); err != nil {
-		t.Fatalf("apply 00014 migration: %v", err)
+	if _, err := provider.UpTo(ctx, 17); err != nil {
+		t.Fatalf("apply 00017 migration: %v", err)
 	}
 	var afterContent string
 	var afterRevision int64
+	var afterModificationPhysicalMillis, afterModificationLogicalCounter int64
+	var afterModificationClientID string
 	var exactAckState string
 	var afterState, afterOperationID, afterEventCursor, afterReconciliationState string
 	var afterResult []byte
 	if err := db.Pool().QueryRow(ctx, `
-		SELECT content, revision FROM conversation_drafts WHERE session_id = $1
-	`, sessionID).Scan(&afterContent, &afterRevision); err != nil {
-		t.Fatalf("read post-00014 draft: %v", err)
+		SELECT content, revision, modification_physical_ms,
+		       modification_logical_counter, modification_client_id
+		FROM conversation_drafts WHERE session_id = $1
+	`, sessionID).Scan(&afterContent, &afterRevision, &afterModificationPhysicalMillis, &afterModificationLogicalCounter, &afterModificationClientID); err != nil {
+		t.Fatalf("read post-00017 draft: %v", err)
 	}
 	if err := db.Pool().QueryRow(ctx, `
 		SELECT exact_ack_state FROM execution_commands WHERE command_id = $1
@@ -722,7 +816,29 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	if afterContent != beforeContent || afterRevision != beforeRevision || exactAckState != "" ||
 		afterState != beforeState || afterOperationID != beforeOperationID || !bytes.Equal(afterResult, beforeResult) ||
 		afterEventCursor != beforeEventCursor || afterReconciliationState != beforeReconciliationState {
-		t.Fatalf("post-00014 state = draft %q/%d command state %q operation %q result %s cursor %q reconciliation %q exact_ack_state %q, want unchanged state", afterContent, afterRevision, afterState, afterOperationID, afterResult, afterEventCursor, afterReconciliationState, exactAckState)
+		t.Fatalf("post-00017 state = draft %q/%d command state %q operation %q result %s cursor %q reconciliation %q exact_ack_state %q, want unchanged state", afterContent, afterRevision, afterState, afterOperationID, afterResult, afterEventCursor, afterReconciliationState, exactAckState)
+	}
+	if afterModificationPhysicalMillis != 0 || afterModificationLogicalCounter != 0 || afterModificationClientID != "" {
+		t.Fatalf("post-00017 legacy draft order = %d/%d/%q, want explicit zero order", afterModificationPhysicalMillis, afterModificationLogicalCounter, afterModificationClientID)
+	}
+	var afterMutationPhysicalMillis, afterMutationLogicalCounter int64
+	var afterMutationClientID string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT modification_physical_ms, modification_logical_counter, modification_client_id
+		FROM conversation_draft_mutations WHERE session_id = $1 AND mutation_id = 'legacy-mutation'
+	`, sessionID).Scan(&afterMutationPhysicalMillis, &afterMutationLogicalCounter, &afterMutationClientID); err != nil {
+		t.Fatalf("read post-00017 legacy draft mutation: %v", err)
+	}
+	if afterMutationPhysicalMillis != 0 || afterMutationLogicalCounter != 0 || afterMutationClientID != "" {
+		t.Fatalf("post-00017 legacy mutation order = %d/%d/%q, want explicit zero order", afterMutationPhysicalMillis, afterMutationLogicalCounter, afterMutationClientID)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_drafts
+		SET content = 'legacy writer must be fenced', revision = revision + 1,
+		    mutation_id = 'legacy-writer-mutation', client_id = 'legacy-writer', client_sequence = client_sequence + 1
+		WHERE session_id = $1
+	`, sessionID); err == nil {
+		t.Fatal("legacy draft writer was not fenced after migration 00017")
 	}
 	var invalidMarkerCount int
 	if err := db.Pool().QueryRow(ctx, `
@@ -759,8 +875,11 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	if exactAckState != "executing" {
 		t.Fatalf("preserved ACK marker = %q, want executing", exactAckState)
 	}
-	if _, err := provider.UpTo(ctx, 14); err != nil {
-		t.Fatalf("re-enter 00014 migration: %v", err)
+	if _, err := provider.DownTo(ctx, 16); err != nil {
+		t.Fatalf("roll back 00017 migration for re-entry: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 17); err != nil {
+		t.Fatalf("re-enter 00017 migration: %v", err)
 	}
 }
 

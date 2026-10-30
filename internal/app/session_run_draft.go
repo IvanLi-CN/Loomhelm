@@ -201,6 +201,11 @@ func (h *draftHTTP) update(writer http.ResponseWriter, request *http.Request) {
 		SessionID: access.SessionID, OwnerUserID: access.CreatorUserID,
 		MutationID: body.MutationID, ClientID: body.ClientID,
 		ClientSequence: body.ClientSequence, Content: body.Content,
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: body.ModificationOrder.PhysicalMillis,
+			LogicalCounter: body.ModificationOrder.LogicalCounter,
+			ClientID:       body.ModificationOrder.ClientID,
+		},
 	})
 	if err != nil {
 		writeDraftError(writer, request, err)
@@ -264,7 +269,15 @@ func (h *draftHTTP) resolveAccess(writer http.ResponseWriter, request *http.Requ
 }
 
 func publicDraft(draft drafts.Draft) protocol.Draft {
-	result := protocol.Draft{SessionID: draft.SessionID, Content: draft.Content, Revision: draft.Revision, UpdatedAt: draft.UpdatedAt}
+	result := protocol.Draft{
+		SessionID: draft.SessionID, Content: draft.Content, Revision: draft.Revision,
+		ModificationOrder: protocol.ModificationOrder{
+			PhysicalMillis: draft.ModificationOrder.PhysicalMillis,
+			LogicalCounter: draft.ModificationOrder.LogicalCounter,
+			ClientID:       draft.ModificationOrder.ClientID,
+		},
+		UpdatedAt: draft.UpdatedAt,
+	}
 	if draft.MutationID != "" {
 		result.MutationID = appStringPointer(draft.MutationID)
 	}
@@ -292,7 +305,7 @@ func writeDraftError(writer http.ResponseWriter, request *http.Request, err erro
 		status, code, message = http.StatusNotFound, protocol.ErrorCodeNotFound, "draft resource is unavailable"
 	case errors.Is(err, auth.ErrInvalid), errors.Is(err, drafts.ErrInvalidDraft):
 		status, code, message = http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid draft request"
-	case errors.Is(err, drafts.ErrDraftMutation), errors.Is(err, drafts.ErrDraftStaleMutation):
+	case errors.Is(err, drafts.ErrDraftOrderRequired), errors.Is(err, drafts.ErrDraftClockSkew), errors.Is(err, drafts.ErrDraftMutation), errors.Is(err, drafts.ErrDraftStaleMutation):
 		status, code, message = http.StatusConflict, protocol.ErrorCodeConflict, "draft state changed; refresh before another update"
 	}
 	requestID := request.Header.Get("X-Request-ID")
