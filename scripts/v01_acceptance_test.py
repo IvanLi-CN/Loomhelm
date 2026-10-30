@@ -35,6 +35,10 @@ class V01AcceptanceTests(unittest.TestCase):
         self.assertIn("<redacted>", redacted)
         short_redacted = MODULE.redact("LOOMHELM_DRAIN_TOKEN=x output=x", ["x"])
         self.assertNotIn("=x", short_redacted)
+        env_values = MODULE.sensitive_environment_values(
+            {"PGPASSWORD": "x", "PGSSLPASSWORD": "abc", "PGSSLMODE": "disable", "SAFE": "value"}
+        )
+        self.assertCountEqual(env_values, ["x", "abc"])
 
     def test_candidate_manifest_reads_v2_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

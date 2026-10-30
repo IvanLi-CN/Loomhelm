@@ -32,8 +32,8 @@ SENSITIVE_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 SENSITIVE_ENV_RE = re.compile(
-    r"(?i)(?:^|_)(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|"
-    r"credential|credentials|dsn|database_url|authorization|cookie)(?:$|_)"
+    r"(?i)(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|"
+    r"credential|credentials|dsn|database_url|authorization|cookie)"
 )
 SENSITIVE_HEADER_RE = re.compile(
     r"(?im)(?P<prefix>\b(?:authorization|proxy-authorization|cookie|set-cookie|"
