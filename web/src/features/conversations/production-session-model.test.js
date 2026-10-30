@@ -8,6 +8,7 @@ import {
   eventToConversationMessage,
   initialRunCommandId,
   isSessionAccessFailure,
+  mergeConversationMessages,
   runFromHistory,
   runFromCommandAck,
   runFromRecoveredIdentity,
@@ -160,6 +161,7 @@ describe("production session model", () => {
     expect(eventToConversationMessage(event({ payload: { jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "nested hello" } } }))).toMatchObject({ content: "nested hello" });
     expect(eventToConversationMessage(event({ event_id: "tool", payload: {}, type: "item.completed" }))).toMatchObject({ kind: "tool", content: "已接收事件：item.completed" });
     expect(eventToConversationMessage(event({ event_id: "known-item", payload: { params: { item: { command: "printf ok", type: "commandExecution" } } }, type: "item.completed" }))).toMatchObject({ detail: expect.stringContaining('"command": "printf ok"'), kind: "tool" });
+    expect(eventToConversationMessage(event({ event_id: "agent-completed", payload: { params: { item: { id: "item-agent", text: "final answer", type: "agentMessage" } } }, type: "item.completed" }))).toMatchObject({ content: "final answer", id: "session-1:run-1:item:item-agent", kind: "message", role: "assistant" });
     expect(eventToConversationMessage(event({ event_id: "unknown", payload: {}, type: "unknown" }))).toMatchObject({ kind: "unknown", content: "已接收事件：unknown" });
     expect(eventToConversationMessage(event({ event_id: "unknown-item", payload: { params: { item: { type: "futureContent", value: "preserve-me" } } }, type: "item.completed" }))).toMatchObject({ kind: "unknown" });
   });
@@ -171,6 +173,14 @@ describe("production session model", () => {
 
     const unknownItem = eventToConversationMessage(event({ event_id: "unknown-item-raw", payload: { params: { item: { type: "futureContent", value: "preserve-me" } } }, type: "item.completed" }));
     expect(unknownItem.detail).toContain('"value": "preserve-me"');
+  });
+
+  test("reconciles streamed agent text with the authoritative completed item", () => {
+    const delta = eventToConversationMessage(event({ event_id: "agent-delta", payload: { params: { delta: "partial ", itemId: "item-agent" } }, type: "message.delta" }));
+    const final = eventToConversationMessage(event({ event_id: "agent-completed", payload: { params: { item: { id: "item-agent", text: "final answer", type: "agentMessage" } } }, sequence: 2, type: "item.completed" }));
+    const merged = mergeConversationMessages([], [delta, final]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ content: "final answer", eventType: "item.completed", kind: "message" });
   });
 
   test("correlates approval resolutions through the durable requested-event identity", () => {
@@ -194,10 +204,21 @@ describe("production session model", () => {
     const oldRequested = event({ event_id: "approval-requested-old", payload: { id: 42 }, sequence: 1, type: "approval.requested" });
     const oldResolved = event({ event_id: "approval-resolved-old", payload: { params: { requestId: 42, resolution: "accept" } }, sequence: 2, type: "approval.resolved" });
     const newRequested = event({ event_id: "approval-requested-new", payload: { id: 42 }, sequence: 3, type: "approval.requested" });
-    expect(applyApprovalResolutionEvents([oldRevision, newRevision], [newRequested, oldResolved, oldRequested], [oldResolved])).toMatchObject({
+    expect(applyApprovalResolutionEvents([oldRevision, newRevision], [oldRequested, oldResolved, newRequested], [oldResolved])).toMatchObject({
       matched: true,
       unresolved: false,
-      approvals: [{ status: "approved" }, { status: "pending" }]
+      approvals: [{ id: "approval-1", status: "approved" }, { id: "approval-1", revision: 2, status: "pending" }]
+    });
+
+    const numericApproval = { ...approvals[0], id: "approval-numeric", requested_event_id: "approval-requested-numeric" };
+    const stringApproval = { ...approvals[0], id: "approval-string", requested_event_id: "approval-requested-string", revision: 2 };
+    const numericRequested = event({ event_id: "approval-requested-numeric", payload: { id: 42 }, sequence: 1, type: "approval.requested" });
+    const stringRequested = event({ event_id: "approval-requested-string", payload: { id: "42" }, sequence: 2, type: "approval.requested" });
+    const numericResolved = event({ event_id: "approval-resolved-numeric", payload: { params: { requestId: 42, resolution: "accept" } }, sequence: 3, type: "approval.resolved" });
+    expect(applyApprovalResolutionEvents([numericApproval, stringApproval], [numericRequested, stringRequested, numericResolved], [numericResolved])).toMatchObject({
+      matched: true,
+      unresolved: false,
+      approvals: [{ id: "approval-numeric", status: "approved" }, { id: "approval-string", status: "pending" }]
     });
   });
 

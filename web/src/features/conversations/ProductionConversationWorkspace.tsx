@@ -29,6 +29,7 @@ import {
   eventToConversationMessage,
   initialRunCommandId,
   isSessionAccessFailure,
+  mergeConversationMessages,
   runFromCommandAck,
   runFromRecoveredIdentity,
   runFromHistory,
@@ -1258,13 +1259,7 @@ export function ProductionConversationWorkspace({
             }
           }
           if (freshEvents.length > 0) {
-            setMessages((current) => {
-              const next = [...current, ...freshEvents.map(eventToConversationMessage)];
-              return next.sort((left, right) => {
-                if (left.sequence === undefined || right.sequence === undefined) return 0;
-                return left.sequence - right.sequence;
-              });
-            });
+            setMessages((current) => mergeConversationMessages(current, freshEvents.map(eventToConversationMessage)));
           }
           const stateEvents = observedEvents.filter((event) => event.sequence > lastAppliedRunSequence.current).sort((left, right) => left.sequence - right.sequence);
           if (stateEvents.length > 0) {

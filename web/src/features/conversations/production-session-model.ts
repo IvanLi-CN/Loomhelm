@@ -126,8 +126,25 @@ function firstString(record: Record<string, unknown> | undefined, keys: readonly
   return undefined;
 }
 
+function eventItem(event: Event): Record<string, unknown> | undefined {
+  const payload = asRecord(event.payload);
+  const params = asRecord(payload?.params);
+  return asRecord(params?.item) ?? asRecord(payload?.item);
+}
+
+function eventItemType(event: Event): string | undefined {
+  return firstString(eventItem(event), ["type"]);
+}
+
+function eventItemID(event: Event): string | undefined {
+  const payload = asRecord(event.payload);
+  const params = asRecord(payload?.params);
+  return firstString(eventItem(event), ["id"]) ?? firstString(params, ["itemId", "item_id"]) ?? firstString(payload, ["itemId", "item_id"]);
+}
+
 function eventText(event: Event, payload: Record<string, unknown> | undefined): string {
-  const text = firstString(payload, ["content", "text", "delta", "message", "summary", "description"])
+  const text = firstString(eventItem(event), ["text", "content"])
+    ?? firstString(payload, ["content", "text", "delta", "message", "summary", "description"])
     ?? firstString(asRecord(payload?.params), ["content", "text", "delta", "message", "summary", "description"]);
   if (text) return text;
   if (event.type === "message.delta") return "已接收消息事件，但 payload 未提供可显示文本。";
@@ -139,8 +156,8 @@ function eventText(event: Event, payload: Record<string, unknown> | undefined): 
 }
 
 function rawValueKey(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) return value.trim();
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string" && value.trim()) return `string:${value}`;
+  if (typeof value === "number" && Number.isFinite(value)) return `number:${String(value)}`;
   return undefined;
 }
 
@@ -235,21 +252,54 @@ function eventHasUnknownContent(event: Event): boolean {
 }
 
 export function eventToConversationMessage(event: Event): ConversationMessage {
-  const isMessage = event.type === "message.delta";
+  const isMessage = event.type === "message.delta" || (event.type === "item.completed" && eventItemType(event) === "agentMessage");
   const isUnknown = eventHasUnknownContent(event);
   const isTool = !isMessage && !isUnknown;
   const hasInspectableItem = event.type === "item.started" || event.type === "item.completed";
+  const itemID = isMessage ? eventItemID(event) : undefined;
   return {
     author: isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
     content: eventText(event, asRecord(event.payload)),
     ...(isUnknown || hasInspectableItem ? { detail: eventDetail(event) } : {}),
     eventType: event.type,
-    id: `${event.session_id}:${event.run_id ?? "session"}:${event.event_id}`,
+    id: `${event.session_id}:${event.run_id ?? "session"}:${itemID ? `item:${itemID}` : event.event_id}`,
     kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",
     occurredAt: event.occurred_at,
     role: isMessage ? "assistant" : "system",
     sequence: event.sequence
   };
+}
+
+export function mergeConversationMessages(current: readonly ConversationMessage[], incoming: readonly ConversationMessage[]): readonly ConversationMessage[] {
+  const byID = new Map(current.map((message) => [message.id, message]));
+  incoming.forEach((message) => {
+    const existing = byID.get(message.id);
+    if (!existing) {
+      byID.set(message.id, message);
+      return;
+    }
+    if (existing.kind !== "message" || message.kind !== "message") {
+      byID.set(message.id, message);
+      return;
+    }
+    if (message.eventType === "item.completed") {
+      byID.set(message.id, message);
+      return;
+    }
+    if (existing.eventType === "item.completed") return;
+    byID.set(message.id, {
+      ...existing,
+      content: `${existing.content}${message.content}`,
+      detail: message.detail ?? existing.detail,
+      eventType: message.eventType,
+      occurredAt: message.occurredAt,
+      sequence: message.sequence
+    });
+  });
+  return [...byID.values()].sort((left, right) => {
+    if (left.sequence === undefined || right.sequence === undefined) return 0;
+    return left.sequence - right.sequence;
+  });
 }
 
 export interface ApprovalContextFields {
