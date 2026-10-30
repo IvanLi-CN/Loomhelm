@@ -443,7 +443,8 @@ func applicationRequest(t *testing.T, client *http.Client, method, target string
 	if strings.HasPrefix(request.URL.Path, "/api/v1/") && response.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("%s response was cacheable", request.URL.Path)
 	}
-	if strings.HasPrefix(request.URL.Path, "/api/v1/") && response.StatusCode >= 400 {
+	// HEAD responses intentionally have no body, including when the API returns an error.
+	if request.Method != http.MethodHead && strings.HasPrefix(request.URL.Path, "/api/v1/") && response.StatusCode >= 400 {
 		var failure struct {
 			Code      string `json:"code"`
 			RequestID string `json:"request_id"`
