@@ -272,19 +272,7 @@ func (o *ArtifactOutbox) MarkUploaded(id string) error {
 	if publication.State == ArtifactPublicationRejected {
 		return ErrArtifactPublicationConflict
 	}
-	if err := o.appendLocked(artifactOutboxRecord{
-		FormatVersion: artifactOutboxFormatVersion,
-		Type:          "state",
-		At:            now(),
-		ArtifactID:    publication.Candidate.ID,
-		State:         ArtifactPublicationUploaded,
-	}); err != nil {
-		return err
-	}
-	publication.State = ArtifactPublicationUploaded
-	publication.Candidate.Content = nil
-	o.entries[publication.Candidate.ID] = publication
-	return nil
+	return o.persistPublicationStateLocked(publication.Candidate.ID, ArtifactPublicationUploaded, "")
 }
 
 // MarkRejected durably records a non-retryable server rejection. The
@@ -317,20 +305,44 @@ func (o *ArtifactOutbox) MarkRejected(id, code string) error {
 	if publication.State == ArtifactPublicationUploaded {
 		return ErrArtifactPublicationConflict
 	}
-	if err := o.appendLocked(artifactOutboxRecord{
+	return o.persistPublicationStateLocked(publication.Candidate.ID, ArtifactPublicationRejected, code)
+}
+
+func (o *ArtifactOutbox) persistPublicationStateLocked(id string, state ArtifactPublicationState, rejectionCode string) error {
+	record := artifactOutboxRecord{
 		FormatVersion: artifactOutboxFormatVersion,
 		Type:          "state",
 		At:            now(),
-		ArtifactID:    publication.Candidate.ID,
-		State:         ArtifactPublicationRejected,
-		RejectionCode: code,
-	}); err != nil {
+		ArtifactID:    id,
+		State:         state,
+		RejectionCode: rejectionCode,
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return o.poison(fmt.Errorf("encode artifact outbox state: %w", err))
+	}
+	data = append(data, '\n')
+	if len(data) > maxArtifactRecordBytes {
+		return fmt.Errorf("artifact outbox state record exceeds %d bytes: %w", maxArtifactRecordBytes, ErrJournalTooLarge)
+	}
+	info, err := o.file.Stat()
+	if err != nil {
+		return o.poison(fmt.Errorf("stat artifact outbox before state transition: %w", err))
+	}
+	if info.Size() > maxArtifactOutboxBytes-int64(len(data)) {
+		if compactErr := o.compactPublicationStateLocked(id, state, rejectionCode); compactErr != nil {
+			return o.poison(fmt.Errorf("artifact outbox state transition exceeds %d bytes: %w; compact publication: %v", maxArtifactOutboxBytes, ErrJournalTooLarge, compactErr))
+		}
+		return nil
+	}
+	if err := o.appendLocked(record); err != nil {
 		return err
 	}
-	publication.State = ArtifactPublicationRejected
-	publication.RejectionCode = code
+	publication := o.entries[id]
+	publication.State = state
+	publication.RejectionCode = rejectionCode
 	publication.Candidate.Content = nil
-	o.entries[publication.Candidate.ID] = publication
+	o.entries[id] = publication
 	return nil
 }
 
@@ -396,12 +408,38 @@ func (o *ArtifactOutbox) compactCompleted() error {
 }
 
 func (o *ArtifactOutbox) compactCompletedLocked() error {
+	return o.compactWithStateLocked("", "", "")
+}
+
+func (o *ArtifactOutbox) compactPublicationState(id string, state ArtifactPublicationState, rejectionCode string) error {
+	if o == nil {
+		return errors.New("artifact outbox is not open")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.compactPublicationStateLocked(id, state, rejectionCode)
+}
+
+func (o *ArtifactOutbox) compactPublicationStateLocked(id string, state ArtifactPublicationState, rejectionCode string) error {
+	return o.compactWithStateLocked(id, state, rejectionCode)
+}
+
+func (o *ArtifactOutbox) compactWithStateLocked(transitionID string, transitionState ArtifactPublicationState, transitionRejectionCode string) error {
 	if o.file == nil {
 		return errors.New("artifact outbox is closed")
 	}
+	if transitionID != "" {
+		if _, ok := o.entries[transitionID]; !ok {
+			return ErrArtifactPublicationNotFound
+		}
+	}
 	completed := false
-	for _, publication := range o.entries {
-		if publication.State != ArtifactPublicationPending {
+	for id, publication := range o.entries {
+		state := publication.State
+		if id == transitionID {
+			state = transitionState
+		}
+		if state != ArtifactPublicationPending {
 			completed = true
 			break
 		}
@@ -454,6 +492,10 @@ func (o *ArtifactOutbox) compactCompletedLocked() error {
 	}
 	sort.Slice(publications, func(i, j int) bool { return publications[i].Candidate.ID < publications[j].Candidate.ID })
 	for _, publication := range publications {
+		if publication.Candidate.ID == transitionID {
+			publication.State = transitionState
+			publication.RejectionCode = transitionRejectionCode
+		}
 		if publication.State != ArtifactPublicationPending {
 			publication.Candidate.Content = nil
 		}
@@ -524,6 +566,10 @@ func (o *ArtifactOutbox) compactCompletedLocked() error {
 	o.file = replacement
 	closeReplacement = false
 	for id, publication := range o.entries {
+		if id == transitionID {
+			publication.State = transitionState
+			publication.RejectionCode = transitionRejectionCode
+		}
 		if publication.State != ArtifactPublicationPending {
 			publication.Candidate.Content = nil
 			o.entries[id] = publication

@@ -394,6 +394,38 @@ func TestArtifactOutboxCompactsCompletedPublication(t *testing.T) {
 	}
 }
 
+func TestArtifactOutboxCompactsPendingStateTransition(t *testing.T) {
+	directory := privateTestDir(t)
+	path := filepath.Join(directory, "artifacts.jsonl")
+	outbox, err := OpenArtifactOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := testArtifactCandidate(t)
+	if _, _, err := outbox.Ensure(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.compactPublicationState(candidate.ID, ArtifactPublicationUploaded, ""); err != nil {
+		t.Fatal(err)
+	}
+	publication, found := outbox.Publication(candidate.ID)
+	if !found || publication.State != ArtifactPublicationUploaded || len(publication.Candidate.Content) != 0 {
+		t.Fatalf("state-transition compacted publication = %+v, found = %v", publication, found)
+	}
+	if err := outbox.Close(); err != nil {
+		t.Fatal(err)
+	}
+	outbox, err = OpenArtifactOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	publication, found = outbox.Publication(candidate.ID)
+	if !found || publication.State != ArtifactPublicationUploaded || len(publication.Candidate.Content) != 0 {
+		t.Fatalf("recovered state-transition publication = %+v, found = %v", publication, found)
+	}
+}
+
 func TestUploadArtifactForEventUsesMappedIdentityAndRetries(t *testing.T) {
 	directory := privateTestDir(t)
 	journal, err := OpenJournal(filepath.Join(directory, "journal.jsonl"))
