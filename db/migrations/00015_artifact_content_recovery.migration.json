@@ -9,7 +9,7 @@
   "compatibility_assessment": {
     "public_api": "patch",
     "persistent_state": "minor",
-    "reason": "The existing REST and MCP artifact operations retain their shapes; content-read replacement races are classified as conflicts, while a stable mismatch may enter the additive content-mismatch unavailable reason already permitted by migration 00007. Candidates before this marker must not be mixed with the recovery-capable candidate, and the candidate reads existing 00007 rows without rewriting them."
+    "reason": "The existing REST and MCP artifact operations retain their shapes; content-read replacement races are classified as conflicts, while a stable mismatch may enter the additive content-mismatch unavailable reason already permitted by migration 00007. Earlier candidates can read that existing state and fail closed, while only the recovery-capable candidate repairs it; the candidate reads existing 00007 rows without rewriting them."
   },
   "durable_state": {
     "description": "A stable bounded content-read mismatch records unavailable_reason=content-mismatch and a bounded recovery deadline. Recovery revalidates the canonical final object and restores ready only after valid bytes are observed; staging bytes are not treated as a backup and remain governed by the existing identity-checked reclamation rules.",
@@ -18,9 +18,9 @@
       "from_program_versions": "Phase-one candidate containing migration 00007 but not the ordered content-recovery marker.",
       "to_program_version": "Phase-one candidate containing migration 00015 and the content-recovery implementation.",
       "readable_earlier_state": true,
-      "older_program_can_read_new_state": false,
+      "older_program_can_read_new_state": true,
       "direct_major_skips_supported": false,
-      "compatibility_boundary": "Artifact-capable processes must be drained and admitted as one recovery-capable candidate. Earlier processes may leave content-mismatch rows unresolved and are not an eligible switchback target after the marker is adopted."
+      "compatibility_boundary": "The marker adds no schema shape and earlier artifact processes can continue to read existing rows, treating content-mismatch as unavailable rather than serving unverified bytes. They do not repair that state, so a recovery-capable candidate must remain available for repair; blue-green staging may overlap the older process, and switchback remains fail-closed without reversing the migration."
     }
   },
   "database_migration": {

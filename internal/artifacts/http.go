@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -62,6 +63,63 @@ type contentVersionVerifier interface {
 	verifyContentVersion(context.Context) error
 }
 
+// downloadReadSeeker records a content identity failure while ServeContent
+// is still rendering into a private buffer. The standard helper does not
+// return read errors, so buffering is what lets the handler replace a
+// partially rendered 200/206 with the existing conflict envelope.
+type downloadReadSeeker struct {
+	io.ReadSeeker
+	err error
+}
+
+func (r *downloadReadSeeker) Read(buffer []byte) (int, error) {
+	n, err := r.ReadSeeker.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.err = err
+	}
+	return n, err
+}
+
+func (r *downloadReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	position, err := r.ReadSeeker.Seek(offset, whence)
+	if err != nil {
+		r.err = err
+	}
+	return position, err
+}
+
+type downloadResponseBuffer struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func (w *downloadResponseBuffer) Header() http.Header {
+	return w.header
+}
+
+func (w *downloadResponseBuffer) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *downloadResponseBuffer) Write(content []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(content)
+}
+
+func copyDownloadHeaders(destination, source http.Header) {
+	for key := range destination {
+		destination.Del(key)
+	}
+	for key, values := range source {
+		destination[key] = append([]string(nil), values...)
+	}
+}
+
 // NewDownloadHTTPHandler constructs a handler over the existing ArtifactStore
 // contract. Browser downloads use Store.Open's full verification path; the
 // production Store additionally implements the snapshot-bound content path,
@@ -120,7 +178,27 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	responseController := http.NewResponseController(writer)
 	_ = responseController.SetWriteDeadline(time.Now().Add(downloadWriteTimeout))
 	defer func() { _ = responseController.SetWriteDeadline(time.Time{}) }()
-	http.ServeContent(writer, request, safeDownloadFilename(artifact.Name), modTime, reader)
+	trackedReader := &downloadReadSeeker{ReadSeeker: reader}
+	buffer := &downloadResponseBuffer{header: writer.Header().Clone()}
+	http.ServeContent(buffer, request, safeDownloadFilename(artifact.Name), modTime, trackedReader)
+	if trackedReader.err != nil {
+		if request.Context().Err() != nil {
+			return
+		}
+		for key := range writer.Header() {
+			writer.Header().Del(key)
+		}
+		h.writeStoreError(writer, request, trackedReader.err, "artifact download failed while reading content")
+		return
+	}
+	copyDownloadHeaders(writer.Header(), buffer.header)
+	if buffer.status == 0 {
+		buffer.status = http.StatusOK
+	}
+	writer.WriteHeader(buffer.status)
+	if request.Method != http.MethodHead && buffer.body.Len() > 0 {
+		_, _ = writer.Write(buffer.body.Bytes())
+	}
 }
 
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and

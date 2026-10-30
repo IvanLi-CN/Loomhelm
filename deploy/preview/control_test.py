@@ -55,7 +55,7 @@ class PreviewControlTest(unittest.TestCase):
                 for key in configured:
                     self.assertEqual(actual[key], auth.get(key, ""))
                 self.assertEqual(actual["LOOMHELM_SESSION_COOKIE_SECURE"], auth.get("LOOMHELM_SESSION_COOKIE_SECURE", "true"))
-                self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "90s")
+                self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "110s")
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 self.assertNotIn(required["LOOMHELM_DRAIN_TOKEN"], captured.getvalue())
                 self.assertNotIn(configured["LOOMHELM_OIDC_CLIENT_SECRET"], captured.getvalue())
@@ -83,6 +83,8 @@ class PreviewControlTest(unittest.TestCase):
             control.write_state(state_dir, state)
             with patch.dict(os.environ, {**settings, "LOOMHELM_PREVIEW_PROJECT_NAME": "renamed-preview"}, clear=True):
                 with self.assertRaises(control.ContractError):
+                    self.invoke("validate_project", state_dir)
+                with self.assertRaises(control.ContractError):
                     self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
 
     def test_legacy_active_state_cannot_be_rebound_to_a_new_project(self) -> None:
@@ -108,7 +110,7 @@ class PreviewControlTest(unittest.TestCase):
                     self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
 
     def test_compose_grace_covers_a_longer_shutdown_timeout(self) -> None:
-        self.assertEqual(control.default_stop_grace_period("1m30s"), "270s")
+        self.assertEqual(control.default_stop_grace_period("1m30s"), "300s")
         settings = {
             "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-grace-test",
             "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
@@ -127,7 +129,7 @@ class PreviewControlTest(unittest.TestCase):
             self.invoke("compose_env", state_dir, output=output)
             actual = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
             self.assertEqual(actual["LOOMHELM_SHUTDOWN_TIMEOUT"], "120s")
-            self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "360s")
+            self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "390s")
 
     def test_compose_environment_rejects_invalid_shutdown_and_grace_durations(self) -> None:
         required = {

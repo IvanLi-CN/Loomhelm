@@ -129,7 +129,7 @@ class ComposeAuthenticationTest(unittest.TestCase):
             self.assertEqual(config.returncode, 0, "Compose could not resolve the generated shutdown grace period")
             services = json.loads(config.stdout)["services"]
             for service in ("server-blue", "server-green", "worker-blue", "worker-green"):
-                self.assertEqual(services[service]["stop_grace_period"], "6m0s", service)
+                self.assertEqual(services[service]["stop_grace_period"], "6m30s", service)
 
 
 if __name__ == "__main__":

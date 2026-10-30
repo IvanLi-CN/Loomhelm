@@ -233,7 +233,8 @@ func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Art
 			if pathErr := r.verifyCanonicalContentVersion(ctx); pathErr != nil {
 				return pathErr
 			}
-			if markErr := r.store.markReadyObjectUnavailable(ctx, r.id, contentMismatchReason); markErr != nil {
+			r.store.fault(faultBeforeContentMismatchMark)
+			if markErr := r.store.markReadyContentMismatch(ctx, r.id, r.version); markErr != nil {
 				return markErr
 			}
 			return unavailableError(err)

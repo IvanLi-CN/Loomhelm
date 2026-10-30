@@ -307,6 +307,7 @@ case "$command" in
 		;;
 	status)
 		load_local_environment
+		control validate-project >/dev/null
 		control status
 		if [ -f "$env_file" ]; then
 			compose ps

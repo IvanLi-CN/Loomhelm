@@ -92,12 +92,13 @@ type RecoveryReport struct {
 type faultPoint string
 
 const (
-	faultAfterStage              faultPoint = "after-stage"
-	faultAfterIntentCommit       faultPoint = "after-intent-commit"
-	faultAfterRepairIntentCommit faultPoint = "after-repair-intent-commit"
-	faultAfterFinalLink          faultPoint = "after-final-link"
-	faultAfterFinalPublication   faultPoint = "after-final-publication"
-	faultAfterReadyCommit        faultPoint = "after-ready-commit"
+	faultAfterStage                faultPoint = "after-stage"
+	faultAfterIntentCommit         faultPoint = "after-intent-commit"
+	faultAfterRepairIntentCommit   faultPoint = "after-repair-intent-commit"
+	faultAfterFinalLink            faultPoint = "after-final-link"
+	faultAfterFinalPublication     faultPoint = "after-final-publication"
+	faultAfterReadyCommit          faultPoint = "after-ready-commit"
+	faultBeforeContentMismatchMark faultPoint = "before-content-mismatch-mark"
 )
 
 // faultHooks is intentionally unexported. Package tests use it to terminate a
@@ -119,6 +120,7 @@ type faultHooks struct {
 	BeforeStagingDirectorySync func() error
 	BeforeStagingCleanupCommit func()
 	BeforeOpenVerification     func()
+	BeforeContentMismatchMark  func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -149,6 +151,10 @@ func (s *Store) fault(point faultPoint) {
 	case faultAfterReadyCommit:
 		if s.faults.AfterReadyCommit != nil {
 			s.faults.AfterReadyCommit()
+		}
+	case faultBeforeContentMismatchMark:
+		if s.faults.BeforeContentMismatchMark != nil {
+			s.faults.BeforeContentMismatchMark()
 		}
 	}
 }
@@ -2229,6 +2235,83 @@ func (s *Store) markReadyObjectUnavailable(parent context.Context, id string, re
 			return nil
 		}
 		return databaseWriteError("commit ready artifact unavailable state", err)
+	}
+	return nil
+}
+
+func (s *Store) verifyCanonicalObjectVersion(ctx context.Context, id, expectedVersion string) error {
+	if strings.TrimSpace(expectedVersion) == "" {
+		return fmt.Errorf("artifact content version is missing: %w", ErrContentChanged)
+	}
+	path, err := s.objectPath(id)
+	if err != nil {
+		return err
+	}
+	file, err := openStoredFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrIntegrity) {
+			return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
+		}
+		return err
+	}
+	defer file.Close()
+	version, err := fileContentVersion(file)
+	if err != nil {
+		return err
+	}
+	if version != expectedVersion {
+		return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
+	}
+	return nil
+}
+
+// markReadyContentMismatch rechecks the canonical object while the ready row
+// is locked and immediately before commit. A replacement that arrives after
+// the reader's last verification therefore leaves the row ready for a later
+// conflict-safe retry instead of quarantining the replacement bytes.
+func (s *Store) markReadyContentMismatch(parent context.Context, id, expectedVersion string) error {
+	cleanup := newCleanupDeadline(parent)
+	defer cleanup.stop()
+	ctx, cancel := cleanup.context()
+	defer cancel()
+	tx, err := s.beginIdentityTx(ctx, id, cleanup)
+	if err != nil {
+		return err
+	}
+	defer func() { rollbackTx(tx, cleanup) }()
+	var state string
+	if err := tx.QueryRow(ctx, `
+		SELECT state
+		FROM conversation_artifacts
+		WHERE id = $1
+		FOR UPDATE
+	`, id).Scan(&state); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("read ready artifact state: %w", ErrStoreUnavailable)
+	}
+	if state != string(publicationReady) {
+		return nil
+	}
+	if err := s.verifyCanonicalObjectVersion(ctx, id, expectedVersion); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE conversation_artifacts SET state = 'unavailable', unavailable_reason = $2, staging_reclaim_after = NOW() WHERE id = $1 AND state = 'ready'`, id, contentMismatchReason); err != nil {
+		return databaseWriteError("mark ready artifact content mismatch", err)
+	}
+	if err := s.verifyCanonicalObjectVersion(ctx, id, expectedVersion); err != nil {
+		return err
+	}
+	if err := s.commit(ctx, tx); err != nil {
+		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
+		if confirmErr == nil && confirmed.State == publicationUnavailable && confirmed.UnavailableReason == contentMismatchReason {
+			return nil
+		}
+		return databaseWriteError("commit ready artifact content mismatch", err)
 	}
 	return nil
 }

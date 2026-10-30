@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -248,6 +249,29 @@ func TestDownloadHTTPHandlerMapsInChunkContentChangesToConflict(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerMapsFullDownloadContentChangesToConflict(t *testing.T) {
+	content := []byte("original bytes")
+	reader := &fullDownloadErrorReader{
+		Reader: bytes.NewReader(content),
+		Err:    ErrContentChanged,
+	}
+	artifact := protocol.Artifact{ID: "artifact-full-content-change", Name: "content.bin", Size: int64(len(content))}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: reader}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-full-content-change", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusConflict, response.Body.String())
+	}
+	if response.Body.String() == string(content) {
+		t.Fatal("full download returned content after the content identity changed")
+	}
+}
+
 func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "artifact")
 	original := []byte("original content")
@@ -371,6 +395,33 @@ type contentErrorReader struct {
 	seekErr error
 	readErr error
 }
+
+type fullDownloadErrorReader struct {
+	*bytes.Reader
+	Err    error
+	failed bool
+}
+
+func (r *fullDownloadErrorReader) Read(buffer []byte) (int, error) {
+	if r.failed {
+		return 0, r.Err
+	}
+	r.failed = true
+	if len(buffer) > 1 {
+		buffer = buffer[:1]
+	}
+	return r.Reader.Read(buffer)
+}
+
+func (r *fullDownloadErrorReader) ReadAt(buffer []byte, offset int64) (int, error) {
+	return r.Reader.ReadAt(buffer, offset)
+}
+
+func (r *fullDownloadErrorReader) Seek(offset int64, whence int) (int64, error) {
+	return r.Reader.Seek(offset, whence)
+}
+
+func (r *fullDownloadErrorReader) Close() error { return nil }
 
 func (r *contentErrorReader) Read([]byte) (int, error) {
 	if r.readErr != nil {
