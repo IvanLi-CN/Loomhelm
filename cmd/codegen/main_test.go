@@ -89,7 +89,7 @@ func TestArtifactDownloadUsesBinaryBrowserClientResponse(t *testing.T) {
 			t.Fatalf("artifact download range contract is incomplete: %#v", operation)
 		}
 		generated := (generator{contract: source}).apiClientTypeScript()
-		if !strings.Contains(operation.Summary, "single byte range") || !strings.Contains(operation.Summary, "416") {
+		if !strings.Contains(operation.Summary, "multiple ranges") || !strings.Contains(operation.Summary, "unknown range units") || !strings.Contains(operation.Summary, "416") {
 			t.Fatalf("artifact download range summary is incomplete: %q", operation.Summary)
 		}
 		if !strings.Contains(generated, "async downloadArtifact(request: DownloadArtifactParams): Promise<Response>") || !strings.Contains(generated, "range?: string;") || !strings.Contains(generated, "requestHeaders.set(\"Range\", String(request.range))") || !strings.Contains(generated, "undefined, [200, 206], true, requestHeaders") || !strings.Contains(generated, "readonly response?: Response") || !strings.Contains(generated, "new ApiClientError(response.status, parsed, response)") {

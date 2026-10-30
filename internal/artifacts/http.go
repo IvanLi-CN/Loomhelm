@@ -530,9 +530,10 @@ func (h *DownloadHTTPHandler) retryPendingStagingCleanup() {
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
 // MCP callers. The content store repeats authorization, ready-state, regular
 // file and exact-size checks for every request; content_version binds later
-// cursors to the same file incarnation. Every response chunk is fully hashed
-// before any response bytes are emitted, so a same-size rewrite cannot leak
-// bytes even when filesystem metadata is restored.
+// cursors to the same file incarnation. The first response chunk is fully
+// hashed before bytes are emitted. Later chunks use the content version token,
+// including change time, to reject a rewrite without rescanning the complete
+// object for every cursor request.
 func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, request *http.Request) {
 	if h == nil || h.store == nil {
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
@@ -643,15 +644,6 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content snapshot is unavailable")
 		return
 	}
-	if verifier, ok := reader.(contentVerifier); ok {
-		if err := verifier.verifyContent(request.Context(), artifact); err != nil {
-			if request.Context().Err() != nil {
-				return
-			}
-			h.writeStoreError(writer, request, err, "artifact content verification failed")
-			return
-		}
-	}
 	releaseResponseSlot, responseSlotErr := h.acquireDownloadResponseSlot(request.Context())
 	if responseSlotErr != nil {
 		if request.Context().Err() != nil {
@@ -729,36 +721,68 @@ func validateDownloadRange(request *http.Request, size int64) error {
 		return nil
 	}
 	if len(values) != 1 {
-		return ErrRangeNotSatisfiable
+		// Multiple field values are delegated to net/http, which applies the
+		// standard combined-range behavior instead of manufacturing a 416.
+		return nil
 	}
 	rangeValue := strings.TrimSpace(values[0])
-	if !strings.HasPrefix(rangeValue, "bytes=") || strings.Contains(rangeValue, ",") {
+	if !strings.Contains(rangeValue, "=") {
 		return ErrRangeNotSatisfiable
 	}
+	if !strings.HasPrefix(rangeValue, "bytes=") {
+		// RFC 9110 permits a server to ignore a Range unit it does not
+		// understand and return the complete representation.
+		request.Header.Del("Range")
+		return nil
+	}
 	specification := strings.TrimSpace(strings.TrimPrefix(rangeValue, "bytes="))
+	if strings.Contains(specification, ",") {
+		for _, part := range strings.Split(specification, ",") {
+			if err := validateSingleDownloadRange(strings.TrimSpace(part), size); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return validateSingleDownloadRange(specification, size)
+}
+
+func validateSingleDownloadRange(specification string, size int64) error {
 	parts := strings.Split(specification, "-")
 	if len(parts) != 2 || specification == "-" || size < 0 {
 		return ErrRangeNotSatisfiable
 	}
 	if parts[0] == "" {
-		suffix, err := strconv.ParseInt(parts[1], 10, 64)
+		suffix, err := parseDownloadRangeNumber(parts[1])
 		if err != nil || suffix <= 0 || size == 0 {
 			return ErrRangeNotSatisfiable
 		}
 		return nil
 	}
-	start, err := strconv.ParseInt(parts[0], 10, 64)
+	start, err := parseDownloadRangeNumber(parts[0])
 	if err != nil || start < 0 || start >= size {
 		return ErrRangeNotSatisfiable
 	}
 	if parts[1] == "" {
 		return nil
 	}
-	end, err := strconv.ParseInt(parts[1], 10, 64)
+	end, err := parseDownloadRangeNumber(parts[1])
 	if err != nil || end < start {
 		return ErrRangeNotSatisfiable
 	}
 	return nil
+}
+
+func parseDownloadRangeNumber(value string) (int64, error) {
+	if value == "" {
+		return 0, strconv.ErrSyntax
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return 0, strconv.ErrSyntax
+		}
+	}
+	return strconv.ParseInt(value, 10, 64)
 }
 
 func contentChunkQuery(request *http.Request) (int64, int64, string, error) {

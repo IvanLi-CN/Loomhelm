@@ -160,8 +160,8 @@ func TestDownloadHTTPHandlerRejectsUnsupportedOrUnsatisfiableRanges(t *testing.T
 		name       string
 		rangeValue string
 	}{
-		{name: "multiple ranges", rangeValue: "bytes=2-6,8-10"},
-		{name: "wrong unit", rangeValue: "items=2-6"},
+		{name: "signed start", rangeValue: "bytes=+2-6"},
+		{name: "malformed", rangeValue: "bytes=two-six"},
 		{name: "past end", rangeValue: "bytes=99-100"},
 		{name: "reversed", rangeValue: "bytes=6-2"},
 	} {
@@ -186,6 +186,35 @@ func TestDownloadHTTPHandlerRejectsUnsupportedOrUnsatisfiableRanges(t *testing.T
 			}
 			if response.Body.String() == string(content) {
 				t.Fatal("invalid range returned artifact bytes")
+			}
+		})
+	}
+}
+
+func TestDownloadHTTPHandlerDelegatesUnknownAndMultipleRangesToNetHTTP(t *testing.T) {
+	content := []byte("range response body")
+	for _, test := range []struct {
+		name       string
+		rangeValue string
+		status     int
+	}{
+		{name: "unknown unit", rangeValue: "items=2-6", status: http.StatusOK},
+		{name: "multiple byte ranges", rangeValue: "bytes=2-6,8-10", status: http.StatusPartialContent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			artifact := protocol.Artifact{ID: "artifact-range-delegated", Name: "range.txt", Size: int64(len(content))}
+			handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+			request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+			request.Header.Set("Range", test.rangeValue)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d; headers=%v; body=%q", response.Code, test.status, response.Header(), response.Body.String())
 			}
 		})
 	}
@@ -265,9 +294,9 @@ func TestDownloadHTTPHandlerVerifiesFirstContentChunkBeforeReadingBytes(t *testi
 func TestDownloadHTTPHandlerRejectsMutationAfterChunkReadBeforeResponse(t *testing.T) {
 	content := []byte("same-size content")
 	reader := &contentVerificationReaderStub{
-		Reader:       bytes.NewReader(content),
-		version:      "v1-test",
-		verifyErrors: []error{nil, ErrHashMismatch},
+		Reader:           bytes.NewReader(content),
+		version:          "v1-test",
+		verifyVersionErr: ErrContentChanged,
 	}
 	store := &contentHTTPArtifactStoreStub{
 		httpArtifactStoreStub: httpArtifactStoreStub{
@@ -283,11 +312,14 @@ func TestDownloadHTTPHandlerRejectsMutationAfterChunkReadBeforeResponse(t *testi
 	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-mutated-after-read/content?limit=4", nil))
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusNotFound, response.Body.String())
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusConflict, response.Body.String())
 	}
-	if reader.verifyCalls != 2 {
-		t.Fatalf("verify calls = %d, want 2", reader.verifyCalls)
+	if reader.verifyCalls != 1 {
+		t.Fatalf("verify calls = %d, want 1", reader.verifyCalls)
+	}
+	if reader.verifyVersionCalls != 1 {
+		t.Fatalf("verify version calls = %d, want 1", reader.verifyVersionCalls)
 	}
 	if strings.Contains(response.Body.String(), base64.StdEncoding.EncodeToString(content)) {
 		t.Fatal("response exposed bytes after the content mutation")
@@ -686,11 +718,15 @@ func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	version, err := fileContentVersion(file)
+	version, err := filePathVersion(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader := &contentReader{File: file, version: version}
+	mutationVersion, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &contentReader{File: file, version: version, mutationVersion: mutationVersion}
 	if _, err := io.ReadFull(reader, make([]byte, 4)); err != nil {
 		t.Fatal(err)
 	}
@@ -718,7 +754,49 @@ func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
 	}
 }
 
-func TestFileContentVersionIgnoresHardLinkLifecycle(t *testing.T) {
+func TestFileContentMutationVersionDetectsRewriteWithRestoredModTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	original := []byte("original content")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	before, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteAt([]byte("rewritten content"), 0); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Fatal("content version did not change after an in-place rewrite with restored mtime")
+	}
+}
+
+func TestFilePathVersionIgnoresHardLinkLifecycle(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "artifact")
 	linkPath := filepath.Join(directory, "staging")
@@ -730,14 +808,14 @@ func TestFileContentVersionIgnoresHardLinkLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	before, err := fileContentVersion(file)
+	before, err := filePathVersion(file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Link(path, linkPath); err != nil {
 		t.Fatal(err)
 	}
-	after, err := fileContentVersion(file)
+	after, err := filePathVersion(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,11 +906,13 @@ type contentVersionReaderStub struct {
 
 type contentVerificationReaderStub struct {
 	*bytes.Reader
-	version          string
-	verifyErr        error
-	verifyErrors     []error
-	verifyCalls      int
-	readBeforeVerify bool
+	version            string
+	verifyErr          error
+	verifyErrors       []error
+	verifyVersionErr   error
+	verifyCalls        int
+	verifyVersionCalls int
+	readBeforeVerify   bool
 }
 
 func (r *contentVerificationReaderStub) Read(buffer []byte) (int, error) {
@@ -854,6 +934,11 @@ func (r *contentVerificationReaderStub) verifyContent(context.Context, protocol.
 		return err
 	}
 	return r.verifyErr
+}
+
+func (r *contentVerificationReaderStub) verifyContentVersion(context.Context) error {
+	r.verifyVersionCalls++
+	return r.verifyVersionErr
 }
 
 type contentErrorReader struct {

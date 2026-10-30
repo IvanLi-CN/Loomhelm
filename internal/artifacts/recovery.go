@@ -1079,7 +1079,7 @@ func inspectArtifactFileWithVersion(ctx context.Context, path string, artifact p
 		return fileUnknown, "", err
 	}
 	defer file.Close()
-	version, err := fileContentVersion(file)
+	version, err := filePathVersion(file)
 	if err != nil {
 		return fileUnknown, "", err
 	}
@@ -1097,7 +1097,7 @@ func inspectArtifactFileWithVersion(ctx context.Context, path string, artifact p
 	if afterVerification != nil {
 		afterVerification()
 	}
-	currentVersion, currentVersionErr := fileContentVersion(file)
+	currentVersion, currentVersionErr := filePathVersion(file)
 	if currentVersionErr != nil {
 		return fileUnknown, "", currentVersionErr
 	}
@@ -1439,6 +1439,31 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 	}
 	if err := ctx.Err(); err != nil {
 		return artifactRecord{}, recoveryPending, err
+	}
+	// The final path can be replaced after the inspection above. Reinspect it
+	// immediately before unlinking the only other hard link so a damaged
+	// replacement cannot make the verified staging inode disappear.
+	finalCheck, pathVersion, err = s.inspectReadyWithVersion(ctx, record)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	if finalCheck == fileUnknown {
+		return artifactRecord{}, recoveryPending, fmt.Errorf("reinspect ready artifact before reclamation: %w", ErrStoreUnavailable)
+	}
+	if finalCheck != fileValid {
+		return commitUnavailable(finalReason(finalCheck), pathVersion)
+	}
+	if removeStaging {
+		currentIdentity, identityErr = s.stagingIdentity(record.StagingName)
+		if identityErr != nil {
+			return artifactRecord{}, recoveryPending, identityErr
+		}
+		removeStaging = sameStagingIdentity(record.StagingIdentity, currentIdentity)
+		if !removeStaging {
+			if err := s.syncStagingDirectory(); err != nil {
+				return artifactRecord{}, recoveryPending, fmt.Errorf("sync artifact staging directory before retaining replaced staging: %w", ErrStoreUnavailable)
+			}
+		}
 	}
 	if removeStaging {
 		if removeErr := s.removeStaging(record.StagingName); removeErr != nil {
@@ -2419,7 +2444,7 @@ func (s *Store) verifyCanonicalObjectVersion(ctx context.Context, id, expectedVe
 		return err
 	}
 	defer file.Close()
-	version, err := fileContentVersion(file)
+	version, err := filePathVersion(file)
 	if err != nil {
 		return err
 	}

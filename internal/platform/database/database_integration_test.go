@@ -216,7 +216,6 @@ func TestMigrationLockSerializesConcurrentCallbacksWithSinglePoolConnection(t *t
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	config := databaseConfigForTest(t)
-	config.URL = isolatedMigrationLockDatabase(t, ctx, config.URL)
 	config.MinConns = 1
 	config.MaxConns = 1
 
@@ -262,7 +261,6 @@ func TestMigrationLockAcceptsPoolOnlyURLOptionsWithSinglePoolConnection(t *testi
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	config := databaseConfigForTest(t)
-	config.URL = isolatedMigrationLockDatabase(t, ctx, config.URL)
 	config.URL = withPoolMaxConnsOne(t, config.URL)
 	config.MinConns = 1
 	config.MaxConns = 1
@@ -285,7 +283,6 @@ func TestMigrationLockPreservesContextErrorDuringConnectionSetup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	config := databaseConfigForTest(t)
-	config.URL = isolatedMigrationLockDatabase(t, ctx, config.URL)
 	config.MinConns = 1
 	config.MaxConns = 1
 
@@ -326,7 +323,6 @@ func TestMigrationLockPreservesContextErrorDuringAdvisoryLockWait(t *testing.T) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	baseConfig.URL = isolatedMigrationLockDatabase(t, ctx, baseConfig.URL)
 	config := baseConfig
 	config.URL = withURLQuery(t, config.URL, "application_name", applicationName)
 	db, err := database.Open(ctx, config)
@@ -383,39 +379,6 @@ func databaseConfigForTest(t *testing.T) database.Config {
 		t.Fatalf("load database configuration: %v", err)
 	}
 	return database.Config{URL: config.URL, MinConns: config.MinConns, MaxConns: config.MaxConns}
-}
-
-func isolatedMigrationLockDatabase(t *testing.T, ctx context.Context, rawURL string) string {
-	t.Helper()
-	admin, err := pgx.Connect(ctx, rawURL)
-	if err != nil {
-		t.Fatalf("open migration lock test admin connection: %v", err)
-	}
-	databaseName := fmt.Sprintf("loomhelm_lock_%d", time.Now().UnixNano())
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{databaseName}.Sanitize()); err != nil {
-		admin.Close(context.Background())
-		t.Fatalf("create migration lock test database: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		if _, err := admin.Exec(cleanupCtx, "DROP DATABASE "+pgx.Identifier{databaseName}.Sanitize()); err != nil {
-			t.Errorf("drop migration lock test database: %v", err)
-		}
-		if err := admin.Close(cleanupCtx); err != nil {
-			t.Errorf("close migration lock test admin connection: %v", err)
-		}
-	})
-	if strings.Contains(rawURL, "://") {
-		parsed, err := url.Parse(rawURL)
-		if err != nil {
-			t.Fatalf("parse migration lock test database URL: %v", err)
-		}
-		parsed.Path = "/" + databaseName
-		parsed.RawPath = ""
-		return parsed.String()
-	}
-	return strings.TrimSpace(rawURL) + " dbname=" + databaseName
 }
 
 func withPoolMaxConnsOne(t *testing.T, rawURL string) string {

@@ -950,7 +950,7 @@
         "response_status": 200,
         "response_statuses": [200, 206],
         "response_headers": {"Content-Range": "206 responses use bytes start-end/total; 416 responses use bytes */total."},
-        "summary": "Download the authorized original artifact bytes. range is an optional single byte range in bytes=start-end, bytes=start-, or bytes=-suffix form; multiple, malformed, and unsatisfiable ranges return 416 with Content-Range."
+        "summary": "Download the authorized original artifact bytes. Range supports satisfiable byte ranges, including multiple ranges; malformed or unsatisfiable byte ranges return 416 with Content-Range, while unknown range units are ignored."
       },
       {
         "operation_id": "downloadArtifactContent",
