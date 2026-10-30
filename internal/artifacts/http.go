@@ -101,6 +101,15 @@ type downloadDeadlineWriter struct {
 	absolute   time.Time
 }
 
+func withDownloadDeadline(request *http.Request) (*http.Request, context.CancelFunc, time.Time) {
+	deadline := time.Now().Add(downloadWriteTimeout)
+	if requestDeadline, ok := request.Context().Deadline(); ok && requestDeadline.Before(deadline) {
+		deadline = requestDeadline
+	}
+	ctx, cancel := context.WithDeadline(request.Context(), deadline)
+	return request.WithContext(ctx), cancel, deadline
+}
+
 func (w *downloadDeadlineWriter) Write(content []byte) (int, error) {
 	deadline := time.Now().Add(downloadWriteIdleTimeout)
 	if deadline.After(w.absolute) {
@@ -232,6 +241,9 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
 		return
 	}
+	var cancel context.CancelFunc
+	request, cancel, downloadDeadline := withDownloadDeadline(request)
+	defer cancel()
 	h.retryPendingStagingCleanup()
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
@@ -308,12 +320,12 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	}
 	modTime := parseDownloadTime(artifact.CreatedAt)
 	responseController := http.NewResponseController(writer)
-	// Staging reads the full artifact before any response bytes are sent. Start
-	// the network-write deadline only after staging has completed.
-	_ = responseController.SetWriteDeadline(time.Now().Add(downloadWriteTimeout))
+	// Staging and network writes share one absolute request deadline so a slow
+	// source cannot consume the full transfer budget before response writes begin.
+	_ = responseController.SetWriteDeadline(downloadDeadline)
 	defer func() { _ = responseController.SetWriteDeadline(time.Time{}) }()
 	if request.Method == http.MethodGet {
-		deadlineWriter := &downloadDeadlineWriter{ResponseWriter: writer, controller: responseController, absolute: time.Now().Add(downloadWriteTimeout)}
+		deadlineWriter := &downloadDeadlineWriter{ResponseWriter: writer, controller: responseController, absolute: downloadDeadline}
 		http.ServeContent(deadlineWriter, request, safeDownloadFilename(artifact.Name), modTime, staged)
 		return
 	}
@@ -427,15 +439,15 @@ func cleanupOrphanedDownloadStaging() {
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().Add(-(downloadWriteTimeout + downloadWriteIdleTimeout))
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), "loomhelm-artifact-download-") {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil || info.ModTime().After(cutoff) {
-			continue
-		}
+		// Staging files are private temporary names. An active process keeps its
+		// file descriptor open, so unlinking the name does not interrupt its
+		// response; the releasing handler treats os.ErrNotExist as successful
+		// cleanup. This also removes crash leftovers immediately after a fast
+		// restart instead of allowing one full transfer timeout per generation.
 		_ = os.Remove(filepath.Join(os.TempDir(), entry.Name()))
 	}
 }
@@ -493,6 +505,9 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
 		return
 	}
+	var cancel context.CancelFunc
+	request, cancel, downloadDeadline := withDownloadDeadline(request)
+	defer cancel()
 	h.retryPendingStagingCleanup()
 	if request.Method != http.MethodGet {
 		writer.Header().Set("Allow", http.MethodGet)
@@ -557,7 +572,7 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 	}
 	content := make([]byte, 0, chunkSize)
 	if chunkSize > 0 {
-		content, err = io.ReadAll(io.LimitReader(reader, chunkSize))
+		content, err = io.ReadAll(io.LimitReader(&downloadContextReader{ctx: request.Context(), reader: reader}, chunkSize))
 		if err != nil {
 			if request.Context().Err() != nil {
 				return
@@ -621,6 +636,9 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	responseController := http.NewResponseController(writer)
+	_ = responseController.SetWriteDeadline(downloadDeadline)
+	defer func() { _ = responseController.SetWriteDeadline(time.Time{}) }()
 	if err := json.NewEncoder(writer).Encode(response); err != nil && request.Context().Err() == nil {
 		return
 	}

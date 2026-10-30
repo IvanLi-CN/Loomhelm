@@ -102,6 +102,7 @@ const (
 	faultAfterReadyCommit            faultPoint = "after-ready-commit"
 	faultBeforeContentMismatchMark   faultPoint = "before-content-mismatch-mark"
 	faultBeforeObjectUnavailableMark faultPoint = "before-object-unavailable-mark"
+	faultBeforeReadyInspection       faultPoint = "before-ready-inspection"
 )
 
 // faultHooks is intentionally unexported. Package tests use it to terminate a
@@ -125,6 +126,7 @@ type faultHooks struct {
 	BeforeOpenVerification      func()
 	BeforeContentMismatchMark   func()
 	BeforeObjectUnavailableMark func()
+	BeforeReadyInspection       func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -163,6 +165,10 @@ func (s *Store) fault(point faultPoint) {
 	case faultBeforeObjectUnavailableMark:
 		if s.faults.BeforeObjectUnavailableMark != nil {
 			s.faults.BeforeObjectUnavailableMark()
+		}
+	case faultBeforeReadyInspection:
+		if s.faults.BeforeReadyInspection != nil {
+			s.faults.BeforeReadyInspection()
 		}
 	}
 }
@@ -617,12 +623,9 @@ func (s *Store) inspectReadyWithVersion(ctx context.Context, record artifactReco
 	if err != nil {
 		return fileUnknown, "", err
 	}
-	version, err := objectPathVersion(path)
-	if err != nil {
-		return fileUnknown, "", err
-	}
-	check, err := inspectArtifactFile(ctx, path, record.Artifact)
-	return check, version, err
+	return inspectArtifactFileWithVersion(ctx, path, record.Artifact, func() {
+		s.fault(faultBeforeReadyInspection)
+	})
 }
 
 func sameArtifactMetadata(candidate, existing protocol.Artifact) bool {
@@ -1022,27 +1025,61 @@ func (s *Store) stagingPath(name string) (string, error) {
 }
 
 func inspectArtifactFile(ctx context.Context, path string, artifact protocol.Artifact) (fileCheck, error) {
+	check, _, err := inspectArtifactFileWithVersion(ctx, path, artifact, nil)
+	return check, err
+}
+
+func inspectArtifactFileWithVersion(ctx context.Context, path string, artifact protocol.Artifact, beforePathCheck func()) (fileCheck, string, error) {
 	if err := requireContext(ctx); err != nil {
-		return fileUnknown, err
+		return fileUnknown, "", err
 	}
 	file, err := openStoredFile(path)
 	if err != nil {
+		version, versionErr := objectPathVersion(path)
+		if versionErr != nil {
+			return fileUnknown, "", versionErr
+		}
 		if errors.Is(err, os.ErrNotExist) {
-			return fileMissing, nil
+			if version != missingObjectPathVersion {
+				return fileUnknown, "", fmt.Errorf("artifact content path changed while inspecting: %w", ErrContentChanged)
+			}
+			return fileMissing, version, nil
 		}
 		if errors.Is(err, ErrIntegrity) {
-			return fileInvalid, nil
+			return fileInvalid, version, nil
 		}
-		return fileUnknown, err
+		return fileUnknown, "", err
 	}
 	defer file.Close()
-	if err := verifyFile(ctx, file, artifact); err != nil {
-		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
-			return fileInvalid, nil
-		}
-		return fileUnknown, err
+	version, err := fileContentVersion(file)
+	if err != nil {
+		return fileUnknown, "", err
 	}
-	return fileValid, nil
+	if beforePathCheck != nil {
+		beforePathCheck()
+	}
+	pathVersion, err := objectPathVersion(path)
+	if err != nil {
+		return fileUnknown, "", err
+	}
+	if pathVersion != version {
+		return fileUnknown, "", fmt.Errorf("artifact content path changed while inspecting: %w", ErrContentChanged)
+	}
+	verifyErr := verifyFile(ctx, file, artifact)
+	currentVersion, currentVersionErr := fileContentVersion(file)
+	if currentVersionErr != nil {
+		return fileUnknown, "", currentVersionErr
+	}
+	if currentVersion != version {
+		return fileUnknown, "", fmt.Errorf("artifact content changed while inspecting: %w", ErrContentChanged)
+	}
+	if verifyErr != nil {
+		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
+			return fileInvalid, version, nil
+		}
+		return fileUnknown, "", verifyErr
+	}
+	return fileValid, version, nil
 }
 
 type fileCheck uint8

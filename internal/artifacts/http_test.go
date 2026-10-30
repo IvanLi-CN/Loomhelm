@@ -447,6 +447,21 @@ func TestDownloadHTTPHandlerRetriesFailedStagingCleanup(t *testing.T) {
 	handler.stagingBudget.Release(int64(len(content)))
 }
 
+func TestCleanupOrphanedDownloadStagingRemovesRecentFiles(t *testing.T) {
+	file, err := os.CreateTemp("", "loomhelm-artifact-download-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cleanupOrphanedDownloadStaging()
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recent orphaned staging file remains: %v", err)
+	}
+}
+
 func TestDownloadHTTPHandlerUsesStoreArtifactSizeLimit(t *testing.T) {
 	handler, err := NewDownloadHTTPHandler(&Store{maxBytes: 8}, nil)
 	if err != nil {

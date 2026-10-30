@@ -298,6 +298,44 @@ func TestStoreOpenDoesNotQuarantineAfterCanonicalReplacement(t *testing.T) {
 	}
 }
 
+func TestStoreMetadataDoesNotQuarantineAfterInspectionReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("metadata inspection bytes")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-metadata-inspection-race"), nil, content)
+	stagingName := ".upload-metadata-inspection-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objectPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeReadyInspection: func() {
+			replacementPath := objectPath + ".replacement"
+			if err := os.WriteFile(replacementPath, corrupt, 0o600); err != nil {
+				t.Fatalf("write metadata inspection replacement: %v", err)
+			}
+			if err := os.Rename(replacementPath, objectPath); err != nil {
+				t.Fatalf("replace metadata inspection object: %v", err)
+			}
+		},
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Metadata error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("inspection replacement state = %q, want %q", state, publicationReady)
+	}
+}
+
 func TestStoreOpenDoesNotQuarantineAfterMissingCanonicalReplacement(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
