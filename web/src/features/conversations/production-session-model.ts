@@ -359,14 +359,15 @@ export function approvalContextFromApproval(approval: Approval): ApprovalContext
   const impact = firstString(context, ["impact", "risk", "description", "reason"]);
   const knownKeys = new Set(["command", "cmd", "command_line", "directory", "cwd", "workdir", "grantRoot", "path", "scope", "impact", "risk", "description", "reason"]);
   const hasUnknownFields = context ? Object.keys(context).some((key) => !knownKeys.has(key)) : false;
+  const hasOpaqueKnownValues = context ? [...knownKeys].some((key) => key in context && context[key] !== undefined && typeof context[key] !== "string") : false;
   const commandContextComplete = !isFileChange && Boolean(command && directory);
   const fileChangeContextComplete = isFileChange && Boolean(fileChangeScope && impact);
   return {
-    complete: Boolean(context && (commandContextComplete || fileChangeContextComplete)),
+    complete: Boolean(context && !hasOpaqueKnownValues && (commandContextComplete || fileChangeContextComplete)),
     command: command ?? approval.summary,
     directory,
     impact,
-    ...(serializedContext && (!context || hasUnknownFields) ? { rawContext: serializedContext } : {}),
+    ...(serializedContext && (!context || hasUnknownFields || hasOpaqueKnownValues) ? { rawContext: serializedContext } : {}),
     ...(explicitScope ? { scope: explicitScope } : {})
   };
 }

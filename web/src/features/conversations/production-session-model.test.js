@@ -350,6 +350,21 @@ describe("production session model", () => {
     expect(context.rawContext).toContain('"opaque request"');
   });
 
+  test("preserves structured values in known approval fields and keeps approval non-operable", () => {
+    const context = approvalContextFromApproval({
+      context: { command: "codex inspect", cwd: "/workspace/loomhelm", risk: { writes: true } },
+      id: "approval-structured-known-context",
+      kind: "shell",
+      requested_at: "2026-10-27T00:00:00Z",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Inspect the requested workspace"
+    });
+    expect(context.complete).toBe(false);
+    expect(context.rawContext).toContain('"writes": true');
+  });
+
   test("maps session lifecycle states to control connection availability", () => {
     expect(connectionFromSessionState("active")).toBe("online");
     expect(connectionFromSessionState("reconciling")).toBe("reconnecting");
