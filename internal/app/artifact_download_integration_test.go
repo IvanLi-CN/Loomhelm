@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +89,7 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	}
 	var credential struct {
 		Credential struct {
+			ID    string `json:"id"`
 			Token string `json:"token"`
 		} `json:"credential"`
 	}
@@ -317,6 +319,33 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	reassembledDigest := sha256.Sum256(reassembled)
 	if hex.EncodeToString(reassembledDigest[:]) != contentPayload.Artifact.Sha256 {
 		t.Fatalf("reassembled API artifact hash = %q, want %q", hex.EncodeToString(reassembledDigest[:]), contentPayload.Artifact.Sha256)
+	}
+	var revocationCredential struct {
+		Credential struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		} `json:"credential"`
+	}
+	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/credentials", map[string]string{"name": "artifact-download-revocation"}, map[string]string{"Origin": baseURL}, http.StatusCreated), &revocationCredential)
+	if revocationCredential.Credential.ID == "" || revocationCredential.Credential.Token == "" {
+		t.Fatal("artifact download revocation credential omitted id or token")
+	}
+	revocationBearer := map[string]string{"Authorization": "Bearer " + revocationCredential.Credential.Token}
+	revocationFirstResponse := applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?limit=4", nil, revocationBearer, http.StatusOK)
+	var revocationFirst protocol.ArtifactContentResponse
+	decodeApplicationResponse(t, revocationFirstResponse, &revocationFirst)
+	if revocationFirst.Complete || revocationFirst.NextOffset <= revocationFirst.Offset {
+		t.Fatalf("revocation fixture did not produce a resumable first chunk: %#v", revocationFirst)
+	}
+	applicationRequest(t, alice, http.MethodDelete, baseURL+"/api/v1/credentials/"+revocationCredential.Credential.ID, nil, map[string]string{"Origin": baseURL}, http.StatusNoContent)
+	revokedResponse := applicationRequest(t, http.DefaultClient, http.MethodGet, contentURL(revocationFirst.NextOffset, revocationFirst.ContentVersion), nil, revocationBearer, http.StatusUnauthorized)
+	revokedBody, err := io.ReadAll(revokedResponse.Body)
+	revokedResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(revokedBody), string(content)) || strings.Contains(string(revokedBody), revocationFirst.ContentBase64) {
+		t.Fatalf("revoked download response exposed artifact bytes: %q", revokedBody)
 	}
 	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/content?offset=999", nil, bearer, http.StatusBadRequest)
 	replacement := append([]byte(nil), content...)

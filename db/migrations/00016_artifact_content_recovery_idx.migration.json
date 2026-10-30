@@ -60,7 +60,7 @@
   "validation": {
     "minor": {
       "required_test_evidence": [
-        "Migration from 00015 creates the partial index without a transaction, repeated migration is idempotent, and a canceled or invalid attempt is recoverable.",
+        "Migration from 00015 creates the partial index without a transaction, repeated migration is idempotent, and a rolled-back and re-entered attempt is recoverable.",
         "The shared application pool retains its configured search_path after migration; migration-only session settings are not reused by application queries.",
         "The pg_indexes definition and EXPLAIN plan show the partial index matches the content and final-object recovery predicate and ordered limit.",
         "Recovery selection returns due content and final-object recheck rows in bounded order without changing row values or states."

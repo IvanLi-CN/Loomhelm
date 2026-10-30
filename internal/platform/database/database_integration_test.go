@@ -12,10 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/db/migrations"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database/generated"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 const testMigrationAdvisoryLockKey int64 = 0x4c6f6f6d68656c6d
@@ -114,6 +117,98 @@ func TestDatabaseMigrateDoesNotLeakSessionSearchPathToPool(t *testing.T) {
 	}
 	if !strings.Contains(searchPath, schema) || !strings.Contains(searchPath, "public") {
 		t.Fatalf("pooled search_path after migration = %q, want %q and public", searchPath, schema)
+	}
+
+	var indexDefinition string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT indexdef
+		FROM pg_indexes
+		WHERE schemaname = current_schema()
+		  AND indexname = 'conversation_artifacts_content_mismatch_idx'
+	`).Scan(&indexDefinition); err != nil {
+		t.Fatalf("read content recovery index definition: %v", err)
+	}
+	for _, fragment := range []string{
+		"staging_reclaim_after",
+		"created_at",
+		"id",
+		"state = 'unavailable'",
+		"content-mismatch",
+		"final-missing",
+		"final-mismatch",
+	} {
+		if !strings.Contains(indexDefinition, fragment) {
+			t.Fatalf("content recovery index definition = %q, missing %q", indexDefinition, fragment)
+		}
+	}
+
+	planTx, err := db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin content recovery explain transaction: %v", err)
+	}
+	defer planTx.Rollback(ctx)
+	if _, err := planTx.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
+		t.Fatalf("disable sequential scan for content recovery explain: %v", err)
+	}
+	planRows, err := planTx.Query(ctx, `
+		EXPLAIN (COSTS OFF)
+		SELECT id
+		FROM conversation_artifacts
+		WHERE state = 'unavailable'
+		  AND unavailable_reason IN ('content-mismatch', 'final-missing', 'final-mismatch')
+		  AND staging_reclaim_after <= NOW()
+		ORDER BY staging_reclaim_after, created_at, id
+		LIMIT 100
+	`)
+	if err != nil {
+		t.Fatalf("explain content recovery selection: %v", err)
+	}
+	var planLines []string
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			planRows.Close()
+			t.Fatalf("scan content recovery explain plan: %v", err)
+		}
+		planLines = append(planLines, line)
+	}
+	if err := planRows.Err(); err != nil {
+		planRows.Close()
+		t.Fatalf("read content recovery explain plan: %v", err)
+	}
+	planRows.Close()
+	if plan := strings.Join(planLines, "\n"); !strings.Contains(plan, "conversation_artifacts_content_mismatch_idx") {
+		t.Fatalf("content recovery explain plan = %q, want partial index", plan)
+	}
+	if err := planTx.Rollback(ctx); err != nil {
+		t.Fatalf("finish content recovery explain transaction: %v", err)
+	}
+
+	migrationConnConfig, err := pgx.ParseConfig(scopedConfig.URL)
+	if err != nil {
+		t.Fatalf("parse migration re-entry config: %v", err)
+	}
+	migrationSQLDB := stdlib.OpenDB(*migrationConnConfig)
+	migrationSQLDB.SetMaxOpenConns(1)
+	migrationSQLDB.SetMaxIdleConns(1)
+	t.Cleanup(func() { migrationSQLDB.Close() })
+	migrationProvider, err := goose.NewProvider(goose.DialectPostgres, migrationSQLDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("create migration re-entry provider: %v", err)
+	}
+	if _, err := migrationProvider.DownTo(ctx, 15); err != nil {
+		t.Fatalf("roll back migration 00016 for re-entry: %v", err)
+	}
+	if _, err := migrationProvider.UpTo(ctx, 16); err != nil {
+		t.Fatalf("re-apply migration 00016 after rollback: %v", err)
+	}
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT indexdef
+		FROM pg_indexes
+		WHERE schemaname = current_schema()
+		  AND indexname = 'conversation_artifacts_content_mismatch_idx'
+	`).Scan(&indexDefinition); err != nil {
+		t.Fatalf("read re-entered content recovery index definition: %v", err)
 	}
 }
 
