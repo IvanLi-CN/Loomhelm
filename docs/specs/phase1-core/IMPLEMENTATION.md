@@ -141,6 +141,14 @@ The owner-confirmed U02 recovery evidence is bound to source commit `0a5fc9092fa
 
 ![Project read recovery after explicit acknowledgement](assets/project-read-recovery-error.png)
 
+### U03 production conversation execution
+
+The U03 candidate uses the login-free, mock-only `ui_demo` route `/demo/production-session`; the owner-confirmed desktop `1440x1000` and narrow `393x852` captures were originally rendered from behavior-equivalent source and a current-candidate re-render found no meaningful UI change, so the canonical assets are reused. The page images show Session context, Host thread identity and the Run event stream; revisioned Approval behavior is covered by the production workspace Storybook states and typed adapters. The current production workspace additionally integrates authorized Session Run history and creator-private durable drafts, but those capabilities are not represented by these reused captures. Both viewports have no horizontal overflow. These images establish the U03 page evidence and do not by themselves establish authenticated backend behavior, persistence or production deployment.
+
+![U03 production conversation on the desktop viewport](assets/u03-production-session-page-desktop-1440x1000.png)
+
+![U03 production conversation on a 393x852 mobile viewport](assets/u03-production-session-page-mobile-393x852.png)
+
 ## Rollout and Compatibility
 
 The initial application schema retains platform short-job results; River retains queue state separately. There is no previously deployed application schema or production compatibility claim. Re-entering startup may apply pending migrations but must not reverse them, and a migration failure prevents readiness. Empty-database migration, startup re-entry and persistence after restart have VM observations; a backend image was built and identified by its local content hash. Immutable candidate publication/promotion and tar-based handoff are implemented; supported blue-green compatibility windows, traffic switching, cross-process Worker fencing and production deployment still require their deployment implementation and observations. The planned release channel is an isolated parent-branch preview; production configuration is not established here.
