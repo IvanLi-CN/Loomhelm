@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -254,6 +255,12 @@ with control.state_lock(state_dir):
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             state_dir = root / "state"
+            repo = root / "repo"
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "deploy" / "preview").mkdir(parents=True)
+            shutil.copy2(control.ROOT / "scripts" / "preview", repo / "scripts" / "preview")
+            shutil.copy2(control.ROOT / "deploy" / "preview" / "control.py", repo / "deploy" / "preview" / "control.py")
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True, capture_output=True, timeout=5)
             holder_ready = root / "holder.ready"
             holder_release = root / "holder.release"
             holder = self.start_lock_holder(state_dir, holder_ready, holder_release, workflow=True)
@@ -263,8 +270,8 @@ with control.state_lock(state_dir):
                 environment = os.environ.copy()
                 environment["LOOMHELM_PREVIEW_STATE_DIR"] = str(state_dir)
                 contender = subprocess.Popen(
-                    [str(control.ROOT / "scripts" / "preview"), "init"],
-                    cwd=control.ROOT,
+                    [str(repo / "scripts" / "preview"), "init"],
+                    cwd=repo,
                     env=environment,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
