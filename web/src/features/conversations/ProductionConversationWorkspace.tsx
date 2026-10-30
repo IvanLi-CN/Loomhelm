@@ -395,6 +395,10 @@ function sessionRunHistoryFailureMessage(reason: SessionRunHistoryReadReason | u
   return "读取 Session 的 Run 历史失败；执行控制已暂停，请刷新或人工对账。";
 }
 
+function sessionMessageHistoryFailureMessage(): string {
+  return "部分 Run 事件暂时无法核对；消息历史可能不完整。正在重试，不会自动发送或补发命令。";
+}
+
 function draftFailureMessage(reason: DraftReadReason | undefined): string {
   if (reason === "forbidden" || reason === "not_found") return "当前账户无法读取这份私有草稿；本地草稿已清除，不会向无权身份展示。";
   if (reason === "conflict") return "草稿同步顺序已变化；已保留当前服务事实，请继续编辑后再同步。";
@@ -646,6 +650,7 @@ export function ProductionConversationWorkspace({
   const [sessionFailure, setSessionFailure] = useState<string | null>(null);
   const [sessionRunHistoryLoading, setSessionRunHistoryLoading] = useState(Boolean(sessionId));
   const [sessionRunHistoryFailure, setSessionRunHistoryFailure] = useState<string | null>(null);
+  const [sessionMessageHistoryFailure, setSessionMessageHistoryFailure] = useState<string | null>(null);
   const [sessionRunHistory, setSessionRunHistory] = useState<readonly Run[]>([]);
   const [run, setRun] = useState<Run | undefined>();
   const [commandState, setCommandState] = useState<CommandState | undefined>();
@@ -782,6 +787,7 @@ export function ProductionConversationWorkspace({
     setSessionAccessFailure(null);
     setSessionRunHistoryLoading(Boolean(sessionId));
     setSessionRunHistoryFailure(null);
+    setSessionMessageHistoryFailure(null);
     setSessionRunHistory([]);
     setRunReadUncertain(false);
     setRunReadFailure(null);
@@ -828,6 +834,7 @@ export function ProductionConversationWorkspace({
     setSessionAccessFailure(null);
     setSessionRunHistoryLoading(Boolean(sessionId));
     setSessionRunHistoryFailure(null);
+    setSessionMessageHistoryFailure(null);
     setSessionRunHistory([]);
     setRunReadUncertain(false);
     setRunReadFailure(null);
@@ -865,6 +872,7 @@ export function ProductionConversationWorkspace({
     setSession(undefined);
     setSessionRunHistoryLoading(true);
     setSessionRunHistoryFailure(null);
+    setSessionMessageHistoryFailure(null);
     setSessionRunHistory([]);
     fenceRunTransition(undefined);
     setRun(undefined);
@@ -932,6 +940,8 @@ export function ProductionConversationWorkspace({
         if (!active || generation !== sessionMessageRestoreGeneration.current) return;
         const observedEvents: Event[] = [];
         const inaccessibleRunIds = new Set<string>();
+        const incompleteRunIds = new Set<string>();
+        let hasPendingOrStaleResult = false;
         results.forEach((result, index) => {
           const candidate = runs[index];
           if (!candidate) return;
@@ -939,9 +949,18 @@ export function ProductionConversationWorkspace({
             inaccessibleRunIds.add(candidate.id);
             return;
           }
-          if (result.state !== "received" || !result.page) return;
+          if (result.state === "pending" || result.reason === "stale_response" || result.reason === "stale_session") {
+            hasPendingOrStaleResult = true;
+            return;
+          }
+          if (result.state !== "received" || !result.page) {
+            incompleteRunIds.add(candidate.id);
+            return;
+          }
           observedEvents.push(...(result.stream?.events.length ? result.stream.events : result.page.events));
         });
+        if (inaccessibleRunIds.size > 0 || incompleteRunIds.size > 0) setSessionMessageHistoryFailure(sessionMessageHistoryFailureMessage());
+        else if (!hasPendingOrStaleResult) setSessionMessageHistoryFailure(null);
         for (const runId of inaccessibleRunIds) {
           for (const key of sessionMessageEventKeys.current) {
             if (key.startsWith(`${runId}:`)) sessionMessageEventKeys.current.delete(key);
@@ -1003,6 +1022,7 @@ export function ProductionConversationWorkspace({
           setRun(undefined);
           sessionMessageRestoreGeneration.current += 1;
           sessionMessageEventKeys.current.clear();
+          setSessionMessageHistoryFailure(null);
           setMessages([]);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
@@ -1021,6 +1041,7 @@ export function ProductionConversationWorkspace({
       if (isSessionAccessFailure(result.reason)) {
         sessionMessageRestoreGeneration.current += 1;
         sessionMessageEventKeys.current.clear();
+        setSessionMessageHistoryFailure(null);
         setMessages([]);
       }
       setApprovals([]);
@@ -1249,6 +1270,7 @@ export function ProductionConversationWorkspace({
         setSession(undefined);
         sessionMessageRestoreGeneration.current += 1;
         sessionMessageEventKeys.current.clear();
+        setSessionMessageHistoryFailure(null);
         setMessages([]);
         setApprovals([]);
         setApprovalHistoryAvailable(false);
@@ -1465,6 +1487,7 @@ export function ProductionConversationWorkspace({
     setSessionFailure(null);
     setSessionRunHistoryLoading(true);
     setSessionRunHistoryFailure(null);
+    setSessionMessageHistoryFailure(null);
     setSessionRunHistory([]);
     setSessionAccessBlocked(false);
     setSessionAccessFailure(null);
@@ -1815,6 +1838,7 @@ export function ProductionConversationWorkspace({
       {activityNotice ? <div className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{activityNotice}</span>{uncertainRunCommandId ? <Button type="button" variant="secondary" onClick={reconcileRunSubmission}>我已对账，复用命令重试</Button> : null}</div> : null}
       {readFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--danger)]/30 bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert" aria-live="assertive"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{readFailure}</span></div> : null}
       {sessionRunHistoryLoading ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status" aria-live="polite" aria-busy="true"><LoaderCircle className="mt-0.5 size-4 shrink-0 animate-spin" aria-hidden="true" /><span>正在核对 Run 历史；核对完成前不会发送命令。</span></div> : null}
+      {sessionMessageHistoryFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{sessionMessageHistoryFailure}</span></div> : null}
       {sessionRunHistory.length > 1 ? <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface)] p-3" aria-label="Run 历史选择"><label className="text-xs font-medium text-[var(--ink)]" htmlFor="production-run-history">Run 历史</label><Select value={selectedHistoryRunId} onValueChange={selectHistoricalRun}><SelectTrigger className="min-w-0 max-w-full" id="production-run-history" size="sm"><SelectValue placeholder="选择已授权 Run" /></SelectTrigger><SelectContent>{sessionRunHistory.map((historyRun) => <SelectItem key={historyRun.id} value={historyRun.id}><span className="font-mono text-xs">{historyRun.id}</span><span className="text-xs text-[var(--muted)]">· {historyRun.created_at}</span></SelectItem>)}</SelectContent></Select><span className="text-[11px] leading-5 text-[var(--muted)]">每台设备独立选择；切换后会重新核对事件和审批。</span></div> : null}
       <ConversationMessageStream connection={connection} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" messages={messages} />
       {activeRun ? <RunStatusCard key={activeRun.id} canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !approvalHistoryBlocked && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}

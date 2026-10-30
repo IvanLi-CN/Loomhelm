@@ -342,6 +342,23 @@ describe("production session model", () => {
     expect(context.rawContext).toContain('"write": true');
   });
 
+  test("keeps approval non-operable when complete known context contains unknown fields", () => {
+    const context = approvalContextFromApproval({
+      context: { command: "codex inspect", cwd: "/workspace/loomhelm", risk_details: { writes: true } },
+      id: "approval-complete-known-unknown-context",
+      kind: "shell",
+      requested_at: "2026-10-27T00:00:00Z",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Inspect the requested workspace"
+    });
+    expect(context.complete).toBe(false);
+    expect(context.command).toBe("codex inspect");
+    expect(context.directory).toBe("/workspace/loomhelm");
+    expect(context.rawContext).toContain('"writes": true');
+  });
+
   test("preserves non-object approval context as inspectable raw JSON", () => {
     const context = approvalContextFromApproval({
       context: [{ type: "text", text: "opaque request" }],

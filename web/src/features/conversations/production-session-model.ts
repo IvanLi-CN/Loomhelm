@@ -374,7 +374,7 @@ export function approvalContextFromApproval(approval: Approval): ApprovalContext
   const commandContextComplete = !isFileChange && Boolean(command && directory);
   const fileChangeContextComplete = isFileChange && Boolean(fileChangeScope && impact);
   return {
-    complete: Boolean(context && !hasOpaqueKnownValues && (commandContextComplete || fileChangeContextComplete)),
+    complete: Boolean(context && !hasUnknownFields && !hasOpaqueKnownValues && (commandContextComplete || fileChangeContextComplete)),
     command: command ?? approval.summary,
     directory,
     impact,
