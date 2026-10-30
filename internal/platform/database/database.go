@@ -158,17 +158,33 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 		}
 		return errors.New("open database migration lock connection")
 	}
+	lockQuery := "SELECT pg_advisory_lock($1)"
+	unlockQuery := "SELECT pg_advisory_unlock($1)"
+	var schema string
+	if err := lockConn.QueryRow(ctx, "SELECT current_schema()").Scan(&schema); err != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = lockConn.Close(closeCtx)
+		return errors.New("inspect database migration lock schema")
+	}
+	// Keep the historical public-schema key so external migration coordination
+	// remains compatible. Isolated schemas are independent migration domains and
+	// derive a separate key instead of serializing unrelated test or tenant work.
+	if strings.TrimSpace(schema) != "public" {
+		lockQuery = "SELECT pg_advisory_lock(hashtextextended(current_schema(), $1))"
+		unlockQuery = "SELECT pg_advisory_unlock(hashtextextended(current_schema(), $1))"
+	}
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, unlockErr := lockConn.Exec(closeCtx, "SELECT pg_advisory_unlock($1)", migrationAdvisoryLockKey); unlockErr != nil {
+		if _, unlockErr := lockConn.Exec(closeCtx, unlockQuery, migrationAdvisoryLockKey); unlockErr != nil {
 			_ = lockConn.Close(closeCtx)
 			return
 		}
 		_ = lockConn.Close(closeCtx)
 	}()
 
-	if _, err := lockConn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationAdvisoryLockKey); err != nil {
+	if _, err := lockConn.Exec(ctx, lockQuery, migrationAdvisoryLockKey); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("acquire database migration lock: %w", err)
 		}
