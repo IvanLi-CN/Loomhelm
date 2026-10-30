@@ -120,6 +120,13 @@ type Store struct {
 	faults     *faultHooks
 }
 
+func (s *Store) maxArtifactBytes() int64 {
+	if s == nil || s.maxBytes <= 0 {
+		return DefaultMaxBytes
+	}
+	return s.maxBytes
+}
+
 type contentReader struct {
 	*os.File
 	store   *Store

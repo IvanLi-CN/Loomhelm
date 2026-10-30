@@ -17,6 +17,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/semaphore"
 )
 
 func TestDownloadHTTPHandlerStreamsVerifiedBytesWithSafeHeaders(t *testing.T) {
@@ -321,6 +322,109 @@ func TestDownloadHTTPHandlerBoundsConcurrentFullDownloadStaging(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerStagesWithinAggregateBudget(t *testing.T) {
+	content := []byte("staged bytes")
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.stagingBudget = semaphore.NewWeighted(int64(len(content)))
+
+	staged, release, err := handler.stageDownload(context.Background(), bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedPath := staged.Name()
+	info, err := staged.Stat()
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		release()
+		t.Fatalf("staging file mode = %o, want 600", info.Mode().Perm())
+	}
+	if handler.stagingBudget.TryAcquire(1) {
+		handler.stagingBudget.Release(1)
+		release()
+		t.Fatal("staging budget admitted bytes beyond its aggregate limit")
+	}
+	got, err := io.ReadAll(staged)
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		release()
+		t.Fatalf("staged content = %q, want %q", got, content)
+	}
+	release()
+	if _, err := os.Stat(stagedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging file remains after release: stat error = %v", err)
+	}
+	if !handler.stagingBudget.TryAcquire(int64(len(content))) {
+		t.Fatal("staging budget was not released")
+	}
+	handler.stagingBudget.Release(int64(len(content)))
+}
+
+func TestDownloadHTTPHandlerUsesStoreArtifactSizeLimit(t *testing.T) {
+	handler, err := NewDownloadHTTPHandler(&Store{maxBytes: 8}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.maxStagingBytes != 8 {
+		t.Fatalf("staging limit = %d, want configured store limit 8", handler.maxStagingBytes)
+	}
+	if !handler.stagingBudget.TryAcquire(8) {
+		t.Fatal("staging budget does not admit the configured store limit")
+	}
+	if handler.stagingBudget.TryAcquire(1) {
+		handler.stagingBudget.Release(1)
+		handler.stagingBudget.Release(8)
+		t.Fatal("staging budget exceeded the configured store limit")
+	}
+	handler.stagingBudget.Release(8)
+}
+
+func TestDownloadHTTPHandlerStopsStagingWhenRequestIsCanceled(t *testing.T) {
+	content := []byte("12345678")
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.stagingBudget = semaphore.NewWeighted(int64(len(content)))
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := &cancelAfterReadSeeker{Reader: bytes.NewReader(content), cancel: cancel}
+	_, _, err = handler.stageDownload(ctx, reader, int64(len(content)))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("stageDownload error = %v, want context.Canceled", err)
+	}
+	if !handler.stagingBudget.TryAcquire(int64(len(content))) {
+		t.Fatal("canceled staging did not release its aggregate budget")
+	}
+	handler.stagingBudget.Release(int64(len(content)))
+}
+
+func TestDownloadHTTPHandlerRejectsContentAboveStagingLimit(t *testing.T) {
+	content := []byte("do not return")
+	artifact := protocol.Artifact{ID: "artifact-over-staging-limit", Name: "content.bin", Size: maxStagedDownloadBytes + 1}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-over-staging-limit", nil))
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusRequestEntityTooLarge, response.Body.String())
+	}
+	if response.Body.String() == string(content) {
+		t.Fatal("download returned content above the staging limit")
+	}
+}
+
 func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "artifact")
 	original := []byte("original content")
@@ -449,6 +553,17 @@ type fullDownloadErrorReader struct {
 	*bytes.Reader
 	Err    error
 	failed bool
+}
+
+type cancelAfterReadSeeker struct {
+	*bytes.Reader
+	cancel context.CancelFunc
+}
+
+func (r *cancelAfterReadSeeker) Read(buffer []byte) (int, error) {
+	n, err := r.Reader.Read(buffer)
+	r.cancel()
+	return n, err
 }
 
 func (r *fullDownloadErrorReader) Read(buffer []byte) (int, error) {

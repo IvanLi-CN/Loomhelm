@@ -27,13 +27,14 @@ const (
 	defaultDownloadContentType = "application/octet-stream"
 	// Full downloads are staged before response headers are sent so a source
 	// identity change can still return a conflict. Bound aggregate staging to
-	// the default artifact maximum and limit readers opened concurrently.
+	// the store's configured artifact maximum (64 MiB by default) and limit
+	// readers opened concurrently.
 	maxStagedDownloadBytes      = int64(DefaultMaxBytes)
 	maxConcurrentStagedDownload = 2
 	// The application Server keeps a 60-second default response deadline for
-	// ordinary APIs. Full artifact downloads are bounded to 64 MiB and may be
-	// deliberately slow, so extend only this route's write deadline without
-	// weakening the timeout for the rest of the Server.
+	// ordinary APIs. Full artifact downloads may be deliberately slow, so extend
+	// only this route's write deadline without weakening the timeout for the
+	// rest of the Server.
 	downloadWriteTimeout = 10 * time.Minute
 )
 
@@ -53,7 +54,12 @@ type DownloadHTTPHandler struct {
 	store                protocol.ArtifactStore
 	writeError           DownloadErrorWriter
 	downloadStagingSlots chan struct{}
+	maxStagingBytes      int64
 	stagingBudget        *semaphore.Weighted
+}
+
+type artifactSizeLimit interface {
+	maxArtifactBytes() int64
 }
 
 type contentSnapshotStore interface {
@@ -152,11 +158,18 @@ func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErr
 	if writeError == nil {
 		writeError = writeDownloadError
 	}
+	maxStagingBytes := maxStagedDownloadBytes
+	if boundedStore, ok := store.(artifactSizeLimit); ok {
+		if configuredLimit := boundedStore.maxArtifactBytes(); configuredLimit > 0 {
+			maxStagingBytes = configuredLimit
+		}
+	}
 	return &DownloadHTTPHandler{
 		store:                store,
 		writeError:           writeError,
 		downloadStagingSlots: make(chan struct{}, maxConcurrentStagedDownload),
-		stagingBudget:        semaphore.NewWeighted(maxStagedDownloadBytes),
+		maxStagingBytes:      maxStagingBytes,
+		stagingBudget:        semaphore.NewWeighted(maxStagingBytes),
 	}, nil
 }
 
@@ -260,7 +273,7 @@ func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadS
 	if size < 0 {
 		return nil, nil, ErrSizeMismatch
 	}
-	if size > maxStagedDownloadBytes {
+	if size > h.maxStagingBytes {
 		return nil, nil, ErrTooLarge
 	}
 	weight := size
