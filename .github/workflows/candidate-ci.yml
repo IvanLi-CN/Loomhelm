@@ -54,7 +54,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
       - name: Install verified sqlc
         run: |
           scripts/install-sqlc "$RUNNER_TEMP/loomhelm-bin"
@@ -76,7 +76,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
       - name: Install Web tooling
         run: bun install --frozen-lockfile
       - name: Check changed React files
@@ -121,7 +121,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
       - name: Install verified sqlc
         run: |
           scripts/install-sqlc "$RUNNER_TEMP/loomhelm-bin"
@@ -154,7 +154,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
       - name: Build immutable candidate
         run: scripts/build-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate"
       - name: Validate and expose candidate identity
@@ -194,6 +194,6 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
       - name: Rebuild and compare candidate identity
         run: scripts/reproduce-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate-repro"
