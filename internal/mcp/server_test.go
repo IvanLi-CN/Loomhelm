@@ -3,6 +3,9 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +21,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/go-chi/chi/v5"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
@@ -363,6 +367,41 @@ func TestServerToolCallPreservesRESTErrorAsToolError(t *testing.T) {
 	}
 }
 
+func TestServerToolCallPreservesRESTConflictAndRetryAfter(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Retry-After", "60")
+		writer.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(writer).Encode(protocol.ApiError{
+			Code:    protocol.ErrorCodeConflict,
+			Message: "artifact content changed",
+		})
+	})
+
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      9,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "loomhelm.list_projects",
+			"arguments": map[string]any{},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int    `json:"http_status"`
+			RetryAfter string `json:"retry_after"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeConflict || result.StructuredContent.RetryAfter != "60" {
+		t.Fatalf("conflict/retry-after tool error = %#v", result)
+	}
+}
+
 func TestServerPreservesRESTQueryValidation(t *testing.T) {
 	var seenPath string
 	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
@@ -431,6 +470,305 @@ func TestServerPreservesEmptyOptionalQueryValue(t *testing.T) {
 	}
 }
 
+func TestServerDelegatesArtifactContentChunksAsStructuredOriginalBytes(t *testing.T) {
+	var seenPath string
+	var seenAccept string
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		seenPath = request.URL.RequestURI()
+		seenAccept = request.Header.Get("Accept")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"artifact":{"id":"artifact-1","session_id":"session-1","name":"original.bin","kind":"file","size":4,"content_type":"application/octet-stream","sha256":"","created_at":"2026-10-30T00:00:00Z"},"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+	})
+
+	response := callMCPWithHeaders(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      13,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+				"offset":      0,
+				"limit":       4,
+			},
+		},
+	}, map[string]string{"Mcp-Protocol-Version": ProtocolVersion})
+	var result struct {
+		IsError           bool `json:"isError"`
+		StructuredContent struct {
+			ContentBase64 string `json:"content_base64"`
+			Complete      bool   `json:"complete"`
+		} `json:"structuredContent"`
+	}
+	decodeResult(t, response, &result)
+	if result.IsError || result.StructuredContent.ContentBase64 != "AAEC/w==" || !result.StructuredContent.Complete {
+		t.Fatalf("artifact content tool result = %#v, want original chunk", result)
+	}
+	if seenPath != "/artifacts/artifact-1/content?limit=4&offset=0" || seenAccept != "application/json" {
+		t.Fatalf("artifact content delegation path=%q accept=%q", seenPath, seenAccept)
+	}
+}
+
+func TestServerBoundsDefaultArtifactContentChunkToResponseBudget(t *testing.T) {
+	var seenLimit int64
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			parsedLimit, parseErr := strconv.ParseInt(request.URL.Query().Get("limit"), 10, 64)
+			if parseErr != nil {
+				t.Fatalf("parse delegated artifact content limit: %v", parseErr)
+			}
+			seenLimit = parsedLimit
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"content_base64":"AA==","content_version":"v1-test","offset":0,"next_offset":1,"total_size":1,"complete":true}`)
+		}),
+		MaxResponseBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	response := callMCPWithHeaders(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      19,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+			},
+		},
+	}, map[string]string{"Mcp-Protocol-Version": ProtocolVersion})
+	var result struct {
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if result.IsError {
+		t.Fatal("default artifact content chunk exceeded the MCP response budget")
+	}
+	if got, want := seenLimit, defaultArtifactContentLimit(1<<20); got != want {
+		t.Fatalf("default artifact content limit = %d, want %d", got, want)
+	}
+}
+
+func TestServerDelegatesArtifactContentChunksForOlderProtocolAsText(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+	})
+	response := callMCPWithHeaders(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      17,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+				"offset":      0,
+				"limit":       4,
+			},
+		},
+	}, map[string]string{"Mcp-Protocol-Version": OlderProtocolVersion})
+	var result struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	decodeResult(t, response, &result)
+	want := `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`
+	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != want || len(result.StructuredContent) != 0 {
+		t.Fatalf("legacy artifact content tool result = %#v, want complete JSON text without structuredContent", result)
+	}
+}
+
+func TestServerDelegatesArtifactContentChunksWithoutProtocolHeaderAsText(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+	})
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      18,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+				"offset":      0,
+				"limit":       4,
+			},
+		},
+	})
+	var result struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	decodeResult(t, response, &result)
+	want := `{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`
+	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != want || len(result.StructuredContent) != 0 {
+		t.Fatalf("headerless artifact content tool result = %#v, want complete JSON text without structuredContent", result)
+	}
+}
+
+func TestArtifactContentToolSuccessPreservesLegacyTextContent(t *testing.T) {
+	body := []byte(`{"content_base64":"AAEC/w==","content_version":"v1-test","offset":0,"next_offset":4,"total_size":4,"complete":true}`)
+	legacy, err := artifactContentToolSuccess(body, OlderProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyWire, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyResult struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(legacyWire, &legacyResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(legacyResult.Content) != 1 || legacyResult.Content[0].Text != string(body) || len(legacyResult.StructuredContent) != 0 {
+		t.Fatalf("legacy artifact content result = %s, want JSON text without structuredContent", legacyWire)
+	}
+	modern, err := artifactContentToolSuccess(body, ProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modern.StructuredContent == nil {
+		t.Fatal("modern artifact content result omitted structuredContent")
+	}
+}
+
+func TestServerDelegatesMultipleArtifactContentChunksForCanonicalReassembly(t *testing.T) {
+	content := []byte{0, 1, 2, 255}
+	digest := sha256.Sum256(content)
+	var seenPaths []string
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		seenPaths = append(seenPaths, request.URL.RequestURI())
+		offset, err := strconv.ParseInt(request.URL.Query().Get("offset"), 10, 64)
+		if err != nil {
+			t.Fatalf("decode artifact content offset: %v", err)
+		}
+		if offset != 0 && offset != 2 {
+			t.Fatalf("artifact content offset = %d, want 0 or 2", offset)
+		}
+		if got := request.URL.Query().Get("content_version"); offset == 0 && got != "" || offset == 2 && got != "v1-test" {
+			t.Fatalf("artifact content version at offset %d = %q", offset, got)
+		}
+		chunk := content[int(offset) : int(offset)+2]
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(protocol.ArtifactContentResponse{
+			Artifact: protocol.Artifact{
+				ID: "artifact-1", SessionID: "session-1", Name: "original.bin", Kind: protocol.ArtifactKindFile,
+				Size: int64(len(content)), ContentType: "application/octet-stream", Sha256: hex.EncodeToString(digest[:]), CreatedAt: "2026-10-30T00:00:00Z",
+			},
+			ContentBase64:  base64.StdEncoding.EncodeToString(chunk),
+			ContentVersion: "v1-test",
+			Offset:         offset, NextOffset: offset + int64(len(chunk)), TotalSize: int64(len(content)), Complete: offset+int64(len(chunk)) == int64(len(content)),
+		})
+	})
+
+	callChunk := func(id int, offset int64, contentVersion string) protocol.ArtifactContentResponse {
+		arguments := map[string]any{
+			"artifact_id": "artifact-1",
+			"offset":      offset,
+			"limit":       2,
+		}
+		if contentVersion != "" {
+			arguments["content_version"] = contentVersion
+		}
+		response := callMCPWithHeaders(t, server, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      id,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "loomhelm.download_artifact",
+				"arguments": arguments,
+			},
+		}, map[string]string{"Mcp-Protocol-Version": ProtocolVersion})
+		var result struct {
+			IsError           bool                             `json:"isError"`
+			StructuredContent protocol.ArtifactContentResponse `json:"structuredContent"`
+		}
+		decodeResult(t, response, &result)
+		if result.IsError {
+			t.Fatalf("artifact content chunk %d returned MCP error", offset)
+		}
+		return result.StructuredContent
+	}
+
+	first := callChunk(14, 0, "")
+	second := callChunk(15, first.NextOffset, first.ContentVersion)
+	firstBytes, err := base64.StdEncoding.DecodeString(first.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBytes, err := base64.StdEncoding.DecodeString(second.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reassembled := append(firstBytes, secondBytes...)
+	reassembledDigest := sha256.Sum256(reassembled)
+	if !second.Complete || string(reassembled) != string(content) || hex.EncodeToString(reassembledDigest[:]) != first.Artifact.Sha256 {
+		t.Fatalf("MCP reassembled content=%v complete=%v hash=%q, want %v/true/%q", reassembled, second.Complete, hex.EncodeToString(reassembledDigest[:]), content, first.Artifact.Sha256)
+	}
+	if got, want := strings.Join(seenPaths, ","), "/artifacts/artifact-1/content?limit=2&offset=0,/artifacts/artifact-1/content?content_version=v1-test&limit=2&offset=2"; got != want {
+		t.Fatalf("MCP artifact content paths = %q, want %q", got, want)
+	}
+}
+
+func TestServerDelegationResetsParentChiRouteContext(t *testing.T) {
+	var reached bool
+	restRouter := chi.NewRouter()
+	restRouter.Get("/artifacts/{artifact_id}/content", func(writer http.ResponseWriter, request *http.Request) {
+		reached = true
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"reached":true}`)
+	})
+	server := newTestServer(t, restRouter.ServeHTTP)
+	outerRouter := chi.NewRouter()
+	outerRouter.Handle("/mcp", server)
+
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      16,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+				"limit":       4,
+			},
+		},
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Protocol-Version", ProtocolVersion)
+	recorder := httptest.NewRecorder()
+	outerRouter.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("MCP response status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Result struct {
+			IsError           bool           `json:"isError"`
+			StructuredContent map[string]any `json:"structuredContent"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode MCP response: %v; body = %s", err, recorder.Body.String())
+	}
+	if response.Result.IsError || !reached || response.Result.StructuredContent["reached"] != true {
+		t.Fatalf("delegated result = %#v, reached=%v; want successful nested chi route", response.Result, reached)
+	}
+}
+
 func TestServerBoundsRESTDispatchLifetime(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -468,6 +806,94 @@ func TestServerBoundsRESTDispatchLifetime(t *testing.T) {
 	decodeResult(t, response, &result)
 	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusConflict || result.StructuredContent.Error.Code != protocol.ErrorCodeUnknownResult {
 		t.Fatalf("timed-out mutation result = %#v, want unknown outcome", result)
+	}
+}
+
+func TestServerDoesNotReportTimedOutGETAsSuccess(t *testing.T) {
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			<-request.Context().Done()
+		}),
+		OperationTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	response := callMCP(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      17,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "loomhelm.download_artifact",
+			"arguments": map[string]any{
+				"artifact_id": "artifact-1",
+			},
+		},
+	})
+	var result struct {
+		StructuredContent struct {
+			HTTPStatus int `json:"http_status"`
+			Error      struct {
+				Code protocol.ErrorCode `json:"code"`
+			} `json:"error"`
+		} `json:"structuredContent"`
+		IsError bool `json:"isError"`
+	}
+	decodeResult(t, response, &result)
+	if !result.IsError || result.StructuredContent.HTTPStatus != http.StatusServiceUnavailable || result.StructuredContent.Error.Code != protocol.ErrorCodeServiceUnavailable {
+		t.Fatalf("timed-out download result = %#v, want service-unavailable error", result)
+	}
+}
+
+func TestServerResourceReadReportsTimeoutAsServiceUnavailable(t *testing.T) {
+	server, err := NewServer(Config{
+		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			<-request.Context().Done()
+		}),
+		OperationTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      18,
+		"method":  "resources/read",
+		"params": map[string]any{
+			"uri": "loomhelm://artifacts/artifact-1",
+		},
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("MCP response status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Error *struct {
+			Code    int64           `json:"code"`
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode MCP response: %v; body = %s", err, recorder.Body.String())
+	}
+	if response.Error == nil {
+		t.Fatalf("timed-out resource response = %s, want JSON-RPC error", recorder.Body.String())
+	}
+	var data struct {
+		HTTPStatus int `json:"http_status"`
+		Error      struct {
+			Code protocol.ErrorCode `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Error.Data, &data); err != nil {
+		t.Fatalf("decode timed-out resource error data: %v", err)
+	}
+	if data.HTTPStatus != http.StatusServiceUnavailable || data.Error.Code != protocol.ErrorCodeServiceUnavailable {
+		t.Fatalf("timed-out resource error data = %#v, want HTTP 503/service_unavailable", data)
 	}
 }
 
@@ -1426,6 +1852,32 @@ func TestServerResourceReadDelegatesParameterizedURI(t *testing.T) {
 	}
 	if len(result.Contents) != 1 || result.Contents[0].URI != "loomhelm://sessions/session-1" || result.Contents[0].MIMEType != "application/json" || result.Contents[0].Text == "" {
 		t.Fatalf("resource result = %#v", result.Contents)
+	}
+}
+
+func TestServerResourceReadPreservesRetryAfter(t *testing.T) {
+	server := newTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Retry-After", "60")
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(writer).Encode(protocol.ApiError{
+			Code:    protocol.ErrorCodeServiceUnavailable,
+			Message: "artifact recovery is pending",
+		})
+	})
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      10,
+		"method":  "resources/read",
+		"params": map[string]any{
+			"uri": "loomhelm://artifacts/artifact-1",
+		},
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"retry_after":"60"`) {
+		t.Fatalf("resource retry-after response status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

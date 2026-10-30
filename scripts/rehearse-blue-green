@@ -11,8 +11,8 @@ usage: scripts/rehearse-blue-green [options]
 
 Run the repeatable G0 branch-preview rehearsal. Runtime mode requires the
 session-owned Agent VM and the four registered preview ports consumed by
-scripts/preview. Control-only mode validates the deterministic state machine
-without Docker and is suitable for local or CI checks.
+scripts/preview. Control-only mode skips Docker/Compose promotion; the opt-in
+Compose contract suite may still use Docker.
 
 options:
   --control-only             Skip Docker/Compose promotion and run contract checks.

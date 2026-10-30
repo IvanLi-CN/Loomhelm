@@ -15,6 +15,7 @@ To enable browser login, export `LOOMHELM_OIDC_ISSUER_URL`, `LOOMHELM_OIDC_CLIEN
 ```sh
 # Use a unique project name and four ports allocated for this worktree.
 export LOOMHELM_PREVIEW_PROJECT_NAME=loomhelm-preview-<worktree-scope>
+export LOOMHELM_ARTIFACT_VOLUME_NAME=loomhelm-preview-<deployment-scope>-artifacts
 export LOOMHELM_PREVIEW_HTTP_PORT=<registered-port>
 export LOOMHELM_PREVIEW_ADMIN_PORT=<registered-port>
 export LOOMHELM_BLUE_SERVER_PORT=<registered-port>
@@ -26,6 +27,10 @@ scripts/preview check
 scripts/preview promote
 scripts/preview status
 ```
+
+The artifact volume name is persisted in preview state and is explicit in Compose so changing the Compose project name does not silently attach a new empty volume. Keep it unique to the deployment/database; when adopting an existing preview, set it to the current Docker volume name before the first `scripts/preview compose-config` or `stage` invocation.
+
+The Compose project name is recorded with the preview state; it may change before activation, but `scripts/preview` rejects a project-name change once a candidate is active or pending so status, ports, Caddy and artifact storage cannot split across two Compose projects.
 
 `stage` selects the inactive slot, checks the candidate against the active state's read range and Web tree digest, copies the Web assets into that slot, validates the Server image and `/version` identity, then starts the Worker only after the Server is ready. A failed candidate is stopped, removed from pending state and followed by an active Worker restart so the old generation remains admitted.
 

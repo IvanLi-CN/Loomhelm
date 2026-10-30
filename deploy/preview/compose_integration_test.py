@@ -34,7 +34,8 @@ class ComposeAuthenticationTest(unittest.TestCase):
     def compose_model(self, directory: Path, settings: dict[str, str]) -> dict:
         state = directory / "state"
         output = directory / "compose.env"
-        with patch.dict(os.environ, {**self.environment(), **settings}, clear=True), contextlib.redirect_stdout(io.StringIO()):
+        volume_name = "loomhelm-test-artifacts-" + directory.name.lower().replace("_", "-")
+        with patch.dict(os.environ, {**self.environment(), **settings, "LOOMHELM_ARTIFACT_VOLUME_NAME": volume_name}, clear=True), contextlib.redirect_stdout(io.StringIO()):
             control.command_init(Namespace(state_dir=state))
             control.command_compose_env(Namespace(state_dir=state, output=output))
         environment = {key: value for key, value in os.environ.items() if not key.startswith("LOOMHELM_")}
@@ -59,7 +60,7 @@ class ComposeAuthenticationTest(unittest.TestCase):
                 )
                 self.assertEqual(delivered.returncode, 0, "Compose did not deliver the literal synthetic credential")
             finally:
-                cleanup = subprocess.run([*compose, "down", "--remove-orphans"], env=environment, capture_output=True, text=True, timeout=30)
+                cleanup = subprocess.run([*compose, "down", "--remove-orphans", "--volumes"], env=environment, capture_output=True, text=True, timeout=30)
                 self.assertEqual(cleanup.returncode, 0, "Could not clean up this fixture's Compose resources")
         return json.loads(result.stdout)
 
@@ -105,12 +106,30 @@ class ComposeAuthenticationTest(unittest.TestCase):
             subprocess.run(["git", "init", "--quiet", str(repo)], check=True, capture_output=True, timeout=10)
             environment = {key: value for key, value in os.environ.items() if not key.startswith("LOOMHELM_")}
             environment.update(self.environment())
-            environment.update({"LOOMHELM_PREVIEW_STATE_DIR": str(directory / "state"), "LOOMHELM_OIDC_CLIENT_SECRET": "fixture-private-client-secret"})
-            for command in ("init", "compose-config"):
-                result = subprocess.run([str(repo / "scripts/preview"), command], cwd=repo, env=environment, capture_output=True, text=True, timeout=30)
-                self.assertEqual(result.returncode, 0, f"preview {command} failed for synthetic configuration")
-                for secret in (environment["LOOMHELM_OIDC_CLIENT_SECRET"], environment["LOOMHELM_DRAIN_TOKEN"], environment["LOOMHELM_DATABASE_URL"]):
-                    self.assertNotIn(secret, result.stdout + result.stderr)
+            environment.update({
+                "LOOMHELM_PREVIEW_STATE_DIR": str(directory / "state"),
+                "LOOMHELM_ARTIFACT_VOLUME_NAME": "loomhelm-test-artifacts-" + directory.name.lower().replace("_", "-"),
+                "LOOMHELM_OIDC_CLIENT_SECRET": "fixture-private-client-secret",
+                "LOOMHELM_SHUTDOWN_TIMEOUT": "120s",
+                # This intentionally conflicts with the generated lower bound
+                # so the wrapper must prove that compose.env wins.
+                "LOOMHELM_STOP_GRACE_PERIOD": "5s",
+            })
+            init = subprocess.run([str(repo / "scripts/preview"), "init"], cwd=repo, env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(init.returncode, 0, "preview init failed for synthetic configuration")
+            for secret in (environment["LOOMHELM_OIDC_CLIENT_SECRET"], environment["LOOMHELM_DRAIN_TOKEN"], environment["LOOMHELM_DATABASE_URL"]):
+                self.assertNotIn(secret, init.stdout + init.stderr)
+
+            wrapper_config = directory / "wrapper-compose.json"
+            compose_env = {**environment, "LOOMHELM_PREVIEW_TEST_COMPOSE_CONFIG_OUTPUT": str(wrapper_config)}
+            result = subprocess.run([str(repo / "scripts/preview"), "compose-config"], cwd=repo, env=compose_env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, "preview compose-config failed for synthetic configuration")
+            for secret in (environment["LOOMHELM_OIDC_CLIENT_SECRET"], environment["LOOMHELM_DRAIN_TOKEN"], environment["LOOMHELM_DATABASE_URL"]):
+                self.assertNotIn(secret, result.stdout + result.stderr)
+            self.assertTrue(wrapper_config.is_file(), "preview wrapper did not write its test config output")
+            services = json.loads(wrapper_config.read_text(encoding="utf-8"))["services"]
+            for service in ("server-blue", "server-green", "worker-blue", "worker-green"):
+                self.assertEqual(services[service]["stop_grace_period"], "6m30s", service)
 
 
 if __name__ == "__main__":

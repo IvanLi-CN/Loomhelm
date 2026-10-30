@@ -19,14 +19,17 @@ import (
 )
 
 const (
-	DefaultRecoveryLimit = 64
-	MaxRecoveryLimit     = 1024
-	cleanupTimeout       = 5 * time.Second
+	DefaultRecoveryLimit  = 64
+	MaxRecoveryLimit      = 1024
+	cleanupTimeout        = 5 * time.Second
+	contentMismatchReason = "content-mismatch"
 )
 
 var (
 	ErrUnavailable        = errors.New("artifact is unavailable")
+	ErrRecoveryPending    = errors.New("artifact recovery is pending")
 	ErrRecoveryIncomplete = errors.New("artifact recovery incomplete")
+	ErrRecoveryDeferred   = errors.New("artifact recovery deferred")
 )
 
 func databaseWriteError(message string, err error) error {
@@ -57,12 +60,13 @@ const (
 )
 
 type artifactRecord struct {
-	Artifact          protocol.Artifact
-	State             publicationState
-	StagingName       string
-	StagingIdentity   *string
-	StagingReclaimed  bool
-	UnavailableReason string
+	Artifact            protocol.Artifact
+	State               publicationState
+	StagingName         string
+	StagingIdentity     *string
+	StagingReclaimed    bool
+	StagingReclaimAfter time.Time
+	UnavailableReason   string
 }
 
 type rowQuerier interface {
@@ -85,37 +89,47 @@ type RecoveryReport struct {
 	Pending     int
 	Cleaned     int
 	Failed      int
+	Deferred    int
 }
 
 type faultPoint string
 
 const (
-	faultAfterStage              faultPoint = "after-stage"
-	faultAfterIntentCommit       faultPoint = "after-intent-commit"
-	faultAfterRepairIntentCommit faultPoint = "after-repair-intent-commit"
-	faultAfterFinalLink          faultPoint = "after-final-link"
-	faultAfterFinalPublication   faultPoint = "after-final-publication"
-	faultAfterReadyCommit        faultPoint = "after-ready-commit"
+	faultAfterStage                  faultPoint = "after-stage"
+	faultAfterIntentCommit           faultPoint = "after-intent-commit"
+	faultAfterRepairIntentCommit     faultPoint = "after-repair-intent-commit"
+	faultAfterFinalLink              faultPoint = "after-final-link"
+	faultAfterFinalPublication       faultPoint = "after-final-publication"
+	faultAfterReadyCommit            faultPoint = "after-ready-commit"
+	faultBeforeContentMismatchMark   faultPoint = "before-content-mismatch-mark"
+	faultBeforeObjectUnavailableMark faultPoint = "before-object-unavailable-mark"
+	faultBeforeReadyInspection       faultPoint = "before-ready-inspection"
+	faultAfterArtifactVerification   faultPoint = "after-artifact-verification"
 )
 
 // faultHooks is intentionally unexported. Package tests use it to terminate a
 // helper process at durable publication boundaries; production composition
 // cannot configure process-exit behavior through Config.
 type faultHooks struct {
-	AfterStage                 func()
-	AfterIntentCommit          func()
-	AfterRepairIntentCommit    func()
-	AfterFinalLink             func()
-	AfterFinalPublication      func()
-	AfterReadyCommit           func()
-	CommitResponseLost         func() error
-	BeforeIdentityLock         func(context.Context, pgx.Tx, string)
-	BeforeIdentityTryLock      func()
-	AfterIdentityLock          func()
-	BeforeReadyStagingRemoval  func()
-	AfterReadyStagingRemoval   func()
-	BeforeStagingDirectorySync func() error
-	BeforeStagingCleanupCommit func()
+	AfterStage                  func()
+	AfterIntentCommit           func()
+	AfterRepairIntentCommit     func()
+	AfterFinalLink              func()
+	AfterFinalPublication       func()
+	AfterReadyCommit            func()
+	CommitResponseLost          func() error
+	BeforeIdentityLock          func(context.Context, pgx.Tx, string)
+	BeforeIdentityTryLock       func()
+	AfterIdentityLock           func()
+	BeforeReadyStagingRemoval   func()
+	AfterReadyStagingRemoval    func()
+	BeforeStagingDirectorySync  func() error
+	BeforeStagingCleanupCommit  func()
+	BeforeOpenVerification      func()
+	BeforeContentMismatchMark   func()
+	BeforeObjectUnavailableMark func()
+	BeforeReadyInspection       func()
+	AfterArtifactVerification   func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -146,6 +160,22 @@ func (s *Store) fault(point faultPoint) {
 	case faultAfterReadyCommit:
 		if s.faults.AfterReadyCommit != nil {
 			s.faults.AfterReadyCommit()
+		}
+	case faultBeforeContentMismatchMark:
+		if s.faults.BeforeContentMismatchMark != nil {
+			s.faults.BeforeContentMismatchMark()
+		}
+	case faultBeforeObjectUnavailableMark:
+		if s.faults.BeforeObjectUnavailableMark != nil {
+			s.faults.BeforeObjectUnavailableMark()
+		}
+	case faultBeforeReadyInspection:
+		if s.faults.BeforeReadyInspection != nil {
+			s.faults.BeforeReadyInspection()
+		}
+	case faultAfterArtifactVerification:
+		if s.faults.AfterArtifactVerification != nil {
+			s.faults.AfterArtifactVerification()
 		}
 	}
 }
@@ -471,7 +501,7 @@ func readArtifactRecord(ctx context.Context, queryer rowQuerier, id string) (art
 	if err := queryer.QueryRow(ctx, `
 		SELECT id, session_id, run_id, name, kind, size, sha256, content_type,
 		       created_at, state, staging_name, staging_identity, unavailable_reason,
-		       (staging_reclaimed_at IS NOT NULL)
+		       (staging_reclaimed_at IS NOT NULL), staging_reclaim_after
 		FROM conversation_artifacts
 		WHERE id = $1
 	`, id).Scan(
@@ -489,6 +519,7 @@ func readArtifactRecord(ctx context.Context, queryer rowQuerier, id string) (art
 		&record.StagingIdentity,
 		&record.UnavailableReason,
 		&record.StagingReclaimed,
+		&record.StagingReclaimAfter,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return artifactRecord{}, ErrNotFound
@@ -576,23 +607,35 @@ func (s *Store) readAuthorizedReadyRecord(ctx context.Context, id string, operat
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return artifactRecord{}, err
 		}
+		if errors.Is(err, ErrStoreUnavailable) {
+			return artifactRecord{}, ErrStoreUnavailable
+		}
 		return artifactRecord{}, ErrNotFound
 	}
 	if record.State != publicationReady {
 		if record.State == publicationPending {
-			return artifactRecord{}, ErrUnavailable
+			return artifactRecord{}, fmt.Errorf("%w: %w", ErrRecoveryPending, ErrUnavailable)
 		}
 		return artifactRecord{}, unavailableError(ErrIntegrity)
 	}
 	return record, nil
 }
 
-func (s *Store) inspectReady(record artifactRecord) (fileCheck, error) {
+func (s *Store) inspectReady(ctx context.Context, record artifactRecord) (fileCheck, error) {
+	check, _, err := s.inspectReadyWithVersion(ctx, record)
+	return check, err
+}
+
+func (s *Store) inspectReadyWithVersion(ctx context.Context, record artifactRecord) (fileCheck, string, error) {
 	path, err := s.objectPath(record.Artifact.ID)
 	if err != nil {
-		return fileUnknown, err
+		return fileUnknown, "", err
 	}
-	return inspectArtifactFile(path, record.Artifact)
+	return inspectArtifactFileWithVersion(ctx, path, record.Artifact, func() {
+		s.fault(faultBeforeReadyInspection)
+	}, func() {
+		s.fault(faultAfterArtifactVerification)
+	})
 }
 
 func sameArtifactMetadata(candidate, existing protocol.Artifact) bool {
@@ -771,6 +814,10 @@ func repairableUnavailableReason(reason string) bool {
 	return reason == "staging-missing" || reason == "staging-corrupt"
 }
 
+func recheckableUnavailableReason(reason string) bool {
+	return reason == contentMismatchReason || reason == "final-missing" || reason == "final-mismatch"
+}
+
 func publicationStateMatchesIntent(state publicationState) bool {
 	return state == publicationPending || state == publicationReady
 }
@@ -780,7 +827,7 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	finalCheck, err := inspectArtifactFile(finalPath, existing.Artifact)
+	finalCheck, err := s.inspectArtifactFile(ctx, finalPath, existing.Artifact)
 	if err != nil {
 		return artifactRecord{}, err
 	}
@@ -815,7 +862,7 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	stagingCheck, err := inspectArtifactFile(stagingPath, candidate)
+	stagingCheck, err := s.inspectArtifactFile(ctx, stagingPath, candidate)
 	if err != nil {
 		return artifactRecord{}, err
 	}
@@ -991,25 +1038,86 @@ func (s *Store) stagingPath(name string) (string, error) {
 	return path, nil
 }
 
-func inspectArtifactFile(path string, artifact protocol.Artifact) (fileCheck, error) {
+func inspectArtifactFile(ctx context.Context, path string, artifact protocol.Artifact) (fileCheck, error) {
+	check, _, err := inspectArtifactFileWithVersion(ctx, path, artifact, nil, nil)
+	return check, err
+}
+
+func (s *Store) inspectArtifactFile(ctx context.Context, path string, artifact protocol.Artifact) (fileCheck, error) {
+	check, _, err := inspectArtifactFileWithVersion(ctx, path, artifact, nil, func() {
+		s.fault(faultAfterArtifactVerification)
+	})
+	return check, err
+}
+
+func inspectArtifactFileWithVersion(ctx context.Context, path string, artifact protocol.Artifact, beforePathCheck, afterVerification func()) (fileCheck, string, error) {
+	if err := requireContext(ctx); err != nil {
+		return fileUnknown, "", err
+	}
+	initialPathVersion, initialPathVersionErr := objectPathVersion(path)
+	if initialPathVersionErr != nil {
+		return fileUnknown, "", initialPathVersionErr
+	}
 	file, err := openStoredFile(path)
 	if err != nil {
+		currentPathVersion, currentPathVersionErr := objectPathVersion(path)
+		if currentPathVersionErr != nil {
+			return fileUnknown, "", currentPathVersionErr
+		}
+		if currentPathVersion != initialPathVersion {
+			return fileUnknown, "", fmt.Errorf("artifact content path changed while opening: %w", ErrContentChanged)
+		}
 		if errors.Is(err, os.ErrNotExist) {
-			return fileMissing, nil
+			if currentPathVersion != missingObjectPathVersion {
+				return fileUnknown, "", fmt.Errorf("artifact content path changed while inspecting: %w", ErrContentChanged)
+			}
+			return fileMissing, currentPathVersion, nil
 		}
 		if errors.Is(err, ErrIntegrity) {
-			return fileInvalid, nil
+			return fileInvalid, currentPathVersion, nil
 		}
-		return fileUnknown, err
+		return fileUnknown, "", err
 	}
 	defer file.Close()
-	if err := verifyFile(file, artifact); err != nil {
-		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
-			return fileInvalid, nil
-		}
-		return fileUnknown, err
+	version, err := filePathVersion(file)
+	if err != nil {
+		return fileUnknown, "", err
 	}
-	return fileValid, nil
+	if beforePathCheck != nil {
+		beforePathCheck()
+	}
+	pathVersion, err := objectPathVersion(path)
+	if err != nil {
+		return fileUnknown, "", err
+	}
+	if pathVersion != version {
+		return fileUnknown, "", fmt.Errorf("artifact content path changed while inspecting: %w", ErrContentChanged)
+	}
+	verifyErr := verifyFile(ctx, file, artifact)
+	if afterVerification != nil {
+		afterVerification()
+	}
+	currentVersion, currentVersionErr := filePathVersion(file)
+	if currentVersionErr != nil {
+		return fileUnknown, "", currentVersionErr
+	}
+	if currentVersion != version {
+		return fileUnknown, "", fmt.Errorf("artifact content changed while inspecting: %w", ErrContentChanged)
+	}
+	pathVersion, pathVersionErr := objectPathVersion(path)
+	if pathVersionErr != nil {
+		return fileUnknown, "", pathVersionErr
+	}
+	if pathVersion != version {
+		return fileUnknown, "", fmt.Errorf("artifact content path changed while inspecting: %w", ErrContentChanged)
+	}
+	if verifyErr != nil {
+		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
+			return fileInvalid, version, nil
+		}
+		return fileUnknown, "", verifyErr
+	}
+	return fileValid, version, nil
 }
 
 type fileCheck uint8
@@ -1062,6 +1170,9 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 			return record, recoveryPending, nil
 		}
 	}
+	if record.State == publicationUnavailable && recheckableUnavailableReason(record.UnavailableReason) {
+		return s.reconcileUnavailableObject(ctx, tx, record, cleanup)
+	}
 	reclaimReady := s.reclaimReadyStaging
 	if respectRetryAfter {
 		reclaimReady = s.reclaimReadyStagingForRecovery
@@ -1069,7 +1180,7 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 	if record.State != publicationPending {
 		if record.State == publicationReady {
 			if record.StagingReclaimed {
-				finalCheck, inspectErr := s.inspectReady(record)
+				finalCheck, pathVersion, inspectErr := s.inspectReadyWithVersion(ctx, record)
 				if inspectErr != nil {
 					return artifactRecord{}, recoveryPending, inspectErr
 				}
@@ -1079,7 +1190,7 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 				if finalCheck != fileValid {
 					rollbackTx(tx, cleanup)
 					tx = nil
-					if err := s.markReadyObjectUnavailable(ctx, id, finalReason(finalCheck)); err != nil {
+					if err := s.markReadyObjectUnavailableForVersion(ctx, id, pathVersion, finalReason(finalCheck)); err != nil {
 						return artifactRecord{}, recoveryPending, err
 					}
 					confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
@@ -1132,6 +1243,72 @@ func (s *Store) reconcileOneWithRetryPolicy(ctx context.Context, id string, clea
 	return confirmed, stateRecoveryStatus(confirmed.State), nil
 }
 
+func (s *Store) reconcileUnavailableObject(ctx context.Context, tx pgx.Tx, record artifactRecord, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
+	reason := record.UnavailableReason
+	finalCheck, err := s.inspectReady(ctx, record)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	if finalCheck != fileValid {
+		if _, err := tx.Exec(ctx, `
+			UPDATE conversation_artifacts
+			SET staging_reclaim_after = clock_timestamp() + INTERVAL '1 minute'
+			WHERE id = $1 AND state = 'unavailable' AND unavailable_reason = $2
+		`, record.Artifact.ID, reason); err != nil {
+			return artifactRecord{}, recoveryPending, databaseWriteError("defer artifact content verification", err)
+		}
+		if err := s.commit(ctx, tx); err != nil {
+			confirmed, confirmErr := s.confirmRecordWithCleanup(record.Artifact.ID, cleanup)
+			if confirmErr == nil && confirmed.State == publicationUnavailable && confirmed.UnavailableReason == reason && confirmed.StagingReclaimAfter.After(time.Now()) {
+				return confirmed, recoveryPending, nil
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return artifactRecord{}, recoveryPending, err
+			}
+			return artifactRecord{}, recoveryPending, fmt.Errorf("confirm artifact content verification deferral: %w", ErrStoreUnavailable)
+		}
+		confirmed, err := s.confirmRecordWithCleanup(record.Artifact.ID, cleanup)
+		if err != nil {
+			return artifactRecord{}, recoveryPending, err
+		}
+		if confirmed.State != publicationUnavailable || confirmed.UnavailableReason != reason {
+			return artifactRecord{}, recoveryPending, fmt.Errorf("artifact content verification state changed unexpectedly: %w", ErrStoreUnavailable)
+		}
+		return confirmed, recoveryPending, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET state = 'ready', unavailable_reason = '', staging_reclaim_after = NOW()
+		WHERE id = $1 AND state = 'unavailable' AND unavailable_reason = $2
+		`, record.Artifact.ID, reason); err != nil {
+		return artifactRecord{}, recoveryPending, databaseWriteError("restore artifact after content verification", err)
+	}
+	if err := s.commit(ctx, tx); err != nil {
+		confirmed, confirmErr := s.confirmRecordWithCleanup(record.Artifact.ID, cleanup)
+		if confirmErr == nil && confirmed.State == publicationReady {
+			if confirmed.StagingReclaimed {
+				return confirmed, recoveryReady, nil
+			}
+			return s.reclaimReadyStagingForRecovery(ctx, record.Artifact.ID, cleanup)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return artifactRecord{}, recoveryPending, err
+		}
+		return artifactRecord{}, recoveryPending, fmt.Errorf("confirm artifact content verification recovery: %w", ErrStoreUnavailable)
+	}
+	confirmed, err := s.confirmRecordWithCleanup(record.Artifact.ID, cleanup)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	if confirmed.State != publicationReady {
+		return artifactRecord{}, recoveryPending, fmt.Errorf("artifact content verification recovery state changed unexpectedly: %w", ErrStoreUnavailable)
+	}
+	if confirmed.StagingReclaimed {
+		return confirmed, recoveryReady, nil
+	}
+	return s.reclaimReadyStagingForRecovery(ctx, record.Artifact.ID, cleanup)
+}
+
 func (s *Store) reclaimReadyStaging(ctx context.Context, id string, cleanup *cleanupDeadline) (artifactRecord, recoveryStatus, error) {
 	return s.reclaimReadyStagingWithRetryPolicy(ctx, id, cleanup, false)
 }
@@ -1175,13 +1352,19 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 			return record, recoveryPending, nil
 		}
 	}
-	commitUnavailable := func(reason string) (artifactRecord, recoveryStatus, error) {
+	commitUnavailable := func(reason, pathVersion string) (artifactRecord, recoveryStatus, error) {
+		if err := s.verifyCanonicalObjectPathVersion(ctx, id, pathVersion); err != nil {
+			return artifactRecord{}, recoveryPending, err
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE conversation_artifacts
 			SET state = 'unavailable', unavailable_reason = $2, staging_reclaim_after = NOW()
 			WHERE id = $1 AND state = 'ready'
 		`, id, reason); err != nil {
 			return artifactRecord{}, recoveryPending, databaseWriteError("update invalid ready artifact", err)
+		}
+		if err := s.verifyCanonicalObjectPathVersion(ctx, id, pathVersion); err != nil {
+			return artifactRecord{}, recoveryPending, err
 		}
 		updated := record
 		updated.State = publicationUnavailable
@@ -1205,7 +1388,7 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 		}
 		return confirmed, recoveryUnavailable, nil
 	}
-	finalCheck, err := s.inspectReady(record)
+	finalCheck, pathVersion, err := s.inspectReadyWithVersion(ctx, record)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1213,7 +1396,7 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 		return artifactRecord{}, recoveryPending, fmt.Errorf("inspect ready artifact for reclamation: %w", ErrStoreUnavailable)
 	}
 	if finalCheck != fileValid {
-		return commitUnavailable(finalReason(finalCheck))
+		return commitUnavailable(finalReason(finalCheck), pathVersion)
 	}
 	if err := lockStagingName(ctx, tx, record.StagingName); err != nil {
 		return artifactRecord{}, recoveryPending, err
@@ -1241,7 +1424,7 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 	// Recheck while the identity lock is still held. The lock must remain held
 	// through deletion and marker publication so another reconciler cannot
 	// transition the row while this process is removing its staging copy.
-	finalCheck, err = s.inspectReady(record)
+	finalCheck, pathVersion, err = s.inspectReadyWithVersion(ctx, record)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1249,13 +1432,38 @@ func (s *Store) reclaimReadyStagingWithRetryPolicy(ctx context.Context, id strin
 		return artifactRecord{}, recoveryPending, fmt.Errorf("reinspect ready artifact for reclamation: %w", ErrStoreUnavailable)
 	}
 	if finalCheck != fileValid {
-		return commitUnavailable(finalReason(finalCheck))
+		return commitUnavailable(finalReason(finalCheck), pathVersion)
 	}
 	if s.faults != nil && s.faults.BeforeReadyStagingRemoval != nil {
 		s.faults.BeforeReadyStagingRemoval()
 	}
 	if err := ctx.Err(); err != nil {
 		return artifactRecord{}, recoveryPending, err
+	}
+	// The final path can be replaced after the inspection above. Reinspect it
+	// immediately before unlinking the only other hard link so a damaged
+	// replacement cannot make the verified staging inode disappear.
+	finalCheck, pathVersion, err = s.inspectReadyWithVersion(ctx, record)
+	if err != nil {
+		return artifactRecord{}, recoveryPending, err
+	}
+	if finalCheck == fileUnknown {
+		return artifactRecord{}, recoveryPending, fmt.Errorf("reinspect ready artifact before reclamation: %w", ErrStoreUnavailable)
+	}
+	if finalCheck != fileValid {
+		return commitUnavailable(finalReason(finalCheck), pathVersion)
+	}
+	if removeStaging {
+		currentIdentity, identityErr = s.stagingIdentity(record.StagingName)
+		if identityErr != nil {
+			return artifactRecord{}, recoveryPending, identityErr
+		}
+		removeStaging = sameStagingIdentity(record.StagingIdentity, currentIdentity)
+		if !removeStaging {
+			if err := s.syncStagingDirectory(); err != nil {
+				return artifactRecord{}, recoveryPending, fmt.Errorf("sync artifact staging directory before retaining replaced staging: %w", ErrStoreUnavailable)
+			}
+		}
 	}
 	if removeStaging {
 		if removeErr := s.removeStaging(record.StagingName); removeErr != nil {
@@ -1353,7 +1561,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
-	finalCheck, err := inspectArtifactFile(finalPath, record.Artifact)
+	finalCheck, err := s.inspectArtifactFile(ctx, finalPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1373,7 +1581,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	if err != nil {
 		return s.updatePublicationState(ctx, tx, record, publicationUnavailable, "staging-invalid")
 	}
-	stagingCheck, err := inspectArtifactFile(stagingPath, record.Artifact)
+	stagingCheck, err := s.inspectArtifactFile(ctx, stagingPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1391,7 +1599,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	}
 	if err := os.Link(stagingPath, finalPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			finalCheck, inspectErr := inspectArtifactFile(finalPath, record.Artifact)
+			finalCheck, inspectErr := s.inspectArtifactFile(ctx, finalPath, record.Artifact)
 			if inspectErr != nil {
 				return artifactRecord{}, recoveryPending, inspectErr
 			}
@@ -1410,7 +1618,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 		return artifactRecord{}, recoveryPending, fmt.Errorf("sync final artifact directory: %w", ErrStoreUnavailable)
 	}
 	s.fault(faultAfterFinalPublication)
-	finalCheck, err = inspectArtifactFile(finalPath, record.Artifact)
+	finalCheck, err = s.inspectArtifactFile(ctx, finalPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1894,6 +2102,15 @@ func (s *Store) listRecoveryWork(ctx context.Context, limit int) ([]recoveryWork
 			UNION ALL
 			SELECT work_kind, work_name, due_at, tie_at
 			FROM (
+				SELECT 0 AS work_kind, id::text AS work_name, staging_reclaim_after AS due_at, created_at AS tie_at
+				FROM conversation_artifacts
+				WHERE state = 'unavailable' AND unavailable_reason IN ('content-mismatch', 'final-missing', 'final-mismatch') AND staging_reclaim_after <= NOW()
+				ORDER BY staging_reclaim_after, created_at, id
+				LIMIT $1
+			) AS content_mismatch_work
+			UNION ALL
+			SELECT work_kind, work_name, due_at, tie_at
+			FROM (
 				SELECT 1 AS work_kind, staging_name AS work_name, retry_after AS due_at, retry_after AS tie_at
 				FROM conversation_artifact_staging_cleanup
 				WHERE retry_after <= NOW()
@@ -1952,7 +2169,7 @@ func (s *Store) deferArtifactRecovery(id string, cleanup *cleanupDeadline) error
 		UPDATE conversation_artifacts
 		SET staging_reclaim_after = clock_timestamp() + INTERVAL '1 minute'
 		WHERE id = $1
-		  AND (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL))
+		  AND (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL) OR (state = 'unavailable' AND unavailable_reason IN ('content-mismatch', 'final-missing', 'final-mismatch')))
 		  AND staging_reclaim_after <= clock_timestamp()
 	`, id); err != nil {
 		return databaseWriteError("defer artifact recovery", err)
@@ -1962,7 +2179,7 @@ func (s *Store) deferArtifactRecovery(id string, cleanup *cleanupDeadline) error
 		deferred := false
 		var confirmErr error
 		confirmErr = s.pool.QueryRow(confirmCtx, `
-			SELECT (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL))
+			SELECT (state = 'pending' OR (state = 'ready' AND staging_reclaimed_at IS NULL) OR (state = 'unavailable' AND unavailable_reason IN ('content-mismatch', 'final-missing', 'final-mismatch')))
 			       AND staging_reclaim_after > clock_timestamp()
 			FROM conversation_artifacts
 			WHERE id = $1
@@ -2055,12 +2272,17 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 					if deferErr := s.deferArtifactRecovery(item.name, cleanup); deferErr != nil {
 						return report, errors.Join(err, deferErr)
 					}
-					return report, err
+					report.Deferred++
+					return report, errors.Join(ErrRecoveryDeferred, err)
 				}
-				if deferErr := s.deferArtifactRecovery(item.name, cleanup); errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
+				deferErr := s.deferArtifactRecovery(item.name, cleanup)
+				if errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
 					return report, deferErr
-				} else if deferErr != nil {
+				}
+				if deferErr != nil {
 					firstFailure = errors.Join(firstFailure, deferErr)
+				} else {
+					report.Deferred++
 				}
 				continue
 			}
@@ -2084,12 +2306,17 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 				if deferErr := s.deferStagingCleanupRetry(item.name, cleanup); deferErr != nil {
 					return report, errors.Join(err, deferErr)
 				}
-				return report, err
+				report.Deferred++
+				return report, errors.Join(ErrRecoveryDeferred, err)
 			}
-			if deferErr := s.deferStagingCleanupRetry(item.name, cleanup); errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
+			deferErr := s.deferStagingCleanupRetry(item.name, cleanup)
+			if errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
 				return report, deferErr
-			} else if deferErr != nil {
+			}
+			if deferErr != nil {
 				firstFailure = errors.Join(firstFailure, deferErr)
+			} else {
+				report.Deferred++
 			}
 			continue
 		}
@@ -2099,6 +2326,9 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 	}
 	if report.Failed > 0 {
 		if firstFailure != nil {
+			if report.Deferred == report.Failed {
+				return report, fmt.Errorf("%w: %w: %v", ErrRecoveryIncomplete, ErrRecoveryDeferred, firstFailure)
+			}
 			return report, fmt.Errorf("%w: %v", ErrRecoveryIncomplete, firstFailure)
 		}
 		return report, ErrRecoveryIncomplete
@@ -2134,7 +2364,7 @@ func (s *Store) markReadyObjectUnavailable(parent context.Context, id string, re
 	if state != string(publicationReady) {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, `UPDATE conversation_artifacts SET state = 'unavailable', unavailable_reason = $2 WHERE id = $1 AND state = 'ready'`, id, reason); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE conversation_artifacts SET state = 'unavailable', unavailable_reason = $2, staging_reclaim_after = NOW() WHERE id = $1 AND state = 'ready'`, id, reason); err != nil {
 		return databaseWriteError("mark ready artifact unavailable", err)
 	}
 	if err := s.commit(ctx, tx); err != nil {
@@ -2145,6 +2375,109 @@ func (s *Store) markReadyObjectUnavailable(parent context.Context, id string, re
 		return databaseWriteError("commit ready artifact unavailable state", err)
 	}
 	return nil
+}
+
+func (s *Store) markReadyObjectUnavailableForVersion(parent context.Context, id, expectedVersion, reason string) error {
+	if strings.TrimSpace(expectedVersion) == "" {
+		return fmt.Errorf("artifact content version is missing: %w", ErrContentChanged)
+	}
+	cleanup := newCleanupDeadline(parent)
+	defer cleanup.stop()
+	ctx, cancel := cleanup.context()
+	defer cancel()
+	tx, err := s.beginIdentityTx(ctx, id, cleanup)
+	if err != nil {
+		return err
+	}
+	defer func() { rollbackTx(tx, cleanup) }()
+	var state string
+	if err := tx.QueryRow(ctx, `
+		SELECT state
+		FROM conversation_artifacts
+		WHERE id = $1
+		FOR UPDATE
+	`, id).Scan(&state); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("read ready artifact state: %w", ErrStoreUnavailable)
+	}
+	if state != string(publicationReady) {
+		return nil
+	}
+	if err := s.verifyCanonicalObjectPathVersion(ctx, id, expectedVersion); err != nil {
+		return err
+	}
+	s.fault(faultBeforeObjectUnavailableMark)
+	if _, err := tx.Exec(ctx, `UPDATE conversation_artifacts SET state = 'unavailable', unavailable_reason = $2, staging_reclaim_after = NOW() WHERE id = $1 AND state = 'ready'`, id, reason); err != nil {
+		return databaseWriteError("mark ready artifact unavailable", err)
+	}
+	if err := s.verifyCanonicalObjectPathVersion(ctx, id, expectedVersion); err != nil {
+		return err
+	}
+	if err := s.commit(ctx, tx); err != nil {
+		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
+		if confirmErr == nil && confirmed.State == publicationUnavailable && confirmed.UnavailableReason == reason {
+			return nil
+		}
+		return databaseWriteError("commit ready artifact unavailable state", err)
+	}
+	return nil
+}
+
+func (s *Store) verifyCanonicalObjectVersion(ctx context.Context, id, expectedVersion string) error {
+	if strings.TrimSpace(expectedVersion) == "" {
+		return fmt.Errorf("artifact content version is missing: %w", ErrContentChanged)
+	}
+	path, err := s.objectPath(id)
+	if err != nil {
+		return err
+	}
+	file, err := openStoredFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrIntegrity) {
+			return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
+		}
+		return err
+	}
+	defer file.Close()
+	version, err := filePathVersion(file)
+	if err != nil {
+		return err
+	}
+	if version != expectedVersion {
+		return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
+	}
+	return nil
+}
+
+func (s *Store) verifyCanonicalObjectPathVersion(ctx context.Context, id, expectedVersion string) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	path, err := s.objectPath(id)
+	if err != nil {
+		return err
+	}
+	version, err := objectPathVersion(path)
+	if err != nil {
+		return err
+	}
+	if version != expectedVersion {
+		return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
+	}
+	return nil
+}
+
+// markReadyContentMismatch rechecks the canonical object while the ready row
+// is locked and immediately before commit. A replacement that arrives after
+// the reader's last verification therefore leaves the row ready for a later
+// conflict-safe retry instead of quarantining the replacement bytes.
+func (s *Store) markReadyContentMismatch(parent context.Context, id, expectedVersion string) error {
+	return s.markReadyObjectUnavailableForVersion(parent, id, expectedVersion, contentMismatchReason)
 }
 
 func unavailableError(reason error) error {

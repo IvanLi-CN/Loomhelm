@@ -13,27 +13,29 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/go-chi/chi/v5"
 )
 
 type Server struct {
-	cfg               platform.Config
-	logger            *slog.Logger
-	lifecycle         *platform.Lifecycle
-	router            chi.Router
-	shutdown          chan struct{}
-	serveMu           sync.Mutex
-	openRuntime       runtimeFactory
-	resourceMu        sync.RWMutex
-	resources         processRuntime
-	activeMCPRequests atomic.Int64
+	cfg                       platform.Config
+	logger                    *slog.Logger
+	lifecycle                 *platform.Lifecycle
+	router                    chi.Router
+	shutdown                  chan struct{}
+	serveMu                   sync.Mutex
+	openRuntime               runtimeFactory
+	resourceMu                sync.RWMutex
+	resources                 processRuntime
+	activeMCPRequests         atomic.Int64
+	activeApplicationRequests atomic.Int64
 }
 
 // The production MCP path may spend up to 15 seconds reading a body and 25
 // seconds waiting for one delegated operation before returning an unknown
-// outcome. Preserve enough HTTP drain time for that response when MCP is busy;
-// ordinary requests retain the configured shutdown timeout.
+// outcome. Artifact responses also have an absolute write deadline, so HTTP
+// drain must cover that deadline before forcing connections closed.
 const mcpHTTPShutdownGracePeriod = 60 * time.Second
 
 type trackedListener struct {
@@ -244,8 +246,21 @@ func (s *Server) BeginDrain(reason string) bool {
 	changed := s.lifecycle.BeginDrain(reason)
 	if changed {
 		s.logger.Info("server entering drain", "reason", reason)
+		s.requestRuntimeShutdown()
 	}
 	return changed
+}
+
+func (s *Server) requestRuntimeShutdown() {
+	s.resourceMu.RLock()
+	resources := s.resources
+	s.resourceMu.RUnlock()
+	if resources == nil {
+		return
+	}
+	if requester, ok := resources.(interface{ RequestShutdown() }); ok {
+		requester.RequestShutdown()
+	}
 }
 
 func (s *Server) shutdownAndWait(server *http.Server, listener *trackedListener, serveResult <-chan error, reason string) error {
@@ -284,6 +299,9 @@ func (s *Server) shutdownHTTP(server *http.Server) error {
 
 func (s *Server) httpShutdownTimeout() time.Duration {
 	timeout := s.cfg.ShutdownTimeout
+	if s.activeApplicationRequests.Load() > 0 && timeout < artifacts.DownloadWriteTimeout {
+		timeout = artifacts.DownloadWriteTimeout
+	}
 	if s.activeMCPRequests.Load() > 0 && timeout < mcpHTTPShutdownGracePeriod {
 		return mcpHTTPShutdownGracePeriod
 	}

@@ -44,6 +44,118 @@ describe("generated browser authentication transport", () => {
   });
 });
 
+describe("generated binary artifact transport", () => {
+  test("returns the original response without consuming its bytes", async () => {
+    const calls = [];
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({
+          path: url.pathname,
+          method: init.method,
+          accept: new Headers(init.headers).get("Accept"),
+        });
+        return new Response(new Uint8Array([0, 1, 2, 255]), {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+      },
+    });
+
+    const response = await client.downloadArtifact({ artifact_id: "artifact/A B?" });
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([0, 1, 2, 255]);
+    expect(calls).toEqual([{
+      path: "/api/v1/artifacts/artifact%2FA%20B%3F/download",
+      method: "GET",
+      accept: "application/octet-stream",
+    }]);
+  });
+
+  test("accepts a partial range response without consuming its bytes", async () => {
+    const calls = [];
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        const headers = new Headers(init.headers);
+        calls.push({ path: url.pathname, ifRange: headers.get("If-Range"), range: headers.get("Range") });
+        return new Response(new Uint8Array([1, 2]), {
+        status: 206,
+        headers: { "Content-Range": "bytes 0-1/4", "Content-Type": "application/octet-stream" },
+        });
+      },
+    });
+
+    const response = await client.downloadArtifact({ artifact_id: "artifact-range", if_range: '"etag"', range: "bytes=0-1" });
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 0-1/4");
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([1, 2]);
+    expect(calls).toEqual([{ path: "/api/v1/artifacts/artifact-range/download", ifRange: '"etag"', range: "bytes=0-1" }]);
+  });
+
+  test("requests artifact metadata with HEAD", async () => {
+    const calls = [];
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, method: init.method, accept: new Headers(init.headers).get("Accept") });
+        return new Response(null, { status: 200, headers: { "Content-Length": "4", ETag: '"etag"' } });
+      },
+    });
+
+    const response = await client.headArtifact({ artifact_id: "artifact-head" });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("4");
+    expect(calls).toEqual([{ path: "/api/v1/artifacts/artifact-head/download", method: "HEAD", accept: "application/octet-stream" }]);
+  });
+
+  test("preserves Content-Range on an unsatisfiable range error", async () => {
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async () => new Response("artifact range is not satisfiable", {
+        status: 416,
+        headers: { "Content-Range": "bytes */4" },
+      }),
+    });
+
+    try {
+      await client.downloadArtifact({ artifact_id: "artifact-range", range: "bytes=9-10" });
+      throw new Error("unsatisfiable range was accepted");
+    } catch (caught) {
+      expect(caught).toBeInstanceOf(ApiClientError);
+      expect(caught.status).toBe(416);
+      expect(caught.response.headers.get("Content-Range")).toBe("bytes */4");
+    }
+  });
+});
+
+describe("generated API artifact content transport", () => {
+  test("retrieves a cursor-addressed original chunk for API callers", async () => {
+    const calls = [];
+    const payload = {
+      artifact: { id: "artifact-1", session_id: "session-1", name: "original.bin", kind: "file", size: 4, content_type: "application/octet-stream", sha256: "", created_at: "2026-10-30T00:00:00Z" },
+      content_base64: "AAEC/w==",
+      offset: 0,
+      next_offset: 4,
+      total_size: 4,
+      complete: true,
+    };
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname + url.search, method: init.method, accept: new Headers(init.headers).get("Accept") });
+        return Response.json(payload);
+      },
+    });
+
+    expect(await client.downloadArtifactContent({ artifact_id: "artifact/1", content_version: "v1-test", limit: 4 })).toEqual(payload);
+    expect(calls).toEqual([{
+      path: "/api/v1/artifacts/artifact%2F1/content?content_version=v1-test&limit=4",
+      method: "GET",
+      accept: "application/json",
+    }]);
+  });
+});
+
 describe("generated user credential transport", () => {
   test("creation preserves the explicit delegated scope and requires HTTP 201", async () => {
     const calls = [];

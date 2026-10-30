@@ -23,6 +23,9 @@ type Config struct {
 	URL      string
 	MinConns int32
 	MaxConns int32
+	// MigrationLockKey overrides the stable cross-process key when non-zero.
+	// Production callers leave it unset; tests can isolate intentional lock holders.
+	MigrationLockKey int64
 }
 
 func (c Config) poolConfig() (*pgxpool.Config, error) {
@@ -60,9 +63,10 @@ func (c Config) Validate() error {
 }
 
 type DB struct {
-	pool       *pgxpool.Pool
-	queries    *generated.Queries
-	connConfig *pgx.ConnConfig
+	pool             *pgxpool.Pool
+	queries          *generated.Queries
+	connConfig       *pgx.ConnConfig
+	migrationLockKey int64
 }
 
 func Open(ctx context.Context, cfg Config) (*DB, error) {
@@ -83,7 +87,16 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, errors.New("open database pool")
 	}
-	db := &DB{pool: pool, queries: generated.New(pool), connConfig: connConfig}
+	migrationLockKey := cfg.MigrationLockKey
+	if migrationLockKey == 0 {
+		migrationLockKey = migrationAdvisoryLockKey
+	}
+	db := &DB{
+		pool:             pool,
+		queries:          generated.New(pool),
+		connConfig:       connConfig,
+		migrationLockKey: migrationLockKey,
+	}
 	if err := db.Ping(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
@@ -122,8 +135,15 @@ func (db *DB) migrate(ctx context.Context) error {
 		return errors.New("database context must not be nil")
 	}
 
-	sqlDB := stdlib.OpenDBFromPool(db.pool)
+	// Migrations may intentionally change session state while executing
+	// non-transactional DDL. Run them on a dedicated database/sql pool so any
+	// session changes are discarded when the migration provider closes.
+	sqlDB := stdlib.OpenDB(*db.connConfig.Copy())
 	defer sqlDB.Close()
+	// Keep every migration statement on the dedicated session so migration
+	// 00016's narrowed search_path cannot be lost between Exec calls.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
 	if err != nil {
 		return fmt.Errorf("create database migration provider: %w", err)
@@ -158,23 +178,42 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 		}
 		return errors.New("open database migration lock connection")
 	}
+	lockQuery := "SELECT attempt.acquired FROM (SELECT pg_try_advisory_lock($1) AS acquired, pg_sleep(0.05)) AS attempt /* pg_advisory_lock */"
+	unlockQuery := "SELECT pg_advisory_unlock($1)"
+	// Keep the historical fixed key for every schema so older and newer
+	// candidates remain mutually exclusive during a blue-green rollout.
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, unlockErr := lockConn.Exec(closeCtx, "SELECT pg_advisory_unlock($1)", migrationAdvisoryLockKey); unlockErr != nil {
+		if _, unlockErr := lockConn.Exec(closeCtx, unlockQuery, db.migrationLockKey); unlockErr != nil {
 			_ = lockConn.Close(closeCtx)
 			return
 		}
 		_ = lockConn.Close(closeCtx)
 	}()
 
-	if _, err := lockConn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationAdvisoryLockKey); err != nil {
+	if err := acquireMigrationLock(ctx, lockConn, lockQuery, db.migrationLockKey); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("acquire database migration lock: %w", err)
 		}
 		return errors.New("acquire database migration lock")
 	}
 	return fn(context.WithValue(ctx, migrationLockContextKey{}, struct{}{}))
+}
+
+func acquireMigrationLock(ctx context.Context, conn *pgx.Conn, query string, lockKey int64) error {
+	for {
+		var acquired bool
+		if err := conn.QueryRow(ctx, query, lockKey).Scan(&acquired); err != nil {
+			return err
+		}
+		if acquired {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 }
 
 func MigrationLockHeld(ctx context.Context) bool {

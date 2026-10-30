@@ -17,7 +17,10 @@ RUN case "${LOOMHELM_COMPONENT}" in \
 
 FROM alpine:3.21
 
-RUN addgroup -S loomhelm && adduser -S -G loomhelm loomhelm
+RUN addgroup -S loomhelm \
+    && adduser -S -G loomhelm loomhelm \
+    && mkdir -p /var/lib/loomhelm/artifacts \
+    && chown -R loomhelm:loomhelm /var/lib/loomhelm
 COPY --from=build /out/loomhelm /usr/local/bin/loomhelm
 
 USER loomhelm

@@ -136,8 +136,10 @@
     },
     "ErrorCode": {
       "type": "string",
+      "extensible": true,
       "enum": [
         "invalid_request",
+        "service_unavailable",
         "unauthorized",
         "not_found",
         "conflict",
@@ -446,6 +448,30 @@
       "type": "object",
       "required": ["artifact"],
       "properties": {"artifact": {"$ref": "#/types/Artifact"}}
+    },
+    "ArtifactContentResponse": {
+      "type": "object",
+      "required": ["artifact", "content_base64", "content_version", "offset", "next_offset", "total_size", "complete"],
+      "properties": {
+        "artifact": {"$ref": "#/types/Artifact"},
+        "content_base64": {"type": "string"},
+        "content_version": {"type": "string"},
+        "offset": {"type": "integer"},
+        "next_offset": {"type": "integer"},
+        "total_size": {"type": "integer"},
+        "complete": {"type": "boolean"}
+      }
+    },
+    "DownloadArtifactContentQuery": {
+      "type": "object",
+      "properties": {
+        "content_version": {"type": "string"},
+        "offset": {"type": "integer"},
+        "limit": {"type": "integer"}
+      }
+    },
+    "ArtifactDownload": {
+      "kind": "binary"
     },
     "CreateProjectRequest": {
       "type": "object",
@@ -912,6 +938,42 @@
         "response_type": "ArtifactResponse",
         "summary": "Read authorized artifact metadata",
         "mcp_tool": {"name": "loomhelm.get_artifact", "description": "Read authorized conversation artifact metadata."}
+      },
+      {
+        "operation_id": "downloadArtifact",
+        "browser_only": true,
+        "method": "GET",
+        "path": "/artifacts/{artifact_id}/download",
+        "path_params": {"artifact_id": "string"},
+        "request_headers": {"if_range": "If-Range", "range": "Range"},
+        "response_type": "ArtifactDownload",
+        "response_status": 200,
+        "response_statuses": [200, 206],
+        "response_headers": {"Content-Range": "206 responses use bytes start-end/total; 416 responses use bytes */total.", "WWW-Authenticate": "401 responses include the Bearer authentication challenge."},
+        "summary": "Download the authorized original artifact bytes. Range supports satisfiable byte ranges, including multiple ranges; If-Range selects a range only when its strong ETag or HTTP-date validator matches; malformed or unsatisfiable byte ranges return 416 with Content-Range, while unknown range units are ignored."
+      },
+      {
+        "operation_id": "headArtifact",
+        "browser_only": true,
+        "method": "HEAD",
+        "path": "/artifacts/{artifact_id}/download",
+        "path_params": {"artifact_id": "string"},
+        "response_type": "ArtifactDownload",
+        "response_status": 200,
+        "response_statuses": [200],
+        "response_headers": {"Content-Length": "HEAD responses advertise the complete original byte length and never include a response body.", "WWW-Authenticate": "401 responses include the Bearer authentication challenge."},
+        "summary": "Read the authorized original artifact download metadata without transferring a response body. HEAD ignores Range and returns the complete representation metadata."
+      },
+      {
+        "operation_id": "downloadArtifactContent",
+        "method": "GET",
+        "path": "/artifacts/{artifact_id}/content",
+        "path_params": {"artifact_id": "string"},
+        "query_type": "DownloadArtifactContentQuery",
+        "response_type": "ArtifactContentResponse",
+        "response_status": 200,
+        "summary": "Download a cursor-addressed chunk of the authorized original artifact bytes. Start at offset 0; when offset is non-zero, content_version from the previous response is required; stop at complete=true and verify the reassembled bytes against artifact.sha256.",
+        "mcp_tool": {"name": "loomhelm.download_artifact", "description": "Download bounded chunks of an authorized original artifact. Start at offset 0, pass content_version with each next_offset call, stop only at complete=true, and verify the reassembled bytes against artifact.sha256."}
       }
     ]
   },

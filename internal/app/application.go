@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
@@ -26,8 +28,10 @@ type applicationServices struct {
 	tasks           *tasks.Service
 	sessions        *sessions.Store
 	runHistory      sessionRunStore
+	runRecords      artifactRunRecords
 	drafts          draftStore
 	sessionCreation sessionCreationApplication
+	artifactStore   protocol.ArtifactStore
 }
 
 // newApplicationHandler returns relative routes for Server's /api/v1 mount.
@@ -45,7 +49,11 @@ func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool
 	if err != nil {
 		return nil, err
 	}
-	return services.handler(control), nil
+	handler, err := services.handler(control)
+	if err != nil {
+		return nil, err
+	}
+	return handler, nil
 }
 
 func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig) (*applicationServices, error) {
@@ -72,11 +80,12 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		tasks:      tasks.NewService(pool, identity, projectService),
 		sessions:   sessions.NewStore(pool),
 		runHistory: runs.NewStore(pool),
+		runRecords: runs.NewStore(pool),
 		drafts:     drafts.NewStore(pool),
 	}, nil
 }
 
-func (s *applicationServices) handler(control runControlApplication) http.Handler {
+func (s *applicationServices) handler(control runControlApplication) (http.Handler, error) {
 	router := chi.NewRouter()
 	s.identity.Mount(router)
 	s.identity.MountAPI(router)
@@ -87,14 +96,29 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	(&runControlHTTP{principal: s.identity, service: control}).mount(router)
 	(&sessionRunHTTP{principal: s.identity, sessions: sessionAccess, runs: s.runHistory}).mount(router)
 	(&draftHTTP{principal: s.identity, sessions: sessionAccess, drafts: s.drafts}).mount(router)
+	var download http.Handler = http.HandlerFunc(unavailableArtifactDownload)
+	var contentDownload http.Handler = http.HandlerFunc(unavailableArtifactDownload)
+	if s.artifactStore != nil {
+		handler, err := artifacts.NewDownloadHTTPHandler(s.artifactStore, writeArtifactDownloadError)
+		if err != nil {
+			return nil, fmt.Errorf("initialize artifact download handler: %w", err)
+		}
+		download = handler
+		contentDownload = http.HandlerFunc(handler.ServeContentHTTP)
+	}
+	protectedDownload := s.artifactDownloadHandler(download)
+	router.Get("/artifacts/{artifact_id}/download", protectedDownload)
+	router.Head("/artifacts/{artifact_id}/download", protectedDownload)
+	router.Get("/artifacts/{artifact_id}", s.artifactMetadataHandler)
+	router.Get("/artifacts/{artifact_id}/content", s.artifactContentHandler(contentDownload))
 	router.Get("/auth/session", func(writer http.ResponseWriter, request *http.Request) {
 		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
-		if err != nil || principal.UserID == "" || principal.CredentialID != "" {
-			status := http.StatusUnauthorized
-			if err != nil && !errors.Is(err, auth.ErrUnauthenticated) {
-				status = http.StatusInternalServerError
-			}
-			writeApplicationError(writer, request, status, "browser session is unavailable")
+		if err != nil {
+			auth.WriteError(writer, request, auth.StatusForError(err), err, "browser session is unavailable")
+			return
+		}
+		if principal.UserID == "" || principal.CredentialID != "" {
+			auth.WriteError(writer, request, http.StatusUnauthorized, auth.ErrUnauthenticated, "browser session is unavailable")
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -115,11 +139,138 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	protection.SetDenyHandler(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writeApplicationError(writer, request, http.StatusForbidden, "cross-origin browser request rejected")
 	}))
-	protected := protection.Handler(s.identity.Middleware(s.identity.ExpectedPrincipalMiddleware(browserOnly)))
+	identityHandler := s.identity.Middleware(s.identity.ExpectedPrincipalMiddleware(browserOnly))
+	identityProtected := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if isArtifactDownloadPath(request.URL.Path) {
+			writer.Header().Set("WWW-Authenticate", "Bearer")
+		}
+		identityHandler.ServeHTTP(writer, request)
+	})
+	protected := protection.Handler(identityProtected)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		protected.ServeHTTP(writer, request)
+	}), nil
+}
+
+func isArtifactDownloadPath(path string) bool {
+	const prefix = "/api/v1/artifacts/"
+	const suffix = "/download"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return false
+	}
+	artifactID := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	return artifactID != "" && !strings.Contains(artifactID, "/")
+}
+
+func (s *applicationServices) artifactDownloadHandler(download http.Handler) http.HandlerFunc {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if len(request.Header.Values("Authorization")) != 0 {
+			writeArtifactAuthenticationError(writer, request, http.StatusUnauthorized, auth.ErrUnauthenticated, "browser session required")
+			return
+		}
+		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
+		if err != nil || principal.UserID == "" {
+			if err == nil {
+				err = auth.ErrUnauthenticated
+			}
+			writeArtifactAuthenticationError(writer, request, auth.StatusForError(err), err, "authentication required")
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal))
+		download.ServeHTTP(writer, request)
 	})
+}
+
+func writeArtifactAuthenticationError(writer http.ResponseWriter, request *http.Request, status int, err error, message string) {
+	if status == http.StatusUnauthorized {
+		writer.Header().Set("WWW-Authenticate", "Bearer")
+	}
+	auth.WriteError(writer, request, status, err, message)
+}
+
+func (s *applicationServices) artifactContentHandler(content http.Handler) http.HandlerFunc {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		principal, err := s.identity.ResolvePrincipal(request.Context(), request)
+		if err != nil || principal.UserID == "" {
+			if err == nil {
+				err = auth.ErrUnauthenticated
+			}
+			auth.WriteError(writer, request, auth.StatusForError(err), err, "authentication required")
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal))
+		content.ServeHTTP(writer, request)
+	})
+}
+
+func (s *applicationServices) artifactMetadataHandler(writer http.ResponseWriter, request *http.Request) {
+	if s.artifactStore == nil {
+		unavailableArtifactDownload(writer, request)
+		return
+	}
+	principal, err := s.identity.ResolvePrincipal(request.Context(), request)
+	if err != nil || principal.UserID == "" {
+		if err == nil {
+			err = auth.ErrUnauthenticated
+		}
+		auth.WriteError(writer, request, auth.StatusForError(err), err, "authentication required")
+		return
+	}
+	metadataContext := context.WithValue(request.Context(), artifactPrincipalContextKey{}, principal)
+	artifact, err := s.artifactStore.Metadata(metadataContext, chi.URLParam(request, "artifact_id"))
+	if err != nil {
+		writeArtifactStoreError(writer, request, err, "artifact metadata is unavailable")
+		return
+	}
+	artifact.Name = artifacts.SafeDownloadFilename(artifact.Name)
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(protocol.ArtifactResponse{Artifact: artifact})
+}
+
+func writeArtifactStoreError(writer http.ResponseWriter, request *http.Request, err error, message string) {
+	status := artifactStoreStatus(err)
+	if status == http.StatusServiceUnavailable && (errors.Is(err, artifacts.ErrRecoveryPending) || errors.Is(err, artifacts.ErrRecoveryIncomplete)) {
+		writer.Header().Set("Retry-After", "60")
+	}
+	writeArtifactDownloadError(writer, request, status, err, message)
+}
+
+func artifactStoreStatus(err error) int {
+	switch {
+	case errors.Is(err, artifacts.ErrInvalid):
+		return http.StatusBadRequest
+	case errors.Is(err, artifacts.ErrContentChanged):
+		return http.StatusConflict
+	case errors.Is(err, artifacts.ErrRecoveryPending), errors.Is(err, artifacts.ErrRecoveryIncomplete), errors.Is(err, artifacts.ErrStoreUnavailable):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, artifacts.ErrNotFound), errors.Is(err, artifacts.ErrUnauthorized), errors.Is(err, artifacts.ErrUnavailable), errors.Is(err, artifacts.ErrIntegrity), errors.Is(err, artifacts.ErrSizeMismatch), errors.Is(err, artifacts.ErrHashMismatch):
+		return http.StatusNotFound
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return http.StatusRequestTimeout
+	default:
+		return http.StatusServiceUnavailable
+	}
+}
+
+func writeArtifactDownloadError(writer http.ResponseWriter, request *http.Request, status int, err error, message string) {
+	apiErr := auth.ErrInvalid
+	switch status {
+	case http.StatusServiceUnavailable:
+		apiErr = auth.ErrUnavailable
+	case http.StatusConflict:
+		apiErr = auth.ErrConflict
+	case http.StatusUnauthorized:
+		apiErr = auth.ErrUnauthenticated
+	case http.StatusNotFound:
+		apiErr = auth.ErrNotFound
+	}
+	auth.WriteError(writer, request, status, apiErr, message)
+}
+
+func unavailableArtifactDownload(writer http.ResponseWriter, request *http.Request) {
+	auth.WriteError(writer, request, http.StatusServiceUnavailable, auth.ErrUnavailable, "artifact download is temporarily unavailable")
 }
 
 func (s *applicationServices) sessionAccess() *sessionService {
@@ -137,6 +288,8 @@ func writeApplicationError(writer http.ResponseWriter, request *http.Request, st
 }
 
 func (s *Server) handleApplication(writer http.ResponseWriter, request *http.Request) {
+	s.activeApplicationRequests.Add(1)
+	defer s.activeApplicationRequests.Add(-1)
 	s.resourceMu.RLock()
 	var handler http.Handler
 	if runtime, ok := s.resources.(interface{ APIHandler() http.Handler }); ok {

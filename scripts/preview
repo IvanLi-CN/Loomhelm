@@ -17,6 +17,71 @@ case "$state_dir" in
 esac
 state_dir=$(CDPATH= cd -- "$(dirname -- "$state_dir")" && pwd -P)/$(basename -- "$state_dir")
 env_file="$state_dir/compose.env"
+workflow_lock_pid=
+workflow_lock_ready=
+
+release_workflow_lock() {
+	if [ -n "${workflow_lock_pid:-}" ]; then
+		kill "$workflow_lock_pid" 2>/dev/null || true
+		wait "$workflow_lock_pid" 2>/dev/null || true
+		workflow_lock_pid=
+	fi
+	if [ -n "${workflow_lock_ready:-}" ]; then
+		rm -f -- "$workflow_lock_ready"
+		workflow_lock_ready=
+	fi
+	unset LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD
+}
+
+acquire_workflow_lock() {
+	mkdir -p "$state_dir"
+	workflow_lock_ready=$(mktemp "${TMPDIR:-/tmp}/loomhelm-preview-lock.XXXXXX")
+	python3 - "$state_dir/.workflow.lock" "$workflow_lock_ready" "$$" <<'PY' &
+import fcntl
+import os
+import pathlib
+import sys
+import time
+
+lock_path = pathlib.Path(sys.argv[1])
+ready_path = pathlib.Path(sys.argv[2])
+parent_pid = int(sys.argv[3])
+blocked_path = pathlib.Path(os.environ["LOOMHELM_PREVIEW_TEST_LOCK_BLOCKED_FILE"]) if os.environ.get("LOOMHELM_PREVIEW_TEST_LOCK_BLOCKED_FILE") else None
+blocked_reported = False
+lock_path.parent.mkdir(parents=True, exist_ok=True)
+try:
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        while True:
+            if os.getppid() != parent_pid:
+                raise SystemExit
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if blocked_path is not None and not blocked_reported:
+                    blocked_path.write_text("blocked\n", encoding="utf-8")
+                    blocked_reported = True
+                time.sleep(0.25)
+        ready_path.write_text("ready\n", encoding="utf-8")
+        while os.getppid() == parent_pid:
+            time.sleep(0.25)
+finally:
+    try:
+        ready_path.unlink()
+    except FileNotFoundError:
+        pass
+PY
+	workflow_lock_pid=$!
+	while [ ! -s "$workflow_lock_ready" ]; do
+		if ! kill -0 "$workflow_lock_pid" 2>/dev/null; then
+			echo "preview: workflow lock helper exited before acquiring the lock" >&2
+			release_workflow_lock
+			return 1
+		fi
+		sleep 0.01
+	done
+	export LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD=1
+}
 
 require_preview_settings() {
 	: "${LOOMHELM_PREVIEW_PROJECT_NAME:?LOOMHELM_PREVIEW_PROJECT_NAME must be exported for this worktree}"
@@ -32,7 +97,9 @@ control() {
 
 compose() {
 	require_preview_settings
-	docker compose --project-name "$LOOMHELM_PREVIEW_PROJECT_NAME" --env-file "$env_file" -f deploy/preview/compose.yaml "$@"
+	# compose.env contains derived candidate values, including the shutdown
+	# grace lower bound; do not let a stale host export override that file.
+	env -u LOOMHELM_STOP_GRACE_PERIOD docker compose --project-name "$LOOMHELM_PREVIEW_PROJECT_NAME" --env-file "$env_file" -f deploy/preview/compose.yaml "$@"
 }
 
 load_local_environment() {
@@ -136,7 +203,7 @@ verify_candidate_identity() {
 wait_server_ready() {
 	slot=$1
 	port=$(server_port "$slot")
-	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-90} ))
+	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-660} ))
 	while [ "$(date +%s)" -lt "$deadline" ]; do
 		if curl --fail --silent --show-error "http://127.0.0.1:$port/readyz" >/dev/null 2>&1 &&
 			version_matches "http://127.0.0.1:$port/version" "$(identity_field "$slot" source_sha)" "$(identity_field "$slot" artifact_digest)"; then
@@ -150,7 +217,7 @@ wait_server_ready() {
 
 wait_worker_ready() {
 	slot=$1
-	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-90} ))
+	deadline=$(( $(date +%s) + ${LOOMHELM_PREVIEW_READY_TIMEOUT:-660} ))
 	while [ "$(date +%s)" -lt "$deadline" ]; do
 		if worker_request "$slot" http://127.0.0.1:8081/readyz 2>/dev/null | grep -q '"ready":true' &&
 			worker_version_matches "$slot" "$(identity_field "$slot" source_sha)" "$(identity_field "$slot" artifact_digest)"; then
@@ -259,6 +326,16 @@ EOF
 
 command=${1:-}
 case "$command" in
+	""|help|-h|--help) ;;
+	*)
+		trap 'release_workflow_lock' 0
+		trap 'release_workflow_lock; exit 129' HUP
+		trap 'release_workflow_lock; exit 130' INT
+		trap 'release_workflow_lock; exit 143' TERM
+		acquire_workflow_lock
+		;;
+esac
+case "$command" in
 	init)
 		control init
 		;;
@@ -305,6 +382,7 @@ case "$command" in
 		;;
 	status)
 		load_local_environment
+		control validate-project >/dev/null
 		control status
 		if [ -f "$env_file" ]; then
 			compose ps
@@ -312,7 +390,13 @@ case "$command" in
 		;;
 	compose-config)
 		refresh_env
-		compose config --quiet
+		if [ -n "${LOOMHELM_PREVIEW_TEST_COMPOSE_CONFIG_OUTPUT:-}" ]; then
+			# Test-only output keeps the normal command quiet while proving that
+			# this wrapper's environment sanitization reaches Compose.
+			compose config --format json >"$LOOMHELM_PREVIEW_TEST_COMPOSE_CONFIG_OUTPUT"
+		else
+			compose config --quiet
+		fi
 		;;
 	""|help|-h|--help)
 		usage

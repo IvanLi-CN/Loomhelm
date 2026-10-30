@@ -16,9 +16,10 @@ import (
 type Component string
 
 const (
-	ComponentServer    Component = "server"
-	ComponentWorker    Component = "worker"
-	ComponentConnector Component = "connector"
+	ComponentServer       Component = "server"
+	ComponentWorker       Component = "worker"
+	ComponentConnector    Component = "connector"
+	DefaultStartupTimeout           = 10 * time.Minute
 )
 
 type Config struct {
@@ -26,6 +27,7 @@ type Config struct {
 	Version                   string
 	CandidateSourceSHA        string
 	ArtifactDigest            string
+	ArtifactRoot              string
 	HTTPAddr                  string
 	WorkerHTTPAddr            string
 	DrainToken                string
@@ -144,10 +146,11 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		Version:            strings.TrimSpace(version),
 		CandidateSourceSHA: strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CANDIDATE_SOURCE_SHA", version)),
 		ArtifactDigest:     strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_DIGEST", "unknown")),
+		ArtifactRoot:       strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_ROOT", "")),
 		ShutdownTimeout:    shutdownTimeout,
 	}
 	if component != ComponentConnector {
-		config.StartupTimeout, err = durationFromEnv(lookup, "LOOMHELM_STARTUP_TIMEOUT", 30*time.Second)
+		config.StartupTimeout, err = durationFromEnv(lookup, "LOOMHELM_STARTUP_TIMEOUT", DefaultStartupTimeout)
 		if err != nil {
 			return Config{}, err
 		}
@@ -214,6 +217,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.ArtifactDigest) != "" && strings.ContainsAny(c.ArtifactDigest, " \t\r\n") {
 		return fmt.Errorf("artifact digest must not contain whitespace")
+	}
+	if strings.TrimSpace(c.ArtifactRoot) != "" && strings.ContainsAny(c.ArtifactRoot, "\x00\r\n") {
+		return fmt.Errorf("artifact root must not contain NUL or line breaks")
 	}
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("shutdown timeout must be greater than zero")
@@ -307,7 +313,7 @@ func ValidateDevelopmentDatabaseTarget(databaseURL, postgresPort string) error {
 // StartupBudget supplies the same default for environment and programmatic callers.
 func (c Config) StartupBudget() time.Duration {
 	if c.StartupTimeout == 0 {
-		return 30 * time.Second
+		return DefaultStartupTimeout
 	}
 	return c.StartupTimeout
 }

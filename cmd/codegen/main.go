@@ -34,6 +34,7 @@ type schema struct {
 	Type                 string            `json:"type"`
 	Format               string            `json:"format"`
 	Enum                 []string          `json:"enum"`
+	Extensible           bool              `json:"extensible"`
 	Required             []string          `json:"required"`
 	Properties           map[string]schema `json:"properties"`
 	Items                *schema           `json:"items"`
@@ -46,17 +47,20 @@ type restContract struct {
 }
 
 type operation struct {
-	OperationID    string            `json:"operation_id"`
-	BrowserOnly    bool              `json:"browser_only"`
-	Method         string            `json:"method"`
-	Path           string            `json:"path"`
-	PathParams     map[string]string `json:"path_params"`
-	QueryType      string            `json:"query_type"`
-	BodyType       string            `json:"body_type"`
-	ResponseType   string            `json:"response_type"`
-	ResponseStatus int               `json:"response_status"`
-	Summary        string            `json:"summary"`
-	MCPTool        *mcpTool          `json:"mcp_tool"`
+	OperationID      string            `json:"operation_id"`
+	BrowserOnly      bool              `json:"browser_only"`
+	Method           string            `json:"method"`
+	Path             string            `json:"path"`
+	PathParams       map[string]string `json:"path_params"`
+	RequestHeaders   map[string]string `json:"request_headers"`
+	QueryType        string            `json:"query_type"`
+	BodyType         string            `json:"body_type"`
+	ResponseType     string            `json:"response_type"`
+	ResponseStatus   int               `json:"response_status"`
+	ResponseStatuses []int             `json:"response_statuses"`
+	ResponseHeaders  map[string]string `json:"response_headers"`
+	Summary          string            `json:"summary"`
+	MCPTool          *mcpTool          `json:"mcp_tool"`
 }
 
 type mcpTool struct {
@@ -172,7 +176,7 @@ func validate(source contract) error {
 			return fmt.Errorf("REST operation ids must be unique and non-empty")
 		}
 		seenOperations[operation.OperationID] = true
-		if !map[string]bool{"GET": true, "POST": true, "PATCH": true, "PUT": true, "DELETE": true}[operation.Method] {
+		if !map[string]bool{"GET": true, "HEAD": true, "POST": true, "PATCH": true, "PUT": true, "DELETE": true}[operation.Method] {
 			return fmt.Errorf("operation %s has unsupported method %q", operation.OperationID, operation.Method)
 		}
 		if !strings.HasPrefix(operation.Path, "/") {
@@ -188,6 +192,16 @@ func validate(source contract) error {
 				return fmt.Errorf("operation %s path parameter %q is not declared", operation.OperationID, name)
 			}
 		}
+		for name, header := range operation.RequestHeaders {
+			if strings.TrimSpace(name) == "" || strings.TrimSpace(header) == "" {
+				return fmt.Errorf("operation %s request header mappings must have non-empty names", operation.OperationID)
+			}
+		}
+		for header, description := range operation.ResponseHeaders {
+			if strings.TrimSpace(header) == "" || strings.TrimSpace(description) == "" {
+				return fmt.Errorf("operation %s response header mappings must have non-empty names and descriptions", operation.OperationID)
+			}
+		}
 		for typeName, label := range map[string]string{
 			operation.QueryType:    "query type",
 			operation.BodyType:     "body type",
@@ -199,15 +213,38 @@ func validate(source contract) error {
 				}
 			}
 		}
-		if operation.ResponseStatus != 0 && (operation.ResponseStatus < 200 || operation.ResponseStatus > 299) {
-			return fmt.Errorf("operation %s response status must be successful", operation.OperationID)
+		statuses := responseStatuses(operation)
+		if len(statuses) == 0 && operation.ResponseType == "" {
+			return fmt.Errorf("operation %s must declare response_status or response_statuses when it has no response type", operation.OperationID)
 		}
-		if operation.ResponseStatus == 204 {
-			if operation.ResponseType != "" {
-				return fmt.Errorf("operation %s cannot declare a response body for status 204", operation.OperationID)
+		seenStatuses := map[int]bool{}
+		for _, status := range statuses {
+			if status < 200 || status > 299 {
+				return fmt.Errorf("operation %s response status must be successful", operation.OperationID)
 			}
-		} else if operation.ResponseType == "" {
-			return fmt.Errorf("operation %s response type must not be empty unless status is 204", operation.OperationID)
+			if seenStatuses[status] {
+				return fmt.Errorf("operation %s response statuses must be unique", operation.OperationID)
+			}
+			seenStatuses[status] = true
+		}
+		if len(operation.ResponseStatuses) > 0 && operation.ResponseStatus == 0 {
+			return fmt.Errorf("operation %s response_statuses requires response_status", operation.OperationID)
+		}
+		if len(operation.ResponseStatuses) > 0 && !seenStatuses[operation.ResponseStatus] {
+			return fmt.Errorf("operation %s response_status must be included in response_statuses", operation.OperationID)
+		}
+		if operation.ResponseType == "" {
+			for _, status := range statuses {
+				if status != 204 {
+					return fmt.Errorf("operation %s response type must not be empty unless every status is 204", operation.OperationID)
+				}
+			}
+		} else {
+			for _, status := range statuses {
+				if status == 204 {
+					return fmt.Errorf("operation %s cannot declare a response body for status 204", operation.OperationID)
+				}
+			}
 		}
 		if operation.BrowserOnly && operation.MCPTool != nil {
 			return fmt.Errorf("browser-only operation %s must not declare an MCP tool", operation.OperationID)
@@ -243,7 +280,7 @@ func validateSchema(types map[string]schema, value schema, location string) erro
 		}
 		return nil
 	}
-	if value.Kind == "json-value" || value.Kind == "raw-json" {
+	if value.Kind == "json-value" || value.Kind == "raw-json" || value.Kind == "binary" {
 		return nil
 	}
 	if value.Type == "" {
@@ -255,6 +292,9 @@ func validateSchema(types map[string]schema, value schema, location string) erro
 				return fmt.Errorf("%s enum values must not be empty", location)
 			}
 		}
+	}
+	if value.Extensible && value.Type != "string" {
+		return fmt.Errorf("%s extensible schemas must be strings", location)
 	}
 	if value.Type == "object" {
 		for property, child := range value.Properties {
@@ -329,7 +369,7 @@ func (g generator) goSource() ([]byte, error) {
 	names := sortedKeys(g.contract.Types)
 	for _, name := range names {
 		value := g.contract.Types[name]
-		if value.Kind == "json-value" || value.Kind == "raw-json" {
+		if value.Kind == "json-value" || value.Kind == "raw-json" || value.Kind == "binary" {
 			continue
 		}
 		if len(value.Enum) > 0 {
@@ -359,11 +399,11 @@ func (g generator) goSource() ([]byte, error) {
 		out.WriteString("}\n\n")
 	}
 
-	out.WriteString("type RESTOperation struct {\n\tOperationID string\n\tMethod string\n\tPath string\n\tRequestType string\n\tResponseType string\n\tResponseStatus int\n}\n\n")
+	out.WriteString("type RESTOperation struct {\n\tOperationID string\n\tMethod string\n\tPath string\n\tRequestType string\n\tResponseType string\n\tResponseStatus int\n\tResponseStatuses []int\n}\n\n")
 	out.WriteString("var RESTOperations = []RESTOperation{\n")
 	for _, operation := range g.contract.REST.Operations {
 		requestType := operationRequestType(operation)
-		fmt.Fprintf(&out, "\t{OperationID: %q, Method: %q, Path: %q, RequestType: %q, ResponseType: %q, ResponseStatus: %d},\n", operation.OperationID, operation.Method, g.contract.REST.BasePath+operation.Path, requestType, operation.ResponseType, operation.ResponseStatus)
+		fmt.Fprintf(&out, "\t{OperationID: %q, Method: %q, Path: %q, RequestType: %q, ResponseType: %q, ResponseStatus: %d, ResponseStatuses: %s},\n", operation.OperationID, operation.Method, g.contract.REST.BasePath+operation.Path, requestType, operation.ResponseType, operation.ResponseStatus, formatGoIntSlice(responseStatuses(operation)))
 	}
 	out.WriteString("}\n\n")
 
@@ -444,10 +484,10 @@ func (g generator) protocolTypeScript() string {
 
 	for _, name := range sortedKeys(g.contract.Types) {
 		value := g.contract.Types[name]
-		if value.Kind == "json-value" || value.Kind == "raw-json" {
+		if value.Kind == "json-value" || value.Kind == "raw-json" || value.Kind == "binary" {
 			continue
 		}
-		if len(value.Enum) > 0 {
+		if len(value.Enum) > 0 && !value.Extensible {
 			quoted := make([]string, len(value.Enum))
 			for i, item := range value.Enum {
 				quoted[i] = fmt.Sprintf("%q", item)
@@ -468,10 +508,10 @@ func (g generator) protocolTypeScript() string {
 		out.WriteString("}\n\n")
 	}
 
-	out.WriteString("export interface RestOperation { operationId: string; method: string; path: string; requestType: string; responseType: string; responseStatus: number; }\n")
+	out.WriteString("export interface RestOperation { operationId: string; method: string; path: string; requestType: string; responseType: string; responseStatus: number; responseStatuses: readonly number[]; }\n")
 	out.WriteString("export const REST_OPERATIONS = [\n")
 	for _, operation := range g.contract.REST.Operations {
-		fmt.Fprintf(&out, "  { operationId: %q, method: %q, path: %q, requestType: %q, responseType: %q, responseStatus: %d },\n", operation.OperationID, operation.Method, g.contract.REST.BasePath+operation.Path, operationRequestType(operation), operation.ResponseType, operation.ResponseStatus)
+		fmt.Fprintf(&out, "  { operationId: %q, method: %q, path: %q, requestType: %q, responseType: %q, responseStatus: %d, responseStatuses: %s },\n", operation.OperationID, operation.Method, g.contract.REST.BasePath+operation.Path, operationRequestType(operation), operation.ResponseType, operation.ResponseStatus, formatIntSlice(responseStatuses(operation)))
 	}
 	out.WriteString("] as const satisfies readonly RestOperation[];\n\n")
 
@@ -525,13 +565,16 @@ func (g generator) apiClientTypeScript() string {
 	fmt.Fprintf(&out, "// Contract SHA256: %s\n\n", g.digest)
 	out.WriteString("import type * as Protocol from \"../../protocol/src/generated\";\n\n")
 	out.WriteString("export interface ApiClientOptions { baseUrl?: string; fetch?: typeof globalThis.fetch; headers?: HeadersInit; }\n\n")
-	out.WriteString("export class ApiClientError extends Error {\n  readonly status: number;\n  readonly body: unknown;\n\n  constructor(status: number, body: unknown) {\n    super(\"Loomhelm API request failed with status \" + status);\n    this.name = \"ApiClientError\";\n    this.status = status;\n    this.body = body;\n  }\n}\n\n")
+	out.WriteString("export class ApiClientError extends Error {\n  readonly status: number;\n  readonly body: unknown;\n  readonly response?: Response;\n\n  constructor(status: number, body: unknown, response?: Response) {\n    super(\"Loomhelm API request failed with status \" + status);\n    this.name = \"ApiClientError\";\n    this.status = status;\n    this.body = body;\n    this.response = response;\n  }\n}\n\n")
 
 	for _, operation := range g.contract.REST.Operations {
 		paramsType := operationParamsType(operation)
 		fmt.Fprintf(&out, "export interface %s {\n", paramsType)
 		for _, property := range sortedKeys(operation.PathParams) {
 			fmt.Fprintf(&out, "  %s: %s;\n", property, tsPrimitive(operation.PathParams[property]))
+		}
+		for _, property := range sortedKeys(operation.RequestHeaders) {
+			fmt.Fprintf(&out, "  %s?: string;\n", property)
 		}
 		if operation.QueryType != "" {
 			query := g.contract.Types[operation.QueryType]
@@ -551,8 +594,14 @@ func (g generator) apiClientTypeScript() string {
 		paramsType := operationParamsType(operation)
 		requestOptional := len(operation.PathParams) == 0 && operation.BodyType == ""
 		responseType := "void"
+		binaryResponse := false
 		if operation.ResponseType != "" {
-			responseType = "Protocol." + operation.ResponseType
+			if g.isBinaryResponse(operation) {
+				responseType = "Response"
+				binaryResponse = true
+			} else {
+				responseType = "Protocol." + operation.ResponseType
+			}
 		}
 		if requestOptional {
 			fmt.Fprintf(&out, "  async %s(request: %s = {}): Promise<%s> {\n", operation.OperationID, paramsType, responseType)
@@ -561,6 +610,12 @@ func (g generator) apiClientTypeScript() string {
 		}
 		pathExpression := g.tsPathExpression(operation)
 		fmt.Fprintf(&out, "    const path = %s;\n", pathExpression)
+		if len(operation.RequestHeaders) > 0 {
+			out.WriteString("    const requestHeaders = new Headers();\n")
+			for _, property := range sortedKeys(operation.RequestHeaders) {
+				fmt.Fprintf(&out, "    if (request.%s !== undefined) requestHeaders.set(%q, String(request.%s));\n", property, operation.RequestHeaders[property], property)
+			}
+		}
 		if operation.QueryType != "" {
 			fmt.Fprintf(&out, "    const query = new URLSearchParams();\n")
 			for _, property := range sortedKeys(g.contract.Types[operation.QueryType].Properties) {
@@ -575,40 +630,72 @@ func (g generator) apiClientTypeScript() string {
 			if operation.BodyType != "" {
 				body = "request.body"
 			}
-			fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %d);\n", responseType, operation.Method, body, operation.ResponseStatus)
+			expectedStatus := strconv.Itoa(operation.ResponseStatus)
+			if statuses := responseStatuses(operation); len(statuses) > 1 {
+				expectedStatus = formatIntSlice(statuses)
+			}
+			if binaryResponse {
+				if len(operation.RequestHeaders) > 0 {
+					fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true, requestHeaders);\n", responseType, operation.Method, body, expectedStatus)
+				} else {
+					fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true);\n", responseType, operation.Method, body, expectedStatus)
+				}
+			} else if len(operation.RequestHeaders) > 0 {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, false, requestHeaders);\n", responseType, operation.Method, body, expectedStatus)
+			} else {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s);\n", responseType, operation.Method, body, expectedStatus)
+			}
 		} else if operation.BodyType != "" {
-			fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, request.body);\n", responseType, operation.Method)
+			if len(operation.RequestHeaders) > 0 {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, request.body, undefined, false, requestHeaders);\n", responseType, operation.Method)
+			} else {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, request.body);\n", responseType, operation.Method)
+			}
 		} else {
-			fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath);\n", responseType, operation.Method)
+			if len(operation.RequestHeaders) > 0 {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, undefined, undefined, false, requestHeaders);\n", responseType, operation.Method)
+			} else {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath);\n", responseType, operation.Method)
+			}
 		}
 		out.WriteString("  }\n\n")
 	}
-	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number): Promise<T> {
+	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number | readonly number[], binary = false, requestHeaders?: HeadersInit): Promise<T> {
     const baseUrl = this.options.baseUrl ?? (typeof location === "undefined" ? "http://localhost" : location.origin);
     const url = new URL(path, baseUrl);
     const fetcher = this.options.fetch ?? globalThis.fetch;
     if (!fetcher) throw new Error("a fetch implementation is required");
     const headers = new Headers(this.options.headers);
-    headers.set("Accept", "application/json");
+    if (requestHeaders !== undefined) {
+      const additionalHeaders = new Headers(requestHeaders);
+      additionalHeaders.forEach((value, key) => headers.set(key, value));
+    }
+    headers.set("Accept", binary ? "application/octet-stream" : "application/json");
     const init: RequestInit = { method, headers };
     if (body !== undefined) {
       headers.set("Content-Type", "application/json");
       init.body = JSON.stringify(body);
     }
     const response = await fetcher(url, init);
-    const text = await response.text();
     let parsed: unknown = undefined;
-    if (text.length > 0) {
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        parsed = text;
+    if (!binary || !response.ok) {
+      const text = await response.text();
+      if (text.length > 0) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = text;
+        }
       }
     }
-    if (!response.ok) throw new ApiClientError(response.status, parsed);
-    if (expectedStatus !== undefined && response.status !== expectedStatus) {
-      throw new Error("Loomhelm API returned status " + response.status + "; expected " + expectedStatus);
+    if (!response.ok) throw new ApiClientError(response.status, parsed, response);
+    if (expectedStatus !== undefined) {
+      const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+      if (!expectedStatuses.includes(response.status)) {
+        throw new Error("Loomhelm API returned status " + response.status + "; expected " + expectedStatuses.join(", "));
+      }
     }
+    if (binary) return response as T;
     return parsed as T;
   }
 }
@@ -618,6 +705,14 @@ export function createGeneratedApiClient(options: ApiClientOptions = {}): Loomhe
 }
 `)
 	return out.String()
+}
+
+func (g generator) isBinaryResponse(operation operation) bool {
+	if operation.ResponseType == "" {
+		return false
+	}
+	value, ok := g.contract.Types[operation.ResponseType]
+	return ok && value.Kind == "binary"
 }
 
 func (g generator) goType(value schema, required bool) string {
@@ -677,6 +772,38 @@ func (g generator) tsType(value schema) string {
 
 func operationRequestType(value operation) string {
 	return operationParamsType(value)
+}
+
+func responseStatuses(value operation) []int {
+	if len(value.ResponseStatuses) > 0 {
+		return append([]int(nil), value.ResponseStatuses...)
+	}
+	if value.ResponseStatus == 0 {
+		return nil
+	}
+	return []int{value.ResponseStatus}
+}
+
+func formatGoIntSlice(values []int) string {
+	if len(values) == 0 {
+		return "nil"
+	}
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.Itoa(value)
+	}
+	return "[]int{" + strings.Join(parts, ", ") + "}"
+}
+
+func formatIntSlice(values []int) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.Itoa(value)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func operationParamsType(value operation) string {

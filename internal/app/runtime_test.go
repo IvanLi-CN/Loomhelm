@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
 
@@ -78,6 +80,67 @@ func newTestWorker(cfg platform.Config, logger *slog.Logger) (*Worker, error) {
 		w.openRuntime = fakeFactory(&fakeRuntime{})
 	}
 	return w, err
+}
+
+type repeatedArtifactRecoveryStore struct {
+	calls atomic.Int32
+}
+
+func (s *repeatedArtifactRecoveryStore) Recover(context.Context, int) (artifacts.RecoveryReport, error) {
+	call := s.calls.Add(1)
+	return artifacts.RecoveryReport{Scanned: int(call)}, nil
+}
+
+type startupArtifactRecoveryStore struct {
+	report artifacts.RecoveryReport
+	err    error
+}
+
+func (s startupArtifactRecoveryStore) Recover(context.Context, int) (artifacts.RecoveryReport, error) {
+	return s.report, s.err
+}
+
+func TestStartupArtifactRecoveryAllowsDeferredItems(t *testing.T) {
+	report, err := recoverArtifactStoreAtStartup(context.Background(), startupArtifactRecoveryStore{
+		report: artifacts.RecoveryReport{Failed: 1, Deferred: 1},
+		err:    errors.Join(artifacts.ErrRecoveryIncomplete, artifacts.ErrRecoveryDeferred),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("deferred startup recovery error = %v, want nil", err)
+	}
+	if report.Failed != 1 || report.Deferred != 1 {
+		t.Fatalf("deferred startup recovery report = %#v", report)
+	}
+}
+
+func TestStartupArtifactRecoveryRejectsNonDeferredFailure(t *testing.T) {
+	want := errors.New("recovery backend unavailable")
+	_, err := recoverArtifactStoreAtStartup(context.Background(), startupArtifactRecoveryStore{err: want}, nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("startup recovery error = %v, want %v", err, want)
+	}
+}
+
+func TestDatabaseRuntimeRepeatsArtifactRecoveryUntilClosed(t *testing.T) {
+	store := &repeatedArtifactRecoveryStore{}
+	runtime := &databaseRuntime{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	runtime.startArtifactRecoveryWithInterval(store, time.Millisecond)
+	t.Cleanup(func() { runtime.stopArtifactRecovery() })
+
+	deadline := time.After(time.Second)
+	for store.calls.Load() < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("artifact recovery calls = %d, want at least 2", store.calls.Load())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	runtime.stopArtifactRecovery()
+	callsAtStop := store.calls.Load()
+	time.Sleep(10 * time.Millisecond)
+	if store.calls.Load() != callsAtStop {
+		t.Fatalf("artifact recovery calls continued after stop: before=%d after=%d", callsAtStop, store.calls.Load())
+	}
 }
 
 func TestServerPersistenceFailureRetainsCallerListener(t *testing.T) {

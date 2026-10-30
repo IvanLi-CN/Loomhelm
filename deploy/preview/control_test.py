@@ -1,12 +1,17 @@
 import io
 import json
 import os
+import shutil
 import stat
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from argparse import Namespace
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 import control
@@ -55,9 +60,117 @@ class PreviewControlTest(unittest.TestCase):
                 for key in configured:
                     self.assertEqual(actual[key], auth.get(key, ""))
                 self.assertEqual(actual["LOOMHELM_SESSION_COOKIE_SECURE"], auth.get("LOOMHELM_SESSION_COOKIE_SECURE", "true"))
+                self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "170s")
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 self.assertNotIn(required["LOOMHELM_DRAIN_TOKEN"], captured.getvalue())
                 self.assertNotIn(configured["LOOMHELM_OIDC_CLIENT_SECRET"], captured.getvalue())
+                with patch.dict(os.environ, {**required, "LOOMHELM_PREVIEW_PROJECT_NAME": "renamed-preview"}, clear=True):
+                    self.invoke("compose_env", state_dir, output=output)
+                renamed = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+                self.assertEqual(renamed["LOOMHELM_ARTIFACT_VOLUME_NAME"], actual["LOOMHELM_ARTIFACT_VOLUME_NAME"])
+
+    def test_compose_project_name_cannot_change_after_activation(self) -> None:
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-project-lock-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            self.invoke("init", state_dir)
+            self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+            state = control.load_state(state_dir)
+            state["active_slot"] = "blue"
+            control.write_state(state_dir, state)
+            with patch.dict(os.environ, {**settings, "LOOMHELM_PREVIEW_PROJECT_NAME": "renamed-preview"}, clear=True):
+                with self.assertRaises(control.ContractError):
+                    self.invoke("validate_project", state_dir)
+                with self.assertRaises(control.ContractError):
+                    self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+
+    def test_legacy_active_state_cannot_be_rebound_to_a_new_project(self) -> None:
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-legacy-project",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            self.invoke("init", state_dir)
+            self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+            state = control.load_state(state_dir)
+            state.pop("compose_project_name", None)
+            state["active_slot"] = "blue"
+            control.write_state(state_dir, state)
+            with patch.dict(os.environ, {**settings, "LOOMHELM_PREVIEW_PROJECT_NAME": "renamed-preview"}, clear=True):
+                with self.assertRaises(control.ContractError):
+                    self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+
+    def test_compose_grace_covers_a_longer_shutdown_timeout(self) -> None:
+        self.assertEqual(control.default_stop_grace_period("1m30s"), "330s")
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-grace-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+            "LOOMHELM_SHUTDOWN_TIMEOUT": "120s",
+            "LOOMHELM_STOP_GRACE_PERIOD": "5s",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            output = state_dir / "compose.env"
+            self.invoke("init", state_dir)
+            self.invoke("compose_env", state_dir, output=output)
+            actual = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+            self.assertEqual(actual["LOOMHELM_SHUTDOWN_TIMEOUT"], "120s")
+            self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "390s")
+
+    def test_compose_environment_rejects_invalid_shutdown_and_grace_durations(self) -> None:
+        required = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-invalid-duration-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+        }
+        for name, invalid in (("LOOMHELM_SHUTDOWN_TIMEOUT", "not-a-duration"), ("LOOMHELM_STOP_GRACE_PERIOD", "0s"), ("LOOMHELM_STOP_GRACE_PERIOD", "0.1ns")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {**required, name: invalid}, clear=True):
+                state_dir = Path(raw_dir) / "state"
+                self.invoke("init", state_dir)
+                with self.assertRaises(control.ContractError):
+                    self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+
+    def test_failed_compose_environment_does_not_persist_derived_state(self) -> None:
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-atomic-state-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            output = state_dir / "compose.env"
+            self.invoke("init", state_dir)
+            with self.assertRaises(control.ContractError):
+                self.invoke("compose_env", state_dir, output=output)
+            state = control.load_state(state_dir)
+            self.assertIsNone(state["compose_project_name"])
+            self.assertIsNone(state["artifact_volume_name"])
+            self.assertFalse(output.exists())
 
     def write_manifest(self, path: Path, value: dict) -> None:
         path.write_text(json.dumps(value), encoding="utf-8")
@@ -67,6 +180,139 @@ class PreviewControlTest(unittest.TestCase):
         options.update(values)
         args = Namespace(**options)
         getattr(control, f"command_{name.replace('-', '_')}")(args)
+
+    def start_lock_holder(
+        self,
+        state_dir: Path,
+        ready: Path,
+        release: Path,
+        *,
+        workflow: bool,
+        blocked: Optional[Path] = None,
+    ) -> subprocess.Popen:
+        source = """
+from pathlib import Path
+import sys
+import time
+
+import control
+
+state_dir = Path(sys.argv[1])
+ready = Path(sys.argv[2])
+release = Path(sys.argv[3])
+blocked = Path(sys.argv[4]) if sys.argv[4] else None
+
+def on_blocked():
+    if blocked is not None:
+        blocked.write_text('blocked', encoding='utf-8')
+
+with control.state_lock(state_dir, on_blocked=on_blocked):
+    ready.write_text('locked', encoding='utf-8')
+    while not release.exists():
+        time.sleep(0.01)
+"""
+        environment = os.environ.copy()
+        module_dir = str(Path(control.__file__).resolve().parent)
+        environment["PYTHONPATH"] = os.pathsep.join(filter(None, (module_dir, environment.get("PYTHONPATH"))))
+        if workflow:
+            environment.pop("LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD", None)
+        else:
+            environment["LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD"] = "1"
+        return subprocess.Popen(
+            [sys.executable, "-c", source, str(state_dir), str(ready), str(release), str(blocked or "")],
+            cwd=module_dir,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def wait_for_file(self, path: Path, process: subprocess.Popen, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.exists():
+                return
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                self.fail(f"lock helper exited with {process.returncode}: {stdout}{stderr}")
+            time.sleep(0.01)
+        self.fail(f"timed out waiting for {path}")
+
+    def test_state_lock_serializes_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            state_dir = root / "state"
+            holder_ready = root / "holder.ready"
+            holder_release = root / "holder.release"
+            contender_ready = root / "contender.ready"
+            contender_release = root / "contender.release"
+            contender_blocked = root / "contender.blocked"
+            holder = self.start_lock_holder(state_dir, holder_ready, holder_release, workflow=False)
+            contender = None
+            try:
+                self.wait_for_file(holder_ready, holder)
+                contender = self.start_lock_holder(
+                    state_dir,
+                    contender_ready,
+                    contender_release,
+                    workflow=False,
+                    blocked=contender_blocked,
+                )
+                self.wait_for_file(contender_blocked, contender)
+                self.assertIsNone(contender.poll(), "state lock contender acquired before the holder released it")
+                self.assertFalse(contender_ready.exists())
+                holder_release.touch()
+                self.wait_for_file(contender_ready, contender)
+                contender_release.touch()
+                contender_stdout, contender_stderr = contender.communicate(timeout=5)
+                self.assertEqual(contender.returncode, 0, f"state contender failed: {contender_stdout}{contender_stderr}")
+            finally:
+                holder_release.touch()
+                if contender is not None:
+                    contender_release.touch()
+                    contender.communicate(timeout=5)
+                holder.communicate(timeout=5)
+
+    def test_preview_workflow_lock_serializes_wrapper_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            state_dir = root / "state"
+            repo = root / "repo"
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "deploy" / "preview").mkdir(parents=True)
+            shutil.copy2(control.ROOT / "scripts" / "preview", repo / "scripts" / "preview")
+            shutil.copy2(control.ROOT / "deploy" / "preview" / "control.py", repo / "deploy" / "preview" / "control.py")
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True, capture_output=True, timeout=5)
+            holder_ready = root / "holder.ready"
+            holder_release = root / "holder.release"
+            contender_blocked = root / "contender.blocked"
+            holder = self.start_lock_holder(state_dir, holder_ready, holder_release, workflow=True)
+            contender = None
+            try:
+                self.wait_for_file(holder_ready, holder)
+                environment = os.environ.copy()
+                environment["LOOMHELM_PREVIEW_STATE_DIR"] = str(state_dir)
+                environment["LOOMHELM_PREVIEW_TEST_LOCK_BLOCKED_FILE"] = str(contender_blocked)
+                contender = subprocess.Popen(
+                    [str(repo / "scripts" / "preview"), "init"],
+                    cwd=repo,
+                    env=environment,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                self.wait_for_file(contender_blocked, contender)
+                self.assertIsNone(contender.poll(), "preview workflow acquired before the holder released it")
+                self.assertFalse((state_dir / "state.json").exists())
+                holder_release.touch()
+                stdout, stderr = contender.communicate(timeout=5)
+                self.assertEqual(contender.returncode, 0, f"preview init failed: {stdout}{stderr}")
+                self.assertTrue((state_dir / "state.json").exists())
+            finally:
+                holder_release.touch()
+                if contender is not None and contender.poll() is None:
+                    contender.communicate(timeout=5)
+                holder.communicate(timeout=5)
 
     def test_promote_retains_previous_web_tree_and_renders_active_slot(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
+	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
@@ -38,12 +40,40 @@ type processRuntime interface {
 type runtimeFactory func(context.Context, platform.Config, *slog.Logger) (processRuntime, error)
 
 type databaseRuntime struct {
-	db              *database.DB
-	runner          *jobs.Runner
-	api             http.Handler
-	mcpHandler      http.Handler
-	gateway         *gateway.Server
-	shutdownTimeout time.Duration
+	db                     *database.DB
+	runner                 *jobs.Runner
+	api                    http.Handler
+	mcpHandler             http.Handler
+	gateway                *gateway.Server
+	logger                 *slog.Logger
+	shutdownTimeout        time.Duration
+	artifactRecoveryMu     sync.Mutex
+	artifactRecoveryCancel context.CancelFunc
+	artifactRecoveryDone   chan struct{}
+	closeOnce              sync.Once
+}
+
+type artifactRecoveryStore interface {
+	Recover(context.Context, int) (artifacts.RecoveryReport, error)
+}
+
+const (
+	artifactRecoveryInterval   = time.Minute
+	artifactRecoveryPassBudget = 10 * time.Second
+)
+
+func recoverArtifactStoreAtStartup(ctx context.Context, store artifactRecoveryStore, logger *slog.Logger) (artifacts.RecoveryReport, error) {
+	report, err := store.Recover(ctx, artifacts.DefaultRecoveryLimit)
+	if err == nil {
+		return report, nil
+	}
+	if !errors.Is(err, artifacts.ErrRecoveryDeferred) {
+		return report, err
+	}
+	if logger != nil {
+		logger.Warn("artifact recovery deferred during startup", "error", err, "failed", report.Failed, "deferred", report.Deferred)
+	}
+	return report, nil
 }
 
 func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.Logger) (processRuntime, error) {
@@ -123,7 +153,8 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			return err
 		}
 	}
-	runtime := &databaseRuntime{db: db, runner: runner, shutdownTimeout: cfg.ShutdownTimeout}
+	runtime := &databaseRuntime{db: db, runner: runner, logger: logger, shutdownTimeout: cfg.ShutdownTimeout}
+	var artifactRecovery artifactRecoveryStore
 	if cfg.Component == platform.ComponentServer {
 		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
@@ -132,6 +163,28 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		if serviceErr != nil {
 			db.Close()
 			return nil, serviceErr
+		}
+		if cfg.ArtifactRoot != "" {
+			artifactStore, artifactErr := artifacts.NewStore(db.Pool(), artifacts.Config{
+				Root: cfg.ArtifactRoot,
+				Authorizer: artifacts.NewResolvedAuthorizer(
+					artifactOwnershipResolver{sessions: services.sessions, runs: services.runRecords},
+					artifactScopeAuthorizer{principal: services.identity, sessions: services.sessionAccess()},
+				),
+			})
+			if artifactErr != nil {
+				db.Close()
+				return nil, fmt.Errorf("initialize artifact store: %w", artifactErr)
+			}
+			recoveryCtx, cancelRecovery := context.WithTimeout(ctx, cfg.StartupBudget())
+			_, artifactErr = recoverArtifactStoreAtStartup(recoveryCtx, artifactStore, logger)
+			cancelRecovery()
+			if artifactErr != nil {
+				db.Close()
+				return nil, fmt.Errorf("recover artifact store: %w", artifactErr)
+			}
+			services.artifactStore = artifactStore
+			artifactRecovery = artifactStore
 		}
 		transport := &gatewayExecutionTransport{
 			sessions:   sessionStore,
@@ -180,12 +233,19 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			return nil, fmt.Errorf("initialize run control: %w", controlErr)
 		}
 		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, hostRegistry, transport, control)
-		runtime.api = services.handler(control)
+		runtime.api, err = services.handler(control)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize application handler: %w", err)
+		}
 		runtime.mcpHandler, err = newMCPHandler(runtime.api, cfg.Version)
 		if err != nil {
 			db.Close()
 			return nil, fmt.Errorf("initialize MCP handler: %w", err)
 		}
+	}
+	if artifactRecovery != nil {
+		runtime.startArtifactRecovery(artifactRecovery)
 	}
 	return runtime, nil
 }
@@ -230,20 +290,130 @@ func (r *databaseRuntime) StopAndCancel(ctx context.Context) error {
 
 func (r *databaseRuntime) WaitStopped(ctx context.Context) error { return r.runner.WaitStopped(ctx) }
 
+func (r *databaseRuntime) startArtifactRecovery(store artifactRecoveryStore) {
+	r.startArtifactRecoveryWithInterval(store, artifactRecoveryInterval)
+}
+
+// RequestShutdown cancels background recovery as soon as the server enters
+// drain. Close still waits for the canceled pass before releasing the pool.
+func (r *databaseRuntime) RequestShutdown() {
+	if r == nil {
+		return
+	}
+	r.artifactRecoveryMu.Lock()
+	cancel := r.artifactRecoveryCancel
+	r.artifactRecoveryMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (r *databaseRuntime) startArtifactRecoveryWithInterval(store artifactRecoveryStore, interval time.Duration) {
+	if r == nil || store == nil || interval <= 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	r.artifactRecoveryMu.Lock()
+	r.artifactRecoveryCancel = cancel
+	r.artifactRecoveryDone = done
+	r.artifactRecoveryMu.Unlock()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				recoveryCtx, cancelRecovery := context.WithTimeout(ctx, artifactRecoveryPassBudget)
+				report, err := store.Recover(recoveryCtx, artifacts.DefaultRecoveryLimit)
+				cancelRecovery()
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					if r.logger != nil {
+						r.logger.Warn("artifact recovery pass incomplete", "error", err)
+					}
+					continue
+				}
+				if report.Scanned > 0 && r.logger != nil {
+					r.logger.Info("artifact recovery pass completed", "scanned", report.Scanned, "ready", report.Ready, "unavailable", report.Unavailable, "cleaned", report.Cleaned)
+				}
+			}
+		}
+	}()
+}
+
+func (r *databaseRuntime) stopArtifactRecovery() bool {
+	if r == nil {
+		return true
+	}
+	r.artifactRecoveryMu.Lock()
+	cancel := r.artifactRecoveryCancel
+	done := r.artifactRecoveryDone
+	r.artifactRecoveryMu.Unlock()
+	if cancel == nil {
+		return true
+	}
+	cancel()
+	if done != nil {
+		timeout := artifactRecoveryPassBudget
+		if r.shutdownTimeout > 0 && r.shutdownTimeout < timeout {
+			timeout = r.shutdownTimeout
+		}
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			if r.logger != nil {
+				r.logger.Error("artifact recovery shutdown exceeded budget")
+			}
+			return false
+		}
+	}
+	r.artifactRecoveryMu.Lock()
+	r.artifactRecoveryCancel = nil
+	r.artifactRecoveryDone = nil
+	r.artifactRecoveryMu.Unlock()
+	return true
+}
+
 func (r *databaseRuntime) Close() {
 	if r == nil {
 		return
 	}
-	if r.gateway != nil {
-		timeout := r.shutdownTimeout
-		if timeout <= 0 {
-			timeout = 10 * time.Second
+	r.closeOnce.Do(func() {
+		recoveryStopped := r.stopArtifactRecovery()
+		if r.gateway != nil {
+			timeout := r.shutdownTimeout
+			if timeout <= 0 {
+				timeout = 10 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			_ = r.gateway.Shutdown(ctx)
+			cancel()
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		_ = r.gateway.Shutdown(ctx)
-		cancel()
-	}
-	if r.db != nil {
-		r.db.Close()
-	}
+		if r.db == nil {
+			return
+		}
+		if recoveryStopped {
+			r.db.Close()
+			return
+		}
+		// Keep the pool alive until the canceled recovery pass exits. This
+		// avoids racing a late filesystem/database operation with db.Close;
+		// the process-level shutdown budget has already been honored above.
+		r.artifactRecoveryMu.Lock()
+		done := r.artifactRecoveryDone
+		r.artifactRecoveryMu.Unlock()
+		db := r.db
+		go func() {
+			<-done
+			db.Close()
+		}()
+	})
 }

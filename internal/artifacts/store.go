@@ -11,6 +11,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"syscall"
@@ -23,9 +24,10 @@ import (
 )
 
 const (
-	DefaultMaxBytes = 64 << 20
-	maxIdentifier   = 128
-	maxNameBytes    = 1024
+	DefaultMaxBytes                   = 64 << 20
+	maxIdentifier                     = 128
+	maxNameBytes                      = 1024
+	maxConcurrentMetadataVerification = 2
 )
 
 var (
@@ -36,6 +38,8 @@ var (
 	ErrIntegrity           = errors.New("artifact integrity check failed")
 	ErrSizeMismatch        = errors.New("artifact size does not match metadata")
 	ErrHashMismatch        = errors.New("artifact hash does not match metadata")
+	ErrContentChanged      = errors.New("artifact content changed during download")
+	ErrRangeNotSatisfiable = errors.New("artifact range is not satisfiable")
 	ErrTooLarge            = errors.New("artifact exceeds the configured size limit")
 	ErrStoreUnavailable    = errors.New("artifact store is unavailable")
 	ErrInputNotCancellable = errors.New("artifact source does not support cancellation")
@@ -110,12 +114,209 @@ func (c Config) validate() (string, error) {
 }
 
 type Store struct {
-	pool       *pgxpool.Pool
-	root       string
-	objects    string
-	maxBytes   int64
-	authorizer Authorizer
-	faults     *faultHooks
+	pool                      *pgxpool.Pool
+	root                      string
+	objects                   string
+	maxBytes                  int64
+	authorizer                Authorizer
+	faults                    *faultHooks
+	metadataVerificationSlots chan struct{}
+}
+
+func (s *Store) maxArtifactBytes() int64 {
+	if s == nil || s.maxBytes <= 0 {
+		return DefaultMaxBytes
+	}
+	return s.maxBytes
+}
+
+type contentReader struct {
+	*os.File
+	store           *Store
+	id              string
+	artifact        protocol.Artifact
+	version         string
+	mutationVersion string
+}
+
+func (r *contentReader) contentVersion() string {
+	if r == nil {
+		return ""
+	}
+	return r.mutationVersion
+}
+
+// Read and Seek enforce the same file-incarnation check for the unbounded
+// browser download path that the bounded content endpoint performs around
+// every chunk. A rename leaves this descriptor on the original immutable
+// object; an in-place mutation is rejected before its bytes can be emitted.
+func (r *contentReader) Read(buffer []byte) (int, error) {
+	if err := r.verifyContentVersion(context.Background()); err != nil {
+		return 0, err
+	}
+	n, err := r.File.Read(buffer)
+	if n > 0 {
+		if versionErr := r.verifyContentVersionStrict(context.Background()); versionErr != nil {
+			return 0, versionErr
+		}
+	}
+	return n, err
+}
+
+func (r *contentReader) Seek(offset int64, whence int) (int64, error) {
+	if err := r.verifyContentVersion(context.Background()); err != nil {
+		return 0, err
+	}
+	position, err := r.File.Seek(offset, whence)
+	if err != nil {
+		return position, err
+	}
+	if err := r.verifyContentVersion(context.Background()); err != nil {
+		return 0, err
+	}
+	return position, nil
+}
+
+func (r *contentReader) verifyContentVersion(ctx context.Context) error {
+	return r.verifyContentVersionWithMode(ctx, false)
+}
+
+func (r *contentReader) verifyContentVersionStrict(ctx context.Context) error {
+	return r.verifyContentVersionWithMode(ctx, true)
+}
+
+func (r *contentReader) verifyContentVersionWithMode(ctx context.Context, strict bool) error {
+	if r == nil || r.File == nil {
+		return ErrStoreUnavailable
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	version, err := filePathVersion(r.File)
+	if err != nil {
+		return err
+	}
+	if version != r.version {
+		return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+	}
+	mutationVersion, err := fileContentMutationVersion(r.File)
+	if err != nil {
+		return err
+	}
+	if contentVersionsMatch(r.mutationVersion, mutationVersion) {
+		return nil
+	}
+	if strict || !contentVersionLinkLifecycleOnly(r.mutationVersion, mutationVersion) {
+		return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+	}
+	return r.verifyStableContent(ctx, mutationVersion)
+}
+
+func (r *contentReader) reconcileExpectedContentVersion(ctx context.Context, expectedVersion string) error {
+	if expectedVersion == "" || contentVersionsMatch(expectedVersion, r.mutationVersion) {
+		return nil
+	}
+	if !contentVersionLinkLifecycleOnly(expectedVersion, r.mutationVersion) {
+		return fmt.Errorf("artifact content snapshot does not match: %w", ErrContentChanged)
+	}
+	return r.verifyStableContent(ctx, r.mutationVersion)
+}
+
+func (r *contentReader) verifyStableContent(ctx context.Context, currentMutationVersion string) error {
+	if r == nil || r.File == nil || r.artifact.Sha256 == "" {
+		return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+	}
+	position, err := r.File.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("inspect artifact content position: %w", ErrStoreUnavailable)
+	}
+	verifyErr := verifyFile(ctx, r.File, r.artifact)
+	if _, err := r.File.Seek(position, io.SeekStart); err != nil {
+		return fmt.Errorf("restore artifact content position: %w", ErrStoreUnavailable)
+	}
+	if verifyErr != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
+			return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+		}
+		return verifyErr
+	}
+	stableMutationVersion, err := fileContentMutationVersion(r.File)
+	if err != nil {
+		return err
+	}
+	if stableMutationVersion != currentMutationVersion {
+		return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+	}
+	r.mutationVersion = stableMutationVersion
+	return nil
+}
+
+func (r *contentReader) verifyCanonicalContentVersion(ctx context.Context) error {
+	if r == nil || r.File == nil || r.store == nil {
+		return ErrStoreUnavailable
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	path, err := r.store.objectPath(r.id)
+	if err != nil {
+		return err
+	}
+	file, err := openStoredFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrIntegrity) {
+			return fmt.Errorf("artifact content path changed while reading: %w", ErrContentChanged)
+		}
+		return err
+	}
+	defer file.Close()
+	version, err := filePathVersion(file)
+	if err != nil {
+		return err
+	}
+	if version != r.version {
+		return fmt.Errorf("artifact content path changed while reading: %w", ErrContentChanged)
+	}
+	return nil
+}
+
+func (r *contentReader) verifyContent(ctx context.Context, artifact protocol.Artifact) error {
+	if r == nil || r.File == nil || r.store == nil {
+		return ErrStoreUnavailable
+	}
+	if err := r.verifyContentVersion(ctx); err != nil {
+		return err
+	}
+	if err := r.verifyCanonicalContentVersion(ctx); err != nil {
+		return err
+	}
+	if err := verifyFile(ctx, r.File, artifact); err != nil {
+		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
+			// Distinguish an in-place mutation from stable corruption before
+			// recording a recoverable content-mismatch state. Recovery revalidates
+			// the final object and restores ready when the bytes become valid, so
+			// the database cannot be permanently poisoned by this read race.
+			if versionErr := r.verifyContentVersion(ctx); versionErr != nil {
+				return versionErr
+			}
+			if pathErr := r.verifyCanonicalContentVersion(ctx); pathErr != nil {
+				return pathErr
+			}
+			r.store.fault(faultBeforeContentMismatchMark)
+			if markErr := r.store.markReadyContentMismatch(ctx, r.id, r.version); markErr != nil {
+				return markErr
+			}
+			return unavailableError(err)
+		}
+		return err
+	}
+	if err := r.verifyContentVersion(ctx); err != nil {
+		return err
+	}
+	return r.verifyCanonicalContentVersion(ctx)
 }
 
 var _ protocol.ArtifactStore = (*Store)(nil)
@@ -152,12 +353,13 @@ func NewStore(pool *pgxpool.Pool, cfg Config) (*Store, error) {
 		maxBytes = DefaultMaxBytes
 	}
 	return &Store{
-		pool:       pool,
-		root:       root,
-		objects:    objects,
-		maxBytes:   maxBytes,
-		authorizer: authorizer,
-		faults:     cfg.faults,
+		pool:                      pool,
+		root:                      root,
+		objects:                   objects,
+		maxBytes:                  maxBytes,
+		authorizer:                authorizer,
+		faults:                    cfg.faults,
+		metadataVerificationSlots: make(chan struct{}, maxConcurrentMetadataVerification),
 	}, nil
 }
 
@@ -230,7 +432,7 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 	}
 	switch record.State {
 	case publicationReady:
-		check, inspectErr := s.inspectReady(record)
+		check, pathVersion, inspectErr := s.inspectReadyWithVersion(ctx, record)
 		if inspectErr != nil {
 			return protocol.Artifact{}, inspectErr
 		}
@@ -239,7 +441,7 @@ func (s *Store) Put(ctx context.Context, artifact protocol.Artifact, source io.R
 		}
 		if check != fileValid {
 			keepStaging = false
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check)); markErr != nil {
+			if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, pathVersion, finalReason(check)); markErr != nil {
 				return protocol.Artifact{}, markErr
 			}
 			return protocol.Artifact{}, unavailableError(ErrIntegrity)
@@ -316,10 +518,15 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 	if err != nil {
 		return protocol.Artifact{}, err
 	}
+	releaseVerification, err := s.acquireMetadataVerification(ctx)
+	if err != nil {
+		return protocol.Artifact{}, err
+	}
+	defer releaseVerification()
 	if err := s.ensureObjectDirectory(); err != nil {
 		return protocol.Artifact{}, err
 	}
-	check, inspectErr := s.inspectReady(record)
+	check, pathVersion, inspectErr := s.inspectReadyWithVersion(ctx, record)
 	if inspectErr != nil {
 		return protocol.Artifact{}, inspectErr
 	}
@@ -327,7 +534,7 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 		return protocol.Artifact{}, ErrStoreUnavailable
 	}
 	if check != fileValid {
-		if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, finalReason(check)); markErr != nil {
+		if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, pathVersion, finalReason(check)); markErr != nil {
 			return protocol.Artifact{}, markErr
 		}
 		return protocol.Artifact{}, unavailableError(ErrIntegrity)
@@ -335,7 +542,48 @@ func (s *Store) Metadata(ctx context.Context, id string) (protocol.Artifact, err
 	return record.Artifact, nil
 }
 
+func (s *Store) acquireMetadataVerification(ctx context.Context) (func(), error) {
+	if s == nil || s.metadataVerificationSlots == nil {
+		return func() {}, nil
+	}
+	select {
+	case s.metadataVerificationSlots <- struct{}{}:
+		return func() { <-s.metadataVerificationSlots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, ErrStoreUnavailable
+	}
+}
+
 func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	return s.openReadyArtifact(ctx, id, true, "")
+}
+
+// OpenContent opens an authorized, immutable ready object for a bounded
+// content transfer. Publication verifies the complete SHA-256 before the
+// object enters the ready state and final objects are never overwritten by
+// Store. This path repeats authorization, regular-file and exact-size checks
+// for every request. OpenContentAt additionally binds each request to the
+// previous file incarnation without a server-side transfer cache. The first
+// chunk calls verifyContent once before bytes are emitted, so the server
+// rejects a corrupt object before reporting any content; the response also
+// carries the canonical SHA-256 for caller-side reassembly verification. Open
+// remains the fully verifying path for browser downloads and callers that need
+// a server-side full hash check before the first byte.
+func (s *Store) OpenContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	return s.openReadyArtifact(ctx, id, false, "")
+}
+
+// OpenContentAt resumes a bounded content transfer only when the current
+// object is the same filesystem incarnation that produced expectedVersion.
+// The token is stateless and opaque; it binds requests without keeping a
+// server-side transfer cache.
+func (s *Store) OpenContentAt(ctx context.Context, id, expectedVersion string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	return s.openReadyArtifact(ctx, id, false, expectedVersion)
+}
+
+func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, expectedVersion string) (protocol.Artifact, protocol.ArtifactReader, error) {
 	if s == nil {
 		return protocol.Artifact{}, nil, ErrStoreUnavailable
 	}
@@ -356,37 +604,106 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 	if err := s.ensureObjectDirectory(); err != nil {
 		return protocol.Artifact{}, nil, err
 	}
+	pathVersion, pathVersionErr := objectPathVersion(path)
+	if pathVersionErr != nil {
+		return protocol.Artifact{}, nil, pathVersionErr
+	}
 	file, err := openStoredFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-missing"); markErr != nil {
+			if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, pathVersion, "final-missing"); markErr != nil {
 				return protocol.Artifact{}, nil, markErr
 			}
 			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
 		}
 		if errors.Is(err, ErrIntegrity) {
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
+			if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, pathVersion, "final-mismatch"); markErr != nil {
 				return protocol.Artifact{}, nil, markErr
 			}
 			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
 		}
 		return protocol.Artifact{}, nil, err
 	}
-	if err := verifyFile(file, record.Artifact); err != nil {
+	version, versionErr := filePathVersion(file)
+	if versionErr != nil {
 		_ = file.Close()
-		if errors.Is(err, ErrIntegrity) || errors.Is(err, ErrSizeMismatch) || errors.Is(err, ErrHashMismatch) {
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
+		return protocol.Artifact{}, nil, versionErr
+	}
+	mutationVersion, mutationVersionErr := fileContentMutationVersion(file)
+	if mutationVersionErr != nil {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, mutationVersionErr
+	}
+	if s.faults != nil && s.faults.BeforeOpenVerification != nil {
+		s.faults.BeforeOpenVerification()
+	}
+	var verifyErr error
+	if verify {
+		verifyErr = verifyFile(ctx, file, record.Artifact)
+	} else {
+		verifyErr = verifyFileSize(ctx, file, record.Artifact)
+	}
+	if verifyErr != nil {
+		currentVersion, currentVersionErr := filePathVersion(file)
+		currentMutationVersion, currentMutationVersionErr := fileContentMutationVersion(file)
+		_ = file.Close()
+		if currentVersionErr != nil {
+			return protocol.Artifact{}, nil, currentVersionErr
+		}
+		if currentMutationVersionErr != nil {
+			return protocol.Artifact{}, nil, currentMutationVersionErr
+		}
+		if currentVersion != version || currentMutationVersion != mutationVersion {
+			return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot changed while opening: %w", ErrContentChanged)
+		}
+		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
+			if pathErr := s.verifyCanonicalObjectVersion(ctx, record.Artifact.ID, version); pathErr != nil {
+				return protocol.Artifact{}, nil, pathErr
+			}
+			if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, version, "final-mismatch"); markErr != nil {
 				return protocol.Artifact{}, nil, markErr
 			}
-			return protocol.Artifact{}, nil, unavailableError(err)
+			return protocol.Artifact{}, nil, unavailableError(verifyErr)
 		}
-		return protocol.Artifact{}, nil, err
+		return protocol.Artifact{}, nil, verifyErr
+	}
+	currentVersion, currentVersionErr := filePathVersion(file)
+	if currentVersionErr != nil {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, currentVersionErr
+	}
+	if currentVersion != version {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot changed while opening: %w", ErrContentChanged)
+	}
+	currentMutationVersion, currentMutationVersionErr := fileContentMutationVersion(file)
+	if currentMutationVersionErr != nil {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, currentMutationVersionErr
+	}
+	if currentMutationVersion != mutationVersion {
+		_ = file.Close()
+		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot changed while opening: %w", ErrContentChanged)
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()
 		return protocol.Artifact{}, nil, fmt.Errorf("rewind artifact bytes: %w", ErrStoreUnavailable)
 	}
-	return record.Artifact, file, nil
+	reader := &contentReader{
+		File:            file,
+		store:           s,
+		id:              record.Artifact.ID,
+		artifact:        record.Artifact,
+		version:         currentVersion,
+		mutationVersion: currentMutationVersion,
+	}
+	if expectedVersion != "" {
+		if err := reader.reconcileExpectedContentVersion(ctx, expectedVersion); err != nil {
+			_ = file.Close()
+			return protocol.Artifact{}, nil, err
+		}
+	}
+	return record.Artifact, reader, nil
 }
 
 func (s *Store) authorize(ctx context.Context, operation Operation, artifact protocol.Artifact) error {
@@ -396,6 +713,9 @@ func (s *Store) authorize(ctx context.Context, operation Operation, artifact pro
 	if err := s.authorizer.Authorize(ctx, operation, artifact); err != nil {
 		if errors.Is(err, ErrUnauthorized) {
 			return ErrUnauthorized
+		}
+		if errors.Is(err, ErrStoreUnavailable) {
+			return ErrStoreUnavailable
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
@@ -421,7 +741,7 @@ func validateArtifact(artifact protocol.Artifact, maxBytes int64) (protocol.Arti
 		return protocol.Artifact{}, "", fmt.Errorf("artifact name is invalid: %w", ErrInvalid)
 	}
 	for _, character := range artifact.Name {
-		if unicode.IsControl(character) {
+		if unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character) {
 			return protocol.Artifact{}, "", fmt.Errorf("artifact name contains a control character: %w", ErrInvalid)
 		}
 	}
@@ -584,9 +904,12 @@ func openStoredFile(path string) (*os.File, error) {
 	return file, nil
 }
 
-func verifyFile(file *os.File, artifact protocol.Artifact) error {
+func verifyFile(ctx context.Context, file *os.File, artifact protocol.Artifact) error {
 	if file == nil {
 		return ErrIntegrity
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -602,13 +925,164 @@ func verifyFile(file *os.File, artifact protocol.Artifact) error {
 		return fmt.Errorf("rewind artifact bytes for verification: %w", ErrStoreUnavailable)
 	}
 	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
+	if _, err := io.Copy(hasher, contextReader{ctx: ctx, reader: file}); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
 		return fmt.Errorf("hash artifact bytes: %w", ErrStoreUnavailable)
 	}
 	if hex.EncodeToString(hasher.Sum(nil)) != artifact.Sha256 {
 		return ErrHashMismatch
 	}
 	return nil
+}
+
+func verifyFileSize(ctx context.Context, file *os.File, artifact protocol.Artifact) error {
+	if file == nil {
+		return ErrIntegrity
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat artifact bytes: %w", ErrStoreUnavailable)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("artifact bytes are not regular: %w", ErrIntegrity)
+	}
+	if info.Size() != artifact.Size {
+		return fmt.Errorf("got %d bytes, want %d: %w", info.Size(), artifact.Size, ErrSizeMismatch)
+	}
+	return nil
+}
+
+func fileContentVersion(file *os.File) (string, error) {
+	if file == nil {
+		return "", ErrIntegrity
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat artifact content version: %w", ErrStoreUnavailable)
+	}
+	return fileInfoContentVersion(info)
+}
+
+func filePathVersion(file *os.File) (string, error) {
+	if file == nil {
+		return "", ErrIntegrity
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat artifact path version: %w", ErrStoreUnavailable)
+	}
+	return fileInfoPathVersion(info)
+}
+
+func fileContentMutationVersion(file *os.File) (string, error) {
+	if file == nil {
+		return "", ErrIntegrity
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat artifact mutation version: %w", ErrStoreUnavailable)
+	}
+	pathVersion, err := fileInfoPathVersion(info)
+	if err != nil {
+		return "", err
+	}
+	contentVersion, err := fileInfoContentVersion(info)
+	if err != nil {
+		return "", err
+	}
+	changeDigest := sha256.Sum256([]byte(contentVersion))
+	return fmt.Sprintf("v2-%s-%s-%s", strings.TrimPrefix(pathVersion, "v1-"), hex.EncodeToString(changeDigest[:16]), statField(info.Sys(), "Nlink", "Nlink64", "Links")), nil
+}
+
+func contentVersionsMatch(expected, current string) bool {
+	return expected != "" && expected == current
+}
+
+func contentVersionLinkLifecycleOnly(expected, current string) bool {
+	expectedParts := strings.Split(expected, "-")
+	currentParts := strings.Split(current, "-")
+	if len(expectedParts) != 4 || len(currentParts) != 4 || expectedParts[0] != "v2" || currentParts[0] != "v2" {
+		return false
+	}
+	return expectedParts[1] == currentParts[1] && expectedParts[3] != currentParts[3]
+}
+
+func fileInfoContentVersion(info os.FileInfo) (string, error) {
+	if info == nil {
+		return "", ErrIntegrity
+	}
+	identity := fmt.Sprintf(
+		"%T|dev=%s|ino=%s|mode=%s|size=%d|ctime=%s|mtime=%s|modtime=%d",
+		info.Sys(),
+		statField(info.Sys(), "Dev"),
+		statField(info.Sys(), "Ino"),
+		statField(info.Sys(), "Mode"),
+		info.Size(),
+		statField(info.Sys(), "Ctim", "Ctimespec", "Ctime"),
+		statField(info.Sys(), "Mtim", "Mtimespec"),
+		info.ModTime().UnixNano(),
+	)
+	digest := sha256.Sum256([]byte(identity))
+	return "v1-" + hex.EncodeToString(digest[:]), nil
+}
+
+func fileInfoPathVersion(info os.FileInfo) (string, error) {
+	if info == nil {
+		return "", ErrIntegrity
+	}
+	identity := fmt.Sprintf(
+		"%T|dev=%s|ino=%s|mode=%s|size=%d|mtime=%s|modtime=%d",
+		info.Sys(),
+		statField(info.Sys(), "Dev"),
+		statField(info.Sys(), "Ino"),
+		statField(info.Sys(), "Mode"),
+		info.Size(),
+		statField(info.Sys(), "Mtim", "Mtimespec"),
+		info.ModTime().UnixNano(),
+	)
+	digest := sha256.Sum256([]byte(identity))
+	return "v1-" + hex.EncodeToString(digest[:]), nil
+}
+
+const missingObjectPathVersion = "missing"
+
+func objectPathVersion(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err == nil {
+		return fileInfoPathVersion(info)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect artifact object path: %w", ErrStoreUnavailable)
+	}
+	if _, dirErr := os.Lstat(filepath.Dir(path)); dirErr != nil {
+		return "", fmt.Errorf("inspect artifact object directory: %w", ErrStoreUnavailable)
+	}
+	return missingObjectPathVersion, nil
+}
+
+func statField(system any, names ...string) string {
+	value := reflect.ValueOf(system)
+	if !value.IsValid() {
+		return ""
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return ""
+		}
+		value = value.Elem()
+	}
+	for _, name := range names {
+		field := value.FieldByName(name)
+		if field.IsValid() && field.CanInterface() {
+			return fmt.Sprintf("%#v", field.Interface())
+		}
+	}
+	return ""
 }
 
 func syncDirectory(path string) error {

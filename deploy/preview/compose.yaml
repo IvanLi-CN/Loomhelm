@@ -11,6 +11,9 @@ services:
 
   server-blue:
     image: "${LOOMHELM_BLUE_SERVER_IMAGE:-busybox:1.36}"
+    # Preview control replaces this validation fallback with a grace period
+    # derived from LOOMHELM_SHUTDOWN_TIMEOUT before starting a real candidate.
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
     ports:
       - "127.0.0.1:${LOOMHELM_BLUE_SERVER_PORT:?LOOMHELM_BLUE_SERVER_PORT is required}:8080"
     environment:
@@ -20,11 +23,12 @@ services:
       LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
       LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
-      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-30s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
       LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
       LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
       LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
       LOOMHELM_POSTGRES_PORT: "${LOOMHELM_POSTGRES_PORT:-}"
+      LOOMHELM_ARTIFACT_ROOT: "/var/lib/loomhelm/artifacts"
       LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
       LOOMHELM_OIDC_CLIENT_ID: "${LOOMHELM_OIDC_CLIENT_ID:-}"
       LOOMHELM_OIDC_CLIENT_SECRET: "${LOOMHELM_OIDC_CLIENT_SECRET:-}"
@@ -35,10 +39,13 @@ services:
       interval: 2s
       timeout: 2s
       start_period: 5s
-      retries: 30
+      retries: 330
+    volumes:
+      - loomhelm-preview-artifacts:/var/lib/loomhelm/artifacts
 
   server-green:
     image: "${LOOMHELM_GREEN_SERVER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
     ports:
       - "127.0.0.1:${LOOMHELM_GREEN_SERVER_PORT:?LOOMHELM_GREEN_SERVER_PORT is required}:8080"
     environment:
@@ -48,11 +55,12 @@ services:
       LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
       LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
-      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-30s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
       LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
       LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
       LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
       LOOMHELM_POSTGRES_PORT: "${LOOMHELM_POSTGRES_PORT:-}"
+      LOOMHELM_ARTIFACT_ROOT: "/var/lib/loomhelm/artifacts"
       LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
       LOOMHELM_OIDC_CLIENT_ID: "${LOOMHELM_OIDC_CLIENT_ID:-}"
       LOOMHELM_OIDC_CLIENT_SECRET: "${LOOMHELM_OIDC_CLIENT_SECRET:-}"
@@ -63,10 +71,13 @@ services:
       interval: 2s
       timeout: 2s
       start_period: 5s
-      retries: 30
+      retries: 330
+    volumes:
+      - loomhelm-preview-artifacts:/var/lib/loomhelm/artifacts
 
   worker-blue:
     image: "${LOOMHELM_BLUE_WORKER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
     environment:
       LOOMHELM_VERSION: "${LOOMHELM_BLUE_SOURCE_SHA:-placeholder}"
       LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_BLUE_SOURCE_SHA:-placeholder}"
@@ -76,7 +87,7 @@ services:
       LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
       LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
-      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-30s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
       LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
       LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
       LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
@@ -86,10 +97,11 @@ services:
       interval: 2s
       timeout: 2s
       start_period: 5s
-      retries: 30
+      retries: 330
 
   worker-green:
     image: "${LOOMHELM_GREEN_WORKER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
     environment:
       LOOMHELM_VERSION: "${LOOMHELM_GREEN_SOURCE_SHA:-placeholder}"
       LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_GREEN_SOURCE_SHA:-placeholder}"
@@ -99,7 +111,7 @@ services:
       LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
       LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
-      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-30s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
       LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
       LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
       LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
@@ -109,4 +121,8 @@ services:
       interval: 2s
       timeout: 2s
       start_period: 5s
-      retries: 30
+      retries: 330
+
+volumes:
+  loomhelm-preview-artifacts:
+    name: "${LOOMHELM_ARTIFACT_VOLUME_NAME:?LOOMHELM_ARTIFACT_VOLUME_NAME is required}"

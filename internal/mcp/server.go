@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/go-chi/chi/v5"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -328,6 +330,11 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 				Message: err.Error(),
 			}), nil
 		}
+		if spec.operationID == "downloadArtifactContent" {
+			if _, ok := arguments["limit"]; !ok {
+				arguments["limit"] = json.RawMessage(strconv.FormatInt(defaultArtifactContentLimit(s.maxResponse), 10))
+			}
+		}
 		response, err := s.invokeREST(ctx, requestHeaders(request), spec.route, arguments)
 		if err != nil {
 			var argumentErr *argumentError
@@ -346,8 +353,17 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 					Message: "application service response exceeds configured limit",
 				}), nil
 			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				if spec.route.method != http.MethodGet {
+					return unknownOutcomeResult(), nil
+				}
+				return toolError(http.StatusServiceUnavailable, protocol.ApiError{
+					Code:    protocol.ErrorCodeServiceUnavailable,
+					Message: "application service did not complete within the operation deadline",
+				}), nil
+			}
 			return toolError(http.StatusServiceUnavailable, protocol.ApiError{
-				Code:    protocol.ErrorCodeInvalidRequest,
+				Code:    protocol.ErrorCodeServiceUnavailable,
 				Message: "application service is unavailable",
 			}), nil
 		}
@@ -355,12 +371,15 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 			if response.status >= http.StatusInternalServerError && response.status < 600 && spec.route.method != http.MethodGet {
 				return unknownOutcomeResult(), nil
 			}
-			return toolError(response.status, decodeAPIError(response.status, response.body)), nil
+			return toolError(response.status, decodeAPIError(response.status, response.body), response.retryAfter), nil
 		}
 		if !validToolResponse(spec.operationID, response.body) {
 			return unknownOutcomeResult(), nil
 		}
 		result, err := toolSuccess(response.body)
+		if spec.operationID == "downloadArtifactContent" {
+			result, err = artifactContentToolSuccess(response.body, artifactProtocolVersion(request))
+		}
 		if err != nil {
 			if spec.route.method != http.MethodGet {
 				return unknownOutcomeResult(), nil
@@ -381,6 +400,26 @@ func (s *Server) toolHandler(name string) sdk.ToolHandler {
 		}
 		return result, nil
 	}
+}
+
+const (
+	mcpArtifactContentChunkCap  int64 = 512 << 10
+	mcpArtifactResponseOverhead int64 = 8 << 10
+)
+
+func defaultArtifactContentLimit(maxResponse int64) int64 {
+	budget := maxResponse / 4
+	if budget <= mcpArtifactResponseOverhead {
+		return 1
+	}
+	limit := (budget - mcpArtifactResponseOverhead) * 3 / 4
+	if limit < 1 {
+		return 1
+	}
+	if limit > mcpArtifactContentChunkCap {
+		return mcpArtifactContentChunkCap
+	}
+	return limit
 }
 
 func validToolResponse(operationID string, body []byte) bool {
@@ -523,12 +562,17 @@ func (s *Server) resourceHandler(ctx context.Context, request *sdk.ReadResourceR
 	}
 	response, err := s.invokeREST(ctx, requestHeaders(request), resource.route, arguments)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, resourceError(http.StatusServiceUnavailable, protocol.ApiError{
+				Code:    protocol.ErrorCodeServiceUnavailable,
+				Message: "application service did not complete within the operation deadline",
+			}, "")
+		}
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "application service is unavailable"}
 	}
 	if response.status < http.StatusOK || response.status >= http.StatusMultipleChoices {
 		apiError := decodeAPIError(response.status, response.body)
-		data, _ := json.Marshal(map[string]any{"http_status": response.status, "error": apiError})
-		return nil, &jsonrpc.Error{Code: int64(rpcCodeForHTTP(response.status)), Message: apiError.Message, Data: data}
+		return nil, resourceError(response.status, apiError, response.retryAfter)
 	}
 	body := response.body
 	if len(bytes.TrimSpace(body)) == 0 {
@@ -548,11 +592,39 @@ func (s *Server) resourceHandler(ctx context.Context, request *sdk.ReadResourceR
 	return result, nil
 }
 
+func resourceError(status int, apiError protocol.ApiError, retryAfter string) *jsonrpc.Error {
+	if apiError.Code == "" {
+		apiError.Code = errorCodeForHTTP(status)
+	}
+	if apiError.Message == "" {
+		apiError.Message = messageForHTTP(status)
+	}
+	envelope := map[string]any{"http_status": status, "error": apiError}
+	if retryAfter != "" {
+		envelope["retry_after"] = retryAfter
+	}
+	data, _ := json.Marshal(envelope)
+	return &jsonrpc.Error{Code: int64(rpcCodeForHTTP(status)), Message: apiError.Message, Data: data}
+}
+
 func requestHeaders(request interface{ GetExtra() *sdk.RequestExtra }) http.Header {
 	if request == nil || request.GetExtra() == nil || request.GetExtra().Header == nil {
 		return nil
 	}
 	return request.GetExtra().Header
+}
+
+func artifactProtocolVersion(request *sdk.CallToolRequest) string {
+	if request == nil {
+		return OlderProtocolVersion
+	}
+	if version := request.ProtocolVersion(); version != "" {
+		return version
+	}
+	// Stateless requests without an initialize handshake have no negotiated
+	// version. Keep the complete JSON envelope in text for those clients so
+	// legacy callers can still reassemble content chunks.
+	return OlderProtocolVersion
 }
 
 func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, route routeSpec, arguments map[string]json.RawMessage) (restResponse, error) {
@@ -579,7 +651,11 @@ func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, rout
 	}
 	operationCtx, cancel := context.WithTimeout(ctx, s.operationTimeout)
 	defer cancel()
-	internalRequest, err := http.NewRequestWithContext(operationCtx, route.method, path, bytes.NewReader(payload))
+	// The MCP endpoint may itself be mounted inside a chi router. The delegated
+	// application handler is another chi router, so prevent it from reusing the
+	// outer /mcp route context instead of matching its relative REST path.
+	delegatedContext := context.WithValue(operationCtx, chi.RouteCtxKey, struct{}{})
+	internalRequest, err := http.NewRequestWithContext(delegatedContext, route.method, path, bytes.NewReader(payload))
 	if err != nil {
 		return restResponse{}, err
 	}
@@ -599,12 +675,16 @@ func (s *Server) invokeREST(ctx context.Context, sourceHeaders http.Header, rout
 	if response.tooLarge || int64(response.body.Len()) > s.maxResponse {
 		return restResponse{}, errResponseTooLarge
 	}
-	return restResponse{status: response.status, body: response.body.Bytes()}, nil
+	if err := operationCtx.Err(); err != nil {
+		return restResponse{}, err
+	}
+	return restResponse{status: response.status, body: response.body.Bytes(), retryAfter: response.Header().Get("Retry-After")}, nil
 }
 
 type restResponse struct {
-	status int
-	body   []byte
+	status     int
+	body       []byte
+	retryAfter string
 }
 
 type argumentError struct {
@@ -658,6 +738,30 @@ func toolSuccess(body []byte) (*sdk.CallToolResult, error) {
 	}, nil
 }
 
+func artifactContentToolSuccess(body []byte, protocolVersion string) (*sdk.CallToolResult, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		body = []byte(`{}`)
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("application service returned invalid JSON")
+	}
+	if protocolVersion != "" && protocolVersion < LegacyProtocolVersion {
+		// StructuredContent was not part of the older protocol revisions. Keep
+		// the complete JSON envelope in text so those clients can reassemble
+		// content_base64 chunks without receiving a duplicated large payload.
+		return &sdk.CallToolResult{
+			Content: []sdk.Content{&sdk.TextContent{Text: string(body)}},
+		}, nil
+	}
+	// The chunk is carried once in structuredContent. Duplicating a potentially
+	// large base64 field in human-readable text would halve the usable MCP
+	// transfer budget without adding information.
+	return &sdk.CallToolResult{
+		Content:           []sdk.Content{&sdk.TextContent{Text: "artifact content chunk retrieved"}},
+		StructuredContent: json.RawMessage(body),
+	}, nil
+}
+
 func encodedResponseWithinBudget(value any, maxResponse int64) bool {
 	if maxResponse < 4 {
 		return false
@@ -666,7 +770,7 @@ func encodedResponseWithinBudget(value any, maxResponse int64) bool {
 	return err == nil && int64(len(data)) <= maxResponse/4
 }
 
-func toolError(status int, apiError protocol.ApiError) *sdk.CallToolResult {
+func toolError(status int, apiError protocol.ApiError, retryAfter ...string) *sdk.CallToolResult {
 	if apiError.Code == "" {
 		apiError.Code = errorCodeForHTTP(status)
 	}
@@ -676,7 +780,11 @@ func toolError(status int, apiError protocol.ApiError) *sdk.CallToolResult {
 	apiError.Details = nil
 	apiError.Message = truncateUTF8(apiError.Message, maxToolErrorMessageBytes)
 	apiError.RequestID = truncateUTF8(apiError.RequestID, maxToolErrorRequestIDBytes)
-	data, _ := json.Marshal(map[string]any{"http_status": status, "error": apiError})
+	envelope := map[string]any{"http_status": status, "error": apiError}
+	if len(retryAfter) > 0 && retryAfter[0] != "" {
+		envelope["retry_after"] = retryAfter[0]
+	}
+	data, _ := json.Marshal(envelope)
 	contentText := string(apiError.Code)
 	if contentText == "" {
 		contentText = "request failed"

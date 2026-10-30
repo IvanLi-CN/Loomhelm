@@ -44,6 +44,16 @@ func TestValidateArtifactRejectsHostPathIdentifiers(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactRejectsBidiFilenameControls(t *testing.T) {
+	artifact := protocol.Artifact{
+		ID: "artifact-valid", SessionID: "session-valid", Name: "report\u202Etxt.txt",
+		Kind: protocol.ArtifactKindFile, Size: 1, ContentType: "application/octet-stream",
+	}
+	if _, _, err := validateArtifact(artifact, DefaultMaxBytes); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bidi filename validation error = %v, want %v", err, ErrInvalid)
+	}
+}
+
 func TestConfigValidateRejectsFilesystemRoot(t *testing.T) {
 	if _, err := (Config{Root: string(filepath.Separator)}).validate(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("filesystem root validation error = %v, want %v", err, ErrInvalid)
@@ -214,6 +224,412 @@ func TestStorePutMetadataOpenAndReopen(t *testing.T) {
 	}
 	if !reflect.DeepEqual(reopenedMetadata, stored) || !bytes.Equal(reopenedBytes, content) {
 		t.Fatalf("reopened metadata/bytes = %#v/%x, want %#v/%x", reopenedMetadata, reopenedBytes, stored, content)
+	}
+}
+
+func TestStoreOpenDoesNotQuarantineContentChangedDuringVerification(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("stable artifact bytes")
+	replacement := []byte("changed artifact bytes")
+	artifact := testArtifact(uniqueID("artifact-open-version"), nil, content)
+	stagingName := ".upload-open-version-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeOpenVerification: func() {
+			if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), replacement, 0o600); err != nil {
+				t.Fatalf("replace artifact during open verification: %v", err)
+			}
+		},
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Open error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("content-change state = %q, want %q", state, publicationReady)
+	}
+}
+
+func TestStoreOpenDetectsInPlaceRewriteWithRestoredModificationTime(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("stable artifact bytes")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-open-ctime-race"), nil, content)
+	stagingName := ".upload-open-ctime-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objectPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(objectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalModTime := info.ModTime()
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeOpenVerification: func() {
+			if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+				t.Fatalf("rewrite artifact during open verification: %v", err)
+			}
+			if err := os.Chtimes(objectPath, originalModTime, originalModTime); err != nil {
+				t.Fatalf("restore artifact modification time: %v", err)
+			}
+		},
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Open error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("ctime content-change state = %q, want %q", state, publicationReady)
+	}
+}
+
+func TestStoreOpenDoesNotQuarantineAfterCanonicalReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("canonical replacement bytes")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-open-path-race"), nil, content)
+	stagingName := ".upload-open-path-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeOpenVerification: func() {
+			replacementPath := objectPath + ".replacement"
+			if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
+				t.Fatalf("write canonical replacement: %v", err)
+			}
+			if err := os.Rename(replacementPath, objectPath); err != nil {
+				t.Fatalf("replace canonical object: %v", err)
+			}
+		},
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Open error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("canonical replacement state = %q, want %q", state, publicationReady)
+	}
+}
+
+func TestStoreMetadataDoesNotQuarantineAfterInspectionReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("metadata inspection bytes")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-metadata-inspection-race"), nil, content)
+	stagingName := ".upload-metadata-inspection-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objectPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeReadyInspection: func() {
+			replacementPath := objectPath + ".replacement"
+			if err := os.WriteFile(replacementPath, corrupt, 0o600); err != nil {
+				t.Fatalf("write metadata inspection replacement: %v", err)
+			}
+			if err := os.Rename(replacementPath, objectPath); err != nil {
+				t.Fatalf("replace metadata inspection object: %v", err)
+			}
+		},
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Metadata error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("inspection replacement state = %q, want %q", state, publicationReady)
+	}
+}
+
+func TestStoreOpenDoesNotQuarantineAfterMissingCanonicalReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("missing path replacement bytes")
+	artifact := testArtifact(uniqueID("artifact-open-missing-path-race"), nil, content)
+	stagingName := ".upload-open-missing-path-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeObjectUnavailableMark: func() {
+			if err := os.WriteFile(objectPath, content, 0o600); err != nil {
+				t.Fatalf("restore missing canonical object: %v", err)
+			}
+		},
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Open error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("missing canonical replacement state = %q, want %q", state, publicationReady)
+	}
+}
+
+func TestStoreContentMismatchIsRecoverableAfterFinalVerification(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("recoverable artifact bytes")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-content-mismatch"), nil, content)
+	stagingName := ".upload-content-mismatch-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	_, reader, err := store.OpenContent(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentReader, ok := reader.(*contentReader)
+	if !ok {
+		_ = reader.Close()
+		t.Fatalf("content reader type = %T, want *contentReader", reader)
+	}
+	verifyErr := contentReader.verifyContent(ctx, artifact)
+	_ = reader.Close()
+	if !errors.Is(verifyErr, ErrUnavailable) || !errors.Is(verifyErr, ErrHashMismatch) {
+		t.Fatalf("content verification error = %v, want unavailable/hash-mismatch", verifyErr)
+	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `SELECT state, unavailable_reason FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationUnavailable) || reason != contentMismatchReason {
+		t.Fatalf("content mismatch state = %q/%q, want unavailable/%q", state, reason, contentMismatchReason)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Recover(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); err != nil {
+		t.Fatalf("recovered artifact metadata error = %v", err)
+	}
+}
+
+func TestStoreContentMismatchDoesNotQuarantineAfterCanonicalReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("canonical replacement content")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-content-path-race"), nil, content)
+	stagingName := ".upload-content-path-race-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	_, reader, err := store.OpenContent(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentReader, ok := reader.(*contentReader)
+	if !ok {
+		_ = reader.Close()
+		t.Fatalf("content reader type = %T, want *contentReader", reader)
+	}
+	replacementPath := objectPath + ".replacement"
+	if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
+		_ = reader.Close()
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementPath, objectPath); err != nil {
+		_ = reader.Close()
+		t.Fatal(err)
+	}
+	verifyErr := contentReader.verifyContent(ctx, artifact)
+	_ = reader.Close()
+	if !errors.Is(verifyErr, ErrContentChanged) {
+		t.Fatalf("content path replacement error = %v, want %v", verifyErr, ErrContentChanged)
+	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `SELECT state, COALESCE(unavailable_reason, '') FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || reason != "" {
+		t.Fatalf("content path replacement state = %q/%q, want ready/empty", state, reason)
+	}
+}
+
+func TestStoreRecoveryDoesNotPersistConflictAfterHashTimeCanonicalReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("recovery canonical replacement content")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-recovery-hash-path-race"), nil, content)
+	stagingName := ".upload-recovery-hash-path-race-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertPendingArtifactAt(t, db.Pool(), ctx, artifact, stagingName, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	stagingIdentity, err := store.stagingIdentity(stagingName)
+	if err != nil || stagingIdentity == nil {
+		t.Fatalf("staging identity = %v/%v", stagingIdentity, err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_identity = $2
+		WHERE id = $1
+	`, artifact.ID, stagingIdentity); err != nil {
+		t.Fatal(err)
+	}
+	var replaced atomic.Bool
+	store.faults = &faultHooks{
+		AfterArtifactVerification: func() {
+			if replaced.Swap(true) {
+				return
+			}
+			replacementPath := objectPath + ".replacement"
+			if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
+				t.Fatalf("write canonical replacement: %v", err)
+			}
+			if err := os.Rename(replacementPath, objectPath); err != nil {
+				t.Fatalf("replace canonical object: %v", err)
+			}
+		},
+	}
+	report, err := store.Recover(ctx, 1)
+	if !errors.Is(err, ErrRecoveryIncomplete) || report.Failed != 1 || report.Deferred != 1 {
+		t.Fatalf("hash-time replacement recovery = %#v, err=%v, want one deferred failure", report, err)
+	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, COALESCE(unavailable_reason, '')
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, artifact.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationPending) || reason != "" {
+		t.Fatalf("hash-time replacement state = %q/%q, want pending/empty", state, reason)
+	}
+
+	store.faults = nil
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_reclaim_after = NOW()
+		WHERE id = $1
+	`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Recover(ctx, 1)
+	if err != nil || second.Ready != 1 {
+		t.Fatalf("hash-time replacement retry = %#v, err=%v, want one ready artifact", second, err)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, artifact.ID).Scan(&state, &reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || !reclaimed {
+		t.Fatalf("hash-time replacement retry state = %q/reclaimed=%t, want ready/true", state, reclaimed)
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
+func TestStoreContentMismatchRechecksCanonicalObjectBeforeQuarantine(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("replacement content")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-content-mark-race"), nil, content)
+	stagingName := ".upload-content-mark-race-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeContentMismatchMark: func() {
+			replacementPath := objectPath + ".replacement"
+			if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
+				t.Fatalf("write canonical replacement: %v", err)
+			}
+			if err := os.Rename(replacementPath, objectPath); err != nil {
+				t.Fatalf("replace canonical object: %v", err)
+			}
+		},
+	}
+	_, reader, err := store.OpenContent(ctx, artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentReader, ok := reader.(*contentReader)
+	if !ok {
+		_ = reader.Close()
+		t.Fatalf("content reader type = %T, want *contentReader", reader)
+	}
+	verifyErr := contentReader.verifyContent(ctx, artifact)
+	_ = reader.Close()
+	if !errors.Is(verifyErr, ErrContentChanged) {
+		t.Fatalf("content mark race error = %v, want %v", verifyErr, ErrContentChanged)
+	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `SELECT state, COALESCE(unavailable_reason, '') FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || reason != "" {
+		t.Fatalf("content mark race state = %q/%q, want ready/empty", state, reason)
 	}
 }
 
@@ -3106,6 +3522,65 @@ func TestStoreMetadataRevalidatesReadyBytesAndDoesNotRepairReadyLoss(t *testing.
 	assertNoStagingFiles(t, store.objects)
 }
 
+func TestStoreMetadataDoesNotQuarantineAfterCanonicalReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("metadata canonical replacement")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-metadata-path-race"), nil, content)
+	stagingName := ".upload-metadata-path-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeObjectUnavailableMark: func() {
+			replacementPath := objectPath + ".replacement"
+			if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
+				t.Fatalf("write metadata replacement: %v", err)
+			}
+			if err := os.Rename(replacementPath, objectPath); err != nil {
+				t.Fatalf("replace metadata canonical object: %v", err)
+			}
+		},
+	}
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Metadata error = %v, want %v", err, ErrContentChanged)
+	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `SELECT state, COALESCE(unavailable_reason, '') FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || reason != "" {
+		t.Fatalf("metadata replacement state = %q/%q, want ready/empty", state, reason)
+	}
+}
+
+func TestStoreMetadataVerificationRejectsWhenCapacityIsExhausted(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("metadata capacity")
+	artifact := testArtifact(uniqueID("artifact-metadata-capacity"), nil, content)
+	if _, err := store.Put(ctx, artifact, readCloser(bytes.NewReader(content))); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxConcurrentMetadataVerification; index++ {
+		store.metadataVerificationSlots <- struct{}{}
+	}
+	defer func() {
+		for index := 0; index < maxConcurrentMetadataVerification; index++ {
+			<-store.metadataVerificationSlots
+		}
+	}()
+	if _, err := store.Metadata(ctx, artifact.ID); !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("metadata capacity error = %v, want %v", err, ErrStoreUnavailable)
+	}
+}
+
 func TestStoreReconcileRevalidatesReclaimedReadyBytes(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()
@@ -3129,6 +3604,40 @@ func TestStoreReconcileRevalidatesReclaimedReadyBytes(t *testing.T) {
 	}
 	if state != string(publicationUnavailable) {
 		t.Fatalf("reconciled ready loss state = %q, want unavailable", state)
+	}
+}
+
+func TestStoreRecoveryRechecksFinalUnavailableObject(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("final object replacement")
+	artifact := testArtifact(uniqueID("artifact-final-object-recheck"), nil, content)
+	stagingName := ".upload-final-object-recheck-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.objects, artifact.ID), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertUnavailableArtifact(t, store, ctx, artifact, stagingName, "final-mismatch")
+	if _, err := db.Pool().Exec(ctx, `UPDATE conversation_artifacts SET staging_reclaim_after = NOW() WHERE id = $1`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := store.Recover(ctx, 1)
+	if err != nil {
+		t.Fatalf("final object recheck recovery err = %v", err)
+	}
+	var state string
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `SELECT state, staging_reclaimed_at IS NOT NULL FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state, &reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || !reclaimed || report.Ready != 1 {
+		t.Fatalf("final object recheck state = %q/%v report=%#v, want ready/reclaimed", state, reclaimed, report)
+	}
+	if _, err := os.Stat(filepath.Join(store.objects, stagingName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rechecked staging file stat error = %v, want removed", err)
 	}
 }
 
@@ -4264,8 +4773,8 @@ func verifyArtifactTestMigrationState(scopedURL string) error {
 	`).Scan(&count, &maxVersion, &allApplied); err != nil {
 		return fmt.Errorf("read artifact migration history: %w", err)
 	}
-	if count != 15 || maxVersion != 14 || !allApplied {
-		return fmt.Errorf("artifact migration history = count %d/max %d/all_applied %t, want 15/14/true", count, maxVersion, allApplied)
+	if count != 17 || maxVersion != 16 || !allApplied {
+		return fmt.Errorf("artifact migration history = count %d/max %d/all_applied %t, want 17/16/true", count, maxVersion, allApplied)
 	}
 	return nil
 }

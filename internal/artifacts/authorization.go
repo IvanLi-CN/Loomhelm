@@ -69,6 +69,9 @@ func (a ResolvedAuthorizer) Authorize(ctx context.Context, operation Operation, 
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
+		if errors.Is(err, ErrStoreUnavailable) {
+			return ErrStoreUnavailable
+		}
 		return ErrUnauthorized
 	}
 	if ownership.SessionID == "" || ownership.SessionID != artifact.SessionID || !sameOptionalID(ownership.RunID, artifact.RunID) {
@@ -77,6 +80,9 @@ func (a ResolvedAuthorizer) Authorize(ctx context.Context, operation Operation, 
 	if err := a.Scope.AuthorizeArtifact(ctx, operation, artifact, ownership); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
+		}
+		if errors.Is(err, ErrStoreUnavailable) {
+			return ErrStoreUnavailable
 		}
 		return ErrUnauthorized
 	}

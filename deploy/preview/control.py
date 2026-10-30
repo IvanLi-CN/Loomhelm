@@ -6,15 +6,18 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as dt
+import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +27,8 @@ SOURCE_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETAINED_KEY_RE = re.compile(r"^[0-9a-f]{40}-[0-9]+$")
+DURATION_PART_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ns|us|µs|ms|s|m|h)")
+VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class ContractError(Exception):
@@ -88,6 +93,34 @@ def write_state(state_dir: Path, state: dict[str, Any]) -> None:
     atomic_write(state_path(state_dir), json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
+@contextmanager
+def locked_file(path: Path, on_blocked: Optional[Callable[[], None]] = None):
+    with path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if on_blocked is not None:
+                on_blocked()
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def state_lock(state_dir: Path, on_blocked: Optional[Callable[[], None]] = None):
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path_lock = state_dir / ".state.lock"
+    if os.environ.get("LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD") == "1":
+        with locked_file(state_path_lock, on_blocked=on_blocked):
+            yield
+        return
+    with locked_file(state_dir / ".workflow.lock", on_blocked=on_blocked):
+        with locked_file(state_path_lock, on_blocked=on_blocked):
+            yield
+
+
 def load_state(state_dir: Path) -> dict[str, Any]:
     path = state_path(state_dir)
     if not path.exists():
@@ -104,10 +137,16 @@ def load_state(state_dir: Path) -> dict[str, Any]:
     state.setdefault("pending_slot", None)
     state.setdefault("previous_retained_key", None)
     state.setdefault("next_worker_generation", 1)
+    state.setdefault("artifact_volume_name", None)
+    state.setdefault("compose_project_name", None)
     state.setdefault("history", [])
     state.setdefault("retained", [])
     if not isinstance(state["retained"], list):
         die("preview state retained must be an array")
+    if state["artifact_volume_name"] is not None and (
+        not isinstance(state["artifact_volume_name"], str) or not VOLUME_NAME_RE.fullmatch(state["artifact_volume_name"])
+    ):
+        die("preview artifact_volume_name is invalid")
     return state
 
 
@@ -119,6 +158,8 @@ def empty_state() -> dict[str, Any]:
         "pending_slot": None,
         "previous_retained_key": None,
         "next_worker_generation": 1,
+        "artifact_volume_name": None,
+        "compose_project_name": None,
         "slots": {slot: None for slot in SLOTS},
         "retained": [],
         "history": [],
@@ -546,6 +587,40 @@ def env_value(name: str, default: str | None = None, required: bool = False) -> 
     return value or ""
 
 
+def parse_duration_seconds(value: str) -> float | None:
+    position = 0
+    seconds = 0.0
+    units = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1, "m": 60, "h": 3600}
+    normalized = value.strip()
+    for match in DURATION_PART_RE.finditer(normalized):
+        if match.start() != position:
+            return None
+        seconds += float(match.group(1)) * units[match.group(2)]
+        position = match.end()
+    if position != len(normalized) or seconds <= 0 or seconds * 1_000_000_000 < 1:
+        return None
+    return seconds
+
+
+def default_stop_grace_period(shutdown_timeout: str) -> str:
+    """Cover HTTP, both gateway drains and artifact recovery in Compose."""
+    seconds = parse_duration_seconds(shutdown_timeout)
+    if seconds is None:
+        return "90s"
+    # The Server path may retain an MCP request for 60s, then spend its
+    # configured budget draining the gateway, wait for the canceled artifact
+    # recovery pass, and drain the gateway once more while closing runtime
+    # resources. A Worker can spend three shutdown budgets stopping its health
+    # server, runner and forced cancellation, so Compose must cover the larger
+    # path.
+    recovery_budget = min(seconds, 10.0)
+    artifact_download_budget = 120.0
+    server_budget = max(seconds, 60.0, artifact_download_budget) + (2.0 * seconds) + recovery_budget + 20.0
+    worker_budget = 3.0 * seconds
+    total = max(server_budget, worker_budget)
+    return f"{math.ceil(total)}s"
+
+
 def dotenv(value: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9_./:@?=&+,-]*", value):
         return value
@@ -555,13 +630,83 @@ def dotenv(value: str) -> str:
     return json.dumps(value, ensure_ascii=False).replace("$", "\\$")
 
 
+def previous_compose_project_name(state_dir: Path) -> str | None:
+    env_file = state_dir / "compose.env"
+    try:
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        die(f"cannot read preview Compose environment: {exc}")
+    prefix = "LOOMHELM_PREVIEW_PROJECT_NAME="
+    for line in lines:
+        if not line.startswith(prefix):
+            continue
+        value = line[len(prefix):]
+        if value.startswith('"'):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                die("preview Compose environment has an invalid project name")
+        return value or None
+    return None
+
+
+def validate_compose_project_name(state_dir: Path, state: dict[str, Any], project_name: str) -> str | None:
+    stored_project_name = state.get("compose_project_name")
+    if stored_project_name is None:
+        stored_project_name = previous_compose_project_name(state_dir)
+        if state.get("active_slot") or state.get("pending_slot"):
+            if stored_project_name is None:
+                die("preview state does not record the active Compose project name")
+    if stored_project_name is not None and (
+        not isinstance(stored_project_name, str) or not stored_project_name
+    ):
+        die("preview compose_project_name is invalid")
+    if stored_project_name and stored_project_name != project_name and (state.get("active_slot") or state.get("pending_slot")):
+        die("LOOMHELM_PREVIEW_PROJECT_NAME cannot change while a preview candidate is active")
+    return stored_project_name
+
+
 def command_compose_env(args: argparse.Namespace) -> None:
     state_dir = Path(args.state_dir).resolve()
     state = load_state(state_dir)
+    shutdown_timeout = env_value("LOOMHELM_SHUTDOWN_TIMEOUT", "10s").strip()
+    shutdown_seconds = parse_duration_seconds(shutdown_timeout)
+    if shutdown_seconds is None:
+        die("LOOMHELM_SHUTDOWN_TIMEOUT must be a positive Go duration")
+    derived_grace = default_stop_grace_period(shutdown_timeout)
+    derived_grace_seconds = parse_duration_seconds(derived_grace)
+    if derived_grace_seconds is None:
+        die("derived preview stop grace period is invalid")
+    configured_grace = os.environ.get("LOOMHELM_STOP_GRACE_PERIOD")
+    if configured_grace:
+        configured_grace = configured_grace.strip()
+        configured_grace_seconds = parse_duration_seconds(configured_grace)
+        if configured_grace_seconds is None:
+            die("LOOMHELM_STOP_GRACE_PERIOD must be a positive Go duration")
+        stop_grace = configured_grace if configured_grace_seconds >= derived_grace_seconds else derived_grace
+    else:
+        stop_grace = derived_grace
+    project_name = env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True)
+    validate_compose_project_name(state_dir, state, project_name)
+    state_changed = state.get("compose_project_name") != project_name
+    configured_volume = os.environ.get("LOOMHELM_ARTIFACT_VOLUME_NAME", "").strip()
+    stored_volume = state.get("artifact_volume_name")
+    if stored_volume:
+        if configured_volume and configured_volume != stored_volume:
+            die("LOOMHELM_ARTIFACT_VOLUME_NAME does not match the initialized preview state")
+        artifact_volume_name = stored_volume
+    else:
+        artifact_volume_name = configured_volume or f"{project_name}_loomhelm-preview-artifacts"
+        if not VOLUME_NAME_RE.fullmatch(artifact_volume_name):
+            die("LOOMHELM_ARTIFACT_VOLUME_NAME must be a valid Docker volume name")
+        state_changed = True
     values: dict[str, str] = {
         "LOOMHELM_PREVIEW_STATE_DIR": str(state_dir),
         "LOOMHELM_PREVIEW_WEB_DIR": str(web_dir(state_dir)),
-        "LOOMHELM_PREVIEW_PROJECT_NAME": env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True),
+        "LOOMHELM_PREVIEW_PROJECT_NAME": project_name,
+        "LOOMHELM_ARTIFACT_VOLUME_NAME": artifact_volume_name,
         "LOOMHELM_PREVIEW_HTTP_PORT": env_value("LOOMHELM_PREVIEW_HTTP_PORT", required=True),
         "LOOMHELM_PREVIEW_ADMIN_PORT": env_value("LOOMHELM_PREVIEW_ADMIN_PORT", required=True),
         "LOOMHELM_BLUE_SERVER_PORT": env_value("LOOMHELM_BLUE_SERVER_PORT", required=True),
@@ -576,8 +721,9 @@ def command_compose_env(args: argparse.Namespace) -> None:
         "LOOMHELM_OIDC_CLIENT_SECRET": env_value("LOOMHELM_OIDC_CLIENT_SECRET", ""),
         "LOOMHELM_OIDC_REDIRECT_URL": env_value("LOOMHELM_OIDC_REDIRECT_URL", ""),
         "LOOMHELM_SESSION_COOKIE_SECURE": env_value("LOOMHELM_SESSION_COOKIE_SECURE", "true"),
-        "LOOMHELM_SHUTDOWN_TIMEOUT": env_value("LOOMHELM_SHUTDOWN_TIMEOUT", "10s"),
-        "LOOMHELM_STARTUP_TIMEOUT": env_value("LOOMHELM_STARTUP_TIMEOUT", "30s"),
+        "LOOMHELM_SHUTDOWN_TIMEOUT": shutdown_timeout,
+        "LOOMHELM_STOP_GRACE_PERIOD": stop_grace,
+        "LOOMHELM_STARTUP_TIMEOUT": env_value("LOOMHELM_STARTUP_TIMEOUT", "10m"),
         "LOOMHELM_WORKER_LEASE_KEY": env_value("LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"),
     }
     for slot in SLOTS:
@@ -590,7 +736,20 @@ def command_compose_env(args: argparse.Namespace) -> None:
         values[f"LOOMHELM_{prefix}_WORKER_GENERATION"] = str(record["generation"] if record else state["next_worker_generation"])
     output = Path(args.output).resolve()
     atomic_write(output, "".join(f"{key}={dotenv(value)}\n" for key, value in sorted(values.items())))
+    if state_changed:
+        state["compose_project_name"] = project_name
+        if not stored_volume:
+            state["artifact_volume_name"] = artifact_volume_name
+        write_state(state_dir, state)
     print(f"env={output}")
+
+
+def command_validate_project(args: argparse.Namespace) -> None:
+    state_dir = Path(args.state_dir).resolve()
+    state = load_state(state_dir)
+    project_name = env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True)
+    validate_compose_project_name(state_dir, state, project_name)
+    print(f"project_name={project_name}")
 
 
 def command_check(args: argparse.Namespace) -> None:
@@ -662,7 +821,7 @@ def command_status(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "stage", "stage-existing", "stage-retained", "abort-stage", "render", "commit", "compose-env", "check", "identity", "verify-web", "status"))
+    parser.add_argument("command", choices=("init", "stage", "stage-existing", "stage-retained", "abort-stage", "render", "commit", "compose-env", "validate-project", "check", "identity", "verify-web", "status"))
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--manifest")
     parser.add_argument("--slot")
@@ -676,7 +835,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
-        {
+        command = {
             "init": command_init,
             "stage": command_stage,
             "stage-existing": command_stage_existing,
@@ -685,11 +844,14 @@ def main() -> int:
             "render": command_render,
             "commit": command_commit,
             "compose-env": command_compose_env,
+            "validate-project": command_validate_project,
             "check": command_check,
             "identity": command_identity,
             "verify-web": command_verify_web,
             "status": command_status,
-        }[args.command](args)
+        }[args.command]
+        with state_lock(Path(args.state_dir).resolve()):
+            command(args)
     except ContractError as exc:
         print(f"preview: {exc}", file=sys.stderr)
         return 2

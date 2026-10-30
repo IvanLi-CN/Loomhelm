@@ -11,11 +11,11 @@ on:
         options:
           - control-only
   pull_request:
-    paths:
-      - deploy/preview/**
-      - scripts/preview
-      - scripts/rehearse-blue-green
-      - .github/workflows/blue-green-baseline.yml
+    # This workflow backs a required branch-protection check. It must start
+    # for every pull request; path filters would leave the required check
+    # pending on unrelated source-only changes.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -34,7 +34,11 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      - name: Pull Compose fixture image
+        run: docker pull postgres:17-alpine
       - name: Run deterministic rehearsal
+        env:
+          LOOMHELM_TEST_COMPOSE: "1"
         run: |
           evidence="$RUNNER_TEMP/loomhelm-blue-green"
           scripts/rehearse-blue-green --control-only --evidence-dir "$evidence"
