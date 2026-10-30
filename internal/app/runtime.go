@@ -62,6 +62,20 @@ const (
 	artifactRecoveryPassBudget = 10 * time.Second
 )
 
+func recoverArtifactStoreAtStartup(ctx context.Context, store artifactRecoveryStore, logger *slog.Logger) (artifacts.RecoveryReport, error) {
+	report, err := store.Recover(ctx, artifacts.DefaultRecoveryLimit)
+	if err == nil {
+		return report, nil
+	}
+	if !errors.Is(err, artifacts.ErrRecoveryDeferred) {
+		return report, err
+	}
+	if logger != nil {
+		logger.Warn("artifact recovery deferred during startup", "error", err, "failed", report.Failed, "deferred", report.Deferred)
+	}
+	return report, nil
+}
+
 func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.Logger) (processRuntime, error) {
 	db, err := database.Open(ctx, database.Config{
 		URL: cfg.DatabaseURL, MinConns: cfg.DatabaseMinConns, MaxConns: cfg.DatabaseMaxConns,
@@ -163,7 +177,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 				return nil, fmt.Errorf("initialize artifact store: %w", artifactErr)
 			}
 			recoveryCtx, cancelRecovery := context.WithTimeout(ctx, cfg.StartupBudget())
-			_, artifactErr = artifactStore.Recover(recoveryCtx, artifacts.DefaultRecoveryLimit)
+			_, artifactErr = recoverArtifactStoreAtStartup(recoveryCtx, artifactStore, logger)
 			cancelRecovery()
 			if artifactErr != nil {
 				db.Close()

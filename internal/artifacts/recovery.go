@@ -29,6 +29,7 @@ var (
 	ErrUnavailable        = errors.New("artifact is unavailable")
 	ErrRecoveryPending    = errors.New("artifact recovery is pending")
 	ErrRecoveryIncomplete = errors.New("artifact recovery incomplete")
+	ErrRecoveryDeferred   = errors.New("artifact recovery deferred")
 )
 
 func databaseWriteError(message string, err error) error {
@@ -87,40 +88,43 @@ type RecoveryReport struct {
 	Pending     int
 	Cleaned     int
 	Failed      int
+	Deferred    int
 }
 
 type faultPoint string
 
 const (
-	faultAfterStage                faultPoint = "after-stage"
-	faultAfterIntentCommit         faultPoint = "after-intent-commit"
-	faultAfterRepairIntentCommit   faultPoint = "after-repair-intent-commit"
-	faultAfterFinalLink            faultPoint = "after-final-link"
-	faultAfterFinalPublication     faultPoint = "after-final-publication"
-	faultAfterReadyCommit          faultPoint = "after-ready-commit"
-	faultBeforeContentMismatchMark faultPoint = "before-content-mismatch-mark"
+	faultAfterStage                  faultPoint = "after-stage"
+	faultAfterIntentCommit           faultPoint = "after-intent-commit"
+	faultAfterRepairIntentCommit     faultPoint = "after-repair-intent-commit"
+	faultAfterFinalLink              faultPoint = "after-final-link"
+	faultAfterFinalPublication       faultPoint = "after-final-publication"
+	faultAfterReadyCommit            faultPoint = "after-ready-commit"
+	faultBeforeContentMismatchMark   faultPoint = "before-content-mismatch-mark"
+	faultBeforeObjectUnavailableMark faultPoint = "before-object-unavailable-mark"
 )
 
 // faultHooks is intentionally unexported. Package tests use it to terminate a
 // helper process at durable publication boundaries; production composition
 // cannot configure process-exit behavior through Config.
 type faultHooks struct {
-	AfterStage                 func()
-	AfterIntentCommit          func()
-	AfterRepairIntentCommit    func()
-	AfterFinalLink             func()
-	AfterFinalPublication      func()
-	AfterReadyCommit           func()
-	CommitResponseLost         func() error
-	BeforeIdentityLock         func(context.Context, pgx.Tx, string)
-	BeforeIdentityTryLock      func()
-	AfterIdentityLock          func()
-	BeforeReadyStagingRemoval  func()
-	AfterReadyStagingRemoval   func()
-	BeforeStagingDirectorySync func() error
-	BeforeStagingCleanupCommit func()
-	BeforeOpenVerification     func()
-	BeforeContentMismatchMark  func()
+	AfterStage                  func()
+	AfterIntentCommit           func()
+	AfterRepairIntentCommit     func()
+	AfterFinalLink              func()
+	AfterFinalPublication       func()
+	AfterReadyCommit            func()
+	CommitResponseLost          func() error
+	BeforeIdentityLock          func(context.Context, pgx.Tx, string)
+	BeforeIdentityTryLock       func()
+	AfterIdentityLock           func()
+	BeforeReadyStagingRemoval   func()
+	AfterReadyStagingRemoval    func()
+	BeforeStagingDirectorySync  func() error
+	BeforeStagingCleanupCommit  func()
+	BeforeOpenVerification      func()
+	BeforeContentMismatchMark   func()
+	BeforeObjectUnavailableMark func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -155,6 +159,10 @@ func (s *Store) fault(point faultPoint) {
 	case faultBeforeContentMismatchMark:
 		if s.faults.BeforeContentMismatchMark != nil {
 			s.faults.BeforeContentMismatchMark()
+		}
+	case faultBeforeObjectUnavailableMark:
+		if s.faults.BeforeObjectUnavailableMark != nil {
+			s.faults.BeforeObjectUnavailableMark()
 		}
 	}
 }
@@ -2149,10 +2157,14 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 					}
 					return report, err
 				}
-				if deferErr := s.deferArtifactRecovery(item.name, cleanup); errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
+				deferErr := s.deferArtifactRecovery(item.name, cleanup)
+				if errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
 					return report, deferErr
-				} else if deferErr != nil {
+				}
+				if deferErr != nil {
 					firstFailure = errors.Join(firstFailure, deferErr)
+				} else {
+					report.Deferred++
 				}
 				continue
 			}
@@ -2178,10 +2190,14 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 				}
 				return report, err
 			}
-			if deferErr := s.deferStagingCleanupRetry(item.name, cleanup); errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
+			deferErr := s.deferStagingCleanupRetry(item.name, cleanup)
+			if errors.Is(deferErr, context.Canceled) || errors.Is(deferErr, context.DeadlineExceeded) {
 				return report, deferErr
-			} else if deferErr != nil {
+			}
+			if deferErr != nil {
 				firstFailure = errors.Join(firstFailure, deferErr)
+			} else {
+				report.Deferred++
 			}
 			continue
 		}
@@ -2191,6 +2207,9 @@ func (s *Store) Recover(ctx context.Context, limit int) (RecoveryReport, error) 
 	}
 	if report.Failed > 0 {
 		if firstFailure != nil {
+			if report.Deferred == report.Failed {
+				return report, fmt.Errorf("%w: %w: %v", ErrRecoveryIncomplete, ErrRecoveryDeferred, firstFailure)
+			}
 			return report, fmt.Errorf("%w: %v", ErrRecoveryIncomplete, firstFailure)
 		}
 		return report, ErrRecoveryIncomplete
@@ -2239,37 +2258,10 @@ func (s *Store) markReadyObjectUnavailable(parent context.Context, id string, re
 	return nil
 }
 
-func (s *Store) verifyCanonicalObjectVersion(ctx context.Context, id, expectedVersion string) error {
+func (s *Store) markReadyObjectUnavailableForVersion(parent context.Context, id, expectedVersion, reason string) error {
 	if strings.TrimSpace(expectedVersion) == "" {
 		return fmt.Errorf("artifact content version is missing: %w", ErrContentChanged)
 	}
-	path, err := s.objectPath(id)
-	if err != nil {
-		return err
-	}
-	file, err := openStoredFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrIntegrity) {
-			return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
-		}
-		return err
-	}
-	defer file.Close()
-	version, err := fileContentVersion(file)
-	if err != nil {
-		return err
-	}
-	if version != expectedVersion {
-		return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
-	}
-	return nil
-}
-
-// markReadyContentMismatch rechecks the canonical object while the ready row
-// is locked and immediately before commit. A replacement that arrives after
-// the reader's last verification therefore leaves the row ready for a later
-// conflict-safe retry instead of quarantining the replacement bytes.
-func (s *Store) markReadyContentMismatch(parent context.Context, id, expectedVersion string) error {
 	cleanup := newCleanupDeadline(parent)
 	defer cleanup.stop()
 	ctx, cancel := cleanup.context()
@@ -2297,23 +2289,76 @@ func (s *Store) markReadyContentMismatch(parent context.Context, id, expectedVer
 	if state != string(publicationReady) {
 		return nil
 	}
-	if err := s.verifyCanonicalObjectVersion(ctx, id, expectedVersion); err != nil {
+	if err := s.verifyCanonicalObjectPathVersion(ctx, id, expectedVersion); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE conversation_artifacts SET state = 'unavailable', unavailable_reason = $2, staging_reclaim_after = NOW() WHERE id = $1 AND state = 'ready'`, id, contentMismatchReason); err != nil {
-		return databaseWriteError("mark ready artifact content mismatch", err)
+	s.fault(faultBeforeObjectUnavailableMark)
+	if _, err := tx.Exec(ctx, `UPDATE conversation_artifacts SET state = 'unavailable', unavailable_reason = $2, staging_reclaim_after = NOW() WHERE id = $1 AND state = 'ready'`, id, reason); err != nil {
+		return databaseWriteError("mark ready artifact unavailable", err)
 	}
-	if err := s.verifyCanonicalObjectVersion(ctx, id, expectedVersion); err != nil {
+	if err := s.verifyCanonicalObjectPathVersion(ctx, id, expectedVersion); err != nil {
 		return err
 	}
 	if err := s.commit(ctx, tx); err != nil {
 		confirmed, confirmErr := s.confirmRecordWithCleanup(id, cleanup)
-		if confirmErr == nil && confirmed.State == publicationUnavailable && confirmed.UnavailableReason == contentMismatchReason {
+		if confirmErr == nil && confirmed.State == publicationUnavailable && confirmed.UnavailableReason == reason {
 			return nil
 		}
-		return databaseWriteError("commit ready artifact content mismatch", err)
+		return databaseWriteError("commit ready artifact unavailable state", err)
 	}
 	return nil
+}
+
+func (s *Store) verifyCanonicalObjectVersion(ctx context.Context, id, expectedVersion string) error {
+	if strings.TrimSpace(expectedVersion) == "" {
+		return fmt.Errorf("artifact content version is missing: %w", ErrContentChanged)
+	}
+	path, err := s.objectPath(id)
+	if err != nil {
+		return err
+	}
+	file, err := openStoredFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrIntegrity) {
+			return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
+		}
+		return err
+	}
+	defer file.Close()
+	version, err := fileContentVersion(file)
+	if err != nil {
+		return err
+	}
+	if version != expectedVersion {
+		return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
+	}
+	return nil
+}
+
+func (s *Store) verifyCanonicalObjectPathVersion(ctx context.Context, id, expectedVersion string) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	path, err := s.objectPath(id)
+	if err != nil {
+		return err
+	}
+	version, err := objectPathVersion(path)
+	if err != nil {
+		return err
+	}
+	if version != expectedVersion {
+		return fmt.Errorf("artifact content path changed while quarantining: %w", ErrContentChanged)
+	}
+	return nil
+}
+
+// markReadyContentMismatch rechecks the canonical object while the ready row
+// is locked and immediately before commit. A replacement that arrives after
+// the reader's last verification therefore leaves the row ready for a later
+// conflict-safe retry instead of quarantining the replacement bytes.
+func (s *Store) markReadyContentMismatch(parent context.Context, id, expectedVersion string) error {
+	return s.markReadyObjectUnavailableForVersion(parent, id, expectedVersion, contentMismatchReason)
 }
 
 func unavailableError(reason error) error {

@@ -519,16 +519,20 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 	if err := s.ensureObjectDirectory(); err != nil {
 		return protocol.Artifact{}, nil, err
 	}
+	pathVersion, pathVersionErr := objectPathVersion(path)
+	if pathVersionErr != nil {
+		return protocol.Artifact{}, nil, pathVersionErr
+	}
 	file, err := openStoredFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-missing"); markErr != nil {
+			if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, pathVersion, "final-missing"); markErr != nil {
 				return protocol.Artifact{}, nil, markErr
 			}
 			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
 		}
 		if errors.Is(err, ErrIntegrity) {
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
+			if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, pathVersion, "final-mismatch"); markErr != nil {
 				return protocol.Artifact{}, nil, markErr
 			}
 			return protocol.Artifact{}, nil, unavailableError(ErrIntegrity)
@@ -566,7 +570,7 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 			if pathErr := s.verifyCanonicalObjectVersion(ctx, record.Artifact.ID, version); pathErr != nil {
 				return protocol.Artifact{}, nil, pathErr
 			}
-			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
+			if markErr := s.markReadyObjectUnavailableForVersion(ctx, record.Artifact.ID, version, "final-mismatch"); markErr != nil {
 				return protocol.Artifact{}, nil, markErr
 			}
 			return protocol.Artifact{}, nil, unavailableError(verifyErr)
@@ -855,20 +859,42 @@ func fileContentVersion(file *os.File) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("stat artifact content version: %w", ErrStoreUnavailable)
 	}
-	system := info.Sys()
+	return fileInfoContentVersion(info)
+}
+
+func fileInfoContentVersion(info os.FileInfo) (string, error) {
+	if info == nil {
+		return "", ErrIntegrity
+	}
 	identity := fmt.Sprintf(
 		"%T|dev=%s|ino=%s|mode=%s|size=%d|mtime=%s|ctime=%s|modtime=%d",
-		system,
-		statField(system, "Dev"),
-		statField(system, "Ino"),
-		statField(system, "Mode"),
+		info.Sys(),
+		statField(info.Sys(), "Dev"),
+		statField(info.Sys(), "Ino"),
+		statField(info.Sys(), "Mode"),
 		info.Size(),
-		statField(system, "Mtim", "Mtimespec"),
-		statField(system, "Ctim", "Ctimespec"),
+		statField(info.Sys(), "Mtim", "Mtimespec"),
+		statField(info.Sys(), "Ctim", "Ctimespec"),
 		info.ModTime().UnixNano(),
 	)
 	digest := sha256.Sum256([]byte(identity))
 	return "v1-" + hex.EncodeToString(digest[:]), nil
+}
+
+const missingObjectPathVersion = "missing"
+
+func objectPathVersion(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err == nil {
+		return fileInfoContentVersion(info)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect artifact object path: %w", ErrStoreUnavailable)
+	}
+	if _, dirErr := os.Lstat(filepath.Dir(path)); dirErr != nil {
+		return "", fmt.Errorf("inspect artifact object directory: %w", ErrStoreUnavailable)
+	}
+	return missingObjectPathVersion, nil
 }
 
 func statField(system any, names ...string) string {

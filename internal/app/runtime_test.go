@@ -91,6 +91,36 @@ func (s *repeatedArtifactRecoveryStore) Recover(context.Context, int) (artifacts
 	return artifacts.RecoveryReport{Scanned: int(call)}, nil
 }
 
+type startupArtifactRecoveryStore struct {
+	report artifacts.RecoveryReport
+	err    error
+}
+
+func (s startupArtifactRecoveryStore) Recover(context.Context, int) (artifacts.RecoveryReport, error) {
+	return s.report, s.err
+}
+
+func TestStartupArtifactRecoveryAllowsDeferredItems(t *testing.T) {
+	report, err := recoverArtifactStoreAtStartup(context.Background(), startupArtifactRecoveryStore{
+		report: artifacts.RecoveryReport{Failed: 1, Deferred: 1},
+		err:    errors.Join(artifacts.ErrRecoveryIncomplete, artifacts.ErrRecoveryDeferred),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("deferred startup recovery error = %v, want nil", err)
+	}
+	if report.Failed != 1 || report.Deferred != 1 {
+		t.Fatalf("deferred startup recovery report = %#v", report)
+	}
+}
+
+func TestStartupArtifactRecoveryRejectsNonDeferredFailure(t *testing.T) {
+	want := errors.New("recovery backend unavailable")
+	_, err := recoverArtifactStoreAtStartup(context.Background(), startupArtifactRecoveryStore{err: want}, nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("startup recovery error = %v, want %v", err, want)
+	}
+}
+
 func TestDatabaseRuntimeRepeatsArtifactRecoveryUntilClosed(t *testing.T) {
 	store := &repeatedArtifactRecoveryStore{}
 	runtime := &databaseRuntime{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}

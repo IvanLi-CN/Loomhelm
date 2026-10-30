@@ -298,6 +298,36 @@ func TestStoreOpenDoesNotQuarantineAfterCanonicalReplacement(t *testing.T) {
 	}
 }
 
+func TestStoreOpenDoesNotQuarantineAfterMissingCanonicalReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("missing path replacement bytes")
+	artifact := testArtifact(uniqueID("artifact-open-missing-path-race"), nil, content)
+	stagingName := ".upload-open-missing-path-race-" + fmt.Sprint(time.Now().UnixNano())
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertReadyArtifact(t, store, ctx, artifact, stagingName)
+	store.faults = &faultHooks{
+		BeforeObjectUnavailableMark: func() {
+			if err := os.WriteFile(objectPath, content, 0o600); err != nil {
+				t.Fatalf("restore missing canonical object: %v", err)
+			}
+		},
+	}
+	if _, _, err := store.Open(ctx, artifact.ID); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("Open error = %v, want %v", err, ErrContentChanged)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM conversation_artifacts WHERE id = $1`, artifact.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) {
+		t.Fatalf("missing canonical replacement state = %q, want %q", state, publicationReady)
+	}
+}
+
 func TestStoreContentMismatchIsRecoverableAfterFinalVerification(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()

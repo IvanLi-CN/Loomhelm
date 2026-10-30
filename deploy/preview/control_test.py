@@ -2,7 +2,10 @@ import io
 import json
 import os
 import stat
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from argparse import Namespace
 from contextlib import redirect_stdout
@@ -175,6 +178,110 @@ class PreviewControlTest(unittest.TestCase):
         options.update(values)
         args = Namespace(**options)
         getattr(control, f"command_{name.replace('-', '_')}")(args)
+
+    def start_lock_holder(self, state_dir: Path, ready: Path, release: Path, *, workflow: bool) -> subprocess.Popen:
+        source = """
+from pathlib import Path
+import sys
+import time
+
+import control
+
+state_dir = Path(sys.argv[1])
+ready = Path(sys.argv[2])
+release = Path(sys.argv[3])
+with control.state_lock(state_dir):
+    ready.write_text('locked', encoding='utf-8')
+    while not release.exists():
+        time.sleep(0.01)
+"""
+        environment = os.environ.copy()
+        module_dir = str(Path(control.__file__).resolve().parent)
+        environment["PYTHONPATH"] = os.pathsep.join(filter(None, (module_dir, environment.get("PYTHONPATH"))))
+        if workflow:
+            environment.pop("LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD", None)
+        else:
+            environment["LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD"] = "1"
+        return subprocess.Popen(
+            [sys.executable, "-c", source, str(state_dir), str(ready), str(release)],
+            cwd=module_dir,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def wait_for_file(self, path: Path, process: subprocess.Popen, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.exists():
+                return
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                self.fail(f"lock helper exited with {process.returncode}: {stdout}{stderr}")
+            time.sleep(0.01)
+        self.fail(f"timed out waiting for {path}")
+
+    def test_state_lock_serializes_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            state_dir = root / "state"
+            holder_ready = root / "holder.ready"
+            holder_release = root / "holder.release"
+            contender_ready = root / "contender.ready"
+            contender_release = root / "contender.release"
+            holder = self.start_lock_holder(state_dir, holder_ready, holder_release, workflow=False)
+            contender = None
+            try:
+                self.wait_for_file(holder_ready, holder)
+                contender = self.start_lock_holder(state_dir, contender_ready, contender_release, workflow=False)
+                time.sleep(0.15)
+                self.assertIsNone(contender.poll(), "state lock contender acquired before the holder released it")
+                self.assertFalse(contender_ready.exists())
+                holder_release.touch()
+                self.wait_for_file(contender_ready, contender)
+                contender_release.touch()
+                contender_stdout, contender_stderr = contender.communicate(timeout=5)
+                self.assertEqual(contender.returncode, 0, f"state contender failed: {contender_stdout}{contender_stderr}")
+            finally:
+                holder_release.touch()
+                if contender is not None:
+                    contender_release.touch()
+                    contender.communicate(timeout=5)
+                holder.communicate(timeout=5)
+
+    def test_preview_workflow_lock_serializes_wrapper_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            state_dir = root / "state"
+            holder_ready = root / "holder.ready"
+            holder_release = root / "holder.release"
+            holder = self.start_lock_holder(state_dir, holder_ready, holder_release, workflow=True)
+            contender = None
+            try:
+                self.wait_for_file(holder_ready, holder)
+                environment = os.environ.copy()
+                environment["LOOMHELM_PREVIEW_STATE_DIR"] = str(state_dir)
+                contender = subprocess.Popen(
+                    [str(control.ROOT / "scripts" / "preview"), "init"],
+                    cwd=control.ROOT,
+                    env=environment,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                time.sleep(0.15)
+                self.assertIsNone(contender.poll(), "preview workflow acquired before the holder released it")
+                self.assertFalse((state_dir / "state.json").exists())
+                holder_release.touch()
+                stdout, stderr = contender.communicate(timeout=5)
+                self.assertEqual(contender.returncode, 0, f"preview init failed: {stdout}{stderr}")
+                self.assertTrue((state_dir / "state.json").exists())
+            finally:
+                holder_release.touch()
+                if contender is not None and contender.poll() is None:
+                    contender.communicate(timeout=5)
+                holder.communicate(timeout=5)
 
     def test_promote_retains_previous_web_tree_and_renders_active_slot(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
