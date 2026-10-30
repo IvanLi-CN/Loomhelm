@@ -459,6 +459,89 @@ func TestStoreContentMismatchDoesNotQuarantineAfterCanonicalReplacement(t *testi
 	}
 }
 
+func TestStoreRecoveryDoesNotPersistConflictAfterHashTimeCanonicalReplacement(t *testing.T) {
+	db, store, ctx := openArtifactStoreFixture(t, nil)
+	defer db.Close()
+	content := []byte("recovery canonical replacement content")
+	corrupt := bytes.Repeat([]byte("x"), len(content))
+	artifact := testArtifact(uniqueID("artifact-recovery-hash-path-race"), nil, content)
+	stagingName := ".upload-recovery-hash-path-race-" + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(store.objects, stagingName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objectPath := filepath.Join(store.objects, artifact.ID)
+	if err := os.WriteFile(objectPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insertPendingArtifactAt(t, db.Pool(), ctx, artifact, stagingName, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	stagingIdentity, err := store.stagingIdentity(stagingName)
+	if err != nil || stagingIdentity == nil {
+		t.Fatalf("staging identity = %v/%v", stagingIdentity, err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_identity = $2
+		WHERE id = $1
+	`, artifact.ID, stagingIdentity); err != nil {
+		t.Fatal(err)
+	}
+	var replaced atomic.Bool
+	store.faults = &faultHooks{
+		AfterArtifactVerification: func() {
+			if replaced.Swap(true) {
+				return
+			}
+			replacementPath := objectPath + ".replacement"
+			if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
+				t.Fatalf("write canonical replacement: %v", err)
+			}
+			if err := os.Rename(replacementPath, objectPath); err != nil {
+				t.Fatalf("replace canonical object: %v", err)
+			}
+		},
+	}
+	report, err := store.Recover(ctx, 1)
+	if !errors.Is(err, ErrRecoveryIncomplete) || report.Failed != 1 || report.Deferred != 1 {
+		t.Fatalf("hash-time replacement recovery = %#v, err=%v, want one deferred failure", report, err)
+	}
+	var state, reason string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, COALESCE(unavailable_reason, '')
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, artifact.ID).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationPending) || reason != "" {
+		t.Fatalf("hash-time replacement state = %q/%q, want pending/empty", state, reason)
+	}
+
+	store.faults = nil
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_artifacts
+		SET staging_reclaim_after = NOW()
+		WHERE id = $1
+	`, artifact.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Recover(ctx, 1)
+	if err != nil || second.Ready != 1 {
+		t.Fatalf("hash-time replacement retry = %#v, err=%v, want one ready artifact", second, err)
+	}
+	var reclaimed bool
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT state, staging_reclaimed_at IS NOT NULL
+		FROM conversation_artifacts
+		WHERE id = $1
+	`, artifact.ID).Scan(&state, &reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(publicationReady) || !reclaimed {
+		t.Fatalf("hash-time replacement retry state = %q/reclaimed=%t, want ready/true", state, reclaimed)
+	}
+	assertNoStagingFiles(t, store.objects)
+}
+
 func TestStoreContentMismatchRechecksCanonicalObjectBeforeQuarantine(t *testing.T) {
 	db, store, ctx := openArtifactStoreFixture(t, nil)
 	defer db.Close()

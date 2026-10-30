@@ -104,6 +104,7 @@ const (
 	faultBeforeContentMismatchMark   faultPoint = "before-content-mismatch-mark"
 	faultBeforeObjectUnavailableMark faultPoint = "before-object-unavailable-mark"
 	faultBeforeReadyInspection       faultPoint = "before-ready-inspection"
+	faultAfterArtifactVerification   faultPoint = "after-artifact-verification"
 )
 
 // faultHooks is intentionally unexported. Package tests use it to terminate a
@@ -128,6 +129,7 @@ type faultHooks struct {
 	BeforeContentMismatchMark   func()
 	BeforeObjectUnavailableMark func()
 	BeforeReadyInspection       func()
+	AfterArtifactVerification   func()
 }
 
 func (s *Store) fault(point faultPoint) {
@@ -170,6 +172,10 @@ func (s *Store) fault(point faultPoint) {
 	case faultBeforeReadyInspection:
 		if s.faults.BeforeReadyInspection != nil {
 			s.faults.BeforeReadyInspection()
+		}
+	case faultAfterArtifactVerification:
+		if s.faults.AfterArtifactVerification != nil {
+			s.faults.AfterArtifactVerification()
 		}
 	}
 }
@@ -627,6 +633,8 @@ func (s *Store) inspectReadyWithVersion(ctx context.Context, record artifactReco
 	}
 	return inspectArtifactFileWithVersion(ctx, path, record.Artifact, func() {
 		s.fault(faultBeforeReadyInspection)
+	}, func() {
+		s.fault(faultAfterArtifactVerification)
 	})
 }
 
@@ -819,7 +827,7 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	finalCheck, err := inspectArtifactFile(ctx, finalPath, existing.Artifact)
+	finalCheck, err := s.inspectArtifactFile(ctx, finalPath, existing.Artifact)
 	if err != nil {
 		return artifactRecord{}, err
 	}
@@ -854,7 +862,7 @@ func (s *Store) repairUnavailable(ctx context.Context, tx pgx.Tx, existing artif
 	if err != nil {
 		return artifactRecord{}, err
 	}
-	stagingCheck, err := inspectArtifactFile(ctx, stagingPath, candidate)
+	stagingCheck, err := s.inspectArtifactFile(ctx, stagingPath, candidate)
 	if err != nil {
 		return artifactRecord{}, err
 	}
@@ -1031,11 +1039,18 @@ func (s *Store) stagingPath(name string) (string, error) {
 }
 
 func inspectArtifactFile(ctx context.Context, path string, artifact protocol.Artifact) (fileCheck, error) {
-	check, _, err := inspectArtifactFileWithVersion(ctx, path, artifact, nil)
+	check, _, err := inspectArtifactFileWithVersion(ctx, path, artifact, nil, nil)
 	return check, err
 }
 
-func inspectArtifactFileWithVersion(ctx context.Context, path string, artifact protocol.Artifact, beforePathCheck func()) (fileCheck, string, error) {
+func (s *Store) inspectArtifactFile(ctx context.Context, path string, artifact protocol.Artifact) (fileCheck, error) {
+	check, _, err := inspectArtifactFileWithVersion(ctx, path, artifact, nil, func() {
+		s.fault(faultAfterArtifactVerification)
+	})
+	return check, err
+}
+
+func inspectArtifactFileWithVersion(ctx context.Context, path string, artifact protocol.Artifact, beforePathCheck, afterVerification func()) (fileCheck, string, error) {
 	if err := requireContext(ctx); err != nil {
 		return fileUnknown, "", err
 	}
@@ -1072,12 +1087,22 @@ func inspectArtifactFileWithVersion(ctx context.Context, path string, artifact p
 		return fileUnknown, "", fmt.Errorf("artifact content path changed while inspecting: %w", ErrContentChanged)
 	}
 	verifyErr := verifyFile(ctx, file, artifact)
+	if afterVerification != nil {
+		afterVerification()
+	}
 	currentVersion, currentVersionErr := fileContentVersion(file)
 	if currentVersionErr != nil {
 		return fileUnknown, "", currentVersionErr
 	}
 	if currentVersion != version {
 		return fileUnknown, "", fmt.Errorf("artifact content changed while inspecting: %w", ErrContentChanged)
+	}
+	pathVersion, pathVersionErr := objectPathVersion(path)
+	if pathVersionErr != nil {
+		return fileUnknown, "", pathVersionErr
+	}
+	if pathVersion != version {
+		return fileUnknown, "", fmt.Errorf("artifact content path changed while inspecting: %w", ErrContentChanged)
 	}
 	if verifyErr != nil {
 		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
@@ -1504,7 +1529,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
-	finalCheck, err := inspectArtifactFile(ctx, finalPath, record.Artifact)
+	finalCheck, err := s.inspectArtifactFile(ctx, finalPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1524,7 +1549,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	if err != nil {
 		return s.updatePublicationState(ctx, tx, record, publicationUnavailable, "staging-invalid")
 	}
-	stagingCheck, err := inspectArtifactFile(ctx, stagingPath, record.Artifact)
+	stagingCheck, err := s.inspectArtifactFile(ctx, stagingPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
@@ -1542,7 +1567,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 	}
 	if err := os.Link(stagingPath, finalPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			finalCheck, inspectErr := inspectArtifactFile(ctx, finalPath, record.Artifact)
+			finalCheck, inspectErr := s.inspectArtifactFile(ctx, finalPath, record.Artifact)
 			if inspectErr != nil {
 				return artifactRecord{}, recoveryPending, inspectErr
 			}
@@ -1561,7 +1586,7 @@ func (s *Store) reconcilePendingTx(ctx context.Context, tx pgx.Tx, record artifa
 		return artifactRecord{}, recoveryPending, fmt.Errorf("sync final artifact directory: %w", ErrStoreUnavailable)
 	}
 	s.fault(faultAfterFinalPublication)
-	finalCheck, err = inspectArtifactFile(ctx, finalPath, record.Artifact)
+	finalCheck, err = s.inspectArtifactFile(ctx, finalPath, record.Artifact)
 	if err != nil {
 		return artifactRecord{}, recoveryPending, err
 	}
