@@ -206,6 +206,13 @@ describe("production session model", () => {
     expect(merged[0]).toMatchObject({ content: "first second ", sequence: 3 });
   });
 
+  test("keeps messages from different Runs in Session time order", () => {
+    const laterRun = eventToConversationMessage(event({ event_id: "run-2-message", occurred_at: "2026-10-27T00:00:06Z", payload: { text: "second Run" }, run_id: "run-2" }));
+    const earlierRun = eventToConversationMessage(event({ event_id: "run-1-message", occurred_at: "2026-10-27T00:00:02Z", payload: { text: "first Run" }, run_id: "run-1" }));
+    const merged = mergeConversationMessages([laterRun], [earlierRun]);
+    expect(merged.map((message) => message.content)).toEqual(["first Run", "second Run"]);
+  });
+
   test("correlates approval resolutions through the durable requested-event identity", () => {
     const approvals = [{
       context: { command: "printf ok", cwd: "/workspace" },

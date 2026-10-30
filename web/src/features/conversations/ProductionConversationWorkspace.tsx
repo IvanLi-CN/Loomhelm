@@ -940,7 +940,6 @@ export function ProductionConversationWorkspace({
             lastAppliedRunSequence.current = 0;
             fenceRunTransition(selected.id);
             setRun(runFromHistory(loadedSession, selected));
-            setMessages([]);
             setApprovals([]);
             setApprovalHistoryAvailable(false);
             setRunReadUncertain(false);
@@ -1561,7 +1560,6 @@ export function ProductionConversationWorkspace({
           seenEventIds.current = new Set();
           approvalCommandIds.current = new Map();
           lastAppliedRunSequence.current = 0;
-          setMessages([]);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
           setRunReadUncertain(false);
@@ -1727,7 +1725,6 @@ export function ProductionConversationWorkspace({
     approvalCommandIds.current = new Map();
     lastAppliedRunSequence.current = 0;
     setRun(runFromHistory(sessionForRoute, selected));
-    setMessages([]);
     setApprovals([]);
     setApprovalHistoryAvailable(false);
     setRunIdentityVerified(true);

@@ -333,8 +333,12 @@ export function mergeConversationMessages(current: readonly ConversationMessage[
     });
   });
   return [...byID.values()].sort((left, right) => {
-    if (left.sequence === undefined || right.sequence === undefined) return 0;
-    return left.sequence - right.sequence;
+    if (left.occurredAt && right.occurredAt) {
+      const occurredAtOrder = left.occurredAt.localeCompare(right.occurredAt);
+      if (occurredAtOrder !== 0) return occurredAtOrder;
+    }
+    if (left.sequence !== undefined && right.sequence !== undefined && left.sequence !== right.sequence) return left.sequence - right.sequence;
+    return left.id.localeCompare(right.id);
   });
 }
 
