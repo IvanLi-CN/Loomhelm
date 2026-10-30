@@ -3,7 +3,9 @@ package artifacts
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -200,6 +202,7 @@ func TestDownloadHTTPHandlerDelegatesUnknownAndMultipleRangesToNetHTTP(t *testin
 	}{
 		{name: "unknown unit", rangeValue: "items=2-6", status: http.StatusOK},
 		{name: "multiple byte ranges", rangeValue: "bytes=2-6,8-10", status: http.StatusPartialContent},
+		{name: "mixed overlapping and past end ranges", rangeValue: "bytes=2-6,99-100", status: http.StatusPartialContent},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			artifact := protocol.Artifact{ID: "artifact-range-delegated", Name: "range.txt", Size: int64(len(content))}
@@ -217,6 +220,34 @@ func TestDownloadHTTPHandlerDelegatesUnknownAndMultipleRangesToNetHTTP(t *testin
 				t.Fatalf("status = %d, want %d; headers=%v; body=%q", response.Code, test.status, response.Header(), response.Body.String())
 			}
 		})
+	}
+}
+
+func TestDownloadHTTPHandlerIgnoresStaleIfRangeBeforeRangeValidation(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{
+		ID:     "artifact-stale-if-range",
+		Name:   "range.txt",
+		Size:   int64(len(content)),
+		Sha256: "445fcfa7807064c0c66e933b2be15b70ace20c745d07564cb76cbaa421d1cdd5",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+	request.Header.Set("Range", "bytes=99-100")
+	request.Header.Set("If-Range", `"stale-etag"`)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+	if response.Body.String() != string(content) {
+		t.Fatalf("body = %q, want %q", response.Body.String(), content)
 	}
 }
 
@@ -793,6 +824,102 @@ func TestFileContentMutationVersionDetectsRewriteWithRestoredModTime(t *testing.
 	}
 	if after == before {
 		t.Fatal("content version did not change after an in-place rewrite with restored mtime")
+	}
+}
+
+func TestContentReaderAllowsUnchangedHardLinkLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	content := []byte("immutable content")
+	digest := sha256.Sum256(content)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	version, err := filePathVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationVersion, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &contentReader{
+		File:            file,
+		version:         version,
+		mutationVersion: mutationVersion,
+		artifact: protocol.Artifact{
+			Size:   int64(len(content)),
+			Sha256: hex.EncodeToString(digest[:]),
+		},
+	}
+	linkPath := filepath.Join(filepath.Dir(path), "staging")
+	if err := os.Link(path, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(linkPath)
+	if err := reader.verifyContentVersion(context.Background()); err != nil {
+		t.Fatalf("hard-link lifecycle verification error = %v", err)
+	}
+}
+
+func TestContentReaderRejectsRewriteWithHardLinkLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	original := []byte("original content")
+	digest := sha256.Sum256(original)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	version, err := filePathVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationVersion, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &contentReader{
+		File:            file,
+		version:         version,
+		mutationVersion: mutationVersion,
+		artifact: protocol.Artifact{
+			Size:   int64(len(original)),
+			Sha256: hex.EncodeToString(digest[:]),
+		},
+	}
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteAt([]byte("rewritten content"), 0); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(filepath.Dir(path), "staging")
+	if err := os.Link(path, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(linkPath)
+	if err := reader.verifyContentVersion(context.Background()); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("rewrite with hard-link lifecycle error = %v, want ErrContentChanged", err)
 	}
 }
 

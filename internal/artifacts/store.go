@@ -134,6 +134,7 @@ type contentReader struct {
 	*os.File
 	store           *Store
 	id              string
+	artifact        protocol.Artifact
 	version         string
 	mutationVersion string
 }
@@ -155,7 +156,7 @@ func (r *contentReader) Read(buffer []byte) (int, error) {
 	}
 	n, err := r.File.Read(buffer)
 	if n > 0 {
-		if versionErr := r.verifyContentVersion(context.Background()); versionErr != nil {
+		if versionErr := r.verifyContentVersionStrict(context.Background()); versionErr != nil {
 			return 0, versionErr
 		}
 	}
@@ -177,6 +178,14 @@ func (r *contentReader) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (r *contentReader) verifyContentVersion(ctx context.Context) error {
+	return r.verifyContentVersionWithMode(ctx, false)
+}
+
+func (r *contentReader) verifyContentVersionStrict(ctx context.Context) error {
+	return r.verifyContentVersionWithMode(ctx, true)
+}
+
+func (r *contentReader) verifyContentVersionWithMode(ctx context.Context, strict bool) error {
 	if r == nil || r.File == nil {
 		return ErrStoreUnavailable
 	}
@@ -194,9 +203,54 @@ func (r *contentReader) verifyContentVersion(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !contentVersionsMatch(r.mutationVersion, mutationVersion) {
+	if contentVersionsMatch(r.mutationVersion, mutationVersion) {
+		return nil
+	}
+	if strict || !contentVersionLinkLifecycleOnly(r.mutationVersion, mutationVersion) {
 		return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
 	}
+	return r.verifyStableContent(ctx, mutationVersion)
+}
+
+func (r *contentReader) reconcileExpectedContentVersion(ctx context.Context, expectedVersion string) error {
+	if expectedVersion == "" || contentVersionsMatch(expectedVersion, r.mutationVersion) {
+		return nil
+	}
+	if !contentVersionLinkLifecycleOnly(expectedVersion, r.mutationVersion) {
+		return fmt.Errorf("artifact content snapshot does not match: %w", ErrContentChanged)
+	}
+	return r.verifyStableContent(ctx, r.mutationVersion)
+}
+
+func (r *contentReader) verifyStableContent(ctx context.Context, currentMutationVersion string) error {
+	if r == nil || r.File == nil || r.artifact.Sha256 == "" {
+		return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+	}
+	position, err := r.File.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("inspect artifact content position: %w", ErrStoreUnavailable)
+	}
+	verifyErr := verifyFile(ctx, r.File, r.artifact)
+	if _, err := r.File.Seek(position, io.SeekStart); err != nil {
+		return fmt.Errorf("restore artifact content position: %w", ErrStoreUnavailable)
+	}
+	if verifyErr != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
+			return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+		}
+		return verifyErr
+	}
+	stableMutationVersion, err := fileContentMutationVersion(r.File)
+	if err != nil {
+		return err
+	}
+	if stableMutationVersion != currentMutationVersion {
+		return fmt.Errorf("artifact content snapshot changed while reading: %w", ErrContentChanged)
+	}
+	r.mutationVersion = stableMutationVersion
 	return nil
 }
 
@@ -575,15 +629,6 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 		_ = file.Close()
 		return protocol.Artifact{}, nil, versionErr
 	}
-	mutationVersion, mutationVersionErr := fileContentMutationVersion(file)
-	if mutationVersionErr != nil {
-		_ = file.Close()
-		return protocol.Artifact{}, nil, mutationVersionErr
-	}
-	if expectedVersion != "" && !contentVersionsMatch(expectedVersion, mutationVersion) {
-		_ = file.Close()
-		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot does not match: %w", ErrContentChanged)
-	}
 	if s.faults != nil && s.faults.BeforeOpenVerification != nil {
 		s.faults.BeforeOpenVerification()
 	}
@@ -627,18 +672,25 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 		_ = file.Close()
 		return protocol.Artifact{}, nil, currentMutationVersionErr
 	}
-	if expectedVersion != "" && !contentVersionsMatch(expectedVersion, currentMutationVersion) {
-		_ = file.Close()
-		return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot does not match: %w", ErrContentChanged)
-	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()
 		return protocol.Artifact{}, nil, fmt.Errorf("rewind artifact bytes: %w", ErrStoreUnavailable)
 	}
-	if !verify {
-		return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: currentVersion, mutationVersion: currentMutationVersion}, nil
+	reader := &contentReader{
+		File:            file,
+		store:           s,
+		id:              record.Artifact.ID,
+		artifact:        record.Artifact,
+		version:         currentVersion,
+		mutationVersion: currentMutationVersion,
 	}
-	return record.Artifact, &contentReader{File: file, store: s, id: record.Artifact.ID, version: currentVersion, mutationVersion: currentMutationVersion}, nil
+	if expectedVersion != "" {
+		if err := reader.reconcileExpectedContentVersion(ctx, expectedVersion); err != nil {
+			_ = file.Close()
+			return protocol.Artifact{}, nil, err
+		}
+	}
+	return record.Artifact, reader, nil
 }
 
 func (s *Store) authorize(ctx context.Context, operation Operation, artifact protocol.Artifact) error {
@@ -935,24 +987,16 @@ func fileContentMutationVersion(file *os.File) (string, error) {
 }
 
 func contentVersionsMatch(expected, current string) bool {
-	if expected == current {
-		return true
-	}
-	if expected == "" || current == "" {
-		return false
-	}
+	return expected != "" && expected == current
+}
+
+func contentVersionLinkLifecycleOnly(expected, current string) bool {
 	expectedParts := strings.Split(expected, "-")
 	currentParts := strings.Split(current, "-")
 	if len(expectedParts) != 4 || len(currentParts) != 4 || expectedParts[0] != "v2" || currentParts[0] != "v2" {
 		return false
 	}
-	if expectedParts[1] != currentParts[1] {
-		return false
-	}
-	// A link or unlink changes ctime without changing the bytes. Treat that
-	// lifecycle-only transition as equivalent; a same-link-count ctime change
-	// is an in-place mutation and must invalidate the snapshot.
-	return expectedParts[3] != currentParts[3]
+	return expectedParts[1] == currentParts[1] && expectedParts[3] != currentParts[3]
 }
 
 func fileInfoContentVersion(info os.FileInfo) (string, error) {

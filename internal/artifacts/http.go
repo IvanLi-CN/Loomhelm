@@ -295,7 +295,8 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		return
 	}
 	defer reader.Close()
-	if err := validateDownloadRange(request, artifact.Size); err != nil {
+	modTime := parseDownloadTime(artifact.CreatedAt)
+	if err := validateDownloadRange(request, artifact.Size, artifact.Sha256, modTime); err != nil {
 		h.writeRangeError(writer, request, artifact.Size, err)
 		return
 	}
@@ -336,7 +337,6 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	if artifact.Sha256 != "" {
 		writer.Header().Set("ETag", `"`+artifact.Sha256+`"`)
 	}
-	modTime := parseDownloadTime(artifact.CreatedAt)
 	responseController := http.NewResponseController(writer)
 	// Staging and network writes share one absolute request deadline so a slow
 	// source cannot consume the full transfer budget before response writes begin.
@@ -715,9 +715,16 @@ func (h *DownloadHTTPHandler) writeRangeError(writer http.ResponseWriter, reques
 	h.writeError(writer, request, http.StatusRequestedRangeNotSatisfiable, err, "artifact range is not satisfiable")
 }
 
-func validateDownloadRange(request *http.Request, size int64) error {
+func validateDownloadRange(request *http.Request, size int64, etag string, modTime time.Time) error {
 	values := request.Header.Values("Range")
 	if len(values) == 0 || (len(values) == 1 && strings.TrimSpace(values[0]) == "") {
+		return nil
+	}
+	if ifRange := strings.TrimSpace(request.Header.Get("If-Range")); ifRange != "" && !downloadIfRangeMatches(ifRange, etag, modTime) {
+		// net/http ignores Range when If-Range does not match. Do this before
+		// validating the range syntax so a stale conditional request cannot be
+		// turned into a spurious 416 response.
+		request.Header.Del("Range")
 		return nil
 	}
 	if len(values) != 1 {
@@ -737,40 +744,70 @@ func validateDownloadRange(request *http.Request, size int64) error {
 	}
 	specification := strings.TrimSpace(strings.TrimPrefix(rangeValue, "bytes="))
 	if strings.Contains(specification, ",") {
+		hasOverlap := false
 		for _, part := range strings.Split(specification, ",") {
-			if err := validateSingleDownloadRange(strings.TrimSpace(part), size); err != nil {
+			overlaps, err := validateSingleDownloadRange(strings.TrimSpace(part), size)
+			if err != nil {
 				return err
 			}
+			hasOverlap = hasOverlap || overlaps
 		}
-		return nil
-	}
-	return validateSingleDownloadRange(specification, size)
-}
-
-func validateSingleDownloadRange(specification string, size int64) error {
-	parts := strings.Split(specification, "-")
-	if len(parts) != 2 || specification == "-" || size < 0 {
-		return ErrRangeNotSatisfiable
-	}
-	if parts[0] == "" {
-		suffix, err := parseDownloadRangeNumber(parts[1])
-		if err != nil || suffix <= 0 || size == 0 {
+		if !hasOverlap {
 			return ErrRangeNotSatisfiable
 		}
 		return nil
 	}
-	start, err := parseDownloadRangeNumber(parts[0])
-	if err != nil || start < 0 || start >= size {
-		return ErrRangeNotSatisfiable
+	overlaps, err := validateSingleDownloadRange(specification, size)
+	if err != nil {
+		return err
 	}
-	if parts[1] == "" {
-		return nil
-	}
-	end, err := parseDownloadRangeNumber(parts[1])
-	if err != nil || end < start {
+	if !overlaps {
 		return ErrRangeNotSatisfiable
 	}
 	return nil
+}
+
+func downloadIfRangeMatches(value, etag string, modTime time.Time) bool {
+	if value == `"`+etag+`"` && etag != "" {
+		return true
+	}
+	if strings.HasPrefix(value, `W/`) || strings.HasPrefix(value, `"`) {
+		return false
+	}
+	if modTime.IsZero() {
+		return false
+	}
+	parsed, err := http.ParseTime(value)
+	return err == nil && parsed.Unix() == modTime.Unix()
+}
+
+func validateSingleDownloadRange(specification string, size int64) (bool, error) {
+	parts := strings.Split(specification, "-")
+	if len(parts) != 2 || specification == "-" || size < 0 {
+		return false, ErrRangeNotSatisfiable
+	}
+	if parts[0] == "" {
+		suffix, err := parseDownloadRangeNumber(parts[1])
+		if err != nil || suffix <= 0 || size == 0 {
+			return false, ErrRangeNotSatisfiable
+		}
+		return true, nil
+	}
+	start, err := parseDownloadRangeNumber(parts[0])
+	if err != nil || start < 0 {
+		return false, ErrRangeNotSatisfiable
+	}
+	if start >= size {
+		return false, nil
+	}
+	if parts[1] == "" {
+		return true, nil
+	}
+	end, err := parseDownloadRangeNumber(parts[1])
+	if err != nil || end < start {
+		return false, ErrRangeNotSatisfiable
+	}
+	return true, nil
 }
 
 func parseDownloadRangeNumber(value string) (int64, error) {
