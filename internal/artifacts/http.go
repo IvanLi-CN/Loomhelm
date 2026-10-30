@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -32,9 +33,13 @@ const (
 	// readers opened concurrently.
 	maxStagedDownloadBytes      = int64(DefaultMaxBytes)
 	maxConcurrentStagedDownload = 2
+	// Network responses are admitted separately from staging so a slow client
+	// cannot consume the two slots needed to verify and stage new artifacts.
+	maxConcurrentDownloadResponses = 32
 	// Full artifact downloads may be deliberately slow, but an absolute deadline
 	// and shorter idle deadline keep a client from pinning transfer resources.
-	downloadWriteTimeout     = 2 * time.Minute
+	DownloadWriteTimeout     = 2 * time.Minute
+	downloadWriteTimeout     = DownloadWriteTimeout
 	downloadWriteIdleTimeout = 30 * time.Second
 )
 
@@ -51,11 +56,15 @@ type DownloadErrorWriter func(http.ResponseWriter, *http.Request, int, error, st
 // deliberately supplied by the application; it reads the chi parameter named
 // artifact_id and does not create a standalone artifacts navigation surface.
 type DownloadHTTPHandler struct {
-	store                protocol.ArtifactStore
-	writeError           DownloadErrorWriter
-	downloadStagingSlots chan struct{}
-	maxStagingBytes      int64
-	stagingBudget        *semaphore.Weighted
+	store                 protocol.ArtifactStore
+	writeError            DownloadErrorWriter
+	downloadStagingSlots  chan struct{}
+	downloadResponseSlots chan struct{}
+	maxStagingBytes       int64
+	stagingBudget         *semaphore.Weighted
+	cleanupMu             sync.Mutex
+	pendingStagingCleanup map[string]int64
+	removeStagingFile     func(string) error
 }
 
 type artifactSizeLimit interface {
@@ -181,18 +190,29 @@ func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErr
 		}
 	}
 	return &DownloadHTTPHandler{
-		store:                store,
-		writeError:           writeError,
-		downloadStagingSlots: make(chan struct{}, maxConcurrentStagedDownload),
-		maxStagingBytes:      maxStagingBytes,
-		stagingBudget:        semaphore.NewWeighted(maxStagingBytes),
+		store:                 store,
+		writeError:            writeError,
+		downloadStagingSlots:  make(chan struct{}, maxConcurrentStagedDownload),
+		downloadResponseSlots: make(chan struct{}, maxConcurrentDownloadResponses),
+		maxStagingBytes:       maxStagingBytes,
+		stagingBudget:         semaphore.NewWeighted(maxStagingBytes),
+		pendingStagingCleanup: make(map[string]int64),
+		removeStagingFile:     os.Remove,
 	}, nil
 }
 
 func (h *DownloadHTTPHandler) acquireDownloadSlot(ctx context.Context) (func(), error) {
+	return acquireDownloadSlot(ctx, h.downloadStagingSlots)
+}
+
+func (h *DownloadHTTPHandler) acquireDownloadResponseSlot(ctx context.Context) (func(), error) {
+	return acquireDownloadSlot(ctx, h.downloadResponseSlots)
+}
+
+func acquireDownloadSlot(ctx context.Context, slots chan struct{}) (func(), error) {
 	select {
-	case h.downloadStagingSlots <- struct{}{}:
-		return func() { <-h.downloadStagingSlots }, nil
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
@@ -212,6 +232,7 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
 		return
 	}
+	h.retryPendingStagingCleanup()
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		h.writeError(writer, request, http.StatusMethodNotAllowed, ErrInvalid, "artifact download method is not allowed")
@@ -268,6 +289,15 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		releaseSlot()
 		releaseSlot = nil
 	}
+	releaseResponseSlot, responseSlotErr := h.acquireDownloadResponseSlot(request.Context())
+	if responseSlotErr != nil {
+		if request.Context().Err() != nil {
+			return
+		}
+		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download response capacity is temporarily exhausted")
+		return
+	}
+	defer releaseResponseSlot()
 
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Disposition", contentDisposition(artifact.Name))
@@ -308,6 +338,10 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 }
 
 func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadSeeker, size int64) (*os.File, func(), error) {
+	h.retryPendingStagingCleanup()
+	if h.cleanupBlocked() {
+		return nil, nil, ErrStoreUnavailable
+	}
 	if size < 0 {
 		return nil, nil, ErrSizeMismatch
 	}
@@ -327,15 +361,23 @@ func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadS
 		h.stagingBudget.Release(weight)
 		return nil, nil, fmt.Errorf("create artifact download staging file: %w", ErrStoreUnavailable)
 	}
+	var releaseOnce sync.Once
 	release := func() {
-		_ = stagingFile.Close()
-		if err := os.Remove(stagingFile.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
-			// Keep the weighted budget occupied when cleanup fails. A later
-			// handler construction retries only stale files, so accounting cannot
-			// claim capacity that still has bytes on disk.
-			return
-		}
-		h.stagingBudget.Release(weight)
+		releaseOnce.Do(func() {
+			_ = stagingFile.Close()
+			remove := h.removeStagingFile
+			if remove == nil {
+				remove = os.Remove
+			}
+			if err := remove(stagingFile.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+				// Keep the weighted budget occupied until a later request confirms
+				// that the file is gone. This preserves the disk bound while making
+				// transient cleanup failures retryable within the same process.
+				h.rememberPendingStagingCleanup(stagingFile.Name(), weight)
+				return
+			}
+			h.stagingBudget.Release(weight)
+		})
 	}
 	staged := false
 	defer func() {
@@ -398,6 +440,49 @@ func cleanupOrphanedDownloadStaging() {
 	}
 }
 
+func (h *DownloadHTTPHandler) cleanupBlocked() bool {
+	h.cleanupMu.Lock()
+	defer h.cleanupMu.Unlock()
+	return len(h.pendingStagingCleanup) >= maxConcurrentDownloadResponses
+}
+
+func (h *DownloadHTTPHandler) rememberPendingStagingCleanup(path string, weight int64) {
+	h.cleanupMu.Lock()
+	defer h.cleanupMu.Unlock()
+	if h.pendingStagingCleanup == nil {
+		h.pendingStagingCleanup = make(map[string]int64)
+	}
+	h.pendingStagingCleanup[path] = weight
+}
+
+func (h *DownloadHTTPHandler) retryPendingStagingCleanup() {
+	h.cleanupMu.Lock()
+	pending := make(map[string]int64, len(h.pendingStagingCleanup))
+	for path, weight := range h.pendingStagingCleanup {
+		pending[path] = weight
+	}
+	h.cleanupMu.Unlock()
+	if len(pending) == 0 {
+		return
+	}
+	remove := h.removeStagingFile
+	if remove == nil {
+		remove = os.Remove
+	}
+	for path := range pending {
+		if err := remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		h.cleanupMu.Lock()
+		weight, ok := h.pendingStagingCleanup[path]
+		if ok {
+			delete(h.pendingStagingCleanup, path)
+			h.stagingBudget.Release(weight)
+		}
+		h.cleanupMu.Unlock()
+	}
+}
+
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
 // MCP callers. The content store repeats authorization, ready-state, regular
 // file and exact-size checks for every request; content_version binds later
@@ -408,6 +493,7 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
 		return
 	}
+	h.retryPendingStagingCleanup()
 	if request.Method != http.MethodGet {
 		writer.Header().Set("Allow", http.MethodGet)
 		h.writeError(writer, request, http.StatusMethodNotAllowed, ErrInvalid, "artifact content method is not allowed")
@@ -509,6 +595,15 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 			}
 		}
 	}
+	releaseResponseSlot, responseSlotErr := h.acquireDownloadResponseSlot(request.Context())
+	if responseSlotErr != nil {
+		if request.Context().Err() != nil {
+			return
+		}
+		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download response capacity is temporarily exhausted")
+		return
+	}
+	defer releaseResponseSlot()
 	if releaseSlot != nil {
 		releaseSlot()
 		releaseSlot = nil

@@ -257,6 +257,8 @@ func writeApplicationError(writer http.ResponseWriter, request *http.Request, st
 }
 
 func (s *Server) handleApplication(writer http.ResponseWriter, request *http.Request) {
+	s.activeApplicationRequests.Add(1)
+	defer s.activeApplicationRequests.Add(-1)
 	s.resourceMu.RLock()
 	var handler http.Handler
 	if runtime, ok := s.resources.(interface{ APIHandler() http.Handler }); ok {

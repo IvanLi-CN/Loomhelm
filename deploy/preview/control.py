@@ -609,7 +609,8 @@ def default_stop_grace_period(shutdown_timeout: str) -> str:
     # server, runner and forced cancellation, so Compose must cover the larger
     # path.
     recovery_budget = min(seconds, 10.0)
-    server_budget = max(seconds, 60.0) + (2.0 * seconds) + recovery_budget + 20.0
+    artifact_download_budget = 120.0
+    server_budget = max(seconds, 60.0, artifact_download_budget) + (2.0 * seconds) + recovery_budget + 20.0
     worker_budget = 3.0 * seconds
     total = max(server_budget, worker_budget)
     return f"{math.ceil(total)}s"

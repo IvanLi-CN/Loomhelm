@@ -322,6 +322,25 @@ func TestDownloadHTTPHandlerBoundsConcurrentFullDownloadStaging(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerBoundsConcurrentDownloadResponses(t *testing.T) {
+	content := []byte("bounded response")
+	artifact := protocol.Artifact{ID: "artifact-response-capacity", Name: "content.bin", Size: int64(len(content))}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxConcurrentDownloadResponses; i++ {
+		handler.downloadResponseSlots <- struct{}{}
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+}
+
 func TestDownloadHTTPHandlerBoundsHeadAndContentVerification(t *testing.T) {
 	artifact := protocol.Artifact{ID: "artifact-verification-capacity", Name: "content.bin", Size: 4}
 	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, []byte("data"))}, nil)
@@ -389,6 +408,41 @@ func TestDownloadHTTPHandlerStagesWithinAggregateBudget(t *testing.T) {
 	}
 	if !handler.stagingBudget.TryAcquire(int64(len(content))) {
 		t.Fatal("staging budget was not released")
+	}
+	handler.stagingBudget.Release(int64(len(content)))
+}
+
+func TestDownloadHTTPHandlerRetriesFailedStagingCleanup(t *testing.T) {
+	content := []byte("retry cleanup")
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.stagingBudget = semaphore.NewWeighted(int64(len(content)))
+	attempts := 0
+	handler.removeStagingFile = func(path string) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("transient cleanup failure")
+		}
+		return os.Remove(path)
+	}
+	staged, release, err := handler.stageDownload(context.Background(), bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedPath := staged.Name()
+	release()
+	if handler.stagingBudget.TryAcquire(int64(len(content))) {
+		handler.stagingBudget.Release(int64(len(content)))
+		t.Fatal("staging budget released before failed cleanup was retried")
+	}
+	handler.retryPendingStagingCleanup()
+	if _, err := os.Stat(stagedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging file remains after retry: %v", err)
+	}
+	if !handler.stagingBudget.TryAcquire(int64(len(content))) {
+		t.Fatal("staging budget was not released after cleanup retry")
 	}
 	handler.stagingBudget.Release(int64(len(content)))
 }

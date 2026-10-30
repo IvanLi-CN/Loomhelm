@@ -59,7 +59,7 @@ class PreviewControlTest(unittest.TestCase):
                 for key in configured:
                     self.assertEqual(actual[key], auth.get(key, ""))
                 self.assertEqual(actual["LOOMHELM_SESSION_COOKIE_SECURE"], auth.get("LOOMHELM_SESSION_COOKIE_SECURE", "true"))
-                self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "110s")
+                self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "170s")
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 self.assertNotIn(required["LOOMHELM_DRAIN_TOKEN"], captured.getvalue())
                 self.assertNotIn(configured["LOOMHELM_OIDC_CLIENT_SECRET"], captured.getvalue())
@@ -114,7 +114,7 @@ class PreviewControlTest(unittest.TestCase):
                     self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
 
     def test_compose_grace_covers_a_longer_shutdown_timeout(self) -> None:
-        self.assertEqual(control.default_stop_grace_period("1m30s"), "300s")
+        self.assertEqual(control.default_stop_grace_period("1m30s"), "330s")
         settings = {
             "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-grace-test",
             "LOOMHELM_PREVIEW_HTTP_PORT": "18080",

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
 
@@ -567,6 +568,12 @@ func TestServerMCPShutdownTimeoutPreservesOperationBudget(t *testing.T) {
 	server.activeMCPRequests.Store(1)
 	if got, want := server.httpShutdownTimeout(), mcpHTTPShutdownGracePeriod; got != want {
 		t.Fatalf("active MCP HTTP shutdown timeout = %s, want %s", got, want)
+	}
+
+	server.activeMCPRequests.Store(0)
+	server.activeApplicationRequests.Store(1)
+	if got, want := server.httpShutdownTimeout(), artifacts.DownloadWriteTimeout; got != want {
+		t.Fatalf("active application HTTP shutdown timeout = %s, want %s", got, want)
 	}
 }
 
