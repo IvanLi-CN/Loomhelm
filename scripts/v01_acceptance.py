@@ -24,8 +24,8 @@ DIGEST_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 
 CHECKS: Dict[str, Dict[str, str]] = {
     "AC-LH-001": {
-        "title": "Web/API/MCP project and task closure",
-        "scope": "Cross-project project, task and relationship CRUD with persistence and authorization.",
+        "title": "Web/API project and task CRUD sample",
+        "scope": "Selected browser authentication, project/task CRUD, authorization and restart persistence test; not the full MCP and relationship matrix.",
     },
     "AC-LH-002": {
         "title": "Web navigation and task views",
@@ -64,8 +64,8 @@ CHECKS: Dict[str, Dict[str, str]] = {
         "scope": "Desktop/mobile UI, themes, actual PWA installation, offline and update behavior.",
     },
     "AC-LH-011": {
-        "title": "Blue-green readiness and handoff",
-        "scope": "Candidate identity, readiness, drain, Worker fencing, handoff and recovery.",
+        "title": "Blue-green control contract evidence",
+        "scope": "Control-only candidate identity and contract rehearsal; runtime readiness, drain, fencing, handoff and recovery remain separate.",
     },
     "AC-LH-012": {
         "title": "Full Web/API/MCP product closure",

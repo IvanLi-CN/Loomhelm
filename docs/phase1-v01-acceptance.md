@@ -73,6 +73,12 @@ scripts/accept-v01 run \
   go test -count=1 ./internal/app -run '^TestServerBrowserAuthenticationAndCRUD$'
 ```
 
+该命令通过只证明当前候选上的浏览器认证、项目任务 CRUD、权限和重启持久化样例；在补齐关系和 MCP 矩阵前，保留该 attempt 并显式阻塞完整 `AC-LH-001`：
+
+```sh
+scripts/accept-v01 mark --evidence-dir /workspace/evidence/loomhelm-v01/acceptance --check-id AC-LH-001 --status blocked --reason 'Selected browser/API CRUD sample passed, but the full cross-project relationship and MCP matrix is not run.'
+```
+
 官方 MCP SDK、artifact authorization、原始文件字节和私有 artifact 隐藏使用真实下载集成测试；该测试不等价于完整产品闭环：
 
 ```sh
@@ -107,6 +113,12 @@ scripts/accept-v01 run \
   --timeout 600 -- \
   scripts/rehearse-blue-green --control-only \
   --evidence-dir /workspace/evidence/loomhelm-v01/blue-green-control
+```
+
+control-only 命令通过后也必须保留 runtime 边界；完整运行时 rehearsal 未完成时，将 `AC-LH-011` 标为 blocked 并保留其 control attempt：
+
+```sh
+scripts/accept-v01 mark --evidence-dir /workspace/evidence/loomhelm-v01/acceptance --check-id AC-LH-011 --status blocked --reason 'Control-only rehearsal passed, but runtime readiness, drain, Worker fencing, handoff and recovery are not run.'
 ```
 
 如果运行完整蓝绿 rehearsal，先按 `$global-port-manager` 为当前工作树登记四个端口，并使用 `scripts/preview` 的现有 manifest、readiness、drain、Worker generation 和 recovery 流程；任何不满足的前置条件都用 `mark --status blocked` 记录，而不是改写 control-only 结果。
