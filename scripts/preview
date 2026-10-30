@@ -17,6 +17,58 @@ case "$state_dir" in
 esac
 state_dir=$(CDPATH= cd -- "$(dirname -- "$state_dir")" && pwd -P)/$(basename -- "$state_dir")
 env_file="$state_dir/compose.env"
+workflow_lock_pid=
+workflow_lock_ready=
+
+release_workflow_lock() {
+	if [ -n "${workflow_lock_pid:-}" ]; then
+		kill "$workflow_lock_pid" 2>/dev/null || true
+		wait "$workflow_lock_pid" 2>/dev/null || true
+		workflow_lock_pid=
+	fi
+	if [ -n "${workflow_lock_ready:-}" ]; then
+		rm -f -- "$workflow_lock_ready"
+		workflow_lock_ready=
+	fi
+	unset LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD
+}
+
+acquire_workflow_lock() {
+	mkdir -p "$state_dir"
+	workflow_lock_ready=$(mktemp "${TMPDIR:-/tmp}/loomhelm-preview-lock.XXXXXX")
+	python3 - "$state_dir/.workflow.lock" "$workflow_lock_ready" <<'PY' &
+import fcntl
+import pathlib
+import sys
+import time
+
+lock_path = pathlib.Path(sys.argv[1])
+ready_path = pathlib.Path(sys.argv[2])
+lock_path.parent.mkdir(parents=True, exist_ok=True)
+with lock_path.open("a+", encoding="utf-8") as handle:
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    ready_path.write_text("ready\n", encoding="utf-8")
+    while True:
+        time.sleep(3600)
+PY
+	workflow_lock_pid=$!
+	attempts=0
+	while [ ! -s "$workflow_lock_ready" ]; do
+		if ! kill -0 "$workflow_lock_pid" 2>/dev/null; then
+			echo "preview: workflow lock helper exited before acquiring the lock" >&2
+			release_workflow_lock
+			return 1
+		fi
+		attempts=$((attempts + 1))
+		if [ "$attempts" -ge 500 ]; then
+			echo "preview: timed out waiting for the workflow lock" >&2
+			release_workflow_lock
+			return 1
+		fi
+		sleep 0.01
+	done
+	export LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD=1
+}
 
 require_preview_settings() {
 	: "${LOOMHELM_PREVIEW_PROJECT_NAME:?LOOMHELM_PREVIEW_PROJECT_NAME must be exported for this worktree}"
@@ -260,6 +312,16 @@ EOF
 }
 
 command=${1:-}
+case "$command" in
+	""|help|-h|--help) ;;
+	*)
+		acquire_workflow_lock
+		trap 'release_workflow_lock' 0
+		trap 'release_workflow_lock; exit 129' HUP
+		trap 'release_workflow_lock; exit 130' INT
+		trap 'release_workflow_lock; exit 143' TERM
+		;;
+esac
 case "$command" in
 	init)
 		control init

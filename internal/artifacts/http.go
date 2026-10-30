@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -19,10 +20,16 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
 	defaultDownloadContentType = "application/octet-stream"
+	// Full downloads are staged before response headers are sent so a source
+	// identity change can still return a conflict. Bound aggregate staging to
+	// the default artifact maximum and limit readers opened concurrently.
+	maxStagedDownloadBytes      = int64(DefaultMaxBytes)
+	maxConcurrentStagedDownload = 2
 	// The application Server keeps a 60-second default response deadline for
 	// ordinary APIs. Full artifact downloads are bounded to 64 MiB and may be
 	// deliberately slow, so extend only this route's write deadline without
@@ -43,8 +50,10 @@ type DownloadErrorWriter func(http.ResponseWriter, *http.Request, int, error, st
 // deliberately supplied by the application; it reads the chi parameter named
 // artifact_id and does not create a standalone artifacts navigation surface.
 type DownloadHTTPHandler struct {
-	store      protocol.ArtifactStore
-	writeError DownloadErrorWriter
+	store                protocol.ArtifactStore
+	writeError           DownloadErrorWriter
+	downloadStagingSlots chan struct{}
+	stagingBudget        *semaphore.Weighted
 }
 
 type contentSnapshotStore interface {
@@ -63,13 +72,24 @@ type contentVersionVerifier interface {
 	verifyContentVersion(context.Context) error
 }
 
-// downloadReadSeeker records a content identity failure while ServeContent
-// is still rendering into a private buffer. The standard helper does not
-// return read errors, so buffering is what lets the handler replace a
-// partially rendered 200/206 with the existing conflict envelope.
+// downloadReadSeeker records a content identity failure while the source is
+// staged. ServeContent does not return read errors, so the handler must finish
+// validating source bytes before it writes response headers.
 type downloadReadSeeker struct {
 	io.ReadSeeker
 	err error
+}
+
+type downloadContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *downloadContextReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(buffer)
 }
 
 func (r *downloadReadSeeker) Read(buffer []byte) (int, error) {
@@ -132,7 +152,12 @@ func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErr
 	if writeError == nil {
 		writeError = writeDownloadError
 	}
-	return &DownloadHTTPHandler{store: store, writeError: writeError}, nil
+	return &DownloadHTTPHandler{
+		store:                store,
+		writeError:           writeError,
+		downloadStagingSlots: make(chan struct{}, maxConcurrentStagedDownload),
+		stagingBudget:        semaphore.NewWeighted(maxStagedDownloadBytes),
+	}, nil
 }
 
 // SafeDownloadFilename returns the filename representation suitable for
@@ -157,6 +182,17 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		h.writeError(writer, request, http.StatusNotFound, ErrNotFound, "artifact was not found")
 		return
 	}
+	if request.Method == http.MethodGet {
+		select {
+		case h.downloadStagingSlots <- struct{}{}:
+			defer func() { <-h.downloadStagingSlots }()
+		case <-request.Context().Done():
+			return
+		default:
+			h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download capacity is temporarily exhausted")
+			return
+		}
+	}
 	artifact, reader, err := h.store.Open(request.Context(), id)
 	if err != nil {
 		if request.Context().Err() != nil {
@@ -166,6 +202,22 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		return
 	}
 	defer reader.Close()
+	var staged *os.File
+	if request.Method == http.MethodGet {
+		var releaseStaging func()
+		staged, releaseStaging, err = h.stageDownload(request.Context(), reader, artifact.Size)
+		if err != nil {
+			if request.Context().Err() != nil {
+				return
+			}
+			h.writeStoreError(writer, request, err, "artifact download could not be staged safely")
+			return
+		}
+		defer releaseStaging()
+		if request.Context().Err() != nil {
+			return
+		}
+	}
 
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Disposition", contentDisposition(artifact.Name))
@@ -176,8 +228,14 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	}
 	modTime := parseDownloadTime(artifact.CreatedAt)
 	responseController := http.NewResponseController(writer)
+	// Staging reads the full artifact before any response bytes are sent. Start
+	// the network-write deadline only after staging has completed.
 	_ = responseController.SetWriteDeadline(time.Now().Add(downloadWriteTimeout))
 	defer func() { _ = responseController.SetWriteDeadline(time.Time{}) }()
+	if request.Method == http.MethodGet {
+		http.ServeContent(writer, request, safeDownloadFilename(artifact.Name), modTime, staged)
+		return
+	}
 	trackedReader := &downloadReadSeeker{ReadSeeker: reader}
 	buffer := &downloadResponseBuffer{header: writer.Header().Clone()}
 	http.ServeContent(buffer, request, safeDownloadFilename(artifact.Name), modTime, trackedReader)
@@ -196,9 +254,74 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		buffer.status = http.StatusOK
 	}
 	writer.WriteHeader(buffer.status)
-	if request.Method != http.MethodHead && buffer.body.Len() > 0 {
-		_, _ = writer.Write(buffer.body.Bytes())
+}
+
+func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadSeeker, size int64) (*os.File, func(), error) {
+	if size < 0 {
+		return nil, nil, ErrSizeMismatch
 	}
+	if size > maxStagedDownloadBytes {
+		return nil, nil, ErrTooLarge
+	}
+	weight := size
+	if weight == 0 {
+		weight = 1
+	}
+	if err := h.stagingBudget.Acquire(ctx, weight); err != nil {
+		return nil, nil, err
+	}
+
+	stagingFile, err := os.CreateTemp("", "loomhelm-artifact-download-*")
+	if err != nil {
+		h.stagingBudget.Release(weight)
+		return nil, nil, fmt.Errorf("create artifact download staging file: %w", ErrStoreUnavailable)
+	}
+	release := func() {
+		_ = stagingFile.Close()
+		_ = os.Remove(stagingFile.Name())
+		h.stagingBudget.Release(weight)
+	}
+	staged := false
+	defer func() {
+		if !staged {
+			release()
+		}
+	}()
+
+	trackedReader := &downloadReadSeeker{ReadSeeker: reader}
+	if _, err := trackedReader.Seek(0, io.SeekStart); err != nil {
+		return nil, nil, err
+	}
+	contextReader := &downloadContextReader{ctx: ctx, reader: trackedReader}
+	copied, err := io.CopyN(stagingFile, contextReader, size)
+	if trackedReader.err != nil {
+		return nil, nil, trackedReader.err
+	}
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil, ErrSizeMismatch
+		}
+		return nil, nil, err
+	}
+	if copied != size {
+		return nil, nil, ErrSizeMismatch
+	}
+	var extra [1]byte
+	read, err := contextReader.Read(extra[:])
+	if trackedReader.err != nil {
+		return nil, nil, trackedReader.err
+	}
+	if read > 0 {
+		return nil, nil, ErrSizeMismatch
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, nil, err
+	}
+	if _, err := stagingFile.Seek(0, io.SeekStart); err != nil {
+		return nil, nil, fmt.Errorf("rewind artifact download staging file: %w", ErrStoreUnavailable)
+	}
+	staged = true
+	return stagingFile, release, nil
 }
 
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
@@ -379,6 +502,8 @@ func downloadStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, ErrContentChanged):
 		return http.StatusConflict
+	case errors.Is(err, ErrTooLarge):
+		return http.StatusRequestEntityTooLarge
 	case errors.Is(err, ErrRecoveryPending), errors.Is(err, ErrRecoveryIncomplete):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrUnauthorized), errors.Is(err, ErrUnavailable),

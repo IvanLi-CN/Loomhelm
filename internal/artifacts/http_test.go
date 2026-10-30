@@ -124,6 +124,36 @@ func TestDownloadHTTPHandlerSupportsHeadWithoutBody(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerSupportsRangeRequests(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{
+		ID:          "artifact-range",
+		Name:        "range.txt",
+		Size:        int64(len(content)),
+		ContentType: "text/plain",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+	request.Header.Set("Range", "bytes=2-6")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusPartialContent, response.Body.String())
+	}
+	if response.Header().Get("Content-Range") != "bytes 2-6/19" {
+		t.Fatalf("content range = %q, want %q", response.Header().Get("Content-Range"), "bytes 2-6/19")
+	}
+	if response.Body.String() != string(content[2:7]) {
+		t.Fatalf("body = %q, want %q", response.Body.String(), content[2:7])
+	}
+}
+
 func TestDownloadHTTPHandlerReturnsCompleteContentChunkAsBase64JSON(t *testing.T) {
 	content := []byte{0, 1, 2, 255}
 	artifact := protocol.Artifact{
@@ -269,6 +299,25 @@ func TestDownloadHTTPHandlerMapsFullDownloadContentChangesToConflict(t *testing.
 	}
 	if response.Body.String() == string(content) {
 		t.Fatal("full download returned content after the content identity changed")
+	}
+}
+
+func TestDownloadHTTPHandlerBoundsConcurrentFullDownloadStaging(t *testing.T) {
+	content := []byte("bounded download")
+	artifact := protocol.Artifact{ID: "artifact-buffer-capacity", Name: "content.bin", Size: int64(len(content))}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxConcurrentStagedDownload; i++ {
+		handler.downloadStagingSlots <- struct{}{}
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-buffer-capacity", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusServiceUnavailable, response.Body.String())
 	}
 }
 

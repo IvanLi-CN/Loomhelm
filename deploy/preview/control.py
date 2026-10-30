@@ -94,15 +94,26 @@ def write_state(state_dir: Path, state: dict[str, Any]) -> None:
 
 
 @contextmanager
-def state_lock(state_dir: Path):
-    state_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = state_dir / ".state.lock"
-    with lock_path.open("a+", encoding="utf-8") as handle:
+def locked_file(path: Path):
+    with path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def state_lock(state_dir: Path):
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path_lock = state_dir / ".state.lock"
+    if os.environ.get("LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD") == "1":
+        with locked_file(state_path_lock):
+            yield
+        return
+    with locked_file(state_dir / ".workflow.lock"):
+        with locked_file(state_path_lock):
+            yield
 
 
 def load_state(state_dir: Path) -> dict[str, Any]:
