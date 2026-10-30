@@ -33,6 +33,8 @@ class V01AcceptanceTests(unittest.TestCase):
         for secret in ("secret", "abc.def", "YWJjZA==", "json-secret", "db-secret", "env-secret", "url-secret", "query-secret"):
             self.assertNotIn(secret, redacted)
         self.assertIn("<redacted>", redacted)
+        short_redacted = MODULE.redact("LOOMHELM_DRAIN_TOKEN=x output=x", ["x"])
+        self.assertNotIn("=x", short_redacted)
 
     def test_candidate_manifest_reads_v2_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -125,6 +127,50 @@ class V01AcceptanceTests(unittest.TestCase):
             self.assertFalse(attempt["current_candidate_proof"])
             self.assertNotIn("run-secret", log)
             self.assertIn("<redacted>", log)
+
+    def test_run_revalidates_binding_before_reusing_passed_attempt(self) -> None:
+        source_sha = "a" * 40
+        tree_sha = "c" * 40
+        ledger = {
+            "schema_version": MODULE.SCHEMA_VERSION,
+            "source": {"sha": source_sha, "tree_sha": tree_sha},
+            "candidate": {},
+            "attempt_sequence": 1,
+            "checks": {
+                check_id: {
+                    "status": "not_run",
+                    "current_candidate_proof": False,
+                    "attempts": [],
+                    "evidence": [],
+                    "decisions": [],
+                }
+                for check_id in MODULE.CHECKS
+            },
+        }
+        ledger["checks"]["AC-LH-008"]["attempts"] = [
+            {"status": "passed", "source_sha": source_sha, "candidate_digest": None}
+        ]
+        binding = {
+            "source_sha": source_sha,
+            "source_tree_sha": tree_sha,
+            "candidate_digest": None,
+            "candidate_verified": False,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_dir = Path(temporary)
+            MODULE.atomic_write_json(evidence_dir / "ledger.json", ledger)
+            args = SimpleNamespace(
+                evidence_dir=str(evidence_dir),
+                check_id="AC-LH-008",
+                allow_repeat=False,
+                command=[],
+                timeout="10",
+                name="reuse-test",
+                candidate_proof=None,
+            )
+            with mock.patch.object(MODULE, "validate_execution_binding", return_value=binding) as validate:
+                self.assertEqual(MODULE.run_check(args), 0)
+            validate.assert_called_once_with(ledger)
 
     def test_markdown_report_exposes_historical_reuse_boundary(self) -> None:
         source_sha = "a" * 40

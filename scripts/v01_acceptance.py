@@ -179,7 +179,7 @@ def redact(value: str, secrets: Sequence[str] = ()) -> str:
     value = SENSITIVE_HEADER_RE.sub(r"\g<prefix><redacted>", value)
     value = SENSITIVE_ASSIGNMENT_RE.sub(_redact_value, value)
     value = CLI_SECRET_RE.sub(_redact_value, value)
-    for secret in sorted({item for item in secrets if len(item) >= 4}, key=len, reverse=True):
+    for secret in sorted({item for item in secrets if item}, key=len, reverse=True):
         value = value.replace(secret, "<redacted>")
     return value
 
@@ -188,13 +188,13 @@ def sensitive_environment_values(environment: Dict[str, str]) -> List[str]:
     return [
         value
         for name, value in environment.items()
-        if SENSITIVE_ENV_RE.search(name) and len(value) >= 4
+        if SENSITIVE_ENV_RE.search(name) and value
     ]
 
 
 def safe_redact(value: str, secrets: Sequence[str]) -> str:
     redacted = redact(value, secrets)
-    if any(secret in redacted for secret in secrets if len(secret) >= 4):
+    if any(secret in redacted for secret in secrets if secret):
         raise ValueError("known secret remained in command output")
     return redacted
 
@@ -474,6 +474,7 @@ def run_check(args: argparse.Namespace) -> int:
     evidence_dir = ensure_absolute(args.evidence_dir, "evidence directory")
     ledger = load_ledger(evidence_dir)
     record = check_record(ledger, args.check_id)
+    binding = validate_execution_binding(ledger)
     existing_pass = any(
         attempt.get("status") == "passed"
         and attempt.get("source_sha") == ledger["source"]["sha"]
@@ -483,7 +484,6 @@ def run_check(args: argparse.Namespace) -> int:
     if existing_pass and not args.allow_repeat:
         print(f"accept-v01: reusing existing passed attempt for {args.check_id}")
         return 0
-    binding = validate_execution_binding(ledger)
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
