@@ -23,6 +23,7 @@ SCHEMA_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TREE_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 DIGEST_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+REDACTION_SENTINEL = "\x00"
 SENSITIVE_FIELD_RE = re.compile(
     r"(?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|"
     r"db[_-]?password|database[_-]?password|password|passwd|secret|token|"
@@ -162,26 +163,30 @@ def normalize_digest(value: str, label: str = "digest") -> str:
 def _redact_value(match: re.Match[str]) -> str:
     value = match.group("value")
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        value = f"{value[0]}<redacted>{value[-1]}"
+        value = f"{value[0]}{REDACTION_SENTINEL}{value[-1]}"
     else:
-        value = "<redacted>"
+        value = REDACTION_SENTINEL
     return f"{match.group('prefix')}{value}"
 
 
-def redact(value: str, secrets: Sequence[str] = ()) -> str:
+def _redact_internal(value: str, secrets: Sequence[str] = ()) -> str:
     value = re.sub(
         r"(?i)(?P<prefix>\b[a-z][a-z0-9+.-]*://)[^/\s?#]+@",
-        r"\g<prefix><redacted>@",
+        rf"\g<prefix>{REDACTION_SENTINEL}@",
         value,
     )
-    value = re.sub(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1<redacted>", value)
-    value = re.sub(r"(?i)\b(Basic\s+)[A-Za-z0-9+/=_-]+", r"\1<redacted>", value)
-    value = SENSITIVE_HEADER_RE.sub(r"\g<prefix><redacted>", value)
+    value = re.sub(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+", rf"\1{REDACTION_SENTINEL}", value)
+    value = re.sub(r"(?i)\b(Basic\s+)[A-Za-z0-9+/=_-]+", rf"\1{REDACTION_SENTINEL}", value)
+    value = SENSITIVE_HEADER_RE.sub(rf"\g<prefix>{REDACTION_SENTINEL}", value)
     value = SENSITIVE_ASSIGNMENT_RE.sub(_redact_value, value)
     value = CLI_SECRET_RE.sub(_redact_value, value)
     for secret in sorted({item for item in secrets if item}, key=len, reverse=True):
-        value = value.replace(secret, "<redacted>")
+        value = value.replace(secret, REDACTION_SENTINEL)
     return value
+
+
+def redact(value: str, secrets: Sequence[str] = ()) -> str:
+    return _redact_internal(value, secrets).replace(REDACTION_SENTINEL, "<redacted>")
 
 
 def sensitive_environment_values(environment: Dict[str, str]) -> List[str]:
@@ -193,10 +198,12 @@ def sensitive_environment_values(environment: Dict[str, str]) -> List[str]:
 
 
 def safe_redact(value: str, secrets: Sequence[str]) -> str:
-    redacted = redact(value, secrets)
+    if REDACTION_SENTINEL in value:
+        raise ValueError("command output contains the internal redaction sentinel")
+    redacted = _redact_internal(value, secrets)
     if any(secret in redacted for secret in secrets if secret):
         raise ValueError("known secret remained in command output")
-    return redacted
+    return redacted.replace(REDACTION_SENTINEL, "<redacted>")
 
 
 def read_json(path: Path) -> Dict[str, Any]:
@@ -548,10 +555,10 @@ def run_check(args: argparse.Namespace) -> int:
     try:
         redacted_stdout = safe_redact(stdout, secret_values)
         redacted_stderr = safe_redact(stderr, secret_values)
-    except ValueError as error:
-        redaction_error = redact(str(error), secret_values)
-        redacted_stdout = "accept-v01: stdout withheld because secret redaction was not provable.\n"
-        redacted_stderr = "accept-v01: stderr withheld because secret redaction was not provable.\n"
+    except ValueError:
+        redaction_error = True
+        redacted_stdout = ""
+        redacted_stderr = ""
     stdout_path = attempts_dir / f"{attempt_id}.stdout.log"
     stderr_path = attempts_dir / f"{attempt_id}.stderr.log"
     stdout_path.write_text(redacted_stdout, encoding="utf-8")

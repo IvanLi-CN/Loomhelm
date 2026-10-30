@@ -39,6 +39,8 @@ class V01AcceptanceTests(unittest.TestCase):
             {"PGPASSWORD": "x", "PGSSLPASSWORD": "abc", "PGSSLMODE": "disable", "SAFE": "value"}
         )
         self.assertCountEqual(env_values, ["x", "abc"])
+        short_postgres = MODULE.safe_redact("PGPASSWORD=e output=e", ["e"])
+        self.assertNotIn("e", short_postgres.replace("<redacted>", ""))
 
     def test_candidate_manifest_reads_v2_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
