@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -37,6 +39,7 @@ type adapterSessionState struct {
 	session        protocol.AdapterSession
 	gatewaySession protocol.GatewaySession
 	transport      RPCTransport
+	workspace      string
 	activeTurns    map[string]string
 	eventMu        sync.Mutex
 	closed         atomic.Bool
@@ -354,6 +357,7 @@ func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, int
 		session:        session,
 		gatewaySession: gatewaySession,
 		transport:      transport,
+		workspace:      a.verifiedCodexWorkspace(response.Result),
 		activeTurns:    make(map[string]string),
 	}
 	if err := a.journal.ResolveSessionStart(intentID, session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
@@ -570,7 +574,7 @@ func (a *Adapter) bindRecoveredSession(gatewaySession protocol.GatewaySession, e
 
 func (a *Adapter) bindRecoveredSessionLocked(gatewaySession protocol.GatewaySession, externalThreadRef, method string, result json.RawMessage, transport RPCTransport) (protocol.AdapterSession, error) {
 	session := protocol.AdapterSession{SessionID: stableSessionID(externalThreadRef), ExternalThreadRef: externalThreadRef}
-	state := &adapterSessionState{session: session, gatewaySession: gatewaySession, transport: transport, activeTurns: a.journal.ActiveTurns(session.SessionID)}
+	state := &adapterSessionState{session: session, gatewaySession: gatewaySession, transport: transport, workspace: a.verifiedCodexWorkspace(result), activeTurns: a.journal.ActiveTurns(session.SessionID)}
 	if binder, ok := a.provider.(interface {
 		SetExternalThreadRef(protocol.GatewaySession, string) error
 	}); ok {
@@ -1338,7 +1342,7 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error 
 	if err != nil {
 		return err
 	}
-	return a.captureArtifactCandidates(recorded, EventObservation{
+	return a.captureArtifactCandidates(state, recorded, EventObservation{
 		AdapterSessionID:  state.session.SessionID,
 		ExternalThreadRef: state.session.ExternalThreadRef,
 		Generation:        state.gatewaySession.Generation,
@@ -1412,13 +1416,26 @@ func (a *Adapter) appendObservedEventFromSourceWithIdentity(state *adapterSessio
 	return recorded, err
 }
 
-func (a *Adapter) captureArtifactCandidates(event protocol.Event, observation EventObservation) error {
+func (a *Adapter) captureArtifactCandidates(state *adapterSessionState, event protocol.Event, observation EventObservation) error {
 	if a == nil || a.artifacts == nil {
 		return nil
 	}
-	candidates, err := artifactCandidatesFromEvent(event, observation)
+	var reader ArtifactContentReader
+	if state != nil && state.workspace != "" {
+		if candidateReader, err := NewCodexArtifactFileReader(state.transport, state.workspace); err == nil {
+			reader = candidateReader
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), artifactReadTimeout)
+	defer cancel()
+	candidates, gaps, err := artifactCandidatesFromEventWithReader(ctx, event, observation, reader)
 	if err != nil {
 		return fmt.Errorf("extract file-change artifact: %w", err)
+	}
+	for _, gap := range gaps {
+		if err := a.artifacts.RecordGap(gap); err != nil {
+			return fmt.Errorf("persist artifact capture gap %q: %w", gap.ID, err)
+		}
 	}
 	for _, candidate := range candidates {
 		if _, _, err := a.artifacts.Ensure(candidate); err != nil {
@@ -1429,6 +1446,48 @@ func (a *Adapter) captureArtifactCandidates(event protocol.Event, observation Ev
 		}
 	}
 	return nil
+}
+
+func (a *Adapter) verifiedCodexWorkspace(result json.RawMessage) string {
+	if a == nil || strings.TrimSpace(a.config.WorkingDir) == "" || len(result) == 0 {
+		return ""
+	}
+	var value struct {
+		Thread struct {
+			Cwd string `json:"cwd"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &value); err != nil || strings.TrimSpace(value.Thread.Cwd) == "" {
+		return ""
+	}
+	configured, err := canonicalDirectory(a.config.WorkingDir)
+	if err != nil {
+		return ""
+	}
+	observed, err := canonicalDirectory(value.Thread.Cwd)
+	if err != nil || observed != configured {
+		return ""
+	}
+	return observed
+}
+
+func canonicalDirectory(value string) (string, error) {
+	absValue, err := filepath.Abs(strings.TrimSpace(value))
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(absValue)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("Codex workspace is not a directory")
+	}
+	canonical, err := filepath.EvalSymlinks(absValue)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(canonical), nil
 }
 
 // ReplayPendingArtifactEvents closes the crash window between the outbox

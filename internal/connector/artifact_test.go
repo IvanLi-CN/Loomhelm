@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,13 +16,13 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
 
-func TestArtifactCandidatesFromFinalFileChange(t *testing.T) {
+func TestArtifactCandidatesFromCodexFileChange(t *testing.T) {
 	event := protocol.Event{
 		EventID:    "source-event-1",
 		OccurredAt: "2026-10-30T01:02:03Z",
 		Source:     protocol.EventSourceAppServer,
 		Type:       protocol.EventTypeItemCompleted,
-		Payload:    json.RawMessage(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item-1","type":"fileChange","changes":[{"path":"private.txt","kind":"update","diff":"--- a/private.txt\n+++ b/private.txt\n@@ -1 +1 @@\n-old\n+new\n"}]}}}`),
+		Payload:    json.RawMessage(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item-1","type":"fileChange","changes":[{"path":"private.txt","kind":{"type":"update"},"diff":"--- a/private.txt\n+++ b/private.txt\n@@ -1 +1 @@\n-old\n+new\n"}]}}}`),
 	}
 	observation := EventObservation{
 		AdapterSessionID:  "adapter-session-1",
@@ -30,15 +31,18 @@ func TestArtifactCandidatesFromFinalFileChange(t *testing.T) {
 		NativeTurnID:      "turn-1",
 	}
 
-	first, err := artifactCandidatesFromEvent(event, observation)
+	first, gaps, err := artifactCandidatesFromEventWithReader(context.Background(), event, observation, fixedArtifactReader{content: []byte("final bytes\n")})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(gaps) != 0 {
+		t.Fatalf("artifact capture gaps = %+v", gaps)
 	}
 	if len(first) != 1 {
 		t.Fatalf("artifact candidates = %d, want 1", len(first))
 	}
 	candidate := first[0]
-	if candidate.Kind != protocol.ArtifactKindDiff || candidate.ContentType != "text/x-diff" {
+	if candidate.Kind != protocol.ArtifactKindFile || candidate.ContentType != "application/octet-stream" || candidate.Provenance != "codex.fs.readFile" {
 		t.Fatalf("artifact metadata = %+v", candidate)
 	}
 	if candidate.Size != int64(len(candidate.Content)) || candidate.Size == 0 {
@@ -55,9 +59,12 @@ func TestArtifactCandidatesFromFinalFileChange(t *testing.T) {
 		t.Fatalf("artifact event payload is invalid JSON: %s", candidate.EventPayload)
 	}
 
-	repeated, err := artifactCandidatesFromEvent(event, observation)
+	repeated, repeatedGaps, err := artifactCandidatesFromEventWithReader(context.Background(), event, observation, fixedArtifactReader{content: []byte("final bytes\n")})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(repeatedGaps) != 0 {
+		t.Fatalf("repeated artifact capture gaps = %+v", repeatedGaps)
 	}
 	if len(repeated) != 1 || repeated[0].ID != candidate.ID || repeated[0].EventID != candidate.EventID || repeated[0].Sha256 != candidate.Sha256 {
 		t.Fatalf("artifact identity was not stable: first = %+v, repeated = %+v", candidate, repeated)
@@ -70,6 +77,14 @@ func TestArtifactCandidatesFromFinalFileChange(t *testing.T) {
 	}
 	if len(ignored) != 0 {
 		t.Fatalf("non-final item event produced artifacts: %+v", ignored)
+	}
+	event.Type = protocol.EventTypeItemCompleted
+	withoutReader, captureGaps, err := artifactCandidatesFromEventWithReader(context.Background(), event, observation, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutReader) != 0 || len(captureGaps) != 1 || captureGaps[0].Reason != "workspace_unconfigured" {
+		t.Fatalf("unconfigured artifact capture = candidates %+v, gaps %+v", withoutReader, captureGaps)
 	}
 }
 
@@ -87,6 +102,16 @@ func TestArtifactOutboxPersistsDeduplicatesAndMarksUploaded(t *testing.T) {
 	}
 	if _, deduplicated, err := outbox.Ensure(candidate); err != nil || !deduplicated {
 		t.Fatalf("retry artifact ensure = deduplicated %v, error %v", deduplicated, err)
+	}
+	gap := ArtifactCaptureGap{
+		ID:            "artifact-gap-1",
+		SourceEventID: candidate.SourceEventID,
+		ChangeKind:    "update",
+		Reason:        "workspace_unconfigured",
+		Observation:   candidate.Observation,
+	}
+	if err := outbox.RecordGap(gap); err != nil {
+		t.Fatal(err)
 	}
 	if err := outbox.Close(); err != nil {
 		t.Fatal(err)
@@ -111,6 +136,10 @@ func TestArtifactOutboxPersistsDeduplicatesAndMarksUploaded(t *testing.T) {
 	publication, found := outbox.Publication(candidate.ID)
 	if !found || publication.State != ArtifactPublicationPending {
 		t.Fatalf("recovered publication = %+v, found = %v", publication, found)
+	}
+	gaps := outbox.Gaps()
+	if len(gaps) != 1 || gaps[0].ID != gap.ID || gaps[0].Reason != gap.Reason {
+		t.Fatalf("recovered artifact gaps = %+v", gaps)
 	}
 	if err := outbox.MarkUploaded(candidate.ID); err != nil {
 		t.Fatal(err)
@@ -282,6 +311,61 @@ func testFileChangeEvent(eventID string) protocol.Event {
 		Source:     protocol.EventSourceAppServer,
 		Type:       protocol.EventTypeItemCompleted,
 		SessionID:  "adapter-session-1",
-		Payload:    json.RawMessage(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item-1","type":"fileChange","changes":[{"path":"private.txt","kind":"update","diff":"--- a/private.txt\n+++ b/private.txt\n@@ -1 +1 @@\n-old\n+new\n"}]}}}`),
+		Payload:    json.RawMessage(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item-1","type":"fileChange","changes":[{"path":"private.txt","kind":{"type":"add"},"diff":"new file bytes\n"}]}}}`),
+	}
+}
+
+type fixedArtifactReader struct {
+	content []byte
+}
+
+func (r fixedArtifactReader) ValidatePath(path string) error {
+	if path != "private.txt" {
+		return ErrArtifactPathUnauthorized
+	}
+	return nil
+}
+
+func (r fixedArtifactReader) ReadFile(context.Context, string) ([]byte, error) {
+	return append([]byte(nil), r.content...), nil
+}
+
+func TestCodexArtifactFileReaderUsesBoundedAppServerRead(t *testing.T) {
+	workspace := privateTestDir(t)
+	filePath := filepath.Join(workspace, "private.txt")
+	if err := os.WriteFile(filePath, []byte("host placeholder\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transport := newFakeTransport()
+	transport.responses["fs/readFile"] = []fakeResult{{message: RPCMessage{Result: mustRawJSON(map[string]string{
+		"dataBase64": base64.StdEncoding.EncodeToString([]byte("final bytes\n")),
+	})}}}
+	reader, err := NewCodexArtifactFileReader(transport, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := reader.ReadFile(context.Background(), "private.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(content, []byte("final bytes\n")) {
+		t.Fatalf("read artifact content = %q", content)
+	}
+	if err := reader.ValidatePath("../outside.txt"); !errors.Is(err, ErrArtifactPathUnauthorized) {
+		t.Fatalf("path escape validation error = %v", err)
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if len(transport.calls) != 1 || transport.calls[0].method != "fs/readFile" {
+		t.Fatalf("app-server calls = %+v", transport.calls)
+	}
+	var params struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(transport.calls[0].params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.Path != filePath {
+		t.Fatalf("fs/readFile path = %q, want %q", params.Path, filePath)
 	}
 }

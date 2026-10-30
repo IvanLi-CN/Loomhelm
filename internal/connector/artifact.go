@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ const (
 	maxArtifactOutboxBytes      = int64(256 << 20)
 	maxArtifactRecordBytes      = 8 << 20
 	maxArtifactContentBytes     = 4 << 20
+	artifactReadTimeout         = 10 * time.Second
 	artifactIdentityVersion     = "loomhelm-artifact-v1"
 )
 
@@ -34,6 +36,9 @@ var (
 	ErrArtifactIdentityPending     = errors.New("artifact publication has no mapped platform run identity")
 	ErrArtifactUploaderRequired    = errors.New("artifact uploader is required")
 	ErrArtifactUnsupportedEvent    = errors.New("Codex event does not contain a supported artifact payload")
+	ErrArtifactWorkspaceRequired   = errors.New("artifact publication has no verified Codex workspace")
+	ErrArtifactPathUnauthorized    = errors.New("artifact path is outside the authorized Codex workspace")
+	ErrArtifactSourceUnavailable   = errors.New("artifact source is not available")
 )
 
 // ArtifactPublicationState is local Connector state. The server remains the
@@ -47,8 +52,10 @@ const (
 )
 
 // ArtifactCandidate is the host-side, native-identity form of one artifact.
-// It deliberately contains no host path: the first supported source is the
-// final file-change diff already present in the app-server event payload.
+// It deliberately contains no host path: file bytes come either from a full
+// Add/Delete fileChange payload or from the authorized app-server fs/readFile
+// operation for an Update. Paths are used only transiently for validation and
+// identity hashing.
 // Platform SessionID and RunID are resolved only after Journal mapping.
 type ArtifactCandidate struct {
 	ID            string                `json:"id"`
@@ -61,13 +68,26 @@ type ArtifactCandidate struct {
 	Sha256        string                `json:"sha256"`
 	ContentType   string                `json:"content_type"`
 	CreatedAt     string                `json:"created_at"`
+	Provenance    string                `json:"provenance"`
 	EventPayload  json.RawMessage       `json:"event_payload"`
 	Content       []byte                `json:"content"`
 }
 
+// ArtifactCaptureGap is a durable, non-product-facing record that explains
+// why a supported file-change event did not yield original file bytes. It
+// carries no host path or error text, so a path cannot escape through the
+// Connector journal or a later platform event.
+type ArtifactCaptureGap struct {
+	ID            string           `json:"id"`
+	SourceEventID string           `json:"source_event_id"`
+	ChangeKind    string           `json:"change_kind"`
+	Reason        string           `json:"reason"`
+	Observation   EventObservation `json:"observation"`
+}
+
 // ArtifactPublication is a durable outbox entry. The content is a bounded
-// copy of the event-owned diff, so a reconnect can retry without reopening a
-// path supplied by Codex or by an untrusted payload.
+// copy of the event-owned file bytes, so a reconnect can retry without
+// reopening a path supplied by Codex or by an untrusted payload.
 type ArtifactPublication struct {
 	Candidate ArtifactCandidate        `json:"candidate"`
 	State     ArtifactPublicationState `json:"state"`
@@ -78,6 +98,7 @@ type artifactOutboxRecord struct {
 	Type          string                   `json:"type"`
 	At            string                   `json:"at"`
 	Publication   *ArtifactPublication     `json:"publication,omitempty"`
+	Gap           *ArtifactCaptureGap      `json:"gap,omitempty"`
 	ArtifactID    string                   `json:"artifact_id,omitempty"`
 	State         ArtifactPublicationState `json:"state,omitempty"`
 }
@@ -91,6 +112,7 @@ type ArtifactOutbox struct {
 	path     string
 	file     *os.File
 	entries  map[string]ArtifactPublication
+	gaps     map[string]ArtifactCaptureGap
 	fatalErr error
 }
 
@@ -127,6 +149,7 @@ func OpenArtifactOutbox(path string) (*ArtifactOutbox, error) {
 		path:    absPath,
 		file:    file,
 		entries: make(map[string]ArtifactPublication),
+		gaps:    make(map[string]ArtifactCaptureGap),
 	}
 	if err := outbox.load(); err != nil {
 		_ = outbox.Close()
@@ -189,6 +212,40 @@ func (o *ArtifactOutbox) Ensure(candidate ArtifactCandidate) (ArtifactPublicatio
 	}
 	o.entries[publication.Candidate.ID] = publication
 	return cloneArtifactPublication(publication), false, nil
+}
+
+// RecordGap durably records a source-recovery gap without retaining the
+// untrusted host path. Repeating the same gap identity is idempotent; a
+// changed reason for the same identity is a corruption/conflict signal.
+func (o *ArtifactOutbox) RecordGap(gap ArtifactCaptureGap) error {
+	if o == nil {
+		return errors.New("artifact outbox is not open")
+	}
+	normalized, err := normalizeArtifactCaptureGap(gap)
+	if err != nil {
+		return err
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.fatalErr != nil {
+		return fmt.Errorf("artifact outbox is unusable: %w", o.fatalErr)
+	}
+	if existing, ok := o.gaps[normalized.ID]; ok {
+		if existing.SourceEventID == normalized.SourceEventID && existing.ChangeKind == normalized.ChangeKind && existing.Reason == normalized.Reason && existing.Observation == normalized.Observation {
+			return nil
+		}
+		return ErrArtifactPublicationConflict
+	}
+	if err := o.appendLocked(artifactOutboxRecord{
+		FormatVersion: artifactOutboxFormatVersion,
+		Type:          "gap",
+		At:            now(),
+		Gap:           &normalized,
+	}); err != nil {
+		return err
+	}
+	o.gaps[normalized.ID] = normalized
+	return nil
 }
 
 // MarkUploaded durably records the remote acknowledgement. Repeating the
@@ -268,6 +325,22 @@ func (o *ArtifactOutbox) Pending() []ArtifactPublication {
 		}
 	}
 	return filtered
+}
+
+// Gaps returns stable, non-sensitive source-recovery gaps for diagnostics and
+// later reconciliation. It never returns raw file paths.
+func (o *ArtifactOutbox) Gaps() []ArtifactCaptureGap {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	values := make([]ArtifactCaptureGap, 0, len(o.gaps))
+	for _, gap := range o.gaps {
+		values = append(values, gap)
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].ID < values[j].ID })
+	return values
 }
 
 func (o *ArtifactOutbox) load() error {
@@ -350,12 +423,12 @@ func (o *ArtifactOutbox) applyRecord(record artifactOutboxRecord, seenHeader *bo
 	}
 	switch record.Type {
 	case "header":
-		if *seenHeader || record.Publication != nil {
+		if *seenHeader || record.Publication != nil || record.Gap != nil {
 			return fmt.Errorf("%w: invalid artifact outbox header", ErrJournalCorrupt)
 		}
 		*seenHeader = true
 	case "publication":
-		if !*seenHeader || record.Publication == nil {
+		if !*seenHeader || record.Publication == nil || record.Gap != nil {
 			return fmt.Errorf("%w: artifact publication appears before header", ErrJournalCorrupt)
 		}
 		publication, err := normalizeArtifactPublication(*record.Publication)
@@ -369,8 +442,20 @@ func (o *ArtifactOutbox) applyRecord(record artifactOutboxRecord, seenHeader *bo
 			publication.State = ArtifactPublicationUploaded
 		}
 		o.entries[publication.Candidate.ID] = publication
+	case "gap":
+		if !*seenHeader || record.Gap == nil || record.Publication != nil {
+			return fmt.Errorf("%w: invalid artifact capture gap", ErrJournalCorrupt)
+		}
+		gap, err := normalizeArtifactCaptureGap(*record.Gap)
+		if err != nil {
+			return fmt.Errorf("%w: invalid artifact capture gap: %v", ErrJournalCorrupt, err)
+		}
+		if existing, ok := o.gaps[gap.ID]; ok && (existing.SourceEventID != gap.SourceEventID || existing.ChangeKind != gap.ChangeKind || existing.Reason != gap.Reason || existing.Observation != gap.Observation) {
+			return fmt.Errorf("%w: conflicting artifact capture gap %q", ErrJournalCorrupt, gap.ID)
+		}
+		o.gaps[gap.ID] = gap
 	case "state":
-		if !*seenHeader || record.ArtifactID == "" || record.State != ArtifactPublicationUploaded {
+		if !*seenHeader || record.ArtifactID == "" || record.State != ArtifactPublicationUploaded || record.Publication != nil || record.Gap != nil {
 			return fmt.Errorf("%w: invalid artifact publication state", ErrJournalCorrupt)
 		}
 		publication, ok := o.entries[record.ArtifactID]
@@ -449,6 +534,7 @@ func normalizeArtifactPublication(publication ArtifactPublication) (ArtifactPubl
 	candidate.Name = strings.TrimSpace(candidate.Name)
 	candidate.ContentType = strings.TrimSpace(candidate.ContentType)
 	candidate.CreatedAt = strings.TrimSpace(candidate.CreatedAt)
+	candidate.Provenance = strings.TrimSpace(candidate.Provenance)
 	candidate.Sha256 = strings.ToLower(strings.TrimSpace(candidate.Sha256))
 	candidate.EventPayload = append(json.RawMessage(nil), candidate.EventPayload...)
 	candidate.Content = append([]byte(nil), candidate.Content...)
@@ -458,11 +544,23 @@ func normalizeArtifactPublication(publication ArtifactPublication) (ArtifactPubl
 	if candidate.Name == "" || strings.ContainsAny(candidate.Name, "/\\") || strings.ContainsRune(candidate.Name, '\x00') {
 		return ArtifactPublication{}, errors.New("artifact candidate name is invalid")
 	}
-	if candidate.Kind != protocol.ArtifactKindDiff {
+	switch candidate.Kind {
+	case protocol.ArtifactKindDiff:
+		if candidate.ContentType != "text/x-diff" {
+			return ArtifactPublication{}, errors.New("artifact diff content type is unsupported")
+		}
+		if candidate.Provenance == "" {
+			candidate.Provenance = "legacy-diff"
+		}
+	case protocol.ArtifactKindFile:
+		if candidate.ContentType != "application/octet-stream" {
+			return ArtifactPublication{}, errors.New("artifact file content type is unsupported")
+		}
+		if candidate.Provenance == "" {
+			return ArtifactPublication{}, errors.New("artifact file provenance is required")
+		}
+	default:
 		return ArtifactPublication{}, fmt.Errorf("artifact candidate kind %q is unsupported", candidate.Kind)
-	}
-	if candidate.ContentType != "text/x-diff" {
-		return ArtifactPublication{}, errors.New("artifact candidate content type is unsupported")
 	}
 	if candidate.Size < 0 || candidate.Size > maxArtifactContentBytes || int64(len(candidate.Content)) != candidate.Size {
 		return ArtifactPublication{}, errors.New("artifact candidate content size is invalid")
@@ -493,6 +591,25 @@ func normalizeArtifactPublication(publication ArtifactPublication) (ArtifactPubl
 	return publication, nil
 }
 
+func normalizeArtifactCaptureGap(gap ArtifactCaptureGap) (ArtifactCaptureGap, error) {
+	gap.ID = strings.TrimSpace(gap.ID)
+	gap.SourceEventID = strings.TrimSpace(gap.SourceEventID)
+	gap.ChangeKind = normalizeArtifactChangeKind(gap.ChangeKind)
+	gap.Reason = strings.TrimSpace(gap.Reason)
+	if err := requireIdentityParts("artifact capture gap", gap.ID, gap.SourceEventID, gap.ChangeKind, gap.Reason, gap.Observation.AdapterSessionID, gap.Observation.ExternalThreadRef, gap.Observation.Generation, gap.Observation.NativeTurnID); err != nil {
+		return ArtifactCaptureGap{}, err
+	}
+	if strings.ContainsAny(gap.Reason, "\r\n") || len(gap.Reason) > 256 {
+		return ArtifactCaptureGap{}, errors.New("artifact capture gap reason is invalid")
+	}
+	switch gap.Reason {
+	case "content_too_large", "file_bytes_unavailable", "path_outside_authorized_workspace", "unsupported_change_kind", "workspace_unconfigured":
+	default:
+		return ArtifactCaptureGap{}, errors.New("artifact capture gap reason is unsupported")
+	}
+	return gap, nil
+}
+
 func sameArtifactPublication(left, right ArtifactPublication) bool {
 	return left.Candidate.ID == right.Candidate.ID &&
 		left.Candidate.EventID == right.Candidate.EventID &&
@@ -504,6 +621,7 @@ func sameArtifactPublication(left, right ArtifactPublication) bool {
 		left.Candidate.Sha256 == right.Candidate.Sha256 &&
 		left.Candidate.ContentType == right.Candidate.ContentType &&
 		left.Candidate.CreatedAt == right.Candidate.CreatedAt &&
+		left.Candidate.Provenance == right.Candidate.Provenance &&
 		bytes.Equal(left.Candidate.EventPayload, right.Candidate.EventPayload) &&
 		bytes.Equal(left.Candidate.Content, right.Candidate.Content)
 }
@@ -521,37 +639,290 @@ type fileChangeEvent struct {
 			ID      string `json:"id"`
 			Type    string `json:"type"`
 			Changes []struct {
-				Diff string `json:"diff"`
+				Path string          `json:"path"`
+				Kind json.RawMessage `json:"kind"`
+				Diff string          `json:"diff"`
 			} `json:"changes"`
 		} `json:"item"`
 	} `json:"params"`
 }
 
-// artifactCandidatesFromEvent accepts only the documented final item shape
-// already preserved by Adapter.observe. It never follows the event's path;
-// only the final diff bytes are eligible for remote publication.
+// ArtifactContentReader is the controlled source for original/final file
+// bytes. Implementations must validate the event path against an authorized
+// workspace before reading it.
+type ArtifactContentReader interface {
+	ValidatePath(string) error
+	ReadFile(context.Context, string) ([]byte, error)
+}
+
+// CodexArtifactFileReader uses the existing host-owned app-server transport.
+// It does not open paths itself: fs/readFile is the Codex-provided host-file
+// boundary, while workspace/path checks here prevent event data from selecting
+// an arbitrary host file.
+type CodexArtifactFileReader struct {
+	transport     RPCTransport
+	workspace     string
+	canonicalRoot string
+}
+
+// NewCodexArtifactFileReader admits one existing app-server transport and one
+// explicit workspace root. The root must already exist as a directory; no
+// environment, credential or alternate Codex configuration is introduced.
+func NewCodexArtifactFileReader(transport RPCTransport, workspace string) (*CodexArtifactFileReader, error) {
+	if transport == nil {
+		return nil, errors.New("Codex artifact file transport must not be nil")
+	}
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return nil, ErrArtifactWorkspaceRequired
+	}
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Codex artifact workspace: %w", err)
+	}
+	info, err := os.Stat(absWorkspace)
+	if err != nil {
+		return nil, fmt.Errorf("stat Codex artifact workspace: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("Codex artifact workspace must be a directory")
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(absWorkspace)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize Codex artifact workspace: %w", err)
+	}
+	return &CodexArtifactFileReader{transport: transport, workspace: filepath.Clean(absWorkspace), canonicalRoot: filepath.Clean(canonicalRoot)}, nil
+}
+
+func (r *CodexArtifactFileReader) ValidatePath(eventPath string) error {
+	_, err := r.resolvePath(eventPath, false)
+	return err
+}
+
+func (r *CodexArtifactFileReader) ReadFile(ctx context.Context, eventPath string) ([]byte, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("read Codex artifact file: %w", ErrArtifactSourceUnavailable)
+	}
+	path, err := r.resolvePath(eventPath, true)
+	if err != nil {
+		return nil, err
+	}
+	response, err := r.transport.Call(ctx, "fs/readFile", mustRawJSON(map[string]string{"path": path}))
+	if err != nil {
+		return nil, fmt.Errorf("Codex fs/readFile: %w", err)
+	}
+	if response.Error != nil {
+		return nil, fmt.Errorf("Codex fs/readFile: %w", rpcResponseError("fs/readFile", response))
+	}
+	var result struct {
+		DataBase64 *string `json:"dataBase64"`
+	}
+	if err := json.Unmarshal(response.Result, &result); err != nil || result.DataBase64 == nil {
+		return nil, fmt.Errorf("Codex fs/readFile returned invalid data: %w", ErrArtifactSourceUnavailable)
+	}
+	if len(*result.DataBase64) > base64.StdEncoding.EncodedLen(maxArtifactContentBytes) {
+		return nil, fmt.Errorf("Codex fs/readFile returned oversized data: %w", ErrJournalTooLarge)
+	}
+	content, err := base64.StdEncoding.DecodeString(*result.DataBase64)
+	if err != nil {
+		return nil, fmt.Errorf("decode Codex fs/readFile data: %w", ErrArtifactSourceUnavailable)
+	}
+	if int64(len(content)) > maxArtifactContentBytes {
+		return nil, fmt.Errorf("Codex fs/readFile returned oversized data: %w", ErrJournalTooLarge)
+	}
+	return content, nil
+}
+
+func (r *CodexArtifactFileReader) resolvePath(eventPath string, requireFile bool) (string, error) {
+	if r == nil || r.transport == nil || r.workspace == "" || r.canonicalRoot == "" {
+		return "", ErrArtifactWorkspaceRequired
+	}
+	raw := strings.TrimSpace(eventPath)
+	if raw == "" || strings.ContainsRune(raw, '\x00') || len(raw) > 4096 {
+		return "", ErrArtifactPathUnauthorized
+	}
+	clean := filepath.Clean(filepath.FromSlash(raw))
+	target := clean
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(r.workspace, target)
+	}
+	target = filepath.Clean(target)
+	if !pathWithinRoot(r.workspace, target) {
+		return "", ErrArtifactPathUnauthorized
+	}
+	if err := rejectSymlinkComponents(r.workspace, target); err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) && !requireFile {
+			return target, nil
+		}
+		return "", fmt.Errorf("resolve Codex artifact path: %w", ErrArtifactSourceUnavailable)
+	}
+	canonical = filepath.Clean(canonical)
+	if !pathWithinRoot(r.canonicalRoot, canonical) {
+		return "", ErrArtifactPathUnauthorized
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return "", fmt.Errorf("stat Codex artifact path: %w", ErrArtifactSourceUnavailable)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("Codex artifact path is not a regular file: %w", ErrArtifactSourceUnavailable)
+	}
+	if info.Size() > maxArtifactContentBytes {
+		return "", fmt.Errorf("Codex artifact path exceeds %d bytes: %w", maxArtifactContentBytes, ErrJournalTooLarge)
+	}
+	return target, nil
+}
+
+func pathWithinRoot(root, target string) bool {
+	relative, err := filepath.Rel(root, target)
+	if err != nil || filepath.IsAbs(relative) || relative == ".." {
+		return false
+	}
+	return !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func rejectSymlinkComponents(root, target string) error {
+	relative, err := filepath.Rel(root, target)
+	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return ErrArtifactPathUnauthorized
+	}
+	current := root
+	if relative == "." {
+		return nil
+	}
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect Codex artifact path: %w", ErrArtifactSourceUnavailable)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return ErrArtifactPathUnauthorized
+		}
+	}
+	return nil
+}
+
+type fileChangeKind struct {
+	Name     string
+	MovePath string
+}
+
+func parseFileChangeKind(raw json.RawMessage) (fileChangeKind, bool) {
+	var name string
+	if json.Unmarshal(raw, &name) == nil {
+		name = strings.TrimSpace(name)
+		return fileChangeKind{Name: name}, name != ""
+	}
+	var object struct {
+		Type     string  `json:"type"`
+		MovePath *string `json:"movePath"`
+	}
+	if json.Unmarshal(raw, &object) != nil {
+		return fileChangeKind{}, false
+	}
+	object.Type = strings.TrimSpace(object.Type)
+	if object.Type == "" {
+		return fileChangeKind{}, false
+	}
+	if object.MovePath != nil {
+		object.MovePath = stringPointer(strings.TrimSpace(*object.MovePath))
+	}
+	kind := fileChangeKind{Name: object.Type}
+	if object.MovePath != nil {
+		kind.MovePath = *object.MovePath
+	}
+	return kind, true
+}
+
+// artifactCandidatesFromEvent keeps the compatibility helper intentionally
+// conservative: without a verified workspace reader it creates no file
+// artifact for Update, and it never publishes an Update diff as original bytes.
 func artifactCandidatesFromEvent(event protocol.Event, observation EventObservation) ([]ArtifactCandidate, error) {
+	candidates, _, err := artifactCandidatesFromEventWithReader(context.Background(), event, observation, nil)
+	return candidates, err
+}
+
+func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.Event, observation EventObservation, reader ArtifactContentReader) ([]ArtifactCandidate, []ArtifactCaptureGap, error) {
 	if event.Type != protocol.EventTypeItemCompleted || event.Source != protocol.EventSourceAppServer {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var message fileChangeEvent
 	if err := json.Unmarshal(event.Payload, &message); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if message.Method != "item/completed" || message.Params.Item.Type != "fileChange" || message.Params.Item.ID == "" || len(message.Params.Item.Changes) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if observation.NativeTurnID == "" {
-		return nil, nil
+		return nil, nil, nil
+	}
+	if ctx == nil {
+		return nil, nil, errors.New("artifact capture context must not be nil")
+	}
+	sourceEventID := strings.TrimSpace(event.EventID)
+	if sourceEventID == "" {
+		sourceEventID = "source-event-" + digestString(string(event.Payload))
 	}
 	values := make([]ArtifactCandidate, 0, len(message.Params.Item.Changes))
+	gaps := make([]ArtifactCaptureGap, 0)
 	for index, change := range message.Params.Item.Changes {
-		content := []byte(change.Diff)
-		if len(content) == 0 {
+		kind, ok := parseFileChangeKind(change.Kind)
+		if !ok {
+			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, change.Path, "unknown", "unsupported_change_kind"))
+			continue
+		}
+		path := strings.TrimSpace(change.Path)
+		if !validArtifactEventPath(path) {
+			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, path, kind.Name, "path_outside_authorized_workspace"))
+			continue
+		}
+		readPath := path
+		if kind.MovePath != "" {
+			readPath = kind.MovePath
+		}
+		if kind.Name == "update" && !validArtifactEventPath(readPath) {
+			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "path_outside_authorized_workspace"))
+			continue
+		}
+		var content []byte
+		provenance := "codex.fileChange.full_content"
+		switch kind.Name {
+		case "add", "delete":
+			content = []byte(change.Diff)
+		case "update":
+			if reader == nil {
+				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "workspace_unconfigured"))
+				continue
+			}
+			if err := reader.ValidatePath(readPath); err != nil {
+				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, artifactGapReason(err)))
+				continue
+			}
+			provenance = "codex.fs.readFile"
+			var err error
+			content, err = reader.ReadFile(ctx, readPath)
+			if err != nil {
+				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, artifactGapReason(err)))
+				continue
+			}
+		default:
+			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "unsupported_change_kind"))
 			continue
 		}
 		if int64(len(content)) > maxArtifactContentBytes {
-			return nil, fmt.Errorf("file-change diff %d exceeds %d bytes: %w", index, maxArtifactContentBytes, ErrJournalTooLarge)
+			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "content_too_large"))
+			continue
 		}
 		identity := strings.Join([]string{
 			artifactIdentityVersion,
@@ -561,6 +932,9 @@ func artifactCandidatesFromEvent(event protocol.Event, observation EventObservat
 			observation.NativeTurnID,
 			message.Params.Item.ID,
 			fmt.Sprintf("%d", index),
+			kind.Name,
+			normalizeArtifactPathForIdentity(path),
+			normalizeArtifactPathForIdentity(kind.MovePath),
 		}, "\x00")
 		artifactID := "artifact-" + digestString(identity)
 		eventID := "artifact-event-" + digestString(artifactID)
@@ -568,20 +942,70 @@ func artifactCandidatesFromEvent(event protocol.Event, observation EventObservat
 		candidate := ArtifactCandidate{
 			ID:            artifactID,
 			EventID:       eventID,
-			SourceEventID: event.EventID,
+			SourceEventID: sourceEventID,
 			Observation:   observation,
-			Name:          "artifact-" + digestString(identity)[:32] + ".diff",
-			Kind:          protocol.ArtifactKindDiff,
+			Name:          "artifact-" + digestString(identity)[:32] + ".bin",
+			Kind:          protocol.ArtifactKindFile,
 			Size:          int64(len(content)),
 			Sha256:        hex.EncodeToString(sum[:]),
-			ContentType:   "text/x-diff",
+			ContentType:   "application/octet-stream",
 			CreatedAt:     event.OccurredAt,
-			Content:       content,
+			Provenance:    provenance,
+			Content:       append([]byte(nil), content...),
 		}
 		candidate.EventPayload = artifactEventPayload(candidate)
 		values = append(values, candidate)
 	}
-	return values, nil
+	return values, gaps, nil
+}
+
+func artifactCaptureGap(sourceEventID string, observation EventObservation, itemID string, index int, eventPath, changeKind, reason string) ArtifactCaptureGap {
+	changeKind = normalizeArtifactChangeKind(changeKind)
+	identity := strings.Join([]string{artifactIdentityVersion, sourceEventID, observation.AdapterSessionID, observation.ExternalThreadRef, observation.Generation, observation.NativeTurnID, itemID, fmt.Sprintf("%d", index), changeKind, normalizeArtifactPathForIdentity(eventPath)}, "\x00")
+	return ArtifactCaptureGap{
+		ID:            "artifact-gap-" + digestString(identity),
+		SourceEventID: sourceEventID,
+		ChangeKind:    changeKind,
+		Reason:        reason,
+		Observation:   observation,
+	}
+}
+
+func normalizeArtifactChangeKind(value string) string {
+	switch strings.TrimSpace(value) {
+	case "add", "delete", "update":
+		return strings.TrimSpace(value)
+	default:
+		return "unknown"
+	}
+}
+
+func artifactGapReason(err error) string {
+	switch {
+	case errors.Is(err, ErrArtifactWorkspaceRequired):
+		return "workspace_unconfigured"
+	case errors.Is(err, ErrArtifactPathUnauthorized):
+		return "path_outside_authorized_workspace"
+	case errors.Is(err, ErrJournalTooLarge):
+		return "content_too_large"
+	case errors.Is(err, ErrArtifactSourceUnavailable):
+		return "file_bytes_unavailable"
+	default:
+		return "file_bytes_unavailable"
+	}
+}
+
+func normalizeArtifactPathForIdentity(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+}
+
+func validArtifactEventPath(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && len(value) <= 4096 && !strings.ContainsRune(value, '\x00')
 }
 
 func artifactEventPayload(candidate ArtifactCandidate) json.RawMessage {
@@ -594,6 +1018,7 @@ func artifactEventPayload(candidate ArtifactCandidate) json.RawMessage {
 			Sha256      string                `json:"sha256"`
 			ContentType string                `json:"content_type"`
 			CreatedAt   string                `json:"created_at"`
+			Provenance  string                `json:"provenance"`
 		} `json:"artifact"`
 		SourceEventID string `json:"source_event_id"`
 	}{SourceEventID: candidate.SourceEventID}
@@ -604,6 +1029,7 @@ func artifactEventPayload(candidate ArtifactCandidate) json.RawMessage {
 	value.Artifact.Sha256 = candidate.Sha256
 	value.Artifact.ContentType = candidate.ContentType
 	value.Artifact.CreatedAt = candidate.CreatedAt
+	value.Artifact.Provenance = candidate.Provenance
 	encoded, _ := json.Marshal(value)
 	return encoded
 }
