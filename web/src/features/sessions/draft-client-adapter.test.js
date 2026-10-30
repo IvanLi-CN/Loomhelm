@@ -98,4 +98,59 @@ describe("draft client adapter", () => {
     adapter.selectSession("session-1");
     await expect(adapter.readDraft("session-1")).resolves.toMatchObject({ state: "unknown", reason: "foreign_response" });
   });
+
+  test("continues the persisted modification order after reload", async () => {
+    const originalNow = Date.now;
+    Date.now = () => 1_730_000_000_000;
+    try {
+      const calls = [];
+      const adapter = new DraftClientAdapter({
+        getDraft: async () => ({ draft: draft({ modification_order: { client_id: "client-1", logical_counter: 4, physical_millis: 1_730_000_000_000 } }) }),
+        updateDraft: async (request) => {
+          calls.push(request);
+          return { draft: draft({ content: request.body.content, modification_order: request.body.modification_order, client_id: request.body.client_id, client_sequence: request.body.client_sequence }) };
+        },
+      }, { clientId: "client-1", readModificationOrder: () => ({ client_id: "client-1", logical_counter: 3, physical_millis: 1_730_000_000_000 }) });
+
+      adapter.selectSession("session-1");
+      await adapter.readDraft("session-1");
+      await adapter.updateDraft("session-1", "after reload");
+      expect(calls[0].body.modification_order).toEqual({ client_id: "client-1", logical_counter: 5, physical_millis: 1_730_000_000_000 });
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("retries a failed update with the exact order and advances cloned-tab orders", async () => {
+    const originalNow = Date.now;
+    Date.now = () => 1_730_000_000_000;
+    try {
+      const calls = [];
+      let shouldFail = true;
+      const adapter = new DraftClientAdapter({
+        getDraft: async () => ({ draft: draft() }),
+        updateDraft: async (request) => {
+          calls.push(request);
+          if (shouldFail) {
+            shouldFail = false;
+            throw new ApiClientError(409, { code: "conflict" });
+          }
+          return { draft: draft({ content: request.body.content, modification_order: request.body.modification_order, client_id: request.body.client_id, client_sequence: request.body.client_sequence }) };
+        },
+      }, { clientId: "client-2" });
+      const persistedOrder = { client_id: "client-1", logical_counter: 7, physical_millis: 1_730_000_000_000 };
+
+      adapter.selectSession("session-1");
+      const failed = await adapter.updateDraft("session-1", "retry me", persistedOrder);
+      expect(failed).toMatchObject({ state: "unknown", reason: "conflict", modificationOrder: { client_id: "client-2", logical_counter: 8, physical_millis: 1_730_000_000_000 } });
+      const succeeded = await adapter.updateDraft("session-1", "retry me", failed.modificationOrder);
+      expect(succeeded).toMatchObject({ state: "received", modificationOrder: failed.modificationOrder });
+      expect(calls.map((request) => request.body.modification_order)).toEqual([
+        { client_id: "client-2", logical_counter: 8, physical_millis: 1_730_000_000_000 },
+        { client_id: "client-2", logical_counter: 8, physical_millis: 1_730_000_000_000 },
+      ]);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
 });

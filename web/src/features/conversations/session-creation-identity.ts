@@ -7,7 +7,7 @@ function createBrowserContextId(): string {
   return `browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function getBrowserContextId(): string | undefined {
+export function getBrowserContextId(): string | undefined {
   if (typeof window === "undefined") return undefined;
   if (browserContextId) return browserContextId;
 

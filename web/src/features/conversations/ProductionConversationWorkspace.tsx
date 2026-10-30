@@ -2,7 +2,7 @@ import { Info, LoaderCircle, MonitorCog, Send, ShieldCheck, WifiOff } from "luci
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiClientError, type ResolveApprovalParams } from "@loomhelm/api-client";
-import type { Approval, ApprovalDecision, CommandState, CreateSessionRequest, Event, Run, Session, SessionPath } from "@loomhelm/protocol";
+import type { Approval, ApprovalDecision, CommandState, CreateSessionRequest, Event, ModificationOrder, Run, Session, SessionPath } from "@loomhelm/protocol";
 
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,8 +15,8 @@ import { ApprovalHistoryClientAdapter } from "../approvals/approval-history-adap
 import { createArtifactDownloader, createArtifactMetadataLoader } from "../artifacts/api";
 import { ConversationComposer, ConversationMessageStream, type ConversationMessage } from "./ConversationMessageStream";
 import type { PublishedSessionApi } from "../sessions/api";
-import { DraftClientAdapter, type DraftReadReason } from "../sessions/draft-client-adapter";
-import { getSessionCreationIntentKey } from "./session-creation-identity";
+import { DraftClientAdapter, compareModificationOrder, isModificationOrder, type DraftReadReason } from "../sessions/draft-client-adapter";
+import { getBrowserContextId, getSessionCreationIntentKey } from "./session-creation-identity";
 import { RunStatusCard } from "../runs/RunStatusCard";
 import { RunClientAdapter } from "../runs/run-client-adapter";
 import { SessionContextSummary } from "../sessions/SessionContextSummary";
@@ -75,6 +75,7 @@ interface LocalDraftState {
   baseRevision: number;
   content: string;
   dirty: boolean;
+  modificationOrder?: ModificationOrder;
 }
 
 function getSessionStorage(): Storage | undefined {
@@ -151,9 +152,11 @@ function getDraftSequenceKey(principalId: string | undefined, sessionId: string 
 }
 
 function readStoredDraftClientId(principalId: string | undefined, sessionId: string | undefined): string {
-  // sessionStorage is copied into a newly opened tab. Keep the client identity
-  // in this JavaScript realm so each top-level browsing context gets a distinct
-  // (and session-scoped) identity instead of racing with its opener.
+  const browserContextId = getBrowserContextId();
+  if (browserContextId) return `draft-${browserContextId}`;
+  // sessionStorage is copied into a newly opened tab. Keep the fallback client
+  // identity in this JavaScript realm so each top-level browsing context gets a
+  // distinct identity instead of racing with its opener.
   if (!browserContextDraftClientId) browserContextDraftClientId = createCommandId("draft-client");
   return browserContextDraftClientId;
 }
@@ -244,7 +247,8 @@ function readLocalDraftState(key: string | undefined): LocalDraftState | undefin
     if (!value) return undefined;
     const parsed = JSON.parse(value) as Partial<LocalDraftState>;
     if (typeof parsed.baseRevision !== "number" || !Number.isInteger(parsed.baseRevision) || parsed.baseRevision < 0 || typeof parsed.content !== "string" || typeof parsed.dirty !== "boolean") return undefined;
-    return { baseRevision: parsed.baseRevision, content: parsed.content, dirty: parsed.dirty };
+    if (parsed.modificationOrder !== undefined && !isModificationOrder(parsed.modificationOrder)) return undefined;
+    return { baseRevision: parsed.baseRevision, content: parsed.content, dirty: parsed.dirty, modificationOrder: parsed.modificationOrder };
   } catch {
     return undefined;
   }
@@ -635,6 +639,7 @@ export function ProductionConversationWorkspace({
     approvalHistory: new ApprovalHistoryClientAdapter(api),
     draft: new DraftClientAdapter(api, {
       clientId: draftClientId ?? "loomhelm-draft-anonymous",
+      readModificationOrder: (currentSessionId) => readLocalDraftState(getDraftStateKey(principalId, currentSessionId))?.modificationOrder,
       readSequence: (currentSessionId) => readStoredDraftSequence(principalId, currentSessionId),
       writeSequence: (currentSessionId, sequence) => writeStoredDraftSequence(principalId, currentSessionId, sequence)
     }),
@@ -695,6 +700,7 @@ export function ProductionConversationWorkspace({
   const draftRevisionRef = useRef(0);
   const draftDirtyRef = useRef(false);
   const pendingDraftValueRef = useRef<string | undefined>(undefined);
+  const pendingDraftModificationOrderRef = useRef<ModificationOrder | undefined>(undefined);
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const draftSavePromiseRef = useRef<Promise<void> | undefined>(undefined);
   const draftAccessBlockedRef = useRef(false);
@@ -814,6 +820,7 @@ export function ProductionConversationWorkspace({
     draftDirtyRef.current = false;
     draftInputSinceReadRef.current = false;
     pendingDraftValueRef.current = undefined;
+    pendingDraftModificationOrderRef.current = undefined;
     if (draftSaveTimerRef.current !== undefined) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = undefined;
     draftSavePromiseRef.current = undefined;
@@ -897,6 +904,7 @@ export function ProductionConversationWorkspace({
     draftDirtyRef.current = false;
     draftInputSinceReadRef.current = false;
     pendingDraftValueRef.current = undefined;
+    pendingDraftModificationOrderRef.current = undefined;
     selectedRunIdRef.current = initialRunId ?? readRunRecoveryId(getRunRecoveryKey(principalId, sessionId));
     lastAppliedRunSequence.current = 0;
     setSessionLoading(true);
@@ -1066,16 +1074,19 @@ export function ProductionConversationWorkspace({
     };
   }, [adapters, api, initialRunId, sessionForRoute?.id, sessionForRoute?.updated_at]);
 
-  const persistDraftValue = (sessionIdForDraft: string, value: string): Promise<void> => {
+  const persistDraftValue = (sessionIdForDraft: string, value: string, modificationOrder?: ModificationOrder): Promise<void> => {
     pendingDraftValueRef.current = value;
+    pendingDraftModificationOrderRef.current = modificationOrder;
     const existing = draftSavePromiseRef.current;
     if (existing) return existing;
     const operation = (async () => {
       while (pendingDraftValueRef.current !== undefined) {
         const nextValue = pendingDraftValueRef.current;
+        const nextModificationOrder = pendingDraftModificationOrderRef.current ?? adapters?.draft.nextModificationOrder(sessionIdForDraft);
         pendingDraftValueRef.current = undefined;
+        pendingDraftModificationOrderRef.current = undefined;
         if (!adapters || currentSessionIdRef.current !== sessionIdForDraft) return;
-        const result = await adapters.draft.updateDraft(sessionIdForDraft, nextValue);
+        const result = await adapters.draft.updateDraft(sessionIdForDraft, nextValue, nextModificationOrder);
         if (currentSessionIdRef.current !== sessionIdForDraft) return;
         if (result.state === "received" && result.draft) {
           draftRevisionRef.current = result.draft.revision;
@@ -1084,7 +1095,7 @@ export function ProductionConversationWorkspace({
           if (draftRef.current === nextValue && result.draft.content === nextValue) {
             draftDirtyRef.current = false;
             draftInputSinceReadRef.current = false;
-            if (writeStoredDraft(draftKey, draftStateKey, nextValue, { baseRevision: result.draft.revision, content: nextValue, dirty: false })) {
+            if (writeStoredDraft(draftKey, draftStateKey, nextValue, { baseRevision: result.draft.revision, content: nextValue, dirty: false, modificationOrder: result.draft.modification_order })) {
               setDraftReadUncertain(false);
               setDraftFailure(null);
             } else {
@@ -1094,7 +1105,7 @@ export function ProductionConversationWorkspace({
             }
           } else if (draftRef.current === nextValue) {
             draftDirtyRef.current = true;
-            if (writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: nextValue, dirty: true })) {
+            if (writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: nextValue, dirty: true, modificationOrder: nextModificationOrder ?? result.modificationOrder ?? result.draft.modification_order })) {
               setDraftReadUncertain(false);
               setDraftFailure(null);
             } else {
@@ -1108,6 +1119,7 @@ export function ProductionConversationWorkspace({
           const preserveFreshInput = draftInputSinceReadRef.current;
           draftDirtyRef.current = false;
           pendingDraftValueRef.current = undefined;
+          pendingDraftModificationOrderRef.current = undefined;
           if (!preserveFreshInput) {
             draftRef.current = "";
             setDraft("");
@@ -1131,12 +1143,19 @@ export function ProductionConversationWorkspace({
     return operation;
   };
 
-  const scheduleDraftPersistence = (sessionIdForDraft: string, value: string): void => {
+  const scheduleDraftPersistence = (sessionIdForDraft: string, value: string, modificationOrder?: ModificationOrder): void => {
+    const nextModificationOrder = modificationOrder ?? adapters?.draft.nextModificationOrder(sessionIdForDraft);
+    const localDraftState = readLocalDraftState(draftStateKey);
+    if (nextModificationOrder && localDraftState?.dirty && localDraftState.content === value && !localDraftState.modificationOrder && !writeLocalDraftState(draftStateKey, { ...localDraftState, modificationOrder: nextModificationOrder })) {
+      setDraftReadUncertain(true);
+      setDraftFailure("本地草稿状态无法持久化；当前输入已保留，未自动覆盖。请恢复浏览器存储后再试。");
+    }
     pendingDraftValueRef.current = value;
+    pendingDraftModificationOrderRef.current = nextModificationOrder;
     if (draftSaveTimerRef.current !== undefined) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = setTimeout(() => {
       draftSaveTimerRef.current = undefined;
-      void persistDraftValue(sessionIdForDraft, value);
+      void persistDraftValue(sessionIdForDraft, value, nextModificationOrder);
     }, 300);
   };
 
@@ -1156,10 +1175,47 @@ export function ProductionConversationWorkspace({
         draftAccessBlockedRef.current = false;
         const localDraft = readStoredDraft(draftKey, draftStateKey);
         const localDraftState = readLocalDraftState(draftStateKey);
+        const serverModificationOrder = result.draft.modification_order;
+        const adoptServerDraft = (): boolean => {
+          draftRef.current = result.draft!.content;
+          setDraft(result.draft!.content);
+          draftDirtyRef.current = false;
+          draftInputSinceReadRef.current = false;
+          if (writeStoredDraft(draftKey, draftStateKey, result.draft!.content, { baseRevision: result.draft!.revision, content: result.draft!.content, dirty: false, modificationOrder: serverModificationOrder })) {
+            setDraftReadUncertain(false);
+            setDraftFailure(null);
+            return true;
+          }
+          draftDirtyRef.current = true;
+          setDraftReadUncertain(true);
+          setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖或清除。请恢复浏览器存储后再试。");
+          return false;
+        };
+        const queueLocalDraft = (value: string, requestedOrder?: ModificationOrder): boolean => {
+          const modificationOrder = requestedOrder ? adapters.draft.prepareModificationOrder(loadedSessionId, requestedOrder) : adapters.draft.nextModificationOrder(loadedSessionId);
+          draftRef.current = value;
+          setDraft(value);
+          if (!writeStoredDraft(draftKey, draftStateKey, value, { baseRevision: result.draft!.revision, content: value, dirty: true, modificationOrder })) {
+            draftDirtyRef.current = true;
+            setDraftReadUncertain(true);
+            setDraftFailure("本地草稿状态无法持久化；当前输入已保留，未自动覆盖。请恢复浏览器存储后再试。");
+            return false;
+          }
+          draftDirtyRef.current = true;
+          draftInputSinceReadRef.current = true;
+          scheduleDraftPersistence(loadedSessionId, value, modificationOrder);
+          return true;
+        };
         const hasPendingLocalDraft = Boolean(localDraftState?.dirty && localDraftState.content === localDraft && draftRef.current === localDraft && localDraft !== result.draft.content);
         if (draftInputSinceReadRef.current && draftRef.current !== result.draft.content) {
-          draftDirtyRef.current = true;
-          scheduleDraftPersistence(loadedSessionId, draftRef.current);
+          if (!localDraftState?.modificationOrder) {
+            draftDirtyRef.current = true;
+            setDraftReadUncertain(true);
+            setDraftFailure("本地草稿状态无法核对；当前输入已保留，未自动覆盖或重放。请继续编辑后再同步。");
+            return;
+          }
+          if (compareModificationOrder(localDraftState.modificationOrder, serverModificationOrder) > 0) queueLocalDraft(draftRef.current, localDraftState.modificationOrder);
+          else adoptServerDraft();
           return;
         }
         if (!localDraftState && draftRef.current === localDraft && localDraft !== result.draft.content) {
@@ -1171,55 +1227,55 @@ export function ProductionConversationWorkspace({
         }
         if (hasPendingLocalDraft) {
           if (result.draft.revision !== localDraftState?.baseRevision) {
+            if (!localDraftState?.modificationOrder) {
+              draftDirtyRef.current = true;
+              draftInputSinceReadRef.current = true;
+              setDraftReadUncertain(true);
+              setDraftFailure("共享草稿修订已变化；本地未同步输入缺少可比较的修改顺序，已保留当前输入，未自动覆盖或重放。");
+              return;
+            }
+            if (compareModificationOrder(localDraftState.modificationOrder, serverModificationOrder) <= 0) {
+              adoptServerDraft();
+              return;
+            }
+            queueLocalDraft(localDraft, localDraftState.modificationOrder);
+            return;
+          }
+          if (localDraftState?.modificationOrder && compareModificationOrder(localDraftState.modificationOrder, serverModificationOrder) > 0) {
+            queueLocalDraft(localDraft, localDraftState.modificationOrder);
+            return;
+          }
+          if (!localDraftState?.modificationOrder) {
+            if (result.draft.revision === localDraftState?.baseRevision) {
+              queueLocalDraft(localDraft);
+              return;
+            }
             draftDirtyRef.current = true;
             draftInputSinceReadRef.current = true;
             setDraftReadUncertain(true);
-            setDraftFailure("共享草稿修订已变化；本地未同步输入已保留，当前 M01 合同无法可靠判断离线修改顺序，未自动覆盖或重放。");
+            setDraftFailure("共享草稿修订已变化；本地未同步输入缺少可比较的修改顺序，已保留当前输入，未自动覆盖或重放。");
             return;
           }
-          draftDirtyRef.current = true;
-          draftInputSinceReadRef.current = true;
-          scheduleDraftPersistence(loadedSessionId, localDraft);
+          adoptServerDraft();
           return;
         }
         if (draftDirtyRef.current) {
           if (draftRef.current === result.draft.content) {
-            draftDirtyRef.current = false;
-            draftInputSinceReadRef.current = false;
-            if (writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false })) {
-              setDraftReadUncertain(false);
-              setDraftFailure(null);
-            } else {
-              draftDirtyRef.current = true;
-              setDraftReadUncertain(true);
-              setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖或清除。请恢复浏览器存储后再试。");
-            }
+            adoptServerDraft();
+          } else if (localDraftState?.modificationOrder && compareModificationOrder(localDraftState.modificationOrder, serverModificationOrder) > 0) {
+            queueLocalDraft(draftRef.current, localDraftState.modificationOrder);
+          } else if (localDraftState?.modificationOrder) {
+            adoptServerDraft();
           } else {
-            scheduleDraftPersistence(loadedSessionId, draftRef.current);
+            draftDirtyRef.current = true;
+            draftInputSinceReadRef.current = true;
+            setDraftReadUncertain(true);
+            setDraftFailure("本地草稿状态无法核对；当前输入已保留，未自动覆盖或重放。请继续编辑后再同步。");
           }
         } else if (result.draft.revision === 0 && result.draft.content === "" && localDraft) {
-          draftRef.current = localDraft;
-          draftDirtyRef.current = true;
-          draftInputSinceReadRef.current = true;
-          setDraft(localDraft);
-          if (!writeLocalDraftState(draftStateKey, { baseRevision: result.draft.revision, content: localDraft, dirty: true })) {
-            setDraftReadUncertain(true);
-            setDraftFailure("本地草稿状态无法持久化；当前输入已保留，未自动覆盖。请恢复浏览器存储后再试。");
-            return;
-          }
-          scheduleDraftPersistence(loadedSessionId, localDraft);
+          queueLocalDraft(localDraft, localDraftState?.modificationOrder);
         } else {
-          draftRef.current = result.draft.content;
-          setDraft(result.draft.content);
-          draftDirtyRef.current = false;
-          draftInputSinceReadRef.current = false;
-          if (writeStoredDraft(draftKey, draftStateKey, result.draft.content, { baseRevision: result.draft.revision, content: result.draft.content, dirty: false })) {
-            setDraftReadUncertain(false);
-            setDraftFailure(null);
-          } else {
-            setDraftReadUncertain(true);
-            setDraftFailure("本地草稿快照无法持久化；当前输入已保留，未自动覆盖或清除。请恢复浏览器存储后再试。");
-          }
+          adoptServerDraft();
         }
         return;
       }
@@ -1227,6 +1283,7 @@ export function ProductionConversationWorkspace({
         const preserveFreshInput = draftInputSinceReadRef.current;
         draftDirtyRef.current = false;
         pendingDraftValueRef.current = undefined;
+        pendingDraftModificationOrderRef.current = undefined;
         if (draftSaveTimerRef.current !== undefined) clearTimeout(draftSaveTimerRef.current);
         draftSaveTimerRef.current = undefined;
         if (!preserveFreshInput) {
@@ -1506,6 +1563,7 @@ export function ProductionConversationWorkspace({
     draftDirtyRef.current = false;
     draftInputSinceReadRef.current = false;
     pendingDraftValueRef.current = undefined;
+    pendingDraftModificationOrderRef.current = undefined;
     if (initialAck && initialRunFailed) {
       const failedRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
       setCommandState("failed");
@@ -1521,7 +1579,8 @@ export function ProductionConversationWorkspace({
         draftInputSinceReadRef.current = true;
         draftDirtyRef.current = true;
         setDraft(initialPrompt);
-        const storedInitialDraft = writeStoredDraft(createdDraftKey, createdDraftStateKey, initialPrompt, { baseRevision: 0, content: initialPrompt, dirty: true });
+        const initialModificationOrder = adapters.draft.nextModificationOrder(response.session.id);
+        const storedInitialDraft = writeStoredDraft(createdDraftKey, createdDraftStateKey, initialPrompt, { baseRevision: 0, content: initialPrompt, dirty: true, modificationOrder: initialModificationOrder });
         if (!storedInitialDraft) {
           setDraftReadUncertain(true);
           setDraftFailure("本地草稿快照无法持久化；原始提示仅保留在当前页面，恢复浏览器存储后再试，刷新前不会自动重放。");
