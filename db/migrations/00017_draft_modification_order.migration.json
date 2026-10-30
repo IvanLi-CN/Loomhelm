@@ -4,16 +4,16 @@
   "migration": {
     "description": "Persist a hybrid logical-clock modification order and stable client tie-break for the private shared-draft projection and its mutation ledger.",
     "release_unit_description": "Phase-one private shared-draft ordering follow-up with its public REST and MCP field exposure integrated.",
-    "version_impact": "minor"
+    "version_impact": "major"
   },
   "compatibility_assessment": {
-    "public_api": "minor",
+    "public_api": "major",
     "persistent_state": "minor",
-    "reason": "The migration is additive. Existing draft and mutation rows receive an explicit zero order, which represents legacy state rather than an inferred modification timestamp. The first ordered write upgrades the projection; once a projection has an order, writers without an order are rejected instead of silently falling back to server arrival time. New ordered writes are selected by physical milliseconds, logical counter, and client ID, so arrival order is not the last-writer rule."
+    "reason": "The persistent state change is additive: existing draft and mutation rows receive an explicit zero order, which represents legacy state rather than an inferred modification timestamp, and a database-level writer fence rejects new draft projection or mutation writes that omit a non-zero order. The public update contract is major because modification_order is now required; callers must upgrade before ordered draft writes are admitted. New ordered writes are selected by physical milliseconds, logical counter, and client ID, so arrival order is not the last-writer rule."
   },
   "durable_state": {
     "description": "conversation_drafts and conversation_draft_mutations store modification_physical_ms, modification_logical_counter, and modification_client_id as one comparable hybrid logical-clock value with a stable tie-break.",
-    "storage_implementation": "PostgreSQL state managed by embedded Goose migration 00017. Existing rows remain zero-ordered; server receive time is used only as a compatibility fallback for the first legacy update. Subsequent updates require an explicit order, and consume mutations receive a server-generated order greater than the current projection.",
+    "storage_implementation": "PostgreSQL state managed by embedded Goose migration 00017. Existing rows remain zero-ordered; the migration installs a database-level fence for new draft writes, while the E01 store generates an order for the first compatibility update. Subsequent updates require an explicit order, and consume mutations receive a server-generated order greater than the current projection.",
     "retention_policy": "The current projection retains its winning order. Mutation rows retain order metadata for the lifetime of the existing mutation ledger and do not retain draft bodies or content fingerprints.",
     "source_compatibility_range": {
       "from_program_versions": "Phase-one private shared-draft candidate after migration 00014.",
@@ -21,7 +21,7 @@
       "readable_earlier_state": true,
       "older_program_can_read_new_state": false,
       "direct_major_skips_supported": false,
-      "compatibility_boundary": "An older writer that does not understand the order columns must be drained and fenced before ordered draft admission is enabled. The E01 store accepts missing order only while the current projection is still legacy zero-ordered; it then returns ErrDraftOrderRequired rather than treating database arrival time as physical edit time."
+      "compatibility_boundary": "An older writer that does not understand the order columns is rejected by the database-level writer fence after migration 00017. The E01 store accepts missing order only while the current projection is still legacy zero-ordered; it then returns ErrDraftOrderRequired rather than treating database arrival time as physical edit time."
     }
   },
   "database_migration": {
@@ -40,6 +40,13 @@
         "order": 2,
         "observable": true,
         "pauseable": false
+      },
+      {
+        "id": "ddl-00017-draft-order-writer-fence",
+        "description": "Install triggers that reject new draft projection and mutation writes without a non-zero modification order, fencing pre-00017 writers after the migration boundary.",
+        "order": 3,
+        "observable": true,
+        "pauseable": false
       }
     ],
     "dml_changes": [],
@@ -49,7 +56,8 @@
     "operations_must_remain_separate": false,
     "operation_sequence": [
       "ddl-00017-draft-order-columns",
-      "ddl-00017-draft-order-checks"
+      "ddl-00017-draft-order-checks",
+      "ddl-00017-draft-order-writer-fence"
     ],
     "progress_signals": [
       "Legacy rows show an all-zero order and are not presented as having a recovered physical modification time.",
@@ -70,13 +78,15 @@
     "backup_restore_role": "separate-disaster-recovery"
   },
   "validation": {
-    "minor": {
+    "major": {
       "required_test_evidence": [
+        "The current E01 program upgrades and uses legacy zero-ordered state from the immediately preceding candidate; direct major skipping remains unsupported.",
         "A higher HLC update remains current when a lower update arrives later, without incrementing revision or sending a command.",
         "A higher later HLC update can replace the current projection and increments the server revision.",
         "A legacy zero-ordered projection accepts one compatibility fallback update, while a nonzero projection rejects a missing order.",
         "Mutation retries and stale mutation IDs preserve the existing idempotency and stale-rejection behavior, and consume operations remain private to the authorized owner.",
-        "The migration is additive and re-entry does not rewrite existing draft or mutation content; legacy order columns remain all zero after migration."
+        "The migration is additive and re-entry does not rewrite existing draft or mutation content; legacy order columns remain all zero after migration.",
+        "The database writer fence rejects a pre-00017 draft write that does not persist a non-zero modification order, and a forward-repair program can retain the additive columns without down-migrating them."
       ]
     }
   },

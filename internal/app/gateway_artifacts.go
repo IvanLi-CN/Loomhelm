@@ -92,11 +92,23 @@ func (h *GatewayArtifactUploadHandler) authorize(ctx context.Context, connection
 		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
 	}
 	access, err := h.sessions.GetAccess(ctx, artifact.SessionID)
-	if err != nil || access.SessionID != artifact.SessionID || access.CreatorUserID == "" || !access.Confirmed || strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID {
+	if err != nil {
+		if errors.Is(err, sessions.ErrSessionNotFound) {
+			return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
+		}
+		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unavailable", fmt.Errorf("read artifact session access: %w", err))
+	}
+	if access.SessionID != artifact.SessionID || access.CreatorUserID == "" || !access.Confirmed || strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID {
 		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
 	}
 	session, err := h.sessions.Get(ctx, artifact.SessionID)
-	if err != nil || session.ID != artifact.SessionID || strings.TrimSpace(session.Generation) == "" {
+	if err != nil {
+		if errors.Is(err, sessions.ErrSessionNotFound) {
+			return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
+		}
+		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unavailable", fmt.Errorf("read artifact session: %w", err))
+	}
+	if session.ID != artifact.SessionID || strings.TrimSpace(session.Generation) == "" {
 		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
 	}
 	if artifact.RunID == nil {
@@ -107,7 +119,13 @@ func (h *GatewayArtifactUploadHandler) authorize(ctx context.Context, connection
 		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewayRunIdentity)
 	}
 	run, err := h.runs.GetRun(ctx, runID)
-	if err != nil || run.ID != runID || run.SessionID != session.ID || run.Generation != session.Generation {
+	if err != nil {
+		if errors.Is(err, runs.ErrRunNotFound) {
+			return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewayRunIdentity)
+		}
+		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unavailable", fmt.Errorf("read artifact run: %w", err))
+	}
+	if run.ID != runID || run.SessionID != session.ID || run.Generation != session.Generation {
 		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewayRunIdentity)
 	}
 	return access, nil

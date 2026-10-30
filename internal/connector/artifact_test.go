@@ -645,14 +645,17 @@ func (r fixedArtifactReader) ValidatePath(path string) error {
 	return nil
 }
 
-func (r fixedArtifactReader) ReadFile(context.Context, string) ([]byte, error) {
+func (r fixedArtifactReader) ReadFile(_ context.Context, path string) ([]byte, error) {
+	if path != "private.txt" {
+		return nil, ErrArtifactPathUnauthorized
+	}
 	return append([]byte(nil), r.content...), nil
 }
 
 func TestCodexArtifactFileReaderUsesBoundedAppServerRead(t *testing.T) {
 	workspace := privateTestDir(t)
 	filePath := filepath.Join(workspace, "private.txt")
-	if err := os.WriteFile(filePath, []byte("host placeholder\n"), 0o600); err != nil {
+	if err := os.WriteFile(filePath, []byte("final bytes\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	transport := newFakeTransport()
@@ -684,7 +687,11 @@ func TestCodexArtifactFileReaderUsesBoundedAppServerRead(t *testing.T) {
 	if err := json.Unmarshal(transport.calls[0].params, &params); err != nil {
 		t.Fatal(err)
 	}
-	if params.Path != filePath {
-		t.Fatalf("fs/readFile path = %q, want %q", params.Path, filePath)
+	canonicalPath, err := filepath.EvalSymlinks(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.Path != canonicalPath {
+		t.Fatalf("fs/readFile path = %q, want %q", params.Path, canonicalPath)
 	}
 }

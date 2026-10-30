@@ -762,6 +762,14 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	`, sessionID, userID); err != nil {
 		t.Fatalf("seed migration draft: %v", err)
 	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO conversation_draft_mutations (
+			session_id, owner_user_id, mutation_id, kind, client_id, client_sequence, revision
+		)
+		VALUES ($1, $2, 'legacy-mutation', 'update', 'desktop', 1, 1)
+	`, sessionID, userID); err != nil {
+		t.Fatalf("seed migration draft mutation: %v", err)
+	}
 	var beforeContent string
 	var beforeRevision int64
 	var beforeState, beforeOperationID, beforeEventCursor, beforeReconciliationState string
@@ -812,6 +820,25 @@ func TestDraftCommandMigrationFrom00013PreservesExistingState(t *testing.T) {
 	}
 	if afterModificationPhysicalMillis != 0 || afterModificationLogicalCounter != 0 || afterModificationClientID != "" {
 		t.Fatalf("post-00017 legacy draft order = %d/%d/%q, want explicit zero order", afterModificationPhysicalMillis, afterModificationLogicalCounter, afterModificationClientID)
+	}
+	var afterMutationPhysicalMillis, afterMutationLogicalCounter int64
+	var afterMutationClientID string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT modification_physical_ms, modification_logical_counter, modification_client_id
+		FROM conversation_draft_mutations WHERE session_id = $1 AND mutation_id = 'legacy-mutation'
+	`, sessionID).Scan(&afterMutationPhysicalMillis, &afterMutationLogicalCounter, &afterMutationClientID); err != nil {
+		t.Fatalf("read post-00017 legacy draft mutation: %v", err)
+	}
+	if afterMutationPhysicalMillis != 0 || afterMutationLogicalCounter != 0 || afterMutationClientID != "" {
+		t.Fatalf("post-00017 legacy mutation order = %d/%d/%q, want explicit zero order", afterMutationPhysicalMillis, afterMutationLogicalCounter, afterMutationClientID)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE conversation_drafts
+		SET content = 'legacy writer must be fenced', revision = revision + 1,
+		    mutation_id = 'legacy-writer-mutation', client_id = 'legacy-writer', client_sequence = client_sequence + 1
+		WHERE session_id = $1
+	`, sessionID); err == nil {
+		t.Fatal("legacy draft writer was not fenced after migration 00017")
 	}
 	var invalidMarkerCount int
 	if err := db.Pool().QueryRow(ctx, `

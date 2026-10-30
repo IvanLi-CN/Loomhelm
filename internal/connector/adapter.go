@@ -1553,6 +1553,33 @@ func canonicalDirectory(value string) (string, error) {
 	return filepath.Clean(canonical), nil
 }
 
+// ReplayPendingArtifactCaptures closes the crash window between the durable
+// source event and its derived artifact outbox record. It revisits raw source
+// events idempotently after a restart; the current session transport remains
+// the only file-byte boundary and the outbox deduplicates successful captures.
+func (a *Adapter) ReplayPendingArtifactCaptures() error {
+	if a == nil || a.artifacts == nil || a.journal == nil {
+		return nil
+	}
+	for _, observed := range a.journal.ObservedEvents() {
+		state := a.sessionState(observed.Observation.AdapterSessionID)
+		if state == nil {
+			continue
+		}
+		state.eventMu.Lock()
+		if state.closed.Load() || !a.isCurrentState(state) {
+			state.eventMu.Unlock()
+			continue
+		}
+		err := a.captureArtifactCandidates(state, observed.Event, observed.Observation)
+		state.eventMu.Unlock()
+		if err != nil {
+			return fmt.Errorf("recover artifact capture for source event %q: %w", observed.Event.EventID, err)
+		}
+	}
+	return nil
+}
+
 // ReplayPendingArtifactEvents closes the crash window between the outbox
 // record and its observed artifact.created event. It is safe to call during
 // Connector recovery or before event delivery; Journal deduplicates the

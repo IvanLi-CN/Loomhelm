@@ -25,6 +25,9 @@ func (c *Connector) uploadPendingArtifacts(ctx context.Context, connection *gate
 		return err
 	}
 	for {
+		if err := c.adapter.ReplayPendingArtifactCaptures(); err != nil {
+			return err
+		}
 		if err := c.adapter.ReplayPendingArtifactEvents(); err != nil && !errors.Is(err, connectorruntime.ErrArtifactIdentityPending) {
 			return err
 		}

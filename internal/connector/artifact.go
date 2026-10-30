@@ -756,9 +756,9 @@ type ArtifactContentReader interface {
 }
 
 // CodexArtifactFileReader uses the existing host-owned app-server transport.
-// It does not open paths itself: fs/readFile is the Codex-provided host-file
-// boundary, while workspace/path checks here prevent event data from selecting
-// an arbitrary host file.
+// It pins an authorized local workspace read with os.Root and confirms the
+// same bytes through fs/readFile, so an event path cannot turn a check-then-use
+// race into an artifact containing bytes outside the workspace.
 type CodexArtifactFileReader struct {
 	transport     RPCTransport
 	workspace     string
@@ -807,6 +807,10 @@ func (r *CodexArtifactFileReader) ReadFile(ctx context.Context, eventPath string
 	if err != nil {
 		return nil, err
 	}
+	localContent, err := r.readAuthorizedFile(path)
+	if err != nil {
+		return nil, err
+	}
 	response, err := r.transport.Call(ctx, "fs/readFile", mustRawJSON(map[string]string{"path": path}))
 	if err != nil {
 		return nil, fmt.Errorf("Codex fs/readFile: %w", err)
@@ -829,6 +833,47 @@ func (r *CodexArtifactFileReader) ReadFile(ctx context.Context, eventPath string
 	}
 	if int64(len(content)) > maxArtifactContentBytes {
 		return nil, fmt.Errorf("Codex fs/readFile returned oversized data: %w", ErrJournalTooLarge)
+	}
+	if !bytes.Equal(content, localContent) {
+		return nil, fmt.Errorf("Codex fs/readFile content changed during authorized read: %w", ErrArtifactSourceUnavailable)
+	}
+	return localContent, nil
+}
+
+func (r *CodexArtifactFileReader) readAuthorizedFile(path string) ([]byte, error) {
+	if r == nil || r.canonicalRoot == "" {
+		return nil, ErrArtifactWorkspaceRequired
+	}
+	relative, err := filepath.Rel(r.canonicalRoot, path)
+	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil, ErrArtifactPathUnauthorized
+	}
+	root, err := os.OpenRoot(r.canonicalRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open Codex artifact workspace root: %w", ErrArtifactSourceUnavailable)
+	}
+	defer root.Close()
+	file, err := root.Open(relative)
+	if err != nil {
+		return nil, fmt.Errorf("open Codex artifact file: %w", ErrArtifactSourceUnavailable)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat Codex artifact file: %w", ErrArtifactSourceUnavailable)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("Codex artifact path is not a regular file: %w", ErrArtifactSourceUnavailable)
+	}
+	if info.Size() > maxArtifactContentBytes {
+		return nil, fmt.Errorf("Codex artifact path exceeds %d bytes: %w", maxArtifactContentBytes, ErrJournalTooLarge)
+	}
+	content, err := io.ReadAll(io.LimitReader(file, maxArtifactContentBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Codex artifact file: %w", ErrArtifactSourceUnavailable)
+	}
+	if int64(len(content)) > maxArtifactContentBytes {
+		return nil, fmt.Errorf("Codex artifact path exceeds %d bytes: %w", maxArtifactContentBytes, ErrJournalTooLarge)
 	}
 	return content, nil
 }
@@ -874,7 +919,10 @@ func (r *CodexArtifactFileReader) resolvePath(eventPath string, requireFile bool
 	if info.Size() > maxArtifactContentBytes {
 		return "", fmt.Errorf("Codex artifact path exceeds %d bytes: %w", maxArtifactContentBytes, ErrJournalTooLarge)
 	}
-	return target, nil
+	// Pass the canonical in-workspace path to the app-server boundary. This
+	// avoids reintroducing an event-supplied symlink or relative path after the
+	// authorization checks above.
+	return canonical, nil
 }
 
 func pathWithinRoot(root, target string) bool {
@@ -1001,10 +1049,6 @@ func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.E
 		case "add", "update":
 			if reader == nil {
 				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "workspace_unconfigured"))
-				continue
-			}
-			if err := reader.ValidatePath(readPath); err != nil {
-				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, artifactGapReason(err)))
 				continue
 			}
 			var err error

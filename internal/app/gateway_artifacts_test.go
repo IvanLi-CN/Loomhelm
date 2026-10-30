@@ -49,8 +49,10 @@ func TestGatewayArtifactUploadHandlerRejectsUnownedIdentityBeforeStore(t *testin
 		name       string
 		connection hosts.Connection
 		access     sessions.SessionAccess
+		accessErr  error
 		run        runs.Run
 		runErr     error
+		sessionErr error
 		wantCode   string
 	}{
 		{
@@ -89,6 +91,13 @@ func TestGatewayArtifactUploadHandlerRejectsUnownedIdentityBeforeStore(t *testin
 			runErr:     runs.ErrRunNotFound,
 			wantCode:   "artifact_unauthorized",
 		},
+		{
+			name:       "session lookup unavailable",
+			connection: hosts.Connection{HostID: "host-1"},
+			access:     sessions.SessionAccess{SessionID: "session-1", CreatorUserID: "owner-1", HostID: "host-1", Confirmed: true},
+			sessionErr: errors.New("database temporarily unavailable"),
+			wantCode:   "artifact_unavailable",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -96,8 +105,10 @@ func TestGatewayArtifactUploadHandlerRejectsUnownedIdentityBeforeStore(t *testin
 			handler, err := NewGatewayArtifactUploadHandler(
 				store,
 				gatewayArtifactSessionProbe{
-					access:  test.access,
-					session: sessions.Session{Session: protocol.Session{ID: "session-1"}, Generation: "generation-1"},
+					access:     test.access,
+					session:    sessions.Session{Session: protocol.Session{ID: "session-1"}, Generation: "generation-1"},
+					accessErr:  test.accessErr,
+					sessionErr: test.sessionErr,
 				},
 				gatewayArtifactRunProbe{run: test.run, err: test.runErr},
 			)
@@ -145,16 +156,24 @@ func TestGatewayArtifactUploadHandlerMapsStoreFailures(t *testing.T) {
 }
 
 type gatewayArtifactSessionProbe struct {
-	access  sessions.SessionAccess
-	session sessions.Session
-	err     error
+	access     sessions.SessionAccess
+	session    sessions.Session
+	err        error
+	accessErr  error
+	sessionErr error
 }
 
 func (p gatewayArtifactSessionProbe) GetAccess(context.Context, string) (sessions.SessionAccess, error) {
+	if p.accessErr != nil {
+		return p.access, p.accessErr
+	}
 	return p.access, p.err
 }
 
 func (p gatewayArtifactSessionProbe) Get(context.Context, string) (sessions.Session, error) {
+	if p.sessionErr != nil {
+		return p.session, p.sessionErr
+	}
 	return p.session, p.err
 }
 
