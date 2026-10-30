@@ -808,7 +808,7 @@ func TestFileContentMutationVersionDetectsRewriteWithRestoredModTime(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.WriteAt([]byte("rewritten content"), 0); err != nil {
+	if _, err := writer.WriteAt([]byte("changed  content"), 0); err != nil {
 		_ = writer.Close()
 		t.Fatal(err)
 	}
