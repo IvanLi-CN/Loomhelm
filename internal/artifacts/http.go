@@ -173,6 +173,17 @@ func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErr
 	}, nil
 }
 
+func (h *DownloadHTTPHandler) acquireDownloadSlot(ctx context.Context) (func(), error) {
+	select {
+	case h.downloadStagingSlots <- struct{}{}:
+		return func() { <-h.downloadStagingSlots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, ErrStoreUnavailable
+	}
+}
+
 // SafeDownloadFilename returns the filename representation suitable for
 // owner-facing artifact metadata and download headers. Legacy records are
 // sanitized at read time as well as new names being rejected at write time.
@@ -195,16 +206,16 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		h.writeError(writer, request, http.StatusNotFound, ErrNotFound, "artifact was not found")
 		return
 	}
-	if request.Method == http.MethodGet {
-		select {
-		case h.downloadStagingSlots <- struct{}{}:
-			defer func() { <-h.downloadStagingSlots }()
-		case <-request.Context().Done():
-			return
-		default:
+	if request.Method == http.MethodGet || request.Method == http.MethodHead {
+		releaseSlot, slotErr := h.acquireDownloadSlot(request.Context())
+		if slotErr != nil {
+			if request.Context().Err() != nil {
+				return
+			}
 			h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download capacity is temporarily exhausted")
 			return
 		}
+		defer releaseSlot()
 	}
 	artifact, reader, err := h.store.Open(request.Context(), id)
 	if err != nil {
@@ -366,6 +377,15 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusBadRequest, ErrInvalid, "artifact content_version is required when offset is non-zero")
 		return
 	}
+	releaseSlot, slotErr := h.acquireDownloadSlot(request.Context())
+	if slotErr != nil {
+		if request.Context().Err() != nil {
+			return
+		}
+		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download capacity is temporarily exhausted")
+		return
+	}
+	defer releaseSlot()
 	artifact, reader, version, versioned, err := h.openContent(request.Context(), id, expectedVersion)
 	if err != nil {
 		if request.Context().Err() != nil {

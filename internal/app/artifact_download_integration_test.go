@@ -231,6 +231,20 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 		t.Fatalf("content disposition = %q", response.Header.Get("Content-Disposition"))
 	}
 
+	rangeResponse := applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, map[string]string{"Range": "bytes=4-10"}, http.StatusPartialContent)
+	rangeBody, err := io.ReadAll(rangeResponse.Body)
+	rangeResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rangeBody) != string(content[4:11]) {
+		t.Fatalf("range download body = %q, want %q", rangeBody, content[4:11])
+	}
+	wantRange := "bytes 4-10/" + strconv.Itoa(len(content))
+	if rangeResponse.Header.Get("Content-Range") != wantRange {
+		t.Fatalf("range content = %q, want %q", rangeResponse.Header.Get("Content-Range"), wantRange)
+	}
+
 	projectResponse := applicationRequest(t, bob, http.MethodGet, baseURL+"/api/v1/artifacts/"+projectArtifactID+"/download", nil, nil, http.StatusOK)
 	projectBody, err := io.ReadAll(projectResponse.Body)
 	projectResponse.Body.Close()

@@ -563,6 +563,9 @@ func (s *Store) openReadyArtifact(ctx context.Context, id string, verify bool, e
 			return protocol.Artifact{}, nil, fmt.Errorf("artifact content snapshot changed while opening: %w", ErrContentChanged)
 		}
 		if errors.Is(verifyErr, ErrIntegrity) || errors.Is(verifyErr, ErrSizeMismatch) || errors.Is(verifyErr, ErrHashMismatch) {
+			if pathErr := s.verifyCanonicalObjectVersion(ctx, record.Artifact.ID, version); pathErr != nil {
+				return protocol.Artifact{}, nil, pathErr
+			}
 			if markErr := s.markReadyObjectUnavailable(ctx, record.Artifact.ID, "final-mismatch"); markErr != nil {
 				return protocol.Artifact{}, nil, markErr
 			}

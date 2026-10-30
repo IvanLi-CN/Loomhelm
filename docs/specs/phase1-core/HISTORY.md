@@ -134,6 +134,10 @@ E01 adds the additive `listRunApprovals` REST/MCP contract, generated Go/TypeScr
 
 The E01 successor decision keeps the stable native approval ID, adds immutable `(id,revision)` history beside the current CAS projection and versions the opaque Run-bound cursor to `(created_at,id,revision)`. Migration 00012 backfills exactly one provable snapshot for each existing current row without inventing discarded revisions, and new writers update projection plus history atomically. Compatibility is `public_api=minor` and `persistent_state=minor`: old projection-only writers are drained and fenced before new revision writes, ambiguous legacy cursors fail closed, and post-cutover switchback requires a history-capable candidate.
 
+## Artifact Download Contract
+
+This candidate adds the authorized browser download and cursor-addressed REST/MCP artifact-content operations, including original-byte verification, Range responses, content-version binding and fail-closed unavailable/content-changed outcomes; existing artifact metadata and authorization semantics remain unchanged. The standalone candidate compatibility assessment is `public_api=minor` because the operations and binary/chunk response contracts are additive within the current major, and `persistent_state=minor` because migration 00015 changes recovery behavior for existing artifact rows while earlier candidates remain readable and fail closed; the migration record's `public_api=patch` classification covers only its marker and recovery behavior, not this separate public-contract addition. Runtime application acceptance and Agent VM evidence remain distinct from contract/code-generation checks.
+
 ## References
 
 - [Requirements](SPEC.md)

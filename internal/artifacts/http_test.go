@@ -322,6 +322,31 @@ func TestDownloadHTTPHandlerBoundsConcurrentFullDownloadStaging(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerBoundsHeadAndContentVerification(t *testing.T) {
+	artifact := protocol.Artifact{ID: "artifact-verification-capacity", Name: "content.bin", Size: 4}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, []byte("data"))}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxConcurrentStagedDownload; i++ {
+		handler.downloadStagingSlots <- struct{}{}
+	}
+	router := chi.NewRouter()
+	router.Head("/artifacts/{artifact_id}", handler.ServeHTTP)
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+
+	headResponse := httptest.NewRecorder()
+	router.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/artifacts/"+artifact.ID, nil))
+	if headResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusServiceUnavailable)
+	}
+	contentResponse := httptest.NewRecorder()
+	router.ServeHTTP(contentResponse, httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID+"/content", nil))
+	if contentResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("content status = %d, want %d", contentResponse.Code, http.StatusServiceUnavailable)
+	}
+}
+
 func TestDownloadHTTPHandlerStagesWithinAggregateBudget(t *testing.T) {
 	content := []byte("staged bytes")
 	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)

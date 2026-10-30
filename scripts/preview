@@ -36,32 +36,29 @@ release_workflow_lock() {
 acquire_workflow_lock() {
 	mkdir -p "$state_dir"
 	workflow_lock_ready=$(mktemp "${TMPDIR:-/tmp}/loomhelm-preview-lock.XXXXXX")
-	python3 - "$state_dir/.workflow.lock" "$workflow_lock_ready" <<'PY' &
+	python3 - "$state_dir/.workflow.lock" "$workflow_lock_ready" "$$" <<'PY' &
 import fcntl
+import os
 import pathlib
 import sys
 import time
 
 lock_path = pathlib.Path(sys.argv[1])
 ready_path = pathlib.Path(sys.argv[2])
+parent_pid = int(sys.argv[3])
 lock_path.parent.mkdir(parents=True, exist_ok=True)
 with lock_path.open("a+", encoding="utf-8") as handle:
     fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
     ready_path.write_text("ready\n", encoding="utf-8")
     while True:
-        time.sleep(3600)
+        if os.getppid() != parent_pid:
+            raise SystemExit
+        time.sleep(0.25)
 PY
 	workflow_lock_pid=$!
-	attempts=0
 	while [ ! -s "$workflow_lock_ready" ]; do
 		if ! kill -0 "$workflow_lock_pid" 2>/dev/null; then
 			echo "preview: workflow lock helper exited before acquiring the lock" >&2
-			release_workflow_lock
-			return 1
-		fi
-		attempts=$((attempts + 1))
-		if [ "$attempts" -ge 500 ]; then
-			echo "preview: timed out waiting for the workflow lock" >&2
 			release_workflow_lock
 			return 1
 		fi
@@ -315,11 +312,11 @@ command=${1:-}
 case "$command" in
 	""|help|-h|--help) ;;
 	*)
-		acquire_workflow_lock
 		trap 'release_workflow_lock' 0
 		trap 'release_workflow_lock; exit 129' HUP
 		trap 'release_workflow_lock; exit 130' INT
 		trap 'release_workflow_lock; exit 143' TERM
+		acquire_workflow_lock
 		;;
 esac
 case "$command" in
