@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
@@ -138,11 +139,28 @@ func (s *applicationServices) handler(control runControlApplication) (http.Handl
 	protection.SetDenyHandler(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writeApplicationError(writer, request, http.StatusForbidden, "cross-origin browser request rejected")
 	}))
-	protected := protection.Handler(s.identity.Middleware(s.identity.ExpectedPrincipalMiddleware(browserOnly)))
+	identityHandler := s.identity.Middleware(s.identity.ExpectedPrincipalMiddleware(browserOnly))
+	identityProtected := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if isArtifactDownloadPath(request.URL.Path) {
+			writer.Header().Set("WWW-Authenticate", "Bearer")
+		}
+		identityHandler.ServeHTTP(writer, request)
+	})
+	protected := protection.Handler(identityProtected)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		protected.ServeHTTP(writer, request)
 	}), nil
+}
+
+func isArtifactDownloadPath(path string) bool {
+	const prefix = "/api/v1/artifacts/"
+	const suffix = "/download"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return false
+	}
+	artifactID := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	return artifactID != "" && !strings.Contains(artifactID, "/")
 }
 
 func (s *applicationServices) artifactDownloadHandler(download http.Handler) http.HandlerFunc {

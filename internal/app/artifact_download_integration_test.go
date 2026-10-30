@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -283,6 +284,14 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	unauthorizedResponse := applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, nil, http.StatusUnauthorized)
 	if unauthorizedResponse.Header.Get("WWW-Authenticate") != "Bearer" {
 		t.Fatalf("unauthorized artifact download challenge = %q, want Bearer", unauthorizedResponse.Header.Get("WWW-Authenticate"))
+	}
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		boundResponse := applicationRequest(t, alice, method, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, map[string]string{
+			auth.ExpectedPrincipalHeader: "different-principal",
+		}, http.StatusUnauthorized)
+		if boundResponse.Header.Get("WWW-Authenticate") != "Bearer" {
+			t.Fatalf("%s artifact download binding challenge = %q, want Bearer", method, boundResponse.Header.Get("WWW-Authenticate"))
+		}
 	}
 	bearer := map[string]string{"Authorization": "Bearer " + credential.Credential.Token}
 	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, bearer, http.StatusUnauthorized)
