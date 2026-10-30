@@ -435,19 +435,19 @@ export class LoomhelmApiClient {
     return this.request<Protocol.ArtifactResponse>("GET", requestPath);
   }
 
-  async downloadArtifact(request: DownloadArtifactParams): Promise<Response> {
+  async downloadArtifact(request: DownloadArtifactParams, requestInit?: Pick<RequestInit, "signal">): Promise<Response> {
     const path = `/api/v1/artifacts/${encodeURIComponent(request.artifact_id)}/download`;
     const requestHeaders = new Headers();
     if (request.if_range !== undefined) requestHeaders.set("If-Range", String(request.if_range));
     if (request.range !== undefined) requestHeaders.set("Range", String(request.range));
     const requestPath = path;
-    return this.request<Response>("GET", requestPath, undefined, [200, 206], true, requestHeaders);
+    return this.request<Response>("GET", requestPath, undefined, [200, 206], true, requestHeaders, requestInit);
   }
 
-  async headArtifact(request: HeadArtifactParams): Promise<Response> {
+  async headArtifact(request: HeadArtifactParams, requestInit?: Pick<RequestInit, "signal">): Promise<Response> {
     const path = `/api/v1/artifacts/${encodeURIComponent(request.artifact_id)}/download`;
     const requestPath = path;
-    return this.request<Response>("HEAD", requestPath, undefined, 200, true);
+    return this.request<Response>("HEAD", requestPath, undefined, 200, true, undefined, requestInit);
   }
 
   async downloadArtifactContent(request: DownloadArtifactContentParams): Promise<Protocol.ArtifactContentResponse> {
@@ -461,7 +461,7 @@ export class LoomhelmApiClient {
     return this.request<Protocol.ArtifactContentResponse>("GET", requestPath, undefined, 200);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number | readonly number[], binary = false, requestHeaders?: HeadersInit): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number | readonly number[], binary = false, requestHeaders?: HeadersInit, requestInit?: Pick<RequestInit, "signal">): Promise<T> {
     const baseUrl = this.options.baseUrl ?? (typeof location === "undefined" ? "http://localhost" : location.origin);
     const url = new URL(path, baseUrl);
     const fetcher = this.options.fetch ?? globalThis.fetch;
@@ -472,7 +472,7 @@ export class LoomhelmApiClient {
       additionalHeaders.forEach((value, key) => headers.set(key, value));
     }
     headers.set("Accept", binary ? "application/octet-stream" : "application/json");
-    const init: RequestInit = { method, headers };
+    const init: RequestInit = { method, headers, ...requestInit };
     if (body !== undefined) {
       headers.set("Content-Type", "application/json");
       init.body = JSON.stringify(body);

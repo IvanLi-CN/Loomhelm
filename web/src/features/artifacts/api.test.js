@@ -58,8 +58,8 @@ describe("artifact download API", () => {
       });
 
       const download = createArtifactDownloader({
-        downloadArtifact: async (request) => {
-          calls.push(request);
+        downloadArtifact: async (request, requestInit) => {
+          calls.push({ request, requestInit });
           return new Response(new Uint8Array([35, 32, 83, 117]), { status: 206 });
         },
       });
@@ -67,7 +67,7 @@ describe("artifact download API", () => {
       await download({ artifact, signal: new AbortController().signal });
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(calls).toEqual([{ artifact_id: artifact.id }]);
+      expect(calls).toEqual([{ request: { artifact_id: artifact.id }, requestInit: { signal: expect.any(AbortSignal) } }]);
       expect(links).toHaveLength(1);
       expect(links[0]).toMatchObject({ download: "summary.md", href: "blob:artifact-download-1", rel: "noopener" });
       expect(revokedObjectUrls).toEqual(["blob:artifact-download-1"]);

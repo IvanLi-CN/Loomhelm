@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { Artifact } from "@loomhelm/protocol";
 
@@ -44,7 +44,17 @@ const loadUnauthorized = async () => {
   throw new Error("permission details stay outside the UI");
 };
 
-function Surface({ children }: { children: ReactNode }) {
+function Surface({ children, theme = "light" }: { children: ReactNode; theme?: "light" | "dark" }) {
+  useEffect(() => {
+    const root = document.documentElement;
+    const previousTheme = root.dataset.theme;
+    root.dataset.theme = theme;
+    return () => {
+      if (previousTheme) root.dataset.theme = previousTheme;
+      else delete root.dataset.theme;
+    };
+  }, [theme]);
+
   return <div className="min-h-screen bg-[var(--canvas)] p-12" data-visual-evidence-surface><div className="mx-auto max-w-2xl" data-visual-evidence-target>{children}</div></div>;
 }
 
@@ -81,6 +91,16 @@ export const ReadyToDownload: Story = {
     const request = downloadArtifact.mock.calls[0]?.[0];
     expect(request).toMatchObject({ artifact });
     expect(request.signal).toBeDefined();
+  }
+};
+
+export const DarkReadyToDownload: Story = {
+  render: () => <Surface theme="dark"><ArtifactReference artifactId={artifact.id} loadMetadata={loadArtifact} download={downloadArtifact} /></Surface>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const button = await canvas.findByRole("button", { name: "下载文件" });
+    await userEvent.click(button);
+    expect(await canvas.findByRole("button", { name: "已请求下载" })).toBeEnabled();
   }
 };
 

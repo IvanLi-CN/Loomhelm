@@ -39,7 +39,7 @@ function startBrowserArtifactDownload(blob: Blob, name: string, id: string): voi
 export function createArtifactDownloader(client: Pick<GeneratedApiClient, "downloadArtifact">): ArtifactDownloader {
   return async ({ artifact, signal }) => {
     throwIfArtifactDownloadAborted(signal);
-    const response = await client.downloadArtifact({ artifact_id: artifact.id });
+    const response = await client.downloadArtifact({ artifact_id: artifact.id }, { signal });
     throwIfArtifactDownloadAborted(signal);
     if (!response.ok) throw new Error(`Artifact download failed with status ${response.status}.`);
     const blob = await response.blob();
