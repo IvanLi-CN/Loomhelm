@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -21,7 +22,7 @@ func TestGatewayArtifactUploadHandlerMapsAuthenticatedHostIdentity(t *testing.T)
 	handler, err := NewGatewayArtifactUploadHandler(
 		store,
 		gatewayArtifactSessionProbe{
-			access:  sessions.SessionAccess{SessionID: "session-1", HostID: "host-1", Confirmed: true},
+			access:  sessions.SessionAccess{SessionID: "session-1", CreatorUserID: "owner-1", HostID: "host-1", ProjectID: "project-1", Confirmed: true},
 			session: sessions.Session{Session: protocol.Session{ID: "session-1"}, Generation: "generation-1"},
 		},
 		gatewayArtifactRunProbe{run: runs.Run{ID: runID, SessionID: "session-1", Generation: "generation-1"}},
@@ -38,8 +39,8 @@ func TestGatewayArtifactUploadHandlerMapsAuthenticatedHostIdentity(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.ID != artifact.ID || store.calls != 1 || store.artifact != artifact || !bytes.Equal(store.content, content) {
-		t.Fatalf("stored artifact = %+v, calls = %d, input = %+v, content = %q", stored, store.calls, store.artifact, store.content)
+	if stored.ID != artifact.ID || store.calls != 1 || store.artifact != artifact || !bytes.Equal(store.content, content) || store.principal.UserID != "owner-1" || !store.principal.HasProjectScope("project-1") {
+		t.Fatalf("stored artifact = %+v, calls = %d, input = %+v, content = %q, principal = %+v", stored, store.calls, store.artifact, store.content, store.principal)
 	}
 }
 
@@ -55,28 +56,28 @@ func TestGatewayArtifactUploadHandlerRejectsUnownedIdentityBeforeStore(t *testin
 		{
 			name:       "different host",
 			connection: hosts.Connection{HostID: "other-host"},
-			access:     sessions.SessionAccess{SessionID: "session-1", HostID: "host-1", Confirmed: true},
+			access:     sessions.SessionAccess{SessionID: "session-1", CreatorUserID: "owner-1", HostID: "host-1", Confirmed: true},
 			run:        runs.Run{ID: "run-1", SessionID: "session-1", Generation: "generation-1"},
 			wantCode:   "artifact_unauthorized",
 		},
 		{
 			name:       "unconfirmed session",
 			connection: hosts.Connection{HostID: "host-1"},
-			access:     sessions.SessionAccess{SessionID: "session-1", HostID: "host-1"},
+			access:     sessions.SessionAccess{SessionID: "session-1", CreatorUserID: "owner-1", HostID: "host-1"},
 			run:        runs.Run{ID: "run-1", SessionID: "session-1", Generation: "generation-1"},
 			wantCode:   "artifact_unauthorized",
 		},
 		{
 			name:       "run belongs to another session",
 			connection: hosts.Connection{HostID: "host-1"},
-			access:     sessions.SessionAccess{SessionID: "session-1", HostID: "host-1", Confirmed: true},
+			access:     sessions.SessionAccess{SessionID: "session-1", CreatorUserID: "owner-1", HostID: "host-1", Confirmed: true},
 			run:        runs.Run{ID: "run-1", SessionID: "other-session", Generation: "generation-1"},
 			wantCode:   "artifact_unauthorized",
 		},
 		{
 			name:       "run belongs to another generation",
 			connection: hosts.Connection{HostID: "host-1"},
-			access:     sessions.SessionAccess{SessionID: "session-1", HostID: "host-1", Confirmed: true},
+			access:     sessions.SessionAccess{SessionID: "session-1", CreatorUserID: "owner-1", HostID: "host-1", Confirmed: true},
 			run:        runs.Run{ID: "run-1", SessionID: "session-1", Generation: "generation-old"},
 			wantCode:   "artifact_unauthorized",
 		},
@@ -124,7 +125,7 @@ func TestGatewayArtifactUploadHandlerMapsStoreFailures(t *testing.T) {
 	handler, err := NewGatewayArtifactUploadHandler(
 		store,
 		gatewayArtifactSessionProbe{
-			access:  sessions.SessionAccess{SessionID: "session-1", HostID: "host-1", Confirmed: true},
+			access:  sessions.SessionAccess{SessionID: "session-1", CreatorUserID: "owner-1", HostID: "host-1", Confirmed: true},
 			session: sessions.Session{Session: protocol.Session{ID: "session-1"}, Generation: "generation-1"},
 		},
 		gatewayArtifactRunProbe{run: runs.Run{ID: "run-1", SessionID: "session-1", Generation: "generation-1"}},
@@ -167,15 +168,17 @@ func (p gatewayArtifactRunProbe) GetRun(context.Context, string) (runs.Run, erro
 }
 
 type gatewayArtifactStoreProbe struct {
-	artifact protocol.Artifact
-	content  []byte
-	calls    int
-	err      error
+	artifact  protocol.Artifact
+	content   []byte
+	principal auth.Principal
+	calls     int
+	err       error
 }
 
-func (p *gatewayArtifactStoreProbe) Put(_ context.Context, artifact protocol.Artifact, source io.Reader) (protocol.Artifact, error) {
+func (p *gatewayArtifactStoreProbe) Put(ctx context.Context, artifact protocol.Artifact, source io.Reader) (protocol.Artifact, error) {
 	p.calls++
 	p.artifact = artifact
+	p.principal, _ = ctx.Value(artifactPrincipalContextKey{}).(auth.Principal)
 	content, err := io.ReadAll(source)
 	if err != nil {
 		return protocol.Artifact{}, err

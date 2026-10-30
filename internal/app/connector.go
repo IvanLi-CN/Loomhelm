@@ -33,11 +33,12 @@ type Connector struct {
 	lifecycle *platform.Lifecycle
 	runMu     sync.Mutex
 
-	journal    *connectorruntime.Journal
-	appGateway *connectorruntime.Gateway
-	adapter    *connectorruntime.Adapter
-	controller *connectorruntime.Controller
-	platform   *gateway.Client
+	journal        *connectorruntime.Journal
+	artifactOutbox *connectorruntime.ArtifactOutbox
+	appGateway     *connectorruntime.Gateway
+	adapter        *connectorruntime.Adapter
+	controller     *connectorruntime.Controller
+	platform       *gateway.Client
 
 	connectionMu sync.Mutex
 	connection   *gateway.ClientConnection
@@ -64,6 +65,16 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 			_ = journal.Close()
 		}
 	}()
+	artifactOutbox, err := connectorruntime.OpenArtifactOutbox(cfg.ConnectorJournalPath + ".artifacts.jsonl")
+	if err != nil {
+		return nil, fmt.Errorf("open connector artifact outbox: %w", err)
+	}
+	closeArtifactOutbox := true
+	defer func() {
+		if closeArtifactOutbox {
+			_ = artifactOutbox.Close()
+		}
+	}()
 
 	appGateway, err := connectorruntime.NewGateway(connectorruntime.GatewayConfig{
 		Process: connectorruntime.ProcessTransportConfig{
@@ -80,7 +91,8 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 		return nil, fmt.Errorf("initialize connector app-server gateway: %w", err)
 	}
 	adapter, err := connectorruntime.NewAdapter(appGateway, journal, connectorruntime.AdapterConfig{
-		WorkingDir: cfg.ConnectorWorkingDir,
+		ArtifactOutbox: artifactOutbox,
+		WorkingDir:     cfg.ConnectorWorkingDir,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize connector Codex adapter: %w", err)
@@ -102,15 +114,17 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 		return nil, fmt.Errorf("initialize connector platform gateway: %w", err)
 	}
 	closeJournal = false
+	closeArtifactOutbox = false
 	return &Connector{
-		cfg:        cfg,
-		logger:     logger,
-		lifecycle:  platform.NewLifecycle(),
-		journal:    journal,
-		appGateway: appGateway,
-		adapter:    adapter,
-		controller: controller,
-		platform:   platformClient,
+		cfg:            cfg,
+		logger:         logger,
+		lifecycle:      platform.NewLifecycle(),
+		journal:        journal,
+		artifactOutbox: artifactOutbox,
+		appGateway:     appGateway,
+		adapter:        adapter,
+		controller:     controller,
+		platform:       platformClient,
 	}, nil
 }
 
@@ -246,15 +260,20 @@ func (c *Connector) serveConnection(ctx context.Context, connection *gateway.Cli
 	defer cancel()
 	readResult := make(chan error, 1)
 	eventResult := make(chan error, 1)
+	artifactResult := make(chan error, 1)
 	heartbeatResult := make(chan error, 1)
 	go func() { readResult <- c.readGatewayMessages(connectionCtx, connection) }()
 	go func() { eventResult <- c.deliverJournalEvents(connectionCtx, connection) }()
+	go func() { artifactResult <- c.uploadPendingArtifacts(connectionCtx, connection) }()
 	go func() { heartbeatResult <- c.sendGatewayHeartbeats(connectionCtx, connection) }()
 	select {
 	case err := <-readResult:
 		cancel()
 		return err
 	case err := <-eventResult:
+		cancel()
+		return err
+	case err := <-artifactResult:
 		cancel()
 		return err
 	case err := <-heartbeatResult:
@@ -607,6 +626,11 @@ func (c *Connector) closeResources(ctx context.Context) error {
 		}
 		if err := c.appGateway.CloseSession(ctx, recovered); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close app-server session %q: %w", session.SessionID, err))
+		}
+	}
+	if c.artifactOutbox != nil {
+		if err := c.artifactOutbox.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close connector artifact outbox: %w", err))
 		}
 	}
 	if c.journal != nil {

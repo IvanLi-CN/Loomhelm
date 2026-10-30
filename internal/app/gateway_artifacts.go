@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -67,43 +68,49 @@ func (h *GatewayArtifactUploadHandler) Handle(ctx context.Context, connection ho
 	if request.Content == nil {
 		return protocol.Artifact{}, artifactHandlerFailure("artifact_invalid", errors.New("gateway artifact content is required"))
 	}
-	if err := h.authorize(ctx, connection, request.Artifact); err != nil {
+	access, err := h.authorize(ctx, connection, request.Artifact)
+	if err != nil {
 		return protocol.Artifact{}, err
 	}
+	principal := auth.Principal{UserID: access.CreatorUserID}
+	if access.ProjectID != "" {
+		principal.ProjectScope = map[string]struct{}{access.ProjectID: {}}
+	}
+	putContext := context.WithValue(ctx, artifactPrincipalContextKey{}, principal)
 	// The gateway has already bounded and fully reassembled this finite reader.
 	// NopCloser is therefore the permitted adapter for ArtifactStore's
 	// cancellation-aware input contract; Store.Put owns and closes it.
-	stored, err := h.store.Put(ctx, request.Artifact, io.NopCloser(request.Content))
+	stored, err := h.store.Put(putContext, request.Artifact, io.NopCloser(request.Content))
 	if err != nil {
 		return protocol.Artifact{}, mapGatewayArtifactStoreError(err)
 	}
 	return stored, nil
 }
 
-func (h *GatewayArtifactUploadHandler) authorize(ctx context.Context, connection hosts.Connection, artifact protocol.Artifact) error {
+func (h *GatewayArtifactUploadHandler) authorize(ctx context.Context, connection hosts.Connection, artifact protocol.Artifact) (sessions.SessionAccess, error) {
 	if strings.TrimSpace(connection.HostID) == "" || strings.TrimSpace(artifact.SessionID) == "" || artifact.SessionID != strings.TrimSpace(artifact.SessionID) {
-		return artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
+		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
 	}
 	access, err := h.sessions.GetAccess(ctx, artifact.SessionID)
-	if err != nil || access.SessionID != artifact.SessionID || !access.Confirmed || strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID {
-		return artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
+	if err != nil || access.SessionID != artifact.SessionID || access.CreatorUserID == "" || !access.Confirmed || strings.TrimSpace(access.HostID) == "" || access.HostID != connection.HostID {
+		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
 	}
 	session, err := h.sessions.Get(ctx, artifact.SessionID)
 	if err != nil || session.ID != artifact.SessionID || strings.TrimSpace(session.Generation) == "" {
-		return artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
+		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewaySessionOwnership)
 	}
 	if artifact.RunID == nil {
-		return nil
+		return access, nil
 	}
 	runID := strings.TrimSpace(*artifact.RunID)
 	if runID == "" || runID != *artifact.RunID {
-		return artifactHandlerFailure("artifact_unauthorized", errGatewayRunIdentity)
+		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewayRunIdentity)
 	}
 	run, err := h.runs.GetRun(ctx, runID)
 	if err != nil || run.ID != runID || run.SessionID != session.ID || run.Generation != session.Generation {
-		return artifactHandlerFailure("artifact_unauthorized", errGatewayRunIdentity)
+		return sessions.SessionAccess{}, artifactHandlerFailure("artifact_unauthorized", errGatewayRunIdentity)
 	}
-	return nil
+	return access, nil
 }
 
 func artifactHandlerFailure(code string, err error) error {
