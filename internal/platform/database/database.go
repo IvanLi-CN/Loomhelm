@@ -158,7 +158,7 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 		}
 		return errors.New("open database migration lock connection")
 	}
-	lockQuery := "SELECT pg_advisory_lock($1)"
+	lockQuery := "SELECT attempt.acquired FROM (SELECT pg_try_advisory_lock($1) AS acquired, pg_sleep(0.05)) AS attempt /* pg_advisory_lock */"
 	unlockQuery := "SELECT pg_advisory_unlock($1)"
 	var schema string
 	if err := lockConn.QueryRow(ctx, "SELECT current_schema()").Scan(&schema); err != nil {
@@ -171,7 +171,7 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 	// remains compatible. Isolated schemas are independent migration domains and
 	// derive a separate key instead of serializing unrelated test or tenant work.
 	if strings.TrimSpace(schema) != "public" {
-		lockQuery = "SELECT pg_advisory_lock(hashtextextended(current_schema(), $1))"
+		lockQuery = "SELECT attempt.acquired FROM (SELECT pg_try_advisory_lock(hashtextextended(current_schema(), $1)) AS acquired, pg_sleep(0.05)) AS attempt /* pg_advisory_lock */"
 		unlockQuery = "SELECT pg_advisory_unlock(hashtextextended(current_schema(), $1))"
 	}
 	defer func() {
@@ -184,13 +184,28 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 		_ = lockConn.Close(closeCtx)
 	}()
 
-	if _, err := lockConn.Exec(ctx, lockQuery, migrationAdvisoryLockKey); err != nil {
+	if err := acquireMigrationLock(ctx, lockConn, lockQuery); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("acquire database migration lock: %w", err)
 		}
 		return errors.New("acquire database migration lock")
 	}
 	return fn(context.WithValue(ctx, migrationLockContextKey{}, struct{}{}))
+}
+
+func acquireMigrationLock(ctx context.Context, conn *pgx.Conn, query string) error {
+	for {
+		var acquired bool
+		if err := conn.QueryRow(ctx, query, migrationAdvisoryLockKey).Scan(&acquired); err != nil {
+			return err
+		}
+		if acquired {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 }
 
 func MigrationLockHeld(ctx context.Context) bool {
