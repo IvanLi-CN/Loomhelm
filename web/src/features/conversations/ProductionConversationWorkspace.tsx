@@ -15,6 +15,7 @@ import { ApprovalHistoryClientAdapter } from "../approvals/approval-history-adap
 import { ConversationComposer, ConversationMessageStream, type ConversationMessage } from "./ConversationMessageStream";
 import type { PublishedSessionApi } from "../sessions/api";
 import { DraftClientAdapter, type DraftReadReason } from "../sessions/draft-client-adapter";
+import { getSessionCreationIntentKey } from "./session-creation-identity";
 import { RunStatusCard } from "../runs/RunStatusCard";
 import { RunClientAdapter } from "../runs/run-client-adapter";
 import { SessionContextSummary } from "../sessions/SessionContextSummary";
@@ -40,7 +41,6 @@ import {
 } from "./production-session-model";
 
 const NO_PROJECT = "__none__";
-const SESSION_CREATION_INTENT_PREFIX = "loomhelm:session-creation-intent:";
 const RUN_INTENT_PREFIX = "loomhelm:run-intent:";
 const RUN_RECOVERY_PREFIX = "loomhelm:run-recovery:";
 const DRAFT_PREFIX = "loomhelm:draft:";
@@ -127,11 +127,6 @@ function clearStoredIntent(key: string | undefined): void {
 
 function getIdentityScope(principalId: string | undefined): string {
   return encodeURIComponent(principalId?.trim() || "anonymous");
-}
-
-function getSessionCreationIntentKey(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent([window.location.pathname, conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
 }
 
 function getRunIntentKey(principalId: string | undefined, sessionId: string | undefined): string | undefined {
