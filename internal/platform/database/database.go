@@ -160,6 +160,20 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 	}
 	lockQuery := "SELECT attempt.acquired FROM (SELECT pg_try_advisory_lock($1) AS acquired, pg_sleep(0.05)) AS attempt /* pg_advisory_lock */"
 	unlockQuery := "SELECT pg_advisory_unlock($1)"
+	var schema string
+	if err := lockConn.QueryRow(ctx, "SELECT current_schema()").Scan(&schema); err != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = lockConn.Close(closeCtx)
+		return errors.New("inspect database migration lock schema")
+	}
+	// Keep the historical public-schema key so external migration coordination
+	// remains compatible. Isolated schemas are independent migration domains and
+	// derive a separate key instead of serializing unrelated test or tenant work.
+	if strings.TrimSpace(schema) != "public" {
+		lockQuery = "SELECT attempt.acquired FROM (SELECT pg_try_advisory_lock(hashtextextended(current_schema(), $1)) AS acquired, pg_sleep(0.05)) AS attempt /* pg_advisory_lock */"
+		unlockQuery = "SELECT pg_advisory_unlock(hashtextextended(current_schema(), $1))"
+	}
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
