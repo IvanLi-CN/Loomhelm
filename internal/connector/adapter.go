@@ -21,6 +21,7 @@ type TransportProvider interface {
 
 type AdapterConfig struct {
 	Journal               *Journal
+	ArtifactOutbox        *ArtifactOutbox
 	Model                 string
 	ReasoningEffort       string
 	ApprovalPolicy        string
@@ -47,9 +48,10 @@ type adapterSessionState struct {
 // already-approved protocol.Command kinds and persists every side effect
 // boundary through Journal before contacting app-server.
 type Adapter struct {
-	provider TransportProvider
-	journal  *Journal
-	config   AdapterConfig
+	provider  TransportProvider
+	journal   *Journal
+	config    AdapterConfig
+	artifacts *ArtifactOutbox
 
 	mu                   sync.Mutex
 	recoveryMu           sync.Mutex
@@ -102,6 +104,7 @@ func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConf
 		provider:             provider,
 		journal:              journal,
 		config:               config,
+		artifacts:            config.ArtifactOutbox,
 		sessions:             make(map[string]*adapterSessionState),
 		startCalls:           make(map[string]*sessionStartCall),
 		unknownSessionStarts: make(map[string]unknownSessionStart),
@@ -1331,8 +1334,16 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error 
 	if state.closed.Load() || !a.isCurrentState(state) {
 		return nil
 	}
-	_, err := a.appendObservedEvent(state, eventType, message.Method, message.Raw, runID)
-	return err
+	recorded, err := a.appendObservedEvent(state, eventType, message.Method, message.Raw, runID)
+	if err != nil {
+		return err
+	}
+	return a.captureArtifactCandidates(recorded, EventObservation{
+		AdapterSessionID:  state.session.SessionID,
+		ExternalThreadRef: state.session.ExternalThreadRef,
+		Generation:        state.gatewaySession.Generation,
+		NativeTurnID:      runID,
+	})
 }
 
 func journaledResponseOperation(operation string) bool {
@@ -1399,6 +1410,98 @@ func (a *Adapter) appendObservedEventFromSourceWithIdentity(state *adapterSessio
 	}
 	recorded, _, err := a.journal.AppendObservedEventWithRecord(event, observation)
 	return recorded, err
+}
+
+func (a *Adapter) captureArtifactCandidates(event protocol.Event, observation EventObservation) error {
+	if a == nil || a.artifacts == nil {
+		return nil
+	}
+	candidates, err := artifactCandidatesFromEvent(event, observation)
+	if err != nil {
+		return fmt.Errorf("extract file-change artifact: %w", err)
+	}
+	for _, candidate := range candidates {
+		if _, _, err := a.artifacts.Ensure(candidate); err != nil {
+			return fmt.Errorf("persist artifact publication %q: %w", candidate.ID, err)
+		}
+		if _, _, err := a.journal.AppendObservedEventWithRecord(artifactEvent(candidate), candidate.Observation); err != nil {
+			return fmt.Errorf("persist artifact.created event %q: %w", candidate.EventID, err)
+		}
+	}
+	return nil
+}
+
+// ReplayPendingArtifactEvents closes the crash window between the outbox
+// record and its observed artifact.created event. It is safe to call during
+// Connector recovery or before event delivery; Journal deduplicates the
+// stable event identity.
+func (a *Adapter) ReplayPendingArtifactEvents() error {
+	if a == nil || a.artifacts == nil {
+		return nil
+	}
+	for _, publication := range a.artifacts.Publications() {
+		if _, _, err := a.journal.AppendObservedEventWithRecord(artifactEvent(publication.Candidate), publication.Candidate.Observation); err != nil {
+			return fmt.Errorf("replay artifact.created event %q: %w", publication.Candidate.EventID, err)
+		}
+	}
+	return nil
+}
+
+// UploadArtifactForEvent is the Connector-side handoff used by the platform
+// event delivery loop. It accepts only an identity-mapped artifact event, so
+// the uploader receives platform SessionID/RunID and the authenticated host
+// connection remains the only remote boundary. It never opens a Codex path or
+// calls the server's in-process ArtifactStore.
+func (a *Adapter) UploadArtifactForEvent(ctx context.Context, event protocol.Event, uploader ArtifactUploader) error {
+	if a == nil || a.artifacts == nil {
+		return ErrArtifactPublicationNotFound
+	}
+	if uploader == nil {
+		return ErrArtifactUploaderRequired
+	}
+	if event.Type != protocol.EventTypeArtifactCreated || event.Source != protocol.EventSourceArtifact {
+		return ErrArtifactUnsupportedEvent
+	}
+	if event.SessionID == "" || event.RunID == nil || strings.TrimSpace(*event.RunID) == "" {
+		return ErrArtifactIdentityPending
+	}
+	publication, ok := a.artifacts.PublicationForEvent(event.EventID)
+	if !ok {
+		return ErrArtifactPublicationNotFound
+	}
+	mapped, mappedOK := a.journal.MappedEvent(event.EventID)
+	if !mappedOK || mapped.EventID != event.EventID || mapped.SessionID != event.SessionID || valueOrEmpty(mapped.RunID) != valueOrEmpty(event.RunID) {
+		return ErrArtifactIdentityPending
+	}
+	artifact := protocol.Artifact{
+		ID:          publication.Candidate.ID,
+		SessionID:   event.SessionID,
+		RunID:       stringPointer(*event.RunID),
+		Name:        publication.Candidate.Name,
+		Kind:        publication.Candidate.Kind,
+		Size:        publication.Candidate.Size,
+		Sha256:      publication.Candidate.Sha256,
+		ContentType: publication.Candidate.ContentType,
+		CreatedAt:   publication.Candidate.CreatedAt,
+	}
+	if publication.State == ArtifactPublicationUploaded {
+		return nil
+	}
+	content := publication.ContentReader()
+	defer content.Close()
+	if err := uploader.UploadArtifact(ctx, ArtifactUploadRequest{
+		Artifact:       artifact,
+		EventID:        event.EventID,
+		SourceEventID:  publication.Candidate.SourceEventID,
+		IdempotencyKey: publication.Candidate.ID,
+		Content:        content,
+	}); err != nil {
+		return fmt.Errorf("upload artifact %q: %w", artifact.ID, err)
+	}
+	if err := a.artifacts.MarkUploaded(publication.Candidate.ID); err != nil {
+		return fmt.Errorf("record uploaded artifact %q: %w", artifact.ID, err)
+	}
+	return nil
 }
 
 func (a *Adapter) threadStartParams(request protocol.NewSessionRequest) map[string]any {
