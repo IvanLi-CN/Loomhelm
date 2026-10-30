@@ -296,8 +296,17 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
     kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",
     occurredAt: event.occurred_at,
     role: isUserMessage ? "user" : isMessage ? "assistant" : "system",
+    runId: event.run_id,
     sequence: event.sequence
   };
+}
+
+function compareOccurredAt(left: string | undefined, right: string | undefined): number {
+  if (!left || !right) return 0;
+  const leftInstant = Date.parse(left);
+  const rightInstant = Date.parse(right);
+  if (!Number.isNaN(leftInstant) && !Number.isNaN(rightInstant) && leftInstant !== rightInstant) return leftInstant - rightInstant;
+  return left.localeCompare(right);
 }
 
 export function mergeConversationMessages(current: readonly ConversationMessage[], incoming: readonly ConversationMessage[]): readonly ConversationMessage[] {
@@ -333,10 +342,8 @@ export function mergeConversationMessages(current: readonly ConversationMessage[
     });
   });
   return [...byID.values()].sort((left, right) => {
-    if (left.occurredAt && right.occurredAt) {
-      const occurredAtOrder = left.occurredAt.localeCompare(right.occurredAt);
-      if (occurredAtOrder !== 0) return occurredAtOrder;
-    }
+    const occurredAtOrder = compareOccurredAt(left.occurredAt, right.occurredAt);
+    if (occurredAtOrder !== 0) return occurredAtOrder;
     if (left.sequence !== undefined && right.sequence !== undefined && left.sequence !== right.sequence) return left.sequence - right.sequence;
     return left.id.localeCompare(right.id);
   });

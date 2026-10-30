@@ -207,8 +207,8 @@ describe("production session model", () => {
   });
 
   test("keeps messages from different Runs in Session time order", () => {
-    const laterRun = eventToConversationMessage(event({ event_id: "run-2-message", occurred_at: "2026-10-27T00:00:06Z", payload: { text: "second Run" }, run_id: "run-2" }));
-    const earlierRun = eventToConversationMessage(event({ event_id: "run-1-message", occurred_at: "2026-10-27T00:00:02Z", payload: { text: "first Run" }, run_id: "run-1" }));
+    const laterRun = eventToConversationMessage(event({ event_id: "run-2-message", occurred_at: "2026-10-27T08:30:00Z", payload: { text: "second Run" }, run_id: "run-2" }));
+    const earlierRun = eventToConversationMessage(event({ event_id: "run-1-message", occurred_at: "2026-10-27T10:00:00+02:00", payload: { text: "first Run" }, run_id: "run-1" }));
     const merged = mergeConversationMessages([laterRun], [earlierRun]);
     expect(merged.map((message) => message.content)).toEqual(["first Run", "second Run"]);
   });

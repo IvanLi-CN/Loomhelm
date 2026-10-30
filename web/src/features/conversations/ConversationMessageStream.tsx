@@ -19,6 +19,7 @@ export type MessageDeliveryState = "sending" | "received";
 
 export interface ConversationMessage {
   id: string;
+  runId?: string;
   sequence?: number;
   role: ConversationMessageRole;
   author: string;

@@ -2,7 +2,7 @@ import { Info, LoaderCircle, MonitorCog, Send, ShieldCheck, WifiOff } from "luci
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiClientError, type ResolveApprovalParams } from "@loomhelm/api-client";
-import type { Approval, ApprovalDecision, CommandState, CreateSessionRequest, Run, Session, SessionPath } from "@loomhelm/protocol";
+import type { Approval, ApprovalDecision, CommandState, CreateSessionRequest, Event, Run, Session, SessionPath } from "@loomhelm/protocol";
 
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -609,6 +609,10 @@ function mapTaskSummary(task: ProductionConversationWorkspaceProps["task"]): Pro
   return task ? { goal: task.goal, id: task.id, state: task.state, title: task.title } : undefined;
 }
 
+function sessionEventKey(event: Pick<Event, "event_id" | "run_id">): string {
+  return `${event.run_id ?? "session"}:${event.event_id}`;
+}
+
 export function ProductionConversationWorkspace({
   api,
   conversationTitle,
@@ -670,6 +674,8 @@ export function ProductionConversationWorkspace({
   const [uncertainRunCommandId, setUncertainRunCommandId] = useState<string | undefined>(() => storedRunIntent?.uncertain ? storedRunIntent.commandId : undefined);
   const draftRef = useRef(draft);
   const seenEventIds = useRef(new Set<string>());
+  const sessionMessageEventKeys = useRef(new Set<string>());
+  const sessionMessageRestoreGeneration = useRef(0);
   const approvalCommandIds = useRef(new Map<string, string>());
   const pendingRunSubmission = useRef<{ commandId: string; prompt: string } | undefined>(storedRunIntent ? { commandId: storedRunIntent.commandId, prompt: storedRunIntent.prompt } : undefined);
   const currentSessionIdRef = useRef<string | undefined>(sessionId);
@@ -769,6 +775,7 @@ export function ProductionConversationWorkspace({
     if (previousSessionId.current === sessionId) return;
     previousSessionId.current = sessionId;
     seenEventIds.current = new Set();
+    sessionMessageEventKeys.current.clear();
     approvalCommandIds.current = new Map();
     lastAppliedRunSequence.current = 0;
     setMessages([]);
@@ -920,6 +927,47 @@ export function ProductionConversationWorkspace({
     adapters.history.selectSession(loadedSessionId);
     let firstRefresh = true;
     let active = true;
+    let messageRestoreInFlight = false;
+    const restoreSessionMessages = async (runs: readonly Run[]) => {
+      if (!active || messageRestoreInFlight) return;
+      const generation = sessionMessageRestoreGeneration.current;
+      messageRestoreInFlight = true;
+      try {
+        const results = await Promise.all(runs.map((candidate) => adapters.run.readRunEvents({ id: "production-conversation", runId: candidate.id, sessionId: loadedSessionId }, { limit: 100 })));
+        if (!active || generation !== sessionMessageRestoreGeneration.current) return;
+        const observedEvents: Event[] = [];
+        const inaccessibleRunIds = new Set<string>();
+        results.forEach((result, index) => {
+          const candidate = runs[index];
+          if (!candidate) return;
+          if (result.state === "unknown" && isSessionAccessFailure(result.reason)) {
+            inaccessibleRunIds.add(candidate.id);
+            return;
+          }
+          if (result.state !== "received" || !result.page) return;
+          observedEvents.push(...(result.stream?.events.length ? result.stream.events : result.page.events));
+        });
+        for (const runId of inaccessibleRunIds) {
+          for (const key of sessionMessageEventKeys.current) {
+            if (key.startsWith(`${runId}:`)) sessionMessageEventKeys.current.delete(key);
+          }
+        }
+        const newEvents = observedEvents.filter((event) => {
+          const key = sessionEventKey(event);
+          if (sessionMessageEventKeys.current.has(key)) return false;
+          sessionMessageEventKeys.current.add(key);
+          return true;
+        });
+        if (inaccessibleRunIds.size > 0 || newEvents.length > 0) {
+          setMessages((current) => {
+            const retained = current.filter((message) => !message.runId || !inaccessibleRunIds.has(message.runId));
+            return newEvents.length > 0 ? mergeConversationMessages(retained, newEvents.map(eventToConversationMessage)) : retained;
+          });
+        }
+      } finally {
+        messageRestoreInFlight = false;
+      }
+    };
     const refreshRunHistory = async () => {
       const forceRefresh = firstRefresh;
       firstRefresh = false;
@@ -929,6 +977,7 @@ export function ProductionConversationWorkspace({
         setSessionRunHistoryLoading(false);
         setSessionRunHistoryFailure(null);
         setSessionRunHistory(result.runs);
+        void restoreSessionMessages(result.runs);
         const preferredRunId = selectedRunIdRef.current ?? activeRunIdRef.current;
         const selected = (preferredRunId ? result.runs.find((candidate) => candidate.id === preferredRunId) : undefined) ?? (!preferredRunId ? result.runs.at(-1) : undefined);
         if (selected) {
@@ -957,6 +1006,8 @@ export function ProductionConversationWorkspace({
         } else if (!activeRunIdRef.current) {
           fenceRunTransition(undefined);
           setRun(undefined);
+          sessionMessageRestoreGeneration.current += 1;
+          sessionMessageEventKeys.current.clear();
           setMessages([]);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
@@ -972,7 +1023,11 @@ export function ProductionConversationWorkspace({
       setSessionRunHistory([]);
       fenceRunTransition(undefined);
       setRun(undefined);
-      setMessages([]);
+      if (isSessionAccessFailure(result.reason)) {
+        sessionMessageRestoreGeneration.current += 1;
+        sessionMessageEventKeys.current.clear();
+        setMessages([]);
+      }
       setApprovals([]);
       setApprovalHistoryAvailable(false);
       setRunIdentityVerified(false);
@@ -1197,6 +1252,8 @@ export function ProductionConversationWorkspace({
         approvalCommandIds.current = new Map();
         lastAppliedRunSequence.current = 0;
         setSession(undefined);
+        sessionMessageRestoreGeneration.current += 1;
+        sessionMessageEventKeys.current.clear();
         setMessages([]);
         setApprovals([]);
         setApprovalHistoryAvailable(false);
@@ -1268,6 +1325,7 @@ export function ProductionConversationWorkspace({
             }
           }
           if (freshEvents.length > 0) {
+            freshEvents.forEach((event) => sessionMessageEventKeys.current.add(sessionEventKey(event)));
             setMessages((current) => mergeConversationMessages(current, freshEvents.map(eventToConversationMessage)));
           }
           const stateEvents = observedEvents.filter((event) => event.sequence > lastAppliedRunSequence.current).sort((left, right) => left.sequence - right.sequence);
@@ -1286,6 +1344,8 @@ export function ProductionConversationWorkspace({
           seenEventIds.current = new Set();
           approvalCommandIds.current = new Map();
           lastAppliedRunSequence.current = 0;
+          sessionMessageRestoreGeneration.current += 1;
+          sessionMessageEventKeys.current.clear();
           setMessages([]);
           setApprovals([]);
           setApprovalHistoryAvailable(false);
@@ -1341,6 +1401,8 @@ export function ProductionConversationWorkspace({
               seenEventIds.current = new Set();
               approvalCommandIds.current = new Map();
               lastAppliedRunSequence.current = 0;
+              sessionMessageRestoreGeneration.current += 1;
+              sessionMessageEventKeys.current.clear();
               setMessages([]);
               setApprovals([]);
               setRunIdentityVerified(false);
