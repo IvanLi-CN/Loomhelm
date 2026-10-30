@@ -238,6 +238,11 @@ func TestArtifactOutboxPersistsDeduplicatesAndMarksUploaded(t *testing.T) {
 	if err := outbox.RecordGap(gap); err != nil {
 		t.Fatal(err)
 	}
+	updatedReason := gap
+	updatedReason.Reason = "file_bytes_unavailable"
+	if err := outbox.RecordGap(updatedReason); err != nil {
+		t.Fatalf("repeated artifact gap with changed transient reason = %v", err)
+	}
 	if err := outbox.Close(); err != nil {
 		t.Fatal(err)
 	}

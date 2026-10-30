@@ -218,8 +218,9 @@ func (o *ArtifactOutbox) Ensure(candidate ArtifactCandidate) (ArtifactPublicatio
 }
 
 // RecordGap durably records a source-recovery gap without retaining the
-// untrusted host path. Repeating the same gap identity is idempotent; a
-// changed reason for the same identity is a corruption/conflict signal.
+// untrusted host path. Repeating the same gap identity is idempotent; recovery
+// may observe a different transient reason later, so the first durable reason
+// is retained instead of blocking the rest of the capture pass.
 func (o *ArtifactOutbox) RecordGap(gap ArtifactCaptureGap) error {
 	if o == nil {
 		return errors.New("artifact outbox is not open")
@@ -234,7 +235,7 @@ func (o *ArtifactOutbox) RecordGap(gap ArtifactCaptureGap) error {
 		return fmt.Errorf("artifact outbox is unusable: %w", o.fatalErr)
 	}
 	if existing, ok := o.gaps[normalized.ID]; ok {
-		if existing.SourceEventID == normalized.SourceEventID && existing.ChangeKind == normalized.ChangeKind && existing.Reason == normalized.Reason && existing.Observation == normalized.Observation {
+		if existing.SourceEventID == normalized.SourceEventID && existing.ChangeKind == normalized.ChangeKind && existing.Observation == normalized.Observation {
 			return nil
 		}
 		return ErrArtifactPublicationConflict
