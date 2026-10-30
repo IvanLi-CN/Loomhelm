@@ -22,7 +22,6 @@ func TestServerCrossProjectRelationshipsThroughOfficialMCP(t *testing.T) {
 		BrowserAuth: platform.BrowserAuthConfig{OIDCIssuerURL: issuer.URL, OIDCClientID: "loomhelm-test", SecureCookies: false},
 	}
 	baseURL, stop := startApplicationTestServer(t, cfg)
-	defer stop()
 	alice := applicationBrowser(t)
 	bob := applicationBrowser(t)
 	loginApplicationBrowser(t, alice, baseURL, "cross-project-alice")
@@ -78,13 +77,37 @@ func TestServerCrossProjectRelationshipsThroughOfficialMCP(t *testing.T) {
 	callMCPToolError(t, aliceMCP, "loomhelm.add_task_parent", map[string]any{
 		"task_id":        parent.Task.ID,
 		"parent_task_id": child.Task.ID,
-	})
+	}, http.StatusConflict, protocol.ErrorCodeConflict)
 	callMCPToolError(t, aliceMCP, "loomhelm.add_task_dependency", map[string]any{
 		"task_id":              parent.Task.ID,
 		"prerequisite_task_id": child.Task.ID,
+	}, http.StatusConflict, protocol.ErrorCodeConflict)
+
+	callMCPTool(t, aliceMCP, "loomhelm.remove_task_parent", map[string]any{
+		"task_id":        child.Task.ID,
+		"parent_task_id": parent.Task.ID,
 	})
+	callMCPTool(t, aliceMCP, "loomhelm.remove_task_dependency", map[string]any{
+		"task_id":              child.Task.ID,
+		"prerequisite_task_id": parent.Task.ID,
+	})
+	var emptyRelationships protocol.TaskRelationshipPage
+	decodeMCPStructured(t, callMCPTool(t, aliceMCP, "loomhelm.get_task_relationships", map[string]any{
+		"task_id": child.Task.ID,
+	}), &emptyRelationships)
+	assertEmptyCrossProjectRelationships(t, emptyRelationships)
+	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/tasks/"+child.Task.ID+"/relationships", nil, nil, http.StatusOK), &emptyRelationships)
+	assertEmptyCrossProjectRelationships(t, emptyRelationships)
+
+	applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/tasks/"+child.Task.ID+"/parents/"+parent.Task.ID, nil, map[string]string{"Origin": baseURL}, http.StatusNoContent)
+	applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/tasks/"+child.Task.ID+"/dependencies/"+parent.Task.ID, nil, map[string]string{"Origin": baseURL}, http.StatusNoContent)
+	decodeMCPStructured(t, callMCPTool(t, aliceMCP, "loomhelm.get_task_relationships", map[string]any{
+		"task_id": child.Task.ID,
+	}), &mcpRelationships)
+	assertCrossProjectRelationships(t, mcpRelationships, parent.Task.ID, child.Task.ID)
 
 	applicationRequest(t, alice, http.MethodPut, baseURL+"/api/v1/projects/"+projectB.Project.ID+"/members/"+bobIdentity.UserID, map[string]string{"role": "viewer"}, map[string]string{"Origin": baseURL}, http.StatusOK)
+	privateParent := createMCPTask(t, aliceMCP, projectA.Project.ID, "MCP private parent", "parent hidden from Bob")
 	bobToken := createProjectScopedCredential(t, bob, baseURL, "cross-project-bob-mcp", []string{projectB.Project.ID})
 	bobMCP := connectOfficialMCP(t, baseURL+"/mcp", bobToken)
 	var filtered protocol.TaskRelationshipPage
@@ -96,8 +119,27 @@ func TestServerCrossProjectRelationshipsThroughOfficialMCP(t *testing.T) {
 	}
 	callMCPToolError(t, bobMCP, "loomhelm.add_task_parent", map[string]any{
 		"task_id":        child.Task.ID,
-		"parent_task_id": parent.Task.ID,
-	})
+		"parent_task_id": privateParent.Task.ID,
+	}, http.StatusNotFound, protocol.ErrorCodeNotFound)
+
+	_ = bobMCP.Close()
+	_ = aliceMCP.Close()
+	stop()
+	baseURL, _ = startApplicationTestServer(t, cfg)
+	aliceMCP = connectOfficialMCP(t, baseURL+"/mcp", aliceToken)
+	decodeMCPStructured(t, callMCPTool(t, aliceMCP, "loomhelm.get_task_relationships", map[string]any{
+		"task_id": child.Task.ID,
+	}), &mcpRelationships)
+	assertCrossProjectRelationships(t, mcpRelationships, parent.Task.ID, child.Task.ID)
+	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/tasks/"+child.Task.ID+"/relationships", nil, nil, http.StatusOK), &httpRelationships)
+	assertCrossProjectRelationships(t, httpRelationships, parent.Task.ID, child.Task.ID)
+
+	applicationRequest(t, alice, http.MethodDelete, baseURL+"/api/v1/tasks/"+child.Task.ID+"/parents/"+parent.Task.ID, nil, map[string]string{"Origin": baseURL}, http.StatusNoContent)
+	applicationRequest(t, alice, http.MethodDelete, baseURL+"/api/v1/tasks/"+child.Task.ID+"/dependencies/"+parent.Task.ID, nil, map[string]string{"Origin": baseURL}, http.StatusNoContent)
+	decodeMCPStructured(t, callMCPTool(t, aliceMCP, "loomhelm.get_task_relationships", map[string]any{
+		"task_id": child.Task.ID,
+	}), &emptyRelationships)
+	assertEmptyCrossProjectRelationships(t, emptyRelationships)
 }
 
 func createProjectScopedCredential(t *testing.T, browser *http.Client, baseURL, name string, projectIDs []string) string {
@@ -153,7 +195,7 @@ func callMCPTool(t *testing.T, session *sdk.ClientSession, name string, argument
 	return result
 }
 
-func callMCPToolError(t *testing.T, session *sdk.ClientSession, name string, arguments map[string]any) {
+func callMCPToolError(t *testing.T, session *sdk.ClientSession, name string, arguments map[string]any, expectedStatus int, expectedCode protocol.ErrorCode) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -163,6 +205,16 @@ func callMCPToolError(t *testing.T, session *sdk.ClientSession, name string, arg
 	}
 	if !result.IsError {
 		t.Fatalf("MCP tool %s unexpectedly succeeded: %#v", name, result)
+	}
+	var failure struct {
+		HTTPStatus int `json:"http_status"`
+		Error      struct {
+			Code protocol.ErrorCode `json:"code"`
+		} `json:"error"`
+	}
+	decodeMCPStructured(t, result, &failure)
+	if failure.HTTPStatus != expectedStatus || failure.Error.Code != expectedCode {
+		t.Fatalf("MCP tool %s error = %#v, want HTTP %d/%s", name, failure, expectedStatus, expectedCode)
 	}
 }
 
@@ -202,5 +254,12 @@ func assertCrossProjectRelationships(t *testing.T, relationships protocol.TaskRe
 	}
 	if len(relationships.Prerequisites) != 1 || relationships.Prerequisites[0].PrerequisiteTaskID != parentID || relationships.Prerequisites[0].DependentTaskID != childID {
 		t.Fatalf("prerequisite relationships = %+v", relationships.Prerequisites)
+	}
+}
+
+func assertEmptyCrossProjectRelationships(t *testing.T, relationships protocol.TaskRelationshipPage) {
+	t.Helper()
+	if len(relationships.Parents) != 0 || len(relationships.Children) != 0 || len(relationships.Prerequisites) != 0 || len(relationships.Dependents) != 0 {
+		t.Fatalf("relationships = %+v, want no relationships", relationships)
 	}
 }

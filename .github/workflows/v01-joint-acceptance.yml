@@ -131,17 +131,20 @@ jobs:
             scripts/rehearse-blue-green --control-only \
             --evidence-dir "$RUNNER_TEMP/loomhelm-v01-blue-green"
       - name: Record unavailable external acceptance surfaces
+        if: always()
         run: |
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-011 --status blocked --reason 'Control-only rehearsal passed, but runtime readiness, drain, Worker fencing, handoff and recovery are not run.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-004 --status blocked --reason 'The workflow does not claim a real owner-approved Codex executable run.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-005 --status blocked --reason 'Active Desktop thread and turn evidence is unavailable in this workflow.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-010 --status blocked --reason 'Real browser PWA installation evidence is unavailable in this workflow.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-012 --status blocked --reason 'The selected checks do not prove the full Web/API/MCP product closure.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-002 --status not_run --reason 'This workflow records backend and artifact acceptance only; full Web UI journey evidence remains separate.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-003 --status not_run --reason 'Real new-session execution is not run by this workflow.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-006 --status not_run --reason 'The full duplicate, approval race, ACK-loss and three-process recovery matrix is not run by this workflow.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-007 --status not_run --reason 'Multi-client draft acceptance is not run by this workflow.'
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-013 --status not_run --reason 'Partial relation failure acceptance is not run by this workflow.'
+          if test -f "$RUNNER_TEMP/loomhelm-v01/ledger.json"; then
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-011 --status blocked --reason 'Control-only rehearsal passed, but runtime readiness, drain, Worker fencing, handoff and recovery are not run.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-004 --status blocked --reason 'The workflow does not claim a real owner-approved Codex executable run.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-005 --status blocked --reason 'Active Desktop thread and turn evidence is unavailable in this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-010 --status blocked --reason 'Real browser PWA installation evidence is unavailable in this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-012 --status blocked --reason 'The selected checks do not prove the full Web/API/MCP product closure.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-002 --status not_run --reason 'This workflow records backend and artifact acceptance only; full Web UI journey evidence remains separate.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-003 --status not_run --reason 'Real new-session execution is not run by this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-006 --status not_run --reason 'The full duplicate, approval race, ACK-loss and three-process recovery matrix is not run by this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-007 --status not_run --reason 'Multi-client draft acceptance is not run by this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-013 --status not_run --reason 'Partial relation failure acceptance is not run by this workflow.'
+          fi
       - name: Render acceptance reports
         if: always()
         run: |
