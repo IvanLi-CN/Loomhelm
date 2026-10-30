@@ -43,19 +43,20 @@ var (
 
 // ArtifactPublicationState is local Connector state. The server remains the
 // authority for artifact readiness; uploaded means only that the remote
-// uploader acknowledged the immutable bytes for this artifact identity.
+// uploader acknowledged the immutable bytes for this artifact identity, while
+// rejected records a durable non-retryable server rejection.
 type ArtifactPublicationState string
 
 const (
 	ArtifactPublicationPending  ArtifactPublicationState = "pending"
 	ArtifactPublicationUploaded ArtifactPublicationState = "uploaded"
+	ArtifactPublicationRejected ArtifactPublicationState = "rejected"
 )
 
 // ArtifactCandidate is the host-side, native-identity form of one artifact.
-// It deliberately contains no host path: file bytes come either from a full
-// Add/Delete fileChange payload or from the authorized app-server fs/readFile
-// operation for an Update. Paths are used only transiently for validation and
-// identity hashing.
+// It deliberately contains no host path: file bytes come from the authorized
+// app-server fs/readFile operation. Paths are used only transiently for
+// validation and identity hashing.
 // Platform SessionID and RunID are resolved only after Journal mapping.
 type ArtifactCandidate struct {
 	ID            string                `json:"id"`
@@ -89,8 +90,9 @@ type ArtifactCaptureGap struct {
 // copy of the event-owned file bytes, so a reconnect can retry without
 // reopening a path supplied by Codex or by an untrusted payload.
 type ArtifactPublication struct {
-	Candidate ArtifactCandidate        `json:"candidate"`
-	State     ArtifactPublicationState `json:"state"`
+	Candidate     ArtifactCandidate        `json:"candidate"`
+	State         ArtifactPublicationState `json:"state"`
+	RejectionCode string                   `json:"rejection_code,omitempty"`
 }
 
 type artifactOutboxRecord struct {
@@ -101,6 +103,7 @@ type artifactOutboxRecord struct {
 	Gap           *ArtifactCaptureGap      `json:"gap,omitempty"`
 	ArtifactID    string                   `json:"artifact_id,omitempty"`
 	State         ArtifactPublicationState `json:"state,omitempty"`
+	RejectionCode string                   `json:"rejection_code,omitempty"`
 }
 
 // ArtifactOutbox is a Connector-local durable publication ledger. It is
@@ -264,6 +267,9 @@ func (o *ArtifactOutbox) MarkUploaded(id string) error {
 	if publication.State == ArtifactPublicationUploaded {
 		return nil
 	}
+	if publication.State == ArtifactPublicationRejected {
+		return ErrArtifactPublicationConflict
+	}
 	if err := o.appendLocked(artifactOutboxRecord{
 		FormatVersion: artifactOutboxFormatVersion,
 		Type:          "state",
@@ -274,6 +280,51 @@ func (o *ArtifactOutbox) MarkUploaded(id string) error {
 		return err
 	}
 	publication.State = ArtifactPublicationUploaded
+	o.entries[publication.Candidate.ID] = publication
+	return nil
+}
+
+// MarkRejected durably records a non-retryable server rejection. The
+// immutable candidate remains available for diagnostics, but Pending excludes
+// it so one bad publication cannot tear down or starve the gateway connection.
+func (o *ArtifactOutbox) MarkRejected(id, code string) error {
+	if o == nil {
+		return errors.New("artifact outbox is not open")
+	}
+	code, err := normalizeArtifactRejectionCode(code)
+	if err != nil {
+		return err
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.fatalErr != nil {
+		return fmt.Errorf("artifact outbox is unusable: %w", o.fatalErr)
+	}
+	publication, ok := o.entries[strings.TrimSpace(id)]
+	if !ok {
+		return ErrArtifactPublicationNotFound
+	}
+	if publication.State == ArtifactPublicationRejected {
+		if publication.RejectionCode == code {
+			return nil
+		}
+		return ErrArtifactPublicationConflict
+	}
+	if publication.State == ArtifactPublicationUploaded {
+		return ErrArtifactPublicationConflict
+	}
+	if err := o.appendLocked(artifactOutboxRecord{
+		FormatVersion: artifactOutboxFormatVersion,
+		Type:          "state",
+		At:            now(),
+		ArtifactID:    publication.Candidate.ID,
+		State:         ArtifactPublicationRejected,
+		RejectionCode: code,
+	}); err != nil {
+		return err
+	}
+	publication.State = ArtifactPublicationRejected
+	publication.RejectionCode = code
 	o.entries[publication.Candidate.ID] = publication
 	return nil
 }
@@ -455,14 +506,25 @@ func (o *ArtifactOutbox) applyRecord(record artifactOutboxRecord, seenHeader *bo
 		}
 		o.gaps[gap.ID] = gap
 	case "state":
-		if !*seenHeader || record.ArtifactID == "" || record.State != ArtifactPublicationUploaded || record.Publication != nil || record.Gap != nil {
+		if !*seenHeader || record.ArtifactID == "" || record.Publication != nil || record.Gap != nil || (record.State != ArtifactPublicationUploaded && record.State != ArtifactPublicationRejected) {
 			return fmt.Errorf("%w: invalid artifact publication state", ErrJournalCorrupt)
+		}
+		rejectionCode := ""
+		if record.State == ArtifactPublicationRejected {
+			normalizedCode, normalizeErr := normalizeArtifactRejectionCode(record.RejectionCode)
+			if normalizeErr != nil {
+				return fmt.Errorf("%w: invalid artifact rejection: %v", ErrJournalCorrupt, normalizeErr)
+			}
+			rejectionCode = normalizedCode
+		} else if record.RejectionCode != "" {
+			return fmt.Errorf("%w: uploaded artifact contains a rejection code", ErrJournalCorrupt)
 		}
 		publication, ok := o.entries[record.ArtifactID]
 		if !ok {
 			return fmt.Errorf("%w: artifact state has no publication %q", ErrJournalCorrupt, record.ArtifactID)
 		}
-		publication.State = ArtifactPublicationUploaded
+		publication.State = record.State
+		publication.RejectionCode = rejectionCode
 		o.entries[record.ArtifactID] = publication
 	default:
 		return fmt.Errorf("%w: unknown artifact outbox record %q", ErrJournalCorrupt, record.Type)
@@ -520,6 +582,25 @@ type ArtifactUploadRequest struct {
 
 type ArtifactUploader interface {
 	UploadArtifact(context.Context, ArtifactUploadRequest) error
+}
+
+type ArtifactPublicationUploadError struct {
+	ArtifactID string
+	Err        error
+}
+
+func (e *ArtifactPublicationUploadError) Error() string {
+	if e == nil {
+		return "artifact publication upload failed"
+	}
+	return fmt.Sprintf("upload artifact publication %q: %v", e.ArtifactID, e.Err)
+}
+
+func (e *ArtifactPublicationUploadError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 func (p ArtifactPublication) ContentReader() io.ReadCloser {
@@ -583,12 +664,31 @@ func normalizeArtifactPublication(publication ArtifactPublication) (ArtifactPubl
 	if state == "" {
 		state = ArtifactPublicationPending
 	}
-	if state != ArtifactPublicationPending && state != ArtifactPublicationUploaded {
+	rejectionCode := strings.TrimSpace(publication.RejectionCode)
+	if state != ArtifactPublicationPending && state != ArtifactPublicationUploaded && state != ArtifactPublicationRejected {
 		return ArtifactPublication{}, fmt.Errorf("artifact publication state %q is invalid", state)
+	}
+	if state == ArtifactPublicationRejected {
+		normalizedCode, normalizeErr := normalizeArtifactRejectionCode(rejectionCode)
+		if normalizeErr != nil {
+			return ArtifactPublication{}, normalizeErr
+		}
+		rejectionCode = normalizedCode
+	} else if rejectionCode != "" {
+		return ArtifactPublication{}, errors.New("artifact publication rejection code requires rejected state")
 	}
 	publication.Candidate = candidate
 	publication.State = state
+	publication.RejectionCode = rejectionCode
 	return publication, nil
+}
+
+func normalizeArtifactRejectionCode(code string) (string, error) {
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 128 || strings.ContainsAny(code, "\r\n") {
+		return "", errors.New("artifact rejection code is invalid")
+	}
+	return code, nil
 }
 
 func normalizeArtifactCaptureGap(gap ArtifactCaptureGap) (ArtifactCaptureGap, error) {
@@ -896,9 +996,9 @@ func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.E
 			continue
 		}
 		var content []byte
-		provenance := "codex.fileChange.full_content"
+		provenance := "codex.fs.readFile"
 		switch kind.Name {
-		case "add", "delete":
+		case "add", "update":
 			if reader == nil {
 				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "workspace_unconfigured"))
 				continue
@@ -907,23 +1007,23 @@ func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.E
 				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, artifactGapReason(err)))
 				continue
 			}
-			content = []byte(change.Diff)
-		case "update":
-			if reader == nil {
-				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "workspace_unconfigured"))
-				continue
-			}
-			if err := reader.ValidatePath(readPath); err != nil {
-				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, artifactGapReason(err)))
-				continue
-			}
-			provenance = "codex.fs.readFile"
 			var err error
 			content, err = reader.ReadFile(ctx, readPath)
 			if err != nil {
 				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, artifactGapReason(err)))
 				continue
 			}
+		case "delete":
+			if reader == nil {
+				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "workspace_unconfigured"))
+				continue
+			}
+			if err := reader.ValidatePath(readPath); err != nil {
+				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, artifactGapReason(err)))
+				continue
+			}
+			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "file_bytes_unavailable"))
+			continue
 		default:
 			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "unsupported_change_kind"))
 			continue

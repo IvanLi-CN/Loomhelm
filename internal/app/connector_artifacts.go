@@ -36,6 +36,16 @@ func (c *Connector) uploadPendingArtifacts(ctx context.Context, connection *gate
 				}
 				continue
 			}
+			if code, ok := gateway.ArtifactUploadErrorCode(err); ok {
+				var publicationErr *connectorruntime.ArtifactPublicationUploadError
+				if !errors.As(err, &publicationErr) || publicationErr == nil || publicationErr.ArtifactID == "" {
+					return err
+				}
+				if err := c.adapter.MarkArtifactRejected(publicationErr.ArtifactID, code); err != nil {
+					return err
+				}
+				continue
+			}
 			return err
 		}
 		timer := time.NewTimer(connectorEventPollInterval)

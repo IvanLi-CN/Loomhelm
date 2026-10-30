@@ -108,6 +108,23 @@ func TestArtifactCandidatesRequireReaderAuthorizationForAdd(t *testing.T) {
 	}
 }
 
+func TestArtifactCandidatesDoNotPublishDeleteDiffAsFile(t *testing.T) {
+	event := testFileChangeEvent("source-event-delete")
+	event.Payload = json.RawMessage(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item-1","type":"fileChange","changes":[{"path":"private.txt","kind":{"type":"delete"},"diff":"@@ -1 +0,0 @@\n-old bytes\n"}]}}}`)
+	candidates, gaps, err := artifactCandidatesFromEventWithReader(context.Background(), event, EventObservation{
+		AdapterSessionID:  "adapter-session-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "turn-1",
+	}, fixedArtifactReader{content: []byte("new file bytes\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 || len(gaps) != 1 || gaps[0].Reason != "file_bytes_unavailable" {
+		t.Fatalf("delete diff capture = candidates %+v, gaps %+v", candidates, gaps)
+	}
+}
+
 func TestArtifactOutboxPersistsDeduplicatesAndMarksUploaded(t *testing.T) {
 	candidate := testArtifactCandidate(t)
 	directory := privateTestDir(t)
@@ -186,6 +203,40 @@ func TestArtifactOutboxPersistsDeduplicatesAndMarksUploaded(t *testing.T) {
 	}
 	if err := outbox.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestArtifactOutboxPersistsRejectedPublication(t *testing.T) {
+	directory := privateTestDir(t)
+	path := filepath.Join(directory, "artifacts.jsonl")
+	outbox, err := OpenArtifactOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := testArtifactCandidate(t)
+	candidate.ID = "artifact-rejected"
+	candidate.EventID = "artifact-event-rejected"
+	if _, _, err := outbox.Ensure(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.MarkRejected(candidate.ID, "artifact_conflict"); err != nil {
+		t.Fatal(err)
+	}
+	if pending := outbox.Pending(); len(pending) != 0 {
+		t.Fatalf("rejected publication remained pending: %+v", pending)
+	}
+	if err := outbox.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	outbox, err = OpenArtifactOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	publication, found := outbox.Publication(candidate.ID)
+	if !found || publication.State != ArtifactPublicationRejected || publication.RejectionCode != "artifact_conflict" {
+		t.Fatalf("recovered rejected publication = %+v, found = %v", publication, found)
 	}
 }
 

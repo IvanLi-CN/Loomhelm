@@ -48,6 +48,7 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 	runStore := NewStore(db.Pool())
 	sessionID := fixture.sessionIDs[0]
 	ownerID := fixture.userID
+	baseModificationMillis := time.Now().Add(-time.Second).UnixMilli()
 	first, err := draftStore.Apply(ctx, drafts.UpdateInput{
 		SessionID:      sessionID,
 		OwnerUserID:    ownerID,
@@ -55,6 +56,10 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 		ClientID:       "desktop",
 		ClientSequence: 1,
 		Content:        "first input",
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: baseModificationMillis,
+			ClientID:       "desktop",
+		},
 	})
 	if err != nil {
 		t.Fatalf("seed first draft: %v", err)
@@ -120,6 +125,10 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 		ClientID:       "mobile",
 		ClientSequence: 1,
 		Content:        "newer input",
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: baseModificationMillis + 1,
+			ClientID:       "mobile",
+		},
 	})
 	if err != nil {
 		t.Fatalf("apply newer draft: %v", err)
@@ -153,6 +162,10 @@ func TestPersistentDraftCommandBindingFinalizesWithoutClobberingNewerInput(t *te
 		ClientID:       "desktop",
 		ClientSequence: 2,
 		Content:        "consume me",
+		ModificationOrder: &drafts.ModificationOrder{
+			PhysicalMillis: baseModificationMillis + 2,
+			ClientID:       "desktop",
+		},
 	})
 	if err != nil {
 		t.Fatalf("apply consumable draft: %v", err)

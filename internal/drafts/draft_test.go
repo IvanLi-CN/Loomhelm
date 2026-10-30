@@ -121,6 +121,15 @@ func TestModificationOrderUsesStableTieBreak(t *testing.T) {
 	}
 }
 
+func TestNextModificationOrderPreservesFuturePhysicalComponent(t *testing.T) {
+	now := time.UnixMilli(100)
+	current := ModificationOrder{PhysicalMillis: 200, LogicalCounter: 3, ClientID: "desktop"}
+	next := nextModificationOrder(current, now, "loomhelm")
+	if next.PhysicalMillis != current.PhysicalMillis || next.LogicalCounter != current.LogicalCounter+1 || next.ClientID != "loomhelm" {
+		t.Fatalf("next order = %+v, want physical %d and logical %d", next, current.PhysicalMillis, current.LogicalCounter+1)
+	}
+}
+
 func TestResolveModificationOrderRejectsLegacyFallbackAndFutureClock(t *testing.T) {
 	now := time.Date(2026, 10, 30, 8, 30, 0, 0, time.UTC)
 	input := UpdateInput{SessionID: "session-1", OwnerUserID: "user-1", MutationID: "mutation-1", ClientID: "desktop", ClientSequence: 1, Content: "draft"}

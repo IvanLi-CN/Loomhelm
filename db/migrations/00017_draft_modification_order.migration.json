@@ -3,7 +3,7 @@
   "kind": "persistent-state-migration-record",
   "migration": {
     "description": "Persist a hybrid logical-clock modification order and stable client tie-break for the private shared-draft projection and its mutation ledger.",
-    "release_unit_description": "Phase-one private shared-draft ordering follow-up; public REST and MCP field exposure remains owned by the application contract integration task.",
+    "release_unit_description": "Phase-one private shared-draft ordering follow-up with its public REST and MCP field exposure integrated.",
     "version_impact": "minor"
   },
   "compatibility_assessment": {
@@ -17,7 +17,7 @@
     "retention_policy": "The current projection retains its winning order. Mutation rows retain order metadata for the lifetime of the existing mutation ledger and do not retain draft bodies or content fingerprints.",
     "source_compatibility_range": {
       "from_program_versions": "Phase-one private shared-draft candidate after migration 00014.",
-      "to_program_version": "Phase-one private shared-draft candidate with durable modification ordering after migration 00016.",
+      "to_program_version": "Phase-one private shared-draft candidate with durable modification ordering after migration 00017.",
       "readable_earlier_state": true,
       "older_program_can_read_new_state": false,
       "direct_major_skips_supported": false,

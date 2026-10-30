@@ -352,7 +352,7 @@ func nextModificationOrder(current ModificationOrder, now time.Time, clientID st
 		return ModificationOrder{PhysicalMillis: physicalMillis, ClientID: clientID}
 	}
 	return ModificationOrder{
-		PhysicalMillis: physicalMillis,
+		PhysicalMillis: current.PhysicalMillis,
 		LogicalCounter: current.LogicalCounter + 1,
 		ClientID:       clientID,
 	}

@@ -1472,10 +1472,17 @@ func (a *Adapter) UploadPendingArtifacts(ctx context.Context, uploader ArtifactU
 			return err
 		}
 		if err := a.uploadPendingArtifact(ctx, publication, uploader); err != nil {
-			return err
+			return &ArtifactPublicationUploadError{ArtifactID: publication.Candidate.ID, Err: err}
 		}
 	}
 	return nil
+}
+
+func (a *Adapter) MarkArtifactRejected(id, code string) error {
+	if a == nil || a.artifacts == nil {
+		return ErrArtifactPublicationNotFound
+	}
+	return a.artifacts.MarkRejected(id, code)
 }
 
 func (a *Adapter) uploadPendingArtifact(ctx context.Context, publication ArtifactPublication, uploader ArtifactUploader) error {
