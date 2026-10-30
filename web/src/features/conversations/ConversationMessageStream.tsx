@@ -5,7 +5,7 @@ import type { EventType } from "@loomhelm/protocol";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { ArtifactMetadataLoader } from "@/features/artifacts/api";
+import type { ArtifactDownloader, ArtifactMetadataLoader } from "@/features/artifacts/api";
 import { ArtifactReference } from "@/features/artifacts/ArtifactReference";
 import { ConversationContentView } from "@/features/artifacts/ConversationContent";
 import type { ConversationContent } from "@/features/artifacts/content";
@@ -43,6 +43,7 @@ export interface ConversationMessageStreamProps {
   emptyMessage?: string;
   className?: string;
   loadArtifactMetadata?: ArtifactMetadataLoader;
+  downloadArtifact?: ArtifactDownloader;
 }
 
 function getMessageIcon(message: ConversationMessage) {
@@ -69,7 +70,7 @@ function getDeliveryLabel(delivery: MessageDeliveryState | undefined): string | 
   return null;
 }
 
-export function ConversationMessageStream({ messages, connection = "online", emptyMessage = "这段会话还没有已接收消息。", className, loadArtifactMetadata }: ConversationMessageStreamProps) {
+export function ConversationMessageStream({ messages, connection = "online", emptyMessage = "这段会话还没有已接收消息。", className, loadArtifactMetadata, downloadArtifact }: ConversationMessageStreamProps) {
   return (
     <section className={cn("grid min-w-0 gap-4 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-5 text-[var(--ink)] shadow-[var(--shadow)]", className)} aria-label="会话消息流" data-testid="conversation-message-stream">
       {connection !== "online" ? (
@@ -108,7 +109,7 @@ export function ConversationMessageStream({ messages, connection = "online", emp
                     {message.occurredAt ? <time className="ml-auto text-[10px] font-normal text-[var(--muted)]">{message.occurredAt}</time> : null}
                   </header>
                   {message.artifactId ? (
-                    loadArtifactMetadata ? <ArtifactReference artifactId={message.artifactId} loadMetadata={loadArtifactMetadata} /> : <div className="grid gap-1 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs text-[var(--muted)]" data-testid="artifact-reference-unavailable"><strong className="text-[var(--ink)]">已接收文件产物</strong><span>当前会话没有可用的授权 metadata 读取器；不会把 artifact 身份当作文件内容或下载地址。</span></div>
+                    loadArtifactMetadata ? <ArtifactReference artifactId={message.artifactId} download={downloadArtifact} loadMetadata={loadArtifactMetadata} /> : <div className="grid gap-1 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs text-[var(--muted)]" data-testid="artifact-reference-unavailable"><strong className="text-[var(--ink)]">已接收文件产物</strong><span>当前会话没有可用的授权 metadata 读取器；不会把 artifact 身份当作文件内容或下载地址。</span></div>
                   ) : message.richContent ? (
                     <ConversationContentView content={message.richContent} />
                   ) : (

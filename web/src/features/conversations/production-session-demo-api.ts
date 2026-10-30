@@ -89,6 +89,7 @@ let demoDraftRevision = 0;
 
 export interface ProductionSessionDemoApiOptions {
   artifacts?: Readonly<Record<string, Artifact>>;
+  downloadArtifact?: PublishedSessionApi["downloadArtifact"];
   events?: readonly Event[];
 }
 
@@ -119,9 +120,9 @@ export function createProductionSessionDemoApi(options: ProductionSessionDemoApi
       if (!artifact) throw new Error("Demo artifact lookup is intentionally unavailable.");
       return { artifact };
     },
-    downloadArtifact: async () => {
+    downloadArtifact: options.downloadArtifact ?? (async () => {
       throw new Error("Demo artifact download is intentionally unavailable.");
-    },
+    }),
     getSession: async () => ({ session }),
     interruptRun: async ({ body }) => acceptedAck(body.command_id),
     listSessionRuns: async ({ session_id }) => ({ has_more: false, items: [{ ...run, session_id }] }),

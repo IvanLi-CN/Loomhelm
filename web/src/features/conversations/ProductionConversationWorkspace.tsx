@@ -12,7 +12,7 @@ import type { TaskRecord } from "@/features/tasks/types";
 import { ApprovalRequestCard, type ApprovalRequestModel } from "../approvals/ApprovalRequestCard";
 import { ApprovalClientAdapter } from "../approvals/approval-client-adapter";
 import { ApprovalHistoryClientAdapter } from "../approvals/approval-history-adapter";
-import { createArtifactMetadataLoader } from "../artifacts/api";
+import { createArtifactDownloader, createArtifactMetadataLoader } from "../artifacts/api";
 import { ConversationComposer, ConversationMessageStream, type ConversationMessage } from "./ConversationMessageStream";
 import type { PublishedSessionApi } from "../sessions/api";
 import { DraftClientAdapter, type DraftReadReason } from "../sessions/draft-client-adapter";
@@ -643,6 +643,7 @@ export function ProductionConversationWorkspace({
     session: new SessionClientAdapter(api)
   } : undefined, [api, draftClientId, principalId]);
   const loadArtifactMetadata = useMemo(() => api ? createArtifactMetadataLoader(api) : undefined, [api]);
+  const downloadArtifact = useMemo(() => api ? createArtifactDownloader(api) : undefined, [api]);
   const runIntentKey = getRunIntentKey(principalId, sessionId);
   const storedRunIntent = useMemo(() => readRunIntent(runIntentKey), [runIntentKey]);
   const draftKey = getDraftKey(principalId, sessionId);
@@ -1842,7 +1843,7 @@ export function ProductionConversationWorkspace({
       {sessionRunHistoryLoading ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status" aria-live="polite" aria-busy="true"><LoaderCircle className="mt-0.5 size-4 shrink-0 animate-spin" aria-hidden="true" /><span>正在核对 Run 历史；核对完成前不会发送命令。</span></div> : null}
       {sessionMessageHistoryFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{sessionMessageHistoryFailure}</span></div> : null}
       {sessionRunHistory.length > 1 ? <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface)] p-3" aria-label="Run 历史选择"><label className="text-xs font-medium text-[var(--ink)]" htmlFor="production-run-history">Run 历史</label><Select value={selectedHistoryRunId} onValueChange={selectHistoricalRun}><SelectTrigger className="min-w-0 max-w-full" id="production-run-history" size="sm"><SelectValue placeholder="选择已授权 Run" /></SelectTrigger><SelectContent>{sessionRunHistory.map((historyRun) => <SelectItem key={historyRun.id} value={historyRun.id}><span className="font-mono text-xs">{historyRun.id}</span><span className="text-xs text-[var(--muted)]">· {historyRun.created_at}</span></SelectItem>)}</SelectContent></Select><span className="text-[11px] leading-5 text-[var(--muted)]">每台设备独立选择；切换后会重新核对事件和审批。</span></div> : null}
-      <ConversationMessageStream connection={connection} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" loadArtifactMetadata={loadArtifactMetadata} messages={messages} />
+      <ConversationMessageStream connection={connection} downloadArtifact={downloadArtifact} emptyMessage="当前没有已接收消息或事件；首条提示和控制命令不会以乐观消息显示。" loadArtifactMetadata={loadArtifactMetadata} messages={messages} />
       {activeRun ? <RunStatusCard key={activeRun.id} canControl={Boolean(api) && runIdentityVerified && !sessionReadUncertain && !sessionAccessBlocked && !sessionRunHistoryBlocked && !runReadUncertain && !approvalReadUncertain && !approvalHistoryBlocked && !uncertainRunCommandId && activeRun.status !== "unknown" && effectiveCommandState !== "unknown" && !controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`) && sessionForRoute.state === "active"} commandState={effectiveCommandState} connection={connection} interruptCommandId={createCommandIdForRun(activeRun.id, approvalCommandIds.current, principalId, sessionForRoute.id)} onInterrupt={interrupt} onReconcile={reconcileInterrupt} readOnly={effectiveReadOnly} recoveryRequired={controlIntentIsUncertain(principalId, sessionForRoute.id, `interrupt:${activeRun.id}`)} run={activeRun} session={sessionForRoute} /> : null}
       {activeApprovals.map((approval) => {
         const approvalContext = approvalContextFromApproval(approval);

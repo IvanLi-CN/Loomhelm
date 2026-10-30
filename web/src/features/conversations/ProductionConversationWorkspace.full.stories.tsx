@@ -142,7 +142,14 @@ const contentEvents: readonly Event[] = [
 ];
 
 function ProductionContentWorkspaceStory() {
-  const api = useMemo(() => createProductionSessionDemoApi({ artifacts: { [contentArtifact.id]: contentArtifact }, events: contentEvents }), []);
+  const api = useMemo(() => createProductionSessionDemoApi({
+    artifacts: { [contentArtifact.id]: contentArtifact },
+    downloadArtifact: async () => new Response(new Blob(["# Summary\n\nDownloaded from the authorized artifact endpoint.\n"], { type: "text/markdown" }), {
+      headers: { "Content-Disposition": 'attachment; filename="summary.md"' },
+      status: 200
+    }),
+    events: contentEvents
+  }), []);
   return (
     <EvidenceFrame>
       <ProductionConversationWorkspace
