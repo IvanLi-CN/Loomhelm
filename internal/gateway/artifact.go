@@ -29,6 +29,32 @@ var (
 	ErrArtifactUploadIdentityMismatch = errors.New("artifact upload acknowledgement identity mismatch")
 )
 
+// ArtifactUploadError preserves the stable server rejection code so callers
+// can distinguish a temporary artifact-store absence from a connection or
+// protocol failure without parsing transport text.
+type ArtifactUploadError struct {
+	Code string
+}
+
+func (e *ArtifactUploadError) Error() string {
+	if e == nil {
+		return ErrArtifactUploadRejected.Error()
+	}
+	return fmt.Sprintf("%s: %s", ErrArtifactUploadRejected, e.Code)
+}
+
+func (e *ArtifactUploadError) Unwrap() error {
+	return ErrArtifactUploadRejected
+}
+
+func ArtifactUploadErrorCode(err error) (string, bool) {
+	var typed *ArtifactUploadError
+	if !errors.As(err, &typed) || typed == nil || typed.Code == "" {
+		return "", false
+	}
+	return typed.Code, true
+}
+
 // ArtifactUploadRequest is the gateway-local wire publication request. The
 // authenticated gateway connection is the only transport boundary; callers
 // retain ownership of Content and must close it when their own contract
@@ -191,7 +217,7 @@ func (c *ClientConnection) SendArtifact(ctx context.Context, request ArtifactUpl
 			return response.err
 		}
 		if response.message.Error != nil {
-			return fmt.Errorf("%w: %s", ErrArtifactUploadRejected, response.message.Error.Code)
+			return &ArtifactUploadError{Code: response.message.Error.Code}
 		}
 		if response.message.Artifact == nil || !sameArtifactUploadMetadata(request.Artifact, *response.message.Artifact) {
 			return ErrArtifactUploadIdentityMismatch

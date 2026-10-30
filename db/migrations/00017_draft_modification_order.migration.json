@@ -13,11 +13,11 @@
   },
   "durable_state": {
     "description": "conversation_drafts and conversation_draft_mutations store modification_physical_ms, modification_logical_counter, and modification_client_id as one comparable hybrid logical-clock value with a stable tie-break.",
-    "storage_implementation": "PostgreSQL state managed by embedded Goose migration 00016. Existing rows remain zero-ordered; server receive time is used only as a compatibility fallback for the first legacy update. Subsequent updates require an explicit order, and consume mutations receive a server-generated order greater than the current projection.",
+    "storage_implementation": "PostgreSQL state managed by embedded Goose migration 00017. Existing rows remain zero-ordered; server receive time is used only as a compatibility fallback for the first legacy update. Subsequent updates require an explicit order, and consume mutations receive a server-generated order greater than the current projection.",
     "retention_policy": "The current projection retains its winning order. Mutation rows retain order metadata for the lifetime of the existing mutation ledger and do not retain draft bodies or content fingerprints.",
     "source_compatibility_range": {
       "from_program_versions": "Phase-one private shared-draft candidate after migration 00014.",
-      "to_program_version": "Phase-one private shared-draft candidate with durable modification ordering after migration 00015.",
+      "to_program_version": "Phase-one private shared-draft candidate with durable modification ordering after migration 00016.",
       "readable_earlier_state": true,
       "older_program_can_read_new_state": false,
       "direct_major_skips_supported": false,
@@ -28,14 +28,14 @@
     "applicable": true,
     "ddl_structural_changes": [
       {
-        "id": "ddl-00016-draft-order-columns",
+        "id": "ddl-00017-draft-order-columns",
         "description": "Add three non-null order columns with zero defaults to the draft projection and mutation ledger without rewriting the logical state; the migration uses a five-second transaction-local lock timeout.",
         "order": 1,
         "observable": true,
         "pauseable": false
       },
       {
-        "id": "ddl-00016-draft-order-checks",
+        "id": "ddl-00017-draft-order-checks",
         "description": "Add NOT VALID checks that permit only the explicit legacy zero order or a positive physical time, non-negative logical counter, and non-empty client tie-break; PostgreSQL avoids an unbounded existing-row validation scan while constraining new and updated rows.",
         "order": 2,
         "observable": true,
@@ -48,8 +48,8 @@
   "rollout_observability": {
     "operations_must_remain_separate": false,
     "operation_sequence": [
-      "ddl-00016-draft-order-columns",
-      "ddl-00016-draft-order-checks"
+      "ddl-00017-draft-order-columns",
+      "ddl-00017-draft-order-checks"
     ],
     "progress_signals": [
       "Legacy rows show an all-zero order and are not presented as having a recovered physical modification time.",
@@ -58,7 +58,7 @@
       "Mutation IDs remain private to the owner session and duplicate or stale mutation handling remains transactional."
     ],
     "pause_points": [
-      "Before applying 00016, verify the candidate source identity, PostgreSQL migration lock availability, and that the short DDL lock window is free of long-running draft readers or writers; the five-second transaction-local lock_timeout fails the migration fast when the lock cannot be acquired.",
+      "Before applying 00017, verify the candidate source identity, PostgreSQL migration lock availability, and that the short DDL lock window is free of long-running draft readers or writers; the five-second transaction-local lock_timeout fails the migration fast when the lock cannot be acquired.",
       "Before enabling public ordered draft writes, drain and fence older writers that do not persist the order columns. Do not claim that an HLC is the true physical last-edit time when device clocks are skewed or edits were made concurrently offline.",
       "The E01 default future-clock bound is five minutes beyond server receive time. A client beyond that bound is rejected until its clock is corrected; this bound limits pathological future winners but cannot correct a clock that is merely wrong within the bound."
     ]

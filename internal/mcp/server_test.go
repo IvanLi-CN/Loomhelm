@@ -233,7 +233,7 @@ func TestServerSessionRunAndDraftToolsDelegateContractRoutes(t *testing.T) {
 	}{
 		{name: "list session runs", arguments: map[string]any{"session_id": "session-1", "after_cursor": "opaque", "limit": 17}, method: http.MethodGet, path: "/sessions/session-1/runs?after_cursor=opaque&limit=17"},
 		{name: "get draft", arguments: map[string]any{"session_id": "session-1"}, method: http.MethodGet, path: "/sessions/session-1/draft"},
-		{name: "update draft", arguments: map[string]any{"session_id": "session-1", "mutation_id": "mutation-1", "client_id": "client-1", "client_sequence": 1, "content": "hello"}, method: http.MethodPut, path: "/sessions/session-1/draft"},
+		{name: "update draft", arguments: map[string]any{"session_id": "session-1", "mutation_id": "mutation-1", "client_id": "client-1", "client_sequence": 1, "content": "hello", "modification_order": map[string]any{"physical_millis": int64(1730253600000), "logical_counter": int64(0), "client_id": "client-1"}}, method: http.MethodPut, path: "/sessions/session-1/draft"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			response := callMCP(t, server, map[string]any{
@@ -259,7 +259,8 @@ func TestServerSessionRunAndDraftToolsDelegateContractRoutes(t *testing.T) {
 			if got.method != test.method || got.path != test.path {
 				t.Fatalf("delegated request = %s %s, want %s %s", got.method, got.path, test.method, test.path)
 			}
-			if test.method == http.MethodPut && (got.body["mutation_id"] != "mutation-1" || got.body["client_id"] != "client-1" || got.body["client_sequence"] != float64(1) || got.body["content"] != "hello") {
+			order, _ := got.body["modification_order"].(map[string]any)
+			if test.method == http.MethodPut && (got.body["mutation_id"] != "mutation-1" || got.body["client_id"] != "client-1" || got.body["client_sequence"] != float64(1) || got.body["content"] != "hello" || order["client_id"] != "client-1") {
 				t.Fatalf("delegated draft body = %#v", got.body)
 			}
 		})
@@ -1109,7 +1110,7 @@ func TestServerReportsMalformedDraftMutationSuccessAsUnknown(t *testing.T) {
 			"name": "loomhelm.update_draft",
 			"arguments": map[string]any{
 				"session_id": "session-1", "mutation_id": "mutation-1", "client_id": "client-1",
-				"client_sequence": 1, "content": "hello",
+				"client_sequence": 1, "content": "hello", "modification_order": map[string]any{"physical_millis": int64(1730253600000), "logical_counter": int64(0), "client_id": "client-1"},
 			},
 		},
 	})

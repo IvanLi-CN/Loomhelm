@@ -1,5 +1,5 @@
 import { ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
-import type { Draft } from "@loomhelm/protocol";
+import type { Draft, ModificationOrder } from "@loomhelm/protocol";
 
 import { SessionRequestFence, type SessionRequestToken } from "./session-client-adapter";
 
@@ -37,7 +37,8 @@ function errorReason(error: unknown): DraftReadReason {
 function validDraft(value: unknown, sessionId: string): value is Draft {
   if (!value || typeof value !== "object") return false;
   const draft = value as Partial<Draft>;
-  return draft.session_id === sessionId && typeof draft.content === "string" && typeof draft.revision === "number" && Number.isInteger(draft.revision) && draft.revision >= 0 && typeof draft.updated_at === "string";
+  const order = draft.modification_order;
+  return draft.session_id === sessionId && typeof draft.content === "string" && typeof draft.revision === "number" && Number.isInteger(draft.revision) && draft.revision >= 0 && !!order && Number.isInteger(order.physical_millis) && order.physical_millis >= 0 && Number.isInteger(order.logical_counter) && order.logical_counter >= 0 && typeof order.client_id === "string" && typeof draft.updated_at === "string";
 }
 
 export class DraftClientAdapter {
@@ -45,6 +46,7 @@ export class DraftClientAdapter {
   private readonly pendingReads = new Map<string, { key: symbol; promise: Promise<DraftReadResult> }>();
   private readonly pendingUpdates = new Map<string, { key: symbol; promise: Promise<DraftReadResult> }>();
   private readonly sequences = new Map<string, number>();
+  private readonly modificationOrders = new Map<string, ModificationOrder>();
 
   constructor(private readonly client: DraftClient, private readonly options: DraftClientAdapterOptions) {}
 
@@ -112,6 +114,7 @@ export class DraftClientAdapter {
     }
 
     const clientSequence = this.nextSequence(sessionId);
+    const modificationOrder = this.nextModificationOrder(sessionId);
     const requestKey = Symbol(sessionId);
     const pendingUpdate = (async (): Promise<DraftReadResult> => {
       try {
@@ -121,6 +124,7 @@ export class DraftClientAdapter {
             client_id: this.options.clientId,
             client_sequence: clientSequence,
             content,
+            modification_order: modificationOrder,
             mutation_id: (this.options.createMutationId ?? mutationId)()
           }
         }));
@@ -153,10 +157,35 @@ export class DraftClientAdapter {
   }
 
   private rememberSequence(sessionId: string, draft: Draft): void {
+    this.rememberModificationOrder(sessionId, draft);
     if (draft.client_id !== this.options.clientId || typeof draft.client_sequence !== "number" || !Number.isInteger(draft.client_sequence) || draft.client_sequence < 0) return;
     const current = this.sequences.get(sessionId) ?? this.options.readSequence?.(sessionId) ?? 0;
     if (draft.client_sequence <= current) return;
     this.sequences.set(sessionId, draft.client_sequence);
     this.options.writeSequence?.(sessionId, draft.client_sequence);
   }
+
+  private nextModificationOrder(sessionId: string): ModificationOrder {
+    const current = this.modificationOrders.get(sessionId);
+    const physicalMillis = Date.now();
+    const next = !current || physicalMillis > current.physical_millis
+      ? { physical_millis: physicalMillis, logical_counter: 0, client_id: this.options.clientId }
+      : { physical_millis: current.physical_millis, logical_counter: current.logical_counter + 1, client_id: this.options.clientId };
+    this.modificationOrders.set(sessionId, next);
+    return next;
+  }
+
+  private rememberModificationOrder(sessionId: string, draft: Draft): void {
+    const order = draft.modification_order;
+    if (!Number.isInteger(order.physical_millis) || order.physical_millis < 0 || !Number.isInteger(order.logical_counter) || order.logical_counter < 0 || typeof order.client_id !== "string") return;
+    const current = this.modificationOrders.get(sessionId);
+    if (!current || compareModificationOrder(order, current) > 0) this.modificationOrders.set(sessionId, order);
+  }
+}
+
+function compareModificationOrder(left: ModificationOrder, right: ModificationOrder): number {
+  if (left.physical_millis !== right.physical_millis) return left.physical_millis < right.physical_millis ? -1 : 1;
+  if (left.logical_counter !== right.logical_counter) return left.logical_counter < right.logical_counter ? -1 : 1;
+  if (left.client_id === right.client_id) return 0;
+  return left.client_id < right.client_id ? -1 : 1;
 }

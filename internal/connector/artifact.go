@@ -899,6 +899,14 @@ func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.E
 		provenance := "codex.fileChange.full_content"
 		switch kind.Name {
 		case "add", "delete":
+			if reader == nil {
+				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "workspace_unconfigured"))
+				continue
+			}
+			if err := reader.ValidatePath(readPath); err != nil {
+				gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, artifactGapReason(err)))
+				continue
+			}
 			content = []byte(change.Diff)
 		case "update":
 			if reader == nil {

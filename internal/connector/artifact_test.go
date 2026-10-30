@@ -91,6 +91,23 @@ func TestArtifactCandidatesFromCodexFileChange(t *testing.T) {
 	}
 }
 
+func TestArtifactCandidatesRequireReaderAuthorizationForAdd(t *testing.T) {
+	event := testFileChangeEvent("source-event-unauthorized")
+	event.Payload = json.RawMessage(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item-1","type":"fileChange","changes":[{"path":"other.txt","kind":{"type":"add"},"diff":"new file bytes\n"}]}}}`)
+	candidates, gaps, err := artifactCandidatesFromEventWithReader(context.Background(), event, EventObservation{
+		AdapterSessionID:  "adapter-session-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "turn-1",
+	}, fixedArtifactReader{content: []byte("new file bytes\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 || len(gaps) != 1 || gaps[0].Reason != "path_outside_authorized_workspace" {
+		t.Fatalf("unauthorized add capture = candidates %+v, gaps %+v", candidates, gaps)
+	}
+}
+
 func TestArtifactOutboxPersistsDeduplicatesAndMarksUploaded(t *testing.T) {
 	candidate := testArtifactCandidate(t)
 	directory := privateTestDir(t)
@@ -218,7 +235,7 @@ func TestUploadArtifactForEventUsesMappedIdentityAndRetries(t *testing.T) {
 	if _, delivered, err := journal.AppendObservedEventWithRecord(source, observation); err != nil || !delivered {
 		t.Fatalf("source event delivered = %v, error = %v", delivered, err)
 	}
-	candidates, err := artifactCandidatesFromEvent(source, observation)
+	candidates, _, err := artifactCandidatesFromEventWithReader(context.Background(), source, observation, fixedArtifactReader{content: []byte("new file bytes\n")})
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("artifact candidates = %+v, error = %v", candidates, err)
 	}
@@ -301,7 +318,7 @@ func TestUploadPendingArtifactsPublishesSuccessOnlyAfterDurableUpload(t *testing
 	if _, _, err := journal.AppendObservedEventWithRecord(source, observation); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := artifactCandidatesFromEvent(source, observation)
+	candidates, _, err := artifactCandidatesFromEventWithReader(context.Background(), source, observation, fixedArtifactReader{content: []byte("new file bytes\n")})
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("artifact candidates = %+v, error = %v", candidates, err)
 	}
@@ -413,7 +430,7 @@ func TestUploadPendingArtifactsSerializesDuplicateCallers(t *testing.T) {
 	if _, _, err := journal.AppendObservedEventWithRecord(source, observation); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := artifactCandidatesFromEvent(source, observation)
+	candidates, _, err := artifactCandidatesFromEventWithReader(context.Background(), source, observation, fixedArtifactReader{content: []byte("new file bytes\n")})
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("artifact candidates = %+v, error = %v", candidates, err)
 	}
@@ -543,12 +560,12 @@ func (p *artifactUploadProbe) UploadArtifact(_ context.Context, request Artifact
 
 func testArtifactCandidate(t *testing.T) ArtifactCandidate {
 	t.Helper()
-	candidates, err := artifactCandidatesFromEvent(testFileChangeEvent("source-event-1"), EventObservation{
+	candidates, _, err := artifactCandidatesFromEventWithReader(context.Background(), testFileChangeEvent("source-event-1"), EventObservation{
 		AdapterSessionID:  "adapter-session-1",
 		ExternalThreadRef: "thread-1",
 		Generation:        "generation-1",
 		NativeTurnID:      "turn-1",
-	})
+	}, fixedArtifactReader{content: []byte("new file bytes\n")})
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("test artifact candidates = %+v, error = %v", candidates, err)
 	}

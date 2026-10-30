@@ -1,5 +1,5 @@
 import type { PublishedSessionApi } from "../sessions/api";
-import type { Approval, Artifact, Event, Run, Session } from "@loomhelm/protocol";
+import type { Approval, Artifact, Event, ModificationOrder, Run, Session } from "@loomhelm/protocol";
 
 const session: Session = {
   created_at: "2026-10-29 13:42",
@@ -86,6 +86,7 @@ const acceptedAck = (commandId: string, runId = run.id) => ({
 
 let demoDraftContent = "";
 let demoDraftRevision = 0;
+let demoDraftOrder: ModificationOrder = { client_id: "", logical_counter: 0, physical_millis: 0 };
 
 export interface ProductionSessionDemoApiOptions {
   artifacts?: Readonly<Record<string, Artifact>>;
@@ -114,7 +115,7 @@ export function createProductionSessionDemoApi(options: ProductionSessionDemoApi
         task_id: body.task_id
       }
     }),
-    getDraft: async ({ session_id }) => ({ draft: { content: demoDraftContent, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } }),
+    getDraft: async ({ session_id }) => ({ draft: { content: demoDraftContent, modification_order: demoDraftOrder, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } }),
     getArtifact: async ({ artifact_id }) => {
       const artifact = demoArtifacts[artifact_id];
       if (!artifact) throw new Error("Demo artifact lookup is intentionally unavailable.");
@@ -136,8 +137,9 @@ export function createProductionSessionDemoApi(options: ProductionSessionDemoApi
     submitRun: async ({ body }) => acceptedAck(body.command_id),
     updateDraft: async ({ body, session_id }) => {
       demoDraftContent = body.content;
+      demoDraftOrder = body.modification_order;
       demoDraftRevision += 1;
-      return { draft: { client_id: body.client_id, client_sequence: body.client_sequence, content: demoDraftContent, mutation_id: body.mutation_id, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } };
+      return { draft: { client_id: body.client_id, client_sequence: body.client_sequence, content: demoDraftContent, modification_order: demoDraftOrder, mutation_id: body.mutation_id, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } };
     }
   };
 }

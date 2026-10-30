@@ -9,6 +9,8 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 )
 
+const connectorArtifactUnavailableRetry = time.Second
+
 // uploadPendingArtifacts keeps the current authenticated WSS connection as
 // the only Connector-to-server artifact boundary. Identity-pending entries
 // remain durable and are retried after the Session/Run mapping catches up;
@@ -28,6 +30,12 @@ func (c *Connector) uploadPendingArtifacts(ctx context.Context, connection *gate
 		}
 		err = c.adapter.UploadPendingArtifacts(ctx, uploader)
 		if err != nil && !errors.Is(err, connectorruntime.ErrArtifactIdentityPending) {
+			if code, ok := gateway.ArtifactUploadErrorCode(err); ok && (code == "artifact_handler_unavailable" || code == "artifact_unavailable") {
+				if err := waitArtifactRetry(ctx, connectorArtifactUnavailableRetry); err != nil {
+					return err
+				}
+				continue
+			}
 			return err
 		}
 		timer := time.NewTimer(connectorEventPollInterval)
@@ -37,5 +45,16 @@ func (c *Connector) uploadPendingArtifacts(ctx context.Context, connection *gate
 			timer.Stop()
 			return ctx.Err()
 		}
+	}
+}
+
+func waitArtifactRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

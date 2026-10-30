@@ -14,6 +14,7 @@ function deferred() {
 function draft(overrides = {}) {
   return {
     content: "shared draft",
+    modification_order: { client_id: "", logical_counter: 0, physical_millis: 0 },
     revision: 1,
     session_id: "session-1",
     updated_at: "2026-10-27T00:00:00Z",
@@ -29,7 +30,7 @@ describe("draft client adapter", () => {
       getDraft: async (request) => ({ draft: draft({ session_id: request.session_id, content: "from server", revision: 4, client_id: "client-1", client_sequence: 7 }) }),
       updateDraft: async (request) => {
         calls.push(request);
-        return { draft: draft({ session_id: request.session_id, content: request.body.content, revision: 8, client_id: request.body.client_id, client_sequence: request.body.client_sequence }) };
+        return { draft: draft({ session_id: request.session_id, content: request.body.content, revision: 8, client_id: request.body.client_id, client_sequence: request.body.client_sequence, modification_order: request.body.modification_order }) };
       },
     }, { clientId: "client-1", writeSequence: (_sessionId, sequence) => sequences.push(sequence), createMutationId: () => "mutation-1" });
 
@@ -38,7 +39,7 @@ describe("draft client adapter", () => {
     await expect(adapter.updateDraft("session-1", "new text")).resolves.toMatchObject({ state: "received", draft: { content: "new text" } });
     expect(calls).toEqual([{
       session_id: "session-1",
-      body: { client_id: "client-1", client_sequence: 8, content: "new text", mutation_id: "mutation-1" },
+      body: { client_id: "client-1", client_sequence: 8, content: "new text", modification_order: expect.objectContaining({ client_id: "client-1", logical_counter: 0 }), mutation_id: "mutation-1" },
     }]);
     expect(sequences).toEqual([7, 8]);
   });
