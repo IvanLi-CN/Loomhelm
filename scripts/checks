@@ -65,12 +65,13 @@ check_quality() {
 		--repo-root . --allow-unchecked-branch-protection
 	run_command "Markdown and dprint" python3 tools/markdown.py check
 	run_command "shell and Python syntax" check_syntax
+	run_command "V01 acceptance ledger tests" python3 scripts/v01_acceptance_test.py
 	run_command "deployment configuration" check_deployment
 	finish_check
 }
 
 check_syntax() {
-	for script in scripts/build-candidate scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
+	for script in scripts/accept-v01 scripts/build-candidate scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
 		sh -n "$script"
 	done
 	python3 - <<'PY'
@@ -81,6 +82,8 @@ for path in (
     Path("deploy/preview/control.py"),
     Path("deploy/preview/control_test.py"),
     Path("scripts/check-react-doctor"),
+	Path("scripts/v01_acceptance.py"),
+	Path("scripts/v01_acceptance_test.py"),
 ):
     ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 PY
