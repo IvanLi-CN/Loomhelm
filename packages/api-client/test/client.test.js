@@ -71,6 +71,21 @@ describe("generated binary artifact transport", () => {
     }]);
   });
 
+  test("forwards the cancellation signal to fetch", async () => {
+    const controller = new AbortController();
+    const signals = [];
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async (_url, init) => {
+        signals.push(init.signal);
+        return new Response(new Uint8Array([1]), { status: 200 });
+      },
+    });
+
+    await client.downloadArtifact({ artifact_id: "artifact-cancel" }, { signal: controller.signal });
+    expect(signals).toEqual([controller.signal]);
+  });
+
   test("accepts a partial range response without consuming its bytes", async () => {
     const calls = [];
     const client = new LoomhelmApiClient({

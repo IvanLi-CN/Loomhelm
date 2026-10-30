@@ -603,10 +603,14 @@ func (g generator) apiClientTypeScript() string {
 				responseType = "Protocol." + operation.ResponseType
 			}
 		}
+		requestInit := ""
+		if binaryResponse {
+			requestInit = `, requestInit?: Pick<RequestInit, "signal">`
+		}
 		if requestOptional {
-			fmt.Fprintf(&out, "  async %s(request: %s = {}): Promise<%s> {\n", operation.OperationID, paramsType, responseType)
+			fmt.Fprintf(&out, "  async %s(request: %s = {}%s): Promise<%s> {\n", operation.OperationID, paramsType, requestInit, responseType)
 		} else {
-			fmt.Fprintf(&out, "  async %s(request: %s): Promise<%s> {\n", operation.OperationID, paramsType, responseType)
+			fmt.Fprintf(&out, "  async %s(request: %s%s): Promise<%s> {\n", operation.OperationID, paramsType, requestInit, responseType)
 		}
 		pathExpression := g.tsPathExpression(operation)
 		fmt.Fprintf(&out, "    const path = %s;\n", pathExpression)
@@ -636,9 +640,9 @@ func (g generator) apiClientTypeScript() string {
 			}
 			if binaryResponse {
 				if len(operation.RequestHeaders) > 0 {
-					fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true, requestHeaders);\n", responseType, operation.Method, body, expectedStatus)
+					fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true, requestHeaders, requestInit);\n", responseType, operation.Method, body, expectedStatus)
 				} else {
-					fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true);\n", responseType, operation.Method, body, expectedStatus)
+					fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true, undefined, requestInit);\n", responseType, operation.Method, body, expectedStatus)
 				}
 			} else if len(operation.RequestHeaders) > 0 {
 				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, false, requestHeaders);\n", responseType, operation.Method, body, expectedStatus)
@@ -660,7 +664,7 @@ func (g generator) apiClientTypeScript() string {
 		}
 		out.WriteString("  }\n\n")
 	}
-	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number | readonly number[], binary = false, requestHeaders?: HeadersInit): Promise<T> {
+	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number | readonly number[], binary = false, requestHeaders?: HeadersInit, requestInit?: Pick<RequestInit, "signal">): Promise<T> {
     const baseUrl = this.options.baseUrl ?? (typeof location === "undefined" ? "http://localhost" : location.origin);
     const url = new URL(path, baseUrl);
     const fetcher = this.options.fetch ?? globalThis.fetch;
@@ -671,7 +675,7 @@ func (g generator) apiClientTypeScript() string {
       additionalHeaders.forEach((value, key) => headers.set(key, value));
     }
     headers.set("Accept", binary ? "application/octet-stream" : "application/json");
-    const init: RequestInit = { method, headers };
+    const init: RequestInit = { method, headers, ...requestInit };
     if (body !== undefined) {
       headers.set("Content-Type", "application/json");
       init.body = JSON.stringify(body);

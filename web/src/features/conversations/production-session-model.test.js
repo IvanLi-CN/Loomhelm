@@ -168,8 +168,14 @@ describe("production session model", () => {
     expect(eventToConversationMessage(event({ event_id: "tool", payload: {}, type: "item.completed" }))).toMatchObject({ kind: "tool", content: "已接收事件：item.completed" });
     expect(eventToConversationMessage(event({ event_id: "known-item", payload: { params: { item: { command: "printf ok", type: "commandExecution" } } }, type: "item.completed" }))).toMatchObject({ detail: expect.stringContaining('"command": "printf ok"'), kind: "tool" });
     expect(eventToConversationMessage(event({ event_id: "agent-completed", payload: { params: { item: { id: "item-agent", text: "final answer", type: "agentMessage" } } }, type: "item.completed" }))).toMatchObject({ content: "final answer", id: "session-1:run-1:item:item-agent", kind: "message", role: "assistant" });
+    expect(eventToConversationMessage(event({ event_id: "tool-output", payload: { method: "item/commandExecution/outputDelta", params: { delta: "stdout" } }, type: "message.delta" }))).toMatchObject({ kind: "tool", richContent: { kind: "tool", summary: "stdout" } });
+    expect(eventToConversationMessage(event({ event_id: "code-completed", payload: { params: { item: { code: "package main", path: "/workspace/main.go", type: "code" } } }, type: "item.completed" }))).toMatchObject({ kind: "tool", richContent: { filename: "/workspace/main.go", kind: "code" } });
     expect(eventToConversationMessage(event({ event_id: "unknown", payload: {}, type: "unknown" }))).toMatchObject({ kind: "unknown", content: "已接收事件：unknown" });
     expect(eventToConversationMessage(event({ event_id: "unknown-item", payload: { params: { item: { type: "futureContent", value: "preserve-me" } } }, type: "item.completed" }))).toMatchObject({ kind: "unknown" });
+  });
+
+  test("projects artifact events into metadata references without inventing file content", () => {
+    expect(eventToConversationMessage(event({ event_id: "artifact-created", payload: { artifact_id: "artifact-1" }, source: "artifact", type: "artifact.created" }))).toMatchObject({ artifactId: "artifact-1", content: "已接收文件产物。", kind: "artifact" });
   });
 
   test("renders a structured userMessage item as a user message", () => {
@@ -188,6 +194,10 @@ describe("production session model", () => {
 
     const unknownItem = eventToConversationMessage(event({ event_id: "unknown-item-raw", payload: { params: { item: { type: "futureContent", value: "preserve-me" } } }, type: "item.completed" }));
     expect(unknownItem.detail).toContain('"value": "preserve-me"');
+
+    const secret = eventToConversationMessage(event({ event_id: "unknown-secret", payload: { Authorization: "Bearer secret-token" }, type: "unknown" }));
+    expect(secret.detail).toContain("[已隐藏]");
+    expect(secret.detail).not.toContain("secret-token");
   });
 
   test("reconciles streamed agent text with the authoritative completed item", () => {

@@ -31,6 +31,6 @@ export function createPublishedSessionApi(client: GeneratedApiClient = createGen
     interruptRun: (request) => client.interruptRun(request),
     listRunEvents: (request) => client.listRunEvents(request),
     getArtifact: (request) => client.getArtifact(request),
-    downloadArtifact: (request) => client.downloadArtifact(request)
+    downloadArtifact: (request, requestInit) => client.downloadArtifact(request, requestInit)
   };
 }

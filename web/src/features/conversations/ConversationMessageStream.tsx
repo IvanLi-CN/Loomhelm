@@ -1,10 +1,14 @@
-import { CheckCircle2, CircleHelp, CloudOff, FileCode2, LoaderCircle, MessageCircle, Send, UserRound, Wrench } from "lucide-react";
+import { CheckCircle2, CircleHelp, CloudOff, FileArchive, FileCode2, LoaderCircle, MessageCircle, Send, UserRound, Wrench } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 
 import type { EventType } from "@loomhelm/protocol";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import type { ArtifactDownloader, ArtifactMetadataLoader } from "@/features/artifacts/api";
+import { ArtifactReference } from "@/features/artifacts/ArtifactReference";
+import { ConversationContentView } from "@/features/artifacts/ConversationContent";
+import type { ConversationContent } from "@/features/artifacts/content";
 import { cn } from "@/lib/utils";
 
 import {
@@ -14,7 +18,7 @@ import {
 } from "@/features/sessions/session-model";
 
 export type ConversationMessageRole = "user" | "assistant" | "system";
-export type ConversationMessageKind = "message" | "tool" | "unknown";
+export type ConversationMessageKind = "message" | "tool" | "unknown" | "artifact";
 export type MessageDeliveryState = "sending" | "received";
 
 export interface ConversationMessage {
@@ -30,15 +34,20 @@ export interface ConversationMessage {
   kind?: ConversationMessageKind;
   occurredAt?: string;
   deltaParts?: readonly { content: string; sequence: number }[];
+  richContent?: ConversationContent;
+  artifactId?: string;
 }
 export interface ConversationMessageStreamProps {
   messages: readonly ConversationMessage[];
   connection?: ConnectionAvailability;
   emptyMessage?: string;
   className?: string;
+  loadArtifactMetadata?: ArtifactMetadataLoader;
+  downloadArtifact?: ArtifactDownloader;
 }
 
 function getMessageIcon(message: ConversationMessage) {
+  if (message.kind === "artifact") return <FileArchive className="size-4" aria-hidden="true" />;
   if (message.kind === "tool") return <Wrench className="size-4" aria-hidden="true" />;
   if (message.kind === "unknown") return <CircleHelp className="size-4" aria-hidden="true" />;
   if (message.role === "user") return <UserRound className="size-4" aria-hidden="true" />;
@@ -47,6 +56,7 @@ function getMessageIcon(message: ConversationMessage) {
 }
 
 function getMessageKindLabel(message: ConversationMessage): string {
+  if (message.kind === "artifact") return "文件产物";
   if (message.kind === "tool") return "工具事件";
   if (message.kind === "unknown") return "unknown";
   if (message.role === "user") return "你";
@@ -60,7 +70,7 @@ function getDeliveryLabel(delivery: MessageDeliveryState | undefined): string | 
   return null;
 }
 
-export function ConversationMessageStream({ messages, connection = "online", emptyMessage = "这段会话还没有已接收消息。", className }: ConversationMessageStreamProps) {
+export function ConversationMessageStream({ messages, connection = "online", emptyMessage = "这段会话还没有已接收消息。", className, loadArtifactMetadata, downloadArtifact }: ConversationMessageStreamProps) {
   return (
     <section className={cn("grid min-w-0 gap-4 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-5 text-[var(--ink)] shadow-[var(--shadow)]", className)} aria-label="会话消息流" data-testid="conversation-message-stream">
       {connection !== "online" ? (
@@ -98,9 +108,15 @@ export function ConversationMessageStream({ messages, connection = "online", emp
                     ) : null}
                     {message.occurredAt ? <time className="ml-auto text-[10px] font-normal text-[var(--muted)]">{message.occurredAt}</time> : null}
                   </header>
-                  <p className={cn("wrap-anywhere whitespace-pre-wrap text-[13px] leading-7", isUnknown ? "text-[var(--muted)]" : "text-[var(--ink)]")}>{message.content}</p>
+                  {message.artifactId ? (
+                    loadArtifactMetadata ? <ArtifactReference artifactId={message.artifactId} download={downloadArtifact} loadMetadata={loadArtifactMetadata} /> : <div className="grid gap-1 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs text-[var(--muted)]" data-testid="artifact-reference-unavailable"><strong className="text-[var(--ink)]">已接收文件产物</strong><span>当前会话没有可用的授权 metadata 读取器；不会把 artifact 身份当作文件内容或下载地址。</span></div>
+                  ) : message.richContent ? (
+                    <ConversationContentView content={message.richContent} />
+                  ) : (
+                    <p className={cn("wrap-anywhere whitespace-pre-wrap text-[13px] leading-7", isUnknown ? "text-[var(--muted)]" : "text-[var(--ink)]")}>{message.content}</p>
+                  )}
                   {message.eventType ? <code className="w-fit max-w-full wrap-anywhere rounded-[var(--radius-sm)] bg-[var(--surface-soft)] px-2 py-1 text-[10px] text-[var(--muted)]">{message.eventType}</code> : null}
-                  {message.detail ? <details className="border-t border-[var(--line)] pt-2 text-xs leading-6 text-[var(--muted)]"><summary className="cursor-pointer">{isUnknown ? "查看原始事件" : "查看过程"}</summary><p className="mt-2 whitespace-pre-wrap">{message.detail}</p></details> : null}
+                  {message.detail && !message.richContent && !message.artifactId ? <details className="border-t border-[var(--line)] pt-2 text-xs leading-6 text-[var(--muted)]"><summary className="cursor-pointer">{isUnknown ? "查看原始事件" : "查看过程"}</summary><p className="mt-2 whitespace-pre-wrap">{message.detail}</p></details> : null}
                   {isUnknown ? <p className="text-[11px] leading-5 text-[var(--muted)]">该内容保留为 unknown，不推断为成功或失败。</p> : null}
                 </article>
               </li>
