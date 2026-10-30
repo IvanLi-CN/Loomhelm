@@ -105,7 +105,19 @@ scripts/accept-v01 reuse \
   --evidence-dir /workspace/evidence/loomhelm-v01/acceptance \
   --check-id AC-LH-009 \
   --status reused \
-  --evidence /workspace/evidence/loomhelm-v01/acceptance/attempts/attempt-0002.stdout.log \
+  --evidence "$(python3 - /workspace/evidence/loomhelm-v01/acceptance/ledger.json /workspace/evidence/loomhelm-v01/acceptance <<'PY'
+import json
+import pathlib
+import sys
+
+ledger_path = pathlib.Path(sys.argv[1])
+evidence_dir = pathlib.Path(sys.argv[2])
+attempts = json.loads(ledger_path.read_text(encoding="utf-8"))["checks"]["AC-LH-008"]["attempts"]
+if not attempts or attempts[-1].get("name") != "authorized-artifact-download" or attempts[-1].get("status") != "passed":
+    raise SystemExit("AC-LH-008 artifact attempt is missing or not passed")
+print(evidence_dir / attempts[-1]["stdout_log"])
+PY
+)" \
   --evidence-source-sha "$source_sha" \
   --evidence-candidate-digest "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$candidate_dir/candidate-manifest.json")" \
   --reason 'Reuses a source-bound artifact test log only for assertions directly covered by that test; it does not prove the full base/unknown/sub-agent matrix.'
