@@ -335,6 +335,21 @@ describe("production session model", () => {
     expect(context.rawContext).toContain('"write": true');
   });
 
+  test("preserves non-object approval context as inspectable raw JSON", () => {
+    const context = approvalContextFromApproval({
+      context: [{ type: "text", text: "opaque request" }],
+      id: "approval-array-context",
+      kind: "shell",
+      requested_at: "2026-10-27T00:00:00Z",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Inspect the opaque request"
+    });
+    expect(context).toMatchObject({ command: "Inspect the opaque request", complete: false });
+    expect(context.rawContext).toContain('"opaque request"');
+  });
+
   test("maps session lifecycle states to control connection availability", () => {
     expect(connectionFromSessionState("active")).toBe("online");
     expect(connectionFromSessionState("reconciling")).toBe("reconnecting");

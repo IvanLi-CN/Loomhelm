@@ -101,6 +101,24 @@ export const ExplicitDecision: Story = {
   }
 };
 
+export const NonObjectContext: Story = {
+  render: () => (
+    <EvidenceFrame>
+      <ApprovalRequestCard
+        request={{
+          ...request,
+          context: {
+            ...request.context,
+            command: request.approval.summary,
+            complete: false,
+            rawContext: '[{"type":"text","text":"opaque request"}]'
+          }
+        }}
+      />
+    </EvidenceFrame>
+  )
+};
+
 export const DuplicateDecisionGuard: Story = {
   render: () => (
     <EvidenceFrame>

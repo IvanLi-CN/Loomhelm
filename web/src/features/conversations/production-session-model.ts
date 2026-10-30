@@ -349,6 +349,7 @@ export interface ApprovalContextFields {
 
 export function approvalContextFromApproval(approval: Approval): ApprovalContextFields {
   const context = asRecord(approval.context);
+  const serializedContext = approval.context === undefined ? undefined : JSON.stringify(approval.context, null, 2);
   const command = firstString(context, ["command", "cmd", "command_line"]);
   const directory = firstString(context, ["directory", "cwd", "workdir", "grantRoot", "path"]);
   const isFileChange = approval.kind === "file_change";
@@ -365,7 +366,7 @@ export function approvalContextFromApproval(approval: Approval): ApprovalContext
     command: command ?? approval.summary,
     directory,
     impact,
-    ...(hasUnknownFields ? { rawContext: JSON.stringify(context, null, 2) } : {}),
+    ...(serializedContext && (!context || hasUnknownFields) ? { rawContext: serializedContext } : {}),
     ...(explicitScope ? { scope: explicitScope } : {})
   };
 }
