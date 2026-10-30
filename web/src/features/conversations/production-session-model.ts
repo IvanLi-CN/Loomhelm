@@ -319,8 +319,9 @@ export function approvalContextFromApproval(approval: Approval): ApprovalContext
   const impact = firstString(context, ["impact", "risk", "description", "reason"]);
   const knownKeys = new Set(["command", "cmd", "command_line", "directory", "cwd", "workdir", "grantRoot", "path", "scope", "impact", "risk", "description", "reason"]);
   const hasUnknownFields = context ? Object.keys(context).some((key) => !knownKeys.has(key)) : false;
-  const commandContextComplete = Boolean(command && directory);
-  const fileChangeContextComplete = approval.kind === "file_change" && Boolean((directory || scope) && impact);
+  const isFileChange = approval.kind === "file_change";
+  const commandContextComplete = !isFileChange && Boolean(command && directory);
+  const fileChangeContextComplete = isFileChange && Boolean((directory || scope) && impact);
   return {
     complete: Boolean(context && (commandContextComplete || fileChangeContextComplete)),
     command: command ?? approval.summary,

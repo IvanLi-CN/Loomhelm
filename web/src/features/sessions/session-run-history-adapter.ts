@@ -30,6 +30,12 @@ function accessFailureReason(error: unknown): "forbidden" | "not_found" | "trans
   return "transport";
 }
 
+function isCursorExpiredError(error: unknown): boolean {
+  if (!(error instanceof ApiClientError)) return false;
+  const body = error.body && typeof error.body === "object" ? error.body as { code?: unknown } : undefined;
+  return body?.code === "cursor_expired";
+}
+
 export class SessionRunHistoryClientAdapter {
   private readonly requests = new SessionRequestFence();
   private readonly pendingReads = new Map<string, { key: symbol; promise: Promise<SessionRunHistoryReadResult> }>();
@@ -99,6 +105,12 @@ export class SessionRunHistoryClientAdapter {
         return { state: "unknown", reason: "invalid_response", request: admission.token };
       } catch (error) {
         if (!this.requests.isCurrent(admission.token)) return { state: "unknown", reason: "stale_response", request: admission.token };
+        if (!forceRefresh && isCursorExpiredError(error)) {
+          this.cachedHistory.delete(sessionId);
+          this.requests.finish(admission.token);
+          if (this.pendingReads.get(sessionId)?.key === requestKey) this.pendingReads.delete(sessionId);
+          return this.readRuns(sessionId, { forceRefresh: true });
+        }
         this.requests.finish(admission.token);
         return { state: "unknown", reason: accessFailureReason(error), request: admission.token };
       } finally {

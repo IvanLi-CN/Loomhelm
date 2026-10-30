@@ -281,6 +281,17 @@ describe("production session model", () => {
       status: "pending",
       summary: "Review file changes"
     })).toMatchObject({ complete: true, command: "Review file changes", impact: "A file change is ready for review", scope: "workspace" });
+
+    expect(approvalContextFromApproval({
+      context: { command: "apply changes", cwd: "/workspace/loomhelm" },
+      id: "approval-6",
+      kind: "file_change",
+      requested_at: "2026-10-27T00:00:00Z",
+      revision: 1,
+      run_id: "run-1",
+      status: "pending",
+      summary: "Review file changes"
+    })).toMatchObject({ complete: false });
   });
 
   test("preserves unknown approval context instead of hiding fields", () => {

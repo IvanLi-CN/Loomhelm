@@ -118,6 +118,26 @@ describe("session run history adapter", () => {
     await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ state: "unknown", reason: "invalid_response" });
   });
 
+  test("refreshes from the first page after an expired resume cursor", async () => {
+    const calls = [];
+    const adapter = new SessionRunHistoryClientAdapter({
+      listSessionRuns: async (request) => {
+        calls.push(request);
+        if (calls.length === 1) return { has_more: true, items: [run("run-1")], next_cursor: "cursor-1" };
+        if (calls.length === 2) throw new ApiClientError(409, { code: "cursor_expired" });
+        return { has_more: false, items: [run("run-2")] };
+      },
+    });
+
+    adapter.selectSession("session-1");
+    await expect(adapter.readRuns("session-1")).resolves.toMatchObject({ state: "received", runs: [{ id: "run-2" }] });
+    expect(calls).toEqual([
+      { session_id: "session-1", limit: 200 },
+      { session_id: "session-1", after_cursor: "cursor-1", limit: 200 },
+      { session_id: "session-1", limit: 200 },
+    ]);
+  });
+
   test("preserves forbidden and missing-session failures", async () => {
     for (const [status, reason] of [[403, "forbidden"], [404, "not_found"]]) {
       const adapter = new SessionRunHistoryClientAdapter({
