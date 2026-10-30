@@ -1,8 +1,6 @@
 -- +goose NO TRANSACTION
 
 -- +goose Up
-SET lock_timeout = '5s';
-
 DROP INDEX CONCURRENTLY IF EXISTS conversation_artifacts_content_mismatch_idx;
 
 CREATE INDEX CONCURRENTLY conversation_artifacts_content_mismatch_idx
