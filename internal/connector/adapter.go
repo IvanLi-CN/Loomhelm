@@ -51,10 +51,11 @@ type adapterSessionState struct {
 // already-approved protocol.Command kinds and persists every side effect
 // boundary through Journal before contacting app-server.
 type Adapter struct {
-	provider  TransportProvider
-	journal   *Journal
-	config    AdapterConfig
-	artifacts *ArtifactOutbox
+	provider         TransportProvider
+	journal          *Journal
+	config           AdapterConfig
+	artifacts        *ArtifactOutbox
+	artifactUploadMu sync.Mutex
 
 	mu                   sync.Mutex
 	recoveryMu           sync.Mutex
@@ -1441,9 +1442,64 @@ func (a *Adapter) captureArtifactCandidates(state *adapterSessionState, event pr
 		if _, _, err := a.artifacts.Ensure(candidate); err != nil {
 			return fmt.Errorf("persist artifact publication %q: %w", candidate.ID, err)
 		}
-		if _, _, err := a.journal.AppendObservedEventWithRecord(artifactEvent(candidate), candidate.Observation); err != nil {
-			return fmt.Errorf("persist artifact.created event %q: %w", candidate.EventID, err)
+	}
+	return nil
+}
+
+// UploadPendingArtifacts is the Connector-side publication/recovery loop.
+// The source event must already have an exact platform SessionID/RunID
+// mapping. Original bytes are sent before artifact.created is materialized;
+// a failed or ambiguous upload therefore cannot publish a success event.
+// One adapter serializes this loop so duplicate callers cannot concurrently
+// send the same immutable publication.
+func (a *Adapter) UploadPendingArtifacts(ctx context.Context, uploader ArtifactUploader) error {
+	if a == nil || a.artifacts == nil {
+		return nil
+	}
+	if a.journal == nil {
+		return ErrArtifactIdentityPending
+	}
+	if ctx == nil {
+		return errors.New("artifact upload context must not be nil")
+	}
+	if uploader == nil {
+		return ErrArtifactUploaderRequired
+	}
+	a.artifactUploadMu.Lock()
+	defer a.artifactUploadMu.Unlock()
+	for _, publication := range a.artifacts.Pending() {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+		if err := a.uploadPendingArtifact(ctx, publication, uploader); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *Adapter) uploadPendingArtifact(ctx context.Context, publication ArtifactPublication, uploader ArtifactUploader) error {
+	observedSource, observed := a.journal.observedEventObservation(publication.Candidate.SourceEventID)
+	if !observed || observedSource != publication.Candidate.Observation {
+		return ErrArtifactIdentityPending
+	}
+	mappedSource, ok := a.journal.MappedEvent(publication.Candidate.SourceEventID)
+	if !ok || mappedSource.SessionID == "" || mappedSource.RunID == nil || strings.TrimSpace(*mappedSource.RunID) == "" {
+		return ErrArtifactIdentityPending
+	}
+	if err := a.uploadArtifactPublication(ctx, publication, mappedSource.SessionID, mappedSource.RunID, uploader); err != nil {
+		return err
+	}
+	artifactEvent := artifactEvent(publication.Candidate)
+	_, delivered, err := a.journal.AppendObservedEventWithRecord(artifactEvent, publication.Candidate.Observation)
+	if err != nil {
+		return fmt.Errorf("persist artifact.created event %q: %w", publication.Candidate.EventID, err)
+	}
+	if !delivered {
+		return ErrArtifactIdentityPending
+	}
+	if err := a.artifacts.MarkUploaded(publication.Candidate.ID); err != nil {
+		return fmt.Errorf("record uploaded artifact %q: %w", publication.Candidate.ID, err)
 	}
 	return nil
 }
@@ -1499,8 +1555,13 @@ func (a *Adapter) ReplayPendingArtifactEvents() error {
 		return nil
 	}
 	for _, publication := range a.artifacts.Publications() {
-		if _, _, err := a.journal.AppendObservedEventWithRecord(artifactEvent(publication.Candidate), publication.Candidate.Observation); err != nil {
+		if publication.State != ArtifactPublicationUploaded {
+			continue
+		}
+		if _, delivered, err := a.journal.AppendObservedEventWithRecord(artifactEvent(publication.Candidate), publication.Candidate.Observation); err != nil {
 			return fmt.Errorf("replay artifact.created event %q: %w", publication.Candidate.EventID, err)
+		} else if !delivered {
+			return ErrArtifactIdentityPending
 		}
 	}
 	return nil
@@ -1524,6 +1585,8 @@ func (a *Adapter) UploadArtifactForEvent(ctx context.Context, event protocol.Eve
 	if event.SessionID == "" || event.RunID == nil || strings.TrimSpace(*event.RunID) == "" {
 		return ErrArtifactIdentityPending
 	}
+	a.artifactUploadMu.Lock()
+	defer a.artifactUploadMu.Unlock()
 	publication, ok := a.artifacts.PublicationForEvent(event.EventID)
 	if !ok {
 		return ErrArtifactPublicationNotFound
@@ -1546,19 +1609,40 @@ func (a *Adapter) UploadArtifactForEvent(ctx context.Context, event protocol.Eve
 	if publication.State == ArtifactPublicationUploaded {
 		return nil
 	}
+	if err := a.uploadArtifactPublication(ctx, publication, event.SessionID, event.RunID, uploader); err != nil {
+		return err
+	}
+	if err := a.artifacts.MarkUploaded(publication.Candidate.ID); err != nil {
+		return fmt.Errorf("record uploaded artifact %q: %w", artifact.ID, err)
+	}
+	return nil
+}
+
+func (a *Adapter) uploadArtifactPublication(ctx context.Context, publication ArtifactPublication, sessionID string, runID *string, uploader ArtifactUploader) error {
+	if runID == nil || strings.TrimSpace(*runID) == "" {
+		return ErrArtifactIdentityPending
+	}
+	artifact := protocol.Artifact{
+		ID:          publication.Candidate.ID,
+		SessionID:   sessionID,
+		RunID:       stringPointer(*runID),
+		Name:        publication.Candidate.Name,
+		Kind:        publication.Candidate.Kind,
+		Size:        publication.Candidate.Size,
+		Sha256:      publication.Candidate.Sha256,
+		ContentType: publication.Candidate.ContentType,
+		CreatedAt:   publication.Candidate.CreatedAt,
+	}
 	content := publication.ContentReader()
 	defer content.Close()
 	if err := uploader.UploadArtifact(ctx, ArtifactUploadRequest{
 		Artifact:       artifact,
-		EventID:        event.EventID,
+		EventID:        publication.Candidate.EventID,
 		SourceEventID:  publication.Candidate.SourceEventID,
 		IdempotencyKey: publication.Candidate.ID,
 		Content:        content,
 	}); err != nil {
 		return fmt.Errorf("upload artifact %q: %w", artifact.ID, err)
-	}
-	if err := a.artifacts.MarkUploaded(publication.Candidate.ID); err != nil {
-		return fmt.Errorf("record uploaded artifact %q: %w", artifact.ID, err)
 	}
 	return nil
 }

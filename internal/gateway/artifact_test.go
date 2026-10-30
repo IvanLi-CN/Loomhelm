@@ -137,4 +137,20 @@ func TestGatewayArtifactUploadReassemblesAndPreservesIdempotency(t *testing.T) {
 		t.Fatalf("handler received bad hash upload: %d", len(received))
 	}
 	mu.Unlock()
+
+	tooLarge := artifact
+	tooLarge.ID = "artifact_upload_too_large"
+	tooLarge.Size = maxGatewayArtifactBytes + 1
+	tooLargeRequest := request
+	tooLargeRequest.Artifact = tooLarge
+	tooLargeRequest.IdempotencyKey = tooLarge.ID
+	tooLargeRequest.Content = bytes.NewReader(nil)
+	if err := connection.SendArtifact(context.Background(), tooLargeRequest); err == nil {
+		t.Fatal("oversized artifact upload unexpectedly succeeded")
+	}
+	mu.Lock()
+	if len(received) != 3 {
+		t.Fatalf("handler received client-rejected oversized upload: %d", len(received))
+	}
+	mu.Unlock()
 }

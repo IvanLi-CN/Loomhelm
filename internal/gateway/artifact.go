@@ -180,6 +180,7 @@ func (c *ClientConnection) SendArtifact(ctx context.Context, request ArtifactUpl
 		return fmt.Errorf("read artifact upload terminator: %w", readErr)
 	}
 	if err := c.write(ctx, Message{Type: MessageArtifactCommit, RequestID: requestID, Generation: c.generation}); err != nil {
+		abort()
 		removePending()
 		return fmt.Errorf("send artifact upload commit: %w", err)
 	}
@@ -197,6 +198,7 @@ func (c *ClientConnection) SendArtifact(ctx context.Context, request ArtifactUpl
 		}
 		return nil
 	case <-ctx.Done():
+		abort()
 		removePending()
 		return fmt.Errorf("%w: %v", ErrArtifactUploadUnknown, ctx.Err())
 	}

@@ -11,8 +11,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
 
@@ -269,11 +272,259 @@ func TestUploadArtifactForEventUsesMappedIdentityAndRetries(t *testing.T) {
 	}
 }
 
+func TestUploadPendingArtifactsPublishesSuccessOnlyAfterDurableUpload(t *testing.T) {
+	directory := privateTestDir(t)
+	journal, err := OpenJournal(filepath.Join(directory, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	outboxPath := filepath.Join(directory, "artifacts.jsonl")
+	outbox, err := OpenArtifactOutbox(outboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := EventObservation{
+		AdapterSessionID:  "adapter-session-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "turn-1",
+	}
+	alias := SessionAlias{PlatformSessionID: "platform-session-1", AdapterSessionID: observation.AdapterSessionID, ExternalThreadRef: observation.ExternalThreadRef, Generation: observation.Generation, CommandID: "session-command-1"}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordRunBinding(RunBinding{PlatformSessionID: alias.PlatformSessionID, PlatformRunID: "platform-run-1", CommandID: "run-command-1", AdapterSessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef, Generation: alias.Generation, NativeTurnID: observation.NativeTurnID, State: IdentityStateBound}); err != nil {
+		t.Fatal(err)
+	}
+	source := testFileChangeEvent("source-event-pending")
+	if _, _, err := journal.AppendObservedEventWithRecord(source, observation); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := artifactCandidatesFromEvent(source, observation)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("artifact candidates = %+v, error = %v", candidates, err)
+	}
+	candidate := candidates[0]
+	if _, _, err := outbox.Ensure(candidate); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &Adapter{journal: journal, artifacts: outbox}
+	uploader := &artifactUploadProbe{fail: true}
+	if err := adapter.UploadPendingArtifacts(context.Background(), uploader); err == nil {
+		t.Fatal("failed artifact upload unexpectedly succeeded")
+	}
+	if publication, _ := outbox.Publication(candidate.ID); publication.State != ArtifactPublicationPending {
+		t.Fatalf("failed upload changed publication state: %+v", publication)
+	}
+	if _, mapped := journal.MappedEvent(candidate.EventID); mapped {
+		t.Fatal("failed artifact upload published artifact.created")
+	}
+
+	if err := outbox.Close(); err != nil {
+		t.Fatal(err)
+	}
+	outbox, err = OpenArtifactOutbox(outboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	adapter.artifacts = outbox
+	uploader.fail = false
+	if err := adapter.UploadPendingArtifacts(context.Background(), uploader); err != nil {
+		t.Fatal(err)
+	}
+	publication, found := outbox.Publication(candidate.ID)
+	if !found || publication.State != ArtifactPublicationUploaded {
+		t.Fatalf("successful publication = %+v, found = %v", publication, found)
+	}
+	mapped, mappedOK := journal.MappedEvent(candidate.EventID)
+	if !mappedOK || mapped.SessionID != "platform-session-1" || valueOrEmpty(mapped.RunID) != "platform-run-1" {
+		t.Fatalf("published artifact event = %+v, found = %v", mapped, mappedOK)
+	}
+	if uploader.calls != 2 {
+		t.Fatalf("upload calls after restart = %d, want 2", uploader.calls)
+	}
+	request := uploader.requests[1]
+	if request.Artifact.SessionID != "platform-session-1" || valueOrEmpty(request.Artifact.RunID) != "platform-run-1" {
+		t.Fatalf("uploaded artifact identity = %+v", request.Artifact)
+	}
+	if !bytes.Equal(uploader.contents[1], candidate.Content) {
+		t.Fatalf("uploaded artifact content = %q, want %q", uploader.contents[1], candidate.Content)
+	}
+	if err := adapter.UploadPendingArtifacts(context.Background(), uploader); err != nil {
+		t.Fatal(err)
+	}
+	if uploader.calls != 2 {
+		t.Fatalf("uploaded artifact was sent again after durable success: %d calls", uploader.calls)
+	}
+}
+
+func TestUploadPendingArtifactsRequiresExactSourceMapping(t *testing.T) {
+	directory := privateTestDir(t)
+	journal, err := OpenJournal(filepath.Join(directory, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	outbox, err := OpenArtifactOutbox(filepath.Join(directory, "artifacts.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	candidate := testArtifactCandidate(t)
+	if _, _, err := journal.AppendObservedEventWithRecord(testFileChangeEvent(candidate.SourceEventID), candidate.Observation); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := outbox.Ensure(candidate); err != nil {
+		t.Fatal(err)
+	}
+	uploader := &artifactUploadProbe{}
+	adapter := &Adapter{journal: journal, artifacts: outbox}
+	if err := adapter.UploadPendingArtifacts(context.Background(), uploader); !errors.Is(err, ErrArtifactIdentityPending) {
+		t.Fatalf("unmapped source upload error = %v", err)
+	}
+	if uploader.calls != 0 {
+		t.Fatalf("unmapped source invoked uploader %d times", uploader.calls)
+	}
+}
+
+func TestUploadPendingArtifactsSerializesDuplicateCallers(t *testing.T) {
+	directory := privateTestDir(t)
+	journal, err := OpenJournal(filepath.Join(directory, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	outbox, err := OpenArtifactOutbox(filepath.Join(directory, "artifacts.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	alias := SessionAlias{PlatformSessionID: "platform-session-1", AdapterSessionID: "adapter-session-1", ExternalThreadRef: "thread-1", Generation: "generation-1", CommandID: "session-command-1"}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordRunBinding(RunBinding{PlatformSessionID: alias.PlatformSessionID, PlatformRunID: "platform-run-1", CommandID: "run-command-1", AdapterSessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef, Generation: alias.Generation, NativeTurnID: "turn-1", State: IdentityStateBound}); err != nil {
+		t.Fatal(err)
+	}
+	observation := EventObservation{AdapterSessionID: alias.AdapterSessionID, ExternalThreadRef: alias.ExternalThreadRef, Generation: alias.Generation, NativeTurnID: "turn-1"}
+	source := testFileChangeEvent("source-event-serial")
+	if _, _, err := journal.AppendObservedEventWithRecord(source, observation); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := artifactCandidatesFromEvent(source, observation)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("artifact candidates = %+v, error = %v", candidates, err)
+	}
+	if _, _, err := outbox.Ensure(candidates[0]); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &Adapter{journal: journal, artifacts: outbox}
+	uploader := &blockingArtifactUploader{entered: make(chan struct{}), secondCall: make(chan struct{}, 1), release: make(chan struct{})}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- adapter.UploadPendingArtifacts(context.Background(), uploader) }()
+	select {
+	case <-uploader.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first artifact upload did not start")
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- adapter.UploadPendingArtifacts(context.Background(), uploader) }()
+	select {
+	case <-uploader.secondCall:
+		t.Fatal("duplicate artifact upload entered uploader concurrently")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(uploader.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	if uploader.calls != 1 {
+		t.Fatalf("serialized uploader calls = %d, want 1", uploader.calls)
+	}
+}
+
+func TestGatewayArtifactUploaderUsesTheAuthenticatedLink(t *testing.T) {
+	link := &artifactLinkProbe{}
+	uploader, err := NewGatewayArtifactUploader(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "platform-run-1"
+	request := ArtifactUploadRequest{
+		Artifact: protocol.Artifact{
+			ID:          "artifact-link-1",
+			SessionID:   "platform-session-1",
+			RunID:       &runID,
+			Name:        "source.bin",
+			Kind:        protocol.ArtifactKindFile,
+			Size:        5,
+			Sha256:      "",
+			ContentType: "application/octet-stream",
+			CreatedAt:   "2026-10-30T01:02:03Z",
+		},
+		EventID:        "artifact-event-link-1",
+		SourceEventID:  "source-event-link-1",
+		IdempotencyKey: "artifact-link-1",
+		Content:        io.NopCloser(bytes.NewReader([]byte("bytes"))),
+	}
+	if err := uploader.UploadArtifact(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if link.request.IdempotencyKey != request.IdempotencyKey || link.request.EventID != request.EventID || !bytes.Equal(link.content, []byte("bytes")) {
+		t.Fatalf("forwarded gateway request = %+v, content = %q", link.request, link.content)
+	}
+}
+
 type artifactUploadProbe struct {
 	fail     bool
 	calls    int
 	requests []ArtifactUploadRequest
 	contents [][]byte
+}
+
+type blockingArtifactUploader struct {
+	mu         sync.Mutex
+	calls      int
+	entered    chan struct{}
+	secondCall chan struct{}
+	release    chan struct{}
+}
+
+type artifactLinkProbe struct {
+	request gateway.ArtifactUploadRequest
+	content []byte
+}
+
+func (p *artifactLinkProbe) SendArtifact(_ context.Context, request gateway.ArtifactUploadRequest) error {
+	p.request = request
+	var err error
+	p.content, err = io.ReadAll(request.Content)
+	return err
+}
+
+func (u *blockingArtifactUploader) UploadArtifact(_ context.Context, request ArtifactUploadRequest) error {
+	if _, err := io.ReadAll(request.Content); err != nil {
+		return err
+	}
+	u.mu.Lock()
+	u.calls++
+	call := u.calls
+	u.mu.Unlock()
+	if call == 1 {
+		close(u.entered)
+		<-u.release
+	} else {
+		select {
+		case u.secondCall <- struct{}{}:
+		default:
+		}
+	}
+	return nil
 }
 
 func (p *artifactUploadProbe) UploadArtifact(_ context.Context, request ArtifactUploadRequest) error {
