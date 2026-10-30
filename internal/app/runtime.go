@@ -233,7 +233,11 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			return nil, fmt.Errorf("initialize run control: %w", controlErr)
 		}
 		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, hostRegistry, transport, control)
-		runtime.api = services.handler(control)
+		runtime.api, err = services.handler(control)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize application handler: %w", err)
+		}
 		runtime.mcpHandler, err = newMCPHandler(runtime.api, cfg.Version)
 		if err != nil {
 			db.Close()

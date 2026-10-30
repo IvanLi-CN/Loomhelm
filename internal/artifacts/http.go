@@ -295,10 +295,14 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		return
 	}
 	defer reader.Close()
+	if err := validateDownloadRange(request, artifact.Size); err != nil {
+		h.writeRangeError(writer, request, artifact.Size, err)
+		return
+	}
 	var staged *os.File
 	if request.Method == http.MethodGet {
 		var releaseStaging func()
-		staged, releaseStaging, err = h.stageDownload(request.Context(), reader, artifact.Size)
+		staged, releaseStaging, err = h.stageDownload(request.Context(), reader, artifact)
 		if err != nil {
 			if request.Context().Err() != nil {
 				return
@@ -364,11 +368,12 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	_ = responseController.Flush()
 }
 
-func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadSeeker, size int64) (*os.File, func(), error) {
+func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadSeeker, artifact protocol.Artifact) (*os.File, func(), error) {
 	h.retryPendingStagingCleanup()
 	if h.cleanupBlocked() {
 		return nil, nil, ErrStoreUnavailable
 	}
+	size := artifact.Size
 	if size < 0 {
 		return nil, nil, ErrSizeMismatch
 	}
@@ -441,6 +446,11 @@ func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadS
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, nil, err
+	}
+	if artifact.Sha256 != "" {
+		if err := verifyFile(ctx, stagingFile, artifact); err != nil {
+			return nil, nil, err
+		}
 	}
 	if _, err := stagingFile.Seek(0, io.SeekStart); err != nil {
 		return nil, nil, fmt.Errorf("rewind artifact download staging file: %w", ErrStoreUnavailable)
@@ -520,9 +530,9 @@ func (h *DownloadHTTPHandler) retryPendingStagingCleanup() {
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
 // MCP callers. The content store repeats authorization, ready-state, regular
 // file and exact-size checks for every request; content_version binds later
-// cursors to the same file incarnation. The first chunk is fully hashed
-// before any response bytes are emitted; later chunks rely on the verified
-// content version and the first response's verification.
+// cursors to the same file incarnation. Every response chunk is fully hashed
+// before any response bytes are emitted, so a same-size rewrite cannot leak
+// bytes even when filesystem metadata is restored.
 func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, request *http.Request) {
 	if h == nil || h.store == nil {
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
@@ -581,7 +591,6 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content snapshot is unavailable")
 		return
 	}
-	contentVerified := false
 	if offset == 0 {
 		if verifier, ok := reader.(contentVerifier); ok {
 			if err := verifier.verifyContent(request.Context(), artifact); err != nil {
@@ -591,7 +600,6 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 				h.writeStoreError(writer, request, err, "artifact content verification failed")
 				return
 			}
-			contentVerified = true
 		}
 	}
 	remaining := artifact.Size - offset
@@ -635,15 +643,13 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content snapshot is unavailable")
 		return
 	}
-	if nextOffset == artifact.Size && !contentVerified {
-		if verifier, ok := reader.(contentVerifier); ok {
-			if err := verifier.verifyContent(request.Context(), artifact); err != nil {
-				if request.Context().Err() != nil {
-					return
-				}
-				h.writeStoreError(writer, request, err, "artifact content verification failed")
+	if verifier, ok := reader.(contentVerifier); ok {
+		if err := verifier.verifyContent(request.Context(), artifact); err != nil {
+			if request.Context().Err() != nil {
 				return
 			}
+			h.writeStoreError(writer, request, err, "artifact content verification failed")
+			return
 		}
 	}
 	releaseResponseSlot, responseSlotErr := h.acquireDownloadResponseSlot(request.Context())
@@ -711,6 +717,50 @@ func (h *DownloadHTTPHandler) writeStoreError(writer http.ResponseWriter, reques
 	h.writeError(writer, request, downloadStatus(err), err, message)
 }
 
+func (h *DownloadHTTPHandler) writeRangeError(writer http.ResponseWriter, request *http.Request, size int64, err error) {
+	writer.Header().Set("Accept-Ranges", "bytes")
+	writer.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
+	h.writeError(writer, request, http.StatusRequestedRangeNotSatisfiable, err, "artifact range is not satisfiable")
+}
+
+func validateDownloadRange(request *http.Request, size int64) error {
+	values := request.Header.Values("Range")
+	if len(values) == 0 || (len(values) == 1 && strings.TrimSpace(values[0]) == "") {
+		return nil
+	}
+	if len(values) != 1 {
+		return ErrRangeNotSatisfiable
+	}
+	rangeValue := strings.TrimSpace(values[0])
+	if !strings.HasPrefix(rangeValue, "bytes=") || strings.Contains(rangeValue, ",") {
+		return ErrRangeNotSatisfiable
+	}
+	specification := strings.TrimSpace(strings.TrimPrefix(rangeValue, "bytes="))
+	parts := strings.Split(specification, "-")
+	if len(parts) != 2 || specification == "-" || size < 0 {
+		return ErrRangeNotSatisfiable
+	}
+	if parts[0] == "" {
+		suffix, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || suffix <= 0 || size == 0 {
+			return ErrRangeNotSatisfiable
+		}
+		return nil
+	}
+	start, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || start < 0 || start >= size {
+		return ErrRangeNotSatisfiable
+	}
+	if parts[1] == "" {
+		return nil
+	}
+	end, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || end < start {
+		return ErrRangeNotSatisfiable
+	}
+	return nil
+}
+
 func contentChunkQuery(request *http.Request) (int64, int64, string, error) {
 	query := request.URL.Query()
 	offset := int64(0)
@@ -744,6 +794,8 @@ func downloadStatus(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, ErrTooLarge):
 		return http.StatusRequestEntityTooLarge
+	case errors.Is(err, ErrRangeNotSatisfiable):
+		return http.StatusRequestedRangeNotSatisfiable
 	case errors.Is(err, ErrRecoveryPending), errors.Is(err, ErrRecoveryIncomplete):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrUnauthorized), errors.Is(err, ErrUnavailable),

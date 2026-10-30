@@ -48,7 +48,11 @@ func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool
 	if err != nil {
 		return nil, err
 	}
-	return services.handler(control), nil
+	handler, err := services.handler(control)
+	if err != nil {
+		return nil, err
+	}
+	return handler, nil
 }
 
 func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig) (*applicationServices, error) {
@@ -80,7 +84,7 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 	}, nil
 }
 
-func (s *applicationServices) handler(control runControlApplication) http.Handler {
+func (s *applicationServices) handler(control runControlApplication) (http.Handler, error) {
 	router := chi.NewRouter()
 	s.identity.Mount(router)
 	s.identity.MountAPI(router)
@@ -94,10 +98,12 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	var download http.Handler = http.HandlerFunc(unavailableArtifactDownload)
 	var contentDownload http.Handler = http.HandlerFunc(unavailableArtifactDownload)
 	if s.artifactStore != nil {
-		if handler, err := artifacts.NewDownloadHTTPHandler(s.artifactStore, writeArtifactDownloadError); err == nil {
-			download = handler
-			contentDownload = http.HandlerFunc(handler.ServeContentHTTP)
+		handler, err := artifacts.NewDownloadHTTPHandler(s.artifactStore, writeArtifactDownloadError)
+		if err != nil {
+			return nil, fmt.Errorf("initialize artifact download handler: %w", err)
 		}
+		download = handler
+		contentDownload = http.HandlerFunc(handler.ServeContentHTTP)
 	}
 	protectedDownload := s.artifactDownloadHandler(download)
 	router.Get("/artifacts/{artifact_id}/download", protectedDownload)
@@ -136,7 +142,7 @@ func (s *applicationServices) handler(control runControlApplication) http.Handle
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		protected.ServeHTTP(writer, request)
-	})
+	}), nil
 }
 
 func (s *applicationServices) artifactDownloadHandler(download http.Handler) http.HandlerFunc {

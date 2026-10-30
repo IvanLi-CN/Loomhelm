@@ -949,8 +949,8 @@
         "response_type": "ArtifactDownload",
         "response_status": 200,
         "response_statuses": [200, 206],
-        "response_headers": {"Content-Range": "Present for partial responses and uses the bytes start-end/total syntax."},
-        "summary": "Download the authorized original artifact bytes. Pass range as the HTTP Range header for a partial transfer; 206 responses include Content-Range."
+        "response_headers": {"Content-Range": "206 responses use bytes start-end/total; 416 responses use bytes */total."},
+        "summary": "Download the authorized original artifact bytes. range is an optional single byte range in bytes=start-end, bytes=start-, or bytes=-suffix form; multiple, malformed, and unsatisfiable ranges return 416 with Content-Range."
       },
       {
         "operation_id": "downloadArtifactContent",

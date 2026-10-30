@@ -1054,20 +1054,27 @@ func inspectArtifactFileWithVersion(ctx context.Context, path string, artifact p
 	if err := requireContext(ctx); err != nil {
 		return fileUnknown, "", err
 	}
+	initialPathVersion, initialPathVersionErr := objectPathVersion(path)
+	if initialPathVersionErr != nil {
+		return fileUnknown, "", initialPathVersionErr
+	}
 	file, err := openStoredFile(path)
 	if err != nil {
-		version, versionErr := objectPathVersion(path)
-		if versionErr != nil {
-			return fileUnknown, "", versionErr
+		currentPathVersion, currentPathVersionErr := objectPathVersion(path)
+		if currentPathVersionErr != nil {
+			return fileUnknown, "", currentPathVersionErr
+		}
+		if currentPathVersion != initialPathVersion {
+			return fileUnknown, "", fmt.Errorf("artifact content path changed while opening: %w", ErrContentChanged)
 		}
 		if errors.Is(err, os.ErrNotExist) {
-			if version != missingObjectPathVersion {
+			if currentPathVersion != missingObjectPathVersion {
 				return fileUnknown, "", fmt.Errorf("artifact content path changed while inspecting: %w", ErrContentChanged)
 			}
-			return fileMissing, version, nil
+			return fileMissing, currentPathVersion, nil
 		}
 		if errors.Is(err, ErrIntegrity) {
-			return fileInvalid, version, nil
+			return fileInvalid, currentPathVersion, nil
 		}
 		return fileUnknown, "", err
 	}

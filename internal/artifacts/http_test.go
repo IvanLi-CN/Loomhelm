@@ -30,7 +30,7 @@ func TestDownloadHTTPHandlerStreamsVerifiedBytesWithSafeHeaders(t *testing.T) {
 		Kind:        protocol.ArtifactKindFile,
 		Size:        int64(len(content)),
 		ContentType: "text/plain; charset=utf-8",
-		Sha256:      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Sha256:      "f7c4f0144c4eb6171ca91601084ba2ba1f0ffb8cc4168c972927006b3a490c05",
 		CreatedAt:   "2026-10-30T01:02:03Z",
 	}
 	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: reader}, nil)
@@ -62,7 +62,7 @@ func TestDownloadHTTPHandlerStreamsVerifiedBytesWithSafeHeaders(t *testing.T) {
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("cache control = %q", response.Header().Get("Cache-Control"))
 	}
-	if response.Header().Get("ETag") != `"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"` {
+	if response.Header().Get("ETag") != `"f7c4f0144c4eb6171ca91601084ba2ba1f0ffb8cc4168c972927006b3a490c05"` {
 		t.Fatalf("etag = %q", response.Header().Get("ETag"))
 	}
 }
@@ -155,6 +155,42 @@ func TestDownloadHTTPHandlerSupportsRangeRequests(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerRejectsUnsupportedOrUnsatisfiableRanges(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		rangeValue string
+	}{
+		{name: "multiple ranges", rangeValue: "bytes=2-6,8-10"},
+		{name: "wrong unit", rangeValue: "items=2-6"},
+		{name: "past end", rangeValue: "bytes=99-100"},
+		{name: "reversed", rangeValue: "bytes=6-2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := []byte("range response body")
+			artifact := protocol.Artifact{ID: "artifact-invalid-range", Name: "range.txt", Size: int64(len(content))}
+			handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+			request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+			request.Header.Set("Range", test.rangeValue)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusRequestedRangeNotSatisfiable {
+				t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusRequestedRangeNotSatisfiable, response.Body.String())
+			}
+			if response.Header().Get("Content-Range") != "bytes */19" {
+				t.Fatalf("content range = %q, want %q", response.Header().Get("Content-Range"), "bytes */19")
+			}
+			if response.Body.String() == string(content) {
+				t.Fatal("invalid range returned artifact bytes")
+			}
+		})
+	}
+}
+
 func TestDownloadHTTPHandlerReturnsCompleteContentChunkAsBase64JSON(t *testing.T) {
 	content := []byte{0, 1, 2, 255}
 	artifact := protocol.Artifact{
@@ -223,6 +259,38 @@ func TestDownloadHTTPHandlerVerifiesFirstContentChunkBeforeReadingBytes(t *testi
 	}
 	if strings.Contains(response.Body.String(), base64.StdEncoding.EncodeToString(content)) {
 		t.Fatal("response exposed corrupt content bytes")
+	}
+}
+
+func TestDownloadHTTPHandlerRejectsMutationAfterChunkReadBeforeResponse(t *testing.T) {
+	content := []byte("same-size content")
+	reader := &contentVerificationReaderStub{
+		Reader:       bytes.NewReader(content),
+		version:      "v1-test",
+		verifyErrors: []error{nil, ErrHashMismatch},
+	}
+	store := &contentHTTPArtifactStoreStub{
+		httpArtifactStoreStub: httpArtifactStoreStub{
+			artifact: protocol.Artifact{ID: "artifact-mutated-after-read", Name: "content.bin", Size: int64(len(content))},
+		},
+		contentReader: reader,
+	}
+	handler, err := NewDownloadHTTPHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-mutated-after-read/content?limit=4", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusNotFound, response.Body.String())
+	}
+	if reader.verifyCalls != 2 {
+		t.Fatalf("verify calls = %d, want 2", reader.verifyCalls)
+	}
+	if strings.Contains(response.Body.String(), base64.StdEncoding.EncodeToString(content)) {
+		t.Fatal("response exposed bytes after the content mutation")
 	}
 }
 
@@ -338,6 +406,30 @@ func TestDownloadHTTPHandlerMapsFullDownloadContentChangesToConflict(t *testing.
 	}
 }
 
+func TestDownloadHTTPHandlerRejectsSameSizeCorruptionBeforeWritingBytes(t *testing.T) {
+	content := []byte("corrupt bytes")
+	artifact := protocol.Artifact{
+		ID:     "artifact-full-corruption",
+		Name:   "content.bin",
+		Size:   int64(len(content)),
+		Sha256: "52c3935626c104b2cbc9031291a1c4d56614c38f52072a361d658a58a9c48698",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-full-corruption", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusNotFound, response.Body.String())
+	}
+	if response.Body.String() == string(content) {
+		t.Fatal("full download returned same-size corrupt bytes")
+	}
+}
+
 func TestDownloadHTTPHandlerBoundsConcurrentFullDownloadStaging(t *testing.T) {
 	content := []byte("bounded download")
 	artifact := protocol.Artifact{ID: "artifact-buffer-capacity", Name: "content.bin", Size: int64(len(content))}
@@ -409,7 +501,8 @@ func TestDownloadHTTPHandlerStagesWithinAggregateBudget(t *testing.T) {
 	}
 	handler.stagingBudget = semaphore.NewWeighted(int64(len(content)))
 
-	staged, release, err := handler.stageDownload(context.Background(), bytes.NewReader(content), int64(len(content)))
+	artifact := protocol.Artifact{Size: int64(len(content))}
+	staged, release, err := handler.stageDownload(context.Background(), bytes.NewReader(content), artifact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +555,8 @@ func TestDownloadHTTPHandlerRetriesFailedStagingCleanup(t *testing.T) {
 		}
 		return os.Remove(path)
 	}
-	staged, release, err := handler.stageDownload(context.Background(), bytes.NewReader(content), int64(len(content)))
+	artifact := protocol.Artifact{Size: int64(len(content))}
+	staged, release, err := handler.stageDownload(context.Background(), bytes.NewReader(content), artifact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +646,7 @@ func TestDownloadHTTPHandlerStopsStagingWhenRequestIsCanceled(t *testing.T) {
 	handler.stagingBudget = semaphore.NewWeighted(int64(len(content)))
 	ctx, cancel := context.WithCancel(context.Background())
 	reader := &cancelAfterReadSeeker{Reader: bytes.NewReader(content), cancel: cancel}
-	_, _, err = handler.stageDownload(ctx, reader, int64(len(content)))
+	_, _, err = handler.stageDownload(ctx, reader, protocol.Artifact{Size: int64(len(content))})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("stageDownload error = %v, want context.Canceled", err)
 	}
@@ -736,6 +830,7 @@ type contentVerificationReaderStub struct {
 	*bytes.Reader
 	version          string
 	verifyErr        error
+	verifyErrors     []error
 	verifyCalls      int
 	readBeforeVerify bool
 }
@@ -753,6 +848,11 @@ func (r *contentVerificationReaderStub) contentVersion() string { return r.versi
 
 func (r *contentVerificationReaderStub) verifyContent(context.Context, protocol.Artifact) error {
 	r.verifyCalls++
+	if len(r.verifyErrors) > 0 {
+		err := r.verifyErrors[0]
+		r.verifyErrors = r.verifyErrors[1:]
+		return err
+	}
 	return r.verifyErr
 }
 

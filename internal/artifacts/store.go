@@ -39,6 +39,7 @@ var (
 	ErrSizeMismatch        = errors.New("artifact size does not match metadata")
 	ErrHashMismatch        = errors.New("artifact hash does not match metadata")
 	ErrContentChanged      = errors.New("artifact content changed during download")
+	ErrRangeNotSatisfiable = errors.New("artifact range is not satisfiable")
 	ErrTooLarge            = errors.New("artifact exceeds the configured size limit")
 	ErrStoreUnavailable    = errors.New("artifact store is unavailable")
 	ErrInputNotCancellable = errors.New("artifact source does not support cancellation")

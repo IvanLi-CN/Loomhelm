@@ -565,7 +565,7 @@ func (g generator) apiClientTypeScript() string {
 	fmt.Fprintf(&out, "// Contract SHA256: %s\n\n", g.digest)
 	out.WriteString("import type * as Protocol from \"../../protocol/src/generated\";\n\n")
 	out.WriteString("export interface ApiClientOptions { baseUrl?: string; fetch?: typeof globalThis.fetch; headers?: HeadersInit; }\n\n")
-	out.WriteString("export class ApiClientError extends Error {\n  readonly status: number;\n  readonly body: unknown;\n\n  constructor(status: number, body: unknown) {\n    super(\"Loomhelm API request failed with status \" + status);\n    this.name = \"ApiClientError\";\n    this.status = status;\n    this.body = body;\n  }\n}\n\n")
+	out.WriteString("export class ApiClientError extends Error {\n  readonly status: number;\n  readonly body: unknown;\n  readonly response?: Response;\n\n  constructor(status: number, body: unknown, response?: Response) {\n    super(\"Loomhelm API request failed with status \" + status);\n    this.name = \"ApiClientError\";\n    this.status = status;\n    this.body = body;\n    this.response = response;\n  }\n}\n\n")
 
 	for _, operation := range g.contract.REST.Operations {
 		paramsType := operationParamsType(operation)
@@ -688,7 +688,7 @@ func (g generator) apiClientTypeScript() string {
         }
       }
     }
-    if (!response.ok) throw new ApiClientError(response.status, parsed);
+    if (!response.ok) throw new ApiClientError(response.status, parsed, response);
     if (expectedStatus !== undefined) {
       const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
       if (!expectedStatuses.includes(response.status)) {

@@ -90,6 +90,25 @@ describe("generated binary artifact transport", () => {
     expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([1, 2]);
     expect(calls).toEqual([{ path: "/api/v1/artifacts/artifact-range/download", range: "bytes=0-1" }]);
   });
+
+  test("preserves Content-Range on an unsatisfiable range error", async () => {
+    const client = new LoomhelmApiClient({
+      baseUrl: "https://loomhelm.example",
+      fetch: async () => new Response("artifact range is not satisfiable", {
+        status: 416,
+        headers: { "Content-Range": "bytes */4" },
+      }),
+    });
+
+    try {
+      await client.downloadArtifact({ artifact_id: "artifact-range", range: "bytes=9-10" });
+      throw new Error("unsatisfiable range was accepted");
+    } catch (caught) {
+      expect(caught).toBeInstanceOf(ApiClientError);
+      expect(caught.status).toBe(416);
+      expect(caught.response.headers.get("Content-Range")).toBe("bytes */4");
+    }
+  });
 });
 
 describe("generated API artifact content transport", () => {
