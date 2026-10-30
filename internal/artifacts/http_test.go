@@ -157,6 +157,31 @@ func TestDownloadHTTPHandlerSupportsRangeRequests(t *testing.T) {
 	}
 }
 
+func TestDownloadHTTPHandlerIgnoresRangeForHead(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{ID: "artifact-head-range", Name: "range.txt", Size: int64(len(content))}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Handle("/artifacts/{artifact_id}", handler)
+	request := httptest.NewRequest(http.MethodHead, "/artifacts/"+artifact.ID, nil)
+	request.Header.Set("Range", "bytes=99-100")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+	if response.Body.Len() != 0 {
+		t.Fatalf("HEAD body length = %d, want 0", response.Body.Len())
+	}
+	if response.Header().Get("Content-Length") != "19" {
+		t.Fatalf("content length = %q, want %q", response.Header().Get("Content-Length"), "19")
+	}
+}
+
 func TestDownloadHTTPHandlerRejectsUnsupportedOrUnsatisfiableRanges(t *testing.T) {
 	for _, test := range []struct {
 		name       string

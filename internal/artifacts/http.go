@@ -296,7 +296,11 @@ func (h *DownloadHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	}
 	defer reader.Close()
 	modTime := parseDownloadTime(artifact.CreatedAt)
-	if err := validateDownloadRange(request, artifact.Size, artifact.Sha256, modTime); err != nil {
+	if request.Method == http.MethodHead {
+		// Range is defined for GET; HEAD returns representation metadata without
+		// selecting a partial response, even when the supplied range is invalid.
+		request.Header.Del("Range")
+	} else if err := validateDownloadRange(request, artifact.Size, artifact.Sha256, modTime); err != nil {
 		h.writeRangeError(writer, request, artifact.Size, err)
 		return
 	}
