@@ -18,7 +18,9 @@ import (
 )
 
 const (
-	ProtocolVersion = "loomhelm.gateway.v1"
+	// Artifact publication adds new frames and therefore requires both ends of
+	// the authenticated link to be upgraded together.
+	ProtocolVersion = "loomhelm.gateway.v2"
 	DefaultMaxFrame = 4 << 20
 )
 
