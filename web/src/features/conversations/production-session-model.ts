@@ -315,14 +315,15 @@ export function approvalContextFromApproval(approval: Approval): ApprovalContext
   const context = asRecord(approval.context);
   const command = firstString(context, ["command", "cmd", "command_line"]);
   const directory = firstString(context, ["directory", "cwd", "workdir", "grantRoot", "path"]);
+  const isFileChange = approval.kind === "file_change";
   const explicitScope = firstString(context, ["scope"]);
-  const scope = explicitScope ?? directory;
+  const fileChangeScope = firstString(context, ["scope", "grantRoot", "directory"]);
+  const scope = explicitScope ?? (isFileChange ? fileChangeScope : undefined);
   const impact = firstString(context, ["impact", "risk", "description", "reason"]);
   const knownKeys = new Set(["command", "cmd", "command_line", "directory", "cwd", "workdir", "grantRoot", "path", "scope", "impact", "risk", "description", "reason"]);
   const hasUnknownFields = context ? Object.keys(context).some((key) => !knownKeys.has(key)) : false;
-  const isFileChange = approval.kind === "file_change";
   const commandContextComplete = !isFileChange && Boolean(command && directory);
-  const fileChangeContextComplete = isFileChange && Boolean(scope && impact);
+  const fileChangeContextComplete = isFileChange && Boolean(fileChangeScope && impact);
   return {
     complete: Boolean(context && (commandContextComplete || fileChangeContextComplete)),
     command: command ?? approval.summary,
