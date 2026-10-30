@@ -1,7 +1,8 @@
 import { FileText, Info, MessageCircle, Pause, Send, ShieldCheck, UserRound } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link, useParams } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 
+import { useOptionalProductionApi } from "@/app/providers";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,6 +11,8 @@ import { getConversation, getProject, getTask, useDemoRuntime, useOptionalDemoRu
 import { taskStates } from "@/demo/types";
 import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
+import { ProductionConversationWorkspace } from "@/features/conversations/ProductionConversationWorkspace";
+import { createPublishedSessionApi } from "@/features/sessions/api";
 import { TaskEditor } from "@/features/tasks/TaskForm";
 import { TaskRelationshipEditor } from "@/features/tasks/TaskRelations";
 import { taskWriteBlockReason } from "@/features/tasks/types";
@@ -115,9 +118,13 @@ export function WorkspaceRoute({ taskId, conversationId }: { taskId?: string; co
   );
 }
 
-function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
+function ProductionTaskWorkspaceRoute({ taskId, initialRunId }: { taskId: string; initialRunId?: string }) {
+  const navigate = useNavigate();
   const source = useOptionalProjectTaskSource();
+  const assembly = useOptionalProductionApi();
+  const sessionApi = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
   const task = source?.getTask(taskId);
+  const [createdSession, setCreatedSession] = useState<{ sessionId: string; taskId: string }>();
   const [deleteState, setDeleteState] = useState<{ taskId: string; status: "idle" | "pending" | "success" } | null>(null);
   const lastTaskRef = useRef<{ taskId: string; task: typeof task } | undefined>(undefined);
   const routeFocusOwnerRef = useRef<HTMLElement>(null);
@@ -134,10 +141,23 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
     queueOwnedFocusRestore(owner, () => headingRef.current);
   }, [displayedTask?.id]);
   useEffect(() => {
+    setCreatedSession(undefined);
+  }, [taskId]);
+  useEffect(() => {
     if (currentDeleteState !== "success") return;
     const frame = requestAnimationFrame(() => deleteResultHeadingRef.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
   }, [currentDeleteState]);
+
+  const handleTaskSessionCreated = async (sessionId: string, runId?: string) => {
+    setCreatedSession({ sessionId, taskId });
+    try {
+      await source?.refresh();
+    } catch {
+      // The local session identity remains an immediate fallback; the source will retry on its normal refresh interval.
+    }
+    return navigate({ params: { taskId }, search: runId ? { runId } : {}, to: "/tasks/$taskId" });
+  };
 
   if (source?.status === "error" || source?.status === "permission-changed") {
     return <section className="page-section unavailable-page"><span className="eyebrow">TASK WORKSPACE</span><TaskReadRecovery source={source} taskId={taskId} /></section>;
@@ -156,20 +176,36 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
 
   const project = source.getProject(displayedTask.projectId);
   const projectPermissions = source.getProjectPermissions(displayedTask.projectId);
+  const taskSessionId = displayedTask.conversationId ?? (createdSession?.taskId === taskId ? createdSession.sessionId : undefined);
   return (
     <section ref={routeFocusOwnerRef} className="workspace-page">
       <header className="workspace-heading">
-        <div><span className="workspace-context">{project?.name ?? "当前无权查看项目"} / {displayedTask.id}</span><h1 ref={headingRef} tabIndex={-1}>{displayedTask.title}</h1><div className="workspace-meta"><span className="execution-pill execution-dot">执行服务未接通</span><span className="inline-flex items-center gap-1">任务业务状态：<TaskStateBadge state={displayedTask.state} /></span></div></div>
+        <div><span className="workspace-context">{project?.name ?? "当前无权查看项目"} / {displayedTask.id}</span><h1 ref={headingRef} tabIndex={-1}>{displayedTask.title}</h1><div className="workspace-meta"><span className="execution-pill execution-dot">{displayedTask.conversationId ? "会话已绑定" : "尚未创建会话"}</span><span className="inline-flex items-center gap-1">任务业务状态：<TaskStateBadge state={displayedTask.state} /></span></div></div>
       </header>
       <div className="workspace-layout workspace-panel-info">
         <section className="chat-panel" aria-label="任务工作区">
-          <div className="empty-state"><span className="section-kicker">SESSION / EXECUTION</span><h2>会话与执行尚未接通</h2><p>当前页面展示真实的任务、项目权限和关系数据。对话历史、审批和执行控制会在后续会话服务接入后出现在这里。</p>{project ? <Button asChild variant="secondary" className="button button-secondary"><Link to="/projects/$projectId" params={{ projectId: project.id }}>返回项目</Link></Button> : <Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">返回任务</Link></Button>}</div>
+          <ProductionConversationWorkspace
+            key={`${displayedTask.id}:${assembly?.auth.principalId ?? "anonymous"}:${taskSessionId ?? "new"}`}
+            api={sessionApi}
+            conversationTitle={displayedTask.title}
+            initialRunId={initialRunId}
+            onRunCreated={handleTaskSessionCreated}
+            onSessionCreated={handleTaskSessionCreated}
+            principalId={assembly?.auth.principalId}
+            projectCanWrite={(projectId) => source.getProjectPermissions(projectId).canWrite}
+            projectId={displayedTask.projectId}
+            projectName={project?.name}
+            projectOptions={source.projects}
+            readOnly={!projectPermissions.canWrite || assembly?.permissions.isReadOnly === true}
+            sessionId={taskSessionId}
+            task={displayedTask}
+          />
         </section>
         <aside className="workspace-info" aria-label="任务信息">
-          <section className="info-block"><span className="section-kicker">任务信息</span><h2>目标</h2><p>{displayedTask.goal}</p><dl className="info-facts"><dt>项目</dt><dd>{project?.name ?? "当前无权查看"}</dd><dt>业务状态</dt><dd><TaskStateBadge state={displayedTask.state} /></dd><dt>执行状态</dt><dd>服务尚未接通</dd></dl></section>
+          <section className="info-block"><span className="section-kicker">任务信息</span><h2>目标</h2><p>{displayedTask.goal}</p><dl className="info-facts"><dt>项目</dt><dd>{project?.name ?? "当前无权查看"}</dd><dt>业务状态</dt><dd><TaskStateBadge state={displayedTask.state} /></dd><dt>执行状态</dt><dd>以 Session / Run 事实为准</dd></dl></section>
           {currentDeleteState === "idle" && <TaskRelationshipEditor key={`relations:${displayedTask.id}`} source={source} taskId={displayedTask.id} />}
           <TaskEditor key={`editor:${displayedTask.id}`} source={source} taskId={displayedTask.id} fallbackTask={displayedTask} onDeleteStarted={() => setDeleteState({ taskId, status: "pending" })} onDeleteFailed={() => setDeleteState({ taskId, status: "idle" })} onDeleted={() => setDeleteState({ taskId, status: "success" })} />
-          <section className="info-block info-note"><Info size={16} aria-hidden="true" /><p>{projectPermissions.canWrite ? "当前项目成员权限允许编辑任务与关系；会话和执行仍保持未就绪。" : "当前项目成员权限为只读；任务编辑与关系写入保持禁用。"}</p></section>
+          <section className="info-block info-note"><Info size={16} aria-hidden="true" /><p>{projectPermissions.canWrite ? "当前项目成员权限允许编辑任务、关系和会话控制；审批与 Run 状态仍以服务事件为准。" : "当前项目成员权限为只读；任务编辑、关系写入和会话控制保持禁用。"}</p></section>
         </aside>
       </div>
     </section>
@@ -178,13 +214,25 @@ function ProductionTaskWorkspaceRoute({ taskId }: { taskId: string }) {
 
 export function TaskWorkspaceRoute() {
   const { taskId } = useParams({ from: "/tasks/$taskId" });
-  return useOptionalDemoRuntime() ? <WorkspaceRoute taskId={taskId} /> : <ProductionTaskWorkspaceRoute taskId={taskId} />;
+  const { runId } = useSearch({ from: "/tasks/$taskId" });
+  return useOptionalDemoRuntime() ? <WorkspaceRoute taskId={taskId} /> : <ProductionTaskWorkspaceRoute initialRunId={runId} taskId={taskId} />;
 }
 
 export function ConversationWorkspaceRoute() {
   const { conversationId } = useParams({ from: "/conversations/$conversationId" });
+  const { runId } = useSearch({ from: "/conversations/$conversationId" });
+  const navigate = useNavigate();
   const runtime = useOptionalDemoRuntime();
-  if (!runtime) return <section className="page-section unavailable-page"><span className="eyebrow">CONVERSATION WORKSPACE</span><h1>对话服务尚未接通</h1><p>当前暂时无法打开对话工作区，请先查看任务列表。</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">查看任务</Link></Button></section>;
+  const source = useOptionalProjectTaskSource();
+  const assembly = useOptionalProductionApi();
+  const sessionApi = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
+  if (!runtime) {
+    const task = source?.tasks.find((candidate) => candidate.conversationId === conversationId);
+    const project = source?.getProject(task?.projectId);
+    const projectPermissions = source?.getProjectPermissions(task?.projectId);
+    if (source?.status === "loading") return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">CONVERSATION WORKSPACE</span><h1>正在读取对话上下文</h1><p>正在读取任务与项目权限，随后显示 Session 和 Host 状态。</p></section>;
+    return <section className="page-section"><ProductionConversationWorkspace key={`${conversationId}:${assembly?.auth.principalId ?? "anonymous"}`} api={sessionApi} conversationTitle={task?.title ?? "独立会话"} initialRunId={runId} onRunCreated={(sessionId, nextRunId) => navigate({ params: { conversationId: sessionId }, search: { runId: nextRunId }, to: "/conversations/$conversationId" })} principalId={assembly?.auth.principalId} projectCanWrite={(projectId) => source?.getProjectPermissions(projectId).canWrite === true} projectId={task?.projectId} projectName={project?.name} projectOptions={source?.projects} readOnly={task ? projectPermissions?.canWrite !== true : assembly?.permissions.isReadOnly !== false} sessionId={conversationId} task={task} /></section>;
+  }
   const conversation = getConversation(runtime.fixtures, conversationId);
   return <WorkspaceRoute taskId={conversation?.taskId} conversationId={conversationId} />;
 }
