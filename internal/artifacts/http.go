@@ -62,6 +62,7 @@ type DownloadHTTPHandler struct {
 	downloadResponseSlots chan struct{}
 	maxStagingBytes       int64
 	stagingBudget         *semaphore.Weighted
+	stagingDir            string
 	cleanupMu             sync.Mutex
 	pendingStagingCleanup map[string]int64
 	removeStagingFile     func(string) error
@@ -185,13 +186,25 @@ func copyDownloadHeaders(destination, source http.Header) {
 // which preserves authorization and file identity checks without rehashing
 // every chunk.
 func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErrorWriter) (*DownloadHTTPHandler, error) {
+	return newDownloadHTTPHandler(store, writeError, os.TempDir(), os.Remove)
+}
+
+func newDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErrorWriter, stagingDir string, removeStagingFile func(string) error) (*DownloadHTTPHandler, error) {
 	if store == nil {
 		return nil, fmt.Errorf("artifact download store is required: %w", ErrStoreUnavailable)
 	}
 	if writeError == nil {
 		writeError = writeDownloadError
 	}
-	cleanupOrphanedDownloadStaging()
+	if strings.TrimSpace(stagingDir) == "" {
+		return nil, fmt.Errorf("artifact download staging directory is required: %w", ErrStoreUnavailable)
+	}
+	if removeStagingFile == nil {
+		removeStagingFile = os.Remove
+	}
+	if err := cleanupOrphanedDownloadStagingIn(stagingDir, removeStagingFile); err != nil {
+		return nil, fmt.Errorf("clean up artifact download staging: %w", ErrStoreUnavailable)
+	}
 	maxStagingBytes := maxStagedDownloadBytes
 	if boundedStore, ok := store.(artifactSizeLimit); ok {
 		if configuredLimit := boundedStore.maxArtifactBytes(); configuredLimit > 0 {
@@ -205,8 +218,9 @@ func NewDownloadHTTPHandler(store protocol.ArtifactStore, writeError DownloadErr
 		downloadResponseSlots: make(chan struct{}, maxConcurrentDownloadResponses),
 		maxStagingBytes:       maxStagingBytes,
 		stagingBudget:         semaphore.NewWeighted(maxStagingBytes),
+		stagingDir:            stagingDir,
 		pendingStagingCleanup: make(map[string]int64),
-		removeStagingFile:     os.Remove,
+		removeStagingFile:     removeStagingFile,
 	}, nil
 }
 
@@ -369,7 +383,7 @@ func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadS
 		return nil, nil, err
 	}
 
-	stagingFile, err := os.CreateTemp("", "loomhelm-artifact-download-*")
+	stagingFile, err := os.CreateTemp(h.stagingDir, "loomhelm-artifact-download-*")
 	if err != nil {
 		h.stagingBudget.Release(weight)
 		return nil, nil, fmt.Errorf("create artifact download staging file: %w", ErrStoreUnavailable)
@@ -435,10 +449,14 @@ func (h *DownloadHTTPHandler) stageDownload(ctx context.Context, reader io.ReadS
 	return stagingFile, release, nil
 }
 
-func cleanupOrphanedDownloadStaging() {
-	entries, err := os.ReadDir(os.TempDir())
+func cleanupOrphanedDownloadStaging() error {
+	return cleanupOrphanedDownloadStagingIn(os.TempDir(), os.Remove)
+}
+
+func cleanupOrphanedDownloadStagingIn(stagingDir string, remove func(string) error) error {
+	entries, err := os.ReadDir(stagingDir)
 	if err != nil {
-		return
+		return fmt.Errorf("read staging directory: %w", err)
 	}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), "loomhelm-artifact-download-") {
@@ -449,8 +467,11 @@ func cleanupOrphanedDownloadStaging() {
 		// response; the releasing handler treats os.ErrNotExist as successful
 		// cleanup. This also removes crash leftovers immediately after a fast
 		// restart instead of allowing one full transfer timeout per generation.
-		_ = os.Remove(filepath.Join(os.TempDir(), entry.Name()))
+		if err := remove(filepath.Join(stagingDir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove orphaned staging file %q: %w", entry.Name(), err)
+		}
 	}
+	return nil
 }
 
 func (h *DownloadHTTPHandler) cleanupBlocked() bool {
@@ -499,8 +520,9 @@ func (h *DownloadHTTPHandler) retryPendingStagingCleanup() {
 // ServeContentHTTP returns a bounded, cursor-addressed JSON chunk for API and
 // MCP callers. The content store repeats authorization, ready-state, regular
 // file and exact-size checks for every request; content_version binds later
-// cursors to the same file incarnation, and the final chunk rechecks the
-// canonical SHA-256 before reporting complete=true.
+// cursors to the same file incarnation. The first chunk is fully hashed
+// before any response bytes are emitted; later chunks rely on the verified
+// content version and the first response's verification.
 func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, request *http.Request) {
 	if h == nil || h.store == nil {
 		writeDownloadError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact download is unavailable")
@@ -559,6 +581,19 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content snapshot is unavailable")
 		return
 	}
+	contentVerified := false
+	if offset == 0 {
+		if verifier, ok := reader.(contentVerifier); ok {
+			if err := verifier.verifyContent(request.Context(), artifact); err != nil {
+				if request.Context().Err() != nil {
+					return
+				}
+				h.writeStoreError(writer, request, err, "artifact content verification failed")
+				return
+			}
+			contentVerified = true
+		}
+	}
 	remaining := artifact.Size - offset
 	chunkSize := remaining
 	if chunkSize > limit {
@@ -600,7 +635,7 @@ func (h *DownloadHTTPHandler) ServeContentHTTP(writer http.ResponseWriter, reque
 		h.writeError(writer, request, http.StatusServiceUnavailable, ErrStoreUnavailable, "artifact content snapshot is unavailable")
 		return
 	}
-	if nextOffset == artifact.Size {
+	if nextOffset == artifact.Size && !contentVerified {
 		if verifier, ok := reader.(contentVerifier); ok {
 			if err := verifier.verifyContent(request.Context(), artifact); err != nil {
 				if request.Context().Err() != nil {

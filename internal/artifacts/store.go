@@ -502,12 +502,12 @@ func (s *Store) Open(ctx context.Context, id string) (protocol.Artifact, protoco
 // object enters the ready state and final objects are never overwritten by
 // Store. This path repeats authorization, regular-file and exact-size checks
 // for every request. OpenContentAt additionally binds each request to the
-// previous file incarnation without a server-side transfer cache. The final
-// chunk calls verifyContent once, so the server rejects a changed object before
-// reporting complete=true; the response also carries the canonical SHA-256
-// for caller-side reassembly verification. Open remains the fully verifying
-// path for browser downloads and callers that need a server-side full hash
-// check before the first byte.
+// previous file incarnation without a server-side transfer cache. The first
+// chunk calls verifyContent once before bytes are emitted, so the server
+// rejects a corrupt object before reporting any content; the response also
+// carries the canonical SHA-256 for caller-side reassembly verification. Open
+// remains the fully verifying path for browser downloads and callers that need
+// a server-side full hash check before the first byte.
 func (s *Store) OpenContent(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
 	return s.openReadyArtifact(ctx, id, false, "")
 }
@@ -889,14 +889,13 @@ func fileInfoContentVersion(info os.FileInfo) (string, error) {
 		return "", ErrIntegrity
 	}
 	identity := fmt.Sprintf(
-		"%T|dev=%s|ino=%s|mode=%s|size=%d|mtime=%s|ctime=%s|modtime=%d",
+		"%T|dev=%s|ino=%s|mode=%s|size=%d|mtime=%s|modtime=%d",
 		info.Sys(),
 		statField(info.Sys(), "Dev"),
 		statField(info.Sys(), "Ino"),
 		statField(info.Sys(), "Mode"),
 		info.Size(),
 		statField(info.Sys(), "Mtim", "Mtimespec"),
-		statField(info.Sys(), "Ctim", "Ctimespec"),
 		info.ModTime().UnixNano(),
 	)
 	digest := sha256.Sum256([]byte(identity))

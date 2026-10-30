@@ -72,17 +72,23 @@ describe("generated binary artifact transport", () => {
   });
 
   test("accepts a partial range response without consuming its bytes", async () => {
+    const calls = [];
     const client = new LoomhelmApiClient({
       baseUrl: "https://loomhelm.example",
-      fetch: async () => new Response(new Uint8Array([1, 2]), {
+      fetch: async (url, init) => {
+        calls.push({ path: url.pathname, range: new Headers(init.headers).get("Range") });
+        return new Response(new Uint8Array([1, 2]), {
         status: 206,
         headers: { "Content-Range": "bytes 0-1/4", "Content-Type": "application/octet-stream" },
-      }),
+        });
+      },
     });
 
-    const response = await client.downloadArtifact({ artifact_id: "artifact-range" });
+    const response = await client.downloadArtifact({ artifact_id: "artifact-range", range: "bytes=0-1" });
     expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 0-1/4");
     expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([1, 2]);
+    expect(calls).toEqual([{ path: "/api/v1/artifacts/artifact-range/download", range: "bytes=0-1" }]);
   });
 });
 

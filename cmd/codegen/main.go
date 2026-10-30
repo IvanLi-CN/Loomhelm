@@ -52,11 +52,13 @@ type operation struct {
 	Method           string            `json:"method"`
 	Path             string            `json:"path"`
 	PathParams       map[string]string `json:"path_params"`
+	RequestHeaders   map[string]string `json:"request_headers"`
 	QueryType        string            `json:"query_type"`
 	BodyType         string            `json:"body_type"`
 	ResponseType     string            `json:"response_type"`
 	ResponseStatus   int               `json:"response_status"`
 	ResponseStatuses []int             `json:"response_statuses"`
+	ResponseHeaders  map[string]string `json:"response_headers"`
 	Summary          string            `json:"summary"`
 	MCPTool          *mcpTool          `json:"mcp_tool"`
 }
@@ -188,6 +190,16 @@ func validate(source contract) error {
 		for name := range pathParameters(operation.Path) {
 			if _, ok := operation.PathParams[name]; !ok {
 				return fmt.Errorf("operation %s path parameter %q is not declared", operation.OperationID, name)
+			}
+		}
+		for name, header := range operation.RequestHeaders {
+			if strings.TrimSpace(name) == "" || strings.TrimSpace(header) == "" {
+				return fmt.Errorf("operation %s request header mappings must have non-empty names", operation.OperationID)
+			}
+		}
+		for header, description := range operation.ResponseHeaders {
+			if strings.TrimSpace(header) == "" || strings.TrimSpace(description) == "" {
+				return fmt.Errorf("operation %s response header mappings must have non-empty names and descriptions", operation.OperationID)
 			}
 		}
 		for typeName, label := range map[string]string{
@@ -561,6 +573,9 @@ func (g generator) apiClientTypeScript() string {
 		for _, property := range sortedKeys(operation.PathParams) {
 			fmt.Fprintf(&out, "  %s: %s;\n", property, tsPrimitive(operation.PathParams[property]))
 		}
+		for _, property := range sortedKeys(operation.RequestHeaders) {
+			fmt.Fprintf(&out, "  %s?: string;\n", property)
+		}
 		if operation.QueryType != "" {
 			query := g.contract.Types[operation.QueryType]
 			for _, property := range sortedKeys(query.Properties) {
@@ -595,6 +610,12 @@ func (g generator) apiClientTypeScript() string {
 		}
 		pathExpression := g.tsPathExpression(operation)
 		fmt.Fprintf(&out, "    const path = %s;\n", pathExpression)
+		if len(operation.RequestHeaders) > 0 {
+			out.WriteString("    const requestHeaders = new Headers();\n")
+			for _, property := range sortedKeys(operation.RequestHeaders) {
+				fmt.Fprintf(&out, "    if (request.%s !== undefined) requestHeaders.set(%q, String(request.%s));\n", property, operation.RequestHeaders[property], property)
+			}
+		}
 		if operation.QueryType != "" {
 			fmt.Fprintf(&out, "    const query = new URLSearchParams();\n")
 			for _, property := range sortedKeys(g.contract.Types[operation.QueryType].Properties) {
@@ -614,23 +635,41 @@ func (g generator) apiClientTypeScript() string {
 				expectedStatus = formatIntSlice(statuses)
 			}
 			if binaryResponse {
-				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true);\n", responseType, operation.Method, body, expectedStatus)
+				if len(operation.RequestHeaders) > 0 {
+					fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true, requestHeaders);\n", responseType, operation.Method, body, expectedStatus)
+				} else {
+					fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, true);\n", responseType, operation.Method, body, expectedStatus)
+				}
+			} else if len(operation.RequestHeaders) > 0 {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s, false, requestHeaders);\n", responseType, operation.Method, body, expectedStatus)
 			} else {
 				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, %s, %s);\n", responseType, operation.Method, body, expectedStatus)
 			}
 		} else if operation.BodyType != "" {
-			fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, request.body);\n", responseType, operation.Method)
+			if len(operation.RequestHeaders) > 0 {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, request.body, undefined, false, requestHeaders);\n", responseType, operation.Method)
+			} else {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, request.body);\n", responseType, operation.Method)
+			}
 		} else {
-			fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath);\n", responseType, operation.Method)
+			if len(operation.RequestHeaders) > 0 {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath, undefined, undefined, false, requestHeaders);\n", responseType, operation.Method)
+			} else {
+				fmt.Fprintf(&out, "    return this.request<%s>(%q, requestPath);\n", responseType, operation.Method)
+			}
 		}
 		out.WriteString("  }\n\n")
 	}
-	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number | readonly number[], binary = false): Promise<T> {
+	out.WriteString(`  private async request<T>(method: string, path: string, body?: unknown, expectedStatus?: number | readonly number[], binary = false, requestHeaders?: HeadersInit): Promise<T> {
     const baseUrl = this.options.baseUrl ?? (typeof location === "undefined" ? "http://localhost" : location.origin);
     const url = new URL(path, baseUrl);
     const fetcher = this.options.fetch ?? globalThis.fetch;
     if (!fetcher) throw new Error("a fetch implementation is required");
     const headers = new Headers(this.options.headers);
+    if (requestHeaders !== undefined) {
+      const additionalHeaders = new Headers(requestHeaders);
+      additionalHeaders.forEach((value, key) => headers.set(key, value));
+    }
     headers.set("Accept", binary ? "application/octet-stream" : "application/json");
     const init: RequestInit = { method, headers };
     if (body !== undefined) {

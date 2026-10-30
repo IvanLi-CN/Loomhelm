@@ -191,6 +191,41 @@ func TestDownloadHTTPHandlerReturnsCompleteContentChunkAsBase64JSON(t *testing.T
 	}
 }
 
+func TestDownloadHTTPHandlerVerifiesFirstContentChunkBeforeReadingBytes(t *testing.T) {
+	content := []byte("same-size corrupt bytes")
+	reader := &contentVerificationReaderStub{
+		Reader:    bytes.NewReader(content),
+		version:   "v1-test",
+		verifyErr: ErrHashMismatch,
+	}
+	store := &contentHTTPArtifactStoreStub{
+		httpArtifactStoreStub: httpArtifactStoreStub{
+			artifact: protocol.Artifact{ID: "artifact-corrupt", Name: "content.bin", Size: int64(len(content))},
+		},
+		contentReader: reader,
+	}
+	handler, err := NewDownloadHTTPHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-corrupt/content?limit=4", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusNotFound, response.Body.String())
+	}
+	if reader.verifyCalls != 1 {
+		t.Fatalf("verify calls = %d, want 1", reader.verifyCalls)
+	}
+	if reader.readBeforeVerify {
+		t.Fatal("content bytes were read before the first full verification")
+	}
+	if strings.Contains(response.Body.String(), base64.StdEncoding.EncodeToString(content)) {
+		t.Fatal("response exposed corrupt content bytes")
+	}
+}
+
 func TestDownloadHTTPHandlerMapsMissingUnauthorizedAndInvalidAccess(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -456,9 +491,36 @@ func TestCleanupOrphanedDownloadStagingRemovesRecentFiles(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	cleanupOrphanedDownloadStaging()
+	if err := cleanupOrphanedDownloadStaging(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recent orphaned staging file remains: %v", err)
+	}
+}
+
+func TestNewDownloadHTTPHandlerFailsClosedWhenStagingCleanupCannotReadDirectory(t *testing.T) {
+	missingDir := filepath.Join(t.TempDir(), "missing")
+	_, err := newDownloadHTTPHandler(httpArtifactStoreStub{}, nil, missingDir, os.Remove)
+	if !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("constructor error = %v, want ErrStoreUnavailable", err)
+	}
+}
+
+func TestNewDownloadHTTPHandlerFailsClosedWhenStagingCleanupCannotRemoveFile(t *testing.T) {
+	directory := t.TempDir()
+	file, err := os.Create(filepath.Join(directory, "loomhelm-artifact-download-orphan"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = newDownloadHTTPHandler(httpArtifactStoreStub{}, nil, directory, func(string) error {
+		return errors.New("remove denied")
+	})
+	if !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("constructor error = %v, want ErrStoreUnavailable", err)
 	}
 }
 
@@ -562,6 +624,34 @@ func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
 	}
 }
 
+func TestFileContentVersionIgnoresHardLinkLifecycle(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "artifact")
+	linkPath := filepath.Join(directory, "staging")
+	if err := os.WriteFile(path, []byte("immutable content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	before, err := fileContentVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(path, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	after, err := fileContentVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("content version changed across hard-link lifecycle: before=%q after=%q", before, after)
+	}
+}
+
 func TestDownloadHTTPHandlerRejectsMethodsAndMissingRouteParameter(t *testing.T) {
 	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)
 	if err != nil {
@@ -615,8 +705,9 @@ type httpArtifactStoreStub struct {
 
 type contentHTTPArtifactStoreStub struct {
 	httpArtifactStoreStub
-	contentOpens int
-	fullOpens    int
+	contentOpens  int
+	fullOpens     int
+	contentReader protocol.ArtifactReader
 }
 
 func (s *contentHTTPArtifactStoreStub) Open(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
@@ -630,12 +721,39 @@ func (s *contentHTTPArtifactStoreStub) OpenContentAt(ctx context.Context, id, _ 
 	if err != nil {
 		return protocol.Artifact{}, nil, err
 	}
+	if s.contentReader != nil {
+		return artifact, s.contentReader, nil
+	}
 	return artifact, &contentVersionReaderStub{ArtifactReader: reader, version: "v1-test"}, nil
 }
 
 type contentVersionReaderStub struct {
 	protocol.ArtifactReader
 	version string
+}
+
+type contentVerificationReaderStub struct {
+	*bytes.Reader
+	version          string
+	verifyErr        error
+	verifyCalls      int
+	readBeforeVerify bool
+}
+
+func (r *contentVerificationReaderStub) Read(buffer []byte) (int, error) {
+	if r.verifyCalls == 0 {
+		r.readBeforeVerify = true
+	}
+	return r.Reader.Read(buffer)
+}
+
+func (r *contentVerificationReaderStub) Close() error { return nil }
+
+func (r *contentVerificationReaderStub) contentVersion() string { return r.version }
+
+func (r *contentVerificationReaderStub) verifyContent(context.Context, protocol.Artifact) error {
+	r.verifyCalls++
+	return r.verifyErr
 }
 
 type contentErrorReader struct {
