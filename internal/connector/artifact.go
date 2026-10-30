@@ -1002,6 +1002,15 @@ func artifactCandidatesFromEvent(event protocol.Event, observation EventObservat
 }
 
 func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.Event, observation EventObservation, reader ArtifactContentReader) ([]ArtifactCandidate, []ArtifactCaptureGap, error) {
+	return artifactCandidatesFromEventWithReaderSkipping(ctx, event, observation, reader, nil)
+}
+
+// artifactCandidatesFromEventWithReaderSkipping preserves an already durable
+// candidate identity during source-event recovery. The event payload carries
+// the identity inputs, while the file bytes are only available from the
+// current workspace; rereading an event after the file changed must not turn
+// an immutable recovered publication into a conflict.
+func artifactCandidatesFromEventWithReaderSkipping(ctx context.Context, event protocol.Event, observation EventObservation, reader ArtifactContentReader, skip func(string) bool) ([]ArtifactCandidate, []ArtifactCaptureGap, error) {
 	if event.Type != protocol.EventTypeItemCompleted || event.Source != protocol.EventSourceAppServer {
 		return nil, nil, nil
 	}
@@ -1043,6 +1052,12 @@ func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.E
 			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "path_outside_authorized_workspace"))
 			continue
 		}
+		identity := artifactCandidateIdentity(observation, message.Params.Item.ID, index, kind.Name, path, kind.MovePath)
+		artifactDigest := digestString(identity)
+		artifactID := "artifact-" + artifactDigest
+		if skip != nil && skip(artifactID) {
+			continue
+		}
 		var content []byte
 		provenance := "codex.fs.readFile"
 		switch kind.Name {
@@ -1076,19 +1091,6 @@ func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.E
 			gaps = append(gaps, artifactCaptureGap(sourceEventID, observation, message.Params.Item.ID, index, readPath, kind.Name, "content_too_large"))
 			continue
 		}
-		identity := strings.Join([]string{
-			artifactIdentityVersion,
-			observation.AdapterSessionID,
-			observation.ExternalThreadRef,
-			observation.Generation,
-			observation.NativeTurnID,
-			message.Params.Item.ID,
-			fmt.Sprintf("%d", index),
-			kind.Name,
-			normalizeArtifactPathForIdentity(path),
-			normalizeArtifactPathForIdentity(kind.MovePath),
-		}, "\x00")
-		artifactID := "artifact-" + digestString(identity)
 		eventID := "artifact-event-" + digestString(artifactID)
 		sum := sha256.Sum256(content)
 		candidate := ArtifactCandidate{
@@ -1096,7 +1098,7 @@ func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.E
 			EventID:       eventID,
 			SourceEventID: sourceEventID,
 			Observation:   observation,
-			Name:          "artifact-" + digestString(identity)[:32] + ".bin",
+			Name:          "artifact-" + artifactDigest[:32] + ".bin",
 			Kind:          protocol.ArtifactKindFile,
 			Size:          int64(len(content)),
 			Sha256:        hex.EncodeToString(sum[:]),
@@ -1109,6 +1111,25 @@ func artifactCandidatesFromEventWithReader(ctx context.Context, event protocol.E
 		values = append(values, candidate)
 	}
 	return values, gaps, nil
+}
+
+func artifactCandidateID(observation EventObservation, itemID string, index int, changeKind, path, movePath string) string {
+	return "artifact-" + digestString(artifactCandidateIdentity(observation, itemID, index, changeKind, path, movePath))
+}
+
+func artifactCandidateIdentity(observation EventObservation, itemID string, index int, changeKind, path, movePath string) string {
+	return strings.Join([]string{
+		artifactIdentityVersion,
+		observation.AdapterSessionID,
+		observation.ExternalThreadRef,
+		observation.Generation,
+		observation.NativeTurnID,
+		itemID,
+		fmt.Sprintf("%d", index),
+		changeKind,
+		normalizeArtifactPathForIdentity(path),
+		normalizeArtifactPathForIdentity(movePath),
+	}, "\x00")
 }
 
 func artifactCaptureGap(sourceEventID string, observation EventObservation, itemID string, index int, eventPath, changeKind, reason string) ArtifactCaptureGap {

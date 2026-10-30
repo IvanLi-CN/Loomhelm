@@ -91,6 +91,94 @@ func TestArtifactCandidatesFromCodexFileChange(t *testing.T) {
 	}
 }
 
+func TestArtifactCandidateRecoverySkipsExistingIdentityBeforeReading(t *testing.T) {
+	event := testFileChangeEvent("source-event-recovery")
+	observation := EventObservation{
+		AdapterSessionID:  "adapter-session-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "turn-1",
+	}
+	initial, gaps, err := artifactCandidatesFromEventWithReader(context.Background(), event, observation, fixedArtifactReader{content: []byte("original bytes\n")})
+	if err != nil || len(gaps) != 0 || len(initial) != 1 {
+		t.Fatalf("initial artifact capture = candidates %+v, gaps %+v, error %v", initial, gaps, err)
+	}
+	readCalls := 0
+	replayed, replayGaps, err := artifactCandidatesFromEventWithReaderSkipping(context.Background(), event, observation, fixedArtifactReader{
+		content: []byte("later file bytes\n"),
+		calls:   &readCalls,
+	}, func(id string) bool {
+		return id == initial[0].ID
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 0 || len(replayGaps) != 0 || readCalls != 0 {
+		t.Fatalf("replayed existing artifact = candidates %+v, gaps %+v, read calls %d", replayed, replayGaps, readCalls)
+	}
+}
+
+func TestReplayPendingArtifactCapturesDoesNotReReadExistingPublication(t *testing.T) {
+	directory := privateTestDir(t)
+	workspace := filepath.Join(directory, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "private.txt"), []byte("later file bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err := OpenJournal(filepath.Join(directory, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	outbox, err := OpenArtifactOutbox(filepath.Join(directory, "artifacts.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	event := testFileChangeEvent("source-event-recovery-wiring")
+	observation := EventObservation{
+		AdapterSessionID:  "adapter-session-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "turn-1",
+	}
+	if _, _, err := journal.AppendObservedEventWithRecord(event, observation); err != nil {
+		t.Fatal(err)
+	}
+	initial, _, err := artifactCandidatesFromEventWithReader(context.Background(), event, observation, fixedArtifactReader{content: []byte("original bytes\n")})
+	if err != nil || len(initial) != 1 {
+		t.Fatalf("initial artifact candidates = %+v, error = %v", initial, err)
+	}
+	if _, _, err := outbox.Ensure(initial[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	transport := newFakeTransport()
+	state := &adapterSessionState{
+		session:        protocol.AdapterSession{SessionID: observation.AdapterSessionID, ExternalThreadRef: observation.ExternalThreadRef},
+		gatewaySession: protocol.GatewaySession{Handle: "gateway-1", Generation: observation.Generation},
+		transport:      transport,
+		workspace:      workspace,
+		activeTurns:    make(map[string]string),
+	}
+	adapter := &Adapter{
+		journal:   journal,
+		artifacts: outbox,
+		sessions:  map[string]*adapterSessionState{state.session.SessionID: state},
+	}
+	if err := adapter.ReplayPendingArtifactCaptures(); err != nil {
+		t.Fatal(err)
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if len(transport.calls) != 0 {
+		t.Fatalf("replayed existing publication contacted app-server = %+v", transport.calls)
+	}
+}
+
 func TestArtifactCandidatesRequireReaderAuthorizationForAdd(t *testing.T) {
 	event := testFileChangeEvent("source-event-unauthorized")
 	event.Payload = json.RawMessage(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item-1","type":"fileChange","changes":[{"path":"other.txt","kind":{"type":"add"},"diff":"new file bytes\n"}]}}}`)
@@ -636,6 +724,7 @@ func testFileChangeEvent(eventID string) protocol.Event {
 
 type fixedArtifactReader struct {
 	content []byte
+	calls   *int
 }
 
 func (r fixedArtifactReader) ValidatePath(path string) error {
@@ -648,6 +737,9 @@ func (r fixedArtifactReader) ValidatePath(path string) error {
 func (r fixedArtifactReader) ReadFile(_ context.Context, path string) ([]byte, error) {
 	if path != "private.txt" {
 		return nil, ErrArtifactPathUnauthorized
+	}
+	if r.calls != nil {
+		(*r.calls)++
 	}
 	return append([]byte(nil), r.content...), nil
 }

@@ -1418,6 +1418,10 @@ func (a *Adapter) appendObservedEventFromSourceWithIdentity(state *adapterSessio
 }
 
 func (a *Adapter) captureArtifactCandidates(state *adapterSessionState, event protocol.Event, observation EventObservation) error {
+	return a.captureArtifactCandidatesWithSkip(state, event, observation, nil)
+}
+
+func (a *Adapter) captureArtifactCandidatesWithSkip(state *adapterSessionState, event protocol.Event, observation EventObservation, skip func(string) bool) error {
 	if a == nil || a.artifacts == nil {
 		return nil
 	}
@@ -1429,7 +1433,7 @@ func (a *Adapter) captureArtifactCandidates(state *adapterSessionState, event pr
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), artifactReadTimeout)
 	defer cancel()
-	candidates, gaps, err := artifactCandidatesFromEventWithReader(ctx, event, observation, reader)
+	candidates, gaps, err := artifactCandidatesFromEventWithReaderSkipping(ctx, event, observation, reader, skip)
 	if err != nil {
 		return fmt.Errorf("extract file-change artifact: %w", err)
 	}
@@ -1571,7 +1575,10 @@ func (a *Adapter) ReplayPendingArtifactCaptures() error {
 			state.eventMu.Unlock()
 			continue
 		}
-		err := a.captureArtifactCandidates(state, observed.Event, observed.Observation)
+		err := a.captureArtifactCandidatesWithSkip(state, observed.Event, observed.Observation, func(id string) bool {
+			_, exists := a.artifacts.Publication(id)
+			return exists
+		})
 		state.eventMu.Unlock()
 		if err != nil {
 			return fmt.Errorf("recover artifact capture for source event %q: %w", observed.Event.EventID, err)
