@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net/url"
 	"os"
 	"strings"
@@ -20,8 +21,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )
-
-const testMigrationAdvisoryLockKey int64 = 0x4c6f6f6d68656c6d
 
 func TestDatabaseMigrateAndReopen(t *testing.T) {
 	config := databaseConfigForTest(t)
@@ -215,7 +214,7 @@ func TestDatabaseMigrateDoesNotLeakSessionSearchPathToPool(t *testing.T) {
 func TestMigrationLockSerializesConcurrentCallbacksWithSinglePoolConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	config := databaseConfigForTest(t)
+	config := migrationLockTestConfig(t)
 	config.MinConns = 1
 	config.MaxConns = 1
 
@@ -260,7 +259,7 @@ func TestMigrationLockSerializesConcurrentCallbacksWithSinglePoolConnection(t *t
 func TestMigrationLockAcceptsPoolOnlyURLOptionsWithSinglePoolConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	config := databaseConfigForTest(t)
+	config := migrationLockTestConfig(t)
 	config.URL = withPoolMaxConnsOne(t, config.URL)
 	config.MinConns = 1
 	config.MaxConns = 1
@@ -282,7 +281,7 @@ func TestMigrationLockAcceptsPoolOnlyURLOptionsWithSinglePoolConnection(t *testi
 func TestMigrationLockPreservesContextErrorDuringConnectionSetup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	config := databaseConfigForTest(t)
+	config := migrationLockTestConfig(t)
 	config.MinConns = 1
 	config.MaxConns = 1
 
@@ -316,7 +315,7 @@ func TestMigrationLockPreservesContextErrorDuringConnectionSetup(t *testing.T) {
 }
 
 func TestMigrationLockPreservesContextErrorDuringAdvisoryLockWait(t *testing.T) {
-	baseConfig := databaseConfigForTest(t)
+	baseConfig := migrationLockTestConfig(t)
 	baseConfig.MinConns = 1
 	baseConfig.MaxConns = 1
 	const applicationName = "loomhelm-migration-lock-waiter-test"
@@ -336,7 +335,7 @@ func TestMigrationLockPreservesContextErrorDuringAdvisoryLockWait(t *testing.T) 
 		t.Fatalf("pgx.Connect() lock holder error = %v", err)
 	}
 	defer holder.Close(context.Background())
-	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", testMigrationAdvisoryLockKey); err != nil {
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", baseConfig.MigrationLockKey); err != nil {
 		t.Fatalf("acquire test advisory lock error = %v", err)
 	}
 
@@ -379,6 +378,18 @@ func databaseConfigForTest(t *testing.T) database.Config {
 		t.Fatalf("load database configuration: %v", err)
 	}
 	return database.Config{URL: config.URL, MinConns: config.MinConns, MaxConns: config.MaxConns}
+}
+
+func migrationLockTestConfig(t *testing.T) database.Config {
+	t.Helper()
+	config := databaseConfigForTest(t)
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(fmt.Sprintf("%d:%s", os.Getpid(), t.Name())))
+	config.MigrationLockKey = int64(hash.Sum64())
+	if config.MigrationLockKey == 0 {
+		config.MigrationLockKey = 1
+	}
+	return config
 }
 
 func withPoolMaxConnsOne(t *testing.T, rawURL string) string {

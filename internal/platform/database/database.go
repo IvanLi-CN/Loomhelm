@@ -23,6 +23,9 @@ type Config struct {
 	URL      string
 	MinConns int32
 	MaxConns int32
+	// MigrationLockKey overrides the stable cross-process key when non-zero.
+	// Production callers leave it unset; tests can isolate intentional lock holders.
+	MigrationLockKey int64
 }
 
 func (c Config) poolConfig() (*pgxpool.Config, error) {
@@ -60,9 +63,10 @@ func (c Config) Validate() error {
 }
 
 type DB struct {
-	pool       *pgxpool.Pool
-	queries    *generated.Queries
-	connConfig *pgx.ConnConfig
+	pool             *pgxpool.Pool
+	queries          *generated.Queries
+	connConfig       *pgx.ConnConfig
+	migrationLockKey int64
 }
 
 func Open(ctx context.Context, cfg Config) (*DB, error) {
@@ -83,7 +87,16 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, errors.New("open database pool")
 	}
-	db := &DB{pool: pool, queries: generated.New(pool), connConfig: connConfig}
+	migrationLockKey := cfg.MigrationLockKey
+	if migrationLockKey == 0 {
+		migrationLockKey = migrationAdvisoryLockKey
+	}
+	db := &DB{
+		pool:             pool,
+		queries:          generated.New(pool),
+		connConfig:       connConfig,
+		migrationLockKey: migrationLockKey,
+	}
 	if err := db.Ping(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
@@ -172,14 +185,14 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, unlockErr := lockConn.Exec(closeCtx, unlockQuery, migrationAdvisoryLockKey); unlockErr != nil {
+		if _, unlockErr := lockConn.Exec(closeCtx, unlockQuery, db.migrationLockKey); unlockErr != nil {
 			_ = lockConn.Close(closeCtx)
 			return
 		}
 		_ = lockConn.Close(closeCtx)
 	}()
 
-	if err := acquireMigrationLock(ctx, lockConn, lockQuery); err != nil {
+	if err := acquireMigrationLock(ctx, lockConn, lockQuery, db.migrationLockKey); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("acquire database migration lock: %w", err)
 		}
@@ -188,10 +201,10 @@ func (db *DB) WithMigrationLock(ctx context.Context, fn func(context.Context) er
 	return fn(context.WithValue(ctx, migrationLockContextKey{}, struct{}{}))
 }
 
-func acquireMigrationLock(ctx context.Context, conn *pgx.Conn, query string) error {
+func acquireMigrationLock(ctx context.Context, conn *pgx.Conn, query string, lockKey int64) error {
 	for {
 		var acquired bool
-		if err := conn.QueryRow(ctx, query, migrationAdvisoryLockKey).Scan(&acquired); err != nil {
+		if err := conn.QueryRow(ctx, query, lockKey).Scan(&acquired); err != nil {
 			return err
 		}
 		if acquired {
