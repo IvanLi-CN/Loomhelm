@@ -124,6 +124,11 @@ func (db *DB) migrate(ctx context.Context) error {
 
 	sqlDB := stdlib.OpenDBFromPool(db.pool)
 	defer sqlDB.Close()
+	// Migration 00016 narrows search_path to current_schema() before its
+	// schema-local concurrent index replacement. Keep every migration statement
+	// on that session so the narrowed path cannot be lost between Exec calls.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
 	if err != nil {
 		return fmt.Errorf("create database migration provider: %w", err)

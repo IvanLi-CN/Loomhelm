@@ -46,6 +46,8 @@ import time
 lock_path = pathlib.Path(sys.argv[1])
 ready_path = pathlib.Path(sys.argv[2])
 parent_pid = int(sys.argv[3])
+blocked_path = pathlib.Path(os.environ["LOOMHELM_PREVIEW_TEST_LOCK_BLOCKED_FILE"]) if os.environ.get("LOOMHELM_PREVIEW_TEST_LOCK_BLOCKED_FILE") else None
+blocked_reported = False
 lock_path.parent.mkdir(parents=True, exist_ok=True)
 try:
     with lock_path.open("a+", encoding="utf-8") as handle:
@@ -56,6 +58,9 @@ try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
+                if blocked_path is not None and not blocked_reported:
+                    blocked_path.write_text("blocked\n", encoding="utf-8")
+                    blocked_reported = True
                 time.sleep(0.25)
         ready_path.write_text("ready\n", encoding="utf-8")
         while os.getppid() == parent_pid:

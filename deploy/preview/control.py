@@ -17,7 +17,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -94,9 +94,14 @@ def write_state(state_dir: Path, state: dict[str, Any]) -> None:
 
 
 @contextmanager
-def locked_file(path: Path):
+def locked_file(path: Path, on_blocked: Optional[Callable[[], None]] = None):
     with path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if on_blocked is not None:
+                on_blocked()
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield
         finally:
@@ -104,15 +109,15 @@ def locked_file(path: Path):
 
 
 @contextmanager
-def state_lock(state_dir: Path):
+def state_lock(state_dir: Path, on_blocked: Optional[Callable[[], None]] = None):
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path_lock = state_dir / ".state.lock"
     if os.environ.get("LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD") == "1":
-        with locked_file(state_path_lock):
+        with locked_file(state_path_lock, on_blocked=on_blocked):
             yield
         return
-    with locked_file(state_dir / ".workflow.lock"):
-        with locked_file(state_path_lock):
+    with locked_file(state_dir / ".workflow.lock", on_blocked=on_blocked):
+        with locked_file(state_path_lock, on_blocked=on_blocked):
             yield
 
 

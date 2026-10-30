@@ -11,6 +11,7 @@ import unittest
 from argparse import Namespace
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 import control
@@ -180,7 +181,15 @@ class PreviewControlTest(unittest.TestCase):
         args = Namespace(**options)
         getattr(control, f"command_{name.replace('-', '_')}")(args)
 
-    def start_lock_holder(self, state_dir: Path, ready: Path, release: Path, *, workflow: bool) -> subprocess.Popen:
+    def start_lock_holder(
+        self,
+        state_dir: Path,
+        ready: Path,
+        release: Path,
+        *,
+        workflow: bool,
+        blocked: Optional[Path] = None,
+    ) -> subprocess.Popen:
         source = """
 from pathlib import Path
 import sys
@@ -191,7 +200,13 @@ import control
 state_dir = Path(sys.argv[1])
 ready = Path(sys.argv[2])
 release = Path(sys.argv[3])
-with control.state_lock(state_dir):
+blocked = Path(sys.argv[4]) if sys.argv[4] else None
+
+def on_blocked():
+    if blocked is not None:
+        blocked.write_text('blocked', encoding='utf-8')
+
+with control.state_lock(state_dir, on_blocked=on_blocked):
     ready.write_text('locked', encoding='utf-8')
     while not release.exists():
         time.sleep(0.01)
@@ -204,7 +219,7 @@ with control.state_lock(state_dir):
         else:
             environment["LOOMHELM_PREVIEW_WORKFLOW_LOCK_HELD"] = "1"
         return subprocess.Popen(
-            [sys.executable, "-c", source, str(state_dir), str(ready), str(release)],
+            [sys.executable, "-c", source, str(state_dir), str(ready), str(release), str(blocked or "")],
             cwd=module_dir,
             env=environment,
             stdout=subprocess.PIPE,
@@ -231,12 +246,19 @@ with control.state_lock(state_dir):
             holder_release = root / "holder.release"
             contender_ready = root / "contender.ready"
             contender_release = root / "contender.release"
+            contender_blocked = root / "contender.blocked"
             holder = self.start_lock_holder(state_dir, holder_ready, holder_release, workflow=False)
             contender = None
             try:
                 self.wait_for_file(holder_ready, holder)
-                contender = self.start_lock_holder(state_dir, contender_ready, contender_release, workflow=False)
-                time.sleep(0.15)
+                contender = self.start_lock_holder(
+                    state_dir,
+                    contender_ready,
+                    contender_release,
+                    workflow=False,
+                    blocked=contender_blocked,
+                )
+                self.wait_for_file(contender_blocked, contender)
                 self.assertIsNone(contender.poll(), "state lock contender acquired before the holder released it")
                 self.assertFalse(contender_ready.exists())
                 holder_release.touch()
@@ -263,12 +285,14 @@ with control.state_lock(state_dir):
             subprocess.run(["git", "init", "--quiet", str(repo)], check=True, capture_output=True, timeout=5)
             holder_ready = root / "holder.ready"
             holder_release = root / "holder.release"
+            contender_blocked = root / "contender.blocked"
             holder = self.start_lock_holder(state_dir, holder_ready, holder_release, workflow=True)
             contender = None
             try:
                 self.wait_for_file(holder_ready, holder)
                 environment = os.environ.copy()
                 environment["LOOMHELM_PREVIEW_STATE_DIR"] = str(state_dir)
+                environment["LOOMHELM_PREVIEW_TEST_LOCK_BLOCKED_FILE"] = str(contender_blocked)
                 contender = subprocess.Popen(
                     [str(repo / "scripts" / "preview"), "init"],
                     cwd=repo,
@@ -277,7 +301,7 @@ with control.state_lock(state_dir):
                     stderr=subprocess.PIPE,
                     text=True,
                 )
-                time.sleep(0.15)
+                self.wait_for_file(contender_blocked, contender)
                 self.assertIsNone(contender.poll(), "preview workflow acquired before the holder released it")
                 self.assertFalse((state_dir / "state.json").exists())
                 holder_release.touch()

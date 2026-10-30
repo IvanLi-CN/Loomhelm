@@ -18,7 +18,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
 )
 
-const migrationTimeout = 30 * time.Second
+const migrationTimeout = platform.DefaultStartupTimeout
 
 type migrationOperation string
 
