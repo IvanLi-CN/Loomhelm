@@ -8,7 +8,7 @@
 
 账本覆盖 PRD 中的 `AC-LH-001` 到 `AC-LH-013`，每项状态只能是 `passed`、`reused`、`failed`、`blocked` 或 `not_run`。
 
-`passed/current` 只表示本账本记录的命令或证据与当前源码 SHA 和当前候选 digest 同时绑定；`reused` 只能表示外部已有记录被引用，不能替代当前候选的独立通过证明。
+`passed/source-bound` 表示命令执行前后验证了干净源码、tree SHA 和 candidate-v2 候选身份，但命令仍可能直接运行源码；只有命令新建并写入匹配的 candidate execution proof，报告才可显示 `passed/current`；`reused` 只能表示外部已有记录被引用，不能替代当前候选的独立通过证明。
 
 `AC-LH-005` 必须使用同一个 Desktop 活跃会话的真实 thread 和 turn；历史记录、fork、copy、另一个 app-server 进程或仅有 Web 会话都不满足该项。
 
@@ -56,7 +56,7 @@ scripts/accept-v01 init \
   --candidate-manifest "$candidate_dir/candidate-manifest.json"
 ```
 
-`init` 会拒绝脏工作树、非当前 HEAD、候选清单源码 SHA 不一致或同一账本的身份漂移；清单中的 `candidate.digest`、清单 SHA-256 和源码 tree SHA 会写入 `ledger.json`。
+`init` 会拒绝脏工作树、非当前 HEAD、旧版或不完整 candidate manifest、候选清单源码 SHA 不一致或同一账本的身份漂移；它会调用 `scripts/promote-candidate --dry-run` 验证 canonical manifest、sidecar、候选 archive、全部构建输入和重算 digest，再把 `candidate.digest`、清单 SHA-256 和源码 tree SHA 写入 `ledger.json`。
 
 ## 运行当前证据
 
@@ -90,20 +90,20 @@ scripts/accept-v01 run \
   go test -count=1 ./internal/app -run '^TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArtifacts$'
 ```
 
-同一条当前候选测试日志可以作为 `AC-LH-009` 的绑定证据引用，但必须写明它覆盖的是该测试实际断言的内容，不得把一次 artifact 下载测试扩展解释成全部未知事件和 sub-agent 内容：
+同一条当前候选测试日志只能作为 `AC-LH-009` 的 `reused` 部分证据引用，必须写明它覆盖的是该测试实际断言的内容，不得把一次 artifact 下载测试扩展解释成全部未知事件和 sub-agent 内容：
 
 ```sh
 scripts/accept-v01 reuse \
   --evidence-dir /workspace/evidence/loomhelm-v01/acceptance \
   --check-id AC-LH-009 \
-  --status passed \
+  --status reused \
   --evidence /workspace/evidence/loomhelm-v01/acceptance/attempts/attempt-0002.stdout.log \
   --evidence-source-sha "$source_sha" \
   --evidence-candidate-digest "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$candidate_dir/candidate-manifest.json")" \
-  --reason 'Reuses the current artifact test log only for assertions directly covered by that test.'
+  --reason 'Reuses a source-bound artifact test log only for assertions directly covered by that test; it does not prove the full base/unknown/sub-agent matrix.'
 ```
 
-控制合同 rehearsal 可以记录 `AC-LH-011` 的当前候选 control-only 证据，但报告必须保留 runtime skipped 的边界：
+控制合同 rehearsal 可以记录 `AC-LH-011` 的 source-bound control-only 证据，但报告必须保留 runtime skipped 的边界：
 
 ```sh
 scripts/accept-v01 run \
@@ -150,7 +150,7 @@ scripts/accept-v01 mark --evidence-dir /workspace/evidence/loomhelm-v01/acceptan
 
 ## 输出与关闭
 
-同时生成 JSON 和 Markdown 报告，并检查日志中的命令、DSN、Bearer、token、secret 和 password 已脱敏：
+同时生成 JSON 和 Markdown 报告；日志会覆盖 JSON 字段、环境变量、URL credentials、Basic/Bearer 认证头和常见 secret flag，并在已知 secret 无法证明已清除时拒绝落盘：
 
 ```sh
 scripts/accept-v01 report --evidence-dir /workspace/evidence/loomhelm-v01/acceptance --format json --output /workspace/evidence/loomhelm-v01/acceptance/V01.json

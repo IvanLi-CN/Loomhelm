@@ -94,11 +94,11 @@ jobs:
           scripts/accept-v01 reuse \
             --evidence-dir "$RUNNER_TEMP/loomhelm-v01" \
             --check-id AC-LH-009 \
-            --status passed \
+            --status reused \
             --evidence "$RUNNER_TEMP/loomhelm-v01/attempts/attempt-0002.stdout.log" \
             --evidence-source-sha "$CANDIDATE_SOURCE_SHA" \
             --evidence-candidate-digest "$candidate_digest" \
-            --reason 'Current artifact test log, limited to assertions directly covered by that test.'
+            --reason 'Source-bound artifact test log reused as historical evidence; it covers only the assertions directly exercised by that test, not the full base/unknown/sub-agent matrix.'
       - name: Run blue-green control contract rehearsal
         run: |
           scripts/accept-v01 run \

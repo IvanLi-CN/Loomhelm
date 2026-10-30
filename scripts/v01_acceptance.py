@@ -9,6 +9,7 @@ import json
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,33 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 SCHEMA_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+TREE_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 DIGEST_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+SENSITIVE_FIELD_RE = re.compile(
+    r"(?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|"
+    r"db[_-]?password|database[_-]?password|password|passwd|secret|token|"
+    r"api[_-]?key|apikey|auth[_-]?token|private[_-]?key|credential(?:s)?|"
+    r"authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|"
+    r"[a-z][a-z0-9]*(?:[_-](?:token|secret|password|passwd|key|credential|dsn)))",
+    re.IGNORECASE,
+)
+SENSITIVE_ENV_RE = re.compile(
+    r"(?i)(?:^|_)(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|"
+    r"credential|credentials|dsn|database_url|authorization|cookie)(?:$|_)"
+)
+SENSITIVE_HEADER_RE = re.compile(
+    r"(?im)(?P<prefix>\b(?:authorization|proxy-authorization|cookie|set-cookie|"
+    r"x-api-key|x-auth-token)\s*:\s*)(?P<value>[^\r\n]*)"
+)
+SENSITIVE_ASSIGNMENT_RE = re.compile(
+    rf"(?i)(?P<prefix>(?:['\"]?{SENSITIVE_FIELD_RE.pattern}['\"]?)\s*[:=]\s*)"
+    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;&]+)"
+)
+CLI_SECRET_RE = re.compile(
+    r"(?i)(?P<prefix>(?:^|\s)(?:--?|/)(?:password|passwd|token|secret|"
+    r"api[-_]?key|auth(?:orization)?)(?:=|\s+))"
+    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;&]+)"
+)
 
 CHECKS: Dict[str, Dict[str, str]] = {
     "AC-LH-001": {
@@ -132,19 +159,44 @@ def normalize_digest(value: str, label: str = "digest") -> str:
     return value
 
 
-def redact(value: str) -> str:
+def _redact_value(match: re.Match[str]) -> str:
+    value = match.group("value")
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = f"{value[0]}<redacted>{value[-1]}"
+    else:
+        value = "<redacted>"
+    return f"{match.group('prefix')}{value}"
+
+
+def redact(value: str, secrets: Sequence[str] = ()) -> str:
     value = re.sub(
-        r"(?i)(postgres(?:ql)?://[^\s/:@]+:)[^\s/@]+(@)",
-        r"\1<redacted>\2",
+        r"(?i)(?P<prefix>\b[a-z][a-z0-9+.-]*://)[^/\s?#]+@",
+        r"\g<prefix><redacted>@",
         value,
     )
-    value = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1<redacted>", value)
-    value = re.sub(
-        r"(?i)\b(api[_-]?key|authorization|password|secret|token)(\s*[:=]\s*)[^\s,;]+",
-        r"\1\2<redacted>",
-        value,
-    )
+    value = re.sub(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1<redacted>", value)
+    value = re.sub(r"(?i)\b(Basic\s+)[A-Za-z0-9+/=_-]+", r"\1<redacted>", value)
+    value = SENSITIVE_HEADER_RE.sub(r"\g<prefix><redacted>", value)
+    value = SENSITIVE_ASSIGNMENT_RE.sub(_redact_value, value)
+    value = CLI_SECRET_RE.sub(_redact_value, value)
+    for secret in sorted({item for item in secrets if len(item) >= 4}, key=len, reverse=True):
+        value = value.replace(secret, "<redacted>")
     return value
+
+
+def sensitive_environment_values(environment: Dict[str, str]) -> List[str]:
+    return [
+        value
+        for name, value in environment.items()
+        if SENSITIVE_ENV_RE.search(name) and len(value) >= 4
+    ]
+
+
+def safe_redact(value: str, secrets: Sequence[str]) -> str:
+    redacted = redact(value, secrets)
+    if any(secret in redacted for secret in secrets if len(secret) >= 4):
+        raise ValueError("known secret remained in command output")
+    return redacted
 
 
 def read_json(path: Path) -> Dict[str, Any]:
@@ -157,27 +209,48 @@ def read_json(path: Path) -> Dict[str, Any]:
     return value
 
 
+def verify_candidate_bundle(path: Path) -> Dict[str, Any]:
+    destination = Path(tempfile.mkdtemp(prefix="loomhelm-v01-candidate-"))
+    try:
+        verifier = repo_root() / "scripts" / "promote-candidate"
+        result = subprocess.run(
+            [str(verifier), "--manifest", str(path), "--destination", str(destination), "--dry-run"],
+            cwd=str(repo_root()),
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            detail = redact(result.stderr or result.stdout).strip() or "candidate verifier failed"
+            raise ValueError(f"candidate manifest failed promotion verification: {detail}")
+        return read_json(path)
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)
+
+
 def candidate_manifest(path: Path) -> Dict[str, str]:
-    manifest = read_json(path)
+    manifest = verify_candidate_bundle(path)
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 2:
+        raise ValueError(f"candidate manifest is not schema version 2: {path}")
+    if set(manifest) != {"schema_version", "candidate", "platform", "inputs", "artifacts"}:
+        raise ValueError(f"candidate manifest is not candidate-v2: {path}")
     candidate = manifest.get("candidate")
-    if isinstance(candidate, dict):
-        source_sha = candidate.get("source_sha")
-        digest = candidate.get("digest")
-        tree_sha = candidate.get("source_tree_sha", "")
-    else:
-        source_sha = manifest.get("source_sha")
-        digest = manifest.get("artifact_digest")
-        tree_sha = ""
-    if not isinstance(source_sha, str):
-        raise ValueError(f"candidate manifest has no candidate.source_sha: {path}")
-    if not isinstance(digest, str):
-        raise ValueError(f"candidate manifest has no candidate.digest: {path}")
+    if not isinstance(candidate, dict):
+        raise ValueError(f"candidate manifest has no candidate identity: {path}")
+    if set(candidate) != {"digest", "source_sha", "source_tree_sha", "source_date_epoch"}:
+        raise ValueError(f"candidate manifest has an incomplete v2 identity: {path}")
+    source_sha = candidate.get("source_sha")
+    digest = candidate.get("digest")
+    tree_sha = candidate.get("source_tree_sha")
+    if not isinstance(source_sha, str) or not isinstance(digest, str) or not isinstance(tree_sha, str):
+        raise ValueError(f"candidate manifest has incomplete candidate identity: {path}")
     validate_sha(source_sha, "candidate source SHA")
     normalize_digest(digest, "candidate digest")
-    result = {"source_sha": source_sha, "digest": digest}
-    if isinstance(tree_sha, str) and tree_sha:
-        result["source_tree_sha"] = tree_sha
-    return result
+    if TREE_SHA_RE.fullmatch(tree_sha) is None:
+        raise ValueError("candidate source tree SHA must be a full lowercase Git tree SHA")
+    return {"source_sha": source_sha, "digest": digest, "source_tree_sha": tree_sha}
 
 
 def evidence_digest(path: Path) -> Tuple[str, int]:
@@ -252,10 +325,59 @@ def check_record(ledger: Dict[str, Any], check_id: str) -> Dict[str, Any]:
     return record
 
 
-def current_binding(ledger: Dict[str, Any], source_sha: str, candidate_digest: Optional[str]) -> bool:
-    expected_source = ledger["source"]["sha"]
-    expected_digest = ledger.get("candidate", {}).get("digest")
-    return source_sha == expected_source and candidate_digest is not None and candidate_digest == expected_digest
+def validate_execution_binding(ledger: Dict[str, Any]) -> Dict[str, Any]:
+    source = ledger.get("source", {})
+    expected_source = source.get("sha")
+    expected_tree = source.get("tree_sha")
+    if not isinstance(expected_source, str) or not isinstance(expected_tree, str):
+        raise ValueError("ledger source binding is incomplete")
+    head_sha = run_git("rev-parse", "HEAD")
+    tree_sha = run_git("rev-parse", "HEAD^{tree}")
+    if head_sha != expected_source:
+        raise ValueError(f"checkout HEAD {head_sha} does not match ledger source SHA {expected_source}")
+    if tree_sha != expected_tree:
+        raise ValueError(f"checkout tree {tree_sha} does not match ledger source tree SHA {expected_tree}")
+    if run_git("status", "--porcelain=v1", "--untracked-files=all"):
+        raise ValueError("checkout must remain clean for acceptance evidence")
+
+    candidate = ledger.get("candidate") or {}
+    candidate_digest = candidate.get("digest")
+    candidate_tree = candidate.get("source_tree_sha")
+    candidate_verified = False
+    if candidate:
+        manifest_path_value = candidate.get("manifest_path")
+        if not isinstance(manifest_path_value, str):
+            raise ValueError("ledger candidate manifest path is missing")
+        parsed = candidate_manifest(ensure_absolute(manifest_path_value, "candidate manifest"))
+        if parsed["source_sha"] != expected_source:
+            raise ValueError("candidate manifest source SHA does not match the ledger")
+        if parsed["source_tree_sha"] != expected_tree:
+            raise ValueError("candidate manifest source tree SHA does not match the ledger")
+        if parsed["digest"] != candidate_digest or parsed["source_tree_sha"] != candidate_tree:
+            raise ValueError("candidate manifest identity does not match the ledger")
+        candidate_verified = True
+    return {
+        "source_sha": expected_source,
+        "source_tree_sha": expected_tree,
+        "candidate_digest": candidate_digest,
+        "candidate_verified": candidate_verified,
+    }
+
+
+def validate_candidate_execution_proof(path: Path, binding: Dict[str, Any]) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"candidate execution proof must be a new regular file: {path}")
+    proof = read_json(path)
+    if set(proof) != {"execution", "source_sha", "source_tree_sha", "candidate_digest"}:
+        raise ValueError("candidate execution proof has unexpected fields")
+    if proof.get("execution") != "candidate":
+        raise ValueError("candidate execution proof is not marked as candidate execution")
+    if proof.get("source_sha") != binding["source_sha"]:
+        raise ValueError("candidate execution proof source SHA does not match the ledger")
+    if proof.get("source_tree_sha") != binding["source_tree_sha"]:
+        raise ValueError("candidate execution proof source tree SHA does not match the ledger")
+    if proof.get("candidate_digest") != binding.get("candidate_digest") or not binding.get("candidate_verified"):
+        raise ValueError("candidate execution proof digest does not match the verified candidate")
 
 
 def init_ledger(args: argparse.Namespace) -> int:
@@ -372,6 +494,7 @@ def run_check(args: argparse.Namespace) -> int:
     if existing_pass and not args.allow_repeat:
         print(f"accept-v01: reusing existing passed attempt for {args.check_id}")
         return 0
+    binding = validate_execution_binding(ledger)
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
@@ -383,6 +506,11 @@ def run_check(args: argparse.Namespace) -> int:
         raise ValueError(f"invalid timeout: {args.timeout}") from error
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
+    proof_path: Optional[Path] = None
+    if args.candidate_proof:
+        proof_path = ensure_absolute(args.candidate_proof, "candidate execution proof")
+        if proof_path.exists() or proof_path.is_symlink():
+            raise ValueError(f"candidate execution proof must not exist before the attempt: {proof_path}")
     attempts_dir = evidence_dir / "attempts"
     attempts_dir.mkdir(parents=True, exist_ok=True)
     attempt_number = int(ledger.get("attempt_sequence", 0)) + 1
@@ -395,11 +523,15 @@ def run_check(args: argparse.Namespace) -> int:
     stderr = ""
     timed_out = False
     exit_code: Optional[int] = None
+    environment = os.environ.copy()
+    if binding.get("candidate_digest"):
+        environment["LOOMHELM_ACCEPTANCE_CANDIDATE_DIGEST"] = str(binding["candidate_digest"])
+    secret_values = sensitive_environment_values(environment)
     try:
         process = subprocess.Popen(
             command,
             cwd=str(repo_root()),
-            env=os.environ.copy(),
+            env=environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -423,13 +555,33 @@ def run_check(args: argparse.Namespace) -> int:
         stderr = f"accept-v01: could not execute command: {error}\n"
         exit_code = 127
     duration = round(time.monotonic() - started_clock, 3)
-    redacted_stdout = redact(stdout)
-    redacted_stderr = redact(stderr)
+    binding_error = ""
+    try:
+        validate_execution_binding(ledger)
+    except ValueError as error:
+        binding_error = redact(str(error), secret_values)
+    proof_error = ""
+    candidate_execution_proof = False
+    if proof_path is not None and not binding_error and exit_code == 0 and not timed_out:
+        try:
+            validate_candidate_execution_proof(proof_path, binding)
+            candidate_execution_proof = True
+        except ValueError as error:
+            proof_error = redact(str(error), secret_values)
+    redaction_error = ""
+    try:
+        redacted_stdout = safe_redact(stdout, secret_values)
+        redacted_stderr = safe_redact(stderr, secret_values)
+    except ValueError as error:
+        redaction_error = redact(str(error), secret_values)
+        redacted_stdout = "accept-v01: stdout withheld because secret redaction was not provable.\n"
+        redacted_stderr = "accept-v01: stderr withheld because secret redaction was not provable.\n"
     stdout_path = attempts_dir / f"{attempt_id}.stdout.log"
     stderr_path = attempts_dir / f"{attempt_id}.stderr.log"
     stdout_path.write_text(redacted_stdout, encoding="utf-8")
     stderr_path.write_text(redacted_stderr, encoding="utf-8")
-    status = "passed" if exit_code == 0 and not timed_out else "failed"
+    status = "passed" if exit_code == 0 and not timed_out and not binding_error and not proof_error and not redaction_error else "failed"
+    execution_binding = "candidate-bound" if candidate_execution_proof else "source-bound"
     attempt: Dict[str, Any] = {
         "id": attempt_id,
         "name": args.name,
@@ -439,19 +591,26 @@ def run_check(args: argparse.Namespace) -> int:
         "timeout_seconds": timeout,
         "timed_out": timed_out,
         "exit_code": exit_code,
-        "command": [redact(part) for part in command],
-        "source_sha": ledger["source"]["sha"],
+        "command": [safe_redact(part, secret_values) for part in command],
+        "source_sha": binding["source_sha"],
+        "source_tree_sha": binding["source_tree_sha"],
         "candidate_digest": ledger.get("candidate", {}).get("digest"),
+        "candidate_verified": binding["candidate_verified"],
+        "execution_binding": execution_binding,
         "stdout_log": relative_evidence_path(stdout_path, evidence_dir),
         "stderr_log": relative_evidence_path(stderr_path, evidence_dir),
         "stdout_sha256": sha256_file(stdout_path),
         "stderr_sha256": sha256_file(stderr_path),
         "stdout_bytes": stdout_path.stat().st_size,
         "stderr_bytes": stderr_path.stat().st_size,
-        "current_candidate_proof": status == "passed" and current_binding(
-            ledger, ledger["source"]["sha"], ledger.get("candidate", {}).get("digest")
-        ),
+        "current_candidate_proof": status == "passed" and candidate_execution_proof,
     }
+    if binding_error:
+        attempt["binding_error"] = binding_error
+    if proof_error:
+        attempt["candidate_proof_error"] = proof_error
+    if redaction_error:
+        attempt["redaction_error"] = redaction_error
     record.setdefault("attempts", []).append(attempt)
     record["status"] = status
     record["current_candidate_proof"] = attempt["current_candidate_proof"]
@@ -478,6 +637,8 @@ def append_evidence(record: Dict[str, Any], item: Dict[str, Any]) -> bool:
 
 
 def reuse_evidence(args: argparse.Namespace) -> int:
+    if args.status != "reused":
+        raise ValueError("external evidence can only be recorded as reused; use run for a current attempt")
     evidence_dir = ensure_absolute(args.evidence_dir, "evidence directory")
     ledger = load_ledger(evidence_dir)
     record = check_record(ledger, args.check_id)
@@ -495,8 +656,8 @@ def reuse_evidence(args: argparse.Namespace) -> int:
         "candidate_digest": candidate_digest or None,
         "status": args.status,
         "reason": args.reason,
-        "current_candidate_proof": args.status == "passed"
-        and current_binding(ledger, source_sha, candidate_digest or None),
+        "current_candidate_proof": False,
+        "execution_binding": "historical-reuse",
         "recorded_at": now(),
     }
     added = append_evidence(record, item)
@@ -530,7 +691,7 @@ def status_label(record: Dict[str, Any]) -> str:
     if status == "passed" and record.get("current_candidate_proof"):
         return "passed/current"
     if status == "passed":
-        return "passed/unbound"
+        return "passed/source-bound"
     return str(status)
 
 
@@ -559,9 +720,11 @@ def render_markdown(ledger: Dict[str, Any]) -> str:
         decisions = list(record.get("decisions", []))
         details_text: List[str] = []
         for item in evidence:
-            details_text.append(f"{item.get('status')}: {item.get('path')}")
+            reason = item.get("reason") or "no coverage note"
+            details_text.append(f"{item.get('status')}: {item.get('path')} ({reason})")
         for attempt in attempts:
-            details_text.append(f"{attempt.get('status')}: {attempt.get('stdout_log')}")
+            binding = attempt.get("execution_binding") or "unknown-binding"
+            details_text.append(f"{attempt.get('status')}: {attempt.get('stdout_log')} ({binding})")
         for decision in decisions:
             details_text.append(f"{decision.get('status')}: {decision.get('reason')}")
         evidence_text = "<br>".join(details_text) or "none"
@@ -576,6 +739,8 @@ def render_markdown(ledger: Dict[str, Any]) -> str:
             "## Boundaries",
             "",
             "A `reused` record is historical evidence and does not prove the current candidate.",
+            "A `passed/source-bound` record validates the clean source checkout and candidate bundle identity but does not claim that the command executed the candidate artifact.",
+            "Only a command-created candidate execution proof may produce `passed/current`.",
             "AC-LH-005 requires the same active Desktop thread and turn; history, fork, copy or another app-server process does not satisfy it.",
             "Actual PWA installation and runtime blue-green behavior remain unpassed unless their real evidence is recorded for this source and candidate.",
             "",
@@ -619,6 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--name", required=True)
     run.add_argument("--timeout", default="900")
     run.add_argument("--allow-repeat", action="store_true")
+    run.add_argument("--candidate-proof", help="new JSON proof file created by a command that executed the candidate")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(handler=run_check)
 
