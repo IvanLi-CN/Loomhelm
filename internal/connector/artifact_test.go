@@ -333,6 +333,67 @@ func TestArtifactOutboxPersistsRejectedPublication(t *testing.T) {
 	}
 }
 
+func TestArtifactOutboxCompactsCompletedPublication(t *testing.T) {
+	directory := privateTestDir(t)
+	path := filepath.Join(directory, "artifacts.jsonl")
+	outbox, err := OpenArtifactOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := testArtifactCandidate(t)
+	candidate.Content = bytes.Repeat([]byte("x"), 64*1024)
+	candidate.Size = int64(len(candidate.Content))
+	sum := sha256.Sum256(candidate.Content)
+	candidate.Sha256 = hex.EncodeToString(sum[:])
+	if _, _, err := outbox.Ensure(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.MarkUploaded(candidate.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.compactCompleted(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() >= before.Size() {
+		t.Fatalf("compacted artifact outbox size = %d, before = %d", after.Size(), before.Size())
+	}
+	publication, found := outbox.Publication(candidate.ID)
+	if !found || publication.State != ArtifactPublicationUploaded || len(publication.Candidate.Content) != 0 {
+		t.Fatalf("compacted uploaded publication = %+v, found = %v", publication, found)
+	}
+	if _, deduplicated, err := outbox.Ensure(candidate); err != nil || !deduplicated {
+		t.Fatalf("compacted publication retry = deduplicated %v, error %v", deduplicated, err)
+	}
+
+	newCandidate := candidate
+	newCandidate.ID = "artifact-compacted-new"
+	newCandidate.EventID = "artifact-event-compacted-new"
+	newCandidate.SourceEventID = "source-event-compacted-new"
+	if _, deduplicated, err := outbox.Ensure(newCandidate); err != nil || deduplicated {
+		t.Fatalf("new publication after compaction = deduplicated %v, error %v", deduplicated, err)
+	}
+	if err := outbox.Close(); err != nil {
+		t.Fatal(err)
+	}
+	outbox, err = OpenArtifactOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	publication, found = outbox.Publication(candidate.ID)
+	if !found || publication.State != ArtifactPublicationUploaded || len(publication.Candidate.Content) != 0 {
+		t.Fatalf("recovered compacted publication = %+v, found = %v", publication, found)
+	}
+}
+
 func TestUploadArtifactForEventUsesMappedIdentityAndRetries(t *testing.T) {
 	directory := privateTestDir(t)
 	journal, err := OpenJournal(filepath.Join(directory, "journal.jsonl"))

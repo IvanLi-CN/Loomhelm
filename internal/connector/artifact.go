@@ -86,9 +86,10 @@ type ArtifactCaptureGap struct {
 	Observation   EventObservation `json:"observation"`
 }
 
-// ArtifactPublication is a durable outbox entry. The content is a bounded
-// copy of the event-owned file bytes, so a reconnect can retry without
-// reopening a path supplied by Codex or by an untrusted payload.
+// ArtifactPublication is a durable outbox entry. Pending entries retain a
+// bounded copy of the event-owned file bytes, so a reconnect can retry without
+// reopening a path supplied by Codex or by an untrusted payload. Completed
+// entries retain their immutable identity metadata but may release the bytes.
 type ArtifactPublication struct {
 	Candidate     ArtifactCandidate        `json:"candidate"`
 	State         ArtifactPublicationState `json:"state"`
@@ -281,13 +282,15 @@ func (o *ArtifactOutbox) MarkUploaded(id string) error {
 		return err
 	}
 	publication.State = ArtifactPublicationUploaded
+	publication.Candidate.Content = nil
 	o.entries[publication.Candidate.ID] = publication
 	return nil
 }
 
 // MarkRejected durably records a non-retryable server rejection. The
-// immutable candidate remains available for diagnostics, but Pending excludes
-// it so one bad publication cannot tear down or starve the gateway connection.
+// immutable candidate metadata remains available for diagnostics, but Pending
+// excludes it so one bad publication cannot tear down or starve the gateway
+// connection.
 func (o *ArtifactOutbox) MarkRejected(id, code string) error {
 	if o == nil {
 		return errors.New("artifact outbox is not open")
@@ -326,6 +329,7 @@ func (o *ArtifactOutbox) MarkRejected(id, code string) error {
 	}
 	publication.State = ArtifactPublicationRejected
 	publication.RejectionCode = code
+	publication.Candidate.Content = nil
 	o.entries[publication.Candidate.ID] = publication
 	return nil
 }
@@ -377,6 +381,155 @@ func (o *ArtifactOutbox) Pending() []ArtifactPublication {
 		}
 	}
 	return filtered
+}
+
+// compactCompleted rewrites the outbox after completed publications have
+// released their immutable bytes. The replacement is installed atomically so
+// a restart sees either the old complete ledger or the new complete ledger.
+func (o *ArtifactOutbox) compactCompleted() error {
+	if o == nil {
+		return errors.New("artifact outbox is not open")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.compactCompletedLocked()
+}
+
+func (o *ArtifactOutbox) compactCompletedLocked() error {
+	if o.file == nil {
+		return errors.New("artifact outbox is closed")
+	}
+	completed := false
+	for _, publication := range o.entries {
+		if publication.State != ArtifactPublicationPending {
+			completed = true
+			break
+		}
+	}
+	if !completed {
+		return nil
+	}
+
+	temporary, err := os.CreateTemp(filepath.Dir(o.path), "."+filepath.Base(o.path)+".compact-")
+	if err != nil {
+		return fmt.Errorf("create compacted artifact outbox: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	removeTemporary := true
+	defer func() {
+		if removeTemporary {
+			_ = temporary.Close()
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("secure compacted artifact outbox: %w", err)
+	}
+
+	var written int64
+	writeRecord := func(record artifactOutboxRecord) error {
+		data, marshalErr := json.Marshal(record)
+		if marshalErr != nil {
+			return fmt.Errorf("encode compacted artifact outbox: %w", marshalErr)
+		}
+		data = append(data, '\n')
+		if len(data) > maxArtifactRecordBytes {
+			return fmt.Errorf("compacted artifact outbox record exceeds %d bytes: %w", maxArtifactRecordBytes, ErrJournalTooLarge)
+		}
+		if written > maxArtifactOutboxBytes-int64(len(data)) {
+			return fmt.Errorf("compacted artifact outbox exceeds %d bytes: %w", maxArtifactOutboxBytes, ErrJournalTooLarge)
+		}
+		if _, writeErr := writeAll(temporary, data); writeErr != nil {
+			return fmt.Errorf("write compacted artifact outbox: %w", writeErr)
+		}
+		written += int64(len(data))
+		return nil
+	}
+	if err := writeRecord(artifactOutboxRecord{FormatVersion: artifactOutboxFormatVersion, Type: "header", At: now()}); err != nil {
+		return err
+	}
+	publications := make([]ArtifactPublication, 0, len(o.entries))
+	for _, publication := range o.entries {
+		publications = append(publications, cloneArtifactPublication(publication))
+	}
+	sort.Slice(publications, func(i, j int) bool { return publications[i].Candidate.ID < publications[j].Candidate.ID })
+	for _, publication := range publications {
+		if publication.State != ArtifactPublicationPending {
+			publication.Candidate.Content = nil
+		}
+		if err := writeRecord(artifactOutboxRecord{
+			FormatVersion: artifactOutboxFormatVersion,
+			Type:          "publication",
+			At:            now(),
+			Publication:   &publication,
+		}); err != nil {
+			return err
+		}
+	}
+	gaps := make([]ArtifactCaptureGap, 0, len(o.gaps))
+	for _, gap := range o.gaps {
+		gaps = append(gaps, gap)
+	}
+	sort.Slice(gaps, func(i, j int) bool { return gaps[i].ID < gaps[j].ID })
+	for _, gap := range gaps {
+		if err := writeRecord(artifactOutboxRecord{
+			FormatVersion: artifactOutboxFormatVersion,
+			Type:          "gap",
+			At:            now(),
+			Gap:           &gap,
+		}); err != nil {
+			return err
+		}
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync compacted artifact outbox: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close compacted artifact outbox: %w", err)
+	}
+
+	replacement, err := openJournalFile(temporaryPath)
+	if err != nil {
+		return fmt.Errorf("reopen compacted artifact outbox: %w", err)
+	}
+	closeReplacement := true
+	defer func() {
+		if closeReplacement {
+			_ = unlockJournalFile(replacement)
+			_ = replacement.Close()
+		}
+	}()
+	if err := replacement.Chmod(0o600); err != nil {
+		return fmt.Errorf("secure reopened artifact outbox: %w", err)
+	}
+	if err := lockJournalFile(replacement); err != nil {
+		return fmt.Errorf("lock reopened artifact outbox: %w", err)
+	}
+	oldInfo, err := o.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat current artifact outbox: %w", err)
+	}
+	pathInfo, err := os.Lstat(o.path)
+	if err != nil {
+		return fmt.Errorf("stat artifact outbox path: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || !os.SameFile(oldInfo, pathInfo) {
+		return errors.New("artifact outbox path changed while compacting")
+	}
+	if err := os.Rename(temporaryPath, o.path); err != nil {
+		return fmt.Errorf("replace artifact outbox: %w", err)
+	}
+	removeTemporary = false
+	oldFile := o.file
+	o.file = replacement
+	closeReplacement = false
+	for id, publication := range o.entries {
+		if publication.State != ArtifactPublicationPending {
+			publication.Candidate.Content = nil
+			o.entries[id] = publication
+		}
+	}
+	return errors.Join(unlockJournalFile(oldFile), oldFile.Close(), syncJournalDirectory(filepath.Dir(o.path)))
 }
 
 // Gaps returns stable, non-sensitive source-recovery gaps for diagnostics and
@@ -526,6 +679,7 @@ func (o *ArtifactOutbox) applyRecord(record artifactOutboxRecord, seenHeader *bo
 		}
 		publication.State = record.State
 		publication.RejectionCode = rejectionCode
+		publication.Candidate.Content = nil
 		o.entries[record.ArtifactID] = publication
 	default:
 		return fmt.Errorf("%w: unknown artifact outbox record %q", ErrJournalCorrupt, record.Type)
@@ -548,7 +702,16 @@ func (o *ArtifactOutbox) appendLocked(record artifactOutboxRecord) error {
 	if info, err := o.file.Stat(); err != nil {
 		return o.poison(fmt.Errorf("stat artifact outbox: %w", err))
 	} else if info.Size() > maxArtifactOutboxBytes-int64(len(data)) {
-		return o.poison(fmt.Errorf("artifact outbox exceeds %d bytes: %w", maxArtifactOutboxBytes, ErrJournalTooLarge))
+		if compactErr := o.compactCompletedLocked(); compactErr != nil {
+			return o.poison(fmt.Errorf("artifact outbox exceeds %d bytes: %w; compact completed publications: %v", maxArtifactOutboxBytes, ErrJournalTooLarge, compactErr))
+		}
+		info, err = o.file.Stat()
+		if err != nil {
+			return o.poison(fmt.Errorf("stat compacted artifact outbox: %w", err))
+		}
+		if info.Size() > maxArtifactOutboxBytes-int64(len(data)) {
+			return o.poison(fmt.Errorf("artifact outbox exceeds %d bytes after compaction: %w", maxArtifactOutboxBytes, ErrJournalTooLarge))
+		}
 	}
 	if _, err := o.file.Seek(0, io.SeekEnd); err != nil {
 		return o.poison(fmt.Errorf("seek artifact outbox: %w", err))
@@ -620,6 +783,13 @@ func normalizeArtifactPublication(publication ArtifactPublication) (ArtifactPubl
 	candidate.Sha256 = strings.ToLower(strings.TrimSpace(candidate.Sha256))
 	candidate.EventPayload = append(json.RawMessage(nil), candidate.EventPayload...)
 	candidate.Content = append([]byte(nil), candidate.Content...)
+	state := publication.State
+	if state == "" {
+		state = ArtifactPublicationPending
+	}
+	if state != ArtifactPublicationPending && state != ArtifactPublicationUploaded && state != ArtifactPublicationRejected {
+		return ArtifactPublication{}, fmt.Errorf("artifact publication state %q is invalid", state)
+	}
 	if err := requireIdentityParts("artifact candidate", candidate.ID, candidate.EventID, candidate.SourceEventID, candidate.Observation.AdapterSessionID, candidate.Observation.ExternalThreadRef, candidate.Observation.Generation, candidate.Observation.NativeTurnID); err != nil {
 		return ArtifactPublication{}, err
 	}
@@ -644,14 +814,24 @@ func normalizeArtifactPublication(publication ArtifactPublication) (ArtifactPubl
 	default:
 		return ArtifactPublication{}, fmt.Errorf("artifact candidate kind %q is unsupported", candidate.Kind)
 	}
-	if candidate.Size < 0 || candidate.Size > maxArtifactContentBytes || int64(len(candidate.Content)) != candidate.Size {
+	contentReleased := state != ArtifactPublicationPending && candidate.Size > 0 && len(candidate.Content) == 0
+	if candidate.Size < 0 || candidate.Size > maxArtifactContentBytes || (!contentReleased && int64(len(candidate.Content)) != candidate.Size) {
 		return ArtifactPublication{}, errors.New("artifact candidate content size is invalid")
 	}
-	sum := sha256.Sum256(candidate.Content)
-	if candidate.Sha256 == "" {
-		candidate.Sha256 = hex.EncodeToString(sum[:])
-	} else if candidate.Sha256 != hex.EncodeToString(sum[:]) {
-		return ArtifactPublication{}, errors.New("artifact candidate content hash is invalid")
+	if contentReleased {
+		if len(candidate.Sha256) != sha256.Size*2 {
+			return ArtifactPublication{}, errors.New("released artifact candidate content hash is invalid")
+		}
+		if _, err := hex.DecodeString(candidate.Sha256); err != nil {
+			return ArtifactPublication{}, errors.New("released artifact candidate content hash is invalid")
+		}
+	} else {
+		sum := sha256.Sum256(candidate.Content)
+		if candidate.Sha256 == "" {
+			candidate.Sha256 = hex.EncodeToString(sum[:])
+		} else if candidate.Sha256 != hex.EncodeToString(sum[:]) {
+			return ArtifactPublication{}, errors.New("artifact candidate content hash is invalid")
+		}
 	}
 	if candidate.CreatedAt == "" {
 		candidate.CreatedAt = now()
@@ -661,14 +841,7 @@ func normalizeArtifactPublication(publication ArtifactPublication) (ArtifactPubl
 	if !json.Valid(candidate.EventPayload) {
 		return ArtifactPublication{}, errors.New("artifact candidate event payload must be valid JSON")
 	}
-	state := publication.State
-	if state == "" {
-		state = ArtifactPublicationPending
-	}
 	rejectionCode := strings.TrimSpace(publication.RejectionCode)
-	if state != ArtifactPublicationPending && state != ArtifactPublicationUploaded && state != ArtifactPublicationRejected {
-		return ArtifactPublication{}, fmt.Errorf("artifact publication state %q is invalid", state)
-	}
 	if state == ArtifactPublicationRejected {
 		normalizedCode, normalizeErr := normalizeArtifactRejectionCode(rejectionCode)
 		if normalizeErr != nil {
@@ -723,8 +896,7 @@ func sameArtifactPublication(left, right ArtifactPublication) bool {
 		left.Candidate.ContentType == right.Candidate.ContentType &&
 		left.Candidate.CreatedAt == right.Candidate.CreatedAt &&
 		left.Candidate.Provenance == right.Candidate.Provenance &&
-		bytes.Equal(left.Candidate.EventPayload, right.Candidate.EventPayload) &&
-		bytes.Equal(left.Candidate.Content, right.Candidate.Content)
+		bytes.Equal(left.Candidate.EventPayload, right.Candidate.EventPayload)
 }
 
 func cloneArtifactPublication(value ArtifactPublication) ArtifactPublication {
