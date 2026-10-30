@@ -8,7 +8,7 @@
 
 账本覆盖 PRD 中的 `AC-LH-001` 到 `AC-LH-013`，每项状态只能是 `passed`、`reused`、`failed`、`blocked` 或 `not_run`。
 
-`passed/source-bound` 表示命令执行前后验证了干净源码、tree SHA 和 candidate-v2 候选身份，但命令仍可能直接运行源码；只有命令新建并写入匹配的 candidate execution proof，报告才可显示 `passed/current`；`reused` 只能表示外部已有记录被引用，不能替代当前候选的独立通过证明。
+`passed/source-bound` 表示命令执行前后验证了干净源码、tree SHA 和 candidate-v2 候选身份，但命令仍可能直接运行源码；本工具不会把这类证据升级为 `passed/current`，真实候选执行必须走独立且可审计的 owner-facing 证据路径；`reused` 只能表示外部已有记录被引用，不能替代当前候选的独立通过证明。
 
 `AC-LH-005` 必须使用同一个 Desktop 活跃会话的真实 thread 和 turn；历史记录、fork、copy、另一个 app-server 进程或仅有 Web 会话都不满足该项。
 

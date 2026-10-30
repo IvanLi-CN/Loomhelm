@@ -308,6 +308,11 @@ def load_ledger(evidence_dir: Path) -> Dict[str, Any]:
         raise ValueError(f"unsupported ledger schema: {ledger.get('schema_version')}")
     if not isinstance(ledger.get("checks"), dict):
         raise ValueError("ledger checks must be an object")
+    if any(
+        isinstance(record, dict) and record.get("current_candidate_proof")
+        for record in ledger["checks"].values()
+    ):
+        raise ValueError("ledger contains an unsupported current candidate proof; rerun as source-bound evidence")
     return ledger
 
 
@@ -362,22 +367,6 @@ def validate_execution_binding(ledger: Dict[str, Any]) -> Dict[str, Any]:
         "candidate_digest": candidate_digest,
         "candidate_verified": candidate_verified,
     }
-
-
-def validate_candidate_execution_proof(path: Path, binding: Dict[str, Any]) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"candidate execution proof must be a new regular file: {path}")
-    proof = read_json(path)
-    if set(proof) != {"execution", "source_sha", "source_tree_sha", "candidate_digest"}:
-        raise ValueError("candidate execution proof has unexpected fields")
-    if proof.get("execution") != "candidate":
-        raise ValueError("candidate execution proof is not marked as candidate execution")
-    if proof.get("source_sha") != binding["source_sha"]:
-        raise ValueError("candidate execution proof source SHA does not match the ledger")
-    if proof.get("source_tree_sha") != binding["source_tree_sha"]:
-        raise ValueError("candidate execution proof source tree SHA does not match the ledger")
-    if proof.get("candidate_digest") != binding.get("candidate_digest") or not binding.get("candidate_verified"):
-        raise ValueError("candidate execution proof digest does not match the verified candidate")
 
 
 def init_ledger(args: argparse.Namespace) -> int:
@@ -506,11 +495,6 @@ def run_check(args: argparse.Namespace) -> int:
         raise ValueError(f"invalid timeout: {args.timeout}") from error
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
-    proof_path: Optional[Path] = None
-    if args.candidate_proof:
-        proof_path = ensure_absolute(args.candidate_proof, "candidate execution proof")
-        if proof_path.exists() or proof_path.is_symlink():
-            raise ValueError(f"candidate execution proof must not exist before the attempt: {proof_path}")
     attempts_dir = evidence_dir / "attempts"
     attempts_dir.mkdir(parents=True, exist_ok=True)
     attempt_number = int(ledger.get("attempt_sequence", 0)) + 1
@@ -560,14 +544,6 @@ def run_check(args: argparse.Namespace) -> int:
         validate_execution_binding(ledger)
     except ValueError as error:
         binding_error = redact(str(error), secret_values)
-    proof_error = ""
-    candidate_execution_proof = False
-    if proof_path is not None and not binding_error and exit_code == 0 and not timed_out:
-        try:
-            validate_candidate_execution_proof(proof_path, binding)
-            candidate_execution_proof = True
-        except ValueError as error:
-            proof_error = redact(str(error), secret_values)
     redaction_error = ""
     try:
         redacted_stdout = safe_redact(stdout, secret_values)
@@ -580,8 +556,7 @@ def run_check(args: argparse.Namespace) -> int:
     stderr_path = attempts_dir / f"{attempt_id}.stderr.log"
     stdout_path.write_text(redacted_stdout, encoding="utf-8")
     stderr_path.write_text(redacted_stderr, encoding="utf-8")
-    status = "passed" if exit_code == 0 and not timed_out and not binding_error and not proof_error and not redaction_error else "failed"
-    execution_binding = "candidate-bound" if candidate_execution_proof else "source-bound"
+    status = "passed" if exit_code == 0 and not timed_out and not binding_error and not redaction_error else "failed"
     attempt: Dict[str, Any] = {
         "id": attempt_id,
         "name": args.name,
@@ -596,19 +571,17 @@ def run_check(args: argparse.Namespace) -> int:
         "source_tree_sha": binding["source_tree_sha"],
         "candidate_digest": ledger.get("candidate", {}).get("digest"),
         "candidate_verified": binding["candidate_verified"],
-        "execution_binding": execution_binding,
+        "execution_binding": "source-bound",
         "stdout_log": relative_evidence_path(stdout_path, evidence_dir),
         "stderr_log": relative_evidence_path(stderr_path, evidence_dir),
         "stdout_sha256": sha256_file(stdout_path),
         "stderr_sha256": sha256_file(stderr_path),
         "stdout_bytes": stdout_path.stat().st_size,
         "stderr_bytes": stderr_path.stat().st_size,
-        "current_candidate_proof": status == "passed" and candidate_execution_proof,
+        "current_candidate_proof": False,
     }
     if binding_error:
         attempt["binding_error"] = binding_error
-    if proof_error:
-        attempt["candidate_proof_error"] = proof_error
     if redaction_error:
         attempt["redaction_error"] = redaction_error
     record.setdefault("attempts", []).append(attempt)
@@ -688,8 +661,6 @@ def mark_check(args: argparse.Namespace) -> int:
 
 def status_label(record: Dict[str, Any]) -> str:
     status = record.get("status", "not_run")
-    if status == "passed" and record.get("current_candidate_proof"):
-        return "passed/current"
     if status == "passed":
         return "passed/source-bound"
     return str(status)
@@ -740,7 +711,7 @@ def render_markdown(ledger: Dict[str, Any]) -> str:
             "",
             "A `reused` record is historical evidence and does not prove the current candidate.",
             "A `passed/source-bound` record validates the clean source checkout and candidate bundle identity but does not claim that the command executed the candidate artifact.",
-            "Only a command-created candidate execution proof may produce `passed/current`.",
+            "This tool never upgrades source-bound command evidence to `passed/current`; a real candidate execution result requires an independent owner-audited evidence path.",
             "AC-LH-005 requires the same active Desktop thread and turn; history, fork, copy or another app-server process does not satisfy it.",
             "Actual PWA installation and runtime blue-green behavior remain unpassed unless their real evidence is recorded for this source and candidate.",
             "",
@@ -784,7 +755,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--name", required=True)
     run.add_argument("--timeout", default="900")
     run.add_argument("--allow-repeat", action="store_true")
-    run.add_argument("--candidate-proof", help="new JSON proof file created by a command that executed the candidate")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(handler=run_check)
 
