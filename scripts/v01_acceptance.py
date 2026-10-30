@@ -52,8 +52,8 @@ CLI_SECRET_RE = re.compile(
 
 CHECKS: Dict[str, Dict[str, str]] = {
     "AC-LH-001": {
-        "title": "Web/API project and task CRUD sample",
-        "scope": "Selected browser authentication, project/task CRUD, authorization and restart persistence test; not the full MCP and relationship matrix.",
+        "title": "Web/API project and task CRUD, relationships and MCP",
+        "scope": "Browser authentication, project/task CRUD, cross-project parent and prerequisite relationships, official MCP SDK authorization and restart persistence; not the full Web journey or product closure.",
     },
     "AC-LH-002": {
         "title": "Web navigation and task views",

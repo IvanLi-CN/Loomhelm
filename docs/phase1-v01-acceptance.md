@@ -73,11 +73,19 @@ scripts/accept-v01 run \
   go test -count=1 ./internal/app -run '^TestServerBrowserAuthenticationAndCRUD$'
 ```
 
-该命令通过只证明当前候选上的浏览器认证、项目任务 CRUD、权限和重启持久化样例；在补齐关系和 MCP 矩阵前，保留该 attempt 并显式阻塞完整 `AC-LH-001`：
+该命令通过只证明当前候选上的浏览器认证、项目任务 CRUD、权限和重启持久化样例；同一 `AC-LH-001` 继续运行下面的定向关系/MCP 检查时必须使用 `--allow-repeat`，因为账本默认会复用同一候选已有的通过 attempt：
 
 ```sh
-scripts/accept-v01 mark --evidence-dir /workspace/evidence/loomhelm-v01/acceptance --check-id AC-LH-001 --status blocked --reason 'Selected browser/API CRUD sample passed, but the full cross-project relationship and MCP matrix is not run.'
+scripts/accept-v01 run \
+  --evidence-dir /workspace/evidence/loomhelm-v01/acceptance \
+  --check-id AC-LH-001 \
+  --name cross-project-relationships-mcp \
+  --allow-repeat \
+  --timeout 600 -- \
+  go test -count=1 ./internal/app -run '^TestServerCrossProjectRelationshipsThroughOfficialMCP$'
 ```
+
+该定向检查在真实 PostgreSQL 与 Server 上由官方 MCP SDK 创建不同项目中的任务，建立并读取跨项目父子关系和前置依赖，验证两个关系图的循环拒绝，并用仅授权子项目的第二凭据确认不可访问的父任务不会通过 MCP 关系读取或写入泄露；它不替代完整 Web 列表/看板/图谱交互或 `AC-LH-012` 的全产品闭环。
 
 官方 MCP SDK、artifact authorization、原始文件字节和私有 artifact 隐藏使用真实下载集成测试；该测试不等价于完整产品闭环：
 

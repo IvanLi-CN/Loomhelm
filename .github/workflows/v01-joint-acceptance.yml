@@ -80,6 +80,15 @@ jobs:
             --name server-browser-auth-crud \
             --timeout 600 -- \
             go test -count=1 ./internal/app -run '^TestServerBrowserAuthenticationAndCRUD$'
+      - name: Run cross-project relationship and MCP acceptance
+        run: |
+          scripts/accept-v01 run \
+            --evidence-dir "$RUNNER_TEMP/loomhelm-v01" \
+            --check-id AC-LH-001 \
+            --name cross-project-relationships-mcp \
+            --allow-repeat \
+            --timeout 600 -- \
+            go test -count=1 ./internal/app -run '^TestServerCrossProjectRelationshipsThroughOfficialMCP$'
       - name: Run official MCP artifact acceptance
         run: |
           scripts/accept-v01 run \
@@ -110,7 +119,6 @@ jobs:
             --evidence-dir "$RUNNER_TEMP/loomhelm-v01-blue-green"
       - name: Record unavailable external acceptance surfaces
         run: |
-          scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-001 --status blocked --reason 'The selected browser/API CRUD sample passed, but the full cross-project relationship and MCP matrix is not run.'
           scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-011 --status blocked --reason 'Control-only rehearsal passed, but runtime readiness, drain, Worker fencing, handoff and recovery are not run.'
           scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-004 --status blocked --reason 'The workflow does not claim a real owner-approved Codex executable run.'
           scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-005 --status blocked --reason 'Active Desktop thread and turn evidence is unavailable in this workflow.'
