@@ -109,6 +109,9 @@ export function createProductionSessionDemoApi(): PublishedSessionApi {
     getArtifact: async () => {
       throw new Error("Demo artifact lookup is intentionally unavailable.");
     },
+    downloadArtifact: async () => {
+      throw new Error("Demo artifact download is intentionally unavailable.");
+    },
     getSession: async () => ({ session }),
     interruptRun: async ({ body }) => acceptedAck(body.command_id),
     listSessionRuns: async ({ session_id }) => ({ has_more: false, items: [{ ...run, session_id }] }),
