@@ -1,5 +1,6 @@
 import type { Approval, CommandAck, Event, Run, Session, Task, TaskStatus } from "@loomhelm/protocol";
 
+import { classifyConversationEvent, inspectableRawPayload } from "../artifacts/content";
 import type { ConversationMessage } from "./ConversationMessageStream";
 import type { ConnectionAvailability, SessionContextModel } from "../sessions/session-model";
 import type { SessionReadReason } from "../sessions/session-client-adapter";
@@ -166,6 +167,23 @@ function eventItemID(event: Event): string | undefined {
   return firstString(eventItem(event), ["id"]) ?? firstString(params, ["itemId", "item_id"]) ?? firstString(payload, ["itemId", "item_id"]);
 }
 
+function eventArtifactID(event: Event): string | undefined {
+  const payload = asRecord(event.payload);
+  const params = asRecord(payload?.params);
+  const item = eventItem(event);
+  const artifact = asRecord(payload?.artifact) ?? asRecord(params?.artifact) ?? asRecord(item?.artifact);
+  return firstString(payload, ["artifact_id", "artifactId"])
+    ?? firstString(params, ["artifact_id", "artifactId"])
+    ?? firstString(item, ["artifact_id", "artifactId"])
+    ?? firstString(artifact, ["id", "artifact_id", "artifactId"]);
+}
+
+function isArtifactEvent(event: Event, artifactID: string | undefined): boolean {
+  if (!artifactID) return false;
+  const itemType = eventItemType(event);
+  return event.type === "artifact.created" || event.source === "artifact" || itemType === "artifact" || itemType === "fileChange";
+}
+
 function eventText(event: Event, payload: Record<string, unknown> | undefined): string {
   const text = firstText(eventItem(event), ["text", "content"])
     ?? firstText(payload, ["content", "text", "delta", "message", "summary", "description"])
@@ -259,11 +277,11 @@ function eventDetail(event: Event): string {
     source: event.source,
     type: event.type
   }, null, 2);
-  const payload = JSON.stringify(event.payload, null, 2);
+  const payload = JSON.stringify(inspectableRawPayload(event.payload), null, 2);
   return `事件元数据\n${metadata}\n\n原始 payload\n${payload}`;
 }
 
-const knownItemTypes = new Set(["agentMessage", "artifact", "collabToolCall", "commandExecution", "dynamicToolCall", "fileChange", "mcpToolCall", "plan", "reasoning", "userMessage", "webSearch"]);
+const knownItemTypes = new Set(["agentMessage", "artifact", "code", "codeBlock", "collabToolCall", "commandExecution", "dynamicToolCall", "fileChange", "mcpToolCall", "message", "plan", "reasoning", "source", "tool", "userMessage", "webSearch"]);
 
 function eventHasUnknownContent(event: Event): boolean {
   if (event.type === "unknown" || event.type.startsWith("reconciliation.")) return true;
@@ -276,24 +294,33 @@ function eventHasUnknownContent(event: Event): boolean {
 }
 
 export function eventToConversationMessage(event: Event): ConversationMessage {
-  const itemType = eventItemType(event);
-  const isUserMessage = (event.type === "item.started" || event.type === "item.completed") && itemType === "userMessage";
-  const isMessage = event.type === "message.delta" || ((event.type === "item.started" || event.type === "item.completed") && (itemType === "agentMessage" || isUserMessage));
-  const isUnknown = eventHasUnknownContent(event);
-  const isTool = !isMessage && !isUnknown;
+  const classifiedContent = classifyConversationEvent(event);
+  const artifactId = eventArtifactID(event);
+  const isArtifact = isArtifactEvent(event, artifactId);
+  const isUserMessage = !isArtifact && classifiedContent.kind === "message" && classifiedContent.role === "user";
+  const isMessage = !isArtifact && classifiedContent.kind === "message";
+  const isUnknown = !isArtifact && (eventHasUnknownContent(event) || (event.type === "artifact.created" && classifiedContent.kind === "unknown"));
   const hasInspectableItem = event.type === "item.started" || event.type === "item.completed";
   const itemID = isMessage ? eventItemID(event) : undefined;
+  const richContent = !isArtifact && (
+    hasInspectableItem
+    || event.type === "unknown"
+    || event.type.startsWith("reconciliation.")
+    || (event.type === "message.delta" && classifiedContent.kind !== "message")
+  ) ? classifiedContent : undefined;
   const deltaParts = event.type === "message.delta" && typeof event.sequence === "number"
     ? [{ content: eventText(event, asRecord(event.payload)), sequence: event.sequence }]
     : undefined;
   return {
-    author: isUserMessage ? "你" : isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
-    content: eventText(event, asRecord(event.payload)),
+    author: isArtifact ? "文件产物" : isUserMessage ? "你" : isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
+    content: isArtifact ? "已接收文件产物。" : eventText(event, asRecord(event.payload)),
     ...(isUnknown || hasInspectableItem ? { detail: eventDetail(event) } : {}),
     ...(deltaParts ? { deltaParts } : {}),
+    ...(richContent ? { richContent } : {}),
+    ...(isArtifact ? { artifactId } : {}),
     eventType: event.type,
     id: `${event.session_id}:${event.run_id ?? "session"}:${itemID ? `item:${itemID}` : event.event_id}`,
-    kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",
+    kind: isArtifact ? "artifact" : isMessage ? "message" : isUnknown ? "unknown" : "tool",
     occurredAt: event.occurred_at,
     role: isUserMessage ? "user" : isMessage ? "assistant" : "system",
     runId: event.run_id,

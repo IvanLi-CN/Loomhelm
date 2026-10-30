@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import type { Artifact } from "@loomhelm/protocol";
 
 import { ConversationMessageStream, type ConversationMessage } from "./ConversationMessageStream";
 
@@ -42,6 +43,70 @@ const messages: readonly ConversationMessage[] = [
     kind: "unknown",
     role: "system",
     occurredAt: "01:13"
+  }
+];
+
+const richArtifact: Artifact = {
+  content_type: "text/markdown",
+  created_at: "2026-10-29 14:05",
+  id: "artifact-story-u04-report",
+  kind: "file",
+  name: "reports/summary.md",
+  session_id: "session-story-u04",
+  sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  size: 68
+};
+
+const richContentMessages: readonly ConversationMessage[] = [
+  {
+    author: "Codex",
+    content: "已接收结构化消息。",
+    eventType: "item.completed",
+    id: "rich-message",
+    kind: "message",
+    occurredAt: "14:04",
+    richContent: { eventId: "rich-message", eventType: "item.completed", kind: "message", raw: { text: "已接收结构化消息。" }, role: "assistant", text: "已接收结构化消息。" },
+    role: "assistant"
+  },
+  {
+    author: "执行事件",
+    content: "已读取代码内容。",
+    eventType: "item.completed",
+    id: "rich-code",
+    kind: "tool",
+    occurredAt: "14:04",
+    richContent: { code: "await workspace.read(\"reports/summary.md\");", eventId: "rich-code", eventType: "item.completed", filename: "/workspace/loomhelm/reports/summary.md", kind: "code", language: "typescript", raw: { code: "await workspace.read(\"reports/summary.md\");" } },
+    role: "system"
+  },
+  {
+    author: "执行事件",
+    content: "读取完成。",
+    eventType: "message.delta",
+    id: "rich-tool",
+    kind: "tool",
+    occurredAt: "14:04",
+    richContent: { eventId: "rich-tool", eventType: "message.delta", kind: "tool", name: "item/commandExecution/outputDelta", raw: { method: "item/commandExecution/outputDelta" }, status: "completed", summary: "读取完成：1 个授权文件，未扩大工作区范围。" },
+    role: "system"
+  },
+  {
+    author: "未识别内容",
+    content: "保留未来事件字段。",
+    eventType: "unknown",
+    id: "rich-unknown",
+    kind: "unknown",
+    occurredAt: "14:05",
+    richContent: { eventId: "rich-unknown", eventType: "unknown", kind: "unknown", label: "futureContent", raw: { futureField: true } },
+    role: "system"
+  },
+  {
+    author: "文件产物",
+    artifactId: richArtifact.id,
+    content: "已接收文件产物。",
+    eventType: "artifact.created",
+    id: "rich-artifact",
+    kind: "artifact",
+    occurredAt: "14:05",
+    role: "system"
   }
 ];
 
@@ -112,6 +177,17 @@ export const Empty: Story = {
   render: () => (
     <EvidenceFrame>
       <ConversationMessageStream messages={[]} />
+    </EvidenceFrame>
+  )
+};
+
+export const RichContentAndArtifact: Story = {
+  render: () => (
+    <EvidenceFrame>
+      <ConversationMessageStream
+        loadArtifactMetadata={async () => richArtifact}
+        messages={richContentMessages}
+      />
     </EvidenceFrame>
   )
 };
