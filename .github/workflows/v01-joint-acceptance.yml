@@ -134,7 +134,18 @@ jobs:
         if: always()
         run: |
           if test -f "$RUNNER_TEMP/loomhelm-v01/ledger.json"; then
-            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-011 --status blocked --reason 'Control-only rehearsal passed, but runtime readiness, drain, Worker fencing, handoff and recovery are not run.'
+            control_status=$(python3 - "$RUNNER_TEMP/loomhelm-v01/ledger.json" <<'PY'
+            import json
+            import pathlib
+            import sys
+
+            ledger = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+            print(ledger["checks"]["AC-LH-011"]["status"])
+            PY
+            )
+            if test "$control_status" = passed; then
+              scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-011 --status blocked --reason 'Control-only rehearsal passed, but runtime readiness, drain, Worker fencing, handoff and recovery are not run.'
+            fi
             scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-004 --status blocked --reason 'The workflow does not claim a real owner-approved Codex executable run.'
             scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-005 --status blocked --reason 'Active Desktop thread and turn evidence is unavailable in this workflow.'
             scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-010 --status blocked --reason 'Real browser PWA installation evidence is unavailable in this workflow.'
