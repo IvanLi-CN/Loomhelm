@@ -7,6 +7,7 @@ import {
   connectionFromSessionState,
   eventToConversationMessage,
   initialRunCommandId,
+  isDefiniteInitialRunFailure,
   isSessionAccessFailure,
   mergeConversationMessages,
   runFromHistory,
@@ -100,6 +101,11 @@ describe("production session model", () => {
     expect(initialRunCommandId("session-1")).toBe("session-1:initial");
   });
 
+  test("only treats a matching failed initial acknowledgement as definite", () => {
+    expect(isDefiniteInitialRunFailure({ command_id: "session-1:initial", state: "failed" }, "session-1:initial")).toBe(true);
+    expect(isDefiniteInitialRunFailure({ command_id: "other-command", state: "failed" }, "session-1:initial")).toBe(false);
+  });
+
   test("preserves a rejected command acknowledgement as a failed Run", () => {
     expect(runFromCommandAck(session, {
       command_id: "command-rejected",
@@ -164,6 +170,15 @@ describe("production session model", () => {
     expect(eventToConversationMessage(event({ event_id: "agent-completed", payload: { params: { item: { id: "item-agent", text: "final answer", type: "agentMessage" } } }, type: "item.completed" }))).toMatchObject({ content: "final answer", id: "session-1:run-1:item:item-agent", kind: "message", role: "assistant" });
     expect(eventToConversationMessage(event({ event_id: "unknown", payload: {}, type: "unknown" }))).toMatchObject({ kind: "unknown", content: "已接收事件：unknown" });
     expect(eventToConversationMessage(event({ event_id: "unknown-item", payload: { params: { item: { type: "futureContent", value: "preserve-me" } } }, type: "item.completed" }))).toMatchObject({ kind: "unknown" });
+  });
+
+  test("renders a structured userMessage item as a user message", () => {
+    const message = eventToConversationMessage(event({
+      event_id: "user-completed",
+      payload: { params: { item: { content: [{ text: "run exactly" }, { text: " now" }], id: "item-user", type: "userMessage" } } },
+      type: "item.completed"
+    }));
+    expect(message).toMatchObject({ author: "你", content: "run exactly now", id: "session-1:run-1:item:item-user", kind: "message", role: "user" });
   });
 
   test("keeps raw payload and metadata inspectable for unknown events", () => {

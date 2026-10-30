@@ -103,6 +103,10 @@ export function initialRunCommandId(sessionId: string): string {
   return `${sessionId}:initial`;
 }
 
+export function isDefiniteInitialRunFailure(ack: CommandAck | undefined, expectedCommandId: string): boolean {
+  return Boolean(ack && ack.command_id === expectedCommandId && (ack.state === "failed" || ack.state === "rejected"));
+}
+
 export function applyRunEvent(run: Run, event: Event): Run {
   const next: Run = { ...run, last_cursor: event.cursor };
   if (event.type === "run.started") return { ...next, started_at: event.occurred_at, status: "running" };
@@ -127,6 +131,25 @@ function firstString(record: Record<string, unknown> | undefined, keys: readonly
   return undefined;
 }
 
+function textFromValue(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value;
+  if (Array.isArray(value)) {
+    const parts = value.map(textFromValue).filter((part): part is string => Boolean(part));
+    return parts.length > 0 ? parts.join("") : undefined;
+  }
+  const record = asRecord(value);
+  return record ? textFromValue(record.text) ?? textFromValue(record.content) : undefined;
+}
+
+function firstText(record: Record<string, unknown> | undefined, keys: readonly string[]): string | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = textFromValue(record[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
 function eventItem(event: Event): Record<string, unknown> | undefined {
   const payload = asRecord(event.payload);
   const params = asRecord(payload?.params);
@@ -144,9 +167,9 @@ function eventItemID(event: Event): string | undefined {
 }
 
 function eventText(event: Event, payload: Record<string, unknown> | undefined): string {
-  const text = firstString(eventItem(event), ["text", "content"])
-    ?? firstString(payload, ["content", "text", "delta", "message", "summary", "description"])
-    ?? firstString(asRecord(payload?.params), ["content", "text", "delta", "message", "summary", "description"]);
+  const text = firstText(eventItem(event), ["text", "content"])
+    ?? firstText(payload, ["content", "text", "delta", "message", "summary", "description"])
+    ?? firstText(asRecord(payload?.params), ["content", "text", "delta", "message", "summary", "description"]);
   if (text) return text;
   if (event.type === "message.delta") return "已接收消息事件，但 payload 未提供可显示文本。";
   if (event.type === "approval.requested") return "已接收到新的审批请求。";
@@ -253,7 +276,9 @@ function eventHasUnknownContent(event: Event): boolean {
 }
 
 export function eventToConversationMessage(event: Event): ConversationMessage {
-  const isMessage = event.type === "message.delta" || (event.type === "item.completed" && eventItemType(event) === "agentMessage");
+  const itemType = eventItemType(event);
+  const isUserMessage = (event.type === "item.started" || event.type === "item.completed") && itemType === "userMessage";
+  const isMessage = event.type === "message.delta" || ((event.type === "item.started" || event.type === "item.completed") && (itemType === "agentMessage" || isUserMessage));
   const isUnknown = eventHasUnknownContent(event);
   const isTool = !isMessage && !isUnknown;
   const hasInspectableItem = event.type === "item.started" || event.type === "item.completed";
@@ -262,7 +287,7 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
     ? [{ content: eventText(event, asRecord(event.payload)), sequence: event.sequence }]
     : undefined;
   return {
-    author: isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
+    author: isUserMessage ? "你" : isMessage ? "Codex" : isUnknown ? "未识别内容" : "执行事件",
     content: eventText(event, asRecord(event.payload)),
     ...(isUnknown || hasInspectableItem ? { detail: eventDetail(event) } : {}),
     ...(deltaParts ? { deltaParts } : {}),
@@ -270,7 +295,7 @@ export function eventToConversationMessage(event: Event): ConversationMessage {
     id: `${event.session_id}:${event.run_id ?? "session"}:${itemID ? `item:${itemID}` : event.event_id}`,
     kind: isMessage ? "message" : isUnknown ? "unknown" : "tool",
     occurredAt: event.occurred_at,
-    role: isMessage ? "assistant" : "system",
+    role: isUserMessage ? "user" : isMessage ? "assistant" : "system",
     sequence: event.sequence
   };
 }

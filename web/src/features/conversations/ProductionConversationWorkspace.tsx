@@ -28,6 +28,7 @@ import {
   connectionFromSessionState,
   eventToConversationMessage,
   initialRunCommandId,
+  isDefiniteInitialRunFailure,
   isSessionAccessFailure,
   mergeConversationMessages,
   runFromCommandAck,
@@ -47,6 +48,7 @@ const DRAFT_STATE_PREFIX = "loomhelm:draft-state:";
 const DRAFT_SEQUENCE_PREFIX = "loomhelm:draft-sequence:";
 const CONTROL_INTENT_PREFIX = "loomhelm:control-intent:";
 let browserContextDraftClientId: string | undefined;
+const browserContextDrafts = new Map<string, string>();
 
 type SessionCreationPayload = Omit<CreateSessionRequest, "command_id">;
 
@@ -220,6 +222,8 @@ function readDraft(key: string | undefined): string {
 }
 
 function readStoredDraft(key: string | undefined, stateKey: string | undefined): string {
+  const browserDraft = key ? browserContextDrafts.get(key) : undefined;
+  if (browserDraft !== undefined) return browserDraft;
   const localState = readLocalDraftState(stateKey);
   return localState ? localState.content : readDraft(key);
 }
@@ -272,11 +276,20 @@ function clearLocalDraftState(key: string | undefined): void {
 }
 
 function writeStoredDraft(key: string | undefined, stateKey: string | undefined, draft: string, state: LocalDraftState): boolean {
-  if (!writeLocalDraftState(stateKey, state)) return false;
-  return writeDraft(key, draft);
+  const stored = writeLocalDraftState(stateKey, state) && writeDraft(key, draft);
+  if (stored) {
+    if (key) browserContextDrafts.delete(key);
+  } else if (key) {
+    // Keep a same-tab fallback so an in-app route change does not lose a private draft
+    // when sessionStorage is temporarily unavailable; the caller still reports the
+    // storage failure because this fallback does not survive a full reload.
+    browserContextDrafts.set(key, draft);
+  }
+  return stored;
 }
 
 function clearStoredDraft(key: string | undefined, stateKey: string | undefined, baseRevision = 0): void {
+  if (key) browserContextDrafts.delete(key);
   if (!writeLocalDraftState(stateKey, { baseRevision, content: "", dirty: false })) return;
   writeDraft(key, "");
 }
@@ -1369,7 +1382,7 @@ export function ProductionConversationWorkspace({
     const expectedInitialCommandId = initialRunCommandId(response.session.id);
     const initialAckMatchesExpectedCommand = Boolean(initialAck && initialAck.command_id === expectedInitialCommandId);
     const initialRunId = initialAckMatchesExpectedCommand && typeof initialAck?.run_id === "string" && initialAck.run_id.trim() ? initialAck.run_id.trim() : undefined;
-    const initialRunFailed = initialAck?.state === "failed" || initialAck?.state === "rejected";
+    const initialRunFailed = isDefiniteInitialRunFailure(initialAck, expectedInitialCommandId);
     if (initialRunId && !writeRunRecoveryId(getRunRecoveryKey(principalId, response.session.id), initialRunId)) {
       throw new Error("Session 已收到但首个 Run 恢复身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
@@ -1426,9 +1439,17 @@ export function ProductionConversationWorkspace({
         draftInputSinceReadRef.current = true;
         draftDirtyRef.current = true;
         setDraft(initialPrompt);
-        writeStoredDraft(createdDraftKey, createdDraftStateKey, initialPrompt, { baseRevision: 0, content: initialPrompt, dirty: true });
+        const storedInitialDraft = writeStoredDraft(createdDraftKey, createdDraftStateKey, initialPrompt, { baseRevision: 0, content: initialPrompt, dirty: true });
+        if (!storedInitialDraft) {
+          setDraftReadUncertain(true);
+          setDraftFailure("本地草稿快照无法持久化；原始提示仅保留在当前页面，恢复浏览器存储后再试，刷新前不会自动重放。");
+          setActivityNotice("首条提示未被服务接受；原始提示暂留在当前页面，本地存储失败，请勿刷新并恢复浏览器存储后再试。");
+        } else {
+          setActivityNotice("首条提示未被服务接受；原始提示已保留为私有草稿，请显式修改或重试。");
+        }
+      } else {
+        setActivityNotice("首条提示未被服务接受；请显式修改或重试。");
       }
-      setActivityNotice("首条提示未被服务接受；原始提示已保留为私有草稿，请显式修改或重试。");
     } else if (initialAck) {
       setCommandState(initialRunUncertain ? "unknown" : initialAck.state);
       const initialRun = initialAckMatchesExpectedCommand ? runFromCommandAck(response.session, initialAck) : undefined;
