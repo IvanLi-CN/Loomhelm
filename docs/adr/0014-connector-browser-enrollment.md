@@ -16,7 +16,7 @@ The Connector accepts `LOOMHELM_CONNECTOR_BASE_URL`, defaulting to `https://loom
 
 When no usable opaque deployment key or private local cache exists, the Connector binds an ephemeral IPv4 loopback listener, generates a state value, and asks the Server for a short-lived device authorization. The Server stores only hashes for the human verification code and one-time authorization code. The browser either uses its existing OIDC HttpOnly session or completes OIDC login, then explicitly approves the displayed Connector device. The Server redirects only the one-time code and the original state to the loopback callback. The Connector verifies the state and exchanges the code for one opaque API key containing the host identity and raw host credential internally.
 
-The Server enrolls the single configured execution host and issues a new revocable host credential on every successful device exchange. The credential is cached on the execution computer in a mode-0600 file bound to the configured Server BaseURL. Raw host credentials are excluded from logs, browser responses and Connector journal records. User API credentials remain scoped to users and projects and are not accepted by this flow.
+The Server creates a new user-owned Host and issues a new revocable Host credential on every successful device exchange. A device request may name an existing Host only when the approving user owns that Host; a shared user cannot bind enrollment to another user's Host. The credential is cached on the execution computer in a mode-0600 file bound to the configured Server BaseURL. Raw Host credentials are excluded from logs, browser responses and Connector journal records. User API credentials remain scoped to users and projects and are not accepted by this flow.
 
 The Connector starts the host-owned `codex` app-server command through its existing process gateway. This design does not attach to or control an already-open ChatGPT Desktop conversation and does not represent such attachment as supported.
 
@@ -29,7 +29,7 @@ The Connector starts the host-owned `codex` app-server command through its exist
 
 ## Compatibility
 
-The new REST endpoints are additive within the current public API major. Migration 00018 adds only a short-lived device authorization table and expiry index; older candidates continue to read existing host and user state. The local credential cache is a new private artifact and is ignored by older Connector binaries. The compatibility classification is `public_api=minor` and `persistent_state=minor`; down-migration is not an automatic rollback strategy.
+The new REST endpoints are additive within the current public API major. Migration 00018 adds the short-lived device authorization table and expiry index; migration 00019 adds nullable Host ownership, explicit share grants, per-user Host defaults and requested-Host binding without reassigning legacy singleton rows. Older candidates continue to read existing Host and user state. The local credential cache is a new private artifact and is ignored by older Connector binaries. The compatibility classification is `public_api=minor` and `persistent_state=minor`; down-migration is not an automatic rollback strategy.
 
 ## Verification
 

@@ -44,6 +44,74 @@
         "items": {"type": "array", "items": {"$ref": "#/types/UserCredential"}}
       }
     },
+    "HostStatus": {
+      "type": "string",
+      "enum": ["offline", "online"]
+    },
+    "HostResource": {
+      "type": "object",
+      "required": ["id", "name", "status", "connection_generation", "owned_by_current_user", "created_at", "updated_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "status": {"$ref": "#/types/HostStatus"},
+        "connection_generation": {"type": "integer", "format": "int64"},
+        "owned_by_current_user": {"type": "boolean"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "HostCredential": {
+      "type": "object",
+      "required": ["id", "host_id", "name", "created_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "host_id": {"type": "string"},
+        "name": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "last_used_at": {"type": "string", "format": "date-time"},
+        "revoked_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "HostShare": {
+      "type": "object",
+      "required": ["host_id", "user_id", "granted_by", "created_at"],
+      "properties": {
+        "host_id": {"type": "string"},
+        "user_id": {"type": "string"},
+        "granted_by": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "revoked_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "HostListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/HostResource"}}
+      }
+    },
+    "HostCredentialListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/HostCredential"}}
+      }
+    },
+    "HostShareResponse": {
+      "type": "object",
+      "required": ["share"],
+      "properties": {
+        "share": {"$ref": "#/types/HostShare"}
+      }
+    },
+    "HostShareListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/HostShare"}}
+      }
+    },
     "CreateUserCredentialRequest": {
       "type": "object",
       "required": ["name"],
@@ -665,6 +733,60 @@
         "response_status": 204,
         "summary": "Revoke an owned credential with an unrestricted principal",
         "mcp_tool": {"name": "loomhelm.revoke_user_credential", "description": "Revoke one of the current user's credentials. Project-scoped credentials cannot revoke the user's other credentials; foreign identities are not disclosed."}
+      },
+      {
+        "operation_id": "listHosts",
+        "method": "GET",
+        "path": "/hosts",
+        "response_type": "HostListResponse",
+        "summary": "List Hosts owned by or explicitly shared with the current user",
+        "mcp_tool": {"name": "loomhelm.list_hosts", "description": "List only Hosts owned by or explicitly shared with the current user; project membership never grants Host access."}
+      },
+      {
+        "operation_id": "listHostCredentials",
+        "method": "GET",
+        "path": "/hosts/{host_id}/credentials",
+        "path_params": {"host_id": "string"},
+        "response_type": "HostCredentialListResponse",
+        "summary": "List credential metadata for a Host owned by the current user",
+        "mcp_tool": {"name": "loomhelm.list_host_credentials", "description": "List non-secret credential metadata for an owned Host; shared users cannot administer credentials."}
+      },
+      {
+        "operation_id": "revokeHostCredential",
+        "method": "DELETE",
+        "path": "/hosts/{host_id}/credentials/{credential_id}",
+        "path_params": {"host_id": "string", "credential_id": "string"},
+        "response_status": 204,
+        "summary": "Revoke one credential belonging to an owned Host",
+        "mcp_tool": {"name": "loomhelm.revoke_host_credential", "description": "Revoke an owned Host credential without returning its secret or disclosing foreign Hosts."}
+      },
+      {
+        "operation_id": "listHostShares",
+        "method": "GET",
+        "path": "/hosts/{host_id}/shares",
+        "path_params": {"host_id": "string"},
+        "response_type": "HostShareListResponse",
+        "summary": "List explicit share grants for an owned Host",
+        "mcp_tool": {"name": "loomhelm.list_host_shares", "description": "List explicit Host share grants for an owned Host."}
+      },
+      {
+        "operation_id": "grantHostShare",
+        "method": "PUT",
+        "path": "/hosts/{host_id}/shares/{user_id}",
+        "path_params": {"host_id": "string", "user_id": "string"},
+        "response_type": "HostShareResponse",
+        "response_status": 200,
+        "summary": "Grant or restore explicit Host access to an existing user",
+        "mcp_tool": {"name": "loomhelm.grant_host_share", "description": "Let only the Host owner grant explicit use access to an existing user; project membership is unrelated."}
+      },
+      {
+        "operation_id": "revokeHostShare",
+        "method": "DELETE",
+        "path": "/hosts/{host_id}/shares/{user_id}",
+        "path_params": {"host_id": "string", "user_id": "string"},
+        "response_status": 204,
+        "summary": "Revoke explicit Host access from a user",
+        "mcp_tool": {"name": "loomhelm.revoke_host_share", "description": "Let only the Host owner revoke an explicit share grant."}
       },
       {
         "operation_id": "listProjects",

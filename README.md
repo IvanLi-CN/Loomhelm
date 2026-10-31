@@ -2,7 +2,7 @@
 
 Loomhelm 是面向个人与小型团队的自部署项目管理与 Agent 工作台。
 
-项目将提供 Web/PWA、API 与 MCP 入口，把项目、任务层级与依赖、单一执行环境中的 Codex 对话、审批和对话文件连接起来。顶部入口为工作台、任务，下方“对话”分组列无项目对话，项目树直接列各项目对话；工作台可进入全部对话。任务提供列表、看板与图谱，并支持多端连续工作与共享草稿。
+项目将提供 Web/PWA、API 与 MCP 入口，把项目、任务层级与依赖、用户已授权 Host 中的 Codex 对话、审批和对话文件连接起来。顶部入口为工作台、任务，下方“对话”分组列无项目对话，项目树直接列各项目对话；工作台可进入全部对话。任务提供列表、看板与图谱，并支持多端连续工作与共享草稿。
 
 当前仓库处于工程初始化阶段，尚未提供可运行的产品。
 
@@ -10,7 +10,7 @@ Loomhelm 是面向个人与小型团队的自部署项目管理与 Agent 工作�
 
 - Go + chi 提供 HTTP 入口；Server、Worker、Connector 分进程运行。
 - PostgreSQL 保存业务与执行事实，pgx/sqlc 负责访问，goose 管理迁移，River 承担短派发与对账作业。
-- Go Connector 从预配置的单一执行环境主动连接平台，并在执行机器内连接 Codex app-server；Codex 登录凭据保留在该机器。执行机器可以与平台分开部署，连接认证与撤销由部署管理负责。
+- Go Connector 从用户授权的 Host 主动连接平台，并在执行机器内连接 Codex app-server；Codex 登录凭据保留在该机器。执行机器可以与平台分开部署，Connector 认证、Host 凭据撤销和显式共享由部署管理 API/MCP 负责，项目成员身份不自动授予 Host 权限。
 - React/Vite/TypeScript 构建 Web/PWA，Bun workspaces 管理前端工程；产品界面在完整设计确认后实现。
 - 非生产候选采用固定源码 SHA 和产物 digest，通过 Caddy 蓝绿切流；Worker 交接与共享状态兼容分别验证。
 

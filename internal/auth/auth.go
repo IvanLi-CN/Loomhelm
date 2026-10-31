@@ -71,7 +71,7 @@ type Provider interface {
 // ConnectorEnrollment issues an independent host deployment credential after
 // a browser user authorizes a local Connector device.
 type ConnectorEnrollment interface {
-	EnrollConnector(context.Context) (ConnectorCredential, error)
+	EnrollConnector(context.Context, string, string) (ConnectorCredential, error)
 }
 
 // ConnectorCredentialResolver resolves a raw host credential only for the

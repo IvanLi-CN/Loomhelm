@@ -219,6 +219,15 @@ func (c *Connector) connectionLoop(ctx context.Context) error {
 		connection, err := c.platform.Connect(dialCtx)
 		cancel()
 		if err != nil {
+			if isConnectorCredentialRejected(err) {
+				if refreshErr := c.refreshPlatformCredential(ctx); refreshErr != nil {
+					c.logger.Warn("connector credential recovery failed", "error_class", connectorRecoveryErrorClass(refreshErr))
+				} else {
+					c.logger.Info("connector credential recovered")
+					delay = connectorInitialReconnectDelay
+					continue
+				}
+			}
 			c.logger.Warn("connector platform gateway connect failed", "error_class", connectorGatewayErrorClass(err), "retry_after", delay)
 			if !waitConnectorRetry(ctx, delay) {
 				return ctx.Err()
@@ -245,6 +254,30 @@ func (c *Connector) connectionLoop(ctx context.Context) error {
 		}
 		delay = nextConnectorRetry(delay)
 	}
+}
+
+func (c *Connector) refreshPlatformCredential(ctx context.Context) error {
+	credential, err := bootstrapConnectorCredential(ctx, c.cfg, c.logger)
+	if err != nil {
+		return err
+	}
+	client, err := newConnectorPlatformClient(c.cfg, credential)
+	if err != nil {
+		return err
+	}
+	c.platform = client
+	return nil
+}
+
+func isConnectorCredentialRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "status 401") ||
+		strings.Contains(message, "status code: 401") ||
+		strings.Contains(message, "status code 401") ||
+		strings.Contains(message, "got 401")
 }
 
 func connectorDialTimeoutFor(shutdownTimeout time.Duration) time.Duration {

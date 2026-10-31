@@ -240,7 +240,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			db.Close()
 			return nil, fmt.Errorf("initialize run control: %w", controlErr)
 		}
-		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, hostRegistry, transport, control)
+		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, services.hosts, transport, control)
 		runtime.api, err = services.handler(control)
 		if err != nil {
 			db.Close()

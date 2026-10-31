@@ -56,7 +56,13 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		t.Fatalf("open acceptance persistence: %v", err)
 	}
 	t.Cleanup(persistence.Close)
-	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+	browser := applicationBrowser(t)
+	browser.Timeout = 3 * time.Minute
+	browser.Transport = insecureTestHTTPClient().Transport
+	loginApplicationBrowser(t, browser, baseURL, "real-platform-c01")
+	var browserIdentity protocol.BrowserSessionResponse
+	decodeApplicationResponse(t, applicationRequest(t, browser, http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusOK), &browserIdentity)
+	hostRegistration, err := hosts.NewService(persistence.Pool()).RegisterForUser(ctx, browserIdentity.UserID, hosts.RegisterRequest{
 		Name:           "h01 real platform C01",
 		CredentialName: "real-platform-c01",
 	})
@@ -133,10 +139,6 @@ func TestRealPlatformC01ConnectorClosure(t *testing.T) {
 		stopServer()
 	})
 
-	browser := applicationBrowser(t)
-	browser.Timeout = 3 * time.Minute
-	browser.Transport = insecureTestHTTPClient().Transport
-	loginApplicationBrowser(t, browser, baseURL, "real-platform-c01")
 	createResponse := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/sessions", protocol.CreateSessionRequest{
 		CommandID: "real-platform-c01-session",
 		Path:      protocol.SessionPathNew,

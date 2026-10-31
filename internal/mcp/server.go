@@ -69,6 +69,7 @@ var (
 		"updateDraft":          "draft",
 		"resolveApproval":      "ack",
 		"interruptRun":         "ack",
+		"grantHostShare":       "share",
 	}
 	mutationResponseRequiredFields = map[string][]string{
 		"createUserCredential": {"id", "name", "project_ids", "created_at", "token"},
@@ -83,6 +84,7 @@ var (
 		"updateDraft":          {"session_id", "content", "revision", "updated_at"},
 		"resolveApproval":      {"command_id", "state", "received_at", "deduplicated"},
 		"interruptRun":         {"command_id", "state", "received_at", "deduplicated"},
+		"grantHostShare":       {"host_id", "user_id", "granted_by", "created_at"},
 	}
 )
 

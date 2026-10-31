@@ -12,13 +12,15 @@ The owner participates in one complete UI design task, and approved product UI i
 
 ## Product Boundaries
 
-The owner clarified that the product uses one configured execution environment and has no host-management concept. The existing control-plane ADR continues to describe Server, Worker and Connector separation, execution-machine locality and credential retention; it does not require a fleet-management product. Connector authentication and revocation remain deployment responsibilities.
+The product boundary distinguishes the browser UI from the authenticated deployment API: the browser has no Host-management surface, while REST/MCP expose user-owned Hosts, explicit sharing and owner-controlled Connector credentials. Server, Worker and Connector remain separate, execution-machine locality and credential retention remain required, and automated multi-Host fleet management remains outside the topic.
 
 The owner's initial design direction established cross-project Workbench, Tasks and Conversations entries with separate project-context navigation, list/board/graph views, distinct task hierarchy and dependency relations, shared unsent conversation drafts and independent client navigation. Each task has at most one directly associated conversation; supporting sub-agent activity is presented within that conversation when actual events support it. Files remain in conversation context, without an independent artifacts module or remote file browser.
 
 These product constraints do not constitute approval of the complete UI design. No existing desktop-session control acceptance, deployed schema or public API compatibility evidence is established by the structural prototype.
 
 The owner's design answers permit standalone conversations, optional project selection and later task association without losing conversation identity. Projectless conversations join the target task's project. This corrected the earlier engineering definition that required every Run to have a Task; that checkpoint did not settle reverse association, reassignment or historical visibility. The verified design checkpoint is `1bdbc53f027c7a5575bc267c14ed2d18a38c4bad`.
+
+The Host ownership contract makes each Host a user-owned execution resource. A user may route sessions through an owned Host or one explicitly shared with that user; project membership never grants Host access. Host credential inventory/revocation and share administration remain owner-only API/MCP operations, and Connector browser enrollment binds the approving user and requested Host before issuing a credential.
 
 The complete product requirements were consolidated into `docs/PRD.md` after the owner identified the missing product-definition responsibility. The coordinator owns that document. PRD confirmation and resolution of affected business decisions precede feature implementation and public business contract finalization; complete UI design confirmation remains an additional UI gate. Suggested business rules are collected for owner decision and do not constitute approval or implemented coverage.
 

@@ -28,6 +28,8 @@ import (
 
 const connectorCredentialCacheVersion = 1
 
+var errConnectorCredentialRejected = errors.New("Connector credential was rejected")
+
 type connectorCredentialCache struct {
 	Version   int    `json:"version"`
 	ServerURL string `json:"server_url"`
@@ -48,13 +50,8 @@ func connectorCredentialFromConfig(cfg platform.Config) (auth.ConnectorCredentia
 	if apiKey == "" {
 		return auth.ConnectorCredential{}, false, nil
 	}
-	if strings.HasPrefix(apiKey, "lhk_") {
-		credential, err := auth.DecodeConnectorAPIKey(apiKey)
-		if err != nil {
-			return auth.ConnectorCredential{}, false, err
-		}
-		return credential, true, nil
-	}
+	// Opaque API keys must pass the identity check in bootstrap. Returning a
+	// decoded key here would allow a revoked key to bypass recovery.
 	return auth.ConnectorCredential{}, false, nil
 }
 
@@ -99,22 +96,47 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 	}
 	apiKey := strings.TrimSpace(cfg.ConnectorAPIKey)
 	if apiKey != "" {
+		decoded, decodeErr := auth.DecodeConnectorAPIKey(apiKey)
+		if decodeErr != nil {
+			return auth.ConnectorCredential{}, decodeErr
+		}
 		credential, err := b.resolveAPIKey(ctx, cfg.ConnectorServerURL, apiKey)
-		if err != nil {
+		if err == nil {
+			return credential, nil
+		}
+		if !errors.Is(err, errConnectorCredentialRejected) {
 			return auth.ConnectorCredential{}, err
 		}
-		return credential, nil
+		if logger != nil {
+			logger.Info("connector credential rejected; starting browser recovery")
+		}
+		return b.authorizeAndCache(ctx, cfg, cachePath, logger, decoded.HostID)
 	}
 	if credential, ok, err := loadConnectorCredential(cachePath, cfg.ConnectorServerURL); err != nil {
 		return auth.ConnectorCredential{}, err
 	} else if ok {
-		return credential, nil
+		cachedAPIKey, encodeErr := auth.EncodeConnectorAPIKey(credential.HostID, credential.Token)
+		if encodeErr != nil {
+			return auth.ConnectorCredential{}, fmt.Errorf("encode cached Connector credential: %w", encodeErr)
+		}
+		if _, validateErr := b.resolveAPIKey(ctx, cfg.ConnectorServerURL, cachedAPIKey); validateErr == nil {
+			return credential, nil
+		} else if !errors.Is(validateErr, errConnectorCredentialRejected) {
+			return auth.ConnectorCredential{}, validateErr
+		} else if logger != nil {
+			logger.Info("cached connector credential rejected; starting browser recovery")
+		}
+		return b.authorizeAndCache(ctx, cfg, cachePath, logger, credential.HostID)
 	}
+	return b.authorizeAndCache(ctx, cfg, cachePath, logger, "")
+}
+
+func (b connectorCredentialBootstrapper) authorizeAndCache(ctx context.Context, cfg platform.Config, cachePath string, logger *slog.Logger, requestedHostID string) (auth.ConnectorCredential, error) {
 	if logger != nil {
 		parsed, _ := url.Parse(cfg.ConnectorServerURL)
 		logger.Info("connector browser authorization required", "server_host", parsed.Host)
 	}
-	credential, err := b.authorizeInBrowser(ctx, cfg.ConnectorServerURL)
+	credential, err := b.authorizeInBrowser(ctx, cfg.ConnectorServerURL, requestedHostID)
 	if err != nil {
 		return auth.ConnectorCredential{}, err
 	}
@@ -128,6 +150,10 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 }
 
 func (b connectorCredentialBootstrapper) resolveAPIKey(ctx context.Context, baseURL, apiKey string) (auth.ConnectorCredential, error) {
+	decoded, err := auth.DecodeConnectorAPIKey(apiKey)
+	if err != nil {
+		return auth.ConnectorCredential{}, err
+	}
 	endpoint, err := connectorHTTPURL(baseURL, "/api/v1/auth/connector/identity")
 	if err != nil {
 		return auth.ConnectorCredential{}, err
@@ -143,6 +169,9 @@ func (b connectorCredentialBootstrapper) resolveAPIKey(ctx context.Context, base
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound {
+			return auth.ConnectorCredential{}, fmt.Errorf("%w: Connector identity request failed with status %d", errConnectorCredentialRejected, response.StatusCode)
+		}
 		return auth.ConnectorCredential{}, fmt.Errorf("Connector identity request failed with status %d", response.StatusCode)
 	}
 	var payload struct {
@@ -154,10 +183,13 @@ func (b connectorCredentialBootstrapper) resolveAPIKey(ctx context.Context, base
 	if strings.TrimSpace(payload.HostID) == "" {
 		return auth.ConnectorCredential{}, errors.New("Connector identity response omitted host id")
 	}
-	return auth.ConnectorCredential{HostID: payload.HostID, Token: apiKey}, nil
+	if payload.HostID != decoded.HostID {
+		return auth.ConnectorCredential{}, errors.New("Connector identity response does not match the configured Host")
+	}
+	return decoded, nil
 }
 
-func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context, baseURL string) (auth.ConnectorCredential, error) {
+func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context, baseURL, requestedHostID string) (auth.ConnectorCredential, error) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return auth.ConnectorCredential{}, fmt.Errorf("listen for Connector authorization callback: %w", err)
@@ -208,7 +240,8 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 	startPayload := struct {
 		RedirectURI string `json:"redirect_uri"`
 		State       string `json:"state"`
-	}{RedirectURI: callbackURL, State: state}
+		HostID      string `json:"host_id,omitempty"`
+	}{RedirectURI: callbackURL, State: state, HostID: strings.TrimSpace(requestedHostID)}
 	var startResponse struct {
 		VerificationURI string `json:"verification_uri"`
 		UserCode        string `json:"user_code"`
@@ -251,6 +284,9 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 	credential, err := auth.DecodeConnectorAPIKey(tokenResponse.APIKey)
 	if err != nil {
 		return auth.ConnectorCredential{}, fmt.Errorf("decode Connector browser authorization: %w", err)
+	}
+	if requestedHostID != "" && credential.HostID != requestedHostID {
+		return auth.ConnectorCredential{}, errors.New("Connector browser authorization returned a different Host")
 	}
 	return credential, nil
 }

@@ -22,6 +22,7 @@ const (
 	connectorDeviceLifetime = 10 * time.Minute
 	connectorDeviceCodeSize = 8
 	connectorDeviceCodeURL  = "/api/v1/auth/device/verify"
+	connectorExchangeClaim  = 2 * time.Minute
 )
 
 type connectorDeviceAuthorization struct {
@@ -30,6 +31,7 @@ type connectorDeviceAuthorization struct {
 	State                string
 	ExpiresAt            time.Time
 	AuthorizedUserID     string
+	RequestedHostID      string
 	AuthorizationCodeSet bool
 }
 
@@ -37,7 +39,9 @@ type connectorDeviceStore interface {
 	Create(context.Context, connectorDeviceAuthorization, []byte, []byte) error
 	Lookup(context.Context, []byte, time.Time) (connectorDeviceAuthorization, error)
 	Authorize(context.Context, []byte, string, []byte, time.Time) (connectorDeviceAuthorization, error)
-	Consume(context.Context, []byte, time.Time) (connectorDeviceAuthorization, error)
+	Claim(context.Context, []byte, time.Time) (connectorDeviceAuthorization, error)
+	Complete(context.Context, []byte, time.Time) error
+	Release(context.Context, []byte, time.Time) error
 }
 
 type connectorDeviceFlow struct {
@@ -57,6 +61,7 @@ func newConnectorDeviceFlow(pool *pgxpool.Pool, connector ConnectorAuth) *connec
 type connectorDeviceStartRequest struct {
 	RedirectURI string `json:"redirect_uri"`
 	State       string `json:"state"`
+	HostID      string `json:"host_id,omitempty"`
 }
 
 type connectorDeviceStartResponse struct {
@@ -81,6 +86,10 @@ func (f *connectorDeviceFlow) start(ctx context.Context, request connectorDevice
 	if len(state) < 16 || len(state) > 256 || strings.ContainsAny(state, " \t\r\n\x00") {
 		return connectorDeviceStartResponse{}, fmt.Errorf("%w: device state is invalid", ErrInvalid)
 	}
+	hostID := strings.TrimSpace(request.HostID)
+	if len(hostID) > 256 || strings.ContainsAny(hostID, " \t\r\n\x00") {
+		return connectorDeviceStartResponse{}, fmt.Errorf("%w: requested Host is invalid", ErrInvalid)
+	}
 	code, normalized := newConnectorDeviceCode()
 	if code == "" {
 		return connectorDeviceStartResponse{}, errors.New("generate connector device code")
@@ -93,10 +102,11 @@ func (f *connectorDeviceFlow) start(ctx context.Context, request connectorDevice
 	expiresAt := now.Add(connectorDeviceLifetime)
 	userCodeHash := sha256.Sum256([]byte(normalized))
 	if err := f.store.Create(ctx, connectorDeviceAuthorization{
-		ID:          id,
-		RedirectURI: redirectURI,
-		State:       state,
-		ExpiresAt:   expiresAt,
+		ID:              id,
+		RedirectURI:     redirectURI,
+		State:           state,
+		ExpiresAt:       expiresAt,
+		RequestedHostID: hostID,
 	}, userCodeHash[:], nil); err != nil {
 		return connectorDeviceStartResponse{}, err
 	}
@@ -154,11 +164,17 @@ func (f *connectorDeviceFlow) exchange(ctx context.Context, code string) (string
 		return "", fmt.Errorf("%w: device authorization code is invalid", ErrInvalid)
 	}
 	hash := sha256.Sum256([]byte(code))
-	if _, err := f.store.Consume(ctx, hash[:], f.now()); err != nil {
+	now := f.now()
+	record, err := f.store.Claim(ctx, hash[:], now)
+	if err != nil {
 		return "", err
 	}
-	credential, err := f.enroller.EnrollConnector(ctx)
+	credential, err := f.enroller.EnrollConnector(ctx, record.AuthorizedUserID, record.RequestedHostID)
 	if err != nil {
+		_ = f.store.Release(ctx, hash[:], now)
+		return "", err
+	}
+	if err := f.store.Complete(ctx, hash[:], now); err != nil {
 		return "", err
 	}
 	return EncodeConnectorAPIKey(credential.HostID, credential.Token)
@@ -227,7 +243,7 @@ func (s *Service) handleConnectorDeviceVerify(writer http.ResponseWriter, reques
 	}
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = fmt.Fprintf(writer, "<!doctype html><html><head><title>Loomhelm Connector</title></head><body><h1>Authorize Loomhelm Connector</h1><p>Authorize this computer to use the configured Loomhelm execution environment.</p><form method=post action=%q><input type=hidden name=user_code value=%q><button type=submit>Authorize Connector</button></form></body></html>", html.EscapeString(request.URL.Path), html.EscapeString(code))
+	_, _ = fmt.Fprintf(writer, "<!doctype html><html><head><title>Loomhelm Connector</title></head><body><h1>Authorize Loomhelm Connector</h1><p>Authorize this computer to use your Loomhelm Host.</p><form method=post action=%q><input type=hidden name=user_code value=%q><button type=submit>Authorize Connector</button></form></body></html>", html.EscapeString(request.URL.Path), html.EscapeString(code))
 }
 
 func (s *Service) handleConnectorDeviceToken(writer http.ResponseWriter, request *http.Request) {
@@ -343,37 +359,50 @@ func normalizeConnectorDeviceCode(value string) (string, error) {
 type postgresConnectorDeviceStore struct{ pool *pgxpool.Pool }
 
 func (s *postgresConnectorDeviceStore) Create(ctx context.Context, record connectorDeviceAuthorization, userCodeHash, authorizationCodeHash []byte) error {
+	if err := s.cleanup(ctx, record.ExpiresAt); err != nil {
+		return err
+	}
 	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO connector_device_authorizations (id, user_code_hash, redirect_uri, state, expires_at, authorization_code_hash)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, record.ID, userCodeHash, record.RedirectURI, record.State, record.ExpiresAt, authorizationCodeHash); err != nil {
+		INSERT INTO connector_device_authorizations (id, user_code_hash, redirect_uri, state, expires_at, requested_host_id, authorization_code_hash)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7)
+	`, record.ID, userCodeHash, record.RedirectURI, record.State, record.ExpiresAt, record.RequestedHostID, authorizationCodeHash); err != nil {
 		return fmt.Errorf("%w: create Connector device authorization: %v", ErrUnavailable, err)
 	}
 	return nil
 }
 
 func (s *postgresConnectorDeviceStore) Lookup(ctx context.Context, userCodeHash []byte, now time.Time) (connectorDeviceAuthorization, error) {
+	if err := s.cleanup(ctx, now); err != nil {
+		return connectorDeviceAuthorization{}, err
+	}
 	var record connectorDeviceAuthorization
 	var userID *string
+	var requestedHostID *string
 	var authorizationCodeHash []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, redirect_uri, state, expires_at, authorized_user_id, authorization_code_hash
+		SELECT id, redirect_uri, state, expires_at, authorized_user_id, requested_host_id, authorization_code_hash
 		FROM connector_device_authorizations
 		WHERE user_code_hash = $1
-	`, userCodeHash).Scan(&record.ID, &record.RedirectURI, &record.State, &record.ExpiresAt, &userID, &authorizationCodeHash)
+	`, userCodeHash).Scan(&record.ID, &record.RedirectURI, &record.State, &record.ExpiresAt, &userID, &requestedHostID, &authorizationCodeHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector enrollment code is invalid", ErrInvalid)
 	}
 	if err != nil {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: load Connector device authorization: %v", ErrUnavailable, err)
 	}
-	if record.ExpiresAt.Before(now) || userID != nil || len(authorizationCodeHash) != 0 {
+	if !record.ExpiresAt.After(now) || userID != nil || len(authorizationCodeHash) != 0 {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector enrollment code is invalid or expired", ErrInvalid)
+	}
+	if requestedHostID != nil {
+		record.RequestedHostID = *requestedHostID
 	}
 	return record, nil
 }
 
 func (s *postgresConnectorDeviceStore) Authorize(ctx context.Context, userCodeHash []byte, userID string, authorizationCodeHash []byte, now time.Time) (connectorDeviceAuthorization, error) {
+	if err := s.cleanup(ctx, now); err != nil {
+		return connectorDeviceAuthorization{}, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: begin Connector authorization: %v", ErrUnavailable, err)
@@ -381,20 +410,21 @@ func (s *postgresConnectorDeviceStore) Authorize(ctx context.Context, userCodeHa
 	defer tx.Rollback(ctx)
 	var record connectorDeviceAuthorization
 	var authorizedUserID *string
+	var requestedHostID *string
 	var existingCode []byte
 	err = tx.QueryRow(ctx, `
-		SELECT id, redirect_uri, state, expires_at, authorized_user_id, authorization_code_hash
+		SELECT id, redirect_uri, state, expires_at, authorized_user_id, requested_host_id, authorization_code_hash
 		FROM connector_device_authorizations
 		WHERE user_code_hash = $1
 		FOR UPDATE
-	`, userCodeHash).Scan(&record.ID, &record.RedirectURI, &record.State, &record.ExpiresAt, &authorizedUserID, &existingCode)
+	`, userCodeHash).Scan(&record.ID, &record.RedirectURI, &record.State, &record.ExpiresAt, &authorizedUserID, &requestedHostID, &existingCode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector enrollment code is invalid", ErrInvalid)
 	}
 	if err != nil {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: load Connector device authorization: %v", ErrUnavailable, err)
 	}
-	if record.ExpiresAt.Before(now) || authorizedUserID != nil || len(existingCode) != 0 {
+	if !record.ExpiresAt.After(now) || authorizedUserID != nil || len(existingCode) != 0 {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector enrollment code is invalid or expired", ErrInvalid)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -408,11 +438,17 @@ func (s *postgresConnectorDeviceStore) Authorize(ctx context.Context, userCodeHa
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: commit Connector device authorization: %v", ErrUnavailable, err)
 	}
 	record.AuthorizedUserID = userID
+	if requestedHostID != nil {
+		record.RequestedHostID = *requestedHostID
+	}
 	record.AuthorizationCodeSet = true
 	return record, nil
 }
 
-func (s *postgresConnectorDeviceStore) Consume(ctx context.Context, authorizationCodeHash []byte, now time.Time) (connectorDeviceAuthorization, error) {
+func (s *postgresConnectorDeviceStore) Claim(ctx context.Context, authorizationCodeHash []byte, now time.Time) (connectorDeviceAuthorization, error) {
+	if err := s.cleanup(ctx, now); err != nil {
+		return connectorDeviceAuthorization{}, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: begin Connector token exchange: %v", ErrUnavailable, err)
@@ -420,26 +456,69 @@ func (s *postgresConnectorDeviceStore) Consume(ctx context.Context, authorizatio
 	defer tx.Rollback(ctx)
 	var record connectorDeviceAuthorization
 	var consumedAt *time.Time
+	var authorizedUserID *string
+	var requestedHostID *string
+	var exchangeStartedAt *time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT id, redirect_uri, state, expires_at, consumed_at
+		SELECT id, redirect_uri, state, expires_at, authorized_user_id, requested_host_id, consumed_at, exchange_started_at
 		FROM connector_device_authorizations
 		WHERE authorization_code_hash = $1
 		FOR UPDATE
-	`, authorizationCodeHash).Scan(&record.ID, &record.RedirectURI, &record.State, &record.ExpiresAt, &consumedAt)
+	`, authorizationCodeHash).Scan(&record.ID, &record.RedirectURI, &record.State, &record.ExpiresAt, &authorizedUserID, &requestedHostID, &consumedAt, &exchangeStartedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector authorization code is invalid", ErrInvalid)
 	}
 	if err != nil {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: load Connector authorization code: %v", ErrUnavailable, err)
 	}
-	if consumedAt != nil || record.ExpiresAt.Before(now) {
+	if consumedAt != nil || !record.ExpiresAt.After(now) || authorizedUserID == nil || (exchangeStartedAt != nil && now.Sub(*exchangeStartedAt) < connectorExchangeClaim) {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector authorization code is invalid or expired", ErrInvalid)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE connector_device_authorizations SET consumed_at = $2 WHERE id = $1`, record.ID, now); err != nil {
-		return connectorDeviceAuthorization{}, fmt.Errorf("%w: consume Connector authorization code: %v", ErrUnavailable, err)
+	if _, err := tx.Exec(ctx, `UPDATE connector_device_authorizations SET exchange_started_at = $2 WHERE id = $1`, record.ID, now); err != nil {
+		return connectorDeviceAuthorization{}, fmt.Errorf("%w: claim Connector authorization code: %v", ErrUnavailable, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return connectorDeviceAuthorization{}, fmt.Errorf("%w: commit Connector token exchange: %v", ErrUnavailable, err)
+		return connectorDeviceAuthorization{}, fmt.Errorf("%w: commit Connector token claim: %v", ErrUnavailable, err)
+	}
+	record.AuthorizedUserID = *authorizedUserID
+	if requestedHostID != nil {
+		record.RequestedHostID = *requestedHostID
 	}
 	return record, nil
+}
+
+func (s *postgresConnectorDeviceStore) Complete(ctx context.Context, authorizationCodeHash []byte, now time.Time) error {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE connector_device_authorizations
+		SET consumed_at = $2, exchange_started_at = NULL
+		WHERE authorization_code_hash = $1 AND consumed_at IS NULL AND exchange_started_at = $2
+	`, authorizationCodeHash, now)
+	if err != nil {
+		return fmt.Errorf("%w: complete Connector token exchange: %v", ErrUnavailable, err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: Connector authorization code is no longer exchangeable", ErrInvalid)
+	}
+	return nil
+}
+
+func (s *postgresConnectorDeviceStore) Release(ctx context.Context, authorizationCodeHash []byte, now time.Time) error {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE connector_device_authorizations
+		SET exchange_started_at = NULL
+		WHERE authorization_code_hash = $1 AND consumed_at IS NULL AND exchange_started_at = $2
+	`, authorizationCodeHash, now); err != nil {
+		return fmt.Errorf("%w: release Connector token claim: %v", ErrUnavailable, err)
+	}
+	return nil
+}
+
+func (s *postgresConnectorDeviceStore) cleanup(ctx context.Context, now time.Time) error {
+	if _, err := s.pool.Exec(ctx, `
+		DELETE FROM connector_device_authorizations
+		WHERE expires_at < $1 - INTERVAL '1 hour'
+	`, now); err != nil {
+		return fmt.Errorf("%w: cleanup expired Connector authorizations: %v", ErrUnavailable, err)
+	}
+	return nil
 }

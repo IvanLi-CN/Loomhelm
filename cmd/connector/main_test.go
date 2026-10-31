@@ -1,8 +1,11 @@
 package main
 
 import (
-	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 )
 
 func TestConnectorInitializationErrorClassOmitsPrivateDetails(t *testing.T) {
@@ -54,13 +59,32 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 	if err := os.Chmod(filepath.Dir(logPath), 0o700); err != nil {
 		t.Fatalf("secure connector test directory: %v", err)
 	}
+	apiKey, err := auth.EncodeConnectorAPIKey("host-test", "token-test")
+	if err != nil {
+		t.Fatalf("encode Connector API key: %v", err)
+	}
+	identityServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/connector/identity" || request.Header.Get("Authorization") != "Bearer "+apiKey {
+			http.Error(writer, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]string{"host_id": "host-test"})
+	}))
+	defer identityServer.Close()
+	certificatePath := filepath.Join(t.TempDir(), "identity-ca.pem")
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: identityServer.Certificate().Raw})
+	if err := os.WriteFile(certificatePath, certificatePEM, 0o600); err != nil {
+		t.Fatalf("write identity CA: %v", err)
+	}
 
 	command := exec.Command(binary)
 	command.Env = commandEnv(map[string]string{
-		"LOOMHELM_VERSION":                      "test",
-		"LOOMHELM_CONNECTOR_BASE_URL":           "https://platform.example.test",
-		"LOOMHELM_CONNECTOR_API_KEY":            "lhk_" + base64.RawURLEncoding.EncodeToString([]byte("host-test\x00token-test")),
-		"XDG_CONFIG_HOME": filepath.Dir(logPath),
+		"LOOMHELM_VERSION":            "test",
+		"LOOMHELM_CONNECTOR_BASE_URL": identityServer.URL,
+		"LOOMHELM_CONNECTOR_API_KEY":  apiKey,
+		"XDG_CONFIG_HOME":             filepath.Dir(logPath),
+		"SSL_CERT_FILE":               certificatePath,
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile

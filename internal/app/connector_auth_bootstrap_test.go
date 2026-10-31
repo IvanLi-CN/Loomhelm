@@ -122,6 +122,105 @@ func TestConnectorBrowserBootstrapUsesLoopbackCallbackAndCachesCredential(t *tes
 	}
 }
 
+func TestConnectorBootstrapRecoversRejectedCachedCredential(t *testing.T) {
+	var callbackURL string
+	var callbackState string
+	var requestedHostID string
+	identityCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/auth/connector/identity":
+			identityCalls++
+			writer.WriteHeader(http.StatusUnauthorized)
+		case "/api/v1/auth/device/start":
+			var payload struct {
+				RedirectURI string `json:"redirect_uri"`
+				State       string `json:"state"`
+				HostID      string `json:"host_id"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				http.Error(writer, "bad request", http.StatusBadRequest)
+				return
+			}
+			callbackURL, callbackState, requestedHostID = payload.RedirectURI, payload.State, payload.HostID
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"verification_uri":"/verify","user_code":"ABCD-2345","expires_in":600}`)
+		case "/api/v1/auth/device/token":
+			apiKey, _ := auth.EncodeConnectorAPIKey("host-cache", "token-recovered")
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"api_key":"`+apiKey+`"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	if err := saveConnectorCredential(cachePath, server.URL, auth.ConnectorCredential{HostID: "host-cache", Token: "token-revoked"}); err != nil {
+		t.Fatalf("save cached credential: %v", err)
+	}
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(_ context.Context, _ string) error {
+			callback := callbackURL + "?code=authorization-code&state=" + url.QueryEscape(callbackState)
+			response, err := server.Client().Get(callback)
+			if err != nil {
+				return err
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				return io.ErrUnexpectedEOF
+			}
+			return nil
+		},
+	}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("cached credential recovery error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-cache", Token: "token-recovered"}) {
+		t.Fatalf("recovered credential = %+v", credential)
+	}
+	if identityCalls != 1 || requestedHostID != "host-cache" {
+		t.Fatalf("recovery binding = identity calls %d, requested host %q", identityCalls, requestedHostID)
+	}
+}
+
+func TestConnectorBootstrapValidatesOpaqueAPIKeyAndUsesRawTokenForGateway(t *testing.T) {
+	apiKey, err := auth.EncodeConnectorAPIKey("host-api-key", "token-api-key")
+	if err != nil {
+		t.Fatalf("encode API key: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/connector/identity" {
+			http.NotFound(writer, request)
+			return
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer "+apiKey {
+			t.Fatalf("identity Authorization = %q, want opaque API key", got)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"host_id":"host-api-key"}`)
+	}))
+	defer server.Close()
+
+	bootstrapper := connectorCredentialBootstrapper{client: server.Client()}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorAPIKey:         apiKey,
+		ConnectorCredentialPath: filepath.Join(t.TempDir(), "connector-credential.json"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("API key bootstrap error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-api-key", Token: "token-api-key"}) {
+		t.Fatalf("API key credential = %+v", credential)
+	}
+}
+
 func TestConnectorVerificationURLPreservesBasePath(t *testing.T) {
 	got, err := resolveConnectorVerificationURL("https://loomhelm.example.test/loomhelm", "/api/v1/auth/device/verify")
 	if err != nil {

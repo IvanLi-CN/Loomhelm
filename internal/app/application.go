@@ -11,6 +11,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
+	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
@@ -27,6 +28,7 @@ type applicationServices struct {
 	projects        *projects.Service
 	tasks           *tasks.Service
 	sessions        *sessions.Store
+	hosts           *hosts.Service
 	runHistory      sessionRunStore
 	runRecords      artifactRunRecords
 	drafts          draftStore
@@ -83,6 +85,7 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		projects:   projectService,
 		tasks:      tasks.NewService(pool, identity, projectService),
 		sessions:   sessions.NewStore(pool),
+		hosts:      hosts.NewService(pool),
 		runHistory: runs.NewStore(pool),
 		runRecords: runs.NewStore(pool),
 		drafts:     drafts.NewStore(pool),
@@ -93,6 +96,7 @@ func (s *applicationServices) handler(control runControlApplication) (http.Handl
 	router := chi.NewRouter()
 	s.identity.Mount(router)
 	s.identity.MountAPI(router)
+	(&hostHTTP{principal: s.identity, registry: s.hosts}).mount(router)
 	s.projects.Mount(router)
 	s.tasks.Mount(router)
 	sessionAccess := s.sessionAccess()
@@ -278,7 +282,7 @@ func unavailableArtifactDownload(writer http.ResponseWriter, request *http.Reque
 }
 
 func (s *applicationServices) sessionAccess() *sessionService {
-	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions, creation: s.sessionCreation, binding: s.sessions}
+	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions, hosts: s.hosts, creation: s.sessionCreation, binding: s.sessions}
 }
 
 func writeApplicationError(writer http.ResponseWriter, request *http.Request, status int, message string) {
