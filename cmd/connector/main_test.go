@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -57,11 +58,9 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 	command := exec.Command(binary)
 	command.Env = commandEnv(map[string]string{
 		"LOOMHELM_VERSION":                      "test",
-		"LOOMHELM_CONNECTOR_SERVER_URL":         "https://platform.example.test",
-		"LOOMHELM_CONNECTOR_HOST_ID":            "host-test",
-		"LOOMHELM_CONNECTOR_TOKEN":              "token-test",
-		"LOOMHELM_CONNECTOR_JOURNAL_PATH":       filepath.Join(filepath.Dir(logPath), "connector.jsonl"),
-		"LOOMHELM_CONNECTOR_APP_SERVER_COMMAND": "/bin/true",
+		"LOOMHELM_CONNECTOR_BASE_URL":           "https://platform.example.test",
+		"LOOMHELM_CONNECTOR_API_KEY":            "lhk_" + base64.RawURLEncoding.EncodeToString([]byte("host-test\x00token-test")),
+		"XDG_CONFIG_HOME": filepath.Dir(logPath),
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -87,10 +86,10 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 func TestConnectorEntrypointRejectsInvalidConfiguration(t *testing.T) {
 	binary := buildConnectorEntrypoint(t)
 	command := exec.Command(binary)
-	command.Env = commandEnv(nil)
+	command.Env = commandEnv(map[string]string{"LOOMHELM_CONNECTOR_BASE_URL": "ftp://platform.example.test"})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 2)
-	if !strings.Contains(string(output), "invalid configuration: invalid LOOMHELM_CONNECTOR_SERVER_URL: must not be empty") {
+	if !strings.Contains(string(output), "invalid configuration: invalid LOOMHELM_CONNECTOR_BASE_URL") {
 		t.Fatalf("invalid configuration output = %q", output)
 	}
 }
@@ -114,7 +113,14 @@ func repositoryRoot() string {
 func commandEnv(values map[string]string) []string {
 	env := make([]string, 0, len(os.Environ())+len(values))
 	for _, value := range os.Environ() {
+		name := value
+		if index := strings.IndexByte(name, '='); index >= 0 {
+			name = name[:index]
+		}
 		if !strings.HasPrefix(value, "LOOMHELM_") {
+			if _, overridden := values[name]; overridden {
+				continue
+			}
 			env = append(env, value)
 		}
 	}

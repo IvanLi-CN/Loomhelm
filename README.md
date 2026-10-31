@@ -14,6 +14,19 @@ Loomhelm 是面向个人与小型团队的自部署项目管理与 Agent 工作�
 - React/Vite/TypeScript 构建 Web/PWA，Bun workspaces 管理前端工程；产品界面在完整设计确认后实现。
 - 非生产候选采用固定源码 SHA 和产物 digest，通过 Caddy 蓝绿切流；Worker 交接与共享状态兼容分别验证。
 
+## Connector on macOS
+
+当前计算机为 Apple silicon 时，安装器可从 GitHub Release 下载 `loomhelm-connector-darwin-arm64.tar.gz`，解压后运行 `loomhelm-connector`；首次运行只需设置可选的 `LOOMHELM_CONNECTOR_BASE_URL`，默认值为 `https://loomhelm.ivanli.cc`，没有 API key 时会打开浏览器完成一次性本机授权。
+
+```sh
+mkdir -p "$HOME/.local/loomhelm"
+curl -fL https://github.com/IvanLi-CN/Loomhelm/releases/latest/download/loomhelm-connector-darwin-arm64.tar.gz | tar -xzf - -C "$HOME/.local/loomhelm" --strip-components=1
+chmod 755 "$HOME/.local/loomhelm/loomhelm-connector"
+LOOMHELM_CONNECTOR_BASE_URL=https://loomhelm.ivanli.cc "$HOME/.local/loomhelm/loomhelm-connector"
+```
+
+Connector 会在当前计算机启动本机 `codex` app-server，Codex 登录凭据不会上传到 Loomhelm；该流程不连接或接管已经打开的 ChatGPT Desktop 会话。
+
 ## Development
 
 工具版本见 [tools/versions.env](tools/versions.env)。在仓库根目录运行 `scripts/setup` 检查 Git、固定版本的 Go/Bun/sqlc 和 Python 3.9+，准备 Markdown 工具、补齐缺失的 `.env.local` 并安装前端依赖；缺失、版本不匹配或安装失败会汇总后以非零状态退出。重复执行保留已有环境配置和 Git 钩子，linked worktree 与自定义 Git common directory 均受支持。Docker/Compose 在初始化时可选，运行数据库工作流时必需；sqlc 下载与摘要校验方式见 [开发说明](docs/development.md)。

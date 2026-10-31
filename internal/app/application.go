@@ -56,7 +56,7 @@ func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool
 	return handler, nil
 }
 
-func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig) (*applicationServices, error) {
+func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, connectorAuth ...auth.ConnectorAuth) (*applicationServices, error) {
 	var provider auth.Provider
 	if cfg.OIDCEnabled() {
 		configured, err := auth.NewOIDCProvider(ctx, auth.OIDCConfig{
@@ -69,7 +69,11 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		}
 		provider = configured
 	}
-	identity, err := auth.NewService(pool, auth.Config{SecureCookies: cfg.SecureCookies}, provider)
+	authConfig := auth.Config{SecureCookies: cfg.SecureCookies}
+	if len(connectorAuth) > 0 {
+		authConfig.ConnectorAuth = connectorAuth[0]
+	}
+	identity, err := auth.NewService(pool, authConfig, provider)
 	if err != nil {
 		return nil, fmt.Errorf("initialize browser authentication: %w", err)
 	}

@@ -89,17 +89,14 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 	if err != nil {
 		return nil, fmt.Errorf("initialize connector controller: %w", err)
 	}
-	platformURL, err := connectorGatewayURL(cfg.ConnectorServerURL)
-	if err != nil {
-		return nil, fmt.Errorf("build connector gateway URL: %w", err)
-	}
-	platformClient, err := gateway.NewClient(gateway.ClientOptions{
-		URL:    platformURL,
-		HostID: cfg.ConnectorHostID,
-		Token:  cfg.ConnectorToken,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize connector platform gateway: %w", err)
+	var platformClient *gateway.Client
+	if credential, ok, credentialErr := connectorCredentialFromConfig(cfg); credentialErr != nil {
+		return nil, fmt.Errorf("initialize connector platform credential: %w", credentialErr)
+	} else if ok {
+		platformClient, err = newConnectorPlatformClient(cfg, credential)
+		if err != nil {
+			return nil, err
+		}
 	}
 	closeJournal = false
 	return &Connector{
@@ -151,6 +148,26 @@ func (c *Connector) Run(ctx context.Context) error {
 		_ = c.closeResources(shutdownCtx)
 		cancel()
 		return nil
+	}
+	if c.platform == nil {
+		credential, err := bootstrapConnectorCredential(ctx, c.cfg, c.logger)
+		if err != nil {
+			c.lifecycle.Stop()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), c.cfg.ShutdownTimeout)
+			shutdownErr := c.closeResources(shutdownCtx)
+			cancel()
+			c.runMu.Unlock()
+			return errors.Join(fmt.Errorf("bootstrap Connector credential: %w", err), shutdownErr)
+		}
+		c.platform, err = newConnectorPlatformClient(c.cfg, credential)
+		if err != nil {
+			c.lifecycle.Stop()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), c.cfg.ShutdownTimeout)
+			shutdownErr := c.closeResources(shutdownCtx)
+			cancel()
+			c.runMu.Unlock()
+			return errors.Join(err, shutdownErr)
+		}
 	}
 	if err := c.lifecycle.Start(); err != nil {
 		c.runMu.Unlock()

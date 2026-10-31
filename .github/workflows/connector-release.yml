@@ -1,0 +1,92 @@
+name: Connector Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full source SHA to build from feat/phase1
+        required: true
+        type: string
+      tag:
+        description: GitHub Release tag, for example connector-v0.1.0
+        required: true
+        type: string
+      environment:
+        description: Protected release environment
+        required: true
+        default: production
+        type: environment
+
+permissions:
+  contents: write
+
+concurrency:
+  group: loomhelm-connector-release-${{ inputs.tag || 'unknown' }}
+  cancel-in-progress: false
+
+jobs:
+  validate-release-ref:
+    name: Validate Release Ref
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the protected parent branch
+        run: |
+          test "$GITHUB_REF" = refs/heads/feat/phase1 || {
+            echo "Connector Release must run from feat/phase1" >&2
+            exit 1
+          }
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 - "$RELEASE_TAG" <<'PY'
+          import re
+          import sys
+
+          if re.fullmatch(r"connector-v[0-9]+\.[0-9]+\.[0-9]+", sys.argv[1]) is None:
+              raise SystemExit("tag must use connector-vMAJOR.MINOR.PATCH")
+          PY
+
+  publish:
+    name: Build and Publish Connector
+    needs: validate-release-ref
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - name: Check out the exact source SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source belongs to parent branch history
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          git fetch --no-tags origin feat/phase1
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/feat/phase1 || {
+            echo "source SHA is not in feat/phase1 history: $SOURCE_SHA" >&2
+            exit 1
+          }
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build immutable macOS arm64 artifact
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: scripts/build-connector-release --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-connector-release"
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "$RUNNER_TEMP/loomhelm-connector-release/loomhelm-connector-darwin-arm64.tar.gz" \
+            "$RUNNER_TEMP/loomhelm-connector-release/SHA256SUMS" \
+            --target "$SOURCE_SHA" \
+            --title "Loomhelm Connector $RELEASE_TAG" \
+            --notes "macOS Apple silicon Connector built from source SHA $SOURCE_SHA."

@@ -68,6 +68,23 @@ type Provider interface {
 	Exchange(context.Context, string, string) (Identity, error)
 }
 
+// ConnectorEnrollment issues an independent host deployment credential after
+// a browser user authorizes a local Connector device.
+type ConnectorEnrollment interface {
+	EnrollConnector(context.Context) (ConnectorCredential, error)
+}
+
+// ConnectorCredentialResolver resolves a raw host credential only for the
+// Connector bootstrap identity endpoint. It never accepts browser cookies.
+type ConnectorCredentialResolver interface {
+	ResolveConnectorCredential(context.Context, string) (string, error)
+}
+
+type ConnectorAuth interface {
+	ConnectorEnrollment
+	ConnectorCredentialResolver
+}
+
 type Config struct {
 	SessionCookieName string
 	SessionLifetime   time.Duration
@@ -75,6 +92,7 @@ type Config struct {
 	SecureCookies     bool
 	SuccessRedirect   string
 	OIDC              OIDCConfig
+	ConnectorAuth     ConnectorAuth
 }
 
 type Service struct {
@@ -83,6 +101,7 @@ type Service struct {
 	oidc     Provider
 	cfg      Config
 	now      func() time.Time
+	devices  *connectorDeviceFlow
 }
 
 type User struct {
@@ -134,7 +153,11 @@ func NewService(pool *pgxpool.Pool, cfg Config, provider Provider) (*Service, er
 	manager.Cookie.HttpOnly = true
 	manager.Cookie.Secure = cfg.SecureCookies
 	manager.Cookie.SameSite = http.SameSiteLaxMode
-	return &Service{pool: pool, sessions: manager, oidc: provider, cfg: cfg, now: time.Now}, nil
+	service := &Service{pool: pool, sessions: manager, oidc: provider, cfg: cfg, now: time.Now}
+	if cfg.ConnectorAuth != nil {
+		service.devices = newConnectorDeviceFlow(pool, cfg.ConnectorAuth)
+	}
+	return service, nil
 }
 
 func (s *Service) Middleware(next http.Handler) http.Handler {
@@ -150,12 +173,17 @@ func (s *Service) Mount(r chi.Router) {
 	r.Route("/auth", func(authRouter chi.Router) {
 		authRouter.Get("/oidc/start", s.handleOIDCStart)
 		authRouter.Get("/oidc/callback", s.handleOIDCCallback)
+		authRouter.Get("/device/verify", s.handleConnectorDeviceVerify)
+		authRouter.Post("/device/verify", s.handleConnectorDeviceVerify)
+		authRouter.Get("/connector/identity", s.handleConnectorIdentity)
 		authRouter.Post("/logout", s.handleLogout)
 		authRouter.Get("/me", s.handleMe)
 	})
 }
 
 func (s *Service) MountAPI(r chi.Router) {
+	r.Post("/auth/device/start", s.handleConnectorDeviceStart)
+	r.Post("/auth/device/token", s.handleConnectorDeviceToken)
 	for _, path := range []string{"/credentials", "/credentials/"} {
 		r.Get(path, s.handleListCredentials)
 		r.Post(path, s.handleCreateCredential)
@@ -522,6 +550,11 @@ func (s *Service) handleOIDCStart(writer http.ResponseWriter, request *http.Requ
 	}
 	s.sessions.Put(request.Context(), "oidc_state", state)
 	s.sessions.Put(request.Context(), "oidc_nonce", nonce)
+	if returnTo := safeAuthReturnTo(request.URL.Query().Get("return_to")); returnTo != "" {
+		s.sessions.Put(request.Context(), "oidc_return_to", returnTo)
+	} else {
+		s.sessions.Remove(request.Context(), "oidc_return_to")
+	}
 	location, err := s.oidc.AuthorizationURL(state, nonce)
 	if err != nil {
 		writeError(writer, request, http.StatusServiceUnavailable, err, "failed to create OIDC authorization URL")
@@ -568,7 +601,12 @@ func (s *Service) handleOIDCCallback(writer http.ResponseWriter, request *http.R
 	s.sessions.Put(request.Context(), "user_id", user.ID)
 	s.sessions.Remove(request.Context(), "oidc_state")
 	s.sessions.Remove(request.Context(), "oidc_nonce")
-	http.Redirect(writer, request, s.cfg.SuccessRedirect, http.StatusFound)
+	returnTo := s.sessions.GetString(request.Context(), "oidc_return_to")
+	s.sessions.Remove(request.Context(), "oidc_return_to")
+	if returnTo == "" {
+		returnTo = s.cfg.SuccessRedirect
+	}
+	http.Redirect(writer, request, returnTo, http.StatusFound)
 }
 
 func (s *Service) handleLogout(writer http.ResponseWriter, request *http.Request) {

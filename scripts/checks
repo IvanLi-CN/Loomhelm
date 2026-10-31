@@ -70,7 +70,7 @@ check_quality() {
 }
 
 check_syntax() {
-	for script in scripts/build-candidate scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
+	for script in scripts/build-candidate scripts/build-connector-release scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
 		sh -n "$script"
 	done
 	python3 - <<'PY'
