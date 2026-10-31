@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ type TransportProvider interface {
 
 type AdapterConfig struct {
 	Journal               *Journal
+	ArtifactOutbox        *ArtifactOutbox
 	Model                 string
 	ReasoningEffort       string
 	ApprovalPolicy        string
@@ -36,6 +39,7 @@ type adapterSessionState struct {
 	session        protocol.AdapterSession
 	gatewaySession protocol.GatewaySession
 	transport      RPCTransport
+	workspace      string
 	activeTurns    map[string]string
 	eventMu        sync.Mutex
 	closed         atomic.Bool
@@ -47,9 +51,11 @@ type adapterSessionState struct {
 // already-approved protocol.Command kinds and persists every side effect
 // boundary through Journal before contacting app-server.
 type Adapter struct {
-	provider TransportProvider
-	journal  *Journal
-	config   AdapterConfig
+	provider         TransportProvider
+	journal          *Journal
+	config           AdapterConfig
+	artifacts        *ArtifactOutbox
+	artifactUploadMu sync.Mutex
 
 	mu                   sync.Mutex
 	recoveryMu           sync.Mutex
@@ -102,6 +108,7 @@ func NewAdapter(provider TransportProvider, journal *Journal, config AdapterConf
 		provider:             provider,
 		journal:              journal,
 		config:               config,
+		artifacts:            config.ArtifactOutbox,
 		sessions:             make(map[string]*adapterSessionState),
 		startCalls:           make(map[string]*sessionStartCall),
 		unknownSessionStarts: make(map[string]unknownSessionStart),
@@ -351,6 +358,7 @@ func (a *Adapter) bindStartedSession(gatewaySession protocol.GatewaySession, int
 		session:        session,
 		gatewaySession: gatewaySession,
 		transport:      transport,
+		workspace:      a.verifiedCodexWorkspace(response.Result),
 		activeTurns:    make(map[string]string),
 	}
 	if err := a.journal.ResolveSessionStart(intentID, session.SessionID, externalThreadRef, gatewaySession.Generation); err != nil {
@@ -567,7 +575,7 @@ func (a *Adapter) bindRecoveredSession(gatewaySession protocol.GatewaySession, e
 
 func (a *Adapter) bindRecoveredSessionLocked(gatewaySession protocol.GatewaySession, externalThreadRef, method string, result json.RawMessage, transport RPCTransport) (protocol.AdapterSession, error) {
 	session := protocol.AdapterSession{SessionID: stableSessionID(externalThreadRef), ExternalThreadRef: externalThreadRef}
-	state := &adapterSessionState{session: session, gatewaySession: gatewaySession, transport: transport, activeTurns: a.journal.ActiveTurns(session.SessionID)}
+	state := &adapterSessionState{session: session, gatewaySession: gatewaySession, transport: transport, workspace: a.verifiedCodexWorkspace(result), activeTurns: a.journal.ActiveTurns(session.SessionID)}
 	if binder, ok := a.provider.(interface {
 		SetExternalThreadRef(protocol.GatewaySession, string) error
 	}); ok {
@@ -1331,8 +1339,16 @@ func (a *Adapter) observe(state *adapterSessionState, message RPCMessage) error 
 	if state.closed.Load() || !a.isCurrentState(state) {
 		return nil
 	}
-	_, err := a.appendObservedEvent(state, eventType, message.Method, message.Raw, runID)
-	return err
+	recorded, err := a.appendObservedEvent(state, eventType, message.Method, message.Raw, runID)
+	if err != nil {
+		return err
+	}
+	return a.captureArtifactCandidates(state, recorded, EventObservation{
+		AdapterSessionID:  state.session.SessionID,
+		ExternalThreadRef: state.session.ExternalThreadRef,
+		Generation:        state.gatewaySession.Generation,
+		NativeTurnID:      runID,
+	})
 }
 
 func journaledResponseOperation(operation string) bool {
@@ -1399,6 +1415,277 @@ func (a *Adapter) appendObservedEventFromSourceWithIdentity(state *adapterSessio
 	}
 	recorded, _, err := a.journal.AppendObservedEventWithRecord(event, observation)
 	return recorded, err
+}
+
+func (a *Adapter) captureArtifactCandidates(state *adapterSessionState, event protocol.Event, observation EventObservation) error {
+	return a.captureArtifactCandidatesWithSkip(state, event, observation, nil)
+}
+
+func (a *Adapter) captureArtifactCandidatesWithSkip(state *adapterSessionState, event protocol.Event, observation EventObservation, skip func(string) bool) error {
+	if a == nil || a.artifacts == nil {
+		return nil
+	}
+	var reader ArtifactContentReader
+	if state != nil && state.workspace != "" {
+		if candidateReader, err := NewCodexArtifactFileReader(state.transport, state.workspace); err == nil {
+			reader = candidateReader
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), artifactReadTimeout)
+	defer cancel()
+	candidates, gaps, err := artifactCandidatesFromEventWithReaderSkipping(ctx, event, observation, reader, skip)
+	if err != nil {
+		return fmt.Errorf("extract file-change artifact: %w", err)
+	}
+	for _, gap := range gaps {
+		if err := a.artifacts.RecordGap(gap); err != nil {
+			return fmt.Errorf("persist artifact capture gap %q: %w", gap.ID, err)
+		}
+	}
+	for _, candidate := range candidates {
+		if _, _, err := a.artifacts.Ensure(candidate); err != nil {
+			return fmt.Errorf("persist artifact publication %q: %w", candidate.ID, err)
+		}
+	}
+	return nil
+}
+
+// UploadPendingArtifacts is the Connector-side publication/recovery loop.
+// The source event must already have an exact platform SessionID/RunID
+// mapping. Original bytes are sent before artifact.created is materialized;
+// a failed or ambiguous upload therefore cannot publish a success event.
+// One adapter serializes this loop so duplicate callers cannot concurrently
+// send the same immutable publication.
+func (a *Adapter) UploadPendingArtifacts(ctx context.Context, uploader ArtifactUploader) error {
+	if a == nil || a.artifacts == nil {
+		return nil
+	}
+	if a.journal == nil {
+		return ErrArtifactIdentityPending
+	}
+	if ctx == nil {
+		return errors.New("artifact upload context must not be nil")
+	}
+	if uploader == nil {
+		return ErrArtifactUploaderRequired
+	}
+	a.artifactUploadMu.Lock()
+	defer a.artifactUploadMu.Unlock()
+	for _, publication := range a.artifacts.Pending() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := a.uploadPendingArtifact(ctx, publication, uploader); err != nil {
+			return &ArtifactPublicationUploadError{ArtifactID: publication.Candidate.ID, Err: err}
+		}
+	}
+	return nil
+}
+
+func (a *Adapter) MarkArtifactRejected(id, code string) error {
+	if a == nil || a.artifacts == nil {
+		return ErrArtifactPublicationNotFound
+	}
+	return a.artifacts.MarkRejected(id, code)
+}
+
+func (a *Adapter) uploadPendingArtifact(ctx context.Context, publication ArtifactPublication, uploader ArtifactUploader) error {
+	observedSource, observed := a.journal.observedEventObservation(publication.Candidate.SourceEventID)
+	if !observed || observedSource != publication.Candidate.Observation {
+		return ErrArtifactIdentityPending
+	}
+	mappedSource, ok := a.journal.MappedEvent(publication.Candidate.SourceEventID)
+	if !ok || mappedSource.SessionID == "" || mappedSource.RunID == nil || strings.TrimSpace(*mappedSource.RunID) == "" {
+		return ErrArtifactIdentityPending
+	}
+	if err := a.uploadArtifactPublication(ctx, publication, mappedSource.SessionID, mappedSource.RunID, uploader); err != nil {
+		return err
+	}
+	artifactEvent := artifactEvent(publication.Candidate)
+	_, delivered, err := a.journal.AppendObservedEventWithRecord(artifactEvent, publication.Candidate.Observation)
+	if err != nil {
+		return fmt.Errorf("persist artifact.created event %q: %w", publication.Candidate.EventID, err)
+	}
+	if !delivered {
+		return ErrArtifactIdentityPending
+	}
+	if err := a.artifacts.MarkUploaded(publication.Candidate.ID); err != nil {
+		return fmt.Errorf("record uploaded artifact %q: %w", publication.Candidate.ID, err)
+	}
+	return nil
+}
+
+func (a *Adapter) verifiedCodexWorkspace(result json.RawMessage) string {
+	if a == nil || strings.TrimSpace(a.config.WorkingDir) == "" || len(result) == 0 {
+		return ""
+	}
+	var value struct {
+		Thread struct {
+			Cwd string `json:"cwd"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &value); err != nil || strings.TrimSpace(value.Thread.Cwd) == "" {
+		return ""
+	}
+	configured, err := canonicalDirectory(a.config.WorkingDir)
+	if err != nil {
+		return ""
+	}
+	observed, err := canonicalDirectory(value.Thread.Cwd)
+	if err != nil || observed != configured {
+		return ""
+	}
+	return observed
+}
+
+func canonicalDirectory(value string) (string, error) {
+	absValue, err := filepath.Abs(strings.TrimSpace(value))
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(absValue)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("Codex workspace is not a directory")
+	}
+	canonical, err := filepath.EvalSymlinks(absValue)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(canonical), nil
+}
+
+// ReplayPendingArtifactCaptures closes the crash window between the durable
+// source event and its derived artifact outbox record. It revisits raw source
+// events idempotently after a restart; the current session transport remains
+// the only file-byte boundary and the outbox deduplicates successful captures.
+func (a *Adapter) ReplayPendingArtifactCaptures() error {
+	if a == nil || a.artifacts == nil || a.journal == nil {
+		return nil
+	}
+	for _, observed := range a.journal.ObservedEvents() {
+		state := a.sessionState(observed.Observation.AdapterSessionID)
+		if state == nil {
+			continue
+		}
+		state.eventMu.Lock()
+		if state.closed.Load() || !a.isCurrentState(state) {
+			state.eventMu.Unlock()
+			continue
+		}
+		err := a.captureArtifactCandidatesWithSkip(state, observed.Event, observed.Observation, func(id string) bool {
+			_, exists := a.artifacts.Publication(id)
+			return exists
+		})
+		state.eventMu.Unlock()
+		if err != nil {
+			return fmt.Errorf("recover artifact capture for source event %q: %w", observed.Event.EventID, err)
+		}
+	}
+	return nil
+}
+
+// ReplayPendingArtifactEvents closes the crash window between the outbox
+// record and its observed artifact.created event. It is safe to call during
+// Connector recovery or before event delivery; Journal deduplicates the
+// stable event identity.
+func (a *Adapter) ReplayPendingArtifactEvents() error {
+	if a == nil || a.artifacts == nil {
+		return nil
+	}
+	for _, publication := range a.artifacts.Publications() {
+		if publication.State != ArtifactPublicationUploaded {
+			continue
+		}
+		if _, delivered, err := a.journal.AppendObservedEventWithRecord(artifactEvent(publication.Candidate), publication.Candidate.Observation); err != nil {
+			return fmt.Errorf("replay artifact.created event %q: %w", publication.Candidate.EventID, err)
+		} else if !delivered {
+			return ErrArtifactIdentityPending
+		}
+	}
+	return nil
+}
+
+// UploadArtifactForEvent is the Connector-side handoff used by the platform
+// event delivery loop. It accepts only an identity-mapped artifact event, so
+// the uploader receives platform SessionID/RunID and the authenticated host
+// connection remains the only remote boundary. It never opens a Codex path or
+// calls the server's in-process ArtifactStore.
+func (a *Adapter) UploadArtifactForEvent(ctx context.Context, event protocol.Event, uploader ArtifactUploader) error {
+	if a == nil || a.artifacts == nil {
+		return ErrArtifactPublicationNotFound
+	}
+	if uploader == nil {
+		return ErrArtifactUploaderRequired
+	}
+	if event.Type != protocol.EventTypeArtifactCreated || event.Source != protocol.EventSourceArtifact {
+		return ErrArtifactUnsupportedEvent
+	}
+	if event.SessionID == "" || event.RunID == nil || strings.TrimSpace(*event.RunID) == "" {
+		return ErrArtifactIdentityPending
+	}
+	a.artifactUploadMu.Lock()
+	defer a.artifactUploadMu.Unlock()
+	publication, ok := a.artifacts.PublicationForEvent(event.EventID)
+	if !ok {
+		return ErrArtifactPublicationNotFound
+	}
+	mapped, mappedOK := a.journal.MappedEvent(event.EventID)
+	if !mappedOK || mapped.EventID != event.EventID || mapped.SessionID != event.SessionID || valueOrEmpty(mapped.RunID) != valueOrEmpty(event.RunID) {
+		return ErrArtifactIdentityPending
+	}
+	artifact := protocol.Artifact{
+		ID:          publication.Candidate.ID,
+		SessionID:   event.SessionID,
+		RunID:       stringPointer(*event.RunID),
+		Name:        publication.Candidate.Name,
+		Kind:        publication.Candidate.Kind,
+		Size:        publication.Candidate.Size,
+		Sha256:      publication.Candidate.Sha256,
+		ContentType: publication.Candidate.ContentType,
+		CreatedAt:   publication.Candidate.CreatedAt,
+	}
+	if publication.State == ArtifactPublicationUploaded {
+		return nil
+	}
+	if err := a.uploadArtifactPublication(ctx, publication, event.SessionID, event.RunID, uploader); err != nil {
+		return err
+	}
+	if err := a.artifacts.MarkUploaded(publication.Candidate.ID); err != nil {
+		return fmt.Errorf("record uploaded artifact %q: %w", artifact.ID, err)
+	}
+	return nil
+}
+
+func (a *Adapter) uploadArtifactPublication(ctx context.Context, publication ArtifactPublication, sessionID string, runID *string, uploader ArtifactUploader) error {
+	if runID == nil || strings.TrimSpace(*runID) == "" {
+		return ErrArtifactIdentityPending
+	}
+	artifact := protocol.Artifact{
+		ID:          publication.Candidate.ID,
+		SessionID:   sessionID,
+		RunID:       stringPointer(*runID),
+		Name:        publication.Candidate.Name,
+		Kind:        publication.Candidate.Kind,
+		Size:        publication.Candidate.Size,
+		Sha256:      publication.Candidate.Sha256,
+		ContentType: publication.Candidate.ContentType,
+		CreatedAt:   publication.Candidate.CreatedAt,
+	}
+	content := publication.ContentReader()
+	defer content.Close()
+	if err := uploader.UploadArtifact(ctx, ArtifactUploadRequest{
+		Artifact:       artifact,
+		EventID:        publication.Candidate.EventID,
+		SourceEventID:  publication.Candidate.SourceEventID,
+		IdempotencyKey: publication.Candidate.ID,
+		Content:        content,
+	}); err != nil {
+		return fmt.Errorf("upload artifact %q: %w", artifact.ID, err)
+	}
+	return nil
 }
 
 func (a *Adapter) threadStartParams(request protocol.NewSessionRequest) map[string]any {

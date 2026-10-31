@@ -155,6 +155,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 	}
 	runtime := &databaseRuntime{db: db, runner: runner, logger: logger, shutdownTimeout: cfg.ShutdownTimeout}
 	var artifactRecovery artifactRecoveryStore
+	var artifactUploadHandler gateway.ArtifactUploadHandler
 	if cfg.Component == platform.ComponentServer {
 		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
@@ -186,6 +187,12 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			}
 			services.artifactStore = artifactStore
 			artifactRecovery = artifactStore
+			uploadHandler, handlerErr := NewGatewayArtifactUploadHandler(artifactStore, sessionStore, runStore)
+			if handlerErr != nil {
+				db.Close()
+				return nil, fmt.Errorf("initialize gateway artifact upload handler: %w", handlerErr)
+			}
+			artifactUploadHandler = uploadHandler.Handle
 		}
 		transport := &gatewayExecutionTransport{
 			sessions:   sessionStore,
@@ -194,8 +201,9 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			now:        time.Now,
 		}
 		runtime.gateway, err = gateway.NewServer(hostRegistry, gateway.ServerOptions{
-			EventHandler: transport.HandleEvent,
-			AckHandler:   transport.HandleCommandAck,
+			EventHandler:    transport.HandleEvent,
+			AckHandler:      transport.HandleCommandAck,
+			ArtifactHandler: artifactUploadHandler,
 		})
 		if err != nil {
 			db.Close()

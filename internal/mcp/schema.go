@@ -24,9 +24,11 @@ type routeSpec struct {
 }
 
 type argumentDefinition struct {
-	kind     string
-	itemKind string
-	enum     map[string]struct{}
+	kind       string
+	itemKind   string
+	enum       map[string]struct{}
+	properties map[string]argumentDefinition
+	required   []string
 }
 
 type toolSpec struct {
@@ -137,6 +139,18 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 	arrayOfStrings := func() map[string]any {
 		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 	}
+	modificationOrderField := func() map[string]any {
+		return map[string]any{
+			"type":     "object",
+			"required": []string{"physical_millis", "logical_counter", "client_id"},
+			"properties": map[string]any{
+				"physical_millis": map[string]any{"type": "integer"},
+				"logical_counter": map[string]any{"type": "integer"},
+				"client_id":       map[string]any{"type": "string"},
+			},
+			"additionalProperties": false,
+		}
+	}
 	enumField := func(values ...string) map[string]any {
 		return map[string]any{"type": "string", "enum": values}
 	}
@@ -233,6 +247,7 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 		add("client_id", stringField(), true)
 		add("client_sequence", integerField(), true)
 		add("content", stringField(), true)
+		add("modification_order", modificationOrderField(), true)
 	case "listRunApprovals", "listRunEvents":
 		add("run_id", stringField(), true)
 		add("after_cursor", stringField(), false)
@@ -280,6 +295,19 @@ func argumentDefinitionFromSchema(field map[string]any) argumentDefinition {
 	}
 	if items, ok := field["items"].(map[string]any); ok {
 		result.itemKind, _ = items["type"].(string)
+	}
+	if properties, ok := field["properties"].(map[string]any); ok {
+		result.properties = make(map[string]argumentDefinition, len(properties))
+		for name, property := range properties {
+			propertyDefinition, ok := property.(map[string]any)
+			if !ok {
+				continue
+			}
+			result.properties[name] = argumentDefinitionFromSchema(propertyDefinition)
+		}
+	}
+	if required, ok := field["required"].([]string); ok {
+		result.required = append([]string(nil), required...)
 	}
 	return result
 }
@@ -390,6 +418,22 @@ func validateArgument(name string, raw json.RawMessage, definition argumentDefin
 	value := bytes.TrimSpace(raw)
 	if len(value) == 0 || bytes.Equal(value, []byte("null")) {
 		return fmt.Errorf("MCP parameter %q must be a %s", name, definition.kind)
+	}
+	if definition.kind == "object" {
+		object, err := decodeObject(value, definition.required)
+		if err != nil {
+			return fmt.Errorf("MCP parameter %q must be an object with the required fields", name)
+		}
+		for fieldName, fieldValue := range object {
+			fieldDefinition, ok := definition.properties[fieldName]
+			if !ok {
+				return fmt.Errorf("MCP parameter %q has unknown field %q", name, fieldName)
+			}
+			if err := validateArgument(name+"."+fieldName, fieldValue, fieldDefinition); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	if definition.kind == "array" {

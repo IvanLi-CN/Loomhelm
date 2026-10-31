@@ -14,6 +14,7 @@ function deferred() {
 function draft(overrides = {}) {
   return {
     content: "shared draft",
+    modification_order: { client_id: "", logical_counter: 0, physical_millis: 0 },
     revision: 1,
     session_id: "session-1",
     updated_at: "2026-10-27T00:00:00Z",
@@ -29,7 +30,7 @@ describe("draft client adapter", () => {
       getDraft: async (request) => ({ draft: draft({ session_id: request.session_id, content: "from server", revision: 4, client_id: "client-1", client_sequence: 7 }) }),
       updateDraft: async (request) => {
         calls.push(request);
-        return { draft: draft({ session_id: request.session_id, content: request.body.content, revision: 8, client_id: request.body.client_id, client_sequence: request.body.client_sequence }) };
+        return { draft: draft({ session_id: request.session_id, content: request.body.content, revision: 8, client_id: request.body.client_id, client_sequence: request.body.client_sequence, modification_order: request.body.modification_order }) };
       },
     }, { clientId: "client-1", writeSequence: (_sessionId, sequence) => sequences.push(sequence), createMutationId: () => "mutation-1" });
 
@@ -38,7 +39,7 @@ describe("draft client adapter", () => {
     await expect(adapter.updateDraft("session-1", "new text")).resolves.toMatchObject({ state: "received", draft: { content: "new text" } });
     expect(calls).toEqual([{
       session_id: "session-1",
-      body: { client_id: "client-1", client_sequence: 8, content: "new text", mutation_id: "mutation-1" },
+      body: { client_id: "client-1", client_sequence: 8, content: "new text", modification_order: expect.objectContaining({ client_id: "client-1", logical_counter: 0 }), mutation_id: "mutation-1" },
     }]);
     expect(sequences).toEqual([7, 8]);
   });
@@ -96,5 +97,60 @@ describe("draft client adapter", () => {
 
     adapter.selectSession("session-1");
     await expect(adapter.readDraft("session-1")).resolves.toMatchObject({ state: "unknown", reason: "foreign_response" });
+  });
+
+  test("continues the persisted modification order after reload", async () => {
+    const originalNow = Date.now;
+    Date.now = () => 1_730_000_000_000;
+    try {
+      const calls = [];
+      const adapter = new DraftClientAdapter({
+        getDraft: async () => ({ draft: draft({ modification_order: { client_id: "client-1", logical_counter: 4, physical_millis: 1_730_000_000_000 } }) }),
+        updateDraft: async (request) => {
+          calls.push(request);
+          return { draft: draft({ content: request.body.content, modification_order: request.body.modification_order, client_id: request.body.client_id, client_sequence: request.body.client_sequence }) };
+        },
+      }, { clientId: "client-1", readModificationOrder: () => ({ client_id: "client-1", logical_counter: 3, physical_millis: 1_730_000_000_000 }) });
+
+      adapter.selectSession("session-1");
+      await adapter.readDraft("session-1");
+      await adapter.updateDraft("session-1", "after reload");
+      expect(calls[0].body.modification_order).toEqual({ client_id: "client-1", logical_counter: 5, physical_millis: 1_730_000_000_000 });
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("retries a failed update with the exact order and advances cloned-tab orders", async () => {
+    const originalNow = Date.now;
+    Date.now = () => 1_730_000_000_000;
+    try {
+      const calls = [];
+      let shouldFail = true;
+      const adapter = new DraftClientAdapter({
+        getDraft: async () => ({ draft: draft() }),
+        updateDraft: async (request) => {
+          calls.push(request);
+          if (shouldFail) {
+            shouldFail = false;
+            throw new ApiClientError(409, { code: "conflict" });
+          }
+          return { draft: draft({ content: request.body.content, modification_order: request.body.modification_order, client_id: request.body.client_id, client_sequence: request.body.client_sequence }) };
+        },
+      }, { clientId: "client-2" });
+      const persistedOrder = { client_id: "client-1", logical_counter: 7, physical_millis: 1_730_000_000_000 };
+
+      adapter.selectSession("session-1");
+      const failed = await adapter.updateDraft("session-1", "retry me", persistedOrder);
+      expect(failed).toMatchObject({ state: "unknown", reason: "conflict", modificationOrder: { client_id: "client-2", logical_counter: 8, physical_millis: 1_730_000_000_000 } });
+      const succeeded = await adapter.updateDraft("session-1", "retry me", failed.modificationOrder);
+      expect(succeeded).toMatchObject({ state: "received", modificationOrder: failed.modificationOrder });
+      expect(calls.map((request) => request.body.modification_order)).toEqual([
+        { client_id: "client-2", logical_counter: 8, physical_millis: 1_730_000_000_000 },
+        { client_id: "client-2", logical_counter: 8, physical_millis: 1_730_000_000_000 },
+      ]);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 });

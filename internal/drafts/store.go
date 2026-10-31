@@ -58,11 +58,12 @@ func (s *Store) Get(ctx context.Context, sessionID, ownerUserID string) (Draft, 
 	return draft, nil
 }
 
-// Apply accepts one complete replacement. Session serialization makes the
-// database commit order the deterministic last-writer-wins order. The
-// mutation ledger recognizes duplicate IDs without retaining historical
-// content: a current mutation can be retried idempotently, while an older
-// mutation is rejected as stale rather than replayed.
+// Apply accepts one complete replacement. Session serialization protects the
+// projection, while the durable modification order selects the winner so a
+// late arrival cannot override a newer offline edit. The mutation ledger
+// recognizes duplicate IDs without retaining historical content: a current
+// mutation can be retried idempotently, while an older mutation is rejected as
+// stale rather than replayed.
 func (s *Store) Apply(ctx context.Context, input UpdateInput) (Draft, error) {
 	if err := s.ready(ctx); err != nil {
 		return Draft{}, err
@@ -122,17 +123,38 @@ func (s *Store) Apply(ctx context.Context, input UpdateInput) (Draft, error) {
 	}
 
 	now := s.now().UTC().Truncate(time.Microsecond)
-	draft, err := applyProjection(current, found, input, now)
+	order, err := resolveModificationOrder(current, input, now)
+	if err != nil {
+		return Draft{}, err
+	}
+	if found && order.Compare(current.ModificationOrder) <= 0 {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO conversation_draft_mutations (
+				session_id, owner_user_id, mutation_id, kind, client_id,
+				client_sequence, revision, modification_physical_ms,
+				modification_logical_counter, modification_client_id, created_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		`, input.SessionID, input.OwnerUserID, input.MutationID, mutationKindUpdate, input.ClientID, input.ClientSequence, current.Revision, order.PhysicalMillis, order.LogicalCounter, order.ClientID, now); err != nil {
+			return Draft{}, fmt.Errorf("record stale draft update: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return Draft{}, fmt.Errorf("commit stale draft update: %w", err)
+		}
+		return current, nil
+	}
+	draft, err := applyProjection(current, found, input, now, order)
 	if err != nil {
 		return Draft{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO conversation_draft_mutations (
 			session_id, owner_user_id, mutation_id, kind, client_id,
-			client_sequence, revision, created_at
+			client_sequence, revision, modification_physical_ms,
+			modification_logical_counter, modification_client_id, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, input.SessionID, input.OwnerUserID, input.MutationID, mutationKindUpdate, input.ClientID, input.ClientSequence, draft.Revision, now); err != nil {
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, input.SessionID, input.OwnerUserID, input.MutationID, mutationKindUpdate, input.ClientID, input.ClientSequence, draft.Revision, draft.ModificationOrder.PhysicalMillis, draft.ModificationOrder.LogicalCounter, draft.ModificationOrder.ClientID, now); err != nil {
 		return Draft{}, fmt.Errorf("record draft update: %w", err)
 	}
 
@@ -140,19 +162,22 @@ func (s *Store) Apply(ctx context.Context, input UpdateInput) (Draft, error) {
 		if _, err := tx.Exec(ctx, `
 			UPDATE conversation_drafts
 			SET content = $2, revision = $3, mutation_id = $4,
-			    client_id = $5, client_sequence = $6, updated_at = $7
+			    client_id = $5, client_sequence = $6,
+			    modification_physical_ms = $7, modification_logical_counter = $8,
+			    modification_client_id = $9, updated_at = $10
 			WHERE session_id = $1
-		`, input.SessionID, draft.Content, draft.Revision, draft.MutationID, draft.ClientID, draft.ClientSequence, now); err != nil {
+		`, input.SessionID, draft.Content, draft.Revision, draft.MutationID, draft.ClientID, draft.ClientSequence, draft.ModificationOrder.PhysicalMillis, draft.ModificationOrder.LogicalCounter, draft.ModificationOrder.ClientID, now); err != nil {
 			return Draft{}, fmt.Errorf("update draft projection: %w", err)
 		}
 	} else {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO conversation_drafts (
 				session_id, owner_user_id, content, revision, mutation_id,
-				client_id, client_sequence, updated_at
+				client_id, client_sequence, modification_physical_ms,
+				modification_logical_counter, modification_client_id, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		`, draft.SessionID, draft.OwnerUserID, draft.Content, draft.Revision, draft.MutationID, draft.ClientID, draft.ClientSequence, now); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		`, draft.SessionID, draft.OwnerUserID, draft.Content, draft.Revision, draft.MutationID, draft.ClientID, draft.ClientSequence, draft.ModificationOrder.PhysicalMillis, draft.ModificationOrder.LogicalCounter, draft.ModificationOrder.ClientID, now); err != nil {
 			return Draft{}, fmt.Errorf("create draft projection: %w", err)
 		}
 	}
@@ -227,7 +252,8 @@ func (s *Store) ConsumeIfCurrentTx(ctx context.Context, tx pgx.Tx, input Consume
 		return ConsumeResult{Draft: current, Consumed: true}, nil
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
-	draft, consumed, err := consumeProjection(current, found, input, now)
+	consumeOrder := nextModificationOrder(current.ModificationOrder, now, "loomhelm")
+	draft, consumed, err := consumeProjection(current, found, input, now, consumeOrder)
 	if err != nil {
 		return ConsumeResult{}, err
 	}
@@ -238,18 +264,21 @@ func (s *Store) ConsumeIfCurrentTx(ctx context.Context, tx pgx.Tx, input Consume
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO conversation_draft_mutations (
 			session_id, owner_user_id, mutation_id, kind, client_id,
-			client_sequence, revision, created_at
+			client_sequence, revision, modification_physical_ms,
+			modification_logical_counter, modification_client_id, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, 0, $6, $7)
-	`, input.SessionID, input.OwnerUserID, mutationID, mutationKindConsume, draft.ClientID, draft.Revision, now); err != nil {
+		VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10)
+		`, input.SessionID, input.OwnerUserID, mutationID, mutationKindConsume, draft.ClientID, draft.Revision, draft.ModificationOrder.PhysicalMillis, draft.ModificationOrder.LogicalCounter, draft.ModificationOrder.ClientID, now); err != nil {
 		return ConsumeResult{}, fmt.Errorf("record draft consume: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_drafts
 		SET content = '', revision = $2, mutation_id = $3,
-		    client_id = $4, client_sequence = 0, updated_at = $5
+		    client_id = $4, client_sequence = 0,
+		    modification_physical_ms = $5, modification_logical_counter = $6,
+		    modification_client_id = $7, updated_at = $8
 		WHERE session_id = $1
-	`, input.SessionID, draft.Revision, draft.MutationID, draft.ClientID, now); err != nil {
+	`, input.SessionID, draft.Revision, draft.MutationID, draft.ClientID, draft.ModificationOrder.PhysicalMillis, draft.ModificationOrder.LogicalCounter, draft.ModificationOrder.ClientID, now); err != nil {
 		return ConsumeResult{}, fmt.Errorf("clear draft projection: %w", err)
 	}
 	return ConsumeResult{Draft: draft, Consumed: true}, nil
@@ -450,11 +479,12 @@ func ensureSessionOwnerTx(ctx context.Context, tx pgx.Tx, sessionID, ownerUserID
 }
 
 type mutationRecord struct {
-	OwnerUserID    string
-	Kind           string
-	ClientID       string
-	ClientSequence int64
-	Revision       int64
+	OwnerUserID       string
+	Kind              string
+	ClientID          string
+	ClientSequence    int64
+	Revision          int64
+	ModificationOrder ModificationOrder
 }
 
 type commandDraftRecord struct {
@@ -473,11 +503,13 @@ const (
 func lockMutationTx(ctx context.Context, tx pgx.Tx, sessionID, mutationID string) (mutationRecord, bool, error) {
 	var record mutationRecord
 	err := tx.QueryRow(ctx, `
-		SELECT owner_user_id, kind, client_id, client_sequence, revision
+		SELECT owner_user_id, kind, client_id, client_sequence, revision,
+		       modification_physical_ms, modification_logical_counter,
+		       modification_client_id
 		FROM conversation_draft_mutations
 		WHERE session_id = $1 AND mutation_id = $2
 		FOR UPDATE
-	`, sessionID, mutationID).Scan(&record.OwnerUserID, &record.Kind, &record.ClientID, &record.ClientSequence, &record.Revision)
+	`, sessionID, mutationID).Scan(&record.OwnerUserID, &record.Kind, &record.ClientID, &record.ClientSequence, &record.Revision, &record.ModificationOrder.PhysicalMillis, &record.ModificationOrder.LogicalCounter, &record.ModificationOrder.ClientID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return mutationRecord{}, false, nil
 	}
@@ -533,14 +565,15 @@ func lockDraftTx(ctx context.Context, tx pgx.Tx, sessionID string) (Draft, bool,
 
 const draftQuery = `
 	SELECT session_id, owner_user_id, content, revision, mutation_id,
-	       client_id, client_sequence, updated_at
+	       client_id, client_sequence, modification_physical_ms,
+	       modification_logical_counter, modification_client_id, updated_at
 	FROM conversation_drafts
 `
 
 func scanDraft(row interface{ Scan(...any) error }) (Draft, error) {
 	var draft Draft
 	var updatedAt time.Time
-	if err := row.Scan(&draft.SessionID, &draft.OwnerUserID, &draft.Content, &draft.Revision, &draft.MutationID, &draft.ClientID, &draft.ClientSequence, &updatedAt); err != nil {
+	if err := row.Scan(&draft.SessionID, &draft.OwnerUserID, &draft.Content, &draft.Revision, &draft.MutationID, &draft.ClientID, &draft.ClientSequence, &draft.ModificationOrder.PhysicalMillis, &draft.ModificationOrder.LogicalCounter, &draft.ModificationOrder.ClientID, &updatedAt); err != nil {
 		return Draft{}, err
 	}
 	draft.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)

@@ -95,6 +95,20 @@ class ComposeAuthenticationTest(unittest.TestCase):
                         self.assertEqual(server[key], "")
                     self.assertEqual(server["LOOMHELM_SESSION_COOKIE_SECURE"], secure or "true")
 
+    def test_database_network_is_shared_by_slots_but_not_caddy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            model = self.compose_model(Path(raw), {})
+            services = model["services"]
+
+            def network_names(service: dict) -> set[str]:
+                networks = service["networks"]
+                return set(networks if isinstance(networks, list) else networks)
+
+            self.assertEqual(network_names(services["caddy"]), {"preview", "proxy"})
+            for service in ("server-blue", "server-green", "worker-blue", "worker-green"):
+                self.assertEqual(network_names(services[service]), {"preview", "database"}, service)
+            self.assertEqual(model["networks"]["database"]["name"], "auth-compose-test-database")
+
     def test_preview_compose_config_validates_without_printing_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)

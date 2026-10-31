@@ -153,6 +153,15 @@ type journalObservedEvent struct {
 	RawPayload  *journalRawPayload `json:"raw_payload,omitempty"`
 }
 
+// ObservedEventRecord exposes the raw event and exact adapter-side identity
+// needed by durable recovery routines. The public event mapping is intentionally
+// not involved: recovery must be able to revisit an event before its platform
+// Session/Run identity is materialized.
+type ObservedEventRecord struct {
+	Event       protocol.Event
+	Observation EventObservation
+}
+
 type journalRawPayload struct {
 	Bytes []byte `json:"bytes"`
 }
@@ -809,6 +818,29 @@ func (j *Journal) observedEventObservation(eventID string) (EventObservation, bo
 		return EventObservation{}, false
 	}
 	return observed.Observation, true
+}
+
+// ObservedEvents returns durable raw observations in journal order. It is used
+// only for idempotent recovery work that may have been interrupted after the
+// source event was persisted but before its derived durable record was written.
+func (j *Journal) ObservedEvents() []ObservedEventRecord {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	values := make([]ObservedEventRecord, 0, len(j.observedEvents))
+	for _, event := range j.events {
+		observed, ok := j.observedEvents[event.EventID]
+		if !ok {
+			continue
+		}
+		values = append(values, ObservedEventRecord{
+			Event:       cloneEvent(observed.Event),
+			Observation: observed.Observation,
+		})
+	}
+	return values
 }
 
 func (j *Journal) appendObservedEvent(event protocol.Event, observation EventObservation) (protocol.Event, protocol.Event, bool, error) {

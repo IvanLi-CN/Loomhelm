@@ -18,21 +18,28 @@ import (
 )
 
 const (
-	ProtocolVersion = "loomhelm.gateway.v1"
+	// Artifact publication adds new frames and therefore requires both ends of
+	// the authenticated link to be upgraded together.
+	ProtocolVersion = "loomhelm.gateway.v2"
 	DefaultMaxFrame = 4 << 20
 )
 
 type MessageType string
 
 const (
-	MessageHello        MessageType = "hello"
-	MessageHelloAck     MessageType = "hello_ack"
-	MessageCommand      MessageType = "command"
-	MessageCommandAck   MessageType = "command_ack"
-	MessageEvent        MessageType = "event"
-	MessageHeartbeat    MessageType = "heartbeat"
-	MessageHeartbeatAck MessageType = "heartbeat_ack"
-	MessageError        MessageType = "error"
+	MessageHello          MessageType = "hello"
+	MessageHelloAck       MessageType = "hello_ack"
+	MessageCommand        MessageType = "command"
+	MessageCommandAck     MessageType = "command_ack"
+	MessageEvent          MessageType = "event"
+	MessageHeartbeat      MessageType = "heartbeat"
+	MessageHeartbeatAck   MessageType = "heartbeat_ack"
+	MessageArtifactBegin  MessageType = "artifact_begin"
+	MessageArtifactChunk  MessageType = "artifact_chunk"
+	MessageArtifactCommit MessageType = "artifact_commit"
+	MessageArtifactAbort  MessageType = "artifact_abort"
+	MessageArtifactAck    MessageType = "artifact_ack"
+	MessageError          MessageType = "error"
 )
 
 type WireError struct {
@@ -49,19 +56,25 @@ type WireCursor struct {
 }
 
 type Message struct {
-	Type       MessageType          `json:"type"`
-	RequestID  string               `json:"request_id,omitempty"`
-	Protocol   string               `json:"protocol,omitempty"`
-	HostID     string               `json:"host_id,omitempty"`
-	Generation int64                `json:"generation,omitempty"`
-	SessionID  string               `json:"session_id,omitempty"`
-	RunID      string               `json:"run_id,omitempty"`
-	Cursor     string               `json:"cursor,omitempty"`
-	Cursors    []WireCursor         `json:"cursors,omitempty"`
-	Command    *protocol.Command    `json:"command,omitempty"`
-	Ack        *protocol.CommandAck `json:"ack,omitempty"`
-	Event      *protocol.Event      `json:"event,omitempty"`
-	Error      *WireError           `json:"error,omitempty"`
+	Type           MessageType          `json:"type"`
+	RequestID      string               `json:"request_id,omitempty"`
+	Protocol       string               `json:"protocol,omitempty"`
+	HostID         string               `json:"host_id,omitempty"`
+	Generation     int64                `json:"generation,omitempty"`
+	SessionID      string               `json:"session_id,omitempty"`
+	RunID          string               `json:"run_id,omitempty"`
+	Cursor         string               `json:"cursor,omitempty"`
+	Cursors        []WireCursor         `json:"cursors,omitempty"`
+	Command        *protocol.Command    `json:"command,omitempty"`
+	Ack            *protocol.CommandAck `json:"ack,omitempty"`
+	Event          *protocol.Event      `json:"event,omitempty"`
+	Artifact       *protocol.Artifact   `json:"artifact,omitempty"`
+	EventID        string               `json:"event_id,omitempty"`
+	SourceEventID  string               `json:"source_event_id,omitempty"`
+	IdempotencyKey string               `json:"idempotency_key,omitempty"`
+	ChunkIndex     int64                `json:"chunk_index,omitempty"`
+	ChunkData      string               `json:"chunk_data,omitempty"`
+	Error          *WireError           `json:"error,omitempty"`
 }
 
 func (m Message) Validate() error {
@@ -97,6 +110,22 @@ func (m Message) Validate() error {
 			return errors.New("gateway command acknowledgement requires request id and ack")
 		}
 		if err := validateCommandAck(*m.Ack); err != nil {
+			return err
+		}
+	case MessageArtifactBegin:
+		if err := validateArtifactBeginMessage(m); err != nil {
+			return err
+		}
+	case MessageArtifactChunk:
+		if err := validateArtifactChunkMessage(m); err != nil {
+			return err
+		}
+	case MessageArtifactCommit, MessageArtifactAbort:
+		if err := validateArtifactTerminalMessage(m); err != nil {
+			return err
+		}
+	case MessageArtifactAck:
+		if err := validateArtifactAckMessage(m); err != nil {
 			return err
 		}
 	case MessageEvent:

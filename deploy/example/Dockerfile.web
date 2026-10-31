@@ -1,0 +1,12 @@
+FROM oven/bun:1.4.4 AS build
+
+WORKDIR /src
+
+COPY . .
+RUN bun install --frozen-lockfile
+RUN STORYBOOK=false VITE_DEMO=false bun run build
+
+FROM caddy:2.10-alpine
+
+COPY --from=build /src/web/dist /srv/web
+COPY deploy/example/Caddyfile /etc/caddy/Caddyfile

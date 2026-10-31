@@ -148,7 +148,7 @@ func TestDraftHTTPUsesSessionOwnerAndMapsPublicProjection(t *testing.T) {
 	}
 
 	updateResponse := httptest.NewRecorder()
-	router.ServeHTTP(updateResponse, httptest.NewRequest(http.MethodPut, "/sessions/session-1/draft", strings.NewReader(`{"mutation_id":"mutation-4","client_id":"client-1","client_sequence":9,"content":"next"}`)))
+	router.ServeHTTP(updateResponse, httptest.NewRequest(http.MethodPut, "/sessions/session-1/draft", strings.NewReader(`{"mutation_id":"mutation-4","client_id":"client-1","client_sequence":9,"content":"next","modification_order":{"physical_millis":1730253600000,"logical_counter":0,"client_id":"client-1"}}`)))
 	if updateResponse.Code != http.StatusOK || store.applyCalls != 1 {
 		t.Fatalf("update status=%d calls=%d body=%s", updateResponse.Code, store.applyCalls, updateResponse.Body.String())
 	}
@@ -167,13 +167,13 @@ func TestDraftHTTPMapsConflictAndRejectsUnknownFields(t *testing.T) {
 	}).mount(router)
 
 	stale := httptest.NewRecorder()
-	router.ServeHTTP(stale, httptest.NewRequest(http.MethodPut, "/sessions/session-1/draft", strings.NewReader(`{"mutation_id":"m","client_id":"c","client_sequence":1,"content":"x"}`)))
+	router.ServeHTTP(stale, httptest.NewRequest(http.MethodPut, "/sessions/session-1/draft", strings.NewReader(`{"mutation_id":"m","client_id":"c","client_sequence":1,"content":"x","modification_order":{"physical_millis":1730253600000,"logical_counter":0,"client_id":"c"}}`)))
 	if stale.Code != http.StatusConflict || store.applyCalls != 1 {
 		t.Fatalf("stale status=%d calls=%d body=%s", stale.Code, store.applyCalls, stale.Body.String())
 	}
 
 	unknown := httptest.NewRecorder()
-	router.ServeHTTP(unknown, httptest.NewRequest(http.MethodPut, "/sessions/session-1/draft", strings.NewReader(`{"mutation_id":"m","client_id":"c","client_sequence":1,"content":"x","owner_user_id":"other"}`)))
+	router.ServeHTTP(unknown, httptest.NewRequest(http.MethodPut, "/sessions/session-1/draft", strings.NewReader(`{"mutation_id":"m","client_id":"c","client_sequence":1,"content":"x","modification_order":{"physical_millis":1730253600000,"logical_counter":0,"client_id":"c"},"owner_user_id":"other"}`)))
 	if unknown.Code != http.StatusBadRequest || store.applyCalls != 1 {
 		t.Fatalf("unknown status=%d calls=%d body=%s", unknown.Code, store.applyCalls, unknown.Body.String())
 	}
@@ -193,7 +193,8 @@ func TestDraftHTTPAcceptsMaximumDomainContentWithinJSONEnvelope(t *testing.T) {
 	}).mount(router)
 	body, err := json.Marshal(protocol.UpdateDraftRequest{
 		MutationID: "mutation-max", ClientID: "client-1", ClientSequence: 1,
-		Content: strings.Repeat("a", drafts.MaxContentBytes),
+		Content:           strings.Repeat("a", drafts.MaxContentBytes),
+		ModificationOrder: protocol.ModificationOrder{PhysicalMillis: 1730253600000, ClientID: "client-1"},
 	})
 	if err != nil {
 		t.Fatal(err)

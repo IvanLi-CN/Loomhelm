@@ -29,7 +29,7 @@ The Connector starts the host-owned `codex` app-server command through its exist
 
 ## Compatibility
 
-The new REST endpoints are additive within the current public API major. Migration 00017 adds only a short-lived device authorization table and expiry index; older candidates continue to read existing host and user state. The local credential cache is a new private artifact and is ignored by older Connector binaries. The compatibility classification is `public_api=minor` and `persistent_state=minor`; down-migration is not an automatic rollback strategy.
+The new REST endpoints are additive within the current public API major. Migration 00018 adds only a short-lived device authorization table and expiry index; older candidates continue to read existing host and user state. The local credential cache is a new private artifact and is ignored by older Connector binaries. The compatibility classification is `public_api=minor` and `persistent_state=minor`; down-migration is not an automatic rollback strategy.
 
 ## Verification
 

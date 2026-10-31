@@ -33,6 +33,7 @@ type ServerOptions struct {
 	HandshakeTimeout time.Duration
 	EventHandler     EventHandler
 	AckHandler       CommandAckHandler
+	ArtifactHandler  ArtifactUploadHandler
 }
 
 type Server struct {
@@ -54,6 +55,7 @@ type serverConnection struct {
 	maxFrame   int64
 	onEvent    EventHandler
 	onAck      CommandAckHandler
+	onArtifact ArtifactUploadHandler
 
 	writeMu     sync.Mutex
 	done        chan struct{}
@@ -61,8 +63,9 @@ type serverConnection struct {
 	close       sync.Once
 	handlerDone chan struct{}
 
-	pendingMu sync.Mutex
-	pending   map[string]chan commandResponse
+	pendingMu       sync.Mutex
+	pending         map[string]chan commandResponse
+	artifactUploads map[string]*pendingServerArtifactUpload
 }
 
 type commandResponse struct {
@@ -84,6 +87,7 @@ func NewServer(registry Registry, options ...ServerOptions) (*Server, error) {
 		}
 		config.EventHandler = options[0].EventHandler
 		config.AckHandler = options[0].AckHandler
+		config.ArtifactHandler = options[0].ArtifactHandler
 	}
 	if config.MaxFrameBytes <= 0 {
 		return nil, errors.New("gateway frame limit must be greater than zero")
@@ -173,16 +177,18 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		return nil, fmt.Errorf("open host gateway connection: %w", err)
 	}
 	result := &serverConnection{
-		ws:          ws,
-		registry:    s.registry,
-		connection:  connection,
-		maxFrame:    s.options.MaxFrameBytes,
-		onEvent:     s.options.EventHandler,
-		onAck:       s.options.AckHandler,
-		done:        make(chan struct{}),
-		ready:       make(chan struct{}),
-		handlerDone: make(chan struct{}),
-		pending:     make(map[string]chan commandResponse),
+		ws:              ws,
+		registry:        s.registry,
+		connection:      connection,
+		maxFrame:        s.options.MaxFrameBytes,
+		onEvent:         s.options.EventHandler,
+		onAck:           s.options.AckHandler,
+		onArtifact:      s.options.ArtifactHandler,
+		done:            make(chan struct{}),
+		ready:           make(chan struct{}),
+		handlerDone:     make(chan struct{}),
+		pending:         make(map[string]chan commandResponse),
+		artifactUploads: make(map[string]*pendingServerArtifactUpload),
 	}
 	ack := helloAckMessage(connection)
 	if _, err := encodeMessage(ack, s.options.MaxFrameBytes); err != nil {
@@ -347,6 +353,22 @@ func (c *serverConnection) readLoop(ctx context.Context) error {
 			}
 		case MessageCommandAck:
 			if err := c.resolve(ctx, message); err != nil {
+				return err
+			}
+		case MessageArtifactBegin:
+			if err := c.handleArtifactBegin(message); err != nil {
+				return err
+			}
+		case MessageArtifactChunk:
+			if err := c.handleArtifactChunk(message); err != nil {
+				return err
+			}
+		case MessageArtifactCommit:
+			if err := c.handleArtifactCommit(ctx, message); err != nil {
+				return err
+			}
+		case MessageArtifactAbort:
+			if err := c.handleArtifactAbort(message); err != nil {
 				return err
 			}
 		default:

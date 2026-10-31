@@ -1,5 +1,5 @@
 import type { PublishedSessionApi } from "../sessions/api";
-import type { Approval, Event, Run, Session } from "@loomhelm/protocol";
+import type { Approval, Artifact, Event, ModificationOrder, Run, Session } from "@loomhelm/protocol";
 
 const session: Session = {
   created_at: "2026-10-29 13:42",
@@ -86,8 +86,18 @@ const acceptedAck = (commandId: string, runId = run.id) => ({
 
 let demoDraftContent = "";
 let demoDraftRevision = 0;
+let demoDraftOrder: ModificationOrder = { client_id: "", logical_counter: 0, physical_millis: 0 };
 
-export function createProductionSessionDemoApi(): PublishedSessionApi {
+export interface ProductionSessionDemoApiOptions {
+  artifacts?: Readonly<Record<string, Artifact>>;
+  downloadArtifact?: PublishedSessionApi["downloadArtifact"];
+  events?: readonly Event[];
+}
+
+export function createProductionSessionDemoApi(options: ProductionSessionDemoApiOptions = {}): PublishedSessionApi {
+  const demoArtifacts = options.artifacts ?? {};
+  const demoEvents = options.events ?? events;
+
   return {
     createSession: async ({ body }) => ({
       initial_run_ack: body.prompt ? {
@@ -105,28 +115,31 @@ export function createProductionSessionDemoApi(): PublishedSessionApi {
         task_id: body.task_id
       }
     }),
-    getDraft: async ({ session_id }) => ({ draft: { content: demoDraftContent, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } }),
-    getArtifact: async () => {
-      throw new Error("Demo artifact lookup is intentionally unavailable.");
+    getDraft: async ({ session_id }) => ({ draft: { content: demoDraftContent, modification_order: demoDraftOrder, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } }),
+    getArtifact: async ({ artifact_id }) => {
+      const artifact = demoArtifacts[artifact_id];
+      if (!artifact) throw new Error("Demo artifact lookup is intentionally unavailable.");
+      return { artifact };
     },
-    downloadArtifact: async () => {
+    downloadArtifact: options.downloadArtifact ?? (async () => {
       throw new Error("Demo artifact download is intentionally unavailable.");
-    },
+    }),
     getSession: async () => ({ session }),
     interruptRun: async ({ body }) => acceptedAck(body.command_id),
     listSessionRuns: async ({ session_id }) => ({ has_more: false, items: [{ ...run, session_id }] }),
     listRunApprovals: async () => ({ has_more: false, items: [approval] }),
     listRunEvents: async ({ after_cursor }) => ({
-      events: after_cursor ? [] : events,
+      events: after_cursor ? [] : demoEvents,
       has_more: false,
-      next_cursor: events.at(-1)?.cursor
+      next_cursor: demoEvents.at(-1)?.cursor
     }),
     resolveApproval: async ({ body }) => acceptedAck(body.command_id),
     submitRun: async ({ body }) => acceptedAck(body.command_id),
     updateDraft: async ({ body, session_id }) => {
       demoDraftContent = body.content;
+      demoDraftOrder = body.modification_order;
       demoDraftRevision += 1;
-      return { draft: { client_id: body.client_id, client_sequence: body.client_sequence, content: demoDraftContent, mutation_id: body.mutation_id, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } };
+      return { draft: { client_id: body.client_id, client_sequence: body.client_sequence, content: demoDraftContent, modification_order: demoDraftOrder, mutation_id: body.mutation_id, revision: demoDraftRevision, session_id, updated_at: "2026-10-29 14:05" } };
     }
   };
 }

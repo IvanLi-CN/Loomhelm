@@ -15,12 +15,12 @@
     "description": "The table stores only hashes for the human verification code and one-time authorization code, the loopback redirect binding, browser state and expiry. Raw host credentials are never stored in this flow's database row.",
     "storage_implementation": "PostgreSQL table managed by the embedded Goose application migration history; consumed rows remain as durable replay evidence and expire by query admission.",
     "source_compatibility_range": {
-      "from_program_versions": "Phase-one candidate containing migration 00016.",
-      "to_program_version": "Phase-one Connector browser-enrollment candidate containing migration 00017.",
+      "from_program_versions": "Phase-one candidate containing migration 00017.",
+      "to_program_version": "Phase-one Connector browser-enrollment candidate containing migration 00018.",
       "readable_earlier_state": true,
       "older_program_can_read_new_state": true,
       "direct_major_skips_supported": false,
-      "compatibility_boundary": "Earlier candidates continue to use existing host registration and credential rows and do not interpret connector_device_authorizations; the new candidate requires migration 00017 before enabling the device routes."
+      "compatibility_boundary": "Earlier candidates continue to use existing host registration and credential rows and do not interpret connector_device_authorizations; the new candidate requires migration 00018 before enabling the device routes."
     }
   },
   "database_migration": {
@@ -30,7 +30,7 @@
     ],
     "backfill": "none",
     "rollout_signals": [
-      "Goose records migration 00017 only after the additive table and expiry index commit.",
+      "Goose records migration 00018 only after the additive table and expiry index commit.",
       "Device start and authorization reject expired rows, and token exchange marks a code consumed while holding the row lock before issuing a host credential."
     ],
     "recovery": {

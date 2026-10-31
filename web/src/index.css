@@ -134,57 +134,59 @@ body {
   color: var(--ink);
 }
 
-body,
-button,
-input,
-select,
-textarea {
-  font: inherit;
-}
+@layer base {
+  body,
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
 
-button,
-select,
-a {
-  -webkit-tap-highlight-color: transparent;
-}
+  button,
+  select,
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
 
-button,
-select,
-a {
-  cursor: pointer;
-}
+  button,
+  select,
+  a {
+    cursor: pointer;
+  }
 
-button,
-input,
-select,
-textarea {
-  color: var(--ink);
-}
+  button,
+  input,
+  select,
+  textarea {
+    color: var(--ink);
+  }
 
-button:disabled,
-select:disabled,
-input:disabled,
-textarea:disabled {
-  cursor: not-allowed;
-  opacity: 0.62;
-}
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+    opacity: 0.62;
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 
-button {
-  border: 0;
-}
+  button {
+    border: 0;
+  }
 
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 3px;
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 3px;
+  }
 }
 
 [data-slot="button"],
