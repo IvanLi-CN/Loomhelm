@@ -19,10 +19,11 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 )
 
-// This is a process-boundary check only. The Connector app-server is the
-// deterministic /bin/true fixture; no Codex credentials or Desktop session is
-// loaded by the test.
-func TestV01ServerWorkerConnectorProcessRestartRecoveryWithFixtures(t *testing.T) {
+// This is a process-boundary readiness and gateway-reconnect check only. It
+// does not create durable command/session state. The Connector app-server is
+// the deterministic /bin/true fixture; no Codex credentials or Desktop
+// session is loaded by the test.
+func TestV01ServerWorkerConnectorProcessRestartReadinessAndReconnectWithFixtures(t *testing.T) {
 	databaseURL := isolatedApplicationDatabase(t)
 	serverBinary := buildV01Entrypoint(t, "./cmd/server", "server")
 	workerBinary := buildV01Entrypoint(t, "./cmd/worker", "worker")

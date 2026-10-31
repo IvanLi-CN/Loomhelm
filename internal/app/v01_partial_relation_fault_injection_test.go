@@ -18,8 +18,10 @@ import (
 )
 
 // This test keeps the production Server and HTTP API intact while injecting a
-// single ambiguous response at the network boundary used by the browser.
-func TestServerBrowserRelationPartialWriteRefreshesBeforeRetry(t *testing.T) {
+// single pre-write dependency failure at the external HTTP boundary. It
+// verifies API reconciliation before an explicit retry; browser UI behavior
+// is covered by separate Web contracts.
+func TestServerAPIRelationPartialWriteRefreshesBeforeRetry(t *testing.T) {
 	databaseURL := isolatedApplicationDatabase(t)
 	issuer := applicationTestIssuer(t)
 	cfg := platform.Config{
