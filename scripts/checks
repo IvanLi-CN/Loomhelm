@@ -107,6 +107,8 @@ check_deployment() {
 	LOOMHELM_GREEN_SERVER_PORT=18083 \
 	LOOMHELM_ARTIFACT_VOLUME_NAME=loomhelm-quality-preview-artifacts \
 	LOOMHELM_PROXY_NETWORK=loomhelm-quality-preview-proxy \
+	LOOMHELM_DATABASE_NETWORK=loomhelm-quality-preview-database \
+	LOOMHELM_DATABASE_NETWORK_EXTERNAL=true \
 	LOOMHELM_DATABASE_URL=postgres://loomhelm:loomhelm_dev_only@127.0.0.1:55432/loomhelm?sslmode=disable \
 	LOOMHELM_DRAIN_TOKEN=quality-check-token \
 		docker compose --project-name loomhelm-quality-preview -f deploy/preview/compose.yaml config >/dev/null

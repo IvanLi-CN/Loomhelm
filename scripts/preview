@@ -9,6 +9,17 @@ repo_root=$(git -C "$script_dir/.." rev-parse --show-toplevel 2>/dev/null) || {
 repo_root=$(CDPATH= cd -- "$repo_root" && pwd -P)
 cd "$repo_root"
 
+load_local_environment() {
+	environment_file=${LOOMHELM_PREVIEW_ENV_FILE:-.env.local}
+	if [ -f "$environment_file" ]; then
+		set -a
+		. "$environment_file"
+		set +a
+	fi
+}
+
+load_local_environment
+
 control="$repo_root/deploy/preview/control.py"
 state_dir=${LOOMHELM_PREVIEW_STATE_DIR:-$repo_root/.loomhelm-preview}
 case "$state_dir" in
@@ -100,15 +111,6 @@ compose() {
 	# compose.env contains derived candidate values, including the shutdown
 	# grace lower bound; do not let a stale host export override that file.
 	env -u LOOMHELM_STOP_GRACE_PERIOD docker compose --project-name "$LOOMHELM_PREVIEW_PROJECT_NAME" --env-file "$env_file" -f deploy/preview/compose.yaml "$@"
-}
-
-load_local_environment() {
-	environment_file=${LOOMHELM_PREVIEW_ENV_FILE:-.env.local}
-	if [ -f "$environment_file" ]; then
-		set -a
-		. "$environment_file"
-		set +a
-	fi
 }
 
 refresh_env() {

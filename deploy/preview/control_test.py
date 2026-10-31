@@ -61,6 +61,7 @@ class PreviewControlTest(unittest.TestCase):
                     self.assertEqual(actual[key], auth.get(key, ""))
                 self.assertEqual(actual["LOOMHELM_SESSION_COOKIE_SECURE"], auth.get("LOOMHELM_SESSION_COOKIE_SECURE", "true"))
                 self.assertEqual(actual["LOOMHELM_PROXY_NETWORK"], "preview-auth-test-proxy")
+                self.assertEqual(actual["LOOMHELM_DATABASE_NETWORK"], "preview-auth-test-database")
                 self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "170s")
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 self.assertNotIn(required["LOOMHELM_DRAIN_TOKEN"], captured.getvalue())
@@ -70,6 +71,26 @@ class PreviewControlTest(unittest.TestCase):
                 renamed = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
                 self.assertEqual(renamed["LOOMHELM_ARTIFACT_VOLUME_NAME"], actual["LOOMHELM_ARTIFACT_VOLUME_NAME"])
                 self.assertEqual(renamed["LOOMHELM_PROXY_NETWORK"], actual["LOOMHELM_PROXY_NETWORK"])
+                self.assertEqual(renamed["LOOMHELM_DATABASE_NETWORK"], actual["LOOMHELM_DATABASE_NETWORK"])
+
+    def test_preview_wrapper_loads_private_environment_before_state_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            state_dir = root / "private-state"
+            environment_file = root / "preview.env"
+            environment_file.write_text(f"LOOMHELM_PREVIEW_STATE_DIR={state_dir}\n", encoding="utf-8")
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("LOOMHELM_")}
+            environment["LOOMHELM_PREVIEW_ENV_FILE"] = str(environment_file)
+            result = subprocess.run(
+                [str(control.ROOT / "scripts" / "preview"), "init"],
+                cwd=control.ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((state_dir / "state.json").is_file())
 
     def test_compose_project_name_cannot_change_after_activation(self) -> None:
         settings = {
@@ -113,6 +134,29 @@ class PreviewControlTest(unittest.TestCase):
             state["active_slot"] = "blue"
             control.write_state(state_dir, state)
             with patch.dict(os.environ, {**settings, "LOOMHELM_PROXY_NETWORK": "another-preview-network"}, clear=True):
+                with self.assertRaises(control.ContractError):
+                    self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+
+    def test_database_network_cannot_change_after_activation(self) -> None:
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-database-lock-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@postgres:5432/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+            "LOOMHELM_DATABASE_NETWORK": "loomhelm-shared-database",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            self.invoke("init", state_dir)
+            self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+            state = control.load_state(state_dir)
+            self.assertEqual(state["database_network"], "loomhelm-shared-database")
+            state["active_slot"] = "blue"
+            control.write_state(state_dir, state)
+            with patch.dict(os.environ, {**settings, "LOOMHELM_DATABASE_NETWORK": "another-database-network"}, clear=True):
                 with self.assertRaises(control.ContractError):
                     self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
 

@@ -22,6 +22,8 @@ export LOOMHELM_BLUE_SERVER_PORT=<registered-port>
 export LOOMHELM_GREEN_SERVER_PORT=<registered-port>
 export LOOMHELM_PROXY_NETWORK=<unique-or-existing-traefik-network>
 export LOOMHELM_PROXY_NETWORK_EXTERNAL=<true-when-the-network-already-exists>
+export LOOMHELM_DATABASE_NETWORK=<stable-network-created-with-postgres>
+export LOOMHELM_DATABASE_NETWORK_EXTERNAL=<true-after-postgres-compose-created-the-network>
 export LOOMHELM_TRAEFIK_ENABLED=<true-when-traefik-owns-the-route>
 export LOOMHELM_PUBLIC_HOST=<public-preview-host>
 
@@ -36,7 +38,7 @@ The artifact volume name is persisted in preview state and is explicit in Compos
 
 The Compose project name is recorded with the preview state; it may change before activation, but `scripts/preview` rejects a project-name change once a candidate is active or pending so status, ports, Caddy and artifact storage cannot split across two Compose projects.
 
-The proxy network name is also recorded in preview state and is locked once a candidate is active or pending. When no `LOOMHELM_PROXY_NETWORK` is supplied, the controller derives a project-scoped `<project>-proxy` name; set it explicitly only when Caddy must join an existing Traefik network. `LOOMHELM_PREVIEW_ENV_FILE` may point to a private environment file outside the checkout; otherwise the wrapper reads `.env.local`.
+The proxy and database network names are recorded in preview state and locked once a candidate is active or pending. When no `LOOMHELM_PROXY_NETWORK` is supplied, the controller derives a project-scoped `<project>-proxy` name; set it explicitly only when Caddy must join an existing Traefik network. Set `LOOMHELM_DATABASE_NETWORK` to the exact named network created by the PostgreSQL Compose service, set `LOOMHELM_DATABASE_NETWORK_EXTERNAL=true` after that bootstrap, and use `postgres:5432` in `LOOMHELM_DATABASE_URL`; Caddy never joins this database network. `LOOMHELM_PREVIEW_ENV_FILE` may point to a private environment file outside the checkout; otherwise the wrapper reads `.env.local`.
 
 `stage` selects the inactive slot, checks the candidate against the active state's read range and Web tree digest, copies the Web assets into that slot, validates the Server image and `/version` identity, then starts the Worker only after the Server is ready. A failed candidate is stopped, removed from pending state and followed by an active Worker restart so the old generation remains admitted.
 
@@ -50,4 +52,4 @@ The Worker lease row is monotonic per `LOOMHELM_WORKER_LEASE_KEY`. River client 
 
 This is an isolated branch-preview mechanism. It does not deploy production, publish versions, modify the candidate build pipeline or silently down-migrate durable state. Compose has no shared project or fixed port defaults: the real rehearsal requires the session-owned Agent VM, a unique project name and registered per-worktree ports for preview HTTP, Caddy admin and both slot listeners.
 
-When Traefik integration is enabled, the route is `Traefik -> caddy -> server-<active-slot>`. Only Caddy joins the external proxy network; Server and Worker slots remain on the private Compose `preview` network. Caddy's generated configuration is the stable entry and is reloaded only after the inactive slot passes Server/Worker readiness, image identity, `/version` and Web tree checks. The labels are parameterized and do not create or mutate Traefik or Authelia configuration.
+When Traefik integration is enabled, the route is `Traefik -> caddy -> server-<active-slot>`. Only Caddy joins the external proxy network; Server and Worker slots remain on the private Compose `preview` network and also join the stable PostgreSQL `database` network. Caddy's generated configuration is the stable entry and is reloaded only after the inactive slot passes Server/Worker readiness, image identity, `/version` and Web tree checks. The labels are parameterized and do not create or mutate Traefik or Authelia configuration.

@@ -12,6 +12,7 @@ services:
       - loomhelm-postgres:/var/lib/postgresql/data
     networks:
       - app
+      - database
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -129,6 +130,9 @@ services:
 networks:
   app:
     name: "${LOOMHELM_APP_NETWORK:-loomhelm-example}"
+  database:
+    name: "${LOOMHELM_DATABASE_NETWORK:-loomhelm-example-database}"
+    external: ${LOOMHELM_DATABASE_NETWORK_EXTERNAL:-false}
   proxy:
     name: "${LOOMHELM_PROXY_NETWORK:-loomhelm-proxy}"
     external: ${LOOMHELM_PROXY_NETWORK_EXTERNAL:-false}
