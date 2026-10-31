@@ -16,6 +16,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
+	"github.com/jackc/pgx/v5"
 )
 
 type sessionCreationApplication interface {
@@ -36,6 +37,7 @@ func sessionUnknownOutcomeContext(parent context.Context) (context.Context, cont
 
 type sessionCreationRecords interface {
 	CreateIntent(context.Context, sessions.CreationIntentInput) (sessions.CreationIntent, error)
+	CreateIntentAuthorized(context.Context, sessions.CreationIntentInput, sessions.CreationIntentAuthorizer) (sessions.CreationIntent, error)
 	MarkIntentUnknown(context.Context, sessions.UnknownIntentInput) (sessions.CreationIntent, error)
 	MarkIntentDefiniteFailure(context.Context, sessions.DefiniteFailureIntentInput) (sessions.CreationIntent, error)
 	ActivateIntent(context.Context, sessions.ActivationInput) (sessions.Session, error)
@@ -120,7 +122,7 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 	if s.now != nil {
 		createdAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
-	intent, err := s.records.CreateIntent(ctx, sessions.CreationIntentInput{
+	intentInput := sessions.CreationIntentInput{
 		SessionID:     sessionID,
 		CommandID:     normalized.CommandID,
 		CreatorUserID: principal.UserID,
@@ -132,7 +134,20 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 		Summary:       "session.start",
 		CreatedAt:     createdAt,
 		UpdatedAt:     createdAt,
-	})
+	}
+	var createIntent func(context.Context, sessions.CreationIntentInput) (sessions.CreationIntent, error)
+	if hostAuthorizer, ok := s.hosts.(interface {
+		AuthorizeUserTx(context.Context, pgx.Tx, string, string) error
+	}); ok {
+		createIntent = func(createCtx context.Context, input sessions.CreationIntentInput) (sessions.CreationIntent, error) {
+			return s.records.CreateIntentAuthorized(createCtx, input, func(authorizeCtx context.Context, tx pgx.Tx, authorizedInput sessions.CreationIntentInput) error {
+				return hostAuthorizer.AuthorizeUserTx(authorizeCtx, tx, principal.UserID, authorizedInput.HostID)
+			})
+		}
+	} else {
+		createIntent = s.records.CreateIntent
+	}
+	intent, err := createIntent(ctx, intentInput)
 	if err != nil {
 		return protocol.SessionResponse{}, err
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
+	"github.com/jackc/pgx/v5"
 )
 
 var (
@@ -24,6 +25,11 @@ var (
 // adapters. The application resolves project ownership and roles; this
 // package only supplies the persisted Session identity and access direction.
 type AuthorizeFunc func(context.Context, auth.Principal, string, bool) error
+
+// AuthorizeTxFunc repeats the application authorization check inside the
+// command-admission transaction. Implementations must lock the Host resource
+// before returning so share revocation and command admission serialize.
+type AuthorizeTxFunc func(context.Context, pgx.Tx, auth.Principal, string, bool) error
 
 type SessionReader interface {
 	Get(context.Context, string) (sessions.Session, error)
@@ -41,24 +47,26 @@ type ApprovalControlStore interface {
 }
 
 type ControlServiceConfig struct {
-	Controller *Controller
-	Sessions   SessionReader
-	Runs       RunControlStore
-	Approvals  ApprovalControlStore
-	Authorize  AuthorizeFunc
-	Now        func() time.Time
+	Controller  *Controller
+	Sessions    SessionReader
+	Runs        RunControlStore
+	Approvals   ApprovalControlStore
+	Authorize   AuthorizeFunc
+	AuthorizeTx AuthorizeTxFunc
+	Now         func() time.Time
 }
 
 // ControlService is the common application boundary for the public Run
 // operations. REST and MCP adapters should call these methods rather than
 // constructing Commands or reading persistence independently.
 type ControlService struct {
-	controller *Controller
-	sessions   SessionReader
-	runs       RunControlStore
-	approvals  ApprovalControlStore
-	authorize  AuthorizeFunc
-	now        func() time.Time
+	controller  *Controller
+	sessions    SessionReader
+	runs        RunControlStore
+	approvals   ApprovalControlStore
+	authorize   AuthorizeFunc
+	authorizeTx AuthorizeTxFunc
+	now         func() time.Time
 }
 
 func NewControlService(config ControlServiceConfig) (*ControlService, error) {
@@ -81,12 +89,13 @@ func NewControlService(config ControlServiceConfig) (*ControlService, error) {
 		config.Now = time.Now
 	}
 	return &ControlService{
-		controller: config.Controller,
-		sessions:   config.Sessions,
-		runs:       config.Runs,
-		approvals:  config.Approvals,
-		authorize:  config.Authorize,
-		now:        config.Now,
+		controller:  config.Controller,
+		sessions:    config.Sessions,
+		runs:        config.Runs,
+		approvals:   config.Approvals,
+		authorize:   config.Authorize,
+		authorizeTx: config.AuthorizeTx,
+		now:         config.Now,
 	}, nil
 }
 
@@ -107,13 +116,14 @@ func (s *ControlService) SubmitRun(ctx context.Context, principal auth.Principal
 	if err != nil {
 		return protocol.CommandAckResponse{}, fmt.Errorf("encode submit run payload: %w", err)
 	}
-	ack, err := s.controller.AcceptCommand(ctx, protocol.Command{
+	command := protocol.Command{
 		CommandID: request.CommandID,
 		IssuedAt:  s.now().UTC().Format(time.RFC3339Nano),
 		Kind:      protocol.CommandKindRunSend,
 		Payload:   payload,
 		SessionID: session.ID,
-	})
+	}
+	ack, err := s.controller.AcceptCommandWithAuthorization(ctx, command, s.admissionAuthorizer(principal, session.ID))
 	return protocol.CommandAckResponse{Ack: ack}, err
 }
 
@@ -141,19 +151,20 @@ func (s *ControlService) SubmitRunWithDraft(ctx context.Context, principal auth.
 	if err != nil {
 		return protocol.CommandAckResponse{}, fmt.Errorf("encode submit run payload: %w", err)
 	}
-	ack, err := s.controller.AcceptCommandWithDraft(ctx, protocol.Command{
+	command := protocol.Command{
 		CommandID: request.CommandID,
 		IssuedAt:  s.now().UTC().Format(time.RFC3339Nano),
 		Kind:      protocol.CommandKindRunSend,
 		Payload:   payload,
 		SessionID: session.ID,
-	}, drafts.CommandDraftInput{
+	}
+	ack, err := s.controller.AcceptCommandWithDraftAndAuthorization(ctx, command, drafts.CommandDraftInput{
 		CommandID:        request.CommandID,
 		SessionID:        session.ID,
 		OwnerUserID:      principal.UserID,
 		ExpectedRevision: expectedRevision,
 		Content:          request.Prompt,
-	})
+	}, s.admissionAuthorizer(principal, session.ID))
 	return protocol.CommandAckResponse{Ack: ack}, err
 }
 
@@ -186,7 +197,7 @@ func (s *ControlService) InterruptRun(ctx context.Context, principal auth.Princi
 		RunID:     stringPointer(run.ID),
 		SessionID: run.SessionID,
 	}
-	ack, err := s.controller.AcceptInterruptCommand(ctx, command)
+	ack, err := s.controller.AcceptInterruptCommandWithAuthorization(ctx, command, s.admissionAuthorizer(principal, run.SessionID))
 	return protocol.CommandAckResponse{Ack: ack}, err
 }
 
@@ -252,7 +263,7 @@ func (s *ControlService) ResolveApproval(ctx context.Context, principal auth.Pri
 		Generation: run.Generation,
 		Request:    request,
 	}
-	ack, err := s.controller.AcceptApprovalCommand(ctx, command, resolver, approvalRequest)
+	ack, err := s.controller.AcceptApprovalCommandWithAuthorization(ctx, command, resolver, approvalRequest, s.admissionAuthorizer(principal, run.SessionID))
 	return protocol.CommandAckResponse{Ack: ack}, err
 }
 
@@ -374,6 +385,18 @@ func (s *ControlService) authorizedSession(ctx context.Context, principal auth.P
 		return sessions.Session{}, err
 	}
 	return session, nil
+}
+
+func (s *ControlService) admissionAuthorizer(principal auth.Principal, sessionID string) AdmissionAuthorizer {
+	if s.authorizeTx == nil {
+		return nil
+	}
+	return func(ctx context.Context, tx pgx.Tx, command protocol.Command) error {
+		if command.SessionID != sessionID {
+			return fmt.Errorf("%w: command session identity changed", ErrRunConflict)
+		}
+		return s.authorizeTx(ctx, tx, principal, sessionID, true)
+	}
 }
 
 func (s *ControlService) ready(ctx context.Context) error {

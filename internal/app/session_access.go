@@ -25,6 +25,10 @@ type sessionRecords interface {
 	Get(context.Context, string) (sessions.Session, error)
 }
 
+type sessionAccessRecordsTx interface {
+	GetAccessTx(context.Context, pgx.Tx, string) (sessions.SessionAccess, error)
+}
+
 type sessionProjectAccess interface {
 	CanReadProject(context.Context, auth.Principal, string) (bool, error)
 	CanWriteProject(context.Context, auth.Principal, string) (bool, error)
@@ -95,6 +99,68 @@ func (s *sessionService) authorize(ctx context.Context, principal auth.Principal
 		return sessions.SessionAccess{}, auth.ErrNotFound
 	}
 	return access, nil
+}
+
+// authorizeTx repeats the full Session/Host authorization check inside the
+// durable Run admission transaction. The Host row lock is the linearization
+// point shared with explicit share revocation.
+func (s *sessionService) authorizeTx(ctx context.Context, tx pgx.Tx, principal auth.Principal, sessionID string, write bool) error {
+	if principal.UserID == "" {
+		return auth.ErrUnauthenticated
+	}
+	records, ok := s.records.(sessionAccessRecordsTx)
+	if !ok {
+		return runs.ErrControlServiceUnavailable
+	}
+	access, err := records.GetAccessTx(ctx, tx, sessionID)
+	if errors.Is(err, sessions.ErrSessionNotFound) {
+		return auth.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read transaction session access: %w", err)
+	}
+	if access.SessionID != sessionID || access.CreatorUserID == "" || access.HostID == "" {
+		return auth.ErrNotFound
+	}
+	if s.hosts != nil {
+		if err := s.hosts.AuthorizeUserTx(ctx, tx, principal.UserID, access.HostID); err != nil {
+			if errors.Is(err, hosts.ErrForbidden) || errors.Is(err, hosts.ErrNotFound) {
+				return auth.ErrNotFound
+			}
+			return fmt.Errorf("authorize transaction session Host: %w", err)
+		}
+	}
+	if access.ProjectID == "" {
+		if access.CreatorUserID != principal.UserID || len(principal.ProjectScope) != 0 {
+			return auth.ErrNotFound
+		}
+		return nil
+	}
+	if !principal.HasProjectScope(access.ProjectID) {
+		return auth.ErrNotFound
+	}
+	if !write {
+		allowed, err := s.projects.CanReadProject(ctx, principal, access.ProjectID)
+		if err != nil {
+			return fmt.Errorf("authorize transaction session project: %w", err)
+		}
+		if !allowed {
+			return auth.ErrNotFound
+		}
+		return nil
+	}
+	projectAccess, ok := s.projects.(sessionProjectBindingAccess)
+	if !ok {
+		return runs.ErrControlServiceUnavailable
+	}
+	allowed, err := projectAccess.CanWriteProjectTx(ctx, tx, principal, access.ProjectID)
+	if err != nil {
+		return fmt.Errorf("authorize transaction session project: %w", err)
+	}
+	if !allowed {
+		return auth.ErrNotFound
+	}
+	return nil
 }
 
 func (s *sessionService) GetSession(ctx context.Context, principal auth.Principal, sessionID string) (protocol.Session, error) {

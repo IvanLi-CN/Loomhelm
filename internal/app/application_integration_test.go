@@ -51,6 +51,74 @@ func TestServerBrowserAuthenticationAndCRUD(t *testing.T) {
 	applicationRequest(t, alice, http.MethodGet, baseURL+"/auth/oidc/start", nil, nil, http.StatusNotFound)
 	loginApplicationBrowser(t, alice, baseURL, "alice")
 	loginApplicationBrowser(t, bob, baseURL, "bob")
+	applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/auth/connector/identity", nil, nil, http.StatusUnauthorized)
+
+	deviceStart := applicationRequest(t, http.DefaultClient, http.MethodPost, baseURL+"/api/v1/auth/device/start", map[string]string{
+		"redirect_uri": "http://127.0.0.1:43123/callback",
+		"state":        strings.Repeat("device-state", 2),
+	}, nil, http.StatusOK)
+	var device struct {
+		VerificationURI string `json:"verification_uri"`
+		UserCode        string `json:"user_code"`
+	}
+	decodeApplicationResponse(t, deviceStart, &device)
+	if device.VerificationURI == "" || device.UserCode == "" {
+		t.Fatalf("device authorization response = %+v", device)
+	}
+	verificationURL, err := url.Parse(baseURL + device.VerificationURI)
+	if err != nil {
+		t.Fatalf("parse device verification URL: %v", err)
+	}
+	verificationURL.RawQuery = url.Values{"user_code": []string{device.UserCode}}.Encode()
+	applicationRequest(t, alice, http.MethodGet, verificationURL.String(), nil, nil, http.StatusOK)
+	authorizeResponse := applicationFormRequest(t, alice, http.MethodPost, baseURL+verificationURL.Path, url.Values{
+		"user_code": []string{device.UserCode},
+	}, map[string]string{"Origin": baseURL}, http.StatusFound)
+	callbackURL, err := url.Parse(authorizeResponse.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Connector callback URL: %v", err)
+	}
+	authorizationCode := callbackURL.Query().Get("code")
+	if authorizationCode == "" || callbackURL.Query().Get("state") == "" {
+		t.Fatal("Connector authorization callback omitted code or state")
+	}
+	tokenResponse := applicationRequest(t, http.DefaultClient, http.MethodPost, baseURL+"/api/v1/auth/device/token", map[string]string{
+		"code": authorizationCode,
+	}, nil, http.StatusOK)
+	var tokenBody struct {
+		APIKey string `json:"api_key"`
+	}
+	decodeApplicationResponse(t, tokenResponse, &tokenBody)
+	if tokenBody.APIKey == "" {
+		t.Fatal("Connector token response omitted API key")
+	}
+	connectorIdentity := applicationRequest(t, http.DefaultClient, http.MethodGet, baseURL+"/api/v1/auth/connector/identity", nil, map[string]string{
+		"Authorization": "Bearer " + tokenBody.APIKey,
+	}, http.StatusOK)
+	var connectorBody struct {
+		HostID string `json:"host_id"`
+	}
+	decodeApplicationResponse(t, connectorIdentity, &connectorBody)
+	if connectorBody.HostID == "" {
+		t.Fatal("Connector identity response omitted Host ID")
+	}
+	var hostList struct {
+		Items []struct {
+			ID    string `json:"id"`
+			Owned bool   `json:"owned_by_current_user"`
+		} `json:"items"`
+	}
+	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/hosts", nil, nil, http.StatusOK), &hostList)
+	ownedHost := false
+	for _, host := range hostList.Items {
+		if host.ID == connectorBody.HostID && host.Owned {
+			ownedHost = true
+			break
+		}
+	}
+	if !ownedHost {
+		t.Fatalf("Connector Host %q was not listed as Alice-owned: %+v", connectorBody.HostID, hostList.Items)
+	}
 	session = applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusOK)
 	var identity struct {
 		UserID string `json:"user_id"`
@@ -457,6 +525,38 @@ func applicationRequest(t *testing.T, client *http.Client, method, target string
 		t.Fatal("bodyless operation returned content")
 	}
 	return response
+}
+
+func applicationFormRequest(t *testing.T, client *http.Client, method, target string, values url.Values, headers map[string]string, statuses ...int) *http.Response {
+	t.Helper()
+	if len(statuses) == 0 {
+		t.Fatal("application form request requires at least one expected status")
+	}
+	request, err := http.NewRequest(method, target, strings.NewReader(values.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(data))
+	for _, status := range statuses {
+		if response.StatusCode == status {
+			return response
+		}
+	}
+	t.Fatalf("%s %s returned %d, want one of %v", method, request.URL.Path, response.StatusCode, statuses)
+	return nil
 }
 
 func decodeApplicationResponse(t *testing.T, response *http.Response, target any) {

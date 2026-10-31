@@ -22,7 +22,7 @@ Host-use authorization is evaluated at operation admission. Admission locks the 
 
 Connector device approval creates a new Host owned by the approving user unless the request names an existing Host owned by that same user. A shared user cannot bind enrollment to another user's Host. The authorization code stores the approving identity and requested Host binding, and completion happens only after the owner-scoped enrollment succeeds.
 
-Each device authorization is also the idempotency key for its Connector enrollment. Migration 00020 binds at most one newly created Host and one credential to that authorization. Retries after a claim lease expires reuse those rows and derive the same opaque token from the in-memory authorization code and durable identities; neither the raw code nor the token is stored in the database. A local cache publication failure remains an operational credential-recovery condition and must be handled through owner-authorized revocation and browser recovery.
+Each device authorization is also the idempotency key for its Connector enrollment. Migration 00020 binds at most one newly created Host and one credential to that authorization. Retries after a claim lease expires, a committed completion with a lost response or a Connector restart reuse those rows and derive the same opaque token from the authorization code and durable identities. A completed authorization may replay only while its short device lifetime remains valid; the raw code and token are never stored in PostgreSQL, while the Connector may retain the raw code in a short-lived mode-0600 pending file until credential-cache publication succeeds. A local cache publication failure therefore remains recoverable through the same enrollment, followed by owner-authorized revocation if needed.
 
 Host inventory, credential and share operations are available through authenticated REST and MCP with the same application authorization. Host administration requires an unrestricted user principal; project-scoped bearers and project membership cannot be used as an installation-management substitute. No browser Host-management surface is introduced by this decision.
 
@@ -36,7 +36,7 @@ Host inventory, credential and share operations are available through authentica
 
 ## Compatibility
 
-Migrations 00019 and 00020 add nullable Host ownership, explicit share grants, per-user defaults, requested-Host device binding and Connector enrollment idempotency. Existing singleton rows are retained but are not implicitly assigned to a user. The public REST/MCP additions and Connector routing change are `public_api=minor`; the durable schema change is `persistent_state=minor`. Down-migration is not an automatic rollback strategy; forward repair is required for any legacy Host adoption.
+Migrations 00019 and 00020 add nullable Host ownership, explicit share grants, per-user defaults, requested-Host device binding and Connector enrollment idempotency. Existing singleton rows are retained but are not implicitly assigned to a user. The public REST/MCP additions and Connector routing change are `public_api=minor`; the durable schema change is `persistent_state=minor`. Older candidates are not a safe rollback target after ownerful Host or authorization-binding state is written; down-migration is not an automatic rollback strategy and forward repair is required for any legacy Host adoption.
 
 ## Verification
 

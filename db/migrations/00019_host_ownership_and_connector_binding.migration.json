@@ -18,9 +18,9 @@
       "from_program_versions": "Phase-one Connector browser-enrollment candidate containing migration 00018.",
       "to_program_version": "Phase-one user-owned Host candidate containing migration 00019.",
       "readable_earlier_state": true,
-      "older_program_can_read_new_state": true,
+      "older_program_can_read_new_state": false,
       "direct_major_skips_supported": false,
-      "compatibility_boundary": "Older candidates ignore the additive ownership, share, default-routing and exchange columns/tables. The new candidate never falls back to the old global Host selection and does not infer ownership for the preserved legacy singleton row."
+      "compatibility_boundary": "Older candidates are not a safe rollback target after ownerful Hosts, explicit shares, per-user defaults or device exchange claims are written. The new candidate never falls back to the old global Host selection and does not infer ownership for the preserved legacy singleton row. Legacy state remains readable only before this candidate writes the new ownership state; recovery after cutover is forward-only."
     }
   },
   "database_migration": {
@@ -39,14 +39,14 @@
     ],
     "recovery": {
       "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
-      "faulty_release_recovery": "forward-repair-by-a-new-program-version-or-a-compatible switchback only while the additive state remains readable; ownerless legacy rows are not auto-assigned during recovery"
+      "faulty_release_recovery": "forward-repair-by-a-new-program-version; switchback to an older candidate is unsupported after the additive ownership state is written; ownerless legacy rows are not auto-assigned during recovery"
     }
   },
   "validation": [
     "Migration inspection confirms nullable legacy singleton compatibility, owner/share/default foreign keys, active-share indexing and exchange claim indexing.",
     "Owner-only credential and share administration rejects foreign identities, while an active explicit share permits host use and revocation removes that access.",
     "User-scoped Host lookup returns no Host when the user has no default or only an ownerless legacy row, even when another user owns a Host.",
-    "Concurrent device exchange attempts permit one final consumption, and a failed enrollment releases the claim so a later exchange can retry without replaying a consumed code."
+    "Concurrent device exchange attempts permit one final enrollment side effect, failed enrollment releases the claim, and a consumed authorization can replay the idempotent enrollment while its bounded authorization lifetime remains valid."
   ],
   "deployed_migrations_immutable": true,
   "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate"

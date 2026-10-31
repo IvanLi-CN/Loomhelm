@@ -27,14 +27,23 @@ import (
 )
 
 const connectorCredentialCacheVersion = 1
+const connectorPendingAuthorizationVersion = 1
 
 var errConnectorCredentialRejected = errors.New("Connector credential was rejected")
+var errConnectorAuthorizationRejected = errors.New("Connector authorization was rejected")
 
 type connectorCredentialCache struct {
 	Version   int    `json:"version"`
 	ServerURL string `json:"server_url"`
 	HostID    string `json:"host_id"`
 	Token     string `json:"token"`
+}
+
+type connectorPendingAuthorization struct {
+	Version   int    `json:"version"`
+	ServerURL string `json:"server_url"`
+	HostID    string `json:"host_id"`
+	Code      string `json:"code"`
 }
 
 type connectorCredentialBootstrapper struct {
@@ -94,6 +103,10 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 		}
 		cachePath = defaultCachePath
 	}
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		return auth.ConnectorCredential{}, err
+	}
 	apiKey := strings.TrimSpace(cfg.ConnectorAPIKey)
 	if apiKey != "" {
 		decoded, decodeErr := auth.DecodeConnectorAPIKey(apiKey)
@@ -106,6 +119,11 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 		}
 		if !errors.Is(err, errConnectorCredentialRejected) {
 			return auth.ConnectorCredential{}, err
+		}
+		if recovered, ok, recoverErr := b.recoverPendingAuthorization(ctx, cfg, cachePath, pendingPath, decoded.HostID, logger); recoverErr != nil {
+			return auth.ConnectorCredential{}, recoverErr
+		} else if ok {
+			return recovered, nil
 		}
 		if cached, ok, cacheErr := loadConnectorCredential(cachePath, cfg.ConnectorServerURL); cacheErr != nil {
 			return auth.ConnectorCredential{}, cacheErr
@@ -124,6 +142,11 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 			logger.Info("connector credential rejected; starting browser recovery")
 		}
 		return b.authorizeAndCache(ctx, cfg, cachePath, logger, decoded.HostID)
+	}
+	if recovered, ok, recoverErr := b.recoverPendingAuthorization(ctx, cfg, cachePath, pendingPath, "", logger); recoverErr != nil {
+		return auth.ConnectorCredential{}, recoverErr
+	} else if ok {
+		return recovered, nil
 	}
 	if credential, ok, err := loadConnectorCredential(cachePath, cfg.ConnectorServerURL); err != nil {
 		return auth.ConnectorCredential{}, err
@@ -149,17 +172,63 @@ func (b connectorCredentialBootstrapper) authorizeAndCache(ctx context.Context, 
 		parsed, _ := url.Parse(cfg.ConnectorServerURL)
 		logger.Info("connector browser authorization required", "server_host", parsed.Host)
 	}
-	credential, err := b.authorizeInBrowser(ctx, cfg.ConnectorServerURL, requestedHostID)
+	authorizationCode, err := b.authorizeInBrowser(ctx, cfg.ConnectorServerURL, requestedHostID)
 	if err != nil {
+		return auth.ConnectorCredential{}, err
+	}
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		return auth.ConnectorCredential{}, err
+	}
+	if err := saveConnectorPendingAuthorization(pendingPath, cfg.ConnectorServerURL, requestedHostID, authorizationCode); err != nil {
+		return auth.ConnectorCredential{}, err
+	}
+	credential, err := b.exchangeConnectorAuthorization(ctx, cfg.ConnectorServerURL, authorizationCode, requestedHostID)
+	if err != nil {
+		if errors.Is(err, errConnectorAuthorizationRejected) {
+			_ = clearConnectorPendingAuthorization(pendingPath)
+		}
 		return auth.ConnectorCredential{}, err
 	}
 	if err := saveConnectorCredential(cachePath, cfg.ConnectorServerURL, credential); err != nil {
 		return auth.ConnectorCredential{}, err
 	}
+	if err := clearConnectorPendingAuthorization(pendingPath); err != nil && logger != nil {
+		logger.Warn("connector pending authorization cleanup failed", "error", err)
+	}
 	if logger != nil {
 		logger.Info("connector browser authorization completed")
 	}
 	return credential, nil
+}
+
+func (b connectorCredentialBootstrapper) recoverPendingAuthorization(ctx context.Context, cfg platform.Config, cachePath, pendingPath, requestedHostID string, logger *slog.Logger) (auth.ConnectorCredential, bool, error) {
+	pending, ok, err := loadConnectorPendingAuthorization(pendingPath, cfg.ConnectorServerURL)
+	if err != nil || !ok {
+		return auth.ConnectorCredential{}, false, err
+	}
+	if requestedHostID != "" && pending.HostID != requestedHostID {
+		return auth.ConnectorCredential{}, false, nil
+	}
+	credential, err := b.exchangeConnectorAuthorization(ctx, cfg.ConnectorServerURL, pending.Code, pending.HostID)
+	if err != nil {
+		if errors.Is(err, errConnectorAuthorizationRejected) {
+			if clearErr := clearConnectorPendingAuthorization(pendingPath); clearErr != nil {
+				return auth.ConnectorCredential{}, false, clearErr
+			}
+			return auth.ConnectorCredential{}, false, nil
+		}
+		return auth.ConnectorCredential{}, false, err
+	}
+	if err := saveConnectorCredential(cachePath, cfg.ConnectorServerURL, credential); err != nil {
+		// Keep the authorization code so a later process can replay the
+		// idempotent exchange after a cache publication failure.
+		return auth.ConnectorCredential{}, false, err
+	}
+	if err := clearConnectorPendingAuthorization(pendingPath); err != nil && logger != nil {
+		logger.Warn("connector pending authorization cleanup failed", "error", err)
+	}
+	return credential, true, nil
 }
 
 func (b connectorCredentialBootstrapper) resolveAPIKey(ctx context.Context, baseURL, apiKey string) (auth.ConnectorCredential, error) {
@@ -202,15 +271,15 @@ func (b connectorCredentialBootstrapper) resolveAPIKey(ctx context.Context, base
 	return decoded, nil
 }
 
-func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context, baseURL, requestedHostID string) (auth.ConnectorCredential, error) {
+func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context, baseURL, requestedHostID string) (string, error) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
-		return auth.ConnectorCredential{}, fmt.Errorf("listen for Connector authorization callback: %w", err)
+		return "", fmt.Errorf("listen for Connector authorization callback: %w", err)
 	}
 	defer listener.Close()
 	state, err := randomConnectorState()
 	if err != nil {
-		return auth.ConnectorCredential{}, err
+		return "", err
 	}
 	callbackURL := "http://" + listener.Addr().String() + "/callback"
 	codeResult := make(chan string, 1)
@@ -248,7 +317,7 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 
 	startEndpoint, err := connectorHTTPURL(baseURL, "/api/v1/auth/device/start")
 	if err != nil {
-		return auth.ConnectorCredential{}, err
+		return "", err
 	}
 	startPayload := struct {
 		RedirectURI string `json:"redirect_uri"`
@@ -261,17 +330,17 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 		ExpiresIn       int    `json:"expires_in"`
 	}
 	if err := b.postConnectorJSON(ctx, startEndpoint, startPayload, &startResponse); err != nil {
-		return auth.ConnectorCredential{}, fmt.Errorf("start Connector browser authorization: %w", err)
+		return "", fmt.Errorf("start Connector browser authorization: %w", err)
 	}
 	if strings.TrimSpace(startResponse.VerificationURI) == "" {
-		return auth.ConnectorCredential{}, errors.New("Connector browser authorization response omitted verification URL")
+		return "", errors.New("Connector browser authorization response omitted verification URL")
 	}
 	verificationURL, err := resolveConnectorVerificationURL(baseURL, startResponse.VerificationURI)
 	if err != nil {
-		return auth.ConnectorCredential{}, err
+		return "", err
 	}
 	if err := b.openBrowser(ctx, verificationURL); err != nil {
-		return auth.ConnectorCredential{}, fmt.Errorf("open Connector browser authorization: %w", err)
+		return "", fmt.Errorf("open Connector browser authorization: %w", err)
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, connectorDeviceAuthorizationTimeout)
 	defer cancel()
@@ -279,9 +348,23 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 	select {
 	case authorizationCode = <-codeResult:
 	case <-waitCtx.Done():
-		return auth.ConnectorCredential{}, fmt.Errorf("wait for Connector browser authorization: %w", waitCtx.Err())
+		return "", fmt.Errorf("wait for Connector browser authorization: %w", waitCtx.Err())
 	}
 
+	return authorizationCode, nil
+}
+
+const connectorDeviceAuthorizationTimeout = 10 * time.Minute
+
+type connectorHTTPStatusError struct {
+	status int
+}
+
+func (e connectorHTTPStatusError) Error() string {
+	return fmt.Sprintf("server returned status %d", e.status)
+}
+
+func (b connectorCredentialBootstrapper) exchangeConnectorAuthorization(ctx context.Context, baseURL, authorizationCode, requestedHostID string) (auth.ConnectorCredential, error) {
 	tokenEndpoint, err := connectorHTTPURL(baseURL, "/api/v1/auth/device/token")
 	if err != nil {
 		return auth.ConnectorCredential{}, err
@@ -292,6 +375,10 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 	if err := b.postConnectorJSON(ctx, tokenEndpoint, struct {
 		Code string `json:"code"`
 	}{Code: authorizationCode}, &tokenResponse); err != nil {
+		var statusErr connectorHTTPStatusError
+		if errors.As(err, &statusErr) && statusErr.status >= http.StatusBadRequest && statusErr.status < http.StatusInternalServerError {
+			return auth.ConnectorCredential{}, fmt.Errorf("%w: %v", errConnectorAuthorizationRejected, err)
+		}
 		return auth.ConnectorCredential{}, fmt.Errorf("exchange Connector browser authorization: %w", err)
 	}
 	credential, err := auth.DecodeConnectorAPIKey(tokenResponse.APIKey)
@@ -303,8 +390,6 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 	}
 	return credential, nil
 }
-
-const connectorDeviceAuthorizationTimeout = 10 * time.Minute
 
 func (b connectorCredentialBootstrapper) postConnectorJSON(ctx context.Context, endpoint string, payload any, destination any) error {
 	body, err := json.Marshal(payload)
@@ -322,7 +407,7 @@ func (b connectorCredentialBootstrapper) postConnectorJSON(ctx context.Context, 
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("server returned status %d", response.StatusCode)
+		return connectorHTTPStatusError{status: response.StatusCode}
 	}
 	return decodeConnectorJSON(response.Body, destination)
 }
@@ -413,13 +498,13 @@ func loadConnectorCredential(path, serverURL string) (auth.ConnectorCredential, 
 	defer file.Close()
 	var cached connectorCredentialCache
 	if err := decodeConnectorJSON(file, &cached); err != nil {
-		return auth.ConnectorCredential{}, false, fmt.Errorf("decode Connector credential cache: %w", err)
+		return auth.ConnectorCredential{}, false, nil
 	}
 	if cached.Version != connectorCredentialCacheVersion || !sameConnectorBaseURL(cached.ServerURL, serverURL) {
 		return auth.ConnectorCredential{}, false, nil
 	}
 	if cached.HostID == "" || cached.Token == "" {
-		return auth.ConnectorCredential{}, false, errors.New("Connector credential cache is incomplete")
+		return auth.ConnectorCredential{}, false, nil
 	}
 	return auth.ConnectorCredential{HostID: cached.HostID, Token: cached.Token}, true, nil
 }
@@ -432,46 +517,141 @@ func saveConnectorCredential(path, serverURL string, credential auth.ConnectorCr
 	if err != nil {
 		return err
 	}
-	directory := filepath.Dir(cachePath)
-	if err := ensureConnectorCredentialDirectory(directory); err != nil {
-		return err
-	}
-	if info, err := os.Lstat(cachePath); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return errors.New("Connector credential cache must be a regular file")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect Connector credential cache: %w", err)
-	}
 	data, err := json.Marshal(connectorCredentialCache{
 		Version: connectorCredentialCacheVersion, ServerURL: normalizeConnectorBaseURL(serverURL), HostID: credential.HostID, Token: credential.Token,
 	})
 	if err != nil {
 		return fmt.Errorf("encode Connector credential cache: %w", err)
 	}
-	temporary, err := os.CreateTemp(directory, ".connector-credential-*")
+	return writeConnectorStateFile(cachePath, data, "Connector credential cache")
+}
+
+func connectorPendingAuthorizationPath(raw string) (string, error) {
+	cachePath, err := connectorCredentialCachePath(raw)
 	if err != nil {
-		return fmt.Errorf("create Connector credential cache temporary file: %w", err)
+		return "", err
+	}
+	return cachePath + ".pending", nil
+}
+
+func saveConnectorPendingAuthorization(path, serverURL, hostID, code string) error {
+	if strings.TrimSpace(code) == "" {
+		return errors.New("Connector authorization code is empty")
+	}
+	data, err := json.Marshal(connectorPendingAuthorization{
+		Version:   connectorPendingAuthorizationVersion,
+		ServerURL: normalizeConnectorBaseURL(serverURL),
+		HostID:    strings.TrimSpace(hostID),
+		Code:      strings.TrimSpace(code),
+	})
+	if err != nil {
+		return fmt.Errorf("encode Connector pending authorization: %w", err)
+	}
+	return writeConnectorStateFile(path, data, "Connector pending authorization")
+}
+
+func loadConnectorPendingAuthorization(path, serverURL string) (connectorPendingAuthorization, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return connectorPendingAuthorization{}, false, nil
+	}
+	pendingPath, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return connectorPendingAuthorization{}, false, fmt.Errorf("resolve Connector pending authorization path: %w", err)
+	}
+	pendingPath = filepath.Clean(pendingPath)
+	info, err := os.Lstat(pendingPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return connectorPendingAuthorization{}, false, nil
+	}
+	if err != nil {
+		return connectorPendingAuthorization{}, false, fmt.Errorf("inspect Connector pending authorization: %w", err)
+	}
+	if err := validateConnectorCredentialDirectory(filepath.Dir(pendingPath)); err != nil {
+		return connectorPendingAuthorization{}, false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return connectorPendingAuthorization{}, false, errors.New("Connector pending authorization must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return connectorPendingAuthorization{}, false, errors.New("Connector pending authorization permissions are too broad")
+	}
+	file, err := os.Open(pendingPath)
+	if err != nil {
+		return connectorPendingAuthorization{}, false, fmt.Errorf("open Connector pending authorization: %w", err)
+	}
+	defer file.Close()
+	var pending connectorPendingAuthorization
+	if err := decodeConnectorJSON(file, &pending); err != nil {
+		return connectorPendingAuthorization{}, false, nil
+	}
+	if pending.Version != connectorPendingAuthorizationVersion || !sameConnectorBaseURL(pending.ServerURL, serverURL) || strings.TrimSpace(pending.Code) == "" {
+		return connectorPendingAuthorization{}, false, nil
+	}
+	pending.HostID = strings.TrimSpace(pending.HostID)
+	pending.Code = strings.TrimSpace(pending.Code)
+	return pending, true, nil
+}
+
+func clearConnectorPendingAuthorization(path string) error {
+	pendingPath, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return fmt.Errorf("resolve Connector pending authorization path: %w", err)
+	}
+	pendingPath = filepath.Clean(pendingPath)
+	info, err := os.Lstat(pendingPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Connector pending authorization: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("Connector pending authorization must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return errors.New("Connector pending authorization permissions are too broad")
+	}
+	if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove Connector pending authorization: %w", err)
+	}
+	return nil
+}
+
+func writeConnectorStateFile(path string, data []byte, label string) error {
+	directory := filepath.Dir(path)
+	if err := ensureConnectorCredentialDirectory(directory); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("%s must be a regular file", label)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect %s: %w", label, err)
+	}
+	temporary, err := os.CreateTemp(directory, ".connector-state-*")
+	if err != nil {
+		return fmt.Errorf("create %s temporary file: %w", label, err)
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return fmt.Errorf("secure Connector credential cache temporary file: %w", err)
+		_ = temporary.Close()
+		return fmt.Errorf("secure %s temporary file: %w", label, err)
 	}
 	if _, err := temporary.Write(append(data, '\n')); err != nil {
-		temporary.Close()
-		return fmt.Errorf("write Connector credential cache: %w", err)
+		_ = temporary.Close()
+		return fmt.Errorf("write %s: %w", label, err)
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return fmt.Errorf("sync Connector credential cache: %w", err)
+		_ = temporary.Close()
+		return fmt.Errorf("sync %s: %w", label, err)
 	}
 	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close Connector credential cache: %w", err)
+		return fmt.Errorf("close %s: %w", label, err)
 	}
-	if err := os.Rename(temporaryPath, cachePath); err != nil {
-		return fmt.Errorf("publish Connector credential cache: %w", err)
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("publish %s: %w", label, err)
 	}
 	return nil
 }

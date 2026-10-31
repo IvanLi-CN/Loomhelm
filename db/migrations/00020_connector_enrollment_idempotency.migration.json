@@ -18,9 +18,9 @@
       "from_program_versions": "Phase-one candidate containing migrations 00018 and 00019.",
       "to_program_version": "Phase-one Connector enrollment idempotency candidate containing migration 00020.",
       "readable_earlier_state": true,
-      "older_program_can_read_new_state": true,
+      "older_program_can_read_new_state": false,
       "direct_major_skips_supported": false,
-      "compatibility_boundary": "Older candidates ignore the additive nullable columns. New Connector exchanges use the binding; legacy Host registration and enrollment paths leave it NULL."
+      "compatibility_boundary": "Older candidates are not a safe rollback target after a Connector enrollment binding is written. New Connector exchanges use the binding; legacy Host registration and enrollment paths leave it NULL. Existing nullable state remains readable by the forward-repair candidate, while switchback after a binding write is unsupported."
     }
   },
   "database_migration": {
@@ -31,11 +31,11 @@
     "backfill": "none; only new Connector exchanges write the binding.",
     "rollout_signals": [
       "One authorization record resolves to one Host and credential under concurrent retry.",
-      "Retry derives the same opaque token from the authorization code and durable Host/credential identities without storing the raw code or token."
+      "Retry derives the same opaque token from the authorization code and durable Host/credential identities without storing the raw code or token in PostgreSQL; the Connector may retain a short-lived mode-0600 pending authorization file for process-crash recovery."
     ],
     "recovery": {
       "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
-      "faulty_release_recovery": "forward-repair-by-a-new-program-version-or-compatible switchback while nullable bindings remain readable"
+      "faulty_release_recovery": "forward-repair-by-a-new-program-version; compatible switchback after a binding write is unsupported even though the nullable columns remain readable"
     }
   },
   "validation": [

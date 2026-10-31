@@ -1114,6 +1114,21 @@ func (s *Service) ListShares(ctx context.Context, userID, hostID string) ([]Shar
 // selects the oldest owned Host, then the oldest explicitly shared Host. The
 // Host ID tie-breaker keeps the fallback deterministic.
 func ensureUserDefaultTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	// Lock the stable user row even when the default row does not exist yet.
+	// This serializes concurrent grants/revocations that would otherwise each
+	// choose a fallback before ON CONFLICT lets one of them win.
+	var lockedUserID string
+	if err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM auth_users
+		WHERE id = $1
+		FOR UPDATE
+	`, userID).Scan(&lockedUserID); errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("lock Host default user: %w", err)
+	}
+
 	var currentHostID string
 	err := tx.QueryRow(ctx, `
 		SELECT host_id

@@ -33,6 +33,7 @@ type connectorDeviceAuthorization struct {
 	AuthorizedUserID     string
 	RequestedHostID      string
 	AuthorizationCodeSet bool
+	Consumed             bool
 }
 
 type connectorDeviceStore interface {
@@ -171,11 +172,15 @@ func (f *connectorDeviceFlow) exchange(ctx context.Context, code string) (string
 	}
 	credential, err := f.enroller.EnrollConnector(ctx, record.AuthorizedUserID, record.RequestedHostID, record.ID, code)
 	if err != nil {
-		_ = f.store.Release(ctx, hash[:], now)
+		if !record.Consumed {
+			_ = f.store.Release(ctx, hash[:], now)
+		}
 		return "", err
 	}
-	if err := f.store.Complete(ctx, hash[:], now); err != nil {
-		return "", err
+	if !record.Consumed {
+		if err := f.store.Complete(ctx, hash[:], now); err != nil {
+			return "", err
+		}
 	}
 	return EncodeConnectorAPIKey(credential.HostID, credential.Token)
 }
@@ -474,7 +479,25 @@ func (s *postgresConnectorDeviceStore) Claim(ctx context.Context, authorizationC
 	if err != nil {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: load Connector authorization code: %v", ErrUnavailable, err)
 	}
-	if consumedAt != nil || !record.ExpiresAt.After(now) || authorizedUserID == nil || (exchangeStartedAt != nil && now.Sub(*exchangeStartedAt) < connectorExchangeClaim) {
+	if !record.ExpiresAt.After(now) || authorizedUserID == nil {
+		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector authorization code is invalid or expired", ErrInvalid)
+	}
+	record.AuthorizedUserID = *authorizedUserID
+	if requestedHostID != nil {
+		record.RequestedHostID = *requestedHostID
+	}
+	if consumedAt != nil {
+		// A completed exchange is replayable only while the original device
+		// authorization remains valid. Enrollment itself is idempotent by the
+		// durable authorization ID, so this recovers a lost token response
+		// without issuing a second Host or credential.
+		record.Consumed = true
+		if err := tx.Commit(ctx); err != nil {
+			return connectorDeviceAuthorization{}, fmt.Errorf("%w: commit Connector token replay: %v", ErrUnavailable, err)
+		}
+		return record, nil
+	}
+	if exchangeStartedAt != nil && now.Sub(*exchangeStartedAt) < connectorExchangeClaim {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector authorization code is invalid or expired", ErrInvalid)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE connector_device_authorizations SET exchange_started_at = $2 WHERE id = $1`, record.ID, now); err != nil {
@@ -482,10 +505,6 @@ func (s *postgresConnectorDeviceStore) Claim(ctx context.Context, authorizationC
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: commit Connector token claim: %v", ErrUnavailable, err)
-	}
-	record.AuthorizedUserID = *authorizedUserID
-	if requestedHostID != nil {
-		record.RequestedHostID = *requestedHostID
 	}
 	return record, nil
 }
@@ -519,7 +538,7 @@ func (s *postgresConnectorDeviceStore) Release(ctx context.Context, authorizatio
 func (s *postgresConnectorDeviceStore) cleanup(ctx context.Context, now time.Time) error {
 	if _, err := s.pool.Exec(ctx, `
 		DELETE FROM connector_device_authorizations
-		WHERE expires_at < $1 - INTERVAL '1 hour'
+		WHERE expires_at < ($1::timestamptz - INTERVAL '1 hour')
 	`, now); err != nil {
 		return fmt.Errorf("%w: cleanup expired Connector authorizations: %v", ErrUnavailable, err)
 	}

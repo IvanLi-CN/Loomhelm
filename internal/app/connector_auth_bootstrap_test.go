@@ -38,6 +38,22 @@ func TestConnectorCredentialCacheIsPrivateAndBoundToServer(t *testing.T) {
 	}
 }
 
+func TestConnectorCredentialCacheInvalidContentIsUnavailable(t *testing.T) {
+	for _, contents := range []string{"{", `{"version":1,"server_url":"https://loomhelm.example.test"}`} {
+		directory := t.TempDir()
+		if err := os.Chmod(directory, 0o700); err != nil {
+			t.Fatalf("secure cache directory: %v", err)
+		}
+		path := filepath.Join(directory, "connector-credential.json")
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write invalid cache: %v", err)
+		}
+		if credential, ok, err := loadConnectorCredential(path, "https://loomhelm.example.test"); err != nil || ok || credential != (auth.ConnectorCredential{}) {
+			t.Fatalf("invalid cache = (%+v, %t, %v), want unavailable cache", credential, ok, err)
+		}
+	}
+}
+
 func TestConnectorCredentialCacheRejectsSymlinkedDirectory(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
@@ -240,6 +256,100 @@ func TestConnectorBootstrapRecoversRejectedCachedCredential(t *testing.T) {
 	}
 	if identityCalls != 1 || requestedHostID != "host-cache" {
 		t.Fatalf("recovery binding = identity calls %d, requested host %q", identityCalls, requestedHostID)
+	}
+}
+
+func TestConnectorBootstrapRecoversPendingAuthorizationAfterCachePublicationFailure(t *testing.T) {
+	var callbackURL string
+	var callbackState string
+	tokenCalls := 0
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/auth/device/start":
+			var payload struct {
+				RedirectURI string `json:"redirect_uri"`
+				State       string `json:"state"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				http.Error(writer, "bad request", http.StatusBadRequest)
+				return
+			}
+			callbackURL, callbackState = payload.RedirectURI, payload.State
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"verification_uri":"/verify","user_code":"ABCD-2345","expires_in":600}`)
+		case "/api/v1/auth/device/token":
+			var payload struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Code != "authorization-code" {
+				http.Error(writer, "bad token", http.StatusBadRequest)
+				return
+			}
+			tokenCalls++
+			if tokenCalls == 1 {
+				if err := os.Mkdir(cachePath, 0o700); err != nil {
+					t.Fatalf("create cache publication blocker: %v", err)
+				}
+			}
+			apiKey, _ := auth.EncodeConnectorAPIKey("host-pending", "token-pending")
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"api_key":"`+apiKey+`"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	openBrowser := func(_ context.Context, verificationURL string) error {
+		parsed, err := url.Parse(verificationURL)
+		if err != nil {
+			return err
+		}
+		if parsed.Path != "/verify" {
+			return io.ErrUnexpectedEOF
+		}
+		callback := callbackURL + "?code=authorization-code&state=" + url.QueryEscape(callbackState)
+		response, err := server.Client().Get(callback)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			return io.ErrUnexpectedEOF
+		}
+		return nil
+	}
+	first := connectorCredentialBootstrapper{client: server.Client(), openBrowser: openBrowser}
+	if _, err := first.bootstrap(context.Background(), platform.Config{ConnectorServerURL: server.URL, ConnectorCredentialPath: cachePath}, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+		t.Fatal("first bootstrap succeeded despite cache publication failure")
+	}
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("pending authorization was not retained: %v", err)
+	}
+	if err := os.Remove(cachePath); err != nil {
+		t.Fatalf("remove cache publication blocker: %v", err)
+	}
+	second := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(context.Context, string) error {
+			t.Fatal("browser authorization restarted despite a pending authorization")
+			return nil
+		},
+	}
+	credential, err := second.bootstrap(context.Background(), platform.Config{ConnectorServerURL: server.URL, ConnectorCredentialPath: cachePath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("pending authorization recovery error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-pending", Token: "token-pending"}) || tokenCalls != 2 {
+		t.Fatalf("pending recovery = (%+v, %d token calls), want the same credential and two exchanges", credential, tokenCalls)
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("pending authorization remains after recovery, stat error = %v", err)
 	}
 }
 

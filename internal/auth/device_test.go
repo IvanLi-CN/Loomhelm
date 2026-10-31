@@ -43,7 +43,15 @@ func (s *connectorDeviceStoreFake) Authorize(_ context.Context, userCodeHash []b
 }
 
 func (s *connectorDeviceStoreFake) Claim(_ context.Context, authorizationCodeHash []byte, now time.Time) (connectorDeviceAuthorization, error) {
-	if s.consumed || string(authorizationCodeHash) != string(s.authorization) || !s.record.ExpiresAt.After(now) || (s.claimed && now.Sub(s.claimedAt) < connectorExchangeClaim) {
+	if string(authorizationCodeHash) != string(s.authorization) || !s.record.ExpiresAt.After(now) {
+		return connectorDeviceAuthorization{}, ErrInvalid
+	}
+	if s.consumed {
+		replay := s.record
+		replay.Consumed = true
+		return replay, nil
+	}
+	if s.claimed && now.Sub(s.claimedAt) < connectorExchangeClaim {
 		return connectorDeviceAuthorization{}, ErrInvalid
 	}
 	s.claimed = true
@@ -106,7 +114,7 @@ func TestConnectorDeviceFlowRejectsNonLoopbackCallback(t *testing.T) {
 	}
 }
 
-func TestConnectorDeviceFlowExchangesAuthorizationCodeOnce(t *testing.T) {
+func TestConnectorDeviceFlowReplaysCompletedAuthorizationIdempotently(t *testing.T) {
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	store := &connectorDeviceStoreFake{}
 	enroller := &connectorEnrollerFake{credential: ConnectorCredential{HostID: "host-1", Token: "token-1"}}
@@ -135,11 +143,15 @@ func TestConnectorDeviceFlowExchangesAuthorizationCodeOnce(t *testing.T) {
 	if err != nil || credential != enroller.credential {
 		t.Fatalf("exchanged credential = %+v, error = %v", credential, err)
 	}
-	if _, err := flow.exchange(context.Background(), parsed.Query().Get("code")); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("replayed exchange error = %v, want invalid", err)
+	replayedKey, err := flow.exchange(context.Background(), parsed.Query().Get("code"))
+	if err != nil {
+		t.Fatalf("replayed exchange error = %v", err)
 	}
-	if enroller.calls != 1 {
-		t.Fatalf("enroller calls = %d, want 1", enroller.calls)
+	if replayedKey != apiKey {
+		t.Fatalf("replayed API key = %q, want original %q", replayedKey, apiKey)
+	}
+	if enroller.calls != 2 {
+		t.Fatalf("enroller calls = %d, want 2 idempotent lookups", enroller.calls)
 	}
 	if enroller.userID != "user-1" || enroller.hostID != "host-1" {
 		t.Fatalf("enroller binding = (%q, %q), want (%q, %q)", enroller.userID, enroller.hostID, "user-1", "host-1")

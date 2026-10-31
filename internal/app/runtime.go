@@ -210,6 +210,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			return nil, fmt.Errorf("initialize Connector gateway: %w", err)
 		}
 		transport.gateway = runtime.gateway
+		authorizer := services.sessionAccess()
 		controller, controllerErr := runs.NewController(runStore, transport, runs.ControllerConfig{
 			ResolveGeneration: func(resolveCtx context.Context, sessionID string) (string, error) {
 				session, resolveErr := sessionStore.Get(resolveCtx, sessionID)
@@ -225,7 +226,6 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			db.Close()
 			return nil, fmt.Errorf("initialize run controller: %w", controllerErr)
 		}
-		authorizer := services.sessionAccess()
 		control, controlErr := runs.NewControlService(runs.ControlServiceConfig{
 			Controller: controller,
 			Sessions:   sessionStore,
@@ -234,6 +234,9 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			Authorize: func(authorizeCtx context.Context, principal auth.Principal, sessionID string, write bool) error {
 				_, authorizeErr := authorizer.authorize(authorizeCtx, principal, sessionID, write)
 				return authorizeErr
+			},
+			AuthorizeTx: func(authorizeCtx context.Context, tx pgx.Tx, principal auth.Principal, sessionID string, write bool) error {
+				return authorizer.authorizeTx(authorizeCtx, tx, principal, sessionID, write)
 			},
 		})
 		if controlErr != nil {

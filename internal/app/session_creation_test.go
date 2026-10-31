@@ -54,6 +54,10 @@ func (f *fakeSessionCreationRecords) CreateIntent(_ context.Context, input sessi
 	return intent, nil
 }
 
+func (f *fakeSessionCreationRecords) CreateIntentAuthorized(ctx context.Context, input sessions.CreationIntentInput, _ sessions.CreationIntentAuthorizer) (sessions.CreationIntent, error) {
+	return f.CreateIntent(ctx, input)
+}
+
 func (f *fakeSessionCreationRecords) MarkIntentUnknown(ctx context.Context, input sessions.UnknownIntentInput) (sessions.CreationIntent, error) {
 	f.unknown++
 	f.unknownContextErr = ctx.Err()
