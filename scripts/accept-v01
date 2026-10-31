@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) || {
+	echo "accept-v01: cannot resolve script directory" >&2
+	exit 1
+}
+
+exec python3 "$script_dir/v01_acceptance.py" "$@"

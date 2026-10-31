@@ -28,4 +28,4 @@ Markdown 工具已提供固定版本入口：首次运行 `python3 tools/markdow
 
 统一质量检查入口是 `scripts/checks`：`quality` 检查质量声明、dprint、脚本和部署配置，`generated` 检查 Go/TypeScript 与 sqlc 漂移，`source` 检查 Go 测试/race/shuffle/vet，`database` 检查真实 PostgreSQL 与 River 作业，`web` 检查前端安装、类型和构建，`react` 检查 React Doctor，`all` 汇总所有失败并以非零状态退出。数据库检查要求显式的 `LOOMHELM_DATABASE_URL`，不会把缺少数据库误报为通过。
 
-完整产品需求与一期验收见 [PRD](docs/PRD.md)，已确定的工程合同见 [项目规范](docs/specs/phase1-core/SPEC.md)，工程边界见 [AGENTS.md](AGENTS.md)。PRD 及相关业务规则须经主人明确确认后才能实施功能，产品 UI 还需完整设计确认；工程骨架、基础设施、能力验证和现有设计讨论可以并行。源码目录按职责组织为 `cmd/`、`internal/`、`web/`、`packages/`、`api/`、`protocol/`、`deploy/` 和 `tests/`；各目录在对应实现加入时创建。
+完整产品需求与一期验收见 [PRD](docs/PRD.md)，V01 联合验收操作见 [V01 验收手册](docs/phase1-v01-acceptance.md)，已确定的工程合同见 [项目规范](docs/specs/phase1-core/SPEC.md)，工程边界见 [AGENTS.md](AGENTS.md)。PRD 及相关业务规则须经主人明确确认后才能实施功能，产品 UI 还需完整设计确认；工程骨架、基础设施、能力验证和现有设计讨论可以并行。源码目录按职责组织为 `cmd/`、`internal/`、`web/`、`packages/`、`api/`、`protocol/`、`deploy/` 和 `tests/`；各目录在对应实现加入时创建。

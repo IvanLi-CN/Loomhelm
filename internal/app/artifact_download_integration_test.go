@@ -495,6 +495,19 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	if hex.EncodeToString(mcpDigest[:]) != hex.EncodeToString(digest[:]) {
 		t.Fatalf("MCP reassembled artifact hash = %q, want %q", hex.EncodeToString(mcpDigest[:]), hex.EncodeToString(digest[:]))
 	}
+
+	_ = mcpSession.Close()
+	stop()
+	baseURL, _ = startApplicationTestServer(t, cfg)
+	restartedResponse := applicationRequest(t, alice, http.MethodGet, baseURL+"/api/v1/artifacts/"+artifactID+"/download", nil, nil, http.StatusOK)
+	restartedBody, err := io.ReadAll(restartedResponse.Body)
+	restartedResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restartedBody) != string(content) {
+		t.Fatalf("download body after server restart = %q, want %q", restartedBody, content)
+	}
 }
 
 func TestWriteArtifactDownloadErrorUsesServiceUnavailableCode(t *testing.T) {

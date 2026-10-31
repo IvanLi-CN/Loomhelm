@@ -89,8 +89,8 @@ expect_failure() {
 log "source_sha=$(source_sha)"
 log "mode=$( [ "$control_only" -eq 1 ] && printf control-only || printf runtime )"
 
-run python3 -m unittest discover -s deploy/preview -p '*_test.py'
-run python3 -m py_compile deploy/preview/control.py
+run python3 -B -m unittest discover -s deploy/preview -p '*_test.py'
+run python3 -B -c 'from pathlib import Path; path = Path("deploy/preview/control.py"); compile(path.read_text(encoding="utf-8"), str(path), "exec")'
 run sh -n scripts/preview
 run sh -n scripts/rehearse-blue-green
 

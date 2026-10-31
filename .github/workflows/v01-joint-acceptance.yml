@@ -1,0 +1,177 @@
+name: V01 Joint Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full source SHA from feat/phase1 to build and record
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loomhelm-v01-acceptance-${{ inputs.source_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+
+jobs:
+  joint-acceptance:
+    name: V01 Evidence Ledger
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: loomhelm
+          POSTGRES_USER: loomhelm
+          POSTGRES_PASSWORD: loomhelm_v01_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U loomhelm -d loomhelm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      LOOMHELM_DATABASE_URL: postgres://loomhelm:loomhelm_v01_ci_only@127.0.0.1:5432/loomhelm?sslmode=disable
+      LOOMHELM_POSTGRES_PORT: "5432"
+      LOOMHELM_DRAIN_TOKEN: loomhelm-v01-ci-drain-token
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source belongs to feat/phase1
+        run: |
+          git fetch --no-tags origin feat/phase1
+          git merge-base --is-ancestor "$CANDIDATE_SOURCE_SHA" refs/remotes/origin/feat/phase1 || {
+            echo "source SHA is not in feat/phase1 history: $CANDIDATE_SOURCE_SHA" >&2
+            exit 1
+          }
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.4
+      - name: Build immutable candidate once
+        run: scripts/build-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate"
+      - name: Initialize acceptance ledger
+        run: |
+          scripts/accept-v01 init \
+            --evidence-dir "$RUNNER_TEMP/loomhelm-v01" \
+            --source-sha "$CANDIDATE_SOURCE_SHA" \
+            --parent-branch feat/phase1 \
+            --candidate-manifest "$RUNNER_TEMP/loomhelm-candidate/candidate-manifest.json"
+      - name: Run real API and browser CRUD acceptance
+        run: |
+          scripts/accept-v01 run \
+            --evidence-dir "$RUNNER_TEMP/loomhelm-v01" \
+            --check-id AC-LH-001 \
+            --name server-browser-auth-crud \
+            --timeout 600 -- \
+            go test -count=1 ./internal/app -run '^TestServerBrowserAuthenticationAndCRUD$'
+      - name: Run cross-project relationship and MCP acceptance
+        run: |
+          scripts/accept-v01 run \
+            --evidence-dir "$RUNNER_TEMP/loomhelm-v01" \
+            --check-id AC-LH-001 \
+            --name cross-project-relationships-mcp \
+            --allow-repeat \
+            --timeout 600 -- \
+            go test -count=1 ./internal/app -run '^TestServerCrossProjectRelationshipsThroughOfficialMCP$'
+      - name: Run official MCP artifact acceptance
+        run: |
+          scripts/accept-v01 run \
+            --evidence-dir "$RUNNER_TEMP/loomhelm-v01" \
+            --check-id AC-LH-008 \
+            --name authorized-artifact-download \
+            --timeout 600 -- \
+            go test -count=1 ./internal/app -run '^TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArtifacts$'
+      - name: Bind the artifact log to opaque-content evidence
+        run: |
+          candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$RUNNER_TEMP/loomhelm-candidate/candidate-manifest.json")
+          artifact_log=$(python3 - "$RUNNER_TEMP/loomhelm-v01/ledger.json" "$RUNNER_TEMP/loomhelm-v01" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          ledger_path = pathlib.Path(sys.argv[1])
+          evidence_dir = pathlib.Path(sys.argv[2])
+          attempts = json.loads(ledger_path.read_text(encoding="utf-8"))["checks"]["AC-LH-008"]["attempts"]
+          if not attempts or attempts[-1].get("name") != "authorized-artifact-download" or attempts[-1].get("status") != "passed":
+              raise SystemExit("AC-LH-008 artifact attempt is missing or not passed")
+          print(evidence_dir / attempts[-1]["stdout_log"])
+          PY
+          )
+          scripts/accept-v01 reuse \
+            --evidence-dir "$RUNNER_TEMP/loomhelm-v01" \
+            --check-id AC-LH-009 \
+            --status reused \
+            --evidence "$artifact_log" \
+            --evidence-source-sha "$CANDIDATE_SOURCE_SHA" \
+            --evidence-candidate-digest "$candidate_digest" \
+            --reason 'Source-bound artifact test log reused as historical evidence; it covers only the assertions directly exercised by that test, not the full base/unknown/sub-agent matrix.'
+      - name: Run blue-green control contract rehearsal
+        run: |
+          scripts/accept-v01 run \
+            --evidence-dir "$RUNNER_TEMP/loomhelm-v01" \
+            --check-id AC-LH-011 \
+            --name blue-green-control-contract \
+            --timeout 600 -- \
+            scripts/rehearse-blue-green --control-only \
+            --evidence-dir "$RUNNER_TEMP/loomhelm-v01-blue-green"
+      - name: Record unavailable external acceptance surfaces
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/loomhelm-v01/ledger.json"; then
+            control_status=$(python3 - "$RUNNER_TEMP/loomhelm-v01/ledger.json" <<'PY'
+            import json
+            import pathlib
+            import sys
+
+            ledger = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+            print(ledger["checks"]["AC-LH-011"]["status"])
+            PY
+            )
+            if test "$control_status" = passed; then
+              scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-011 --status blocked --reason 'Control-only rehearsal passed, but runtime readiness, drain, Worker fencing, handoff and recovery are not run.'
+            fi
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-004 --status blocked --reason 'The workflow does not claim a real owner-approved Codex executable run.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-005 --status blocked --reason 'Active Desktop thread and turn evidence is unavailable in this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-010 --status blocked --reason 'Real browser PWA installation evidence is unavailable in this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-012 --status blocked --reason 'The selected checks do not prove the full Web/API/MCP product closure.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-002 --status not_run --reason 'This workflow records backend and artifact acceptance only; full Web UI journey evidence remains separate.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-003 --status not_run --reason 'Real new-session execution is not run by this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-006 --status not_run --reason 'The full duplicate, approval race, ACK-loss and three-process recovery matrix is not run by this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-007 --status not_run --reason 'Multi-client draft acceptance is not run by this workflow.'
+            scripts/accept-v01 mark --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --check-id AC-LH-013 --status not_run --reason 'Partial relation failure acceptance is not run by this workflow.'
+          fi
+      - name: Render acceptance reports
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/loomhelm-v01/ledger.json"; then
+            scripts/accept-v01 report --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --format json --output "$RUNNER_TEMP/loomhelm-v01/V01.json"
+            scripts/accept-v01 report --evidence-dir "$RUNNER_TEMP/loomhelm-v01" --format markdown --output "$RUNNER_TEMP/loomhelm-v01/V01.md"
+          fi
+      - name: Upload V01 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loomhelm-v01-acceptance-${{ env.CANDIDATE_SOURCE_SHA }}
+          path: |
+            ${{ runner.temp }}/loomhelm-v01
+            ${{ runner.temp }}/loomhelm-v01-blue-green
+            ${{ runner.temp }}/loomhelm-candidate/candidate-manifest.json
+            ${{ runner.temp }}/loomhelm-candidate/candidate-manifest.json.sha256
+          if-no-files-found: warn
+          retention-days: 90
