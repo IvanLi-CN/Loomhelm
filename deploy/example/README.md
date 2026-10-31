@@ -7,7 +7,7 @@ The single-slot example builds a Web image containing Caddy and the production W
 ## Components
 
 | Service | Default image or build | Container endpoint | Persistent data |
-| --- | --- | --- | --- |
+| - | - | - | - |
 | `web` | `loomhelm-web:example`, built from `deploy/example/Dockerfile.web` | Caddy `:80` | none; the Web bundle is immutable in the image |
 | `server` | `loomhelm-server:example`, built with `LOOMHELM_COMPONENT=server` | HTTP `:8080` on `app` | `loomhelm-artifacts` at `/var/lib/loomhelm/artifacts` |
 | `worker` | `loomhelm-worker:example`, built with `LOOMHELM_COMPONENT=worker` | health/drain HTTP `:8081` on `app` | none; leases and jobs are in PostgreSQL |
