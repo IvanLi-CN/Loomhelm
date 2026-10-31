@@ -192,6 +192,78 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 	return Registration{Host: host, Credential: credential, Token: token}, nil
 }
 
+// Enroll returns a fresh deployment credential for the single configured
+// execution host. Unlike Register, it is idempotent at the host level so a
+// browser device flow can authorize a replacement Connector credential.
+func (s *Service) Enroll(ctx context.Context, request RegisterRequest) (Registration, error) {
+	if err := s.ready(ctx); err != nil {
+		return Registration{}, err
+	}
+	name := strings.TrimSpace(request.Name)
+	if name == "" {
+		name = "Loomhelm Connector"
+	}
+	if len(name) > maxHostNameLength {
+		return Registration{}, fmt.Errorf("%w: host name must be at most %d characters", ErrInvalid, maxHostNameLength)
+	}
+	credentialName := strings.TrimSpace(request.CredentialName)
+	if credentialName == "" {
+		credentialName = "connector"
+	}
+	if len(credentialName) > maxCredentialName {
+		return Registration{}, fmt.Errorf("%w: credential name must be at most %d characters", ErrInvalid, maxCredentialName)
+	}
+	hostID, err := newID("host")
+	if err != nil {
+		return Registration{}, err
+	}
+	credentialID, err := newID("hcred")
+	if err != nil {
+		return Registration{}, err
+	}
+	token, err := newToken(credentialID)
+	if err != nil {
+		return Registration{}, err
+	}
+	tokenHash := hashToken(token)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Registration{}, fmt.Errorf("begin host enrollment: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO host_registrations (id, name)
+		VALUES ($1, $2)
+		ON CONFLICT (singleton_key) DO NOTHING
+	`, hostID, name); err != nil {
+		return Registration{}, fmt.Errorf("ensure host registration: %w", err)
+	}
+	var host Host
+	if err := tx.QueryRow(ctx, `
+		SELECT id, name, status, connection_generation, created_at, updated_at
+		FROM host_registrations
+		WHERE singleton_key = 'default'
+		FOR UPDATE
+	`).Scan(&host.ID, &host.Name, &host.Status, &host.ConnectionGeneration, &host.CreatedAt, &host.UpdatedAt); err != nil {
+		return Registration{}, fmt.Errorf("load host registration: %w", err)
+	}
+	var credential Credential
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO host_credentials (id, host_id, name, token_hash)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, host_id, name, created_at, last_used_at, revoked_at
+	`, credentialID, host.ID, credentialName, tokenHash[:]).Scan(
+		&credential.ID, &credential.HostID, &credential.Name, &credential.CreatedAt, &credential.LastUsedAt, &credential.RevokedAt,
+	); err != nil {
+		return Registration{}, fmt.Errorf("insert host enrollment credential: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Registration{}, fmt.Errorf("commit host enrollment: %w", err)
+	}
+	return Registration{Host: host, Credential: credential, Token: token}, nil
+}
+
 func (s *Service) Authenticate(ctx context.Context, token string) (Credential, error) {
 	if err := s.ready(ctx); err != nil {
 		return Credential{}, err
