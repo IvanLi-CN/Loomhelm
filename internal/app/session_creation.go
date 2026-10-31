@@ -43,7 +43,7 @@ type sessionCreationRecords interface {
 }
 
 type sessionCreationHostSelector interface {
-	ConfiguredHost(context.Context) (hosts.Host, error)
+	ConfiguredHostForUser(context.Context, string) (hosts.Host, error)
 }
 
 type sessionCreationTransport interface {
@@ -98,7 +98,7 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 	if s.records == nil || s.hosts == nil || s.transport == nil {
 		return protocol.SessionResponse{}, runs.ErrControlServiceUnavailable
 	}
-	host, err := s.hosts.ConfiguredHost(ctx)
+	host, err := s.hosts.ConfiguredHostForUser(ctx, principal.UserID)
 	if err != nil {
 		return protocol.SessionResponse{}, fmt.Errorf("resolve configured execution host: %w", err)
 	}

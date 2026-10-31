@@ -1,7 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 )
 
 func TestConnectorInitializationErrorClassOmitsPrivateDetails(t *testing.T) {
@@ -53,15 +59,32 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 	if err := os.Chmod(filepath.Dir(logPath), 0o700); err != nil {
 		t.Fatalf("secure connector test directory: %v", err)
 	}
+	apiKey, err := auth.EncodeConnectorAPIKey("host-test", "token-test")
+	if err != nil {
+		t.Fatalf("encode Connector API key: %v", err)
+	}
+	identityServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/connector/identity" || request.Header.Get("Authorization") != "Bearer "+apiKey {
+			http.Error(writer, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]string{"host_id": "host-test"})
+	}))
+	defer identityServer.Close()
+	certificatePath := filepath.Join(t.TempDir(), "identity-ca.pem")
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: identityServer.Certificate().Raw})
+	if err := os.WriteFile(certificatePath, certificatePEM, 0o600); err != nil {
+		t.Fatalf("write identity CA: %v", err)
+	}
 
 	command := exec.Command(binary)
 	command.Env = commandEnv(map[string]string{
-		"LOOMHELM_VERSION":                      "test",
-		"LOOMHELM_CONNECTOR_SERVER_URL":         "https://platform.example.test",
-		"LOOMHELM_CONNECTOR_HOST_ID":            "host-test",
-		"LOOMHELM_CONNECTOR_TOKEN":              "token-test",
-		"LOOMHELM_CONNECTOR_JOURNAL_PATH":       filepath.Join(filepath.Dir(logPath), "connector.jsonl"),
-		"LOOMHELM_CONNECTOR_APP_SERVER_COMMAND": "/bin/true",
+		"LOOMHELM_VERSION":            "test",
+		"LOOMHELM_CONNECTOR_BASE_URL": identityServer.URL,
+		"LOOMHELM_CONNECTOR_API_KEY":  apiKey,
+		"XDG_CONFIG_HOME":             filepath.Dir(logPath),
+		"SSL_CERT_FILE":               certificatePath,
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -87,10 +110,10 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 func TestConnectorEntrypointRejectsInvalidConfiguration(t *testing.T) {
 	binary := buildConnectorEntrypoint(t)
 	command := exec.Command(binary)
-	command.Env = commandEnv(nil)
+	command.Env = commandEnv(map[string]string{"LOOMHELM_CONNECTOR_BASE_URL": "ftp://platform.example.test"})
 	output, err := command.CombinedOutput()
 	assertExitCode(t, err, 2)
-	if !strings.Contains(string(output), "invalid configuration: invalid LOOMHELM_CONNECTOR_SERVER_URL: must not be empty") {
+	if !strings.Contains(string(output), "invalid configuration: invalid LOOMHELM_CONNECTOR_BASE_URL") {
 		t.Fatalf("invalid configuration output = %q", output)
 	}
 }
@@ -114,7 +137,14 @@ func repositoryRoot() string {
 func commandEnv(values map[string]string) []string {
 	env := make([]string, 0, len(os.Environ())+len(values))
 	for _, value := range os.Environ() {
+		name := value
+		if index := strings.IndexByte(name, '='); index >= 0 {
+			name = name[:index]
+		}
 		if !strings.HasPrefix(value, "LOOMHELM_") {
+			if _, overridden := values[name]; overridden {
+				continue
+			}
 			env = append(env, value)
 		}
 	}

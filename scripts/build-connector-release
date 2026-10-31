@@ -1,0 +1,142 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	cat <<'EOF'
+usage: scripts/build-connector-release --source-sha SHA [--output DIR]
+
+Build the macOS Apple silicon Connector from the exact clean checkout SHA.
+The output contains the Connector archive and SHA256SUMS for a GitHub Release.
+EOF
+}
+
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "build-connector-release: cannot resolve repository root" >&2
+	exit 1
+}
+cd "$repo_root"
+
+source_sha=${LOOMHELM_SOURCE_SHA:-}
+output_dir=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--source-sha)
+			[ "$#" -ge 2 ] || { echo "build-connector-release: --source-sha needs a value" >&2; exit 2; }
+			source_sha=$2
+			shift 2
+			;;
+		--source-sha=*)
+			source_sha=${1#*=}
+			shift
+			;;
+		--output)
+			[ "$#" -ge 2 ] || { echo "build-connector-release: --output needs a value" >&2; exit 2; }
+			output_dir=$2
+			shift 2
+			;;
+		--output=*)
+			output_dir=${1#*=}
+			shift
+			;;
+		--help|-h)
+			usage
+			exit 0
+			;;
+		*)
+			echo "build-connector-release: unknown argument: $1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+if [ -z "$source_sha" ]; then
+	echo "build-connector-release: --source-sha is required" >&2
+	exit 2
+fi
+python3 - "$source_sha" <<'PY'
+import re
+import sys
+
+if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sys.argv[1]) is None:
+    raise SystemExit("source SHA must be a full lowercase 40- or 64-character Git object id")
+PY
+
+resolved_source_sha=$(git rev-parse --verify "${source_sha}^{commit}" 2>/dev/null) || {
+	echo "build-connector-release: source SHA is not a commit in this checkout" >&2
+	exit 1
+}
+if [ "$(git rev-parse HEAD)" != "$source_sha" ] || [ "$resolved_source_sha" != "$source_sha" ]; then
+	echo "build-connector-release: checkout HEAD does not match source SHA $source_sha" >&2
+	exit 1
+fi
+if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+	echo "build-connector-release: checkout must be clean" >&2
+	git status --short >&2
+	exit 1
+fi
+
+expected_go=$(awk -F= '$1 == "GO_VERSION" { print $2; exit }' tools/versions.env)
+actual_go=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//') || actual_go=""
+if [ "$actual_go" != "$expected_go" ]; then
+	echo "build-connector-release: Go $expected_go is required; found ${actual_go:-unreadable}" >&2
+	exit 1
+fi
+
+if [ -z "$output_dir" ]; then
+	output_dir="build/releases/connector-$source_sha"
+fi
+case "$output_dir" in
+	/*) ;;
+	*) output_dir="$repo_root/$output_dir" ;;
+esac
+case "$output_dir" in
+	*..*) echo "build-connector-release: output path must not contain parent traversal" >&2; exit 2 ;;
+esac
+case "$output_dir" in
+	"$repo_root"|"$repo_root/"*)
+		case "$output_dir" in
+			"$repo_root/build"|"$repo_root/build/"*) ;;
+			*) echo "build-connector-release: output must not replace the repository root" >&2; exit 2 ;;
+			esac
+		;;
+esac
+output_parent=$(dirname -- "$output_dir")
+mkdir -p "$output_parent"
+output_dir=$(CDPATH='' cd -- "$output_parent" && pwd -P)/$(basename -- "$output_dir")
+if [ -e "$output_dir" ] || [ -L "$output_dir" ]; then
+	echo "build-connector-release: refusing to overwrite existing output: $output_dir" >&2
+	exit 1
+fi
+
+stage_dir=$(mktemp -d "$output_dir.tmp.XXXXXX")
+cleanup() {
+	status=$?
+	trap - EXIT HUP INT TERM
+	if [ -e "$stage_dir" ] || [ -L "$stage_dir" ]; then
+		rm -rf -- "$stage_dir"
+	fi
+	exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+package_dir="$stage_dir/loomhelm-connector-darwin-arm64"
+mkdir -p "$package_dir"
+GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 GOFLAGS='-mod=readonly' go mod download
+GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 GOFLAGS='-mod=readonly' go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$package_dir/loomhelm-connector" ./cmd/connector
+chmod 755 "$package_dir/loomhelm-connector"
+cp docs/connector-macos-arm64.md "$package_dir/README.md"
+printf '%s\n' "$source_sha" > "$package_dir/SOURCE_SHA"
+
+archive="$stage_dir/loomhelm-connector-darwin-arm64.tar.gz"
+tar -czf "$archive" -C "$stage_dir" loomhelm-connector-darwin-arm64
+if command -v sha256sum >/dev/null 2>&1; then
+	digest=$(sha256sum "$archive" | awk '{print $1}')
+else
+	digest=$(shasum -a 256 "$archive" | awk '{print $1}')
+fi
+printf '%s  %s\n' "$digest" "$(basename -- "$archive")" > "$stage_dir/SHA256SUMS"
+
+mkdir "$output_dir"
+mv "$archive" "$stage_dir/SHA256SUMS" "$output_dir/"
+echo "build-connector-release: wrote $output_dir"

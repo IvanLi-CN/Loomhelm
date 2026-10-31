@@ -56,7 +56,13 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 		t.Fatalf("open focused interrupt persistence: %v", err)
 	}
 	t.Cleanup(persistence.Close)
-	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+	browser := applicationBrowser(t)
+	browser.Timeout = 3 * time.Minute
+	browser.Transport = insecureTestHTTPClient().Transport
+	loginApplicationBrowser(t, browser, baseURL, "real-platform-c01-interrupt-only")
+	var browserIdentity protocol.BrowserSessionResponse
+	decodeApplicationResponse(t, applicationRequest(t, browser, http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusOK), &browserIdentity)
+	hostRegistration, err := hosts.NewService(persistence.Pool()).RegisterForUser(ctx, browserIdentity.UserID, hosts.RegisterRequest{
 		Name:           "h01 focused real interrupt",
 		CredentialName: "real-platform-c01-interrupt-only",
 	})
@@ -123,10 +129,6 @@ func TestRealPlatformC01InterruptOnly(t *testing.T) {
 		}
 	})
 
-	browser := applicationBrowser(t)
-	browser.Timeout = 3 * time.Minute
-	browser.Transport = insecureTestHTTPClient().Transport
-	loginApplicationBrowser(t, browser, baseURL, "real-platform-c01-interrupt-only")
 	createResponse := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/sessions", protocol.CreateSessionRequest{
 		CommandID: "real-platform-c01-interrupt-only-session",
 		Path:      protocol.SessionPathNew,

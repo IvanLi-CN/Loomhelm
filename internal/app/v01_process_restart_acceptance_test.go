@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 )
 
@@ -87,21 +88,42 @@ func TestV01ServerWorkerConnectorProcessRestartReadinessAndReconnectWithFixtures
 	if err != nil {
 		t.Fatalf("gateway.NewServer() error = %v", err)
 	}
-	tlsServer := httptest.NewTLSServer(gatewayServer)
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/auth/connector/identity" {
+			raw := strings.TrimSpace(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "))
+			credential, decodeErr := auth.DecodeConnectorAPIKey(raw)
+			if decodeErr != nil || credential.HostID != registry.credential.HostID || credential.Token != registry.token {
+				http.Error(writer, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"host_id":"`+credential.HostID+`"}`)
+			return
+		}
+		gatewayServer.ServeHTTP(writer, request)
+	}))
 	t.Cleanup(tlsServer.Close)
 	certPath := writeV01GatewayCertificate(t, tlsServer.Certificate())
-	journalDir := t.TempDir()
-	if err := os.Chmod(journalDir, 0o700); err != nil {
-		t.Fatalf("secure Connector journal directory: %v", err)
+	connectorConfigDir := t.TempDir()
+	if err := os.Chmod(connectorConfigDir, 0o700); err != nil {
+		t.Fatalf("secure Connector config directory: %v", err)
+	}
+	connectorBinDir := t.TempDir()
+	if err := os.Symlink("/bin/true", filepath.Join(connectorBinDir, "codex")); err != nil {
+		t.Fatalf("create deterministic codex command: %v", err)
+	}
+	apiKey, err := auth.EncodeConnectorAPIKey(registry.credential.HostID, registry.token)
+	if err != nil {
+		t.Fatalf("encode Connector API key: %v", err)
 	}
 	connectorValues := map[string]string{
-		"LOOMHELM_VERSION":                      "v01-connector-restart",
-		"LOOMHELM_CONNECTOR_SERVER_URL":         tlsServer.URL,
-		"LOOMHELM_CONNECTOR_HOST_ID":            registry.credential.HostID,
-		"LOOMHELM_CONNECTOR_TOKEN":              registry.token,
-		"LOOMHELM_CONNECTOR_JOURNAL_PATH":       filepath.Join(journalDir, "connector.jsonl"),
-		"LOOMHELM_CONNECTOR_APP_SERVER_COMMAND": "/bin/true",
-		"SSL_CERT_FILE":                         certPath,
+		"LOOMHELM_VERSION":            "v01-connector-restart",
+		"LOOMHELM_CONNECTOR_BASE_URL": tlsServer.URL,
+		"LOOMHELM_CONNECTOR_API_KEY":  apiKey,
+		"HOME":                        connectorConfigDir,
+		"XDG_CONFIG_HOME":             connectorConfigDir,
+		"PATH":                        connectorBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"SSL_CERT_FILE":               certPath,
 	}
 	connector := startV01Process(t, connectorBinary, "connector-first", connectorValues)
 	waitForV01Log(t, connector.logPath, "connector started")
@@ -269,7 +291,11 @@ func reserveV01ListenAddress(t *testing.T) string {
 func v01CommandEnv(values map[string]string) []string {
 	env := make([]string, 0, len(os.Environ())+len(values))
 	for _, value := range os.Environ() {
-		if !strings.HasPrefix(value, "LOOMHELM_") {
+		key, _, _ := strings.Cut(value, "=")
+		if !strings.HasPrefix(key, "LOOMHELM_") {
+			if _, overridden := values[key]; overridden {
+				continue
+			}
 			env = append(env, value)
 		}
 	}

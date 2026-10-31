@@ -44,6 +44,7 @@ type sessionService struct {
 	principal auth.PrincipalResolver
 	projects  sessionProjectAccess
 	records   sessionRecords
+	hosts     *hosts.Service
 	creation  sessionCreationApplication
 	binding   sessionTaskBinder
 }
@@ -63,6 +64,14 @@ func (s *sessionService) authorize(ctx context.Context, principal auth.Principal
 	// project must not make these records public before explicit reconciliation.
 	if access.SessionID != sessionID || access.CreatorUserID == "" || access.HostID == "" {
 		return sessions.SessionAccess{}, auth.ErrNotFound
+	}
+	if s.hosts != nil {
+		if err := s.hosts.AuthorizeUser(ctx, principal.UserID, access.HostID); err != nil {
+			if errors.Is(err, hosts.ErrForbidden) || errors.Is(err, hosts.ErrNotFound) {
+				return sessions.SessionAccess{}, auth.ErrNotFound
+			}
+			return sessions.SessionAccess{}, fmt.Errorf("authorize session Host: %w", err)
+		}
 	}
 	if access.ProjectID == "" {
 		if access.CreatorUserID != principal.UserID || len(principal.ProjectScope) != 0 {
@@ -223,6 +232,14 @@ func (s *sessionService) authorizeTaskBinding(ctx context.Context, tx pgx.Tx, pr
 	access := facts.Access
 	if access.SessionID != facts.Session.ID || access.CreatorUserID == "" || access.HostID == "" || !access.Confirmed {
 		return auth.ErrNotFound
+	}
+	if s.hosts != nil {
+		if err := s.hosts.AuthorizeUserTx(ctx, tx, principal.UserID, access.HostID); err != nil {
+			if errors.Is(err, hosts.ErrForbidden) || errors.Is(err, hosts.ErrNotFound) {
+				return auth.ErrNotFound
+			}
+			return fmt.Errorf("authorize task binding Host: %w", err)
+		}
 	}
 	if access.ProjectID == "" {
 		if access.CreatorUserID != principal.UserID || len(principal.ProjectScope) != 0 {

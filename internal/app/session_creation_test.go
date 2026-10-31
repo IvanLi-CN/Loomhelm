@@ -108,7 +108,7 @@ type fakeSessionCreationHost struct {
 	calls int
 }
 
-func (f *fakeSessionCreationHost) ConfiguredHost(context.Context) (hosts.Host, error) {
+func (f *fakeSessionCreationHost) ConfiguredHostForUser(context.Context, string) (hosts.Host, error) {
 	f.calls++
 	return f.host, nil
 }

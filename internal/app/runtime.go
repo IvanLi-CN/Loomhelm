@@ -160,7 +160,8 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
 		approvalStore := approvals.NewStore(db.Pool())
-		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth)
+		hostRegistry := hosts.NewService(db.Pool())
+		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth, connectorAuthService{registry: hostRegistry})
 		if serviceErr != nil {
 			db.Close()
 			return nil, serviceErr
@@ -199,7 +200,6 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			eventStore: events.NewStore(db.Pool()),
 			now:        time.Now,
 		}
-		hostRegistry := hosts.NewService(db.Pool())
 		runtime.gateway, err = gateway.NewServer(hostRegistry, gateway.ServerOptions{
 			EventHandler:    transport.HandleEvent,
 			AckHandler:      transport.HandleCommandAck,
@@ -240,7 +240,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			db.Close()
 			return nil, fmt.Errorf("initialize run control: %w", controlErr)
 		}
-		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, hostRegistry, transport, control)
+		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, services.hosts, transport, control)
 		runtime.api, err = services.handler(control)
 		if err != nil {
 			db.Close()

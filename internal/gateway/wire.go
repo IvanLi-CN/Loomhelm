@@ -1,5 +1,5 @@
 // Package gateway owns the authenticated Connector link to the installation's
-// one configured execution environment. Its wire messages are internal to the
+// one authorized Host execution environment. Its wire messages are internal to the
 // platform gateway and are not a second public REST/MCP contract.
 package gateway
 

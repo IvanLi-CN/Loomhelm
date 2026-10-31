@@ -1136,6 +1136,13 @@ func TestServerAcceptsTaskResponseWithEmptyGoal(t *testing.T) {
 	}
 }
 
+func TestServerAcceptsHostShareResponse(t *testing.T) {
+	body := []byte(`{"share":{"host_id":"host-1","user_id":"user-2","granted_by":"user-1","created_at":"2026-01-01T00:00:00Z"}}`)
+	if !validToolResponse("grantHostShare", body) {
+		t.Fatal("valid Host share response was rejected")
+	}
+}
+
 func TestServerReportsOversizedReadResponseAsServiceFailure(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,10 +17,11 @@ import (
 type Component string
 
 const (
-	ComponentServer       Component = "server"
-	ComponentWorker       Component = "worker"
-	ComponentConnector    Component = "connector"
-	DefaultStartupTimeout           = 10 * time.Minute
+	ComponentServer         Component = "server"
+	ComponentWorker         Component = "worker"
+	ComponentConnector      Component = "connector"
+	DefaultStartupTimeout             = 10 * time.Minute
+	DefaultConnectorBaseURL           = "https://loomhelm.ivanli.cc"
 )
 
 type Config struct {
@@ -39,9 +41,11 @@ type Config struct {
 	WorkerGeneration          uint64
 	WorkerLeaseKey            string
 	ConnectorServerURL        string
+	ConnectorAPIKey           string
 	ConnectorHostID           string
 	ConnectorToken            string
 	ConnectorJournalPath      string
+	ConnectorCredentialPath   string
 	ConnectorAppServerCommand string
 	ConnectorWorkingDir       string
 	BrowserAuth               BrowserAuthConfig
@@ -189,13 +193,17 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		config.WorkerGeneration = generation
 		config.WorkerLeaseKey = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_WORKER_LEASE_KEY", "loomhelm-worker"))
 	case ComponentConnector:
-		config.ConnectorServerURL = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_SERVER_URL", ""))
-		config.ConnectorHostID = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_HOST_ID", ""))
-		config.ConnectorToken = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_TOKEN", ""))
-		config.ConnectorJournalPath = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_JOURNAL_PATH", ""))
-		config.ConnectorAppServerCommand = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_APP_SERVER_COMMAND", "codex"))
+		journalPath, credentialPath, pathErr := defaultConnectorStatePaths()
+		if pathErr != nil {
+			return Config{}, pathErr
+		}
+		config.ConnectorServerURL = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_BASE_URL", DefaultConnectorBaseURL))
+		config.ConnectorAPIKey = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CONNECTOR_API_KEY", ""))
+		config.ConnectorJournalPath = journalPath
+		config.ConnectorCredentialPath = credentialPath
+		config.ConnectorAppServerCommand = "codex"
 		if err := validateServerURL(config.ConnectorServerURL); err != nil {
-			return Config{}, fmt.Errorf("invalid LOOMHELM_CONNECTOR_SERVER_URL: %w", err)
+			return Config{}, fmt.Errorf("invalid LOOMHELM_CONNECTOR_BASE_URL: %w", err)
 		}
 	}
 
@@ -264,14 +272,27 @@ func (c Config) Validate() error {
 		if err := validateServerURL(c.ConnectorServerURL); err != nil {
 			return fmt.Errorf("invalid connector server URL: %w", err)
 		}
-		if err := validateConnectorValue(c.ConnectorHostID, "connector host id", true); err != nil {
-			return err
+		if (strings.TrimSpace(c.ConnectorHostID) == "") != (strings.TrimSpace(c.ConnectorToken) == "") {
+			return fmt.Errorf("connector host id and token must be provided together")
 		}
-		if err := validateConnectorValue(c.ConnectorToken, "connector token", true); err != nil {
+		if strings.TrimSpace(c.ConnectorHostID) != "" {
+			if err := validateConnectorValue(c.ConnectorHostID, "connector host id", true); err != nil {
+				return err
+			}
+			if err := validateConnectorValue(c.ConnectorToken, "connector token", true); err != nil {
+				return err
+			}
+		}
+		if err := validateOptionalConnectorValue(c.ConnectorAPIKey, "connector API key"); err != nil {
 			return err
 		}
 		if err := validateConnectorValue(c.ConnectorJournalPath, "connector journal path", false); err != nil {
 			return err
+		}
+		if strings.TrimSpace(c.ConnectorCredentialPath) != "" {
+			if err := validateConnectorValue(c.ConnectorCredentialPath, "connector credential path", false); err != nil {
+				return err
+			}
 		}
 		if err := validateConnectorValue(c.ConnectorAppServerCommand, "connector app-server command", false); err != nil {
 			return err
@@ -356,6 +377,19 @@ func lookupOrDefault(lookup func(string) (string, bool), key, fallback string) s
 		return fallback
 	}
 	return value
+}
+
+func defaultConnectorStatePaths() (string, string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil || strings.TrimSpace(configDir) == "" {
+		return "", "", fmt.Errorf("resolve connector state directory")
+	}
+	stateDir := filepath.Join(configDir, "loomhelm")
+	return filepath.Join(stateDir, "connector.jsonl"), filepath.Join(stateDir, "connector-credential.json"), nil
+}
+
+func DefaultConnectorStatePaths() (string, string, error) {
+	return defaultConnectorStatePaths()
 }
 
 func durationFromEnv(lookup func(string) (string, bool), key string, fallback time.Duration) (time.Duration, error) {
@@ -444,6 +478,16 @@ func validateConnectorValue(value, field string, rejectWhitespace bool) error {
 		return fmt.Errorf("%s must not be empty", field)
 	}
 	if rejectWhitespace && strings.ContainsAny(value, " \t\r\n") {
+		return fmt.Errorf("%s must not contain whitespace", field)
+	}
+	return nil
+}
+
+func validateOptionalConnectorValue(value, field string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	if strings.ContainsAny(value, " \t\r\n\x00") {
 		return fmt.Errorf("%s must not contain whitespace", field)
 	}
 	return nil
