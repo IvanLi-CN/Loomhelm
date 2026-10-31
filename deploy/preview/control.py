@@ -139,6 +139,7 @@ def load_state(state_dir: Path) -> dict[str, Any]:
     state.setdefault("next_worker_generation", 1)
     state.setdefault("artifact_volume_name", None)
     state.setdefault("compose_project_name", None)
+    state.setdefault("proxy_network", None)
     state.setdefault("history", [])
     state.setdefault("retained", [])
     if not isinstance(state["retained"], list):
@@ -147,6 +148,10 @@ def load_state(state_dir: Path) -> dict[str, Any]:
         not isinstance(state["artifact_volume_name"], str) or not VOLUME_NAME_RE.fullmatch(state["artifact_volume_name"])
     ):
         die("preview artifact_volume_name is invalid")
+    if state["proxy_network"] is not None and (
+        not isinstance(state["proxy_network"], str) or not VOLUME_NAME_RE.fullmatch(state["proxy_network"])
+    ):
+        die("preview proxy_network is invalid")
     return state
 
 
@@ -160,6 +165,7 @@ def empty_state() -> dict[str, Any]:
         "next_worker_generation": 1,
         "artifact_volume_name": None,
         "compose_project_name": None,
+        "proxy_network": None,
         "slots": {slot: None for slot in SLOTS},
         "retained": [],
         "history": [],
@@ -668,6 +674,17 @@ def validate_compose_project_name(state_dir: Path, state: dict[str, Any], projec
     return stored_project_name
 
 
+def validate_proxy_network(state: dict[str, Any], project_name: str) -> tuple[str, bool]:
+    configured = os.environ.get("LOOMHELM_PROXY_NETWORK", "").strip()
+    stored_network = state.get("proxy_network")
+    proxy_network = configured or stored_network or f"{project_name}-proxy"
+    if not VOLUME_NAME_RE.fullmatch(proxy_network):
+        die("LOOMHELM_PROXY_NETWORK must be a valid Docker network name")
+    if stored_network is not None and stored_network != proxy_network and (state.get("active_slot") or state.get("pending_slot")):
+        die("LOOMHELM_PROXY_NETWORK cannot change while a preview candidate is active")
+    return proxy_network, stored_network != proxy_network
+
+
 def command_compose_env(args: argparse.Namespace) -> None:
     state_dir = Path(args.state_dir).resolve()
     state = load_state(state_dir)
@@ -690,7 +707,8 @@ def command_compose_env(args: argparse.Namespace) -> None:
         stop_grace = derived_grace
     project_name = env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True)
     validate_compose_project_name(state_dir, state, project_name)
-    state_changed = state.get("compose_project_name") != project_name
+    proxy_network, proxy_network_changed = validate_proxy_network(state, project_name)
+    state_changed = state.get("compose_project_name") != project_name or proxy_network_changed
     configured_volume = os.environ.get("LOOMHELM_ARTIFACT_VOLUME_NAME", "").strip()
     stored_volume = state.get("artifact_volume_name")
     if stored_volume:
@@ -706,6 +724,13 @@ def command_compose_env(args: argparse.Namespace) -> None:
         "LOOMHELM_PREVIEW_STATE_DIR": str(state_dir),
         "LOOMHELM_PREVIEW_WEB_DIR": str(web_dir(state_dir)),
         "LOOMHELM_PREVIEW_PROJECT_NAME": project_name,
+        "LOOMHELM_PROXY_NETWORK": proxy_network,
+        "LOOMHELM_PROXY_NETWORK_EXTERNAL": env_value("LOOMHELM_PROXY_NETWORK_EXTERNAL", "false"),
+        "LOOMHELM_TRAEFIK_ENABLED": env_value("LOOMHELM_TRAEFIK_ENABLED", "false"),
+        "LOOMHELM_TRAEFIK_ENTRYPOINTS": env_value("LOOMHELM_TRAEFIK_ENTRYPOINTS", "websecure"),
+        "LOOMHELM_TRAEFIK_TLS": env_value("LOOMHELM_TRAEFIK_TLS", "true"),
+        "LOOMHELM_TRAEFIK_MIDDLEWARE": env_value("LOOMHELM_TRAEFIK_MIDDLEWARE", ""),
+        "LOOMHELM_PUBLIC_HOST": env_value("LOOMHELM_PUBLIC_HOST", "loomhelm.example.test"),
         "LOOMHELM_ARTIFACT_VOLUME_NAME": artifact_volume_name,
         "LOOMHELM_PREVIEW_HTTP_PORT": env_value("LOOMHELM_PREVIEW_HTTP_PORT", required=True),
         "LOOMHELM_PREVIEW_ADMIN_PORT": env_value("LOOMHELM_PREVIEW_ADMIN_PORT", required=True),
@@ -740,6 +765,7 @@ def command_compose_env(args: argparse.Namespace) -> None:
         state["compose_project_name"] = project_name
         if not stored_volume:
             state["artifact_volume_name"] = artifact_volume_name
+        state["proxy_network"] = proxy_network
         write_state(state_dir, state)
     print(f"env={output}")
 
@@ -749,6 +775,7 @@ def command_validate_project(args: argparse.Namespace) -> None:
     state = load_state(state_dir)
     project_name = env_value("LOOMHELM_PREVIEW_PROJECT_NAME", required=True)
     validate_compose_project_name(state_dir, state, project_name)
+    validate_proxy_network(state, project_name)
     print(f"project_name={project_name}")
 
 

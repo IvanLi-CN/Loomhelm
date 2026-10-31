@@ -1,0 +1,140 @@
+name: "${LOOMHELM_COMPOSE_PROJECT_NAME:-loomhelm-example}"
+
+services:
+  postgres:
+    image: "${LOOMHELM_POSTGRES_IMAGE:-postgres:17-alpine}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${LOOMHELM_POSTGRES_DB:?LOOMHELM_POSTGRES_DB is required}"
+      POSTGRES_USER: "${LOOMHELM_POSTGRES_USER:?LOOMHELM_POSTGRES_USER is required}"
+      POSTGRES_PASSWORD: "${LOOMHELM_POSTGRES_PASSWORD:?LOOMHELM_POSTGRES_PASSWORD is required}"
+    volumes:
+      - loomhelm-postgres:/var/lib/postgresql/data
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 12
+
+  server:
+    image: "${LOOMHELM_SERVER_IMAGE:-loomhelm-server:example}"
+    build:
+      context: ../..
+      dockerfile: build/Dockerfile
+      args:
+        LOOMHELM_COMPONENT: server
+    restart: unless-stopped
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-90s}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_VERSION:-example}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_CANDIDATE_SOURCE_SHA:-example}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_ARTIFACT_DIGEST:-example}"
+      LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_POSTGRES_PORT: "${LOOMHELM_POSTGRES_PORT:-5432}"
+      LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
+      LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
+      LOOMHELM_ARTIFACT_ROOT: /var/lib/loomhelm/artifacts
+      LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
+      LOOMHELM_OIDC_CLIENT_ID: "${LOOMHELM_OIDC_CLIENT_ID:-}"
+      LOOMHELM_OIDC_CLIENT_SECRET: "${LOOMHELM_OIDC_CLIENT_SECRET:-}"
+      LOOMHELM_OIDC_REDIRECT_URL: "${LOOMHELM_OIDC_REDIRECT_URL:-}"
+      LOOMHELM_SESSION_COOKIE_SECURE: "${LOOMHELM_SESSION_COOKIE_SECURE:-true}"
+    volumes:
+      - loomhelm-artifacts:/var/lib/loomhelm/artifacts
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 120
+
+  worker:
+    image: "${LOOMHELM_WORKER_IMAGE:-loomhelm-worker:example}"
+    build:
+      context: ../..
+      dockerfile: build/Dockerfile
+      args:
+        LOOMHELM_COMPONENT: worker
+    restart: unless-stopped
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-90s}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_VERSION:-example}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_CANDIDATE_SOURCE_SHA:-example}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_ARTIFACT_DIGEST:-example}"
+      LOOMHELM_WORKER_GENERATION: "${LOOMHELM_WORKER_GENERATION:-1}"
+      LOOMHELM_WORKER_LEASE_KEY: "${LOOMHELM_WORKER_LEASE_KEY:-loomhelm-worker}"
+      LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_POSTGRES_PORT: "${LOOMHELM_POSTGRES_PORT:-5432}"
+      LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
+      LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8081/readyz"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 120
+
+  web:
+    image: "${LOOMHELM_WEB_IMAGE:-loomhelm-web:example}"
+    build:
+      context: ../..
+      dockerfile: deploy/example/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${LOOMHELM_HTTP_BIND:-127.0.0.1}:${LOOMHELM_HTTP_PORT:-18080}:80"
+    expose:
+      - "80"
+    networks:
+      - app
+      - proxy
+    labels:
+      traefik.enable: "${LOOMHELM_TRAEFIK_ENABLED:-false}"
+      traefik.docker.network: "${LOOMHELM_PROXY_NETWORK:-loomhelm-proxy}"
+      traefik.http.routers.loomhelm.rule: "Host(`${LOOMHELM_PUBLIC_HOST:-loomhelm.example.test}`)"
+      traefik.http.routers.loomhelm.entrypoints: "${LOOMHELM_TRAEFIK_ENTRYPOINTS:-websecure}"
+      traefik.http.routers.loomhelm.tls: "${LOOMHELM_TRAEFIK_TLS:-true}"
+      traefik.http.routers.loomhelm.middlewares: "${LOOMHELM_TRAEFIK_MIDDLEWARE:-}"
+      traefik.http.services.loomhelm.loadbalancer.server.port: "80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/livez"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 12
+
+networks:
+  app:
+    name: "${LOOMHELM_APP_NETWORK:-loomhelm-example}"
+  proxy:
+    name: "${LOOMHELM_PROXY_NETWORK:-loomhelm-proxy}"
+    external: ${LOOMHELM_PROXY_NETWORK_EXTERNAL:-false}
+
+volumes:
+  loomhelm-postgres:
+    name: "${LOOMHELM_DATABASE_VOLUME_NAME:-loomhelm-example-postgres}"
+  loomhelm-artifacts:
+    name: "${LOOMHELM_ARTIFACT_VOLUME_NAME:-loomhelm-example-artifacts}"

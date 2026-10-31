@@ -60,6 +60,7 @@ class PreviewControlTest(unittest.TestCase):
                 for key in configured:
                     self.assertEqual(actual[key], auth.get(key, ""))
                 self.assertEqual(actual["LOOMHELM_SESSION_COOKIE_SECURE"], auth.get("LOOMHELM_SESSION_COOKIE_SECURE", "true"))
+                self.assertEqual(actual["LOOMHELM_PROXY_NETWORK"], "preview-auth-test-proxy")
                 self.assertEqual(actual["LOOMHELM_STOP_GRACE_PERIOD"], "170s")
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 self.assertNotIn(required["LOOMHELM_DRAIN_TOKEN"], captured.getvalue())
@@ -68,6 +69,7 @@ class PreviewControlTest(unittest.TestCase):
                     self.invoke("compose_env", state_dir, output=output)
                 renamed = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
                 self.assertEqual(renamed["LOOMHELM_ARTIFACT_VOLUME_NAME"], actual["LOOMHELM_ARTIFACT_VOLUME_NAME"])
+                self.assertEqual(renamed["LOOMHELM_PROXY_NETWORK"], actual["LOOMHELM_PROXY_NETWORK"])
 
     def test_compose_project_name_cannot_change_after_activation(self) -> None:
         settings = {
@@ -89,6 +91,28 @@ class PreviewControlTest(unittest.TestCase):
             with patch.dict(os.environ, {**settings, "LOOMHELM_PREVIEW_PROJECT_NAME": "renamed-preview"}, clear=True):
                 with self.assertRaises(control.ContractError):
                     self.invoke("validate_project", state_dir)
+                with self.assertRaises(control.ContractError):
+                    self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+
+    def test_proxy_network_cannot_change_after_activation(self) -> None:
+        settings = {
+            "LOOMHELM_PREVIEW_PROJECT_NAME": "preview-proxy-lock-test",
+            "LOOMHELM_PREVIEW_HTTP_PORT": "18080",
+            "LOOMHELM_PREVIEW_ADMIN_PORT": "12019",
+            "LOOMHELM_BLUE_SERVER_PORT": "18081",
+            "LOOMHELM_GREEN_SERVER_PORT": "18082",
+            "LOOMHELM_DATABASE_URL": "postgres://fixture:fixture@db/loomhelm",
+            "LOOMHELM_DRAIN_TOKEN": "fixture-drain-token",
+            "LOOMHELM_PROXY_NETWORK": "traefik-preview",
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, settings, clear=True):
+            state_dir = Path(raw_dir) / "state"
+            self.invoke("init", state_dir)
+            self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
+            state = control.load_state(state_dir)
+            state["active_slot"] = "blue"
+            control.write_state(state_dir, state)
+            with patch.dict(os.environ, {**settings, "LOOMHELM_PROXY_NETWORK": "another-preview-network"}, clear=True):
                 with self.assertRaises(control.ContractError):
                     self.invoke("compose_env", state_dir, output=state_dir / "compose.env")
 

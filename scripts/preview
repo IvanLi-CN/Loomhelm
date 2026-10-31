@@ -103,9 +103,10 @@ compose() {
 }
 
 load_local_environment() {
-	if [ -f .env.local ]; then
+	environment_file=${LOOMHELM_PREVIEW_ENV_FILE:-.env.local}
+	if [ -f "$environment_file" ]; then
 		set -a
-		. ./.env.local
+		. "$environment_file"
 		set +a
 	fi
 }
