@@ -1,0 +1,160 @@
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    ports:
+      - "127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT:?LOOMHELM_PREVIEW_HTTP_PORT is required}:80"
+      - "127.0.0.1:${LOOMHELM_PREVIEW_ADMIN_PORT:?LOOMHELM_PREVIEW_ADMIN_PORT is required}:2019"
+    volumes:
+      - "${LOOMHELM_PREVIEW_STATE_DIR:?LOOMHELM_PREVIEW_STATE_DIR is required}/caddy:/etc/caddy:ro"
+      - "${LOOMHELM_PREVIEW_WEB_DIR:?LOOMHELM_PREVIEW_WEB_DIR is required}:/srv/web:ro"
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    networks:
+      - preview
+      - proxy
+    labels:
+      traefik.enable: "${LOOMHELM_TRAEFIK_ENABLED:-false}"
+      traefik.docker.network: "${LOOMHELM_PROXY_NETWORK:-loomhelm-proxy}"
+      traefik.http.routers.loomhelm-preview.rule: "Host(`${LOOMHELM_PUBLIC_HOST:-loomhelm.example.test}`)"
+      traefik.http.routers.loomhelm-preview.entrypoints: "${LOOMHELM_TRAEFIK_ENTRYPOINTS:-websecure}"
+      traefik.http.routers.loomhelm-preview.tls: "${LOOMHELM_TRAEFIK_TLS:-true}"
+      traefik.http.routers.loomhelm-preview.middlewares: "${LOOMHELM_TRAEFIK_MIDDLEWARE:-}"
+      traefik.http.services.loomhelm-preview.loadbalancer.server.port: "80"
+
+  server-blue:
+    image: "${LOOMHELM_BLUE_SERVER_IMAGE:-busybox:1.36}"
+    # Preview control replaces this validation fallback with a grace period
+    # derived from LOOMHELM_SHUTDOWN_TIMEOUT before starting a real candidate.
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
+    ports:
+      - "127.0.0.1:${LOOMHELM_BLUE_SERVER_PORT:?LOOMHELM_BLUE_SERVER_PORT is required}:8080"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_BLUE_SOURCE_SHA:-placeholder}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_BLUE_SOURCE_SHA:-placeholder}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_BLUE_ARTIFACT_DIGEST:-unknown}"
+      LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
+      LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
+      LOOMHELM_POSTGRES_PORT: "${LOOMHELM_POSTGRES_PORT:-}"
+      LOOMHELM_ARTIFACT_ROOT: "/var/lib/loomhelm/artifacts"
+      LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
+      LOOMHELM_OIDC_CLIENT_ID: "${LOOMHELM_OIDC_CLIENT_ID:-}"
+      LOOMHELM_OIDC_CLIENT_SECRET: "${LOOMHELM_OIDC_CLIENT_SECRET:-}"
+      LOOMHELM_OIDC_REDIRECT_URL: "${LOOMHELM_OIDC_REDIRECT_URL:-}"
+      LOOMHELM_SESSION_COOKIE_SECURE: "${LOOMHELM_SESSION_COOKIE_SECURE:-true}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/readyz | grep -q '\"ready\":true'"]
+      interval: 2s
+      timeout: 2s
+      start_period: 5s
+      retries: 330
+    volumes:
+      - loomhelm-preview-artifacts:/var/lib/loomhelm/artifacts
+    networks:
+      - preview
+      - database
+
+  server-green:
+    image: "${LOOMHELM_GREEN_SERVER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
+    ports:
+      - "127.0.0.1:${LOOMHELM_GREEN_SERVER_PORT:?LOOMHELM_GREEN_SERVER_PORT is required}:8080"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_GREEN_SOURCE_SHA:-placeholder}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_GREEN_SOURCE_SHA:-placeholder}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_GREEN_ARTIFACT_DIGEST:-unknown}"
+      LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
+      LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
+      LOOMHELM_POSTGRES_PORT: "${LOOMHELM_POSTGRES_PORT:-}"
+      LOOMHELM_ARTIFACT_ROOT: "/var/lib/loomhelm/artifacts"
+      LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
+      LOOMHELM_OIDC_CLIENT_ID: "${LOOMHELM_OIDC_CLIENT_ID:-}"
+      LOOMHELM_OIDC_CLIENT_SECRET: "${LOOMHELM_OIDC_CLIENT_SECRET:-}"
+      LOOMHELM_OIDC_REDIRECT_URL: "${LOOMHELM_OIDC_REDIRECT_URL:-}"
+      LOOMHELM_SESSION_COOKIE_SECURE: "${LOOMHELM_SESSION_COOKIE_SECURE:-true}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/readyz | grep -q '\"ready\":true'"]
+      interval: 2s
+      timeout: 2s
+      start_period: 5s
+      retries: 330
+    volumes:
+      - loomhelm-preview-artifacts:/var/lib/loomhelm/artifacts
+    networks:
+      - preview
+      - database
+
+  worker-blue:
+    image: "${LOOMHELM_BLUE_WORKER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_BLUE_SOURCE_SHA:-placeholder}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_BLUE_SOURCE_SHA:-placeholder}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_BLUE_ARTIFACT_DIGEST:-unknown}"
+      LOOMHELM_WORKER_GENERATION: "${LOOMHELM_BLUE_WORKER_GENERATION:-1}"
+      LOOMHELM_WORKER_LEASE_KEY: "${LOOMHELM_WORKER_LEASE_KEY:-loomhelm-worker}"
+      LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
+      LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
+      LOOMHELM_POSTGRES_PORT: "${LOOMHELM_POSTGRES_PORT:-}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8081/readyz | grep -q '\"ready\":true'"]
+      interval: 2s
+      timeout: 2s
+      start_period: 5s
+      retries: 330
+    networks:
+      - preview
+      - database
+
+  worker-green:
+    image: "${LOOMHELM_GREEN_WORKER_IMAGE:-busybox:1.36}"
+    stop_grace_period: "${LOOMHELM_STOP_GRACE_PERIOD:-300s}"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_GREEN_SOURCE_SHA:-placeholder}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_GREEN_SOURCE_SHA:-placeholder}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_GREEN_ARTIFACT_DIGEST:-unknown}"
+      LOOMHELM_WORKER_GENERATION: "${LOOMHELM_GREEN_WORKER_GENERATION:-1}"
+      LOOMHELM_WORKER_LEASE_KEY: "${LOOMHELM_WORKER_LEASE_KEY:-loomhelm-worker}"
+      LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_SHUTDOWN_TIMEOUT: "${LOOMHELM_SHUTDOWN_TIMEOUT:-10s}"
+      LOOMHELM_STARTUP_TIMEOUT: "${LOOMHELM_STARTUP_TIMEOUT:-10m}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_DATABASE_MIN_CONNS: "${LOOMHELM_DATABASE_MIN_CONNS:-0}"
+      LOOMHELM_DATABASE_MAX_CONNS: "${LOOMHELM_DATABASE_MAX_CONNS:-4}"
+      LOOMHELM_POSTGRES_PORT: "${LOOMHELM_POSTGRES_PORT:-}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8081/readyz | grep -q '\"ready\":true'"]
+      interval: 2s
+      timeout: 2s
+      start_period: 5s
+      retries: 330
+    networks:
+      - preview
+      - database
+
+networks:
+  preview:
+  database:
+    name: "${LOOMHELM_DATABASE_NETWORK:-loomhelm-preview-database}"
+    external: ${LOOMHELM_DATABASE_NETWORK_EXTERNAL:-false}
+  proxy:
+    name: "${LOOMHELM_PROXY_NETWORK:-loomhelm-preview-proxy}"
+    external: ${LOOMHELM_PROXY_NETWORK_EXTERNAL:-false}
+
+volumes:
+  loomhelm-preview-artifacts:
+    name: "${LOOMHELM_ARTIFACT_VOLUME_NAME:?LOOMHELM_ARTIFACT_VOLUME_NAME is required}"

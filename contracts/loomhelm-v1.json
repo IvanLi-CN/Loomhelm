@@ -1,0 +1,998 @@
+{
+  "schema": "loomhelm.public-contract/v1",
+  "version": "v1",
+  "types": {
+    "BrowserCsrfProtection": {
+      "type": "string",
+      "enum": ["same_origin"]
+    },
+    "BrowserSessionResponse": {
+      "type": "object",
+      "required": ["user_id", "csrf_protection"],
+      "properties": {
+        "user_id": {"type": "string"},
+        "csrf_protection": {"$ref": "#/types/BrowserCsrfProtection"}
+      }
+    },
+    "UserCredential": {
+      "type": "object",
+      "required": ["id", "name", "project_ids", "created_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "project_ids": {"type": "array", "items": {"type": "string"}},
+        "created_at": {"type": "string", "format": "date-time"},
+        "last_used_at": {"type": "string", "format": "date-time"},
+        "revoked_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CreatedUserCredential": {
+      "type": "object",
+      "required": ["id", "name", "project_ids", "created_at", "token"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "project_ids": {"type": "array", "items": {"type": "string"}},
+        "created_at": {"type": "string", "format": "date-time"},
+        "token": {"type": "string"}
+      }
+    },
+    "UserCredentialListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/UserCredential"}}
+      }
+    },
+    "CreateUserCredentialRequest": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "project_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "CreateUserCredentialResponse": {
+      "type": "object",
+      "required": ["credential"],
+      "properties": {
+        "credential": {"$ref": "#/types/CreatedUserCredential"}
+      }
+    },
+    "JSONValue": {
+      "kind": "json-value"
+    },
+    "TaskStatus": {
+      "type": "string",
+      "enum": ["todo", "in_progress", "blocked", "done", "cancelled"]
+    },
+    "ProjectMemberRole": {
+      "type": "string",
+      "enum": ["viewer", "operator", "owner"]
+    },
+    "ProjectMemberGrantRole": {
+      "type": "string",
+      "enum": ["viewer", "operator"]
+    },
+    "SessionPath": {
+      "type": "string",
+      "enum": ["new", "existing_active"]
+    },
+    "SessionState": {
+      "type": "string",
+      "enum": ["starting", "active", "reconciling", "disconnected", "closed", "unsupported"]
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": ["pending", "running", "waiting_approval", "completed", "failed", "interrupted", "unknown"]
+    },
+    "ApprovalStatus": {
+      "type": "string",
+      "enum": ["pending", "approved", "denied", "expired"]
+    },
+    "ApprovalDecision": {
+      "type": "string",
+      "enum": ["approve", "deny"]
+    },
+    "CommandKind": {
+      "type": "string",
+      "enum": ["session.start", "session.attach", "run.send", "run.approve", "run.deny", "run.interrupt"]
+    },
+    "CommandState": {
+      "type": "string",
+      "enum": ["accepted", "executing", "succeeded", "failed", "unknown", "rejected"]
+    },
+    "EventSource": {
+      "type": "string",
+      "enum": ["app-server", "host-observation", "artifact"]
+    },
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "session.created",
+        "session.attached",
+        "run.started",
+        "message.delta",
+        "item.started",
+        "item.completed",
+        "approval.requested",
+        "approval.resolved",
+        "run.interrupted",
+        "run.completed",
+        "run.failed",
+        "artifact.created",
+        "reconciliation.required",
+        "reconciliation.completed",
+        "unknown"
+      ]
+    },
+    "ArtifactKind": {
+      "type": "string",
+      "enum": ["file", "diff", "snapshot"]
+    },
+    "ReconciliationState": {
+      "type": "string",
+      "enum": ["confirmed", "not_found", "unknown"]
+    },
+    "ErrorCode": {
+      "type": "string",
+      "extensible": true,
+      "enum": [
+        "invalid_request",
+        "service_unavailable",
+        "unauthorized",
+        "not_found",
+        "conflict",
+        "unsupported_path",
+        "idempotency_conflict",
+        "unknown_result",
+        "cursor_expired"
+      ]
+    },
+    "Project": {
+      "type": "object",
+      "required": ["id", "name", "created_at", "updated_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ProjectMember": {
+      "type": "object",
+      "required": ["project_id", "user_id", "role", "created_at"],
+      "properties": {
+        "project_id": {"type": "string"},
+        "user_id": {"type": "string"},
+        "role": {"$ref": "#/types/ProjectMemberRole"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Task": {
+      "type": "object",
+      "required": ["id", "project_id", "title", "goal", "status", "created_at", "updated_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "title": {"type": "string"},
+        "goal": {"type": "string"},
+        "status": {"$ref": "#/types/TaskStatus"},
+        "session_id": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Session": {
+      "type": "object",
+      "required": ["id", "path", "state", "external_thread_ref", "created_at", "updated_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "task_id": {"type": "string"},
+        "path": {"$ref": "#/types/SessionPath"},
+        "state": {"$ref": "#/types/SessionState"},
+        "external_thread_ref": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Run": {
+      "type": "object",
+      "required": ["id", "session_id", "status", "created_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "session_id": {"type": "string"},
+        "status": {"$ref": "#/types/RunStatus"},
+        "command_id": {"type": "string"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "finished_at": {"type": "string", "format": "date-time"},
+        "last_cursor": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Approval": {
+      "type": "object",
+      "required": ["id", "run_id", "revision", "kind", "summary", "status", "requested_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "run_id": {"type": "string"},
+        "revision": {"type": "integer", "format": "int64"},
+        "kind": {"type": "string"},
+        "summary": {"type": "string"},
+        "status": {"$ref": "#/types/ApprovalStatus"},
+        "requested_at": {"type": "string", "format": "date-time"},
+        "context": {"kind": "raw-json"},
+        "requested_event_id": {"type": "string"}
+      }
+    },
+    "Artifact": {
+      "type": "object",
+      "required": ["id", "session_id", "name", "kind", "size", "sha256", "content_type", "created_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "session_id": {"type": "string"},
+        "run_id": {"type": "string"},
+        "name": {"type": "string"},
+        "kind": {"$ref": "#/types/ArtifactKind"},
+        "size": {"type": "integer", "format": "int64"},
+        "sha256": {"type": "string"},
+        "content_type": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ApiError": {
+      "type": "object",
+      "required": ["code", "message", "request_id"],
+      "properties": {
+        "code": {"$ref": "#/types/ErrorCode"},
+        "message": {"type": "string"},
+        "request_id": {"type": "string"},
+        "details": {"kind": "raw-json"}
+      }
+    },
+    "Command": {
+      "type": "object",
+      "required": ["command_id", "kind", "session_id", "issued_at", "payload"],
+      "properties": {
+        "command_id": {"type": "string"},
+        "kind": {"$ref": "#/types/CommandKind"},
+        "session_id": {"type": "string"},
+        "run_id": {"type": "string"},
+        "issued_at": {"type": "string", "format": "date-time"},
+        "payload": {"kind": "raw-json"}
+      }
+    },
+    "CommandAck": {
+      "type": "object",
+      "required": ["command_id", "state", "received_at", "deduplicated"],
+      "properties": {
+        "command_id": {"type": "string"},
+        "state": {"$ref": "#/types/CommandState"},
+        "received_at": {"type": "string", "format": "date-time"},
+        "operation_id": {"type": "string"},
+        "run_id": {"type": "string"},
+        "event_cursor": {"type": "string"},
+        "deduplicated": {"type": "boolean"},
+        "result": {"kind": "raw-json"},
+        "error": {"$ref": "#/types/ApiError"}
+      }
+    },
+    "Event": {
+      "type": "object",
+      "required": ["event_id", "cursor", "sequence", "session_id", "type", "occurred_at", "source", "payload"],
+      "properties": {
+        "event_id": {"type": "string"},
+        "cursor": {"type": "string"},
+        "sequence": {"type": "integer", "format": "int64"},
+        "session_id": {"type": "string"},
+        "run_id": {"type": "string"},
+        "type": {"$ref": "#/types/EventType"},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "source": {"$ref": "#/types/EventSource"},
+        "payload": {"kind": "raw-json"}
+      }
+    },
+    "EventPage": {
+      "type": "object",
+      "required": ["events", "has_more"],
+      "properties": {
+        "events": {"type": "array", "items": {"$ref": "#/types/Event"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "ApprovalListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/Approval"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "RunListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/Run"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "ModificationOrder": {
+      "type": "object",
+      "required": ["physical_millis", "logical_counter", "client_id"],
+      "properties": {
+        "physical_millis": {"type": "integer", "format": "int64"},
+        "logical_counter": {"type": "integer", "format": "int64"},
+        "client_id": {"type": "string"}
+      }
+    },
+    "Draft": {
+      "type": "object",
+      "required": ["session_id", "content", "revision", "modification_order", "updated_at"],
+      "properties": {
+        "session_id": {"type": "string"},
+        "content": {"type": "string"},
+        "revision": {"type": "integer", "format": "int64"},
+        "mutation_id": {"type": "string"},
+        "client_id": {"type": "string"},
+        "client_sequence": {"type": "integer", "format": "int64"},
+        "modification_order": {"$ref": "#/types/ModificationOrder"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "DraftResponse": {
+      "type": "object",
+      "required": ["draft"],
+      "properties": {"draft": {"$ref": "#/types/Draft"}}
+    },
+    "Reconciliation": {
+      "type": "object",
+      "required": ["command_id", "state", "observed_at"],
+      "properties": {
+        "command_id": {"type": "string"},
+        "state": {"$ref": "#/types/ReconciliationState"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "event_cursor": {"type": "string"},
+        "note": {"type": "string"}
+      }
+    },
+    "FixtureEnvelope": {
+      "type": "object",
+      "required": ["schema", "source", "stream", "sequence", "payload"],
+      "properties": {
+        "schema": {"type": "string"},
+        "source": {"type": "string"},
+        "stream": {"$ref": "#/types/EventSource"},
+        "sequence": {"type": "integer", "format": "int64"},
+        "payload": {"kind": "raw-json"}
+      }
+    },
+    "ProjectResponse": {
+      "type": "object",
+      "required": ["project"],
+      "properties": {"project": {"$ref": "#/types/Project"}}
+    },
+    "ProjectMemberResponse": {
+      "type": "object",
+      "required": ["member"],
+      "properties": {"member": {"$ref": "#/types/ProjectMember"}}
+    },
+    "ProjectMemberListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/ProjectMember"}}
+      }
+    },
+    "ProjectListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/Project"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "TaskResponse": {
+      "type": "object",
+      "required": ["task"],
+      "properties": {"task": {"$ref": "#/types/Task"}}
+    },
+    "TaskContainment": {
+      "type": "object",
+      "required": ["kind", "parent_task_id", "child_task_id", "created_at"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["parent_child"]},
+        "parent_task_id": {"type": "string"},
+        "child_task_id": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "TaskDependency": {
+      "type": "object",
+      "required": ["kind", "prerequisite_task_id", "dependent_task_id", "created_at"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["prerequisite"]},
+        "prerequisite_task_id": {"type": "string"},
+        "dependent_task_id": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "TaskRelationshipPage": {
+      "type": "object",
+      "required": ["parents", "children", "prerequisites", "dependents"],
+      "properties": {
+        "parents": {"type": "array", "items": {"$ref": "#/types/TaskContainment"}},
+        "children": {"type": "array", "items": {"$ref": "#/types/TaskContainment"}},
+        "prerequisites": {"type": "array", "items": {"$ref": "#/types/TaskDependency"}},
+        "dependents": {"type": "array", "items": {"$ref": "#/types/TaskDependency"}}
+      }
+    },
+    "TaskListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/Task"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "SessionResponse": {
+      "type": "object",
+      "required": ["session"],
+      "properties": {
+        "session": {"$ref": "#/types/Session"},
+        "initial_run_ack": {"$ref": "#/types/CommandAck"}
+      }
+    },
+    "CommandAckResponse": {
+      "type": "object",
+      "required": ["ack"],
+      "properties": {"ack": {"$ref": "#/types/CommandAck"}}
+    },
+    "ArtifactResponse": {
+      "type": "object",
+      "required": ["artifact"],
+      "properties": {"artifact": {"$ref": "#/types/Artifact"}}
+    },
+    "ArtifactContentResponse": {
+      "type": "object",
+      "required": ["artifact", "content_base64", "content_version", "offset", "next_offset", "total_size", "complete"],
+      "properties": {
+        "artifact": {"$ref": "#/types/Artifact"},
+        "content_base64": {"type": "string"},
+        "content_version": {"type": "string"},
+        "offset": {"type": "integer"},
+        "next_offset": {"type": "integer"},
+        "total_size": {"type": "integer"},
+        "complete": {"type": "boolean"}
+      }
+    },
+    "DownloadArtifactContentQuery": {
+      "type": "object",
+      "properties": {
+        "content_version": {"type": "string"},
+        "offset": {"type": "integer"},
+        "limit": {"type": "integer"}
+      }
+    },
+    "ArtifactDownload": {
+      "kind": "binary"
+    },
+    "CreateProjectRequest": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"}
+      }
+    },
+    "UpdateProjectRequest": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "description": {"type": "string"}
+      }
+    },
+    "GrantProjectMemberRequest": {
+      "type": "object",
+      "required": ["role"],
+      "properties": {
+        "role": {"$ref": "#/types/ProjectMemberGrantRole"}
+      }
+    },
+    "ListProjectsQuery": {
+      "type": "object",
+      "properties": {
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "ListSessionRunsQuery": {
+      "type": "object",
+      "properties": {
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "CreateTaskRequest": {
+      "type": "object",
+      "required": ["project_id", "title", "goal"],
+      "properties": {
+        "id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "title": {"type": "string"},
+        "goal": {"type": "string"},
+        "status": {"$ref": "#/types/TaskStatus"}
+      }
+    },
+    "ListTasksQuery": {
+      "type": "object",
+      "properties": {
+        "project_id": {"type": "string"},
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "UpdateTaskRequest": {
+      "type": "object",
+      "properties": {
+        "title": {"type": "string"},
+        "goal": {"type": "string"},
+        "status": {"$ref": "#/types/TaskStatus"}
+      }
+    },
+    "CreateSessionRequest": {
+      "type": "object",
+      "required": ["command_id", "path"],
+      "properties": {
+        "command_id": {"type": "string"},
+        "path": {"$ref": "#/types/SessionPath"},
+        "project_id": {"type": "string"},
+        "task_id": {"type": "string"},
+        "prompt": {"type": "string"},
+        "active_thread_ref": {"type": "string"}
+      }
+    },
+    "BindSessionTaskRequest": {
+      "type": "object",
+      "required": ["task_id"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "confirm_share": {"type": "boolean"}
+      }
+    },
+    "SubmitRunRequest": {
+      "type": "object",
+      "required": ["command_id", "prompt"],
+      "properties": {
+        "command_id": {"type": "string"},
+        "prompt": {"type": "string"},
+        "model": {"type": "string"},
+        "reasoning_effort": {"type": "string"}
+      }
+    },
+    "UpdateDraftRequest": {
+      "type": "object",
+      "required": ["mutation_id", "client_id", "client_sequence", "content", "modification_order"],
+      "properties": {
+        "mutation_id": {"type": "string"},
+        "client_id": {"type": "string"},
+        "client_sequence": {"type": "integer", "format": "int64"},
+        "content": {"type": "string"},
+        "modification_order": {"$ref": "#/types/ModificationOrder"}
+      }
+    },
+    "ResolveApprovalRequest": {
+      "type": "object",
+      "required": ["command_id", "revision", "decision"],
+      "properties": {
+        "command_id": {"type": "string"},
+        "revision": {"type": "integer", "format": "int64"},
+        "decision": {"$ref": "#/types/ApprovalDecision"}
+      }
+    },
+    "InterruptRunRequest": {
+      "type": "object",
+      "required": ["command_id"],
+      "properties": {
+        "command_id": {"type": "string"},
+        "reason": {"type": "string"}
+      }
+    },
+    "ListRunEventsQuery": {
+      "type": "object",
+      "properties": {
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "ListRunApprovalsQuery": {
+      "type": "object",
+      "properties": {
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    }
+  },
+  "rest": {
+    "base_path": "/api/v1",
+    "operations": [
+      {
+        "operation_id": "getBrowserSession",
+        "browser_only": true,
+        "method": "GET",
+        "path": "/auth/session",
+        "response_type": "BrowserSessionResponse",
+        "summary": "Read the authenticated browser identity and enforced CSRF protection"
+      },
+      {
+        "operation_id": "logoutBrowserSession",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/auth/logout",
+        "response_status": 204,
+        "summary": "Destroy the current browser session behind same-origin CSRF protection"
+      },
+      {
+        "operation_id": "listUserCredentials",
+        "method": "GET",
+        "path": "/credentials",
+        "response_type": "UserCredentialListResponse",
+        "summary": "List the current user's credential metadata with an unrestricted principal",
+        "mcp_tool": {"name": "loomhelm.list_user_credentials", "description": "List only the current user's credential metadata; project-scoped credentials cannot administer the user's credential inventory."}
+      },
+      {
+        "operation_id": "createUserCredential",
+        "method": "POST",
+        "path": "/credentials",
+        "body_type": "CreateUserCredentialRequest",
+        "response_type": "CreateUserCredentialResponse",
+        "response_status": 201,
+        "summary": "Create a user credential without widening the caller's authority",
+        "mcp_tool": {"name": "loomhelm.create_user_credential", "description": "Issue a credential for the current user and return its secret once. A project-scoped caller must select a nonempty subset of its current authorized scope."}
+      },
+      {
+        "operation_id": "revokeUserCredential",
+        "method": "DELETE",
+        "path": "/credentials/{credential_id}",
+        "path_params": {"credential_id": "string"},
+        "response_status": 204,
+        "summary": "Revoke an owned credential with an unrestricted principal",
+        "mcp_tool": {"name": "loomhelm.revoke_user_credential", "description": "Revoke one of the current user's credentials. Project-scoped credentials cannot revoke the user's other credentials; foreign identities are not disclosed."}
+      },
+      {
+        "operation_id": "listProjects",
+        "method": "GET",
+        "path": "/projects",
+        "query_type": "ListProjectsQuery",
+        "response_type": "ProjectListResponse",
+        "summary": "List authorized projects",
+        "mcp_tool": {"name": "loomhelm.list_projects", "description": "List projects visible to the caller."}
+      },
+      {
+        "operation_id": "createProject",
+        "method": "POST",
+        "path": "/projects",
+        "body_type": "CreateProjectRequest",
+        "response_type": "ProjectResponse",
+        "summary": "Create a project",
+        "mcp_tool": {"name": "loomhelm.create_project", "description": "Create a project for authorized work."}
+      },
+      {
+        "operation_id": "getProject",
+        "method": "GET",
+        "path": "/projects/{project_id}",
+        "path_params": {"project_id": "string"},
+        "response_type": "ProjectResponse",
+        "summary": "Read an authorized project",
+        "mcp_tool": {"name": "loomhelm.get_project", "description": "Read a project visible to the caller."}
+      },
+      {
+        "operation_id": "updateProject",
+        "method": "PATCH",
+        "path": "/projects/{project_id}",
+        "path_params": {"project_id": "string"},
+        "body_type": "UpdateProjectRequest",
+        "response_type": "ProjectResponse",
+        "summary": "Update an authorized project",
+        "mcp_tool": {"name": "loomhelm.update_project", "description": "Update a project within the caller's authorization."}
+      },
+      {
+        "operation_id": "deleteProject",
+        "method": "DELETE",
+        "path": "/projects/{project_id}",
+        "path_params": {"project_id": "string"},
+        "response_status": 204,
+        "summary": "Delete a project when authorized and not protected",
+        "mcp_tool": {"name": "loomhelm.delete_project", "description": "Delete an authorized project only when preservation rules permit it."}
+      },
+      {
+        "operation_id": "listProjectMembers",
+        "method": "GET",
+        "path": "/projects/{project_id}/members",
+        "path_params": {"project_id": "string"},
+        "response_type": "ProjectMemberListResponse",
+        "response_status": 200,
+        "summary": "List membership grants in an authorized project",
+        "mcp_tool": {"name": "loomhelm.list_project_members", "description": "List project member identities and roles within the caller's project scope."}
+      },
+      {
+        "operation_id": "grantProjectMember",
+        "method": "PUT",
+        "path": "/projects/{project_id}/members/{user_id}",
+        "path_params": {"project_id": "string", "user_id": "string"},
+        "body_type": "GrantProjectMemberRequest",
+        "response_type": "ProjectMemberResponse",
+        "response_status": 200,
+        "summary": "Grant or update read-only or operator access as project creator",
+        "mcp_tool": {"name": "loomhelm.grant_project_member", "description": "Let the project creator grant or update viewer/operator access for an existing user, without transferring ownership."}
+      },
+      {
+        "operation_id": "revokeProjectMember",
+        "method": "DELETE",
+        "path": "/projects/{project_id}/members/{user_id}",
+        "path_params": {"project_id": "string", "user_id": "string"},
+        "response_status": 204,
+        "summary": "Revoke another member's project access as project creator",
+        "mcp_tool": {"name": "loomhelm.revoke_project_member", "description": "Let the project creator revoke another user's membership while retaining the creator's own ownership."}
+      },
+      {
+        "operation_id": "listTasks",
+        "method": "GET",
+        "path": "/tasks",
+        "query_type": "ListTasksQuery",
+        "response_type": "TaskListResponse",
+        "summary": "List authorized tasks",
+        "mcp_tool": {"name": "loomhelm.list_tasks", "description": "List tasks visible to the caller."}
+      },
+      {
+        "operation_id": "createTask",
+        "method": "POST",
+        "path": "/tasks",
+        "body_type": "CreateTaskRequest",
+        "response_type": "TaskResponse",
+        "summary": "Create a task",
+        "mcp_tool": {"name": "loomhelm.create_task", "description": "Create a task in an authorized project."}
+      },
+      {
+        "operation_id": "getTask",
+        "method": "GET",
+        "path": "/tasks/{task_id}",
+        "path_params": {"task_id": "string"},
+        "response_type": "TaskResponse",
+        "summary": "Read an authorized task",
+        "mcp_tool": {"name": "loomhelm.get_task", "description": "Read a task visible to the caller."}
+      },
+      {
+        "operation_id": "updateTask",
+        "method": "PATCH",
+        "path": "/tasks/{task_id}",
+        "path_params": {"task_id": "string"},
+        "body_type": "UpdateTaskRequest",
+        "response_type": "TaskResponse",
+        "summary": "Update a task",
+        "mcp_tool": {"name": "loomhelm.update_task", "description": "Update an authorized task."}
+      },
+      {
+        "operation_id": "deleteTask",
+        "method": "DELETE",
+        "path": "/tasks/{task_id}",
+        "path_params": {"task_id": "string"},
+        "response_status": 204,
+        "summary": "Delete a task when authorized and not protected",
+        "mcp_tool": {"name": "loomhelm.delete_task", "description": "Delete an authorized task only when preservation rules permit it."}
+      },
+      {
+        "operation_id": "getTaskRelationships",
+        "method": "GET",
+        "path": "/tasks/{task_id}/relationships",
+        "path_params": {"task_id": "string"},
+        "response_type": "TaskRelationshipPage",
+        "summary": "Read task relationships filtered by authorization at both endpoints",
+        "mcp_tool": {"name": "loomhelm.get_task_relationships", "description": "Read authorized containment and prerequisite relationships without disclosing inaccessible endpoints."}
+      },
+      {
+        "operation_id": "addTaskParent",
+        "method": "POST",
+        "path": "/tasks/{task_id}/parents/{parent_task_id}",
+        "path_params": {"task_id": "string", "parent_task_id": "string"},
+        "response_status": 204,
+        "summary": "Add a parent relationship between authorized tasks",
+        "mcp_tool": {"name": "loomhelm.add_task_parent", "description": "Add task containment with authorization at both endpoints, including across projects."}
+      },
+      {
+        "operation_id": "removeTaskParent",
+        "method": "DELETE",
+        "path": "/tasks/{task_id}/parents/{parent_task_id}",
+        "path_params": {"task_id": "string", "parent_task_id": "string"},
+        "response_status": 204,
+        "summary": "Remove a parent relationship between authorized tasks",
+        "mcp_tool": {"name": "loomhelm.remove_task_parent", "description": "Remove task containment without changing task project ownership."}
+      },
+      {
+        "operation_id": "addTaskDependency",
+        "method": "POST",
+        "path": "/tasks/{task_id}/dependencies/{prerequisite_task_id}",
+        "path_params": {"task_id": "string", "prerequisite_task_id": "string"},
+        "response_status": 204,
+        "summary": "Add a prerequisite for the task",
+        "mcp_tool": {"name": "loomhelm.add_task_dependency", "description": "Add an authorized prerequisite; task_id identifies the dependent task."}
+      },
+      {
+        "operation_id": "removeTaskDependency",
+        "method": "DELETE",
+        "path": "/tasks/{task_id}/dependencies/{prerequisite_task_id}",
+        "path_params": {"task_id": "string", "prerequisite_task_id": "string"},
+        "response_status": 204,
+        "summary": "Remove a prerequisite for the task",
+        "mcp_tool": {"name": "loomhelm.remove_task_dependency", "description": "Remove an authorized prerequisite without changing task project ownership."}
+      },
+      {
+        "operation_id": "createSession",
+        "method": "POST",
+        "path": "/sessions",
+        "body_type": "CreateSessionRequest",
+        "response_type": "SessionResponse",
+        "summary": "Start a new or explicitly attach an active session",
+        "mcp_tool": {"name": "loomhelm.start_session", "description": "Start a new Host Gateway session or request an explicit active-session attach."}
+      },
+      {
+        "operation_id": "getSession",
+        "method": "GET",
+        "path": "/sessions/{session_id}",
+        "path_params": {"session_id": "string"},
+        "response_type": "SessionResponse",
+        "summary": "Read a session",
+        "mcp_tool": {"name": "loomhelm.get_session", "description": "Read an authorized session."}
+      },
+      {
+        "operation_id": "bindSessionTask",
+        "method": "POST",
+        "path": "/sessions/{session_id}/task",
+        "path_params": {"session_id": "string"},
+        "body_type": "BindSessionTaskRequest",
+        "response_type": "SessionResponse",
+        "response_status": 200,
+        "summary": "Bind an authorized task to a session",
+        "mcp_tool": {"name": "loomhelm.bind_session_task", "description": "Bind a task to an authorized session with explicit confirmation when sharing a projectless session."}
+      },
+      {
+        "operation_id": "submitRun",
+        "method": "POST",
+        "path": "/sessions/{session_id}/runs",
+        "path_params": {"session_id": "string"},
+        "body_type": "SubmitRunRequest",
+        "response_type": "CommandAckResponse",
+        "summary": "Submit a run command",
+        "mcp_tool": {"name": "loomhelm.submit_run", "description": "Submit one idempotent run command."}
+      },
+      {
+        "operation_id": "listSessionRuns",
+        "method": "GET",
+        "path": "/sessions/{session_id}/runs",
+        "path_params": {"session_id": "string"},
+        "query_type": "ListSessionRunsQuery",
+        "response_type": "RunListResponse",
+        "summary": "Read the durable run history for an authorized session after an opaque cursor",
+        "mcp_tool": {"name": "loomhelm.list_session_runs", "description": "Read the durable run history for an authorized session without changing execution state."}
+      },
+      {
+        "operation_id": "getDraft",
+        "method": "GET",
+        "path": "/sessions/{session_id}/draft",
+        "path_params": {"session_id": "string"},
+        "response_type": "DraftResponse",
+        "summary": "Read the private shared unsent draft for an authorized session",
+        "mcp_tool": {"name": "loomhelm.get_draft", "description": "Read the caller's private shared unsent draft for an authorized session."}
+      },
+      {
+        "operation_id": "updateDraft",
+        "method": "PUT",
+        "path": "/sessions/{session_id}/draft",
+        "path_params": {"session_id": "string"},
+        "body_type": "UpdateDraftRequest",
+        "response_type": "DraftResponse",
+        "summary": "Replace the private shared unsent draft with an idempotent last-accepted update ordered by a client-provided hybrid logical clock; client_sequence increases per session/client and current mutation_id retries reuse the original request",
+        "mcp_tool": {"name": "loomhelm.update_draft", "description": "Update the caller's private shared unsent draft with a client-provided modification_order. The UTF-8 content is at most 1 MiB; client_sequence is positive and strictly increasing per session/client, stale sequences are rejected, and mutation_id is an idempotency key that must not be reused with different metadata or content. A matching retry for the current projection returns it without reapplying; a retry for an older revision is rejected as stale. Updates are durable and never submit a run."}
+      },
+      {
+        "operation_id": "listRunApprovals",
+        "method": "GET",
+        "path": "/runs/{run_id}/approvals",
+        "path_params": {"run_id": "string"},
+        "query_type": "ListRunApprovalsQuery",
+        "response_type": "ApprovalListResponse",
+        "summary": "Read all authorized approval revisions for a run after an opaque cursor",
+        "mcp_tool": {"name": "loomhelm.list_run_approvals", "description": "Read all authorized approval revisions for a run without constructing approval identities."}
+      },
+      {
+        "operation_id": "resolveApproval",
+        "method": "POST",
+        "path": "/runs/{run_id}/approvals/{approval_id}",
+        "path_params": {"run_id": "string", "approval_id": "string"},
+        "body_type": "ResolveApprovalRequest",
+        "response_type": "CommandAckResponse",
+        "summary": "Approve or deny a pending request",
+        "mcp_tool": {"name": "loomhelm.resolve_approval", "description": "Resolve one current approval revision exactly once."}
+      },
+      {
+        "operation_id": "interruptRun",
+        "method": "POST",
+        "path": "/runs/{run_id}/interrupt",
+        "path_params": {"run_id": "string"},
+        "body_type": "InterruptRunRequest",
+        "response_type": "CommandAckResponse",
+        "summary": "Interrupt a run",
+        "mcp_tool": {"name": "loomhelm.interrupt_run", "description": "Request an idempotent run interruption."}
+      },
+      {
+        "operation_id": "listRunEvents",
+        "method": "GET",
+        "path": "/runs/{run_id}/events",
+        "path_params": {"run_id": "string"},
+        "query_type": "ListRunEventsQuery",
+        "response_type": "EventPage",
+        "summary": "Read ordered run events after a cursor",
+        "mcp_tool": {"name": "loomhelm.read_run_events", "description": "Read ordered run events from an exclusive cursor."}
+      },
+      {
+        "operation_id": "getArtifact",
+        "method": "GET",
+        "path": "/artifacts/{artifact_id}",
+        "path_params": {"artifact_id": "string"},
+        "response_type": "ArtifactResponse",
+        "summary": "Read authorized artifact metadata",
+        "mcp_tool": {"name": "loomhelm.get_artifact", "description": "Read authorized conversation artifact metadata."}
+      },
+      {
+        "operation_id": "downloadArtifact",
+        "browser_only": true,
+        "method": "GET",
+        "path": "/artifacts/{artifact_id}/download",
+        "path_params": {"artifact_id": "string"},
+        "request_headers": {"if_range": "If-Range", "range": "Range"},
+        "response_type": "ArtifactDownload",
+        "response_status": 200,
+        "response_statuses": [200, 206],
+        "response_headers": {"Content-Range": "206 responses use bytes start-end/total; 416 responses use bytes */total.", "WWW-Authenticate": "401 responses include the Bearer authentication challenge."},
+        "summary": "Download the authorized original artifact bytes. Range supports satisfiable byte ranges, including multiple ranges; If-Range selects a range only when its strong ETag or HTTP-date validator matches; malformed or unsatisfiable byte ranges return 416 with Content-Range, while unknown range units are ignored."
+      },
+      {
+        "operation_id": "headArtifact",
+        "browser_only": true,
+        "method": "HEAD",
+        "path": "/artifacts/{artifact_id}/download",
+        "path_params": {"artifact_id": "string"},
+        "response_type": "ArtifactDownload",
+        "response_status": 200,
+        "response_statuses": [200],
+        "response_headers": {"Content-Length": "HEAD responses advertise the complete original byte length and never include a response body.", "WWW-Authenticate": "401 responses include the Bearer authentication challenge."},
+        "summary": "Read the authorized original artifact download metadata without transferring a response body. HEAD ignores Range and returns the complete representation metadata."
+      },
+      {
+        "operation_id": "downloadArtifactContent",
+        "method": "GET",
+        "path": "/artifacts/{artifact_id}/content",
+        "path_params": {"artifact_id": "string"},
+        "query_type": "DownloadArtifactContentQuery",
+        "response_type": "ArtifactContentResponse",
+        "response_status": 200,
+        "summary": "Download a cursor-addressed chunk of the authorized original artifact bytes. Start at offset 0; when offset is non-zero, content_version from the previous response is required; stop at complete=true and verify the reassembled bytes against artifact.sha256.",
+        "mcp_tool": {"name": "loomhelm.download_artifact", "description": "Download bounded chunks of an authorized original artifact. Start at offset 0, pass content_version with each next_offset call, stop only at complete=true, and verify the reassembled bytes against artifact.sha256."}
+      }
+    ]
+  },
+  "mcp": {
+    "resources": [
+      {"name": "session", "uri": "loomhelm://sessions/{session_id}", "operation_id": "getSession"},
+      {"name": "run-events", "uri": "loomhelm://runs/{run_id}/events", "operation_id": "listRunEvents"},
+      {"name": "artifact", "uri": "loomhelm://artifacts/{artifact_id}", "operation_id": "getArtifact"}
+    ]
+  }
+}

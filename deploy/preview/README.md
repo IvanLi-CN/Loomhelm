@@ -1,0 +1,55 @@
+# Branch preview deployment
+
+The preview bundle implements the phase-one blue-green contract with two immutable Server/Worker slots, a Caddy traffic switch, durable Worker generation fencing and retained Web assets.
+
+The candidate manifest is the deployment identity. It must contain the exact source SHA, the server and Worker image digests, the built Web directory and its deterministic tree digest, and a two-way state compatibility range. The deployment controller records those values in a local state file and never rebuilds an image during promotion.
+
+The state directory is intentionally outside Git by default at `.loomhelm-preview/`; set `LOOMHELM_PREVIEW_STATE_DIR` when the deployment state belongs elsewhere. It contains the slot metadata, Caddy files, compose environment and copied Web trees. Do not commit it or place credentials in the manifest.
+
+To enable browser login, export `LOOMHELM_OIDC_ISSUER_URL`, `LOOMHELM_OIDC_CLIENT_ID`, `LOOMHELM_OIDC_REDIRECT_URL` and, when required by the issuer, `LOOMHELM_OIDC_CLIENT_SECRET` before staging. The controller writes them into its mode-0600 Compose environment file and passes them only to both Server slots; Workers receive no browser identity-provider credentials. The redirect must use the public Web origin and `/api/v1/auth/oidc/callback`. `LOOMHELM_SESSION_COOKIE_SECURE` defaults to `true`; explicitly set `false` only for an isolated plain-HTTP test endpoint. Empty OIDC settings keep login unavailable and do not grant anonymous access. Protect the runtime state directory and do not publish the rendered environment or Compose configuration, which may contain secrets.
+
+`scripts/preview compose-config` validates configuration without printing expanded credentials. Literal quotes, backslashes and dollar signs in environment values are preserved by Compose-compatible encoding. In the session-owned Agent VM, run `LOOMHELM_TEST_COMPOSE=1 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/preview -p '*_test.py'` to exercise the actual Compose parser, literal credential delivery into disposable containers and the script's secret-safe validation entrypoint. The suite uses synthetic credentials, the VM's existing `postgres:17-alpine` image, unique fixture projects and cleanup; it does not start the application or publish service ports.
+
+## Workflow
+
+```sh
+# Use a unique project name and four ports allocated for this worktree.
+export LOOMHELM_PREVIEW_PROJECT_NAME=loomhelm-preview-<worktree-scope>
+export LOOMHELM_ARTIFACT_VOLUME_NAME=loomhelm-preview-<deployment-scope>-artifacts
+export LOOMHELM_PREVIEW_HTTP_PORT=<registered-port>
+export LOOMHELM_PREVIEW_ADMIN_PORT=<registered-port>
+export LOOMHELM_BLUE_SERVER_PORT=<registered-port>
+export LOOMHELM_GREEN_SERVER_PORT=<registered-port>
+export LOOMHELM_PROXY_NETWORK=<unique-or-existing-traefik-network>
+export LOOMHELM_PROXY_NETWORK_EXTERNAL=<true-when-the-network-already-exists>
+export LOOMHELM_DATABASE_NETWORK=<stable-network-created-with-postgres>
+export LOOMHELM_DATABASE_NETWORK_EXTERNAL=<true-after-postgres-compose-created-the-network>
+export LOOMHELM_TRAEFIK_ENABLED=<true-when-traefik-owns-the-route>
+export LOOMHELM_PUBLIC_HOST=<public-preview-host>
+
+scripts/preview init
+scripts/preview stage path/to/candidate-manifest.json
+scripts/preview check
+scripts/preview promote
+scripts/preview status
+```
+
+The artifact volume name is persisted in preview state and is explicit in Compose so changing the Compose project name does not silently attach a new empty volume. Keep it unique to the deployment/database; when adopting an existing preview, set it to the current Docker volume name before the first `scripts/preview compose-config` or `stage` invocation.
+
+The Compose project name is recorded with the preview state; it may change before activation, but `scripts/preview` rejects a project-name change once a candidate is active or pending so status, ports, Caddy and artifact storage cannot split across two Compose projects.
+
+The proxy and database network names are recorded in preview state and locked once a candidate is active or pending. When no `LOOMHELM_PROXY_NETWORK` is supplied, the controller derives a project-scoped `<project>-proxy` name; set it explicitly only when Caddy must join an existing Traefik network. Set `LOOMHELM_DATABASE_NETWORK` to the exact named network created by the PostgreSQL Compose service, set `LOOMHELM_DATABASE_NETWORK_EXTERNAL=true` after that bootstrap, and use `postgres:5432` in `LOOMHELM_DATABASE_URL`; Caddy never joins this database network. `LOOMHELM_PREVIEW_ENV_FILE` may point to a private environment file outside the checkout; otherwise the wrapper reads `.env.local`.
+
+`stage` selects the inactive slot, checks the candidate against the active state's read range and Web tree digest, copies the Web assets into that slot, validates the Server image and `/version` identity, then starts the Worker only after the Server is ready. A failed candidate is stopped, removed from pending state and followed by an active Worker restart so the old generation remains admitted.
+
+`promote` requires both slot readiness endpoints, validates the declared image references against the running containers and both `/version` identity responses, validates and reloads the candidate Caddy configuration, atomically updates the traceable state and Web symlinks, then drains and stops the old Server and Worker. An unhealthy or identity-mismatched candidate therefore cannot receive traffic.
+
+`rollback` restages the retained slot with a new Worker generation before switching traffic. It is allowed only when the retained candidate can read the current state and the current candidate can read the retained candidate's declared state version; deployed migrations are never reversed.
+
+`web/current` points at the active Web tree and `web/retained/<source-sha>-<generation>` stores each retained candidate within the compatibility window. Caddy tries the current tree first and retained candidates from newest to oldest, so old hashed assets remain available across more than one promotion while installed clients update. `rollback [retained-key]` can restage a specific retained candidate after compatibility validation.
+
+The Worker lease row is monotonic per `LOOMHELM_WORKER_LEASE_KEY`. River client creation and startup happen before lease admission; a startup failure therefore cannot fence the active Worker. Once admitted, a newer generation replaces the durable lease; an older generation loses readiness, stops River scheduling and cannot enqueue or complete a short job after the lease check observes the fence. A database outage pauses scheduling and heartbeat renewal; successful reconnection rebuilds the River client without reusing a lower generation. Any post-admission startup failure releases the exact matching lease.
+
+This is an isolated branch-preview mechanism. It does not deploy production, publish versions, modify the candidate build pipeline or silently down-migrate durable state. Compose has no shared project or fixed port defaults: the real rehearsal requires the session-owned Agent VM, a unique project name and registered per-worktree ports for preview HTTP, Caddy admin and both slot listeners.
+
+When Traefik integration is enabled, the route is `Traefik -> caddy -> server-<active-slot>`. Only Caddy joins the external proxy network; Server and Worker slots remain on the private Compose `preview` network and also join the stable PostgreSQL `database` network. Caddy's generated configuration is the stable entry and is reloaded only after the inactive slot passes Server/Worker readiness, image identity, `/version` and Web tree checks. The labels are parameterized and do not create or mutate Traefik or Authelia configuration.

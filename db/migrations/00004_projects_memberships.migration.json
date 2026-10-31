@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Create durable project records, project-scoped membership roles and optional API credential project scopes.",
+    "release_unit_description": "Phase-one authenticated project/task API candidate.",
+    "version_impact": "minor"
+  },
+  "durable_state": {
+    "description": "Projects retain their creator and timestamps; project_members is the authorization boundary; a credential with explicit scope rows is limited to those projects while an unscoped credential follows the user's memberships.",
+    "storage_implementation": "PostgreSQL tables managed by the embedded Goose migration history.",
+    "source_compatibility_range": {
+      "from_program_version": "Phase-one candidate containing migration 00003.",
+      "to_program_version": "Phase-one candidate containing migration 00004.",
+      "readable_earlier_state": true,
+      "earlier_state": "The missing project tables are an unapplied migration; no earlier project state exists in the supported range."
+    }
+  },
+  "database_migration": {
+    "ordered_operations": [
+      {"order": 1, "kind": "ddl", "description": "Create projects and project_members with restricted deletion and viewer/operator/owner role checks."},
+      {"order": 2, "kind": "ddl", "description": "Create optional API credential project scope rows after both credential and project tables exist."}
+    ],
+    "backfill": "none",
+    "rollout_signals": [
+      "Goose records migration 00004 before project/task handlers can report readiness.",
+      "Project creation inserts the creator's owner membership in the same transaction as the project."
+    ],
+    "recovery": {
+      "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+      "faulty_release_recovery": "forward-repair-by-a-new-program-version-or-new-ordered-migration"
+    }
+  },
+  "validation": [
+    "A project creator can read and mutate the project, while a viewer can read but cannot mutate tasks.",
+    "Cross-project access is checked from both endpoint memberships and credential scope rows.",
+    "Project deletion is rejected while tasks or protected history remain and does not silently remove ownership."
+  ],
+  "deployed_migrations_immutable": true,
+  "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate"
+}

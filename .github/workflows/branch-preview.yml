@@ -1,0 +1,126 @@
+name: Branch Preview
+
+on:
+  push:
+    branches:
+      - feat/phase1
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full source SHA to build and promote
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loomhelm-branch-preview-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+
+jobs:
+  build-preview-candidate:
+    name: Build Preview Candidate
+    outputs:
+      source_sha: ${{ steps.candidate.outputs.source_sha }}
+      candidate_digest: ${{ steps.candidate.outputs.candidate_digest }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify parent branch workflow ref
+        run: |
+          test "$GITHUB_REF" = refs/heads/feat/phase1 || {
+            echo "Branch Preview must run from feat/phase1" >&2
+            exit 1
+          }
+      - name: Check out the fixed source SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source belongs to parent branch history
+        run: |
+          git fetch --no-tags origin feat/phase1
+          git merge-base --is-ancestor "$CANDIDATE_SOURCE_SHA" refs/remotes/origin/feat/phase1 || {
+            echo "source SHA is not in feat/phase1 history: $CANDIDATE_SOURCE_SHA" >&2
+            exit 1
+          }
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.4
+      - name: Build candidate once
+        run: scripts/build-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate"
+      - name: Record candidate identity
+        id: candidate
+        run: |
+          manifest="$RUNNER_TEMP/loomhelm-candidate/candidate-manifest.json"
+          candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
+          source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
+          test "$source_sha" = "$CANDIDATE_SOURCE_SHA" || {
+            echo "candidate manifest source SHA does not match the requested source SHA: $source_sha" >&2
+            exit 1
+          }
+          echo "candidate_digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Upload the built candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loomhelm-branch-preview-${{ github.run_id }}
+          path: ${{ runner.temp }}/loomhelm-candidate
+          if-no-files-found: error
+          retention-days: 90
+
+  promote-branch-preview:
+    name: Promote Branch Preview
+    needs: build-preview-candidate
+    runs-on: ubuntu-24.04
+    environment:
+      name: branch-preview
+    steps:
+      - name: Check out the candidate tooling source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Download the built candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: loomhelm-branch-preview-${{ github.run_id }}
+          path: ${{ runner.temp }}/loomhelm-candidate
+      - name: Promote the exact candidate digest
+        run: |
+          manifest=$(find "$RUNNER_TEMP/loomhelm-candidate" -type f -name candidate-manifest.json -print -quit)
+          test -n "$manifest"
+          candidate_digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["digest"])' "$manifest")
+          source_sha=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate"]["source_sha"])' "$manifest")
+          test "$candidate_digest" = "${{ needs.build-preview-candidate.outputs.candidate_digest }}" || {
+            echo "candidate manifest digest does not match the build job output: $candidate_digest" >&2
+            exit 1
+          }
+          test "$source_sha" = "$CANDIDATE_SOURCE_SHA" || {
+            echo "candidate manifest source SHA does not match the requested source SHA: $source_sha" >&2
+            exit 1
+          }
+          scripts/promote-candidate --manifest "$manifest" --destination "$RUNNER_TEMP/loomhelm-branch-preview" --expected-digest "$candidate_digest" --expected-source-sha "$source_sha"
+      - name: Package the preview handoff with file modes
+        run: |
+          handoff_dir=$(find "$RUNNER_TEMP/loomhelm-branch-preview" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$handoff_dir"
+          tar --format=posix -czf "$RUNNER_TEMP/loomhelm-branch-preview-handoff.tar.gz" -C "$handoff_dir" .
+      - name: Upload the preview handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loomhelm-branch-preview-promoted-${{ github.run_id }}
+          path: ${{ runner.temp }}/loomhelm-branch-preview-handoff.tar.gz
+          if-no-files-found: error
+          retention-days: 90

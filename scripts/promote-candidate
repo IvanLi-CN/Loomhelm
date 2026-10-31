@@ -1,0 +1,913 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	cat <<'EOF'
+usage: scripts/promote-candidate --manifest FILE --destination DIR [--expected-digest DIGEST] [--expected-source-sha SHA] [--expected-promote-script-sha DIGEST] [--dry-run]
+
+Verify an already-built candidate and promote its files into a directory named
+by candidate digest. This command never invokes Go, Bun, Docker or a build.
+EOF
+}
+
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "promote-candidate: cannot resolve repository root" >&2
+	exit 1
+}
+
+manifest_path=""
+destination_dir=""
+expected_digest=""
+expected_source_sha=""
+expected_promote_script_sha=""
+dry_run=0
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--manifest)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --manifest needs a value" >&2; exit 2; }
+			manifest_path=$2
+			shift 2
+			;;
+		--manifest=*)
+			manifest_path=${1#*=}
+			shift
+			;;
+		--destination)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --destination needs a value" >&2; exit 2; }
+			destination_dir=$2
+			shift 2
+			;;
+		--destination=*)
+			destination_dir=${1#*=}
+			shift
+			;;
+		--expected-digest)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --expected-digest needs a value" >&2; exit 2; }
+			expected_digest=$2
+			shift 2
+			;;
+		--expected-digest=*)
+			expected_digest=${1#*=}
+			shift
+			;;
+		--expected-source-sha)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --expected-source-sha needs a value" >&2; exit 2; }
+			expected_source_sha=$2
+			shift 2
+			;;
+		--expected-source-sha=*)
+			expected_source_sha=${1#*=}
+			shift
+			;;
+		--expected-promote-script-sha)
+			[ "$#" -ge 2 ] || { echo "promote-candidate: --expected-promote-script-sha needs a value" >&2; exit 2; }
+			expected_promote_script_sha=$2
+			shift 2
+			;;
+		--expected-promote-script-sha=*)
+			expected_promote_script_sha=${1#*=}
+			shift
+			;;
+		--dry-run)
+			dry_run=1
+			shift
+			;;
+		--help|-h)
+			usage
+			exit 0
+			;;
+		*)
+			echo "promote-candidate: unknown argument: $1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+if [ -z "$manifest_path" ] || [ -z "$destination_dir" ]; then
+	echo "promote-candidate: --manifest and --destination are required" >&2
+	usage >&2
+	exit 2
+fi
+
+case "$manifest_path" in
+	/*) ;;
+	*) manifest_path="$repo_root/$manifest_path" ;;
+esac
+case "$destination_dir" in
+	/*) ;;
+	*)
+		echo "promote-candidate: destination must be an absolute path outside the checkout" >&2
+		exit 2
+		;;
+esac
+case "$destination_dir" in
+	"$repo_root"|"$repo_root/"*)
+		echo "promote-candidate: destination must be outside the checkout" >&2
+		exit 2
+		;;
+esac
+
+python3 - "$manifest_path" "$destination_dir" "$expected_digest" "$expected_source_sha" "$dry_run" "$repo_root/scripts/promote-candidate" "$expected_promote_script_sha" <<'PY'
+from __future__ import annotations
+
+import gzip
+import ctypes
+import fcntl
+import hashlib
+import io
+import json
+import os
+import re
+import secrets
+import stat
+import subprocess
+import sys
+import tarfile
+import time
+from pathlib import Path
+
+manifest_path = Path(os.path.abspath(sys.argv[1]))
+destination = Path(os.path.abspath(sys.argv[2]))
+expected_digest = sys.argv[3]
+expected_source_sha = sys.argv[4]
+dry_run = sys.argv[5] == "1"
+tool_path = Path(os.path.abspath(sys.argv[6]))
+expected_tool_digest = sys.argv[7]
+trusted_repo_root = tool_path.parent.parent
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"promote-candidate: {message}")
+
+
+def canonical_json(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_symlink_components(path: Path) -> None:
+    absolute = Path(os.path.abspath(path))
+    current = Path(absolute.anchor)
+    for part in absolute.parts:
+        if part == absolute.anchor:
+            continue
+        current /= part
+        try:
+            metadata = os.lstat(current)
+        except FileNotFoundError:
+            break
+        except OSError as error:
+            fail(f"cannot inspect path component {current}: {error}")
+        if stat.S_ISLNK(metadata.st_mode):
+            fail(f"path contains a symlink component: {current}")
+
+
+def open_directory_chain(path: Path) -> int:
+    reject_symlink_components(path)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    no_follow_flag = getattr(os, "O_NOFOLLOW", 0)
+    if directory_flag == 0 or no_follow_flag == 0:
+        fail("secure directory operations are unavailable on this platform")
+    absolute = Path(os.path.abspath(path))
+    current_fd = os.open(absolute.anchor, os.O_RDONLY | directory_flag | no_follow_flag)
+    try:
+        for part in absolute.parts:
+            if part == absolute.anchor:
+                continue
+            try:
+                next_fd = os.open(part, os.O_RDONLY | directory_flag | no_follow_flag, dir_fd=current_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=current_fd)
+                except FileExistsError:
+                    pass
+                next_fd = os.open(part, os.O_RDONLY | directory_flag | no_follow_flag, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def rename_noreplace(source_name: str, destination_name: str, directory_fd: int) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        try:
+            renameat2 = libc.renameat2
+        except AttributeError as error:
+            fail(f"no-replace rename is unavailable: {error}")
+        renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(directory_fd, source_name.encode(), directory_fd, destination_name.encode(), 1)
+    elif sys.platform == "darwin":
+        try:
+            renameatx_np = libc.renameatx_np
+        except AttributeError as error:
+            fail(f"no-replace rename is unavailable: {error}")
+        renameatx_np.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameatx_np.restype = ctypes.c_int
+        result = renameatx_np(directory_fd, source_name.encode(), directory_fd, destination_name.encode(), 4)
+    else:
+        fail(f"no-replace rename is unsupported on {sys.platform}")
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), destination_name)
+
+
+def git_bytes(*args: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(trusted_repo_root), *args],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        fail(f"cannot read trusted source contract from Git: {error}")
+    return result.stdout
+
+
+def source_file_digest(source_sha: str, relative: str) -> str:
+    return hashlib.sha256(git_bytes("show", f"{source_sha}:{relative}")).hexdigest()
+
+
+def source_contract(source_sha: str) -> tuple[str, int, dict[str, object]]:
+    tree_sha = git_bytes("rev-parse", f"{source_sha}^{{tree}}").decode("ascii").strip()
+    source_date = int(git_bytes("show", "-s", "--format=%ct", source_sha).decode("ascii").strip())
+    for entry in git_bytes("ls-tree", "-r", "-z", source_sha).split(b"\0"):
+        if entry and entry.split(b"\t", 1)[0].startswith(b"120000 "):
+            fail("trusted source tree contains a symlink")
+    versions: dict[str, str] = {}
+    for line in git_bytes("show", f"{source_sha}:tools/versions.env").decode("utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in {"GO_VERSION", "BUN_VERSION"}:
+            versions[key] = value
+    if set(versions) != {"GO_VERSION", "BUN_VERSION"}:
+        fail("trusted source tool versions are incomplete")
+    input_digests = {
+        relative.replace("/", "_").replace(".", "_").replace("-", "_"): source_file_digest(source_sha, relative)
+        for relative in (
+            "bun.lock",
+            "go.mod",
+            "go.sum",
+            "scripts/build-candidate",
+            "scripts/promote-candidate",
+            "web/package.json",
+            "web/vite.config.ts",
+        )
+    }
+    expected_inputs = {
+        "build_contract": "candidate-v2",
+        "build_flags": ["CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
+        "build_environment": {
+            "GOAMD64": "v1",
+            "GOARM": "7",
+            "GOARM64": "v8.0",
+            "GO386": "sse2",
+            "GOEXPERIMENT": "",
+            "GOMIPS": "hardfloat",
+            "GOMIPS64": "hardfloat",
+            "GOTOOLCHAIN": "local",
+            "GOPPC64": "power8",
+            "GORISCV64": "rva20u64",
+            "GOWASM": "",
+            "STORYBOOK": "false",
+            "VITE_DEMO": "false",
+        },
+        "bun_lock_sha256": input_digests["bun_lock"],
+        "build_script_sha256": input_digests["scripts_build_candidate"],
+        "promote_script_sha256": input_digests["scripts_promote_candidate"],
+        "go_mod_sha256": input_digests["go_mod"],
+        "go_sum_sha256": input_digests["go_sum"],
+        "go_version": f"go{versions['GO_VERSION']}",
+        "bun_version": versions["BUN_VERSION"],
+        "web_package_sha256": input_digests["web_package_json"],
+        "vite_config_sha256": input_digests["web_vite_config_ts"],
+    }
+    return tree_sha, source_date, expected_inputs
+
+
+def open_regular(path: Path) -> tuple[int, os.stat_result]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        fail(f"cannot open regular file {path}: {error}")
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        fail(f"expected a regular file: {path}")
+    return descriptor, metadata
+
+
+def file_observation(path: Path) -> tuple[str, int, int]:
+    descriptor, metadata = open_regular(path)
+    digest = hashlib.sha256()
+    with os.fdopen(descriptor, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest(), metadata.st_size, metadata.st_mode & 0o7777
+
+
+def sha256_file(path: Path) -> str:
+    return file_observation(path)[0]
+
+
+def relative_parts(relative: str) -> list[str]:
+    if not relative or "\\" in relative:
+        fail(f"artifact path is not a safe relative path: {relative!r}")
+    path = Path(relative)
+    if path.is_absolute() or path.as_posix() != relative or any(part in ("", ".", "..") for part in path.parts):
+        fail(f"artifact path is not a safe relative path: {relative!r}")
+    return list(path.parts)
+
+
+def open_target_directory(root_fd: int, parts: list[str]) -> int:
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    current_fd = os.dup(root_fd)
+    try:
+        for part in parts:
+            try:
+                next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                os.mkdir(part, 0o755, dir_fd=current_fd)
+                next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            os.fchmod(next_fd, 0o755)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def copy_regular(source: Path, target_root_fd: int, relative: str, mode: int) -> None:
+    descriptor, _ = open_regular(source)
+    parts = relative_parts(relative)
+    parent_fd = open_target_directory(target_root_fd, parts[:-1])
+    target_fd = None
+    try:
+        target_fd = os.open(
+            parts[-1],
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            mode,
+            dir_fd=parent_fd,
+        )
+        os.fchmod(target_fd, mode)
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(target_fd, view)
+                view = view[written:]
+    finally:
+        os.close(descriptor)
+        if target_fd is not None:
+            os.close(target_fd)
+        os.close(parent_fd)
+
+
+def safe_child(root: Path, relative: str) -> Path:
+    if not relative or "\\" in relative:
+        fail(f"artifact path is not a safe relative path: {relative!r}")
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or relative_path.as_posix() != relative or any(part in ("", ".", "..") for part in relative_path.parts):
+        fail(f"artifact path is not a safe relative path: {relative!r}")
+    path = root / relative_path
+    reject_symlink_components(path)
+    try:
+        path.relative_to(root)
+    except ValueError:
+        fail(f"artifact path escapes candidate root: {relative!r}")
+    return path
+
+
+def mode_value(value: object, label: str, expected: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 0o7777:
+        fail(f"{label} must be a file mode")
+    if value != expected:
+        fail(f"{label} must be {expected:o}, found {value:o}")
+    return value
+
+
+def file_record(
+    root: Path,
+    record: object,
+    expected_path: str | None = None,
+    expected_mode: int | None = None,
+    verify_mode: bool = False,
+) -> dict[str, object]:
+    if not isinstance(record, dict):
+        fail("artifact record must be an object")
+    if set(record) != {"path", "sha256", "size", "mode"}:
+        fail("artifact record has unexpected fields")
+    relative = record.get("path")
+    if not isinstance(relative, str) or (expected_path is not None and relative != expected_path):
+        fail(f"unexpected artifact path: {relative!r}")
+    expected_sha = record.get("sha256")
+    expected_size = record.get("size")
+    expected_mode = mode_value(
+        record.get("mode"),
+        f"mode for {relative}",
+        expected_mode if expected_mode is not None else (0o755 if relative.startswith("bin/") else 0o644),
+    )
+    if not isinstance(expected_sha, str) or len(expected_sha) != 64 or any(char not in "0123456789abcdef" for char in expected_sha):
+        fail(f"invalid artifact digest: {relative}")
+    if isinstance(expected_size, bool) or not isinstance(expected_size, int) or expected_size < 0:
+        fail(f"invalid artifact size: {relative}")
+    path = safe_child(root, relative)
+    digest, size, actual_mode = file_observation(path)
+    if expected_sha != digest or expected_size != size:
+        fail(f"artifact digest or size mismatch: {relative}")
+    if verify_mode and actual_mode != expected_mode:
+        fail(f"artifact mode mismatch: {relative}: expected {expected_mode:o}, found {actual_mode:o}")
+    return {"path": relative, "sha256": digest, "size": size, "mode": expected_mode}
+
+
+def web_records(root: Path, record: object, verify_mode: bool = False) -> tuple[str, list[dict[str, object]]]:
+    if not isinstance(record, dict) or record.get("path") != "web":
+        fail("web artifact record must point to web")
+    if set(record) != {"path", "sha256", "files"}:
+        fail("web artifact record has unexpected fields")
+    web_root = safe_child(root, "web")
+    if not web_root.is_dir() or web_root.is_symlink():
+        fail("web artifact directory is missing or is a symlink")
+    if verify_mode and web_root.stat().st_mode & 0o7777 != 0o755:
+        fail(f"web artifact directory has an unsafe mode: {web_root.stat().st_mode & 0o7777:o}")
+    expected = record.get("files")
+    if not isinstance(expected, list):
+        fail("web artifact files must be a list")
+    if not expected:
+        fail("web artifact is empty")
+    records: list[dict[str, object]] = []
+    for item in expected:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            fail("web artifact file record is malformed")
+        relative = item["path"]
+        records.append(file_record(web_root, item, relative, 0o644, verify_mode))
+    paths = [item["path"] for item in records]
+    if paths != sorted(set(paths)):
+        fail("web artifact file paths must be sorted and unique")
+    actual_files: list[str] = []
+    for child in web_root.rglob("*"):
+        if child.is_symlink():
+            fail(f"web artifact contains a symlink: {child}")
+        if child.is_dir():
+            if not any(child.iterdir()):
+                fail(f"web artifact contains an empty directory: {child}")
+            if verify_mode and child.stat().st_mode & 0o7777 != 0o755:
+                fail(f"web artifact directory has an unsafe mode: {child}")
+        elif not child.is_file():
+            fail(f"web artifact contains a non-file entry: {child}")
+        if child.is_file():
+            actual_files.append(child.relative_to(web_root).as_posix())
+    if sorted(actual_files) != paths:
+        fail("web artifact file list does not match the candidate directory")
+    encoded = "".join(
+        f"{item['path']}\0{item['sha256']}\0{item['size']}\0{item['mode']}\n" for item in records
+    ).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    if record.get("sha256") != digest:
+        fail("web artifact directory digest mismatch")
+    return digest, records
+
+
+def exact_directory_entries(path: Path, expected: set[str], label: str, verify_mode: bool = False) -> None:
+    if path.is_symlink() or not path.is_dir():
+        fail(f"{label} is missing or is a symlink")
+    if verify_mode and path.stat().st_mode & 0o7777 != 0o755:
+        fail(f"{label} has an unsafe directory mode: {path.stat().st_mode & 0o7777:o}")
+    try:
+        actual = {child.name for child in path.iterdir()}
+    except OSError as error:
+        fail(f"cannot inspect {label}: {error}")
+    if actual != expected:
+        fail(f"{label} entries do not match the contract: expected={sorted(expected)} found={sorted(actual)}")
+
+
+def archive_members(root: Path) -> list[tuple[str, Path]]:
+    members: dict[str, Path] = {}
+    for name in ("bin", "web", "candidate-manifest.json"):
+        path = root / name
+        if path.is_dir():
+            if path.is_symlink():
+                fail(f"candidate archive contains a directory symlink: {path}")
+            members[name] = path
+            for child in path.rglob("*"):
+                if child.is_symlink():
+                    fail(f"candidate archive contains a symlink: {child}")
+                if not child.is_dir() and not child.is_file():
+                    fail(f"candidate archive contains a non-file entry: {child}")
+                members[child.relative_to(root).as_posix()] = child
+        else:
+            members[name] = path
+    return [(name, members[name]) for name in sorted(members)]
+
+
+def deterministic_archive_bytes(root: Path, source_date_epoch: int) -> bytes:
+    raw_archive = io.BytesIO()
+    with gzip.GzipFile(fileobj=raw_archive, mode="wb", filename="", mtime=0, compresslevel=9) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for name, path in archive_members(root):
+                info = tarfile.TarInfo(name)
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = source_date_epoch
+                if path.is_dir():
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    info.size = 0
+                    archive.addfile(info)
+                else:
+                    if not path.is_file():
+                        fail(f"candidate archive member is not a regular file: {path}")
+                    data = path.read_bytes()
+                    info.type = tarfile.REGTYPE
+                    info.mode = 0o755 if name.startswith("bin/") else 0o644
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+    return raw_archive.getvalue()
+
+
+def verify_archive(bundle_root: Path, source_date_epoch: int) -> None:
+    package = bundle_root / "candidate.tar.gz"
+    expected_bytes = deterministic_archive_bytes(bundle_root, source_date_epoch)
+    if package.read_bytes() != expected_bytes:
+        fail("candidate archive bytes do not match the deterministic candidate archive")
+    expected_members = archive_members(bundle_root)
+    expected_names = [name for name, _ in expected_members]
+    try:
+        with tarfile.open(package, mode="r:gz") as archive:
+            members = archive.getmembers()
+            if [member.name for member in members] != expected_names:
+                fail("candidate archive member list does not match the candidate files")
+            for member, (name, path) in zip(members, expected_members):
+                if member.name != name or member.uid != 0 or member.gid != 0 or member.uname or member.gname or member.mtime != source_date_epoch:
+                    fail(f"candidate archive metadata mismatch: {name}")
+                if member.isdir():
+                    if not path.is_dir() or member.mode & 0o7777 != 0o755:
+                        fail(f"candidate archive directory mismatch: {name}")
+                    continue
+                if not member.isfile() or not path.is_file():
+                    fail(f"candidate archive member is not a regular file: {name}")
+                expected_mode = 0o755 if name.startswith("bin/") else 0o644
+                if member.mode & 0o7777 != expected_mode:
+                    fail(f"candidate archive file mode mismatch: {name}")
+                stream = archive.extractfile(member)
+                if stream is None:
+                    fail(f"candidate archive file cannot be read: {name}")
+                digest = hashlib.sha256()
+                size = 0
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    size += len(chunk)
+                expected_digest, expected_size, _ = file_observation(path)
+                if digest.hexdigest() != expected_digest or size != expected_size:
+                    fail(f"candidate archive content mismatch: {name}")
+    except (OSError, tarfile.TarError) as error:
+        fail(f"cannot read candidate archive: {error}")
+
+
+def sidecar_digest(path: Path, expected_name: str) -> str:
+    if not path.is_file() or path.is_symlink():
+        fail(f"digest sidecar is missing: {path}")
+    fields = path.read_text(encoding="ascii").split()
+    if len(fields) != 2 or fields[1] != expected_name or len(fields[0]) != 64 or any(char not in "0123456789abcdef" for char in fields[0]):
+        fail(f"digest sidecar is malformed: {path}")
+    return fields[0]
+
+
+def verify_bundle(
+    bundle_root: Path,
+    expected: str | None = None,
+    verify_mode: bool = False,
+) -> tuple[str, str, dict[str, object]]:
+    reject_symlink_components(bundle_root)
+    if bundle_root.is_symlink() or not bundle_root.is_dir():
+        fail(f"candidate bundle is not a directory: {bundle_root}")
+    exact_directory_entries(
+        bundle_root,
+        {"bin", "web", "candidate-manifest.json", "candidate-manifest.json.sha256", "candidate.tar.gz", "candidate.tar.gz.sha256"},
+        "candidate bundle",
+        verify_mode,
+    )
+    manifest_file = bundle_root / "candidate-manifest.json"
+    if manifest_file.is_symlink() or not manifest_file.is_file():
+        fail(f"candidate manifest is missing: {manifest_file}")
+    try:
+        manifest_bytes = manifest_file.read_bytes()
+        manifest = json.loads(
+            manifest_bytes.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"cannot read candidate manifest: {error}")
+    except ValueError as error:
+        fail(f"candidate manifest has duplicate fields: {error}")
+    if not isinstance(manifest, dict) or type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 2:
+        fail("unsupported candidate manifest")
+    if manifest_bytes != canonical_json(manifest) + b"\n":
+        fail("candidate manifest is not canonical")
+    if set(manifest) != {"schema_version", "candidate", "platform", "inputs", "artifacts"}:
+        fail("candidate manifest has unexpected fields")
+    candidate = manifest.get("candidate")
+    platform = manifest.get("platform")
+    inputs = manifest.get("inputs")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(candidate, dict) or not isinstance(platform, dict) or not isinstance(inputs, dict) or not isinstance(artifacts, dict):
+        fail("candidate manifest has an invalid top-level shape")
+    if set(candidate) != {"digest", "source_sha", "source_tree_sha", "source_date_epoch"}:
+        fail("candidate identity has unexpected fields")
+    if set(artifacts) != {"server", "worker", "connector", "web"}:
+        fail("candidate artifact set is invalid")
+    digest = candidate.get("digest")
+    source_sha = candidate.get("source_sha")
+    source_tree_sha = candidate.get("source_tree_sha")
+    source_date_epoch = candidate.get("source_date_epoch")
+    if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        fail("candidate digest is invalid")
+    if not isinstance(source_sha, str) or len(source_sha) not in (40, 64) or any(char not in "0123456789abcdef" for char in source_sha):
+        fail("candidate source SHA is invalid")
+    if not isinstance(source_tree_sha, str) or len(source_tree_sha) not in (40, 64) or any(char not in "0123456789abcdef" for char in source_tree_sha):
+        fail("candidate source tree SHA is invalid")
+    if isinstance(source_date_epoch, bool) or not isinstance(source_date_epoch, int):
+        fail("candidate source date is invalid")
+    if set(platform) != {"goos", "goarch", "cgo_enabled"}:
+        fail("candidate platform contract is invalid")
+    if not isinstance(platform["goos"], str) or re.fullmatch(r"[a-z][a-z0-9]*", platform["goos"]) is None:
+        fail("candidate GOOS is invalid")
+    if not isinstance(platform["goarch"], str) or re.fullmatch(r"[a-z][a-z0-9]*", platform["goarch"]) is None:
+        fail("candidate GOARCH is invalid")
+    if platform["cgo_enabled"] is not False:
+        fail("candidate must be built with CGO disabled")
+    expected_tree_sha, expected_source_date, expected_inputs = source_contract(source_sha)
+    if source_tree_sha != expected_tree_sha:
+        fail(f"candidate source tree SHA does not match Git: manifest={source_tree_sha} git={expected_tree_sha}")
+    if source_date_epoch != expected_source_date:
+        fail(f"candidate source date does not match Git: manifest={source_date_epoch} git={expected_source_date}")
+    if inputs != expected_inputs:
+        fail("candidate build input contract does not match the trusted source")
+    if expected and digest != expected:
+        fail(f"candidate digest {digest} does not match expected digest {expected}")
+    if expected_source_sha and source_sha != expected_source_sha:
+        fail(f"candidate source SHA {source_sha} does not match expected source SHA {expected_source_sha}")
+    if expected_tool_digest:
+        if len(expected_tool_digest) != 64 or any(char not in "0123456789abcdef" for char in expected_tool_digest):
+            fail("expected promotion script digest is invalid")
+        if inputs.get("promote_script_sha256") != expected_tool_digest:
+            fail("candidate promotion script digest does not match the trusted promotion tooling")
+        if sha256_file(tool_path) != expected_tool_digest:
+            fail("checked-out promotion tooling does not match the expected digest")
+    exact_directory_entries(bundle_root / "bin", {"server", "worker", "connector"}, "candidate binary directory", verify_mode)
+    component_records = {
+        name: file_record(bundle_root, artifacts.get(name), f"bin/{name}", 0o755, verify_mode)
+        for name in ("server", "worker", "connector")
+    }
+    web_digest, web_file_records = web_records(bundle_root, artifacts.get("web"), verify_mode)
+    normalized_artifacts = {
+        **component_records,
+        "web": {"path": "web", "sha256": web_digest, "files": web_file_records},
+    }
+    identity = {
+        "schema_version": 2,
+        "source_sha": source_sha,
+        "source_tree_sha": source_tree_sha,
+        "source_date_epoch": source_date_epoch,
+        "platform": platform,
+        "inputs": inputs,
+        "artifacts": normalized_artifacts,
+    }
+    recomputed = hashlib.sha256(canonical_json(identity)).hexdigest()
+    if recomputed != digest:
+        fail(f"candidate identity digest mismatch: manifest={digest} recomputed={recomputed}")
+    manifest_digest = sha256_file(manifest_file)
+    if sidecar_digest(bundle_root / "candidate-manifest.json.sha256", "candidate-manifest.json") != manifest_digest:
+        fail("candidate manifest sidecar digest mismatch")
+    package = bundle_root / "candidate.tar.gz"
+    package_digest = sha256_file(package)
+    if sidecar_digest(bundle_root / "candidate.tar.gz.sha256", "candidate.tar.gz") != package_digest:
+        fail("candidate package sidecar digest mismatch")
+    if not manifest_bytes:
+        fail("candidate manifest is empty")
+    verify_archive(bundle_root, source_date_epoch)
+    return digest, source_sha, manifest
+
+
+reject_symlink_components(manifest_path)
+reject_symlink_components(destination)
+reject_symlink_components(tool_path)
+if not manifest_path.is_file() or manifest_path.is_symlink():
+    fail(f"manifest does not exist: {manifest_path}")
+candidate_root = manifest_path.parent
+digest, source_sha, manifest = verify_bundle(candidate_root, expected_digest or None, verify_mode=dry_run)
+target = destination / digest
+lock_name = f".{digest}.lock"
+lock = destination / lock_name
+if dry_run:
+    print(f"promote-candidate: verified candidate_digest={digest} source_sha={source_sha} destination={target} dry_run=true")
+    raise SystemExit(0)
+destination_fd = open_directory_chain(destination)
+lock_fd: int | None = None
+temporary: Path | None = None
+temporary_name: str | None = None
+temporary_fd: int | None = None
+promoted = False
+
+
+def target_exists() -> bool:
+    try:
+        metadata = os.stat(digest, dir_fd=destination_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        fail(f"cannot inspect promoted candidate target: {error}")
+    if stat.S_ISLNK(metadata.st_mode):
+        fail(f"promoted candidate target is a symlink: {target}")
+    if not stat.S_ISDIR(metadata.st_mode):
+        fail(f"promoted candidate target is not a directory: {target}")
+    return True
+
+
+def finish_existing() -> bool:
+    if not target_exists():
+        return False
+    existing_digest, existing_source_sha, _ = verify_bundle(target, digest, verify_mode=True)
+    if existing_digest != digest or existing_source_sha != source_sha:
+        fail(f"existing promoted candidate conflicts with {digest}: {target}")
+    print(f"promote-candidate: already-promoted candidate_digest={digest} destination={target}")
+    return True
+
+
+def acquire_lock() -> int:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    open_deadline = time.monotonic() + 60
+    while True:
+        if time.monotonic() >= open_deadline:
+            fail(f"timed out recovering promotion lock {lock}")
+        try:
+            descriptor = os.open(lock_name, flags, 0o600, dir_fd=destination_fd)
+            break
+        except IsADirectoryError:
+            try:
+                os.rmdir(lock_name, dir_fd=destination_fd)
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                fail(f"cannot recover stale promotion lock {lock}: {error}")
+        except FileNotFoundError as error:
+            if time.monotonic() >= open_deadline:
+                fail(f"cannot open promotion lock {lock}: {error}")
+            time.sleep(0.01)
+        except OSError as error:
+            fail(f"cannot open promotion lock {lock}: {error}")
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            fail(f"promotion lock is not a regular file: {lock}")
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return descriptor
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    fail(f"timed out waiting for concurrent promotion: {lock}")
+                time.sleep(0.1)
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def create_temporary_directory() -> tuple[str, Path, int]:
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for _ in range(100):
+        name = f".{digest}.tmp-{secrets.token_hex(8)}"
+        try:
+            os.mkdir(name, 0o700, dir_fd=destination_fd)
+        except FileExistsError:
+            continue
+        try:
+            descriptor = os.open(name, directory_flags, dir_fd=destination_fd)
+        except BaseException:
+            try:
+                os.rmdir(name, dir_fd=destination_fd)
+            except OSError:
+                pass
+            raise
+        return name, destination / name, descriptor
+    fail(f"could not allocate a temporary promotion directory under {destination}")
+
+
+def ensure_temporary_stable() -> None:
+    if temporary_name is None or temporary_fd is None:
+        fail("promotion temporary directory is not open")
+    try:
+        path_metadata = os.stat(temporary_name, dir_fd=destination_fd, follow_symlinks=False)
+    except OSError as error:
+        fail(f"cannot inspect promotion temporary directory: {error}")
+    descriptor_metadata = os.fstat(temporary_fd)
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or path_metadata.st_dev != descriptor_metadata.st_dev
+        or path_metadata.st_ino != descriptor_metadata.st_ino
+    ):
+        fail("promotion temporary directory changed during verification")
+
+
+def remove_tree_at(parent_fd: int, name: str) -> None:
+    try:
+        metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        os.unlink(name, dir_fd=parent_fd)
+        return
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    child_fd = os.open(name, directory_flags, dir_fd=parent_fd)
+    try:
+        for child in os.listdir(child_fd):
+            remove_tree_at(child_fd, child)
+    finally:
+        os.close(child_fd)
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        pass
+
+
+def sweep_stale_temporary() -> None:
+    pattern = re.compile(rf"\.{re.escape(digest)}\.tmp-[0-9a-f]{{16}}$")
+    for name in os.listdir(destination_fd):
+        if pattern.fullmatch(name):
+            remove_tree_at(destination_fd, name)
+
+
+try:
+    if finish_existing():
+        raise SystemExit(0)
+    lock_fd = acquire_lock()
+    sweep_stale_temporary()
+    if finish_existing():
+        raise SystemExit(0)
+
+    temporary_name, temporary, temporary_fd = create_temporary_directory()
+    artifacts = manifest["artifacts"]
+    for name in ("server", "worker", "connector"):
+        record = artifacts[name]
+        source = safe_child(candidate_root, record["path"])
+        copy_regular(source, temporary_fd, record["path"], record["mode"])
+    web_record = artifacts["web"]
+    for record in web_record["files"]:
+        source = safe_child(candidate_root / "web", record["path"])
+        copy_regular(source, temporary_fd, f"web/{record['path']}", record["mode"])
+    for name in (
+        "candidate-manifest.json",
+        "candidate-manifest.json.sha256",
+        "candidate.tar.gz",
+        "candidate.tar.gz.sha256",
+    ):
+        copy_regular(candidate_root / name, temporary_fd, name, 0o644)
+    ensure_temporary_stable()
+    os.fchmod(temporary_fd, 0o755)
+    verify_bundle(temporary, digest, verify_mode=True)
+    ensure_temporary_stable()
+    if target_exists():
+        fail(f"promoted candidate target appeared during promotion: {target}")
+    try:
+        rename_noreplace(temporary_name, digest, destination_fd)
+    except OSError as error:
+        fail(f"promoted candidate target appeared during promotion: {error}")
+    temporary = None
+    temporary_name = None
+    os.close(temporary_fd)
+    temporary_fd = None
+    promoted = True
+finally:
+    if temporary_name is not None:
+        remove_tree_at(destination_fd, temporary_name)
+    if temporary_fd is not None:
+        os.close(temporary_fd)
+    if lock_fd is not None:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+    os.close(destination_fd)
+if promoted:
+    print(f"promote-candidate: promoted candidate_digest={digest} source_sha={source_sha} destination={target}")
+PY
