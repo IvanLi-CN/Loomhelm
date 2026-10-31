@@ -77,13 +77,19 @@ class PreviewControlTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             state_dir = root / "private-state"
+            repo = root / "repo"
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "deploy" / "preview").mkdir(parents=True)
+            shutil.copy2(control.ROOT / "scripts" / "preview", repo / "scripts" / "preview")
+            shutil.copy2(control.ROOT / "deploy" / "preview" / "control.py", repo / "deploy" / "preview" / "control.py")
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True, capture_output=True, timeout=5)
             environment_file = root / "preview.env"
             environment_file.write_text(f"LOOMHELM_PREVIEW_STATE_DIR={state_dir}\n", encoding="utf-8")
             environment = {key: value for key, value in os.environ.items() if not key.startswith("LOOMHELM_")}
             environment["LOOMHELM_PREVIEW_ENV_FILE"] = str(environment_file)
             result = subprocess.run(
-                [str(control.ROOT / "scripts" / "preview"), "init"],
-                cwd=control.ROOT,
+                [str(repo / "scripts" / "preview"), "init"],
+                cwd=repo,
                 env=environment,
                 capture_output=True,
                 text=True,
