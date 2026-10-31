@@ -187,11 +187,35 @@ func TestServiceHostOwnershipAndExplicitSharing(t *testing.T) {
 	if enrollment.Host.OwnerUserID != ownerID {
 		t.Fatalf("EnrollForUser() owner = %q, want %q", enrollment.Host.OwnerUserID, ownerID)
 	}
+	enrollmentID := "cdevice-" + ownerID
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO connector_device_authorizations
+			(id, user_code_hash, redirect_uri, state, expires_at, authorized_user_id, authorization_code_hash, authorized_at)
+		VALUES ($1, $2, 'http://127.0.0.1:43123/callback', $3, $4, $5, $6, CURRENT_TIMESTAMP)
+	`, enrollmentID, make([]byte, 32), strings.Repeat("s", 32), time.Now().Add(time.Hour), ownerID, []byte(strings.Repeat("a", 32))); err != nil {
+		t.Fatalf("insert Connector authorization: %v", err)
+	}
+	connectorEnrollment, err := service.EnrollConnectorForUser(ctx, ownerID, "", enrollmentID, "authorization-code", RegisterRequest{CredentialName: "connector"})
+	if err != nil {
+		t.Fatalf("EnrollConnectorForUser() error = %v", err)
+	}
+	retriedConnectorEnrollment, err := service.EnrollConnectorForUser(ctx, ownerID, "", enrollmentID, "authorization-code", RegisterRequest{CredentialName: "connector"})
+	if err != nil {
+		t.Fatalf("retry EnrollConnectorForUser() error = %v", err)
+	}
+	if connectorEnrollment.Host.ID != retriedConnectorEnrollment.Host.ID || connectorEnrollment.Credential.ID != retriedConnectorEnrollment.Credential.ID || connectorEnrollment.Token != retriedConnectorEnrollment.Token {
+		t.Fatalf("Connector enrollment retry = (%q, %q, %q), want the original result (%q, %q, %q)", retriedConnectorEnrollment.Host.ID, retriedConnectorEnrollment.Credential.ID, retriedConnectorEnrollment.Token, connectorEnrollment.Host.ID, connectorEnrollment.Credential.ID, connectorEnrollment.Token)
+	}
+	authenticatedConnectorCredential, err := service.Authenticate(ctx, connectorEnrollment.Token)
+	if err != nil || authenticatedConnectorCredential.ID != connectorEnrollment.Credential.ID {
+		t.Fatalf("Authenticate(Connector enrollment token) = (%q, %v), want credential %q", authenticatedConnectorCredential.ID, err, connectorEnrollment.Credential.ID)
+	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 		cleanupHostRegistration(cleanupCtx, pool, registration.Host.ID)
 		cleanupHostRegistration(cleanupCtx, pool, enrollment.Host.ID)
+		cleanupHostRegistration(cleanupCtx, pool, connectorEnrollment.Host.ID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM auth_users WHERE id = ANY($1::text[])`, []string{ownerID, sharedID, foreignID})
 	})
 	if _, err := service.ConfiguredHostForUser(ctx, foreignID); !errors.Is(err, ErrNotFound) {
@@ -223,9 +247,12 @@ func TestServiceHostOwnershipAndExplicitSharing(t *testing.T) {
 	if err != nil || configured.ID != registration.Host.ID {
 		t.Fatalf("ConfiguredHostForUser(shared) = (%q, %v), want %q", configured.ID, err, registration.Host.ID)
 	}
+	if _, err := service.GrantShare(ctx, ownerID, enrollment.Host.ID, sharedID); err != nil {
+		t.Fatalf("GrantShare(second Host) error = %v", err)
+	}
 	visible, err := service.ListForUser(ctx, sharedID)
-	if err != nil || len(visible) != 1 || visible[0].Owned {
-		t.Fatalf("ListForUser(shared) = (%+v, %v), want one shared Host", visible, err)
+	if err != nil || len(visible) != 2 || visible[0].Owned || visible[1].Owned {
+		t.Fatalf("ListForUser(shared) = (%+v, %v), want two shared Hosts", visible, err)
 	}
 	if _, err := service.ListCredentialsForUser(ctx, sharedID, registration.Host.ID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("ListCredentialsForUser(shared) error = %v, want ErrForbidden", err)
@@ -236,8 +263,15 @@ func TestServiceHostOwnershipAndExplicitSharing(t *testing.T) {
 	if allowed, err := service.CanUse(ctx, sharedID, registration.Host.ID); err != nil || allowed {
 		t.Fatalf("CanUse(after revoke) = (%t, %v), want false", allowed, err)
 	}
+	configured, err = service.ConfiguredHostForUser(ctx, sharedID)
+	if err != nil || configured.ID != enrollment.Host.ID {
+		t.Fatalf("ConfiguredHostForUser(after first revoke) = (%q, %v), want fallback %q", configured.ID, err, enrollment.Host.ID)
+	}
+	if err := service.RevokeShare(ctx, ownerID, enrollment.Host.ID, sharedID); err != nil {
+		t.Fatalf("RevokeShare(fallback Host) error = %v", err)
+	}
 	if _, err := service.ConfiguredHostForUser(ctx, sharedID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("ConfiguredHostForUser(after revoke) error = %v, want ErrNotFound", err)
+		t.Fatalf("ConfiguredHostForUser(after all revokes) error = %v, want ErrNotFound", err)
 	}
 }
 

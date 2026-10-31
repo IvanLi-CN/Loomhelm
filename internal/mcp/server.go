@@ -458,6 +458,9 @@ func validToolResponse(operationID string, body []byte) bool {
 	case "grantProjectMember":
 		var response protocol.ProjectMemberResponse
 		return json.Unmarshal(body, &response) == nil && validProjectMember(response.Member)
+	case "grantHostShare":
+		var response protocol.HostShareResponse
+		return json.Unmarshal(body, &response) == nil && validHostShare(response.Share)
 	case "createTask", "updateTask":
 		var response protocol.TaskResponse
 		return json.Unmarshal(body, &response) == nil && validTask(response.Task)
@@ -473,6 +476,10 @@ func validToolResponse(operationID string, body []byte) bool {
 	default:
 		return false
 	}
+}
+
+func validHostShare(value protocol.HostShare) bool {
+	return value.HostID != "" && value.UserID != "" && value.GrantedBy != "" && value.CreatedAt != ""
 }
 
 func validCreatedCredential(value protocol.CreatedUserCredential) bool {

@@ -16,7 +16,13 @@ Each registered Host has one user owner. A Host owner may list and revoke that H
 
 Every user has a durable default Host selection when they own or explicitly receive access to a Host. Session creation and Run routing resolve through that default; public session/run operations do not accept an arbitrary machine selector. Legacy singleton rows without an owner remain quarantined from user routing until explicitly repaired by an owner-facing migration or administrative operation.
 
+Default routing preserves a currently authorized selection. When that selection becomes unavailable, the service removes it and deterministically chooses the oldest owned Host, then the oldest explicitly shared Host, ordering ties by Host ID. If no authorized Host remains, routing fails closed until a new Host is registered or shared.
+
+Host-use authorization is evaluated at operation admission. Admission locks the Host row, and share or credential revocation uses the same transaction boundary. A request that commits admission before revocation may finish under that admission; no later admission can pass after the revocation is committed. This is the phase-one linearization point and does not claim retroactive cancellation of already admitted work.
+
 Connector device approval creates a new Host owned by the approving user unless the request names an existing Host owned by that same user. A shared user cannot bind enrollment to another user's Host. The authorization code stores the approving identity and requested Host binding, and completion happens only after the owner-scoped enrollment succeeds.
+
+Each device authorization is also the idempotency key for its Connector enrollment. Migration 00020 binds at most one newly created Host and one credential to that authorization. Retries after a claim lease expires reuse those rows and derive the same opaque token from the in-memory authorization code and durable identities; neither the raw code nor the token is stored in the database. A local cache publication failure remains an operational credential-recovery condition and must be handled through owner-authorized revocation and browser recovery.
 
 Host inventory, credential and share operations are available through authenticated REST and MCP with the same application authorization. Host administration requires an unrestricted user principal; project-scoped bearers and project membership cannot be used as an installation-management substitute. No browser Host-management surface is introduced by this decision.
 
@@ -30,7 +36,7 @@ Host inventory, credential and share operations are available through authentica
 
 ## Compatibility
 
-Migration 00019 adds nullable Host ownership, explicit share grants, per-user defaults and requested-Host device binding. Existing singleton rows are retained but are not implicitly assigned to a user. The public REST/MCP additions and Connector routing change are `public_api=minor`; the durable schema change is `persistent_state=minor`. Down-migration is not an automatic rollback strategy; forward repair is required for any legacy Host adoption.
+Migrations 00019 and 00020 add nullable Host ownership, explicit share grants, per-user defaults, requested-Host device binding and Connector enrollment idempotency. Existing singleton rows are retained but are not implicitly assigned to a user. The public REST/MCP additions and Connector routing change are `public_api=minor`; the durable schema change is `persistent_state=minor`. Down-migration is not an automatic rollback strategy; forward repair is required for any legacy Host adoption.
 
 ## Verification
 

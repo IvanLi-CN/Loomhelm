@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Bind Connector-issued Hosts and credentials to the durable device authorization so retries reuse one enrollment result.",
+    "release_unit_description": "Phase-one Connector exchange retry hardening after migration 00019.",
+    "version_impact": "patch"
+  },
+  "compatibility_assessment": {
+    "public_api": "patch",
+    "persistent_state": "minor",
+    "reason": "The migration adds nullable foreign-key bindings used only by Connector device enrollment retries; existing Host registrations and credentials remain unchanged."
+  },
+  "durable_state": {
+    "description": "A device authorization may identify at most one Host registration and one Host credential. The foreign keys are nullable and clear when expired device rows are removed.",
+    "storage_implementation": "PostgreSQL columns and partial unique indexes managed by the embedded Goose application migration history.",
+    "source_compatibility_range": {
+      "from_program_versions": "Phase-one candidate containing migrations 00018 and 00019.",
+      "to_program_version": "Phase-one Connector enrollment idempotency candidate containing migration 00020.",
+      "readable_earlier_state": true,
+      "older_program_can_read_new_state": true,
+      "direct_major_skips_supported": false,
+      "compatibility_boundary": "Older candidates ignore the additive nullable columns. New Connector exchanges use the binding; legacy Host registration and enrollment paths leave it NULL."
+    }
+  },
+  "database_migration": {
+    "ordered_operations": [
+      {"order": 1, "kind": "ddl", "description": "Add a nullable device-authorization foreign key and partial unique index to Host registrations."},
+      {"order": 2, "kind": "ddl", "description": "Add the corresponding nullable device-authorization foreign key and partial unique index to Host credentials."}
+    ],
+    "backfill": "none; only new Connector exchanges write the binding.",
+    "rollout_signals": [
+      "One authorization record resolves to one Host and credential under concurrent retry.",
+      "Retry derives the same opaque token from the authorization code and durable Host/credential identities without storing the raw code or token."
+    ],
+    "recovery": {
+      "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+      "faulty_release_recovery": "forward-repair-by-a-new-program-version-or-compatible switchback while nullable bindings remain readable"
+    }
+  },
+  "validation": [
+    "Fresh and upgraded PostgreSQL databases apply migration 00020 with all partial unique indexes present.",
+    "Concurrent and stale device exchange retries reuse one Host/credential result.",
+    "Legacy Host registrations and credentials remain valid with NULL Connector bindings."
+  ],
+  "deployed_migrations_immutable": true,
+  "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate"
+}

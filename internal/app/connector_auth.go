@@ -13,8 +13,8 @@ type connectorAuthService struct {
 	registry *hosts.Service
 }
 
-func (s connectorAuthService) EnrollConnector(ctx context.Context, approvingUserID, requestedHostID string) (auth.ConnectorCredential, error) {
-	registration, err := s.registry.EnrollForUser(ctx, approvingUserID, requestedHostID, hosts.RegisterRequest{
+func (s connectorAuthService) EnrollConnector(ctx context.Context, approvingUserID, requestedHostID, enrollmentID, authorizationCode string) (auth.ConnectorCredential, error) {
+	registration, err := s.registry.EnrollConnectorForUser(ctx, approvingUserID, requestedHostID, enrollmentID, authorizationCode, hosts.RegisterRequest{
 		Name:           "Loomhelm execution environment",
 		CredentialName: "loomhelm-connector",
 	})

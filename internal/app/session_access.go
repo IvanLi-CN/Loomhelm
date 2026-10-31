@@ -234,7 +234,7 @@ func (s *sessionService) authorizeTaskBinding(ctx context.Context, tx pgx.Tx, pr
 		return auth.ErrNotFound
 	}
 	if s.hosts != nil {
-		if err := s.hosts.AuthorizeUser(ctx, principal.UserID, access.HostID); err != nil {
+		if err := s.hosts.AuthorizeUserTx(ctx, tx, principal.UserID, access.HostID); err != nil {
 			if errors.Is(err, hosts.ErrForbidden) || errors.Is(err, hosts.ErrNotFound) {
 				return auth.ErrNotFound
 			}

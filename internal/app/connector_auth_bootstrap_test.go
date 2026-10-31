@@ -122,6 +122,60 @@ func TestConnectorBrowserBootstrapUsesLoopbackCallbackAndCachesCredential(t *tes
 	}
 }
 
+func TestConnectorBootstrapPrefersValidCachedCredentialAfterConfiguredKeyRejection(t *testing.T) {
+	configuredKey, err := auth.EncodeConnectorAPIKey("host-stale", "token-stale")
+	if err != nil {
+		t.Fatalf("encode configured key: %v", err)
+	}
+	cachedCredential := auth.ConnectorCredential{HostID: "host-stale", Token: "token-cache"}
+	cachedKey, err := auth.EncodeConnectorAPIKey(cachedCredential.HostID, cachedCredential.Token)
+	if err != nil {
+		t.Fatalf("encode cached key: %v", err)
+	}
+	identityCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/connector/identity" {
+			http.NotFound(writer, request)
+			return
+		}
+		identityCalls++
+		if request.Header.Get("Authorization") == "Bearer "+configuredKey {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if request.Header.Get("Authorization") != "Bearer "+cachedKey {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"host_id":"host-stale"}`)
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	if err := saveConnectorCredential(cachePath, server.URL, cachedCredential); err != nil {
+		t.Fatalf("save cached credential: %v", err)
+	}
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(context.Context, string) error {
+			t.Fatal("browser recovery was started despite a valid cached credential")
+			return nil
+		},
+	}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorAPIKey:         configuredKey,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("bootstrap error = %v", err)
+	}
+	if credential != cachedCredential || identityCalls != 2 {
+		t.Fatalf("bootstrap result = (%+v, %d identity calls), want cached credential and two checks", credential, identityCalls)
+	}
+}
+
 func TestConnectorBootstrapRecoversRejectedCachedCredential(t *testing.T) {
 	var callbackURL string
 	var callbackState string

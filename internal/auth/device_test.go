@@ -16,6 +16,7 @@ type connectorDeviceStoreFake struct {
 	consumed      bool
 	claimed       bool
 	claimedAt     time.Time
+	completeErr   error
 }
 
 func (s *connectorDeviceStoreFake) Create(_ context.Context, record connectorDeviceAuthorization, userCodeHash, _ []byte) error {
@@ -54,6 +55,11 @@ func (s *connectorDeviceStoreFake) Complete(_ context.Context, authorizationCode
 	if !s.claimed || string(authorizationCodeHash) != string(s.authorization) || !s.claimedAt.Equal(now) {
 		return ErrInvalid
 	}
+	if s.completeErr != nil {
+		err := s.completeErr
+		s.completeErr = nil
+		return err
+	}
 	s.claimed = false
 	s.claimedAt = time.Time{}
 	s.consumed = true
@@ -70,16 +76,19 @@ func (s *connectorDeviceStoreFake) Release(_ context.Context, authorizationCodeH
 }
 
 type connectorEnrollerFake struct {
-	credential ConnectorCredential
-	calls      int
-	userID     string
-	hostID     string
-	err        error
+	credential        ConnectorCredential
+	calls             int
+	userID            string
+	hostID            string
+	enrollmentID      string
+	authorizationCode string
+	err               error
 }
 
-func (e *connectorEnrollerFake) EnrollConnector(_ context.Context, userID, hostID string) (ConnectorCredential, error) {
+func (e *connectorEnrollerFake) EnrollConnector(_ context.Context, userID, hostID, enrollmentID, authorizationCode string) (ConnectorCredential, error) {
 	e.calls++
 	e.userID, e.hostID = userID, hostID
+	e.enrollmentID, e.authorizationCode = enrollmentID, authorizationCode
 	if e.err != nil {
 		return ConnectorCredential{}, e.err
 	}
@@ -135,6 +144,9 @@ func TestConnectorDeviceFlowExchangesAuthorizationCodeOnce(t *testing.T) {
 	if enroller.userID != "user-1" || enroller.hostID != "host-1" {
 		t.Fatalf("enroller binding = (%q, %q), want (%q, %q)", enroller.userID, enroller.hostID, "user-1", "host-1")
 	}
+	if enroller.enrollmentID == "" || enroller.authorizationCode != parsed.Query().Get("code") {
+		t.Fatalf("enroller exchange binding = (%q, %q), want non-empty authorization and code", enroller.enrollmentID, enroller.authorizationCode)
+	}
 }
 
 func TestConnectorDeviceFlowReleasesClaimWhenEnrollmentFails(t *testing.T) {
@@ -178,6 +190,45 @@ func TestConnectorDeviceFlowReleasesClaimWhenEnrollmentFails(t *testing.T) {
 	}
 	if enroller.calls != 2 {
 		t.Fatalf("enroller calls = %d, want 2", enroller.calls)
+	}
+}
+
+func TestConnectorDeviceFlowRetriesEnrollmentAfterCompletionLeaseFailure(t *testing.T) {
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	store := &connectorDeviceStoreFake{completeErr: errors.New("completion lost")}
+	enroller := &connectorEnrollerFake{credential: ConnectorCredential{HostID: "host-1", Token: "token-1"}}
+	flow := &connectorDeviceFlow{store: store, enroller: enroller, now: func() time.Time { return now }}
+	started, err := flow.start(context.Background(), connectorDeviceStartRequest{
+		RedirectURI: "http://127.0.0.1:43123/callback",
+		State:       strings.Repeat("s", 32),
+	})
+	if err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	callback, err := flow.authorize(context.Background(), started.UserCode, "user-1")
+	if err != nil {
+		t.Fatalf("authorize error = %v", err)
+	}
+	parsed, err := url.Parse(callback)
+	if err != nil {
+		t.Fatalf("parse callback: %v", err)
+	}
+	code := parsed.Query().Get("code")
+	if _, err := flow.exchange(context.Background(), code); err == nil {
+		t.Fatal("exchange succeeded despite completion failure")
+	}
+	firstEnrollmentID, firstAuthorizationCode := enroller.enrollmentID, enroller.authorizationCode
+	now = now.Add(connectorExchangeClaim + time.Second)
+	apiKey, err := flow.exchange(context.Background(), code)
+	if err != nil {
+		t.Fatalf("retry exchange error = %v", err)
+	}
+	if enroller.calls != 2 || enroller.enrollmentID != firstEnrollmentID || enroller.authorizationCode != firstAuthorizationCode {
+		t.Fatalf("retry enrollment binding = (%d, %q, %q), want the same authorization binding", enroller.calls, enroller.enrollmentID, enroller.authorizationCode)
+	}
+	credential, err := DecodeConnectorAPIKey(apiKey)
+	if err != nil || credential != enroller.credential {
+		t.Fatalf("retry credential = (%+v, %v), want %+v", credential, err, enroller.credential)
 	}
 }
 
@@ -225,6 +276,11 @@ func TestSafeAuthReturnToRejectsExternalURL(t *testing.T) {
 	}
 	if got := safeAuthReturnTo("/api/v1/auth/device/verify?user_code=ABCD-2345"); got == "" {
 		t.Fatal("relative return target was rejected")
+	}
+	for _, value := range []string{`/\\evil.example/callback`, "/%5C%5Cevil.example/callback"} {
+		if got := safeAuthReturnTo(value); got != "" {
+			t.Fatalf("backslash return target %q = %q, want empty", value, got)
+		}
 	}
 }
 

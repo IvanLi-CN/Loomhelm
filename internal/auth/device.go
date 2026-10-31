@@ -169,7 +169,7 @@ func (f *connectorDeviceFlow) exchange(ctx context.Context, code string) (string
 	if err != nil {
 		return "", err
 	}
-	credential, err := f.enroller.EnrollConnector(ctx, record.AuthorizedUserID, record.RequestedHostID)
+	credential, err := f.enroller.EnrollConnector(ctx, record.AuthorizedUserID, record.RequestedHostID, record.ID, code)
 	if err != nil {
 		_ = f.store.Release(ctx, hash[:], now)
 		return "", err
@@ -283,11 +283,14 @@ func (s *Service) handleConnectorIdentity(writer http.ResponseWriter, request *h
 }
 
 func safeAuthReturnTo(raw string) string {
-	if raw == "" || strings.ContainsAny(raw, "\x00\r\n") || strings.HasPrefix(raw, "//") {
+	if raw == "" || strings.ContainsAny(raw, "\\\x00\r\n") || strings.HasPrefix(raw, "//") {
 		return ""
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.IsAbs() || parsed.Host != "" || !strings.HasPrefix(parsed.Path, "/") {
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || !strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(parsed.Path, "//") {
+		return ""
+	}
+	if strings.Contains(parsed.Path, "\\") || strings.Contains(strings.ToLower(parsed.RawPath), "%5c") {
 		return ""
 	}
 	return parsed.RequestURI()

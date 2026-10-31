@@ -107,6 +107,19 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 		if !errors.Is(err, errConnectorCredentialRejected) {
 			return auth.ConnectorCredential{}, err
 		}
+		if cached, ok, cacheErr := loadConnectorCredential(cachePath, cfg.ConnectorServerURL); cacheErr != nil {
+			return auth.ConnectorCredential{}, cacheErr
+		} else if ok && cached.HostID == decoded.HostID {
+			cachedAPIKey, encodeErr := auth.EncodeConnectorAPIKey(cached.HostID, cached.Token)
+			if encodeErr != nil {
+				return auth.ConnectorCredential{}, fmt.Errorf("encode cached Connector credential: %w", encodeErr)
+			}
+			if cachedCredential, cacheValidateErr := b.resolveAPIKey(ctx, cfg.ConnectorServerURL, cachedAPIKey); cacheValidateErr == nil {
+				return cachedCredential, nil
+			} else if !errors.Is(cacheValidateErr, errConnectorCredentialRejected) {
+				return auth.ConnectorCredential{}, cacheValidateErr
+			}
+		}
 		if logger != nil {
 			logger.Info("connector credential rejected; starting browser recovery")
 		}

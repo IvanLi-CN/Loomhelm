@@ -256,11 +256,7 @@ func normalizeRegistrationRequest(request RegisterRequest, requireName bool) (st
 }
 
 func newRegistrationCredential() (string, string, string, [32]byte, error) {
-	hostID, err := newID("host")
-	if err != nil {
-		return "", "", "", [32]byte{}, err
-	}
-	credentialID, err := newID("hcred")
+	hostID, credentialID, err := newRegistrationIDs()
 	if err != nil {
 		return "", "", "", [32]byte{}, err
 	}
@@ -269,6 +265,23 @@ func newRegistrationCredential() (string, string, string, [32]byte, error) {
 		return "", "", "", [32]byte{}, err
 	}
 	return hostID, credentialID, token, hashToken(token), nil
+}
+
+func newRegistrationIDs() (string, string, error) {
+	hostID, err := newID("host")
+	if err != nil {
+		return "", "", err
+	}
+	credentialID, err := newID("hcred")
+	if err != nil {
+		return "", "", err
+	}
+	return hostID, credentialID, nil
+}
+
+func connectorEnrollmentToken(authorizationCode, hostID, credentialID string) string {
+	digest := sha256.Sum256([]byte("loomhelm-connector-enrollment\x00" + authorizationCode + "\x00" + hostID + "\x00" + credentialID))
+	return "lhc_" + credentialID + "_" + base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
 func nullableString(value string) *string {
@@ -281,14 +294,25 @@ func nullableString(value string) *string {
 // Enroll is retained for legacy host gateway fixtures. Production Connector
 // enrollment must use EnrollForUser so the approving user owns the Host.
 func (s *Service) Enroll(ctx context.Context, request RegisterRequest) (Registration, error) {
-	return s.enroll(ctx, "", "", request, true)
+	return s.enroll(ctx, "", "", request, true, "", "")
 }
 
 func (s *Service) EnrollForUser(ctx context.Context, userID, requestedHostID string, request RegisterRequest) (Registration, error) {
-	return s.enroll(ctx, strings.TrimSpace(userID), strings.TrimSpace(requestedHostID), request, false)
+	return s.enroll(ctx, strings.TrimSpace(userID), strings.TrimSpace(requestedHostID), request, false, "", "")
 }
 
-func (s *Service) enroll(ctx context.Context, userID, requestedHostID string, request RegisterRequest, legacySingleton bool) (Registration, error) {
+// EnrollConnectorForUser binds the resulting Host and credential to one
+// device authorization. Retrying the same authorization therefore reuses the
+// durable enrollment result instead of creating another credential.
+func (s *Service) EnrollConnectorForUser(ctx context.Context, userID, requestedHostID, enrollmentID, authorizationCode string, request RegisterRequest) (Registration, error) {
+	enrollmentID, authorizationCode = strings.TrimSpace(enrollmentID), strings.TrimSpace(authorizationCode)
+	if enrollmentID == "" || authorizationCode == "" {
+		return Registration{}, fmt.Errorf("%w: Connector enrollment binding is required", ErrInvalid)
+	}
+	return s.enroll(ctx, strings.TrimSpace(userID), strings.TrimSpace(requestedHostID), request, false, enrollmentID, authorizationCode)
+}
+
+func (s *Service) enroll(ctx context.Context, userID, requestedHostID string, request RegisterRequest, legacySingleton bool, enrollmentID, authorizationCode string) (Registration, error) {
 	if err := s.ready(ctx); err != nil {
 		return Registration{}, err
 	}
@@ -299,9 +323,20 @@ func (s *Service) enroll(ctx context.Context, userID, requestedHostID string, re
 	if !legacySingleton && userID == "" {
 		return Registration{}, fmt.Errorf("%w: owner user id is required", ErrInvalid)
 	}
-	hostID, credentialID, token, tokenHash, err := newRegistrationCredential()
-	if err != nil {
-		return Registration{}, err
+	var hostID, credentialID, token string
+	var tokenHash [32]byte
+	if enrollmentID == "" {
+		var err error
+		hostID, credentialID, token, tokenHash, err = newRegistrationCredential()
+		if err != nil {
+			return Registration{}, err
+		}
+	} else {
+		var err error
+		hostID, credentialID, err = newRegistrationIDs()
+		if err != nil {
+			return Registration{}, err
+		}
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -336,32 +371,43 @@ func (s *Service) enroll(ctx context.Context, userID, requestedHostID string, re
 			return Registration{}, fmt.Errorf("lock requested Host: %w", err)
 		}
 	} else {
-		insertQuery := `
-			INSERT INTO host_registrations (id, name, owner_user_id, singleton_key)
-			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (singleton_key) DO NOTHING
-		`
-		if !legacySingleton {
-			insertQuery = `
-				INSERT INTO host_registrations (id, name, owner_user_id, singleton_key)
-				VALUES ($1, $2, $3, NULL)
-			`
-		}
-		var singletonKey any
-		if legacySingleton {
-			singletonKey = "default"
-		}
 		var insertErr error
-		if legacySingleton {
-			_, insertErr = tx.Exec(ctx, insertQuery, hostID, name, nullableString(userID), singletonKey)
+		if enrollmentID != "" {
+			_, insertErr = tx.Exec(ctx, `
+					INSERT INTO host_registrations (id, name, owner_user_id, singleton_key, connector_device_authorization_id)
+					VALUES ($1, $2, $3, NULL, $4)
+					ON CONFLICT DO NOTHING
+				`, hostID, name, userID, enrollmentID)
+		} else if legacySingleton {
+			_, insertErr = tx.Exec(ctx, `
+					INSERT INTO host_registrations (id, name, owner_user_id, singleton_key)
+					VALUES ($1, $2, $3, $4)
+					ON CONFLICT (singleton_key) DO NOTHING
+				`, hostID, name, nullableString(userID), "default")
 		} else {
-			_, insertErr = tx.Exec(ctx, insertQuery, hostID, name, userID)
+			_, insertErr = tx.Exec(ctx, `
+					INSERT INTO host_registrations (id, name, owner_user_id, singleton_key)
+					VALUES ($1, $2, $3, NULL)
+				`, hostID, name, userID)
 		}
 		if insertErr != nil {
 			return Registration{}, fmt.Errorf("ensure host registration: %w", insertErr)
 		}
 		var loadErr error
-		if legacySingleton {
+		if enrollmentID != "" {
+			loadErr = tx.QueryRow(ctx, `
+					SELECT id, name, status, connection_generation, created_at, updated_at, owner_user_id
+					FROM host_registrations
+					WHERE connector_device_authorization_id = $1
+					FOR UPDATE
+				`, enrollmentID).Scan(&host.ID, &host.Name, &host.Status, &host.ConnectionGeneration, &host.CreatedAt, &host.UpdatedAt, &host.OwnerUserID)
+			if errors.Is(loadErr, pgx.ErrNoRows) {
+				return Registration{}, ErrNotFound
+			}
+			if loadErr == nil && host.OwnerUserID != userID {
+				return Registration{}, ErrForbidden
+			}
+		} else if legacySingleton {
 			loadErr = tx.QueryRow(ctx, `
 				SELECT id, name, status, connection_generation, created_at, updated_at
 				FROM host_registrations
@@ -381,7 +427,38 @@ func (s *Service) enroll(ctx context.Context, userID, requestedHostID string, re
 		}
 	}
 	var credential Credential
-	if err := tx.QueryRow(ctx, `
+	if enrollmentID != "" {
+		token = connectorEnrollmentToken(authorizationCode, host.ID, credentialID)
+		tokenHash = hashToken(token)
+		credentialErr := tx.QueryRow(ctx, `
+			INSERT INTO host_credentials (id, host_id, name, token_hash, connector_device_authorization_id)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT DO NOTHING
+			RETURNING id, host_id, name, created_at, last_used_at, revoked_at
+		`, credentialID, host.ID, credentialName, tokenHash[:], enrollmentID).Scan(
+			&credential.ID, &credential.HostID, &credential.Name, &credential.CreatedAt, &credential.LastUsedAt, &credential.RevokedAt,
+		)
+		if errors.Is(credentialErr, pgx.ErrNoRows) {
+			credentialErr = tx.QueryRow(ctx, `
+				SELECT id, host_id, name, created_at, last_used_at, revoked_at
+				FROM host_credentials
+				WHERE connector_device_authorization_id = $1 AND host_id = $2
+			`, enrollmentID, host.ID).Scan(
+				&credential.ID, &credential.HostID, &credential.Name, &credential.CreatedAt, &credential.LastUsedAt, &credential.RevokedAt,
+			)
+			if credentialErr == nil {
+				credentialID = credential.ID
+				token = connectorEnrollmentToken(authorizationCode, host.ID, credentialID)
+				tokenHash = hashToken(token)
+			}
+		}
+		if credentialErr != nil {
+			return Registration{}, fmt.Errorf("ensure Connector enrollment credential: %w", credentialErr)
+		}
+		if credential.RevokedAt != nil {
+			return Registration{}, ErrCredentialRevoked
+		}
+	} else if err := tx.QueryRow(ctx, `
 		INSERT INTO host_credentials (id, host_id, name, token_hash)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id, host_id, name, created_at, last_used_at, revoked_at
@@ -852,6 +929,20 @@ func (s *Service) AuthorizeUser(ctx context.Context, userID, hostID string) erro
 	return nil
 }
 
+// AuthorizeUserTx locks the Host row before checking ownership or an active
+// share. Share revocation uses the same lock, so admission and revocation are
+// serialized at the transaction boundary.
+func (s *Service) AuthorizeUserTx(ctx context.Context, tx pgx.Tx, userID, hostID string) error {
+	allowed, err := s.CanUseTx(ctx, tx, userID, hostID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrForbidden
+	}
+	return nil
+}
+
 func (s *Service) CanUse(ctx context.Context, userID, hostID string) (bool, error) {
 	if err := s.ready(ctx); err != nil {
 		return false, err
@@ -872,6 +963,40 @@ func (s *Service) CanUse(ctx context.Context, userID, hostID string) (bool, erro
 		)
 	`, hostID, userID).Scan(&allowed); err != nil {
 		return false, fmt.Errorf("check Host access: %w", err)
+	}
+	return allowed, nil
+}
+
+func (s *Service) CanUseTx(ctx context.Context, tx pgx.Tx, userID, hostID string) (bool, error) {
+	if tx == nil {
+		return false, ErrInvalid
+	}
+	userID = strings.TrimSpace(userID)
+	hostID = strings.TrimSpace(hostID)
+	if userID == "" || hostID == "" {
+		return false, ErrInvalid
+	}
+	var ownerUserID *string
+	if err := tx.QueryRow(ctx, `
+		SELECT owner_user_id
+		FROM host_registrations
+		WHERE id = $1
+		FOR UPDATE
+	`, hostID).Scan(&ownerUserID); errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	} else if err != nil {
+		return false, fmt.Errorf("lock Host access: %w", err)
+	}
+	allowed := ownerUserID != nil && *ownerUserID == userID
+	if !allowed {
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM host_share_grants
+				WHERE host_id = $1 AND user_id = $2 AND revoked_at IS NULL
+			)
+		`, hostID, userID).Scan(&allowed); err != nil {
+			return false, fmt.Errorf("check Host share access: %w", err)
+		}
 	}
 	return allowed, nil
 }
@@ -985,6 +1110,66 @@ func (s *Service) ListShares(ctx context.Context, userID, hostID string) ([]Shar
 	return result, nil
 }
 
+// ensureUserDefaultTx preserves a still-authorized default and otherwise
+// selects the oldest owned Host, then the oldest explicitly shared Host. The
+// Host ID tie-breaker keeps the fallback deterministic.
+func ensureUserDefaultTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	var currentHostID string
+	err := tx.QueryRow(ctx, `
+		SELECT host_id
+		FROM host_user_defaults
+		WHERE user_id = $1
+		FOR UPDATE
+	`, userID).Scan(&currentHostID)
+	if err == nil {
+		var allowed bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM host_registrations
+				WHERE id = $1 AND owner_user_id = $2
+				UNION ALL
+				SELECT 1 FROM host_share_grants
+				WHERE host_id = $1 AND user_id = $2 AND revoked_at IS NULL
+			)
+		`, currentHostID, userID).Scan(&allowed); err != nil {
+			return fmt.Errorf("check Host default access: %w", err)
+		}
+		if allowed {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM host_user_defaults WHERE user_id = $1`, userID); err != nil {
+			return fmt.Errorf("clear unavailable Host default: %w", err)
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("lock Host default: %w", err)
+	}
+
+	var fallbackHostID string
+	err = tx.QueryRow(ctx, `
+		SELECT h.id
+		FROM host_registrations AS h
+		LEFT JOIN host_share_grants AS share
+		  ON share.host_id = h.id AND share.user_id = $1 AND share.revoked_at IS NULL
+		WHERE h.owner_user_id = $1 OR share.user_id IS NOT NULL
+		ORDER BY CASE WHEN h.owner_user_id = $1 THEN 0 ELSE 1 END, h.created_at, h.id
+		LIMIT 1
+	`, userID).Scan(&fallbackHostID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("find fallback Host: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO host_user_defaults (user_id, host_id)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id) DO NOTHING
+	`, userID, fallbackHostID); err != nil {
+		return fmt.Errorf("set fallback Host default: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) GrantShare(ctx context.Context, ownerUserID, hostID, userID string) (ShareGrant, error) {
 	if err := s.ready(ctx); err != nil {
 		return ShareGrant{}, err
@@ -1023,12 +1208,8 @@ func (s *Service) GrantShare(ctx context.Context, ownerUserID, hostID, userID st
 	`, hostID, userID, ownerUserID).Scan(&share.HostID, &share.UserID, &share.GrantedBy, &share.CreatedAt, &share.RevokedAt); err != nil {
 		return ShareGrant{}, fmt.Errorf("grant Host share: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO host_user_defaults (user_id, host_id)
-		VALUES ($1, $2)
-		ON CONFLICT (user_id) DO NOTHING
-	`, userID, hostID); err != nil {
-		return ShareGrant{}, fmt.Errorf("set shared Host default: %w", err)
+	if err := ensureUserDefaultTx(ctx, tx, userID); err != nil {
+		return ShareGrant{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return ShareGrant{}, fmt.Errorf("commit Host share grant: %w", err)
@@ -1068,6 +1249,9 @@ func (s *Service) RevokeShare(ctx context.Context, ownerUserID, hostID, userID s
 		WHERE user_id = $1 AND host_id = $2
 	`, userID, hostID); err != nil {
 		return fmt.Errorf("clear revoked Host default: %w", err)
+	}
+	if err := ensureUserDefaultTx(ctx, tx, userID); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit Host share revocation: %w", err)
