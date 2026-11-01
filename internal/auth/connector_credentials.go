@@ -9,7 +9,7 @@ import (
 
 const connectorAPIKeyPrefix = "lhk_"
 
-// ConnectorCredential is the deployment credential returned by the device
+// ConnectorCredential is the Host credential returned by the device
 // authorization flow. It is deliberately separate from a user API credential.
 type ConnectorCredential struct {
 	HostID string
@@ -28,7 +28,7 @@ func EncodeConnectorAPIKey(hostID, token string) (string, error) {
 	return connectorAPIKeyPrefix + base64.RawURLEncoding.EncodeToString([]byte(hostID+"\x00"+token)), nil
 }
 
-// DecodeConnectorAPIKey decodes only Loomhelm's opaque deployment key format.
+// DecodeConnectorAPIKey decodes only Loomhelm's opaque Host credential format.
 func DecodeConnectorAPIKey(value string) (ConnectorCredential, error) {
 	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, connectorAPIKeyPrefix) {
