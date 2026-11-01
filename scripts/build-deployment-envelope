@@ -80,12 +80,30 @@ with open(candidate_path, encoding="utf-8") as stream:
     candidate = json.load(stream)
 if candidate.get("schema_version") != 2:
     raise SystemExit("candidate schema_version must be 2")
+if set(candidate) != {"schema_version", "candidate", "platform", "inputs", "artifacts"}:
+    raise SystemExit("candidate manifest has unexpected top-level fields")
 identity = candidate.get("candidate")
-if not isinstance(identity, dict) or not re.fullmatch(r"[0-9a-f]{40}", identity.get("source_sha", "")) or not re.fullmatch(r"[0-9a-f]{64}", identity.get("digest", "")):
+if not isinstance(identity, dict) or set(identity) != {"digest", "source_sha", "source_tree_sha", "source_date_epoch"}:
+    raise SystemExit("candidate identity is invalid")
+if not re.fullmatch(r"[0-9a-f]{40}", identity.get("source_sha", "")) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", identity.get("source_tree_sha", "")) or not re.fullmatch(r"[0-9a-f]{64}", identity.get("digest", "")):
     raise SystemExit("candidate identity is invalid")
 web = candidate.get("artifacts", {}).get("web", {})
 if not re.fullmatch(r"[0-9a-f]{64}", web.get("sha256", "")):
     raise SystemExit("candidate Web digest is invalid")
+candidate_identity = {
+    "schema_version": candidate["schema_version"],
+    "source_sha": identity["source_sha"],
+    "source_tree_sha": identity["source_tree_sha"],
+    "source_date_epoch": identity["source_date_epoch"],
+    "platform": candidate["platform"],
+    "inputs": candidate["inputs"],
+    "artifacts": candidate["artifacts"],
+}
+expected_candidate_digest = hashlib.sha256(
+    json.dumps(candidate_identity, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+if identity["digest"] != expected_candidate_digest:
+    raise SystemExit("candidate digest does not match its canonical identity")
 compatibility = {
     "state_version": state_version,
     "read_min": read_min,

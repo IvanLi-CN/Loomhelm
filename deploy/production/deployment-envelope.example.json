@@ -1,26 +1,56 @@
 {
-  "schema_version": 1,
   "candidate_manifest": {
-    "schema_version": 2,
-    "candidate": {
-      "digest": "0000000000000000000000000000000000000000000000000000000000000000",
-      "source_sha": "0000000000000000000000000000000000000000"
-    },
     "artifacts": {
+      "connector": {
+        "mode": 493,
+        "path": "bin/connector",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 0
+      },
+      "server": {
+        "mode": 493,
+        "path": "bin/server",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 0
+      },
       "web": {
+        "files": [],
+        "path": "web",
         "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "worker": {
+        "mode": 493,
+        "path": "bin/worker",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 0
       }
-    }
+    },
+    "candidate": {
+      "digest": "8322a371668f2d5ad05115b3f826776a45c1fbf923ae05df39923410085804f7",
+      "source_date_epoch": 0,
+      "source_sha": "0000000000000000000000000000000000000000",
+      "source_tree_sha": "0000000000000000000000000000000000000000"
+    },
+    "inputs": {
+      "build_contract": "candidate-v2"
+    },
+    "platform": {
+      "cgo_enabled": false,
+      "goarch": "amd64",
+      "goos": "linux"
+    },
+    "schema_version": 2
   },
   "compatibility": {
-    "state_version": 1,
-    "read_min": 1,
+    "migration_mode": "none",
     "read_max": 1,
-    "migration_mode": "none"
+    "read_min": 1,
+    "state_version": 1
   },
+  "envelope_digest": "sha256:9dd07d342243f73a69e4ceb35f294b5b2dd10745306beb208c32cc8f1c7933bf",
   "runtime": {
     "server_image": "ghcr.io/example/loomhelm-server@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "worker_image": "ghcr.io/example/loomhelm-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
-  "envelope_digest": "sha256:68aa23903642857211ca9d9b59a5d42cb977a978a1b29837112149bdbed62496"
+  "schema_version": 1
 }

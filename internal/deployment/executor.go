@@ -45,6 +45,27 @@ func (e *DegradedError) Unwrap() error {
 	return e.Err
 }
 
+// DeterministicError means the controller proved that no candidate side effect
+// remains and can therefore persist a failed result instead of unknown.
+type DeterministicError struct {
+	Err                       error
+	RecoveredWorkerGeneration int64
+}
+
+func (e *DeterministicError) Error() string {
+	if e == nil || e.Err == nil {
+		return "deterministic deployment failure"
+	}
+	return e.Err.Error()
+}
+
+func (e *DeterministicError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // CommandExecutor is deliberately a closed command set. Request data selects
 // only a registered candidate and slot; it can never provide a shell string,
 // Compose flag, binary path or Caddy endpoint.
@@ -164,16 +185,13 @@ func (e *CommandExecutor) Execute(ctx context.Context, operation Operation) erro
 	if e == nil {
 		return ErrExecutorUnavailable
 	}
-	kind := operation.ExecutionKind
-	if kind == "" {
-		kind = operation.Kind
-	}
+	kind := operation.Kind
 	if operation.CandidateID != "" {
 		if !validCandidateID(operation.CandidateID) || !validImageReference(operation.ServerImage) || !validImageReference(operation.WorkerImage) {
-			return ErrInvalidCandidate
+			return &DeterministicError{Err: ErrInvalidCandidate}
 		}
 		if err := e.verifyCandidateWeb(operation); err != nil {
-			return err
+			return &DeterministicError{Err: err}
 		}
 	}
 	switch kind {
@@ -184,32 +202,41 @@ func (e *CommandExecutor) Execute(ctx context.Context, operation Operation) erro
 		return e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("config", "--quiet")...)
 	case "stage":
 		if err := requireSlot(operation.Slot); err != nil {
-			return err
+			return &DeterministicError{Err: err}
 		}
 		if operation.CandidateID != "" && operation.WorkerGeneration <= 0 {
-			return fmt.Errorf("%w: staged candidate has no worker generation", ErrInvalidCandidate)
+			return &DeterministicError{Err: fmt.Errorf("%w: staged candidate has no worker generation", ErrInvalidCandidate)}
 		}
 		if err := e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "server-"+operation.Slot)...); err != nil {
-			return err
+			return e.cleanupStartedService(ctx, operation, "server", err)
 		}
-		return e.waitServerIdentity(ctx, operation)
+		if err := e.waitServerIdentity(ctx, operation); err != nil {
+			return e.cleanupStartedService(ctx, operation, "server", err)
+		}
+		return nil
 	case "promote", "rollback":
 		if err := requireSlot(operation.Slot); err != nil {
-			return err
+			return &DeterministicError{Err: err}
 		}
 		if operation.CandidateID != "" && operation.WorkerGeneration <= 0 {
-			return fmt.Errorf("%w: promoted candidate has no worker generation", ErrInvalidCandidate)
+			return &DeterministicError{Err: fmt.Errorf("%w: promoted candidate has no worker generation", ErrInvalidCandidate)}
 		}
-		if err := e.prepareCaddy(ctx, operation, true); err != nil {
-			return err
+		if err := e.prepareCaddy(ctx, operation, false); err != nil {
+			return &DeterministicError{Err: err}
 		}
 		if operation.CandidateID != "" {
 			if err := e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "worker-"+operation.Slot)...); err != nil {
-				return err
+				return e.cleanupFailedWorker(ctx, operation, err)
 			}
 			if err := e.waitWorkerIdentity(ctx, operation); err != nil {
-				return err
+				return e.cleanupFailedWorker(ctx, operation, err)
 			}
+		}
+		if err := e.prepareCaddy(ctx, operation, true); err != nil {
+			if operation.CandidateID != "" {
+				return e.cleanupFailedWorker(ctx, operation, err)
+			}
+			return err
 		}
 		if err := e.run(ctx, nil, e.CaddyBinary, e.caddyArguments("reload")...); err != nil {
 			return err
@@ -227,22 +254,39 @@ func (e *CommandExecutor) Execute(ctx context.Context, operation Operation) erro
 		return nil
 	case "drain":
 		if err := requireSlot(operation.Slot); err != nil {
-			return err
+			return &DeterministicError{Err: err}
 		}
 		return e.drain(ctx, operation.Slot)
 	case "reconcile":
 		switch operation.ExecutionKind {
+		case "preflight":
+			if err := e.prepareCaddy(ctx, operation, false); err != nil {
+				return err
+			}
+			return e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("config", "--quiet")...)
 		case "stage":
+			if err := e.ensureService(ctx, operation, "server"); err != nil {
+				return err
+			}
 			return e.waitServerIdentity(ctx, operation)
 		case "promote", "rollback":
+			if err := e.prepareCaddy(ctx, operation, false); err != nil {
+				return err
+			}
+			if err := e.ensureService(ctx, operation, "server"); err != nil {
+				return err
+			}
 			if err := e.waitServerIdentity(ctx, operation); err != nil {
 				return err
 			}
+			if err := e.ensureService(ctx, operation, "worker"); err != nil {
+				return e.cleanupFailedWorker(ctx, operation, err)
+			}
 			if err := e.waitWorkerIdentity(ctx, operation); err != nil {
-				return err
+				return e.cleanupFailedWorker(ctx, operation, err)
 			}
 			if err := e.prepareCaddy(ctx, operation, true); err != nil {
-				return err
+				return e.cleanupFailedWorker(ctx, operation, err)
 			}
 			if err := e.run(ctx, nil, e.CaddyBinary, e.caddyArguments("reload")...); err != nil {
 				return err
@@ -311,6 +355,53 @@ func (e *CommandExecutor) run(ctx context.Context, operation *Operation, binary 
 		return fmt.Errorf("run allowlisted deployment command %q: %w", filepath.Base(binary), err)
 	}
 	return nil
+}
+
+func (e *CommandExecutor) cleanupStartedService(ctx context.Context, operation Operation, component string, cause error) error {
+	service := component + "-" + operation.Slot
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cleanupErr := e.run(cleanupCtx, &operation, e.ComposeBinary, e.composeArguments("rm", "--force", "--stop", service)...)
+	if cleanupErr != nil {
+		return errors.Join(cause, fmt.Errorf("clean up failed deployment service %s: %w", service, cleanupErr))
+	}
+	return &DeterministicError{Err: cause}
+}
+
+func (e *CommandExecutor) cleanupFailedWorker(ctx context.Context, operation Operation, cause error) error {
+	cleanupErr := e.cleanupStartedService(ctx, operation, "worker", cause)
+	var deterministic *DeterministicError
+	if !errors.As(cleanupErr, &deterministic) {
+		return cleanupErr
+	}
+	if operation.RetiringSlot == "" || operation.RetiringCandidateID == "" || operation.RetiringWorkerImage == "" {
+		return cleanupErr
+	}
+	restore := operation
+	restore.Slot = operation.RetiringSlot
+	restore.CandidateID = operation.RetiringCandidateID
+	restore.CandidateSourceSHA = operation.RetiringCandidateSourceSHA
+	restore.ArtifactDigest = operation.RetiringArtifactDigest
+	restore.ServerImage = operation.RetiringServerImage
+	restore.WorkerImage = operation.RetiringWorkerImage
+	restore.WorkerGeneration = operation.WorkerGeneration + 1
+	if restore.WorkerGeneration <= operation.WorkerGeneration {
+		return errors.Join(cause, errors.New("worker recovery generation overflow"))
+	}
+	if err := e.run(ctx, &restore, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "worker-"+restore.Slot)...); err != nil {
+		return errors.Join(cause, fmt.Errorf("restore retiring Worker: %w", err))
+	}
+	if err := e.waitWorkerIdentity(ctx, restore); err != nil {
+		return errors.Join(cause, fmt.Errorf("verify restored Worker: %w", err))
+	}
+	return &DeterministicError{Err: cause, RecoveredWorkerGeneration: restore.WorkerGeneration}
+}
+
+func (e *CommandExecutor) ensureService(ctx context.Context, operation Operation, component string) error {
+	if err := requireSlot(operation.Slot); err != nil {
+		return &DeterministicError{Err: err}
+	}
+	return e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--no-deps", component+"-"+operation.Slot)...)
 }
 
 func setEnvironment(environment []string, key, value string) []string {
@@ -493,9 +584,9 @@ func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker boo
 	if baseURL == "" {
 		return ErrExecutorUnavailable
 	}
-	return e.requestStatus(ctx, http.MethodGet, baseURL+"/readyz", nil, func(status int, body []byte) error {
+	return e.requestStatus(ctx, http.MethodGet, baseURL+"/readyz", nil, func(status int, _ []byte) error {
 		if status < http.StatusOK || status >= http.StatusMultipleChoices {
-			return fmt.Errorf("deployment %s readiness returned HTTP %d: %s", component, status, strings.TrimSpace(string(body)))
+			return fmt.Errorf("deployment %s readiness returned HTTP %d", component, status)
 		}
 		return nil
 	})
@@ -550,14 +641,23 @@ func (e *CommandExecutor) drain(ctx context.Context, slot string) error {
 		return ErrExecutorUnavailable
 	}
 	for _, target := range []struct {
-		service string
-		port    string
+		baseURL   string
+		component string
 	}{
-		{service: "server-" + slot, port: "8080"},
-		{service: "worker-" + slot, port: "8081"},
+		{baseURL: e.SlotURLs[slot], component: "Server"},
+		{baseURL: e.WorkerURLs[slot], component: "Worker"},
 	} {
-		arguments := e.composeArguments("exec", "-T", target.service, "/bin/busybox", "wget", "-q", "-O", "-", "--header", "Authorization: Bearer "+e.DrainToken, "--post-data", "", "http://127.0.0.1:"+target.port+"/-/drain")
-		if err := e.run(ctx, nil, e.ComposeBinary, arguments...); err != nil {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(target.baseURL, "/")+"/-/drain", strings.NewReader(""))
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Authorization", "Bearer "+e.DrainToken)
+		if err := e.request(ctx, request, func(status int, _ []byte) error {
+			if status < http.StatusOK || status >= http.StatusMultipleChoices {
+				return fmt.Errorf("deployment %s drain returned HTTP %d", target.component, status)
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 	}
@@ -628,7 +728,7 @@ func (e *CommandExecutor) request(_ context.Context, request *http.Request, chec
 		return fmt.Errorf("deployment HTTP request failed: %w", err)
 	}
 	defer response.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 	if readErr != nil {
 		return readErr
 	}

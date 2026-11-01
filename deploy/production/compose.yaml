@@ -27,6 +27,7 @@ services:
       LOOMHELM_DEPLOYMENT_ENV_FILE: "/run/secrets/loomhelm-deployment.env"
       LOOMHELM_DEPLOYMENT_CADDY_FILE: "/etc/caddy/Caddyfile"
       LOOMHELM_DEPLOYMENT_CADDY_TEMPLATE: "/opt/loomhelm-install/deploy/production/Caddyfile.tmpl"
+      LOOMHELM_CADDY_CONTROL_IP: "${LOOMHELM_CADDY_CONTROL_IP:?LOOMHELM_CADDY_CONTROL_IP is required}"
       LOOMHELM_DEPLOYMENT_CADDY_ADMIN_URL: "http://caddy-control:2019"
       LOOMHELM_DEPLOYMENT_PUBLIC_URL: "http://caddy:80"
       LOOMHELM_DEPLOYMENT_WEB_ROOT: "/opt/loomhelm-web"

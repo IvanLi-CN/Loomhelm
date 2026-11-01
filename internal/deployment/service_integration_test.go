@@ -143,9 +143,20 @@ func TestDeploymentOperationsPersistIdempotencyAndUnknownRecovery(t *testing.T) 
 		}
 	}
 	executor.mu.Lock()
+	executor.err = &DeterministicError{Err: errors.New("reconcile proof was rejected")}
+	executor.mu.Unlock()
+	failedReconcile, _, err := service.StartOperation(ctx, principal, "reconcile", OperationRequest{OperationID: unknown.ID, ExpectedFingerprint: status.ActiveFingerprint}, "reconcile-stage-unknown-failed")
+	if err != nil {
+		t.Fatalf("start failed unknown-stage reconcile: %v", err)
+	}
+	waitDeploymentOperation(t, ctx, service, failedReconcile.ID, "failed")
+	if _, _, err := service.StartOperation(ctx, principal, "stage", OperationRequest{CandidateID: second.ID, Confirm: true, ExpectedFingerprint: status.ActiveFingerprint}, "blocked-while-reconcile-failed"); !errors.Is(err, ErrOperationLocked) {
+		t.Fatalf("operation accepted while unknown target remained locked: %v", err)
+	}
+	executor.mu.Lock()
 	executor.err = nil
 	executor.mu.Unlock()
-	reconcile, _, err := service.StartOperation(ctx, principal, "reconcile", OperationRequest{OperationID: unknown.ID}, "reconcile-stage-unknown")
+	reconcile, _, err := service.StartOperation(ctx, principal, "reconcile", OperationRequest{OperationID: unknown.ID, ExpectedFingerprint: status.ActiveFingerprint}, "reconcile-stage-unknown")
 	if err != nil {
 		t.Fatalf("start unknown-stage reconcile: %v", err)
 	}
@@ -158,18 +169,48 @@ func TestDeploymentOperationsPersistIdempotencyAndUnknownRecovery(t *testing.T) 
 	if err != nil {
 		t.Fatalf("list deployment events: %v", err)
 	}
-	var observedPromotion bool
+	var observedPromotion, observedReconciledStage bool
 	for _, event := range events {
 		if event.Type == "promote_succeeded" {
 			if event.WorkerGeneration == nil || *event.WorkerGeneration <= 0 || event.ObservedFingerprint == "" {
 				t.Fatalf("promotion event did not preserve runtime identity: %+v", event)
 			}
 			observedPromotion = true
-			break
+		}
+		if event.OperationID == unknown.ID && event.Type == "stage_succeeded" {
+			if event.Details["reconciled_by"] != reconcile.ID || event.ObservedFingerprint == "" {
+				t.Fatalf("reconciled stage event did not preserve terminal evidence: %+v", event)
+			}
+			observedReconciledStage = true
 		}
 	}
 	if !observedPromotion {
 		t.Fatal("deployment events did not contain a successful promotion")
+	}
+	if !observedReconciledStage {
+		t.Fatal("deployment events did not contain a terminal event for the reconciled stage")
+	}
+
+	fourth, err := service.RegisterCandidate(ctx, deploymentTestEnvelope(4))
+	if err != nil {
+		t.Fatalf("register fourth candidate: %v", err)
+	}
+	executor.mu.Lock()
+	executor.err = &DeterministicError{Err: errors.New("candidate readiness was rejected")}
+	executor.mu.Unlock()
+	failedStage, _, err := service.StartOperation(ctx, principal, "stage", OperationRequest{CandidateID: fourth.ID, Confirm: true, ExpectedFingerprint: status.ActiveFingerprint}, "stage-deterministic-failure")
+	if err != nil {
+		t.Fatalf("start deterministic failed stage: %v", err)
+	}
+	waitDeploymentOperation(t, ctx, service, failedStage.ID, "failed")
+	candidates, err := service.ListCandidates(ctx)
+	if err != nil {
+		t.Fatalf("list candidates after deterministic failure: %v", err)
+	}
+	for _, candidate := range candidates {
+		if candidate.ID == fourth.ID && candidate.Status != "failed" {
+			t.Fatalf("deterministic failed candidate status = %q, want failed", candidate.Status)
+		}
 	}
 }
 

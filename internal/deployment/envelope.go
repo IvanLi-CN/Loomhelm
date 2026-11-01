@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 )
@@ -95,7 +97,7 @@ func ParseDeploymentEnvelope(data []byte) (Envelope, error) {
 	}
 	parsed.ServerImage = strings.TrimSpace(envelope.Runtime.ServerImage)
 	parsed.WorkerImage = strings.TrimSpace(envelope.Runtime.WorkerImage)
-	if envelope.EnvelopeDigest != "" && envelope.EnvelopeDigest != "sha256:"+parsed.Fingerprint() {
+	if !digestPattern.MatchString(envelope.EnvelopeDigest) || envelope.EnvelopeDigest != "sha256:"+parsed.Fingerprint() {
 		return Envelope{}, fmt.Errorf("%w: deployment envelope digest does not match its identity", ErrInvalidCandidate)
 	}
 	parsed.EnvelopeDigest = envelope.EnvelopeDigest
@@ -113,6 +115,11 @@ func parseCandidateManifest(data []byte, externalCompatibility *deploymentCompat
 	}
 	if manifest.SchemaVersion != 2 {
 		return Envelope{}, fmt.Errorf("%w: candidate schema_version must be 2", ErrInvalidCandidate)
+	}
+	if digest, err := canonicalCandidateDigest(data); err != nil {
+		return Envelope{}, fmt.Errorf("%w: validate candidate identity: %v", ErrInvalidCandidate, err)
+	} else if digest != manifest.Candidate.Digest {
+		return Envelope{}, fmt.Errorf("%w: candidate digest does not match its canonical identity", ErrInvalidCandidate)
 	}
 	if !sha40Pattern.MatchString(manifest.Candidate.SourceSHA) {
 		return Envelope{}, fmt.Errorf("%w: candidate source_sha must be 40 lowercase hexadecimal characters", ErrInvalidCandidate)
@@ -158,6 +165,96 @@ func parseCandidateManifest(data []byte, externalCompatibility *deploymentCompat
 		MigrationMode:  compatibility.MigrationMode,
 		ManifestJSON:   append(json.RawMessage(nil), data...),
 	}, nil
+}
+
+func canonicalCandidateDigest(data []byte) (string, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		return "", err
+	}
+	if err := requireJSONKeys(document, "candidate manifest", "schema_version", "candidate", "platform", "inputs", "artifacts"); err != nil {
+		if len(document) != 6 {
+			return "", err
+		}
+		if _, ok := document["deployment"]; !ok {
+			return "", err
+		}
+	}
+	var candidate map[string]json.RawMessage
+	if err := json.Unmarshal(document["candidate"], &candidate); err != nil {
+		return "", fmt.Errorf("candidate identity must be an object: %w", err)
+	}
+	if err := requireJSONKeys(candidate, "candidate identity", "digest", "source_sha", "source_tree_sha", "source_date_epoch"); err != nil {
+		return "", err
+	}
+	var sourceSHA, sourceTreeSHA string
+	if err := json.Unmarshal(candidate["source_sha"], &sourceSHA); err != nil || !sha40Or64Pattern.MatchString(sourceSHA) {
+		return "", errors.New("candidate source_sha is invalid")
+	}
+	if err := json.Unmarshal(candidate["source_tree_sha"], &sourceTreeSHA); err != nil || !sha40Or64Pattern.MatchString(sourceTreeSHA) {
+		return "", errors.New("candidate source_tree_sha is invalid")
+	}
+	var sourceDate int64
+	if err := json.Unmarshal(candidate["source_date_epoch"], &sourceDate); err != nil {
+		return "", errors.New("candidate source_date_epoch is invalid")
+	}
+	canonical := make(map[string]json.RawMessage, 7)
+	for key, raw := range map[string]json.RawMessage{
+		"schema_version":    document["schema_version"],
+		"source_sha":        candidate["source_sha"],
+		"source_tree_sha":   candidate["source_tree_sha"],
+		"source_date_epoch": candidate["source_date_epoch"],
+		"platform":          document["platform"],
+		"inputs":            document["inputs"],
+		"artifacts":         document["artifacts"],
+	} {
+		value, err := canonicalJSON(raw)
+		if err != nil {
+			return "", fmt.Errorf("canonicalize %s: %w", key, err)
+		}
+		canonical[key] = value
+	}
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+var sha40Or64Pattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+func requireJSONKeys(object map[string]json.RawMessage, label string, keys ...string) error {
+	if len(object) != len(keys) {
+		return fmt.Errorf("%s has unexpected fields", label)
+	}
+	for _, key := range keys {
+		if _, ok := object[key]; !ok {
+			return fmt.Errorf("%s is missing %s", label, key)
+		}
+	}
+	return nil
+}
+
+func canonicalJSON(data []byte) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("JSON contains trailing values")
+		}
+		return nil, err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
 }
 
 func (e Envelope) Fingerprint() string {

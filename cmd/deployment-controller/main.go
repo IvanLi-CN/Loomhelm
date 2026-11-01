@@ -50,6 +50,7 @@ func main() {
 	service, err := deployment.NewService(db.Pool(), deployment.Config{
 		OwnerUserIDs: config.DeploymentOwnerUserIDs,
 		Executor:     executor,
+		Logger:       logger,
 	})
 	if err != nil {
 		logger.Error("deployment service initialization failed", "error", err)

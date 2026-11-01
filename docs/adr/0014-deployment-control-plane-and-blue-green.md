@@ -30,7 +30,7 @@ Observations are transient runtime evidence rather than durable deployment facts
 
 The first single-slot-to-dual-slot migration needs a controlled maintenance window to adopt the current service as blue, enable the dedicated private Caddy admin address and add the inactive slot. PostgreSQL and artifact volumes remain shared and are never removed by the template.
 
-Blue-green protects HTTP traffic and preserves old Web assets, but it does not reverse database migrations or guarantee zero WebSocket interruption. Connector reconnect, host connection generation and durable command reconciliation remain separate observable outcomes. Production Worker services are Compose-profiled and are started only by the controller's fixed service command; the controller uses Compose exec to invoke the loopback-only drain endpoint inside each retiring container.
+Blue-green protects HTTP traffic and preserves old Web assets, but it does not reverse database migrations or guarantee zero WebSocket interruption. Connector reconnect, host connection generation and durable command reconciliation remain separate observable outcomes. Production Worker services are Compose-profiled and are started only by the controller's fixed service command; the controller invokes fixed authenticated drain endpoints over the private application network and never places the drain token in a Docker argument.
 
 ## Compatibility and recovery
 

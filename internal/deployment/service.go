@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ type Config struct {
 	OwnerUserIDs []string
 	Executor     Executor
 	Observer     ObservationProvider
+	Logger       *slog.Logger
 	Now          func() time.Time
 	ReadOnly     bool
 }
@@ -42,6 +44,7 @@ type Service struct {
 	owners   map[string]struct{}
 	executor Executor
 	observer ObservationProvider
+	logger   *slog.Logger
 	now      func() time.Time
 	readOnly bool
 }
@@ -69,7 +72,11 @@ func NewService(pool *pgxpool.Pool, config Config) (*Service, error) {
 	if observer == nil {
 		observer, _ = executor.(ObservationProvider)
 	}
-	return &Service{pool: pool, owners: owners, executor: executor, observer: observer, now: now, readOnly: config.ReadOnly}, nil
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Service{pool: pool, owners: owners, executor: executor, observer: observer, logger: logger, now: now, readOnly: config.ReadOnly}, nil
 }
 
 func ConfigFromEnvironment() Config {
@@ -434,7 +441,21 @@ func (s *Service) StartOperation(ctx context.Context, principal auth.Principal, 
 		return Operation{}, false, fmt.Errorf("load active deployment operation: %w", err)
 	}
 	if activeOperationID != "" {
-		return Operation{}, false, ErrOperationLocked
+		var activeKind, activeStatus, activeTargetOperationID, activeTargetStatus string
+		if err := tx.QueryRow(ctx, `
+			SELECT operation.kind, operation.status, COALESCE(operation.target_operation_id, ''), COALESCE(target.status, '')
+			FROM deployment_operations AS operation
+			LEFT JOIN deployment_operations AS target ON target.id = operation.target_operation_id
+			WHERE operation.id = $1
+		`, activeOperationID).Scan(&activeKind, &activeStatus, &activeTargetOperationID, &activeTargetStatus); err != nil {
+			return Operation{}, false, fmt.Errorf("load active deployment operation status: %w", err)
+		}
+		canReconcileActive := kind == "reconcile" &&
+			((activeStatus == "unknown" && request.OperationID == activeOperationID) ||
+				(activeKind == "reconcile" && activeTargetOperationID == request.OperationID && activeTargetStatus == "unknown"))
+		if !canReconcileActive {
+			return Operation{}, false, ErrOperationLocked
+		}
 	}
 	var operation Operation
 	var inserted bool
@@ -473,7 +494,11 @@ func (s *Service) StartOperation(ctx context.Context, principal auth.Principal, 
 	if err := tx.Commit(ctx); err != nil {
 		return Operation{}, false, fmt.Errorf("commit deployment operation: %w", err)
 	}
-	go s.execute(context.Background(), principal, operation)
+	go func() {
+		if err := s.execute(context.Background(), principal, operation); err != nil {
+			s.logger.Error("deployment operation finalization failed", "operation_id", operation.ID, "error", err)
+		}
+	}()
 	return operation, true, nil
 }
 
@@ -504,10 +529,11 @@ func (s *Service) RecoverPending(ctx context.Context) error {
 		return fmt.Errorf("read pending deployment operations: %w", err)
 	}
 	rows.Close()
+	var recoveryErr error
 	for _, operation := range pending {
-		s.finishOperation(ctx, controller, operation, "unknown", "controller_restarted", "controller restarted before the operation result was durable", operation.Kind+"_unknown")
+		recoveryErr = errors.Join(recoveryErr, s.finishOperation(ctx, controller, operation, "unknown", "controller_restarted", "controller restarted before the operation result was durable", operation.Kind+"_unknown"))
 	}
-	return nil
+	return recoveryErr
 }
 
 func capabilityForKind(kind string) Capability {
@@ -531,7 +557,7 @@ func capabilityForKind(kind string) Capability {
 
 func requiresFingerprint(kind string) bool {
 	switch kind {
-	case "stage", "promote", "rollback", "drain":
+	case "stage", "promote", "rollback", "drain", "reconcile":
 		return true
 	default:
 		return false
@@ -546,46 +572,48 @@ func newOperationID() (string, error) {
 	return "deploy-" + hex.EncodeToString(value), nil
 }
 
-func (s *Service) execute(ctx context.Context, principal auth.Principal, operation Operation) {
+func (s *Service) execute(ctx context.Context, principal auth.Principal, operation Operation) error {
 	prepared, err := s.prepareOperation(ctx, operation)
 	if err != nil {
-		s.finishOperation(ctx, principal, operation, "failed", "preparation_failed", err.Error(), operation.Kind+"_failed")
-		return
+		return s.finishOperation(ctx, principal, operation, "failed", "preparation_failed", err.Error(), operation.Kind+"_failed")
 	}
 	operation = prepared
 	started := s.now()
-	_, _ = s.pool.Exec(ctx, `UPDATE deployment_operations SET status = 'running', started_at = $2, updated_at = $2 WHERE id = $1`, operation.ID, started)
+	if _, err := s.pool.Exec(ctx, `UPDATE deployment_operations SET status = 'running', started_at = $2, updated_at = $2 WHERE id = $1`, operation.ID, started); err != nil {
+		return s.finishOperation(ctx, principal, operation, "unknown", "state_commit_failed", err.Error(), operation.Kind+"_unknown")
+	}
 	if err := s.appendEvent(ctx, principal, operation, operation.Kind+"_started", nil); err != nil {
-		s.finishOperation(ctx, principal, operation, "unknown", "audit_failed", err.Error(), operation.Kind+"_unknown")
-		return
+		return s.finishOperation(ctx, principal, operation, "unknown", "audit_failed", err.Error(), operation.Kind+"_unknown")
 	}
 	if err := s.executor.Execute(ctx, operation); err != nil {
 		status, code := "failed", "executor_failed"
 		var degraded *DegradedError
 		if errors.As(err, &degraded) {
-			if applyErr := s.applySuccess(ctx, operation); applyErr != nil {
-				s.finishOperation(ctx, principal, operation, "unknown", "state_commit_failed", applyErr.Error(), operation.Kind+"_unknown")
-				return
+			if applyErr := s.applySuccess(ctx, principal, operation); applyErr != nil {
+				return s.finishOperation(ctx, principal, operation, "unknown", "state_commit_failed", applyErr.Error(), operation.Kind+"_unknown")
 			}
-			s.finishOperation(ctx, principal, operation, "degraded", "drain_timeout", err.Error(), operation.Kind+"_degraded")
-			return
+			return s.finishOperation(ctx, principal, operation, "degraded", "drain_timeout", err.Error(), operation.Kind+"_degraded")
 		}
-		if operation.Kind != "preflight" {
+		var deterministic *DeterministicError
+		if !errors.As(err, &deterministic) && operation.Kind != "preflight" {
 			status, code = "unknown", "unknown_outcome"
+		}
+		if deterministic != nil && deterministic.RecoveredWorkerGeneration > 0 {
+			if recoveryErr := s.recordRecoveredWorker(ctx, operation, deterministic.RecoveredWorkerGeneration); recoveryErr != nil {
+				return s.finishOperation(ctx, principal, operation, "unknown", "state_commit_failed", recoveryErr.Error(), operation.Kind+"_unknown")
+			}
 		}
 		if status != "unknown" {
 			if failureErr := s.markFailure(ctx, operation); failureErr != nil {
 				err = errors.Join(err, failureErr)
 			}
 		}
-		s.finishOperation(ctx, principal, operation, status, code, err.Error(), operation.Kind+"_"+status)
-		return
+		return s.finishOperation(ctx, principal, operation, status, code, err.Error(), operation.Kind+"_"+status)
 	}
-	if err := s.applySuccess(ctx, operation); err != nil {
-		s.finishOperation(ctx, principal, operation, "unknown", "state_commit_failed", err.Error(), operation.Kind+"_unknown")
-		return
+	if err := s.applySuccess(ctx, principal, operation); err != nil {
+		return s.finishOperation(ctx, principal, operation, "unknown", "state_commit_failed", err.Error(), operation.Kind+"_unknown")
 	}
-	s.finishOperation(ctx, principal, operation, "succeeded", "", "", operation.Kind+"_succeeded")
+	return s.finishOperation(ctx, principal, operation, "succeeded", "", "", operation.Kind+"_succeeded")
 }
 
 func (s *Service) prepareOperation(ctx context.Context, operation Operation) (Operation, error) {
@@ -605,6 +633,18 @@ func (s *Service) prepareOperation(ctx context.Context, operation Operation) (Op
 	var nextGeneration int64
 	if err := tx.QueryRow(ctx, `SELECT active_slot, active_candidate_id, next_worker_generation FROM deployment_installations WHERE id = 'default'`).Scan(&activeSlot, &activeCandidateID, &nextGeneration); err != nil {
 		return Operation{}, err
+	}
+	if activeSlot != "" {
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(s.candidate_id, ''), COALESCE(s.worker_generation, 0),
+			       COALESCE(c.source_sha, ''), COALESCE(c.artifact_digest, ''),
+			       COALESCE(c.server_image, ''), COALESCE(c.worker_image, '')
+			FROM deployment_slots AS s
+			LEFT JOIN deployment_candidates AS c ON c.id = s.candidate_id
+			WHERE s.slot = $1
+		`, activeSlot).Scan(&operation.RetiringCandidateID, &operation.RetiringWorkerGeneration, &operation.RetiringCandidateSourceSHA, &operation.RetiringArtifactDigest, &operation.RetiringServerImage, &operation.RetiringWorkerImage); err != nil {
+			return Operation{}, fmt.Errorf("load retiring Worker identity: %w", err)
+		}
 	}
 	if operation.TargetOperationID != "" {
 		var target Operation
@@ -705,15 +745,20 @@ func (s *Service) prepareOperation(ctx context.Context, operation Operation) (Op
 		operation.Slot = slot
 	}
 	if operation.Kind == "promote" || operation.Kind == "rollback" || (operation.Kind == "reconcile" && (operation.ExecutionKind == "promote" || operation.ExecutionKind == "rollback")) {
+		reconcileRollback := operation.Kind == "reconcile" && operation.ExecutionKind == "rollback"
 		wantState := "staged"
 		if operation.Kind == "rollback" || operation.ExecutionKind == "rollback" {
 			wantState = "retained"
 		}
-		if operation.Kind == "reconcile" && operation.ExecutionKind == "rollback" {
+		if reconcileRollback && operation.Slot != "" {
 			wantState = "staging"
 		}
 		if operation.Slot == "" {
-			if err := tx.QueryRow(ctx, `SELECT slot FROM deployment_slots WHERE candidate_id = $1 AND state = $2 ORDER BY slot LIMIT 1`, operation.CandidateID, wantState).Scan(&operation.Slot); err != nil {
+			lookupState := wantState
+			if reconcileRollback {
+				lookupState = "retained"
+			}
+			if err := tx.QueryRow(ctx, `SELECT slot FROM deployment_slots WHERE candidate_id = $1 AND state = $2 ORDER BY slot LIMIT 1`, operation.CandidateID, lookupState).Scan(&operation.Slot); err != nil {
 				return Operation{}, fmt.Errorf("find %s candidate slot: %w", operation.Kind, err)
 			}
 		}
@@ -727,13 +772,13 @@ func (s *Service) prepareOperation(ctx context.Context, operation Operation) (Op
 		if err := tx.QueryRow(ctx, `SELECT state, COALESCE(candidate_id, '') FROM deployment_slots WHERE slot = $1`, operation.Slot).Scan(&slotState, &slotCandidate); err != nil {
 			return Operation{}, err
 		}
-		if slotCandidate != operation.CandidateID || slotState != wantState {
+		if slotCandidate != operation.CandidateID || (slotState != wantState && !(reconcileRollback && slotState == "retained")) {
 			return Operation{}, fmt.Errorf("%w: candidate is not in the required %s slot state", auth.ErrConflict, wantState)
 		}
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(worker_generation, 0) FROM deployment_slots WHERE slot = $1`, operation.Slot).Scan(&operation.WorkerGeneration); err != nil {
 			return Operation{}, err
 		}
-		if operation.Kind == "rollback" {
+		if operation.Kind == "rollback" || (reconcileRollback && slotState == "retained") {
 			if _, err := tx.Exec(ctx, `UPDATE deployment_slots SET state = 'staging', worker_generation = $2, updated_at = CURRENT_TIMESTAMP WHERE slot = $1`, operation.Slot, nextGeneration); err != nil {
 				return Operation{}, err
 			}
@@ -741,6 +786,11 @@ func (s *Service) prepareOperation(ctx context.Context, operation Operation) (Op
 				return Operation{}, err
 			}
 			operation.WorkerGeneration = nextGeneration
+		}
+		if operation.TargetOperationID != "" && operation.Slot != "" {
+			if _, err := tx.Exec(ctx, `UPDATE deployment_operations SET slot = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND slot = ''`, operation.TargetOperationID, operation.Slot); err != nil {
+				return Operation{}, err
+			}
 		}
 	}
 	if operation.Kind == "drain" && operation.Slot == "" {
@@ -792,7 +842,7 @@ func validateCandidateCompatibilityTx(ctx context.Context, tx pgx.Tx, candidateI
 	return nil
 }
 
-func (s *Service) applySuccess(ctx context.Context, operation Operation) error {
+func (s *Service) applySuccess(ctx context.Context, principal auth.Principal, operation Operation) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -818,7 +868,7 @@ func (s *Service) applySuccess(ctx context.Context, operation Operation) error {
 	case "drain":
 		_, err = tx.Exec(ctx, `UPDATE deployment_slots SET state = 'draining', updated_at = CURRENT_TIMESTAMP WHERE slot = $1`, operation.Slot)
 	case "reconcile":
-		err = s.reconcileTargetTx(ctx, tx, operation)
+		err = s.reconcileTargetTx(ctx, tx, principal, operation)
 	}
 	if err != nil {
 		return err
@@ -826,7 +876,7 @@ func (s *Service) applySuccess(ctx context.Context, operation Operation) error {
 	return tx.Commit(ctx)
 }
 
-func (s *Service) reconcileTargetTx(ctx context.Context, tx pgx.Tx, operation Operation) error {
+func (s *Service) reconcileTargetTx(ctx context.Context, tx pgx.Tx, principal auth.Principal, operation Operation) error {
 	if operation.TargetOperationID == "" {
 		return fmt.Errorf("%w: reconcile target is required", auth.ErrInvalid)
 	}
@@ -870,7 +920,30 @@ func (s *Service) reconcileTargetTx(ctx context.Context, tx pgx.Tx, operation Op
 		SET status = 'succeeded', error_code = '', error_message = '', finished_at = $2, updated_at = $2
 		WHERE id = $1
 	`, target.ID, finished)
-	return err
+	if err != nil {
+		return err
+	}
+	target.Status = "succeeded"
+	target.ErrorCode = ""
+	target.ErrorMessage = ""
+	target.FinishedAt = &finished
+	target.UpdatedAt = finished
+	if err := tx.QueryRow(ctx, `SELECT active_fingerprint FROM deployment_installations WHERE id = 'default'`).Scan(&target.ObservedFingerprint); err != nil {
+		return fmt.Errorf("observe reconciled deployment fingerprint: %w", err)
+	}
+	if target.Slot != "" {
+		var generation *int64
+		if err := tx.QueryRow(ctx, `SELECT worker_generation FROM deployment_slots WHERE slot = $1`, target.Slot).Scan(&generation); err != nil {
+			return fmt.Errorf("observe reconciled Worker generation: %w", err)
+		}
+		if generation != nil {
+			target.WorkerGeneration = *generation
+		}
+	}
+	if err := appendEventTx(ctx, tx, principal, target, target.Kind+"_succeeded", map[string]any{"reconciled_by": operation.ID}); err != nil {
+		return fmt.Errorf("record reconciled operation result: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) promoteTx(ctx context.Context, tx pgx.Tx, operation Operation) error {
@@ -939,46 +1012,130 @@ func (s *Service) promoteTx(ctx context.Context, tx pgx.Tx, operation Operation)
 }
 
 func (s *Service) markFailure(ctx context.Context, operation Operation) error {
-	if (operation.Kind != "stage" && operation.Kind != "rollback") || operation.Slot == "" {
+	if (operation.Kind != "stage" && operation.Kind != "promote" && operation.Kind != "rollback") || operation.Slot == "" {
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE deployment_slots SET state = 'failed', updated_at = CURRENT_TIMESTAMP WHERE slot = $1 AND candidate_id = $2`, operation.Slot, operation.CandidateID)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `UPDATE deployment_slots SET state = 'failed', updated_at = CURRENT_TIMESTAMP WHERE slot = $1 AND candidate_id = $2`, operation.Slot, operation.CandidateID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE deployment_candidates SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, operation.CandidateID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
-func (s *Service) finishOperation(ctx context.Context, principal auth.Principal, operation Operation, status, code, message, eventType string) {
+func (s *Service) recordRecoveredWorker(ctx context.Context, operation Operation, generation int64) error {
+	if operation.RetiringSlot == "" || operation.RetiringCandidateID == "" || generation <= 0 {
+		return fmt.Errorf("recovered Worker identity is incomplete")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtext('loomhelm:deployment-control'))`).Scan(&locked); err != nil {
+		return err
+	}
+	if !locked {
+		return ErrOperationLocked
+	}
+	var updated int64
+	if err := tx.QueryRow(ctx, `
+		UPDATE deployment_slots
+		SET worker_generation = $3, updated_at = CURRENT_TIMESTAMP
+		WHERE slot = $1 AND state = 'active' AND candidate_id = $2
+		RETURNING worker_generation
+	`, operation.RetiringSlot, operation.RetiringCandidateID, generation).Scan(&updated); err != nil {
+		return fmt.Errorf("record recovered Worker generation: %w", err)
+	}
+	if updated != generation {
+		return fmt.Errorf("recorded Worker generation %d does not match %d", updated, generation)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE deployment_installations SET next_worker_generation = GREATEST(next_worker_generation, $1), updated_at = CURRENT_TIMESTAMP WHERE id = 'default'`, generation+1); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Service) finishOperation(ctx context.Context, principal auth.Principal, operation Operation, status, code, _ string, eventType string) error {
 	finished := s.now()
-	finishErr := func() error {
-		tx, err := s.pool.Begin(ctx)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = tx.Rollback(ctx) }()
-		if _, err := tx.Exec(ctx, `UPDATE deployment_operations SET status = $2, error_code = $3, error_message = $4, finished_at = $5, updated_at = $5 WHERE id = $1`, operation.ID, status, code, message, finished); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE deployment_installations SET active_operation_id = '' WHERE id = 'default' AND active_operation_id = $1`, operation.ID); err != nil {
-			return err
-		}
-		return tx.Commit(ctx)
-	}()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	safeMessage := safeOperationMessage(code)
+	if _, err := tx.Exec(ctx, `UPDATE deployment_operations SET status = $2, error_code = $3, error_message = $4, finished_at = $5, updated_at = $5 WHERE id = $1`, operation.ID, status, code, safeMessage, finished); err != nil {
+		return err
+	}
 	if status == "unknown" {
-		_, _ = s.pool.Exec(ctx, `UPDATE deployment_candidates SET status = 'unknown', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND $2 IN ('stage', 'promote', 'rollback')`, operation.CandidateID, operation.Kind)
+		if _, err := tx.Exec(ctx, `UPDATE deployment_candidates SET status = 'unknown', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND $2 IN ('stage', 'promote', 'rollback')`, operation.CandidateID, operation.Kind); err != nil {
+			return err
+		}
 	}
 	operation.Status = status
 	operation.ErrorCode = code
-	operation.ErrorMessage = message
+	operation.ErrorMessage = safeMessage
 	operation.FinishedAt = &finished
 	operation.UpdatedAt = finished
 	var observedFingerprint string
-	if err := s.pool.QueryRow(ctx, `SELECT active_fingerprint FROM deployment_installations WHERE id = 'default'`).Scan(&observedFingerprint); err == nil {
+	if err := tx.QueryRow(ctx, `SELECT active_fingerprint FROM deployment_installations WHERE id = 'default'`).Scan(&observedFingerprint); err == nil {
 		operation.ObservedFingerprint = observedFingerprint
 	}
-	details := map[string]any{"error": message}
-	if finishErr != nil {
-		details["finish_error"] = finishErr.Error()
+	details := map[string]any{}
+	if code != "" {
+		details["error_code"] = code
 	}
-	_ = s.appendEvent(ctx, principal, operation, eventType, details)
+	if err := appendEventTx(ctx, tx, principal, operation, eventType, details); err != nil {
+		return err
+	}
+	retainActiveOperation := status == "unknown"
+	if !retainActiveOperation && operation.Kind == "reconcile" && operation.TargetOperationID != "" {
+		var targetStatus string
+		err := tx.QueryRow(ctx, `SELECT status FROM deployment_operations WHERE id = $1`, operation.TargetOperationID).Scan(&targetStatus)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("load reconciled target status: %w", err)
+		}
+		retainActiveOperation = err == nil && targetStatus == "unknown"
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE deployment_installations
+		SET active_operation_id = CASE WHEN $2 THEN active_operation_id ELSE '' END,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = 'default' AND active_operation_id = $1
+	`, operation.ID, retainActiveOperation); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func safeOperationMessage(code string) string {
+	switch code {
+	case "":
+		return ""
+	case "drain_timeout":
+		return "deployment drain timed out"
+	case "controller_restarted":
+		return "controller restarted before the operation result was durable; reconcile is required"
+	case "unknown_outcome":
+		return "external deployment result is unknown; reconcile is required"
+	case "state_commit_failed":
+		return "deployment state commit failed; reconcile is required"
+	case "audit_failed":
+		return "deployment audit failed; reconcile is required"
+	case "preparation_failed":
+		return "deployment preparation failed"
+	case "executor_failed":
+		return "deployment executor failed"
+	default:
+		return "deployment operation failed with code " + code
+	}
 }
 
 func fingerprintForCandidate(candidateID, sourceSHA, artifactDigest, webDigest string, stateVersion, readMin, readMax int64, migrationMode, slot string, workerGeneration int64) string {

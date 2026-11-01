@@ -96,6 +96,7 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
       const body = {
         candidate_id: selectedCandidateId || undefined,
         expected_current_fingerprint: statusQuery.data?.status.active_fingerprint || undefined,
+        operation_id: action === "reconcile" ? operation?.target_operation_id || operation?.id : undefined,
         slot: action === "drain" ? statusQuery.data?.status.active_slot || undefined : undefined,
         confirm: action !== "preflight" && action !== "reconcile"
       };
