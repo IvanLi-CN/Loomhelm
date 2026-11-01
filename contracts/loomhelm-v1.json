@@ -618,11 +618,251 @@
         "after_cursor": {"type": "string"},
         "limit": {"type": "integer", "format": "int64"}
       }
+    },
+    "DeploymentRole": {
+      "type": "string",
+      "enum": ["deployment_observer", "deployment_operator", "deployment_releaser", "deployment_recovery", "installation_owner"]
+    },
+    "DeploymentCapability": {
+      "type": "string",
+      "enum": ["view", "preflight", "stage", "promote", "rollback", "reconcile", "emergency_drain"]
+    },
+    "DeploymentCandidate": {
+      "type": "object",
+      "required": ["id", "source_sha", "artifact_digest", "web_digest", "state_version", "read_min", "read_max", "migration_mode", "status", "created_at", "updated_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "source_sha": {"type": "string"},
+        "artifact_digest": {"type": "string"},
+        "web_digest": {"type": "string"},
+        "state_version": {"type": "integer", "format": "int64"},
+        "read_min": {"type": "integer", "format": "int64"},
+        "read_max": {"type": "integer", "format": "int64"},
+        "migration_mode": {"type": "string", "enum": ["none", "expand"]},
+        "status": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "DeploymentSlot": {
+      "type": "object",
+      "required": ["slot", "state"],
+      "properties": {
+        "slot": {"type": "string", "enum": ["blue", "green"]},
+        "state": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "worker_generation": {"type": "integer", "format": "int64"}
+      }
+    },
+    "DeploymentOperation": {
+      "type": "object",
+      "required": ["id", "kind", "status", "created_at", "updated_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string", "enum": ["preflight", "stage", "promote", "rollback", "drain", "reconcile"]},
+        "status": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "slot": {"type": "string", "enum": ["blue", "green"]},
+        "target_operation_id": {"type": "string"},
+        "expected_current_fingerprint": {"type": "string"},
+        "error_code": {"type": "string"},
+        "error_message": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "finished_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "DeploymentEvent": {
+      "type": "object",
+      "required": ["id", "operation_id", "type", "created_at"],
+      "properties": {
+        "id": {"type": "integer", "format": "int64"},
+        "operation_id": {"type": "string"},
+        "type": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "slot": {"type": "string", "enum": ["blue", "green"]},
+        "worker_generation": {"type": "integer", "format": "int64"},
+        "observed_fingerprint": {"type": "string"},
+        "details": {"$ref": "#/types/JSONValue"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "DeploymentStatus": {
+      "type": "object",
+      "required": ["active_slot", "active_candidate_id", "active_fingerprint", "next_worker_generation", "slots", "capabilities", "controller_ready"],
+      "properties": {
+        "active_slot": {"type": "string"},
+        "active_candidate_id": {"type": "string"},
+        "active_fingerprint": {"type": "string"},
+        "next_worker_generation": {"type": "integer", "format": "int64"},
+        "slots": {"type": "array", "items": {"$ref": "#/types/DeploymentSlot"}},
+        "latest_operation": {"$ref": "#/types/DeploymentOperation"},
+        "role": {"$ref": "#/types/DeploymentRole"},
+        "capabilities": {"type": "array", "items": {"$ref": "#/types/DeploymentCapability"}},
+        "controller_ready": {"type": "boolean"}
+      }
+    },
+    "DeploymentStatusResponse": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {"status": {"$ref": "#/types/DeploymentStatus"}}
+    },
+    "DeploymentCandidateListResponse": {
+      "type": "object",
+      "required": ["candidates"],
+      "properties": {"candidates": {"type": "array", "items": {"$ref": "#/types/DeploymentCandidate"}}}
+    },
+    "DeploymentCandidateResponse": {
+      "type": "object",
+      "required": ["candidate"],
+      "properties": {"candidate": {"$ref": "#/types/DeploymentCandidate"}}
+    },
+    "DeploymentEventListResponse": {
+      "type": "object",
+      "required": ["events"],
+      "properties": {"events": {"type": "array", "items": {"$ref": "#/types/DeploymentEvent"}}}
+    },
+    "DeploymentOperationResponse": {
+      "type": "object",
+      "required": ["operation", "created"],
+      "properties": {
+        "operation": {"$ref": "#/types/DeploymentOperation"},
+        "created": {"type": "boolean"}
+      }
+    },
+    "DeploymentOperationRequest": {
+      "type": "object",
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "expected_current_fingerprint": {"type": "string"},
+        "slot": {"type": "string"},
+        "operation_id": {"type": "string"},
+        "confirm": {"type": "boolean"}
+      }
+    },
+    "ListDeploymentEventsQuery": {
+      "type": "object",
+      "properties": {"limit": {"type": "integer", "format": "int64"}}
     }
   },
   "rest": {
     "base_path": "/api/v1",
     "operations": [
+      {
+        "operation_id": "getDeploymentStatus",
+        "method": "GET",
+        "path": "/deployment",
+        "response_type": "DeploymentStatusResponse",
+        "response_status": 200,
+        "summary": "Read installation deployment status and the caller's deployment capabilities",
+        "mcp_tool": {"name": "loomhelm.get_deployment_status", "description": "Read deployment status, active and retained slots, worker generation and caller capabilities."}
+      },
+      {
+        "operation_id": "listDeploymentCandidates",
+        "method": "GET",
+        "path": "/deployment/candidates",
+        "response_type": "DeploymentCandidateListResponse",
+        "response_status": 200,
+        "summary": "List immutable deployment candidates visible to the installation",
+        "mcp_tool": {"name": "loomhelm.list_deployment_candidates", "description": "List immutable deployment candidate identities and compatibility windows."}
+      },
+      {
+        "operation_id": "registerDeploymentCandidate",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/candidates",
+        "body_type": "JSONValue",
+        "response_type": "DeploymentCandidateResponse",
+        "response_status": 201,
+        "summary": "Register an immutable deployment envelope for this installation"
+      },
+      {
+        "operation_id": "listDeploymentEvents",
+        "method": "GET",
+        "path": "/deployment/events",
+        "query_type": "ListDeploymentEventsQuery",
+        "response_type": "DeploymentEventListResponse",
+        "response_status": 200,
+        "summary": "Read deployment audit events",
+        "mcp_tool": {"name": "loomhelm.list_deployment_events", "description": "Read append-only deployment audit events without changing deployment state."}
+      },
+      {
+        "operation_id": "getDeploymentOperation",
+        "method": "GET",
+        "path": "/deployment/operations/{operation_id}",
+        "path_params": {"operation_id": "string"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 200,
+        "summary": "Read one durable deployment operation",
+        "mcp_tool": {"name": "loomhelm.get_deployment_operation", "description": "Read one deployment operation and reconcile its durable result before retrying."}
+      },
+      {
+        "operation_id": "preflightDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/preflight",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Start an idempotent deployment candidate preflight"
+      },
+      {
+        "operation_id": "stageDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/stage",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Stage a validated immutable candidate in the inactive slot"
+      },
+      {
+        "operation_id": "promoteDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/promote",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Promote the staged candidate after fencing and readiness checks"
+      },
+      {
+        "operation_id": "rollbackDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/rollback",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Start a compatibility-checked deployment switchback"
+      },
+      {
+        "operation_id": "drainDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/drain",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Start a bounded drain or recovery action"
+      },
+      {
+        "operation_id": "reconcileDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/reconcile",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Reconcile an accepted or unknown deployment operation"
+      },
       {
         "operation_id": "getBrowserSession",
         "browser_only": true,

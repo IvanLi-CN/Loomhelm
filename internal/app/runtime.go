@@ -160,7 +160,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
 		approvalStore := approvals.NewStore(db.Pool())
-		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth)
+		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth, cfg.DeploymentOwnerUserIDs)
 		if serviceErr != nil {
 			db.Close()
 			return nil, serviceErr

@@ -811,6 +811,316 @@ pre {
   margin: 0 auto;
 }
 
+.deployment-page {
+  display: grid;
+  gap: 20px;
+}
+
+.deployment-heading {
+  margin-bottom: 0;
+}
+
+.deployment-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.deployment-summary-metric,
+.deployment-section {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--highlight), var(--shadow);
+}
+
+.deployment-summary-metric {
+  display: grid;
+  min-height: 112px;
+  align-content: space-between;
+  gap: 6px;
+  padding: 14px;
+}
+
+.deployment-summary-metric > span,
+.deployment-summary-metric > small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.deployment-summary-metric > strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deployment-summary-success { border-top: 2px solid var(--success); }
+.deployment-summary-accent { border-top: 2px solid var(--accent); }
+.deployment-summary-danger { border-top: 2px solid var(--danger); }
+.deployment-summary-neutral { border-top: 2px solid var(--line-strong); }
+
+.deployment-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.deployment-main-column,
+.deployment-side-column {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
+.deployment-section {
+  padding: 18px;
+}
+
+.deployment-section .panel-heading {
+  margin-bottom: 14px;
+}
+
+.deployment-candidate-list,
+.deployment-slot-list,
+.deployment-timeline {
+  display: grid;
+  gap: 6px;
+}
+
+.deployment-candidate-row,
+.deployment-slot-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.deployment-candidate-row:hover,
+.deployment-candidate-row.is-selected,
+.deployment-slot-row.is-active {
+  border-color: var(--line);
+  background: var(--selected);
+}
+
+.deployment-candidate-copy,
+.deployment-slot-row > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.deployment-candidate-copy strong,
+.deployment-slot-row strong {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deployment-candidate-copy small,
+.deployment-slot-row small,
+.deployment-timeline small,
+.deployment-operation-notice small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deployment-state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.deployment-state-active,
+.deployment-state-succeeded { background: var(--success); }
+.deployment-state-staged,
+.deployment-state-preflight_passed { background: var(--accent); }
+.deployment-state-failed,
+.deployment-state-unknown { background: var(--danger); }
+
+.deployment-status {
+  max-width: 116px;
+  overflow: hidden;
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deployment-status-active,
+.deployment-status-succeeded { color: var(--success); background: var(--success-bg); }
+.deployment-status-failed,
+.deployment-status-unknown,
+.deployment-status-blocked { color: var(--danger); background: var(--danger-bg); }
+
+.deployment-field {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.deployment-field select {
+  width: 100%;
+  min-height: var(--control-height-form);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 11px;
+  color: var(--ink);
+  background: var(--surface-solid);
+}
+
+.deployment-action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.deployment-confirmation,
+.deployment-operation-notice,
+.deployment-empty-state,
+.deployment-loading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: var(--radius-sm);
+  padding: 11px;
+  font-size: 12px;
+}
+
+.deployment-confirmation {
+  margin-top: 14px;
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.deployment-confirmation > div:nth-child(2),
+.deployment-operation-notice > div {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.deployment-confirmation p {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deployment-confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.deployment-operation-notice {
+  margin-top: 14px;
+  color: var(--accent);
+  background: var(--selected);
+}
+
+.deployment-operation-success { color: var(--success); background: var(--success-bg); }
+.deployment-operation-danger { color: var(--danger); background: var(--danger-bg); }
+
+.deployment-muted,
+.deployment-loading {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.deployment-empty-state {
+  align-items: center;
+  min-height: 220px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.deployment-empty-state h1 {
+  margin: 0 0 5px;
+  font-size: 22px;
+}
+
+.deployment-empty-state p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.deployment-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 3px;
+}
+
+.deployment-timeline li {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-height: 46px;
+}
+
+.deployment-timeline-marker {
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.deployment-timeline li > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.deployment-spin { animation: deployment-spin 900ms linear infinite; }
+
+@keyframes deployment-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 900px) {
+  .deployment-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .deployment-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 560px) {
+  .deployment-summary-grid { grid-template-columns: minmax(0, 1fr); }
+  .deployment-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .deployment-section { padding: 14px; }
+  .deployment-confirmation { flex-wrap: wrap; }
+  .deployment-confirmation-actions { width: 100%; margin-left: 27px; }
+}
+
 .workbench-page {
   container: workbench / inline-size;
 }

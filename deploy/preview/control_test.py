@@ -425,6 +425,8 @@ with control.state_lock(state_dir, on_blocked=on_blocked):
             self.assertEqual((state_dir / "web" / "retained" / retained_key / "assets" / "old.js").read_text(encoding="utf-8"), "old")
             caddy = (state_dir / "caddy" / "Caddyfile").read_text(encoding="utf-8")
             self.assertIn("reverse_proxy server-green:8080", caddy)
+            self.assertIn("handle /mcp", caddy)
+            self.assertIn("handle /gateway", caddy)
             self.assertIn(f"/current{{path}} retained/{retained_key}{{path}} /current/index.html", caddy)
 
     def test_incompatible_candidate_is_rejected_in_both_directions(self) -> None:

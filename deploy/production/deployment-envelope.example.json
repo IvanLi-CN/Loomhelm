@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "candidate_manifest": {
+    "schema_version": 2,
+    "candidate": {
+      "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+      "source_sha": "0000000000000000000000000000000000000000"
+    },
+    "artifacts": {
+      "web": {
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  },
+  "compatibility": {
+    "state_version": 1,
+    "read_min": 1,
+    "read_max": 1,
+    "migration_mode": "none"
+  },
+  "runtime": {
+    "server_image": "ghcr.io/example/loomhelm-server@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "worker_image": "ghcr.io/example/loomhelm-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "envelope_digest": "sha256:68aa23903642857211ca9d9b59a5d42cb977a978a1b29837112149bdbed62496"
+}

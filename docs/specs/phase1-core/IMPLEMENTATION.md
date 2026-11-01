@@ -4,6 +4,8 @@
 
 The repository contains the Go lifecycle/persistence foundations, versioned public protocol/codegen, branch-preview blue-green runtime, Bun/React/PWA foundation, the approved product UI framework and login-free Demo, and the P01 identity/project/task services. Server and Worker require PostgreSQL and apply application and River migrations before completing startup. Server mounts the identity and business handlers under `/api/v1`, discovers a configured OIDC issuer before becoming ready, and applies cookie-session and standard-library same-origin protection to application requests. An unconfigured issuer disables browser login without permitting anonymous business access. Connector remains database-independent. Server still requires its drain token and checks persistence for readiness independently of liveness; Worker readiness remains tied to its durable generation lease and queue runner. The E01 approval-history read slice is implemented in the shared contract, durable store and authenticated Run-control HTTP boundary, while full real-platform acceptance and MCP transport remain separate gates.
 
+The deployment-control slice adds migration 00017, immutable schema 2 deployment envelopes, the stable `deployment-controller`, installation roles, durable operations and audit events, authenticated REST operations and read-only MCP queries, plus the approved installation Deployment page. The implementation and branch-preview scope are documented in [Deployment Control](../../deployment.md) and [ADR 0014](../../adr/0014-deployment-control-plane-and-blue-green.md); 101 migration and production switching remain owner-authorized follow-up gates.
+
 ## Implementation Coverage
 
 | Requirements | Implementation | Verification |

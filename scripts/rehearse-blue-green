@@ -120,6 +120,33 @@ run scripts/preview stage "$baseline_manifest"
 run scripts/preview promote
 run curl --fail --silent --show-error "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}/readyz"
 
+assert_caddy_route() {
+	route=$1
+	body=$(mktemp "${TMPDIR:-/tmp}/loomhelm-route.XXXXXX")
+	status=$(curl --silent --show-error --output "$body" --write-out '%{http_code}' "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}${route}" || true)
+	case "$status" in
+		000|404|5[0-9][0-9])
+			echo "rehearse-blue-green: Caddy route $route did not reach a usable Server response (status=$status)" >&2
+			rm -f "$body"
+			return 1
+		;;
+	esac
+	if grep -qi '<!doctype html' "$body"; then
+		echo "rehearse-blue-green: Caddy route $route did not reach Server (status=$status)" >&2
+		rm -f "$body"
+		return 1
+	fi
+	rm -f "$body"
+	log "Caddy route $route reached Server (status=$status)"
+}
+
+assert_caddy_route /api/v1/auth/session
+assert_caddy_route /mcp
+assert_caddy_route /gateway
+assert_caddy_route /livez
+assert_caddy_route /readyz
+assert_caddy_route /version
+
 active_before=$(python3 deploy/preview/control.py --state-dir "$state_dir" status --field active_slot)
 log "baseline active_slot=$active_before"
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/deployment"
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -24,6 +25,7 @@ import (
 
 type applicationServices struct {
 	identity        *auth.Service
+	deployment      *deployment.Service
 	projects        *projects.Service
 	tasks           *tasks.Service
 	sessions        *sessions.Store
@@ -44,8 +46,8 @@ func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform
 // The runtime supplies the real control service once its durable stores and
 // Host transport are ready. An absent dependency exposes explicit unavailable
 // responses, never a simulated command acknowledgement.
-func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, control runControlApplication) (http.Handler, error) {
-	services, err := newApplicationServices(ctx, pool, cfg)
+func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, control runControlApplication, deploymentOwnerUserIDs ...[]string) (http.Handler, error) {
+	services, err := newApplicationServices(ctx, pool, cfg, deploymentOwnerUserIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +58,7 @@ func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool
 	return handler, nil
 }
 
-func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig) (*applicationServices, error) {
+func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, deploymentOwnerUserIDs ...[]string) (*applicationServices, error) {
 	var provider auth.Provider
 	if cfg.OIDCEnabled() {
 		configured, err := auth.NewOIDCProvider(ctx, auth.OIDCConfig{
@@ -74,8 +76,17 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		return nil, fmt.Errorf("initialize browser authentication: %w", err)
 	}
 	projectService := projects.NewService(pool, identity)
+	var ownerUserIDs []string
+	if len(deploymentOwnerUserIDs) > 0 {
+		ownerUserIDs = deploymentOwnerUserIDs[0]
+	}
+	deploymentService, err := deployment.NewService(pool, deployment.Config{OwnerUserIDs: ownerUserIDs, ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("initialize deployment service: %w", err)
+	}
 	return &applicationServices{
 		identity:   identity,
+		deployment: deploymentService,
 		projects:   projectService,
 		tasks:      tasks.NewService(pool, identity, projectService),
 		sessions:   sessions.NewStore(pool),
@@ -89,6 +100,7 @@ func (s *applicationServices) handler(control runControlApplication) (http.Handl
 	router := chi.NewRouter()
 	s.identity.Mount(router)
 	s.identity.MountAPI(router)
+	deployment.MountAPI(router, s.identity, s.deployment, true)
 	s.projects.Mount(router)
 	s.tasks.Mount(router)
 	sessionAccess := s.sessionAccess()

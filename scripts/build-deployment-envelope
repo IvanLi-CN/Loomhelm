@@ -1,0 +1,115 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	cat <<'EOF'
+usage: scripts/build-deployment-envelope --candidate-manifest PATH --output PATH --server-image IMAGE@sha256:DIGEST --worker-image IMAGE@sha256:DIGEST [--state-version N] [--read-min N] [--read-max N] [--migration-mode none|expand]
+
+Wrap an immutable candidate schema 2 manifest in the deployment compatibility
+envelope. This command never rebuilds or modifies the candidate manifest.
+EOF
+}
+
+candidate_manifest=""
+output=""
+state_version=1
+read_min=1
+read_max=1
+migration_mode=none
+server_image=""
+worker_image=""
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--candidate-manifest|--output|--state-version|--read-min|--read-max|--migration-mode|--server-image|--worker-image)
+			[ "$#" -ge 2 ] || { echo "build-deployment-envelope: $1 needs a value" >&2; exit 2; }
+			case "$1" in
+				--candidate-manifest) candidate_manifest=$2 ;;
+				--output) output=$2 ;;
+				--state-version) state_version=$2 ;;
+				--read-min) read_min=$2 ;;
+				--read-max) read_max=$2 ;;
+				--migration-mode) migration_mode=$2 ;;
+				--server-image) server_image=$2 ;;
+				--worker-image) worker_image=$2 ;;
+			esac
+			shift 2
+			;;
+		--help|-h)
+			usage
+			exit 0
+			;;
+		*)
+			echo "build-deployment-envelope: unknown argument: $1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+[ -n "$candidate_manifest" ] || { echo "build-deployment-envelope: --candidate-manifest is required" >&2; exit 2; }
+[ -n "$output" ] || { echo "build-deployment-envelope: --output is required" >&2; exit 2; }
+[ -n "$server_image" ] || { echo "build-deployment-envelope: --server-image is required" >&2; exit 2; }
+[ -n "$worker_image" ] || { echo "build-deployment-envelope: --worker-image is required" >&2; exit 2; }
+[ -f "$candidate_manifest" ] || { echo "build-deployment-envelope: candidate manifest does not exist: $candidate_manifest" >&2; exit 2; }
+[ ! -e "$output" ] && [ ! -L "$output" ] || { echo "build-deployment-envelope: refusing to overwrite output: $output" >&2; exit 1; }
+
+python3 - "$candidate_manifest" "$output" "$state_version" "$read_min" "$read_max" "$migration_mode" "$server_image" "$worker_image" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+candidate_path, output_path, state_raw, read_min_raw, read_max_raw, migration_mode, server_image, worker_image = sys.argv[1:]
+try:
+    state_version = int(state_raw)
+    read_min = int(read_min_raw)
+    read_max = int(read_max_raw)
+except ValueError as error:
+    raise SystemExit(f"compatibility values must be integers: {error}")
+if state_version <= 0 or read_min <= 0 or read_max < read_min or not (read_min <= state_version <= read_max):
+    raise SystemExit("compatibility range is invalid")
+if migration_mode not in {"none", "expand"}:
+    raise SystemExit("migration mode must be none or expand")
+image_pattern = r"^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$"
+if re.fullmatch(image_pattern, server_image) is None or re.fullmatch(image_pattern, worker_image) is None:
+    raise SystemExit("server and worker image references must be immutable @sha256 references")
+with open(candidate_path, encoding="utf-8") as stream:
+    candidate = json.load(stream)
+if candidate.get("schema_version") != 2:
+    raise SystemExit("candidate schema_version must be 2")
+identity = candidate.get("candidate")
+if not isinstance(identity, dict) or not re.fullmatch(r"[0-9a-f]{40}", identity.get("source_sha", "")) or not re.fullmatch(r"[0-9a-f]{64}", identity.get("digest", "")):
+    raise SystemExit("candidate identity is invalid")
+web = candidate.get("artifacts", {}).get("web", {})
+if not re.fullmatch(r"[0-9a-f]{64}", web.get("sha256", "")):
+    raise SystemExit("candidate Web digest is invalid")
+compatibility = {
+    "state_version": state_version,
+    "read_min": read_min,
+    "read_max": read_max,
+    "migration_mode": migration_mode,
+}
+fingerprint = {
+    "candidate_id": identity["digest"],
+    "source_sha": identity["source_sha"],
+    "artifact_digest": "sha256:" + identity["digest"],
+    "web_digest": "sha256:" + web["sha256"],
+    **compatibility,
+}
+envelope = {
+    "schema_version": 1,
+    "candidate_manifest": candidate,
+    "compatibility": compatibility,
+    "runtime": {"server_image": server_image, "worker_image": worker_image},
+    "envelope_digest": "sha256:" + hashlib.sha256((
+        f"{fingerprint['candidate_id']}:{fingerprint['source_sha']}:{fingerprint['artifact_digest']}:{fingerprint['web_digest']}:{state_version}:{read_min}:{read_max}:{migration_mode}:{server_image}:{worker_image}"
+    ).encode("utf-8")).hexdigest(),
+}
+path = Path(output_path)
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(envelope, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+os.chmod(path, 0o644)
+PY
