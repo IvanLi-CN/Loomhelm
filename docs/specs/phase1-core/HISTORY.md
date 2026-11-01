@@ -146,6 +146,8 @@ The Connector now exposes a deployment-only browser device flow: a local loopbac
 
 Repair Batch 3 closes two concurrency boundaries without changing the public enrollment contract: Connector bootstrap/recovery is serialized by an adjacent mode-0600 lock, active or ambiguous exchanges retain pending state for retry, and Session creation performs its final project check inside the creation-intent transaction. Host admission commits its revocation fence before callbacks that use independent transactions, while event cursor checkpointing follows successful handler execution so failed processing remains replayable. Focused tests cover active-exchange retention, cross-process locking, transaction-scoped project authorization and callback lock-order behavior; these are implementation evidence, not production deployment evidence.
 
+Repair Batch 4 completes the retry and idempotency fences: transient Connector exchange conflicts now retry with context-bounded backoff, revoked enrollment credentials become definitive rejections that start fresh recovery, and state-file publication/removal syncs its parent directory. `CreateIntentAuthorized` rechecks project and Host access for existing session identities before returning them, so an idempotent retry cannot bypass a current revoke. Focused tests cover active-exchange retry, existing-intent re-admission and the corresponding recovery boundaries; real process-crash and cross-platform evidence remain separate gates.
+
 ## References
 
 - [Requirements](SPEC.md)

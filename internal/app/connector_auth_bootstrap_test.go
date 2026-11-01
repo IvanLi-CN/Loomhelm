@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -72,14 +73,14 @@ func TestConnectorCredentialCacheRejectsSymlinkedDirectory(t *testing.T) {
 
 func TestConnectorBootstrapLockSerializesProcesses(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "connector-credential.json.lock")
-	first, err := openConnectorBootstrapLock(lockPath)
+	first, err := openConnectorBootstrapLock(context.Background(), lockPath)
 	if err != nil {
 		t.Fatalf("open first bootstrap lock: %v", err)
 	}
 	acquired := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		second, openErr := openConnectorBootstrapLock(lockPath)
+		second, openErr := openConnectorBootstrapLock(context.Background(), lockPath)
 		if openErr != nil {
 			done <- openErr
 			return
@@ -102,6 +103,30 @@ func TestConnectorBootstrapLockSerializesProcesses(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("close second bootstrap lock: %v", err)
+	}
+}
+
+func TestConnectorBootstrapLockHonorsContextCancellation(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "connector-credential.json.lock")
+	first, err := openConnectorBootstrapLock(context.Background(), lockPath)
+	if err != nil {
+		t.Fatalf("open first bootstrap lock: %v", err)
+	}
+	defer func() {
+		if err := closeConnectorBootstrapLock(first); err != nil {
+			t.Fatalf("close first bootstrap lock: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	second, err := openConnectorBootstrapLock(ctx, lockPath)
+	if second != nil {
+		_ = closeConnectorBootstrapLock(second)
+		t.Fatal("second bootstrap lock acquired while the first was held")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("canceled bootstrap lock error = %v, want context deadline exceeded", err)
 	}
 }
 
@@ -414,7 +439,9 @@ func TestConnectorBootstrapRetainsPendingAuthorizationDuringActiveExchange(t *te
 			return nil
 		},
 	}
-	if _, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if _, err := bootstrapper.bootstrap(ctx, platform.Config{
 		ConnectorServerURL:      server.URL,
 		ConnectorCredentialPath: cachePath,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
@@ -422,6 +449,61 @@ func TestConnectorBootstrapRetainsPendingAuthorizationDuringActiveExchange(t *te
 	}
 	if _, err := os.Stat(pendingPath); err != nil {
 		t.Fatalf("pending authorization was removed during an active exchange: %v", err)
+	}
+}
+
+func TestConnectorBootstrapRetriesTransientExchange(t *testing.T) {
+	tokenCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/device/token" {
+			http.NotFound(writer, request)
+			return
+		}
+		tokenCalls++
+		if tokenCalls <= 2 {
+			status := http.StatusConflict
+			if tokenCalls == 2 {
+				status = http.StatusServiceUnavailable
+			}
+			writer.WriteHeader(status)
+			return
+		}
+		apiKey, err := auth.EncodeConnectorAPIKey("host-retried", "token-retried")
+		if err != nil {
+			t.Fatalf("encode retried API key: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"api_key":"`+apiKey+`"}`)
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	if err := saveConnectorPendingAuthorization(pendingPath, server.URL, "", "authorization-code"); err != nil {
+		t.Fatalf("save pending authorization: %v", err)
+	}
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(context.Context, string) error {
+			t.Fatal("browser authorization restarted during retry")
+			return nil
+		},
+	}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("active exchange retry error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-retried", Token: "token-retried"}) || tokenCalls != 3 {
+		t.Fatalf("transient exchange retry = (%+v, %d token calls), want two retries and the credential", credential, tokenCalls)
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("pending authorization remains after successful retry, stat error = %v", err)
 	}
 }
 

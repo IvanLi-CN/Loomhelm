@@ -114,10 +114,10 @@ func (s *Store) CreateIntent(ctx context.Context, input CreationIntentInput) (Cr
 	return s.createIntent(ctx, input, nil)
 }
 
-// CreateIntentAuthorized adds a transaction-scoped admission check for a new
-// intent. Existing idempotent intents are returned without re-admitting the
-// original operation, while a new intent cannot commit after its Host access
-// has been revoked.
+// CreateIntentAuthorized adds a transaction-scoped admission check for both a
+// new intent and an idempotent retry. Existing intents are re-admitted before
+// they are returned so a retry cannot bypass current project or Host access;
+// a new intent cannot commit after that access has been revoked.
 func (s *Store) CreateIntentAuthorized(ctx context.Context, input CreationIntentInput, authorize CreationIntentAuthorizer) (CreationIntent, error) {
 	return s.createIntent(ctx, input, authorize)
 }
@@ -149,6 +149,11 @@ func (s *Store) createIntent(ctx context.Context, input CreationIntentInput, aut
 		if err := compareCreationIntent(existing, normalized, digest, true); err != nil {
 			return CreationIntent{}, err
 		}
+		if authorize != nil {
+			if err := authorize(ctx, tx, normalized); err != nil {
+				return CreationIntent{}, err
+			}
+		}
 		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
 			return CreationIntent{}, err
 		}
@@ -163,6 +168,11 @@ func (s *Store) createIntent(ctx context.Context, input CreationIntentInput, aut
 	} else if found {
 		if err := compareCreationIntent(existing, normalized, digest, false); err != nil {
 			return CreationIntent{}, err
+		}
+		if authorize != nil {
+			if err := authorize(ctx, tx, normalized); err != nil {
+				return CreationIntent{}, err
+			}
 		}
 		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
 			return CreationIntent{}, err

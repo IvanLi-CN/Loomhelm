@@ -19,6 +19,9 @@ func (s connectorAuthService) EnrollConnector(ctx context.Context, approvingUser
 		CredentialName: "loomhelm-connector",
 	})
 	if err != nil {
+		if errors.Is(err, hosts.ErrCredentialRevoked) {
+			return auth.ConnectorCredential{}, auth.ErrForbidden
+		}
 		if errors.Is(err, hosts.ErrForbidden) || errors.Is(err, hosts.ErrNotFound) {
 			return auth.ConnectorCredential{}, auth.ErrForbidden
 		}

@@ -3,16 +3,21 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
 const (
-	connectorLockExclusive = 0x00000002
+	connectorBootstrapLockPollInterval = 25 * time.Millisecond
+	connectorLockExclusive             = 0x00000002
+	connectorLockFailImmediately       = 0x00000001
+	connectorLockViolation             = syscall.Errno(33)
 )
 
 var (
@@ -20,7 +25,13 @@ var (
 	connectorUnlockFileEx = syscall.NewLazyDLL("kernel32.dll").NewProc("UnlockFileEx")
 )
 
-func openConnectorBootstrapLock(path string) (*os.File, error) {
+func openConnectorBootstrapLock(ctx context.Context, path string) (*os.File, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := ensureConnectorCredentialDirectory(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
@@ -46,13 +57,34 @@ func openConnectorBootstrapLock(path string) (*os.File, error) {
 		_ = file.Close()
 		return nil, errors.New("Connector bootstrap lock permissions are too broad")
 	}
-	overlap := new(syscall.Overlapped)
-	result, _, callErr := connectorLockFileEx.Call(uintptr(file.Fd()), connectorLockExclusive, 0, 1, 0, uintptr(unsafe.Pointer(overlap)))
-	if result == 0 {
-		_ = file.Close()
-		return nil, fmt.Errorf("acquire Connector bootstrap lock: %w", callErr)
+	for {
+		if err := ctx.Err(); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		overlap := new(syscall.Overlapped)
+		result, _, callErr := connectorLockFileEx.Call(uintptr(file.Fd()), connectorLockExclusive|connectorLockFailImmediately, 0, 1, 0, uintptr(unsafe.Pointer(overlap)))
+		if result != 0 {
+			return file, nil
+		}
+		if !errors.Is(callErr, connectorLockViolation) {
+			_ = file.Close()
+			return nil, fmt.Errorf("acquire Connector bootstrap lock: %w", callErr)
+		}
+		timer := time.NewTimer(connectorBootstrapLockPollInterval)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			_ = file.Close()
+			return nil, ctx.Err()
+		}
 	}
-	return file, nil
 }
 
 func closeConnectorBootstrapLock(file *os.File) error {
@@ -65,4 +97,8 @@ func closeConnectorBootstrapLock(file *os.File) error {
 		return errors.Join(fmt.Errorf("release Connector bootstrap lock: %w", callErr), file.Close())
 	}
 	return file.Close()
+}
+
+func syncConnectorStateDirectory(string) error {
+	return nil
 }

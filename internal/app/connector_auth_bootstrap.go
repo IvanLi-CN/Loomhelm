@@ -111,7 +111,7 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 	if err != nil {
 		return auth.ConnectorCredential{}, err
 	}
-	bootstrapLock, err := openConnectorBootstrapLock(cachePath + ".lock")
+	bootstrapLock, err := openConnectorBootstrapLock(ctx, cachePath+".lock")
 	if err != nil {
 		return auth.ConnectorCredential{}, fmt.Errorf("lock Connector bootstrap state: %w", err)
 	}
@@ -380,6 +380,20 @@ func (e connectorHTTPStatusError) Error() string {
 }
 
 func (b connectorCredentialBootstrapper) exchangeConnectorAuthorization(ctx context.Context, baseURL, authorizationCode, requestedHostID string) (auth.ConnectorCredential, error) {
+	delay := connectorInitialReconnectDelay
+	for {
+		credential, err := b.exchangeConnectorAuthorizationOnce(ctx, baseURL, authorizationCode, requestedHostID)
+		if err == nil || !errors.Is(err, errConnectorAuthorizationRetryable) {
+			return credential, err
+		}
+		if !waitConnectorRetry(ctx, delay) {
+			return auth.ConnectorCredential{}, ctx.Err()
+		}
+		delay = nextConnectorRetry(delay)
+	}
+}
+
+func (b connectorCredentialBootstrapper) exchangeConnectorAuthorizationOnce(ctx context.Context, baseURL, authorizationCode, requestedHostID string) (auth.ConnectorCredential, error) {
 	tokenEndpoint, err := connectorHTTPURL(baseURL, "/api/v1/auth/device/token")
 	if err != nil {
 		return auth.ConnectorCredential{}, err
@@ -391,7 +405,7 @@ func (b connectorCredentialBootstrapper) exchangeConnectorAuthorization(ctx cont
 		Code string `json:"code"`
 	}{Code: authorizationCode}, &tokenResponse); err != nil {
 		var statusErr connectorHTTPStatusError
-		if errors.As(err, &statusErr) && (statusErr.status == http.StatusConflict || statusErr.status == http.StatusTooEarly || statusErr.status == http.StatusTooManyRequests) {
+		if errors.As(err, &statusErr) && (statusErr.status == http.StatusConflict || statusErr.status == http.StatusTooEarly || statusErr.status == http.StatusTooManyRequests || statusErr.status == http.StatusServiceUnavailable) {
 			return auth.ConnectorCredential{}, fmt.Errorf("%w: %v", errConnectorAuthorizationRetryable, err)
 		}
 		if errors.As(err, &statusErr) && statusErr.status >= http.StatusBadRequest && statusErr.status < http.StatusInternalServerError {
@@ -632,6 +646,9 @@ func clearConnectorPendingAuthorization(path string) error {
 	if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove Connector pending authorization: %w", err)
 	}
+	if err := syncConnectorStateDirectory(filepath.Dir(pendingPath)); err != nil {
+		return fmt.Errorf("sync Connector pending authorization directory: %w", err)
+	}
 	return nil
 }
 
@@ -670,6 +687,9 @@ func writeConnectorStateFile(path string, data []byte, label string) error {
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("publish %s: %w", label, err)
+	}
+	if err := syncConnectorStateDirectory(directory); err != nil {
+		return fmt.Errorf("sync %s directory: %w", label, err)
 	}
 	return nil
 }
