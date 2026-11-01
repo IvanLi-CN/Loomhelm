@@ -77,6 +77,30 @@ func closeConnectorBootstrapLock(file *os.File) error {
 	return errors.Join(syscall.Flock(int(file.Fd()), syscall.LOCK_UN), file.Close())
 }
 
+func connectorStatePermissionsTooBroad(info os.FileInfo) bool {
+	return info.Mode().Perm()&0o077 != 0
+}
+
+func secureConnectorStateDirectory(string) error {
+	return nil
+}
+
+func validateConnectorStateDirectorySecurity(string) error {
+	return nil
+}
+
+func secureConnectorStateFile(*os.File) error {
+	return nil
+}
+
+func validateConnectorStateFile(string) error {
+	return nil
+}
+
+func validateConnectorStateFileHandle(*os.File) error {
+	return nil
+}
+
 func syncConnectorStateDirectory(path string) error {
 	directory, err := os.Open(path)
 	if err != nil {

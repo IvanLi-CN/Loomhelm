@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func TestConnectorCredentialCacheIsPrivateAndBoundToServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat cache: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("cache mode = %o, want 600", info.Mode().Perm())
 	}
 	got, ok, err := loadConnectorCredential(path, "https://loomhelm.example.test")

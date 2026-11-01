@@ -53,9 +53,17 @@ func openConnectorBootstrapLock(ctx context.Context, path string) (*os.File, err
 		_ = file.Close()
 		return nil, errors.New("Connector bootstrap lock must be a regular file")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if connectorStatePermissionsTooBroad(info) {
 		_ = file.Close()
 		return nil, errors.New("Connector bootstrap lock permissions are too broad")
+	}
+	if err := secureConnectorStateFile(file); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("secure Connector bootstrap lock: %w", err)
+	}
+	if err := validateConnectorStateFileHandle(file); err != nil {
+		_ = file.Close()
+		return nil, err
 	}
 	for {
 		if err := ctx.Err(); err != nil {

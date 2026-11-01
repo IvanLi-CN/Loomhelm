@@ -520,8 +520,11 @@ func loadConnectorCredential(path, serverURL string) (auth.ConnectorCredential, 
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return auth.ConnectorCredential{}, false, errors.New("Connector credential cache must be a regular file")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if connectorStatePermissionsTooBroad(info) {
 		return auth.ConnectorCredential{}, false, errors.New("Connector credential cache permissions are too broad")
+	}
+	if err := validateConnectorStateFile(cachePath); err != nil {
+		return auth.ConnectorCredential{}, false, err
 	}
 	file, err := os.Open(cachePath)
 	if err != nil {
@@ -604,8 +607,11 @@ func loadConnectorPendingAuthorization(path, serverURL string) (connectorPending
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return connectorPendingAuthorization{}, false, errors.New("Connector pending authorization must be a regular file")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if connectorStatePermissionsTooBroad(info) {
 		return connectorPendingAuthorization{}, false, errors.New("Connector pending authorization permissions are too broad")
+	}
+	if err := validateConnectorStateFile(pendingPath); err != nil {
+		return connectorPendingAuthorization{}, false, err
 	}
 	file, err := os.Open(pendingPath)
 	if err != nil {
@@ -640,8 +646,11 @@ func clearConnectorPendingAuthorization(path string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return errors.New("Connector pending authorization must be a regular file")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if connectorStatePermissionsTooBroad(info) {
 		return errors.New("Connector pending authorization permissions are too broad")
+	}
+	if err := validateConnectorStateFile(pendingPath); err != nil {
+		return err
 	}
 	if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove Connector pending authorization: %w", err)
@@ -661,6 +670,9 @@ func writeConnectorStateFile(path string, data []byte, label string) error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("%s must be a regular file", label)
 		}
+		if err := validateConnectorStateFile(path); err != nil {
+			return fmt.Errorf("validate %s: %w", label, err)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect %s: %w", label, err)
 	}
@@ -671,6 +683,10 @@ func writeConnectorStateFile(path string, data []byte, label string) error {
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("secure %s temporary file: %w", label, err)
+	}
+	if err := secureConnectorStateFile(temporary); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("secure %s temporary file: %w", label, err)
 	}
@@ -720,6 +736,9 @@ func ensureConnectorCredentialDirectory(path string) error {
 	if err := os.Chmod(path, 0o700); err != nil {
 		return fmt.Errorf("secure Connector credential cache directory: %w", err)
 	}
+	if err := secureConnectorStateDirectory(path); err != nil {
+		return fmt.Errorf("secure Connector credential cache directory: %w", err)
+	}
 	return validateConnectorCredentialDirectory(path)
 }
 
@@ -734,8 +753,11 @@ func validateConnectorCredentialDirectory(path string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return errors.New("Connector credential cache directory must be a regular directory")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if connectorStatePermissionsTooBroad(info) {
 		return errors.New("Connector credential cache directory permissions are too broad")
+	}
+	if err := validateConnectorStateDirectorySecurity(path); err != nil {
+		return err
 	}
 	return nil
 }

@@ -148,6 +148,8 @@ Repair Batch 3 closes two concurrency boundaries without changing the public enr
 
 Repair Batch 4 completes the retry and idempotency fences: transient Connector exchange conflicts now retry with context-bounded backoff, revoked enrollment credentials become definitive rejections that start fresh recovery, and state-file publication/removal syncs its parent directory. `CreateIntentAuthorized` rechecks project and Host access for existing session identities before returning them, so an idempotent retry cannot bypass a current revoke. Focused tests cover active-exchange retry, existing-intent re-admission and the corresponding recovery boundaries; real process-crash and cross-platform evidence remain separate gates.
 
+Repair Batch 5 closes the Windows Connector state boundary: Windows no longer interprets POSIX mode bits as ACLs, and state directories, cache/pending files and bootstrap locks use protected owner-only ACL validation while Unix retains strict mode checks. Windows runtime coverage and real process-crash recovery remain separate platform gates.
+
 ## References
 
 - [Requirements](SPEC.md)
