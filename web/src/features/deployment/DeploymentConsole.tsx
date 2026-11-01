@@ -84,14 +84,15 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
     enabled: Boolean(principalId),
     refetchInterval: 5_000
   });
+  const latestOperation = statusQuery.data?.status.latest_operation;
+  const operationQueryId = latestOperation && ["accepted", "running", "unknown", "reconciling"].includes(latestOperation.status) && latestOperation.id !== operationId ? latestOperation.id : operationId;
   const operationQuery = useQuery({
-    queryKey: ["loomhelm", principalId, "deployment-operation", operationId],
-    queryFn: () => client.getDeploymentOperation({ operation_id: operationId ?? "" }),
-    enabled: Boolean(operationId),
-    refetchInterval: operationId ? 1_500 : false
+    queryKey: ["loomhelm", principalId, "deployment-operation", operationQueryId],
+    queryFn: () => client.getDeploymentOperation({ operation_id: operationQueryId ?? "" }),
+    enabled: Boolean(operationQueryId),
+    refetchInterval: operationQueryId ? 1_500 : false
   });
   const operation = operationQuery.data?.operation;
-  const latestOperation = statusQuery.data?.status.latest_operation;
   const visibleOperation = operation ?? latestOperation;
   const mutation = useMutation({
     mutationFn: async (action: DeploymentAction) => {
@@ -119,11 +120,6 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
       void queryClient.invalidateQueries({ queryKey: ["loomhelm", principalId, "deployment-observations"] });
     }
   });
-
-  useEffect(() => {
-    if (operationId || !latestOperation?.id || !["accepted", "running", "unknown", "reconciling"].includes(latestOperation.status)) return;
-    setOperationId(latestOperation.id);
-  }, [latestOperation, operationId]);
 
   useEffect(() => {
     if (!operation || !["succeeded", "failed", "unknown", "degraded", "blocked"].includes(operation.status)) return;
