@@ -136,12 +136,29 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 		UpdatedAt:     createdAt,
 	}
 	var createIntent func(context.Context, sessions.CreationIntentInput) (sessions.CreationIntent, error)
-	if hostAuthorizer, ok := s.hosts.(interface {
+	hostAuthorizer, hasHostAuthorizer := s.hosts.(interface {
 		AuthorizeUserTx(context.Context, pgx.Tx, string, string) error
-	}); ok {
+	})
+	projectAuthorizer, hasProjectAuthorizer := s.projects.(sessionProjectBindingAccess)
+	if hasHostAuthorizer || hasProjectAuthorizer {
 		createIntent = func(createCtx context.Context, input sessions.CreationIntentInput) (sessions.CreationIntent, error) {
 			return s.records.CreateIntentAuthorized(createCtx, input, func(authorizeCtx context.Context, tx pgx.Tx, authorizedInput sessions.CreationIntentInput) error {
-				return hostAuthorizer.AuthorizeUserTx(authorizeCtx, tx, principal.UserID, authorizedInput.HostID)
+				if authorizedInput.ProjectID != "" {
+					if !hasProjectAuthorizer {
+						return runs.ErrControlServiceUnavailable
+					}
+					allowed, err := projectAuthorizer.CanWriteProjectTx(authorizeCtx, tx, principal, authorizedInput.ProjectID)
+					if err != nil {
+						return fmt.Errorf("authorize session project in creation transaction: %w", err)
+					}
+					if !allowed {
+						return auth.ErrNotFound
+					}
+				}
+				if hasHostAuthorizer {
+					return hostAuthorizer.AuthorizeUserTx(authorizeCtx, tx, principal.UserID, authorizedInput.HostID)
+				}
+				return nil
 			})
 		}
 	} else {

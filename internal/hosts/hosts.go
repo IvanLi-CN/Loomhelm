@@ -660,9 +660,11 @@ func (s *Service) Touch(ctx context.Context, connection Connection) error {
 }
 
 // AuthorizeCommand serializes command admission with credential revocation and
-// the replacement-generation fence. The callback is executed while the host
-// row is locked, so a revocation either precedes command delivery or follows
-// an already admitted write.
+// the replacement-generation fence. The admission transaction commits before
+// the callback because callbacks persist through independent transactions. A
+// revocation therefore either precedes this durable admission or follows work
+// that was already admitted, without holding the Host row lock across a
+// database callback.
 func (s *Service) AuthorizeCommand(ctx context.Context, connection Connection, deliver func() error) error {
 	if err := s.ready(ctx); err != nil {
 		return commandNotDelivered(err)
@@ -685,11 +687,11 @@ func (s *Service) AuthorizeCommand(ctx context.Context, connection Connection, d
 	`, connection.HostID, s.now(), connection.CredentialID, connection.Generation); err != nil {
 		return commandNotDelivered(fmt.Errorf("touch host command connection: %w", err))
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return commandNotDelivered(fmt.Errorf("commit host command authorization: %w", err))
+	}
 	if err := deliver(); err != nil {
 		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit host command authorization: %w", err)
 	}
 	return nil
 }
@@ -701,10 +703,11 @@ func commandNotDelivered(err error) error {
 	return fmt.Errorf("%w: %w", ErrCommandNotDelivered, err)
 }
 
-// ProcessEvent validates and checkpoints one observed event under the same
-// host-generation lock as credential revocation and command admission. The
-// handler runs before the cursor is committed, so failed processing remains
-// replayable after reconnect.
+// ProcessEvent validates one observed event under the same host-generation
+// admission fence as credential revocation and command admission. The handler
+// runs after that fence commits, then the cursor is checkpointed separately so
+// callbacks can safely use their own database transaction. Failed processing
+// remains replayable after reconnect.
 func (s *Service) ProcessEvent(ctx context.Context, connection Connection, cursor Cursor, handler func(context.Context) error) error {
 	if err := s.ready(ctx); err != nil {
 		return err
@@ -721,11 +724,6 @@ func (s *Service) ProcessEvent(ctx context.Context, connection Connection, curso
 	if err != nil {
 		return err
 	}
-	if handler != nil {
-		if err := handler(ctx); err != nil {
-			return err
-		}
-	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE host_connections
 		SET last_seen_at = $2
@@ -733,18 +731,16 @@ func (s *Service) ProcessEvent(ctx context.Context, connection Connection, curso
 	`, connection.HostID, admission.now, connection.CredentialID, connection.Generation); err != nil {
 		return fmt.Errorf("touch host event connection: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO host_cursors (host_id, session_id, run_id, cursor, observed_at, cursor_retained_until)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (host_id, session_id, run_id) DO UPDATE
-		SET cursor = EXCLUDED.cursor,
-		    observed_at = EXCLUDED.observed_at,
-		    cursor_retained_until = EXCLUDED.cursor_retained_until
-	`, connection.HostID, cursor.SessionID, cursor.RunID, cursor.Value, admission.now, admission.retainedUntil); err != nil {
-		return fmt.Errorf("store host event cursor: %w", err)
-	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit host event processing: %w", err)
+		return fmt.Errorf("commit host event admission: %w", err)
+	}
+	if handler != nil {
+		if err := handler(ctx); err != nil {
+			return err
+		}
+	}
+	if err := s.Checkpoint(ctx, connection, cursor); err != nil {
+		return fmt.Errorf("checkpoint host event cursor: %w", err)
 	}
 	return nil
 }

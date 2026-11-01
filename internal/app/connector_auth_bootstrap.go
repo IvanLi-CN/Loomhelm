@@ -103,10 +103,23 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 		}
 		cachePath = defaultCachePath
 	}
+	cachePath, err := connectorCredentialCachePath(cachePath)
+	if err != nil {
+		return auth.ConnectorCredential{}, err
+	}
 	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
 	if err != nil {
 		return auth.ConnectorCredential{}, err
 	}
+	bootstrapLock, err := openConnectorBootstrapLock(cachePath + ".lock")
+	if err != nil {
+		return auth.ConnectorCredential{}, fmt.Errorf("lock Connector bootstrap state: %w", err)
+	}
+	defer func() {
+		if closeErr := closeConnectorBootstrapLock(bootstrapLock); closeErr != nil && logger != nil {
+			logger.Warn("close Connector bootstrap lock failed", "error", closeErr)
+		}
+	}()
 	apiKey := strings.TrimSpace(cfg.ConnectorAPIKey)
 	if apiKey != "" {
 		decoded, decodeErr := auth.DecodeConnectorAPIKey(apiKey)
@@ -360,6 +373,8 @@ type connectorHTTPStatusError struct {
 	status int
 }
 
+var errConnectorAuthorizationRetryable = errors.New("Connector authorization exchange is temporarily unavailable")
+
 func (e connectorHTTPStatusError) Error() string {
 	return fmt.Sprintf("server returned status %d", e.status)
 }
@@ -376,6 +391,9 @@ func (b connectorCredentialBootstrapper) exchangeConnectorAuthorization(ctx cont
 		Code string `json:"code"`
 	}{Code: authorizationCode}, &tokenResponse); err != nil {
 		var statusErr connectorHTTPStatusError
+		if errors.As(err, &statusErr) && (statusErr.status == http.StatusConflict || statusErr.status == http.StatusTooEarly || statusErr.status == http.StatusTooManyRequests) {
+			return auth.ConnectorCredential{}, fmt.Errorf("%w: %v", errConnectorAuthorizationRetryable, err)
+		}
 		if errors.As(err, &statusErr) && statusErr.status >= http.StatusBadRequest && statusErr.status < http.StatusInternalServerError {
 			return auth.ConnectorCredential{}, fmt.Errorf("%w: %v", errConnectorAuthorizationRejected, err)
 		}

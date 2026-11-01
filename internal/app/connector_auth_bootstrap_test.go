@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
@@ -66,6 +67,41 @@ func TestConnectorCredentialCacheRejectsSymlinkedDirectory(t *testing.T) {
 	}
 	if err := saveConnectorCredential(filepath.Join(link, "connector-credential.json"), "https://loomhelm.example.test", auth.ConnectorCredential{HostID: "host", Token: "token"}); err == nil {
 		t.Fatal("saveConnectorCredential() succeeded through a symlinked directory")
+	}
+}
+
+func TestConnectorBootstrapLockSerializesProcesses(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "connector-credential.json.lock")
+	first, err := openConnectorBootstrapLock(lockPath)
+	if err != nil {
+		t.Fatalf("open first bootstrap lock: %v", err)
+	}
+	acquired := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		second, openErr := openConnectorBootstrapLock(lockPath)
+		if openErr != nil {
+			done <- openErr
+			return
+		}
+		close(acquired)
+		done <- closeConnectorBootstrapLock(second)
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("second bootstrap lock acquired before the first was released")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := closeConnectorBootstrapLock(first); err != nil {
+		t.Fatalf("close first bootstrap lock: %v", err)
+	}
+	select {
+	case <-acquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second bootstrap lock was not released after the first closed")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("close second bootstrap lock: %v", err)
 	}
 }
 
@@ -350,6 +386,42 @@ func TestConnectorBootstrapRecoversPendingAuthorizationAfterCachePublicationFail
 	}
 	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
 		t.Fatalf("pending authorization remains after recovery, stat error = %v", err)
+	}
+}
+
+func TestConnectorBootstrapRetainsPendingAuthorizationDuringActiveExchange(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/device/token" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	if err := saveConnectorPendingAuthorization(pendingPath, server.URL, "", "authorization-code"); err != nil {
+		t.Fatalf("save pending authorization: %v", err)
+	}
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(context.Context, string) error {
+			t.Fatal("browser authorization restarted while exchange was active")
+			return nil
+		},
+	}
+	if _, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+		t.Fatal("bootstrap succeeded despite an active exchange")
+	}
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("pending authorization was removed during an active exchange: %v", err)
 	}
 }
 

@@ -498,7 +498,7 @@ func (s *postgresConnectorDeviceStore) Claim(ctx context.Context, authorizationC
 		return record, nil
 	}
 	if exchangeStartedAt != nil && now.Sub(*exchangeStartedAt) < connectorExchangeClaim {
-		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector authorization code is invalid or expired", ErrInvalid)
+		return connectorDeviceAuthorization{}, fmt.Errorf("%w: Connector authorization exchange is already in progress", ErrConflict)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE connector_device_authorizations SET exchange_started_at = $2 WHERE id = $1`, record.ID, now); err != nil {
 		return connectorDeviceAuthorization{}, fmt.Errorf("%w: claim Connector authorization code: %v", ErrUnavailable, err)
@@ -519,7 +519,7 @@ func (s *postgresConnectorDeviceStore) Complete(ctx context.Context, authorizati
 		return fmt.Errorf("%w: complete Connector token exchange: %v", ErrUnavailable, err)
 	}
 	if result.RowsAffected() != 1 {
-		return fmt.Errorf("%w: Connector authorization code is no longer exchangeable", ErrInvalid)
+		return fmt.Errorf("%w: Connector authorization completion is ambiguous", ErrUnavailable)
 	}
 	return nil
 }

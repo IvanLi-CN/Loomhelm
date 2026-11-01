@@ -52,7 +52,7 @@ func (s *connectorDeviceStoreFake) Claim(_ context.Context, authorizationCodeHas
 		return replay, nil
 	}
 	if s.claimed && now.Sub(s.claimedAt) < connectorExchangeClaim {
-		return connectorDeviceAuthorization{}, ErrInvalid
+		return connectorDeviceAuthorization{}, ErrConflict
 	}
 	s.claimed = true
 	s.claimedAt = now
@@ -158,6 +158,36 @@ func TestConnectorDeviceFlowReplaysCompletedAuthorizationIdempotently(t *testing
 	}
 	if enroller.enrollmentID == "" || enroller.authorizationCode != parsed.Query().Get("code") {
 		t.Fatalf("enroller exchange binding = (%q, %q), want non-empty authorization and code", enroller.enrollmentID, enroller.authorizationCode)
+	}
+}
+
+func TestConnectorDeviceFlowReportsActiveExchangeAsRetryable(t *testing.T) {
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	store := &connectorDeviceStoreFake{}
+	flow := &connectorDeviceFlow{
+		store:    store,
+		enroller: &connectorEnrollerFake{credential: ConnectorCredential{HostID: "host-1", Token: "token-1"}},
+		now:      func() time.Time { return now },
+	}
+	started, err := flow.start(context.Background(), connectorDeviceStartRequest{
+		RedirectURI: "http://127.0.0.1:43123/callback",
+		State:       strings.Repeat("s", 32),
+	})
+	if err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	callback, err := flow.authorize(context.Background(), started.UserCode, "user-1")
+	if err != nil {
+		t.Fatalf("authorize error = %v", err)
+	}
+	parsed, err := url.Parse(callback)
+	if err != nil {
+		t.Fatalf("parse callback: %v", err)
+	}
+	store.claimed = true
+	store.claimedAt = now
+	if _, err := flow.exchange(context.Background(), parsed.Query().Get("code")); !errors.Is(err, ErrConflict) {
+		t.Fatalf("active exchange error = %v, want conflict", err)
 	}
 }
 

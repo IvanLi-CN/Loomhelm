@@ -15,6 +15,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 type fakeSessionCreationRecords struct {
@@ -54,7 +55,12 @@ func (f *fakeSessionCreationRecords) CreateIntent(_ context.Context, input sessi
 	return intent, nil
 }
 
-func (f *fakeSessionCreationRecords) CreateIntentAuthorized(ctx context.Context, input sessions.CreationIntentInput, _ sessions.CreationIntentAuthorizer) (sessions.CreationIntent, error) {
+func (f *fakeSessionCreationRecords) CreateIntentAuthorized(ctx context.Context, input sessions.CreationIntentInput, authorize sessions.CreationIntentAuthorizer) (sessions.CreationIntent, error) {
+	if authorize != nil {
+		if err := authorize(ctx, nil, input); err != nil {
+			return sessions.CreationIntent{}, err
+		}
+	}
 	return f.CreateIntent(ctx, input)
 }
 
@@ -150,13 +156,23 @@ func (f *fakeSessionInitialRun) SubmitRun(_ context.Context, _ auth.Principal, _
 	return protocol.CommandAckResponse{Ack: ack}, f.err
 }
 
-type fakeSessionCreationProjects struct{ write bool }
+type fakeSessionCreationProjects struct {
+	write   bool
+	txWrite *bool
+}
 
 func (fakeSessionCreationProjects) CanReadProject(context.Context, auth.Principal, string) (bool, error) {
 	return true, nil
 }
 
 func (f fakeSessionCreationProjects) CanWriteProject(context.Context, auth.Principal, string) (bool, error) {
+	return f.write, nil
+}
+
+func (f fakeSessionCreationProjects) CanWriteProjectTx(context.Context, pgx.Tx, auth.Principal, string) (bool, error) {
+	if f.txWrite != nil {
+		return *f.txWrite, nil
+	}
 	return f.write, nil
 }
 
@@ -354,6 +370,26 @@ func TestSessionCreationRejectsUnauthorizedProjectBeforeHostCommand(t *testing.T
 	}
 	if host.calls != 0 || len(transport.commands) != 0 || len(records.intents) != 0 {
 		t.Fatalf("authorization crossed side-effect boundary: host=%d commands=%d intents=%d", host.calls, len(transport.commands), len(records.intents))
+	}
+}
+
+func TestSessionCreationRechecksProjectAuthorizationInsideCreationIntent(t *testing.T) {
+	txWrite := false
+	host := &fakeSessionCreationHost{host: hosts.Host{ID: "host-1"}}
+	records := &fakeSessionCreationRecords{}
+	transport := &fakeSessionCreationTransport{ack: protocol.CommandAck{State: protocol.CommandStateSucceeded}}
+	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true, txWrite: &txWrite}, host, transport, nil)
+	projectID := "project-1"
+	_, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, protocol.CreateSessionRequest{
+		CommandID: "create-revoked-project",
+		Path:      protocol.SessionPathNew,
+		ProjectID: &projectID,
+	})
+	if !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("transaction-scoped project authorization error = %v", err)
+	}
+	if host.calls != 1 || len(transport.commands) != 0 || len(records.intents) != 0 {
+		t.Fatalf("transaction-scoped authorization crossed write boundary: host=%d commands=%d intents=%d", host.calls, len(transport.commands), len(records.intents))
 	}
 }
 
