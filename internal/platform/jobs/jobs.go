@@ -263,16 +263,17 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 			return startClient.Start(startContext)
 		}
 	}
+	clientStarted := false
 	stopClient := func() error {
+		if !clientStarted {
+			return nil
+		}
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), r.cfg.SoftStopTimeout)
 		defer stopCancel()
 		return client.StopAndCancel(stopCtx)
 	}
-	if err := startClient(ctx, client); err != nil {
-		return errors.Join(fmt.Errorf("start River client: %w", err), stopClient())
-	}
 	if err := lease.Acquire(ctx); err != nil {
-		return errors.Join(err, stopClient())
+		return err
 	}
 	defer func() {
 		if startErr == nil {
@@ -288,6 +289,10 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 		if err := r.afterAcquire(lease); err != nil {
 			return err
 		}
+	}
+	clientStarted = true
+	if err := startClient(ctx, client); err != nil {
+		return fmt.Errorf("start River client: %w", err)
 	}
 	monitorCtx, monitorCancel := context.WithCancel(ctx)
 	r.mu.Lock()
@@ -508,6 +513,7 @@ func validateGeneration(generation uint64) error {
 
 type shortJobWorker struct {
 	river.WorkerDefaults[ShortJobArgs]
+	db         *database.DB
 	queries    *generated.Queries
 	generation Generation
 	lease      *workerLease
@@ -534,15 +540,23 @@ func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs])
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if w.lease != nil {
-		if err := w.lease.Check(workCtx); err != nil {
-			if errors.Is(err, ErrWorkerLeaseLost) {
-				return river.JobCancel(err)
-			}
-			return err
-		}
+	if w.db == nil || w.db.Pool() == nil || w.queries == nil || w.lease == nil {
+		return river.JobCancel(ErrWorkerLeaseLost)
 	}
-	_, err := w.queries.RecordShortJobResult(workCtx, generated.RecordShortJobResultParams{
+	// The lease fence and result write share one transaction so a newer
+	// generation cannot replace the lease between the check and the commit.
+	tx, err := w.db.Pool().Begin(workCtx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(workCtx) }()
+	if err := w.lease.CheckTx(workCtx, tx); err != nil {
+		if errors.Is(err, ErrWorkerLeaseLost) {
+			return river.JobCancel(err)
+		}
+		return err
+	}
+	_, err = w.queries.WithTx(tx).RecordShortJobResult(workCtx, generated.RecordShortJobResultParams{
 		JobID:      job.ID,
 		Generation: int64(job.Args.Generation),
 		Payload:    job.Args.Payload,
@@ -550,7 +564,16 @@ func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs])
 	if err != nil && generationCtx.Err() != nil {
 		return river.JobCancel(fmt.Errorf("generation %d stopped: %w", job.Args.Generation, generationCtx.Err()))
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(workCtx); err != nil {
+		if generationCtx.Err() != nil {
+			return river.JobCancel(fmt.Errorf("generation %d stopped: %w", job.Args.Generation, generationCtx.Err()))
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *Runner) Ready() bool {
@@ -647,7 +670,7 @@ func (r *Runner) restartClient(ctx context.Context, generation Generation) error
 func (r *Runner) workers(generation Generation, lease *workerLease) (*river.Workers, error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &shortJobWorker{
-		queries: r.db.Queries(), generation: generation, lease: lease,
+		db: r.db, queries: r.db.Queries(), generation: generation, lease: lease,
 	})
 	if register := r.cfg.RegisterWorkers; register != nil {
 		checkLease := func(ctx context.Context) error {

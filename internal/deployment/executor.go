@@ -181,6 +181,56 @@ func durationFromEnvironment(key string, fallback time.Duration) (time.Duration,
 	return value, nil
 }
 
+func (e *CommandExecutor) Ready(ctx context.Context) error {
+	if e == nil {
+		return ErrExecutorUnavailable
+	}
+	if ctx == nil {
+		return errors.New("deployment readiness context must not be nil")
+	}
+	if e.Run != nil {
+		return nil
+	}
+	if e.ComposeBinary != allowlistedComposeBinary || e.CaddyBinary != allowlistedCaddyBinary {
+		return ErrExecutorUnavailable
+	}
+	for name, path := range map[string]string{
+		"Compose file": e.ComposeFile,
+		"Caddy file":   e.CaddyFile,
+	} {
+		if e.CaddyTemplate != "" && name == "Caddy file" {
+			path = e.CaddyTemplate
+		}
+		if strings.TrimSpace(path) == "" {
+			return fmt.Errorf("deployment %s is not configured", name)
+		}
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("deployment %s is unavailable: %w", name, err)
+		}
+	}
+	if e.ComposeEnvFile != "" {
+		if _, err := os.Stat(e.ComposeEnvFile); err != nil {
+			return fmt.Errorf("deployment Compose env file is unavailable: %w", err)
+		}
+	}
+	if err := e.run(ctx, nil, e.ComposeBinary, e.composeArguments("config", "--quiet")...); err != nil {
+		return fmt.Errorf("deployment Compose is not ready: %w", err)
+	}
+	baseURL := strings.TrimRight(e.PublicURL, "/")
+	if baseURL == "" {
+		return errors.New("deployment public URL is not configured")
+	}
+	if err := e.requestStatus(ctx, http.MethodGet, baseURL+"/version", nil, func(status int, _ []byte) error {
+		if status != http.StatusOK {
+			return fmt.Errorf("deployment public route returned HTTP %d", status)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("deployment Caddy is not ready: %w", err)
+	}
+	return nil
+}
+
 func (e *CommandExecutor) Execute(ctx context.Context, operation Operation) error {
 	if e == nil {
 		return ErrExecutorUnavailable

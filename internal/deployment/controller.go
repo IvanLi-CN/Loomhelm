@@ -1,8 +1,10 @@
 package deployment
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
@@ -33,7 +35,7 @@ func NewControllerHTTPHandler(identity *auth.Service, service *Service, version 
 	router.Mount("/api/v1", protected)
 	router.Handle("/mcp", protectedMCP)
 	router.Get("/livez", controllerHealthHandler("alive", version))
-	router.Get("/readyz", controllerHealthHandler("ready", version))
+	router.Get("/readyz", controllerReadyHandler(service, version))
 	router.Get("/version", func(writer http.ResponseWriter, _ *http.Request) {
 		writeControllerJSON(writer, http.StatusOK, map[string]string{
 			"component": "deployment-controller",
@@ -43,9 +45,30 @@ func NewControllerHTTPHandler(identity *auth.Service, service *Service, version 
 	return router, nil
 }
 
+func controllerReadyHandler(service *Service, version string) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+		defer cancel()
+		ready := service != nil && service.Ready(ctx) == nil
+		statusCode := http.StatusOK
+		status := "ready"
+		if !ready {
+			statusCode = http.StatusServiceUnavailable
+			status = "not_ready"
+		}
+		writeControllerJSONWithStatus(writer, statusCode, map[string]any{
+			"status":    status,
+			"component": "deployment-controller",
+			"version":   version,
+			"ready":     ready,
+			"live":      true,
+		})
+	}
+}
+
 func controllerHealthHandler(status, version string) http.HandlerFunc {
 	return func(writer http.ResponseWriter, _ *http.Request) {
-		writeControllerJSON(writer, http.StatusOK, map[string]any{
+		writeControllerJSONWithStatus(writer, http.StatusOK, map[string]any{
 			"status":    status,
 			"component": "deployment-controller",
 			"version":   version,
@@ -56,6 +79,10 @@ func controllerHealthHandler(status, version string) http.HandlerFunc {
 }
 
 func writeControllerJSON(writer http.ResponseWriter, status int, value any) {
+	writeControllerJSONWithStatus(writer, status, value)
+}
+
+func writeControllerJSONWithStatus(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)

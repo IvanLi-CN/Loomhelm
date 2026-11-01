@@ -91,12 +91,14 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
     refetchInterval: operationId ? 1_500 : false
   });
   const operation = operationQuery.data?.operation;
+  const latestOperation = statusQuery.data?.status.latest_operation;
+  const visibleOperation = operation ?? latestOperation;
   const mutation = useMutation({
     mutationFn: async (action: DeploymentAction) => {
       const body = {
         candidate_id: selectedCandidateId || undefined,
         expected_current_fingerprint: statusQuery.data?.status.active_fingerprint || undefined,
-        operation_id: action === "reconcile" ? operation?.target_operation_id || operation?.id : undefined,
+        operation_id: action === "reconcile" ? visibleOperation?.target_operation_id || visibleOperation?.id : undefined,
         slot: action === "drain" ? statusQuery.data?.status.active_slot || undefined : undefined,
         confirm: action !== "preflight" && action !== "reconcile"
       };
@@ -117,6 +119,11 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
       void queryClient.invalidateQueries({ queryKey: ["loomhelm", principalId, "deployment-observations"] });
     }
   });
+
+  useEffect(() => {
+    if (operationId || !latestOperation?.id || !["accepted", "running", "unknown", "reconciling"].includes(latestOperation.status)) return;
+    setOperationId(latestOperation.id);
+  }, [latestOperation, operationId]);
 
   useEffect(() => {
     if (!operation || !["succeeded", "failed", "unknown", "degraded", "blocked"].includes(operation.status)) return;
@@ -150,7 +157,7 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
       observationError={observationQuery.error}
       candidates={candidates}
       events={eventsQuery.data?.events ?? []}
-      operation={operation ?? statusQuery.data?.status.latest_operation}
+      operation={visibleOperation}
       loading={statusQuery.isLoading || candidatesQuery.isLoading || eventsQuery.isLoading}
       error={statusQuery.error ?? candidatesQuery.error ?? eventsQuery.error}
       actionPending={mutation.isPending ? mutation.variables : undefined}

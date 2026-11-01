@@ -92,6 +92,32 @@ func ConfigFromEnvironment() Config {
 type UnavailableExecutor struct{}
 
 func (UnavailableExecutor) Execute(context.Context, Operation) error { return ErrExecutorUnavailable }
+func (UnavailableExecutor) Ready(context.Context) error              { return ErrExecutorUnavailable }
+
+type readinessChecker interface {
+	Ready(context.Context) error
+}
+
+func (s *Service) Ready(ctx context.Context) error {
+	if s == nil || s.pool == nil {
+		return errors.New("deployment service is not initialized")
+	}
+	if ctx == nil {
+		return errors.New("deployment readiness context must not be nil")
+	}
+	if err := s.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("deployment database is not ready: %w", err)
+	}
+	if s.executor == nil {
+		return ErrExecutorUnavailable
+	}
+	if checker, ok := s.executor.(readinessChecker); ok {
+		if err := checker.Ready(ctx); err != nil {
+			return fmt.Errorf("deployment executor is not ready: %w", err)
+		}
+	}
+	return nil
+}
 
 func (s *Service) Role(ctx context.Context, principal auth.Principal) (Role, error) {
 	if principal.UserID == "" {
@@ -793,7 +819,8 @@ func (s *Service) prepareOperation(ctx context.Context, operation Operation) (Op
 			}
 		}
 	}
-	if operation.Kind == "drain" && operation.Slot == "" {
+	drainKind := operation.Kind == "drain" || (operation.Kind == "reconcile" && operation.ExecutionKind == "drain")
+	if drainKind && operation.Slot == "" {
 		operation.Slot = activeSlot
 		if operation.Slot == "" {
 			return Operation{}, fmt.Errorf("%w: no active slot is available to drain", auth.ErrConflict)
@@ -801,6 +828,15 @@ func (s *Service) prepareOperation(ctx context.Context, operation Operation) (Op
 	}
 	if operation.Slot != "" && operation.Slot != "blue" && operation.Slot != "green" {
 		return Operation{}, fmt.Errorf("%w: deployment slot must be blue or green", auth.ErrInvalid)
+	}
+	if drainKind {
+		var slotState string
+		if err := tx.QueryRow(ctx, `SELECT state FROM deployment_slots WHERE slot = $1 FOR UPDATE`, operation.Slot).Scan(&slotState); err != nil {
+			return Operation{}, err
+		}
+		if slotState != "active" && slotState != "draining" {
+			return Operation{}, fmt.Errorf("%w: slot %s is not active or already draining", auth.ErrConflict, operation.Slot)
+		}
 	}
 	if operation.Slot != "" {
 		if _, err := tx.Exec(ctx, `UPDATE deployment_operations SET slot = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, operation.ID, operation.Slot); err != nil {
