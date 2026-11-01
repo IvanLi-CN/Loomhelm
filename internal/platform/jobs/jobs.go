@@ -21,6 +21,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivertype"
 )
 
 const ShortJobKind = "platform_short_job"
@@ -62,6 +63,12 @@ type Config struct {
 	ArtifactDigest         string
 	OwnerID                string
 	RegisterWorkers        WorkerRegistration
+}
+
+type LoadObservation struct {
+	QueueDepth     int64
+	RunningJobs    int64
+	WorkerCapacity int64
 }
 
 func (c Config) withDefaults() (Config, error) {
@@ -136,6 +143,7 @@ type Runner struct {
 	afterAcquire  func(*workerLease) error
 	stopping      atomic.Bool
 	ready         atomic.Bool
+	activeJobs    atomic.Int64
 }
 
 func NewRunner(db *database.DB, logger *slog.Logger, cfg Config) (*Runner, error) {
@@ -243,7 +251,8 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 		Queues: map[string]river.QueueConfig{
 			r.cfg.Queue: {MaxWorkers: r.cfg.MaxWorkers},
 		},
-		Workers: workers,
+		Workers:          workers,
+		WorkerMiddleware: []rivertype.WorkerMiddleware{workerLoadMiddleware(&r.activeJobs)},
 	})
 	if err != nil {
 		return fmt.Errorf("create River client: %w", err)
@@ -307,6 +316,35 @@ func (r *Runner) Enqueue(ctx context.Context, args ShortJobArgs) (int64, error) 
 		return 0, err
 	}
 	return r.EnqueueArgs(ctx, args, nil)
+}
+
+// ObserveLoad reads bounded queue gauges from River's durable queue. It is a
+// read-only diagnostic path and never participates in scheduling or fencing.
+func (r *Runner) ObserveLoad(ctx context.Context) (LoadObservation, error) {
+	if r == nil || r.db == nil || r.db.Pool() == nil {
+		return LoadObservation{}, errors.New("job runner is not initialized")
+	}
+	if ctx == nil {
+		return LoadObservation{}, errors.New("job context must not be nil")
+	}
+	var observation LoadObservation
+	if err := r.db.Pool().QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE state IN ('available', 'retryable', 'scheduled', 'pending'))
+		FROM river_job WHERE queue = $1
+	`, r.cfg.Queue).Scan(&observation.QueueDepth); err != nil {
+		return LoadObservation{}, fmt.Errorf("observe River queue load: %w", err)
+	}
+	observation.RunningJobs = r.activeJobs.Load()
+	observation.WorkerCapacity = int64(r.cfg.MaxWorkers)
+	return observation, nil
+}
+
+func workerLoadMiddleware(activeJobs *atomic.Int64) river.WorkerMiddlewareFunc {
+	return func(ctx context.Context, _ *rivertype.JobRow, doInner func(context.Context) error) error {
+		activeJobs.Add(1)
+		defer activeJobs.Add(-1)
+		return doInner(ctx)
+	}
 }
 
 // EnqueueArgs retains the same readiness and durable worker lease checks as
@@ -586,7 +624,8 @@ func (r *Runner) restartClient(ctx context.Context, generation Generation) error
 		Queues: map[string]river.QueueConfig{
 			r.cfg.Queue: {MaxWorkers: r.cfg.MaxWorkers},
 		},
-		Workers: workers,
+		Workers:          workers,
+		WorkerMiddleware: []rivertype.WorkerMiddleware{workerLoadMiddleware(&r.activeJobs)},
 	})
 	if err != nil {
 		return fmt.Errorf("create River recovery client: %w", err)

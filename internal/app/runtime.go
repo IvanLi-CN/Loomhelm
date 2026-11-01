@@ -286,6 +286,18 @@ func (r *databaseRuntime) Ping(ctx context.Context) error { return r.db.Ping(ctx
 
 func (r *databaseRuntime) Ready() bool { return r.runner.Ready() }
 
+func (r *databaseRuntime) ObserveLoad(ctx context.Context) (workerLoadSnapshot, error) {
+	load, err := r.runner.ObserveLoad(ctx)
+	if err != nil {
+		return workerLoadSnapshot{}, err
+	}
+	return workerLoadSnapshot{
+		QueueDepth:     load.QueueDepth,
+		RunningJobs:    load.RunningJobs,
+		WorkerCapacity: load.WorkerCapacity,
+	}, nil
+}
+
 func (r *databaseRuntime) Start(ctx context.Context, generation *platform.GenerationController, lifecycle *platform.Lifecycle) error {
 	return r.runner.Start(ctx, generation, lifecycle)
 }

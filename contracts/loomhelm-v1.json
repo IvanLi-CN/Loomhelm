@@ -708,6 +708,98 @@
       "required": ["status"],
       "properties": {"status": {"$ref": "#/types/DeploymentStatus"}}
     },
+    "DeploymentComponentObservation": {
+      "type": "object",
+      "required": ["state", "load_state", "observed_at", "live", "ready", "requests_total", "responses_4xx", "responses_5xx", "active_requests", "active_mcp_requests", "active_gateway_requests"],
+      "properties": {
+        "state": {"type": "string"},
+        "reason": {"type": "string"},
+        "load_state": {"type": "string"},
+        "load_reason": {"type": "string"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "live": {"type": "boolean"},
+        "ready": {"type": "boolean"},
+        "candidate_source_sha": {"type": "string"},
+        "artifact_digest": {"type": "string"},
+        "requests_total": {"type": "integer", "format": "int64"},
+        "responses_4xx": {"type": "integer", "format": "int64"},
+        "responses_5xx": {"type": "integer", "format": "int64"},
+        "active_requests": {"type": "integer", "format": "int64"},
+        "active_mcp_requests": {"type": "integer", "format": "int64"},
+        "active_gateway_requests": {"type": "integer", "format": "int64"},
+        "queue_depth": {"type": "integer", "format": "int64"},
+        "running_jobs": {"type": "integer", "format": "int64"},
+        "worker_capacity": {"type": "integer", "format": "int64"},
+        "worker_generation": {"type": "integer", "format": "int64"}
+      }
+    },
+    "DeploymentSlotTrafficObservation": {
+      "type": "object",
+      "required": ["state", "requests_total", "active_requests"],
+      "properties": {
+        "state": {"type": "string"},
+        "reason": {"type": "string"},
+        "requests_total": {"type": "integer", "format": "int64"},
+        "request_rate": {"type": "number"},
+        "share": {"type": "number"},
+        "error_rate": {"type": "number"},
+        "active_requests": {"type": "integer", "format": "int64"}
+      }
+    },
+    "DeploymentSlotLoadObservation": {
+      "type": "object",
+      "required": ["state", "http_active_requests"],
+      "properties": {
+        "state": {"type": "string"},
+        "reason": {"type": "string"},
+        "http_active_requests": {"type": "integer", "format": "int64"},
+        "worker_running_jobs": {"type": "integer", "format": "int64"},
+        "worker_capacity": {"type": "integer", "format": "int64"},
+        "worker_utilization": {"type": "number"}
+      }
+    },
+    "DeploymentSlotObservation": {
+      "type": "object",
+      "required": ["slot", "desired_state", "server", "worker", "traffic", "load"],
+      "properties": {
+        "slot": {"type": "string", "enum": ["blue", "green"]},
+        "desired_state": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "worker_generation": {"type": "integer", "format": "int64"},
+        "server": {"$ref": "#/types/DeploymentComponentObservation"},
+        "worker": {"$ref": "#/types/DeploymentComponentObservation"},
+        "traffic": {"$ref": "#/types/DeploymentSlotTrafficObservation"},
+        "load": {"$ref": "#/types/DeploymentSlotLoadObservation"}
+      }
+    },
+    "DeploymentObservation": {
+      "type": "object",
+      "required": ["state", "observed_at", "desired_active_slot", "migration_state", "sample_window_seconds", "shared_worker_load_state", "slots"],
+      "properties": {
+        "state": {"type": "string"},
+        "reason": {"type": "string"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "desired_active_slot": {"type": "string"},
+        "observed_active_slot": {"type": "string", "enum": ["blue", "green"]},
+        "observed_active_candidate_sha": {"type": "string"},
+        "migration_state": {"type": "string"},
+        "sample_window_seconds": {"type": "number"},
+        "total_request_rate": {"type": "number"},
+        "total_error_rate": {"type": "number"},
+        "shared_worker_load_state": {"type": "string"},
+        "shared_worker_load_reason": {"type": "string"},
+        "shared_worker_queue_depth": {"type": "integer", "format": "int64"},
+        "shared_worker_running_jobs": {"type": "integer", "format": "int64"},
+        "shared_worker_capacity": {"type": "integer", "format": "int64"},
+        "shared_worker_utilization": {"type": "number"},
+        "slots": {"type": "array", "items": {"$ref": "#/types/DeploymentSlotObservation"}}
+      }
+    },
+    "DeploymentObservationResponse": {
+      "type": "object",
+      "required": ["observation"],
+      "properties": {"observation": {"$ref": "#/types/DeploymentObservation"}}
+    },
     "DeploymentCandidateListResponse": {
       "type": "object",
       "required": ["candidates"],
@@ -757,6 +849,15 @@
         "response_status": 200,
         "summary": "Read installation deployment status and the caller's deployment capabilities",
         "mcp_tool": {"name": "loomhelm.get_deployment_status", "description": "Read deployment status, active and retained slots, worker generation and caller capabilities."}
+      },
+      {
+        "operation_id": "getDeploymentObservations",
+        "method": "GET",
+        "path": "/deployment/observations",
+        "response_type": "DeploymentObservationResponse",
+        "response_status": 200,
+        "summary": "Read live traffic migration and per-slot load observations",
+        "mcp_tool": {"name": "loomhelm.get_deployment_observations", "description": "Read live traffic migration, observed route, request rates, traffic shares and per-slot runtime load."}
       },
       {
         "operation_id": "listDeploymentCandidates",

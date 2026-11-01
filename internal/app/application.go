@@ -300,42 +300,42 @@ func writeApplicationError(writer http.ResponseWriter, request *http.Request, st
 }
 
 func (s *Server) handleApplication(writer http.ResponseWriter, request *http.Request) {
-	s.activeApplicationRequests.Add(1)
-	defer s.activeApplicationRequests.Add(-1)
-	s.resourceMu.RLock()
-	var handler http.Handler
-	if runtime, ok := s.resources.(interface{ APIHandler() http.Handler }); ok {
-		handler = runtime.APIHandler()
-	}
-	s.resourceMu.RUnlock()
-	if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
-		writer.Header().Set("Cache-Control", "no-store")
-		writer.Header().Set("Retry-After", "1")
-		writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
-		return
-	}
-	// Do not hold resourceMu across request execution: a long event stream must
-	// not prevent lifecycle/drain coordination from progressing.
-	handler.ServeHTTP(writer, request)
+	s.requestMetrics.track(&s.activeApplicationRequests, writer, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		s.resourceMu.RLock()
+		var handler http.Handler
+		if runtime, ok := s.resources.(interface{ APIHandler() http.Handler }); ok {
+			handler = runtime.APIHandler()
+		}
+		s.resourceMu.RUnlock()
+		if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
+			writer.Header().Set("Cache-Control", "no-store")
+			writer.Header().Set("Retry-After", "1")
+			writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
+			return
+		}
+		// Do not hold resourceMu across request execution: a long event stream must
+		// not prevent lifecycle/drain coordination from progressing.
+		handler.ServeHTTP(writer, request)
+	}), request)
 }
 
 func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
-	s.activeMCPRequests.Add(1)
-	defer s.activeMCPRequests.Add(-1)
-	s.resourceMu.RLock()
-	var handler http.Handler
-	if runtime, ok := s.resources.(interface{ MCPHandler() http.Handler }); ok {
-		handler = runtime.MCPHandler()
-	}
-	s.resourceMu.RUnlock()
-	if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
-		loomhelmMCP.CloseRejectedRequestBody(writer, request)
-		writer.Header().Set("Cache-Control", "no-store")
-		writer.Header().Set("Retry-After", "1")
-		writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
-		return
-	}
-	// MCP shares the application handler and lifecycle admission boundary with
-	// REST; the MCP adapter adds only protocol discovery and delegation.
-	handler.ServeHTTP(writer, request)
+	s.requestMetrics.track(&s.activeMCPRequests, writer, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		s.resourceMu.RLock()
+		var handler http.Handler
+		if runtime, ok := s.resources.(interface{ MCPHandler() http.Handler }); ok {
+			handler = runtime.MCPHandler()
+		}
+		s.resourceMu.RUnlock()
+		if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
+			loomhelmMCP.CloseRejectedRequestBody(writer, request)
+			writer.Header().Set("Cache-Control", "no-store")
+			writer.Header().Set("Retry-After", "1")
+			writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
+			return
+		}
+		// MCP shares the application handler and lifecycle admission boundary with
+		// REST; the MCP adapter adds only protocol discovery and delegation.
+		handler.ServeHTTP(writer, request)
+	}), request)
 }

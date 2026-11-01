@@ -22,6 +22,10 @@ The current candidate schema 2 remains the immutable build contract. Deployment 
 
 Installation deployment roles are separate from project roles: observer, operator, releaser, recovery and installation owner. Phase one exposes read-only deployment information through MCP; REST is the sole public mutating deployment adapter.
 
+The controller also owns live deployment observability. Each Server and Worker exposes a bounded `/-/observe` endpoint only on the private application/control network; it returns candidate identity, lifecycle readiness, cumulative request/error counters, active HTTP requests, Worker generation, the installation's shared queue depth, this process's running jobs and capacity, without user IDs, URLs, request IDs or other high-cardinality labels. The controller samples both slots and the public `/version` route, then derives the observed active slot, migration phase, request rate, traffic share and error rate from two consecutive counter samples. The shared queue is shown once at installation scope; each slot retains only load values attributable to its observed Worker generation, so a global River queue is never presented as two independent slot queues.
+
+Observations are transient runtime evidence rather than durable deployment facts. The first sample is `warming_up`; an endpoint failure is `degraded` or `unavailable`, and a complete outage after a successful sample returns the last sample as `stale` with an explicit reason. The Web console never renders unavailable counters as zero, and a counter reset invalidates only the affected rate until a fresh sample is available. The read-only REST and MCP observation query calls the same installation-scoped application service and does not create a database migration or a second state machine.
+
 ## Consequences
 
 The first single-slot-to-dual-slot migration needs a controlled maintenance window to adopt the current service as blue, enable the dedicated private Caddy admin address and add the inactive slot. PostgreSQL and artifact volumes remain shared and are never removed by the template.

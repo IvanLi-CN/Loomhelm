@@ -23,6 +23,7 @@ func MountAPI(router chi.Router, identity auth.PrincipalResolver, service *Servi
 	status := statusHandler(identity, service)
 	router.Get("/deployment", status)
 	router.Get("/deployment/", status)
+	router.Get("/deployment/observations", observationsHandler(identity, service))
 	router.Get("/deployment/candidates", candidatesHandler(identity, service))
 	if !readOnly {
 		router.Post("/deployment/candidates", registerCandidateHandler(identity, service))
@@ -34,6 +35,21 @@ func MountAPI(router chi.Router, identity auth.PrincipalResolver, service *Servi
 	}
 	for _, kind := range []string{"preflight", "stage", "promote", "rollback", "drain", "reconcile"} {
 		router.Post("/deployment/"+kind, startOperationHandler(identity, service, kind))
+	}
+}
+
+func observationsHandler(identity auth.PrincipalResolver, service *Service) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		principal, ok := resolvePrincipal(writer, request, identity)
+		if !ok {
+			return
+		}
+		observation, err := service.Observe(request.Context(), principal)
+		if err != nil {
+			writeDeploymentError(writer, request, err, "deployment observations are unavailable")
+			return
+		}
+		auth.WriteJSON(writer, http.StatusOK, ObservationResponse{Observation: observation})
 	}
 }
 

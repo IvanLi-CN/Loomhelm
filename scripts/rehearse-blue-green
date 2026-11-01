@@ -147,8 +147,159 @@ assert_caddy_route /livez
 assert_caddy_route /readyz
 assert_caddy_route /version
 
+preview_compose() {
+	# Reuse the exact project and generated environment used by scripts/preview.
+	env -u LOOMHELM_STOP_GRACE_PERIOD docker compose \
+		--project-name "$LOOMHELM_PREVIEW_PROJECT_NAME" \
+		--env-file "$state_dir/compose.env" \
+		-f deploy/preview/compose.yaml "$@"
+}
+
+preview_server_port() {
+	case "$1" in
+		blue) printf '%s\n' "${LOOMHELM_BLUE_SERVER_PORT:?LOOMHELM_BLUE_SERVER_PORT is required}" ;;
+		green) printf '%s\n' "${LOOMHELM_GREEN_SERVER_PORT:?LOOMHELM_GREEN_SERVER_PORT is required}" ;;
+		*) echo "rehearse-blue-green: invalid preview slot $1" >&2; return 2 ;;
+	esac
+}
+
+capture_component_observation() {
+	slot=$1
+	kind=$2
+	output=$3
+	if [ "$kind" = server ]; then
+		if curl --fail --silent --show-error "http://127.0.0.1:$(preview_server_port "$slot")/-/observe" >"$output" 2>/dev/null; then
+			return 0
+		fi
+	else
+		if preview_compose exec -T "worker-$slot" wget -q -O - http://127.0.0.1:8081/-/observe >"$output" 2>/dev/null; then
+			return 0
+		fi
+	fi
+	# The inactive slot may already be stopped after a promotion. Preserve that
+	# fact explicitly instead of manufacturing zero-valued metrics.
+	printf '%s\n' '{"state":"unavailable","reason":"observation endpoint was unavailable during rehearsal capture"}' >"$output"
+	return 0
+}
+
+capture_runtime_snapshot() {
+	label=$1
+	active_slot=$2
+	require_inactive=$3
+	snapshot_dir="$evidence_dir/observations/$label"
+	mkdir -p "$snapshot_dir"
+	if ! curl --fail --silent --show-error "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}/version" >"$snapshot_dir/route.json" 2>/dev/null; then
+		printf '%s\n' '{"state":"unavailable","reason":"public route identity was unavailable during rehearsal capture"}' >"$snapshot_dir/route.json"
+	fi
+	for slot in blue green; do
+		capture_component_observation "$slot" server "$snapshot_dir/server-$slot.json"
+		capture_component_observation "$slot" worker "$snapshot_dir/worker-$slot.json"
+	done
+	python3 - "$snapshot_dir" "$state_dir/state.json" "$active_slot" "$require_inactive" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+snapshot_dir = Path(sys.argv[1])
+state = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+active_slot = sys.argv[3]
+require_inactive = sys.argv[4] == "1"
+
+def read(name):
+    return json.loads((snapshot_dir / name).read_text(encoding="utf-8"))
+
+route = read("route.json")
+active = state["slots"].get(active_slot)
+assert active, f"active slot {active_slot!r} is not recorded"
+assert route.get("candidate_source_sha") == active["source_sha"], route
+assert route.get("artifact_digest") == active["artifact_digest"], route
+
+for slot in ("blue", "green"):
+    record = state["slots"].get(slot)
+    if not record:
+        continue
+    server = read(f"server-{slot}.json")
+    worker = read(f"worker-{slot}.json")
+    if server.get("state") == "unavailable":
+        assert slot != active_slot and not require_inactive, (slot, server)
+        continue
+    assert server.get("state") == "measured", (slot, server)
+    assert server.get("live") is True and server.get("ready") is True, (slot, server)
+    assert server.get("candidate_source_sha") == record["source_sha"], (slot, server)
+    assert server.get("artifact_digest") == record["artifact_digest"], (slot, server)
+    assert isinstance(server.get("requests_total"), int), (slot, server)
+    assert isinstance(server.get("active_requests"), int), (slot, server)
+    if worker.get("state") == "unavailable":
+        assert slot != active_slot and not require_inactive, (slot, worker)
+        continue
+    assert worker.get("state") == "measured", (slot, worker)
+    assert worker.get("live") is True and worker.get("ready") is True, (slot, worker)
+    assert worker.get("candidate_source_sha") == record["source_sha"], (slot, worker)
+    assert worker.get("artifact_digest") == record["artifact_digest"], (slot, worker)
+    assert worker.get("worker_generation") == record["generation"], (slot, worker)
+    assert worker.get("load_state") == "measured", (slot, worker)
+    for field in ("queue_depth", "running_jobs", "worker_capacity"):
+        assert isinstance(worker.get(field), int) and worker[field] >= 0, (slot, worker)
+
+print(f"observation_snapshot={snapshot_dir}")
+PY
+	log "observation snapshot captured: label=$label active_slot=$active_slot"
+}
+
+generate_public_observation_traffic() {
+	i=0
+	while [ "$i" -lt 8 ]; do
+		curl --silent --show-error --output /dev/null --max-time 10 \
+			"http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}/api/v1/auth/session" || true
+		i=$((i + 1))
+	done
+}
+
+compare_runtime_samples() {
+	first=$1
+	second=$2
+	active_slot=$3
+	output=$4
+	python3 - "$first" "$second" "$active_slot" >"$output" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+first = Path(sys.argv[1])
+second = Path(sys.argv[2])
+active_slot = sys.argv[3]
+
+def read(snapshot, slot):
+    return json.loads((snapshot / f"server-{slot}.json").read_text(encoding="utf-8"))
+
+deltas = {}
+for slot in ("blue", "green"):
+    before = read(first, slot)
+    after = read(second, slot)
+    if before.get("state") != "measured" or after.get("state") != "measured":
+        continue
+    total_before = before["requests_total"]
+    total_after = after["requests_total"]
+    assert total_after >= total_before, (slot, before, after)
+    errors_before = before["responses_4xx"] + before["responses_5xx"]
+    errors_after = after["responses_4xx"] + after["responses_5xx"]
+    assert errors_after >= errors_before, (slot, before, after)
+    deltas[slot] = {"requests": total_after - total_before, "errors": errors_after - errors_before}
+
+total_requests = sum(item["requests"] for item in deltas.values())
+assert total_requests > 0, deltas
+active_delta = deltas.get(active_slot, {}).get("requests", 0)
+assert active_delta > 0, (active_slot, deltas)
+shares = {slot: item["requests"] / total_requests for slot, item in deltas.items()}
+print(json.dumps({"active_slot": active_slot, "request_deltas": deltas, "shares": shares}, sort_keys=True))
+PY
+	cat "$output" | tee -a "$log_file"
+	log "two-sample traffic evidence captured: first=$first second=$second"
+}
+
 active_before=$(python3 deploy/preview/control.py --state-dir "$state_dir" status --field active_slot)
 log "baseline active_slot=$active_before"
+capture_runtime_snapshot baseline "$active_before" 0
 
 # A bad candidate must be rejected while the active generation remains serving.
 expect_failure scripts/preview stage "$bad_manifest"
@@ -161,8 +312,28 @@ run curl --fail --silent --show-error "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_
 
 run scripts/preview check "$candidate_manifest"
 run scripts/preview stage "$candidate_manifest"
+capture_runtime_snapshot staged-before-promote "$active_before" 1
+generate_public_observation_traffic
+sleep 1
+capture_runtime_snapshot staged-after-promote "$active_before" 1
+compare_runtime_samples \
+	"$evidence_dir/observations/staged-before-promote" \
+	"$evidence_dir/observations/staged-after-promote" \
+	"$active_before" \
+	"$evidence_dir/observations/staged-traffic.json"
 run scripts/preview promote
 run curl --fail --silent --show-error "http://127.0.0.1:${LOOMHELM_PREVIEW_HTTP_PORT}/readyz"
+
+active_after=$(python3 deploy/preview/control.py --state-dir "$state_dir" status --field active_slot)
+capture_runtime_snapshot promoted-before-traffic "$active_after" 0
+generate_public_observation_traffic
+sleep 1
+capture_runtime_snapshot promoted-after-traffic "$active_after" 0
+compare_runtime_samples \
+	"$evidence_dir/observations/promoted-before-traffic" \
+	"$evidence_dir/observations/promoted-after-traffic" \
+	"$active_after" \
+	"$evidence_dir/observations/promoted-traffic.json"
 
 retained_key=$(python3 deploy/preview/control.py --state-dir "$state_dir" status --field previous_retained_key)
 [ -n "$retained_key" ] || { echo "rehearse-blue-green: promotion did not retain the previous candidate" >&2; exit 1; }

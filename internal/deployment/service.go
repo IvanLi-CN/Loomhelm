@@ -28,14 +28,20 @@ var (
 type Config struct {
 	OwnerUserIDs []string
 	Executor     Executor
+	Observer     ObservationProvider
 	Now          func() time.Time
 	ReadOnly     bool
+}
+
+type ObservationProvider interface {
+	Observe(context.Context, Status) (Observation, error)
 }
 
 type Service struct {
 	pool     *pgxpool.Pool
 	owners   map[string]struct{}
 	executor Executor
+	observer ObservationProvider
 	now      func() time.Time
 	readOnly bool
 }
@@ -59,7 +65,11 @@ func NewService(pool *pgxpool.Pool, config Config) (*Service, error) {
 	if executor == nil {
 		executor = UnavailableExecutor{}
 	}
-	return &Service{pool: pool, owners: owners, executor: executor, now: now, readOnly: config.ReadOnly}, nil
+	observer := config.Observer
+	if observer == nil {
+		observer, _ = executor.(ObservationProvider)
+	}
+	return &Service{pool: pool, owners: owners, executor: executor, observer: observer, now: now, readOnly: config.ReadOnly}, nil
 }
 
 func ConfigFromEnvironment() Config {
@@ -173,6 +183,50 @@ func (s *Service) Status(ctx context.Context, principal auth.Principal) (Status,
 	result.Capabilities = capabilitiesForRole(role)
 	result.ControllerReady = true
 	return result, nil
+}
+
+func (s *Service) Observe(ctx context.Context, principal auth.Principal) (Observation, error) {
+	if _, err := s.Require(ctx, principal, CapabilityView); err != nil {
+		return Observation{}, err
+	}
+	status, err := s.Status(ctx, principal)
+	if err != nil {
+		return Observation{}, err
+	}
+	if s.observer == nil {
+		return unavailableObservation(status, "runtime observation provider is unavailable"), nil
+	}
+	observation, err := s.observer.Observe(ctx, status)
+	if err != nil {
+		return unavailableObservation(status, "runtime observation is unavailable"), nil
+	}
+	return observation, nil
+}
+
+func unavailableObservation(status Status, reason string) Observation {
+	result := Observation{
+		State:                  ObservationUnavailable,
+		Reason:                 reason,
+		DesiredActiveSlot:      status.ActiveSlot,
+		MigrationState:         ObservationUnknown,
+		SharedWorkerLoadState:  ObservationUnavailable,
+		SharedWorkerLoadReason: reason,
+		ObservedAt:             time.Now().UTC(),
+		Slots:                  make([]SlotObservation, 0, len(status.Slots)),
+	}
+	for _, slot := range status.Slots {
+		result.Slots = append(result.Slots, SlotObservation{
+			Slot:             slot.Name,
+			DesiredState:     slot.State,
+			CandidateID:      slot.CandidateID,
+			WorkerGeneration: slot.WorkerGeneration,
+			Server:           ComponentObservation{State: ObservationUnavailable, LoadState: ObservationUnavailable, Reason: reason, LoadReason: reason},
+			Worker:           ComponentObservation{State: ObservationUnavailable, LoadState: ObservationUnavailable, Reason: reason, LoadReason: reason},
+			Traffic:          SlotTrafficObservation{State: ObservationUnavailable, Reason: reason},
+			Load:             SlotLoadObservation{State: ObservationUnavailable, Reason: reason},
+		})
+	}
+	return result
 }
 
 func capabilitiesForRole(role Role) []Capability {

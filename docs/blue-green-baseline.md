@@ -38,7 +38,7 @@ scripts/rehearse-blue-green \
 
 The command records the source SHA, command log, final deployment state and retained Web keys. It verifies that an unhealthy candidate is rejected while the active generation remains ready, a healthy candidate is promoted and the old slot is drained/stopped, the retained Web tree remains available, readiness recovers through the Caddy path, and a compatible rollback creates a new Worker generation. The final state must include `stage_failed`, `promote`, and `stage_retained` events and a monotonic generation of at least three.
 
-The stable controller is a host-control component outside the Server/Worker/Connector/Web candidate. It exposes only authenticated installation-scoped REST writes and read-only MCP queries, keeps Caddy's `/api`, `/mcp`, `/gateway`, health, version and retained-Web paths stable, and treats lost side-effect responses as `unknown` until reconcile.
+The stable controller is a host-control component outside the Server/Worker/Connector/Web candidate. It exposes only authenticated installation-scoped REST writes and read-only MCP queries, keeps Caddy's `/api`, `/mcp`, `/gateway`, health, version and retained-Web paths stable, and treats lost side-effect responses as `unknown` until reconcile. Its private observation sampler also records the public `/version` identity, two-sample per-slot request shares, installation-level shared queue depth and generation-attributed HTTP/Worker load; the rehearsal must show those values moving during promotion rather than relying on desired slot state alone.
 
 ## G0 evidence
 

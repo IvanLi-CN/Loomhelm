@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -64,6 +65,10 @@ type CommandExecutor struct {
 	HTTPClient        *http.Client
 	DrainTimeout      time.Duration
 	Run               func(context.Context, string, ...string) error
+
+	observationMu     sync.Mutex
+	observationSample *observationSample
+	lastObservation   *Observation
 }
 
 func NewCommandExecutorFromEnvironment() (*CommandExecutor, error) {

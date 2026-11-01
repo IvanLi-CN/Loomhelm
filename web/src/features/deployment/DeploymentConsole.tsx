@@ -1,5 +1,5 @@
 import { ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
-import type { DeploymentCandidate, DeploymentEvent, DeploymentOperation, DeploymentStatus } from "@loomhelm/protocol";
+import type { DeploymentCandidate, DeploymentEvent, DeploymentObservation, DeploymentOperation, DeploymentSlotObservation, DeploymentStatus } from "@loomhelm/protocol";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Check, CheckCircle2, CircleAlert, Clock3, LoaderCircle, LockKeyhole, Play, RefreshCw, RotateCcw, ShieldCheck, TriangleAlert, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -15,6 +15,9 @@ export interface DeploymentConsoleProps {
 
 interface DeploymentDashboardProps {
   status?: DeploymentStatus;
+  observation?: DeploymentObservation;
+  observationLoading?: boolean;
+  observationError?: unknown;
   candidates: readonly DeploymentCandidate[];
   events: readonly DeploymentEvent[];
   operation?: DeploymentOperation;
@@ -75,6 +78,12 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
     enabled: Boolean(principalId),
     refetchInterval: 10_000
   });
+  const observationQuery = useQuery({
+    queryKey: ["loomhelm", principalId, "deployment-observations"],
+    queryFn: () => client.getDeploymentObservations(),
+    enabled: Boolean(principalId),
+    refetchInterval: 5_000
+  });
   const operationQuery = useQuery({
     queryKey: ["loomhelm", principalId, "deployment-operation", operationId],
     queryFn: () => client.getDeploymentOperation({ operation_id: operationId ?? "" }),
@@ -104,6 +113,7 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
       setConfirmingAction(undefined);
       setOperationId(response.operation.id);
       void queryClient.invalidateQueries({ queryKey: ["loomhelm", principalId, "deployment-events"] });
+      void queryClient.invalidateQueries({ queryKey: ["loomhelm", principalId, "deployment-observations"] });
     }
   });
 
@@ -117,7 +127,7 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
   const candidates = candidatesQuery.data?.candidates ?? [];
   const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId);
   const refresh = () => {
-    void Promise.all([statusQuery.refetch(), candidatesQuery.refetch(), eventsQuery.refetch()]);
+    void Promise.all([statusQuery.refetch(), candidatesQuery.refetch(), eventsQuery.refetch(), observationQuery.refetch()]);
   };
   const startAction = (action: DeploymentAction) => {
     if (confirmingAction === action) {
@@ -134,6 +144,9 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
   return (
     <DeploymentDashboard
       status={statusQuery.data?.status}
+      observation={observationQuery.data?.observation}
+      observationLoading={observationQuery.isLoading || observationQuery.isFetching}
+      observationError={observationQuery.error}
       candidates={candidates}
       events={eventsQuery.data?.events ?? []}
       operation={operation ?? statusQuery.data?.status.latest_operation}
@@ -152,6 +165,9 @@ export function DeploymentConsole({ client, principalId }: DeploymentConsoleProp
 
 export function DeploymentDashboard({
   status,
+  observation,
+  observationLoading,
+  observationError,
   candidates,
   events,
   operation,
@@ -191,6 +207,8 @@ export function DeploymentDashboard({
           <SummaryMetric label="最近操作" value={status.latest_operation ? (statusLabels[status.latest_operation.status] ?? status.latest_operation.status) : "暂无"} detail={status.latest_operation?.kind ? actionLabels[status.latest_operation.kind as DeploymentAction] ?? status.latest_operation.kind : ""} tone={operationTone(status.latest_operation?.status)} />
         </div>
 
+        <DeploymentObservationPanel observation={observation} loading={observationLoading} error={observationError} />
+
         <div className="deployment-layout">
           <div className="deployment-main-column">
             <section className="deployment-section" aria-labelledby="deployment-candidates-heading">
@@ -225,6 +243,72 @@ export function DeploymentDashboard({
       </>}
     </section>
   );
+}
+
+function DeploymentObservationPanel({ observation, loading, error }: { observation?: DeploymentObservation; loading?: boolean; error?: unknown }) {
+  if (!observation) {
+    return <section className="deployment-section deployment-observation-section" aria-labelledby="deployment-observation-heading">
+      <div className="panel-heading"><div><span className="section-kicker">RUNTIME OBSERVABILITY</span><h2 id="deployment-observation-heading">实际流量与负载</h2></div><span className="deployment-observation-status deployment-observation-status-unavailable">{loading ? "采样中" : "不可用"}</span></div>
+      <div className="deployment-observation-empty"><CircleAlert size={17} aria-hidden="true" /><span>{error ? "运行时观测暂时不可用，控制器未用 0 值替代实际数据。" : "正在等待运行时观测数据。"}</span></div>
+    </section>;
+  }
+
+  const migrationLabel = migrationStateLabels[observation.migration_state] ?? observation.migration_state;
+  const observedRoute = observation.observed_active_slot ? slotLabels[observation.observed_active_slot] ?? observation.observed_active_slot : "未确认";
+  const desiredRoute = slotLabels[observation.desired_active_slot] ?? observation.desired_active_slot;
+  const aggregateRate = observation.total_request_rate === undefined ? observationNumber(undefined, observation.state, formatRate) : formatRate(observation.total_request_rate);
+  const aggregateErrorRate = observation.total_error_rate === undefined ? observationNumber(undefined, observation.state, formatPercent) : formatPercent(observation.total_error_rate);
+
+  return <section className="deployment-section deployment-observation-section" aria-labelledby="deployment-observation-heading">
+    <div className="panel-heading">
+      <div><span className="section-kicker">RUNTIME OBSERVABILITY</span><h2 id="deployment-observation-heading">实际流量与负载</h2></div>
+      <div className="deployment-observation-heading-meta"><span className={`deployment-observation-status deployment-observation-status-${observationTone(observation.state)}`}>{observationStateLabels[observation.state] ?? observation.state}</span>{loading && <span className="deployment-observation-refresh"><LoaderCircle className="deployment-spin" size={13} aria-hidden="true" />更新中</span>}</div>
+    </div>
+
+    <div className="deployment-observation-route-grid">
+      <ObservationMetric label="实际入口路由" value={observedRoute} detail={`期望 ${desiredRoute}`} tone={observation.observed_active_slot === observation.desired_active_slot ? "success" : "warning"} />
+      <ObservationMetric label="迁移阶段" value={migrationLabel} detail={observation.reason || "由入口版本与槽位采样共同判断"} tone={observationTone(observation.migration_state)} />
+      <ObservationMetric label="总请求速率" value={aggregateRate} detail={observation.sample_window_seconds > 0 ? `采样窗口 ${formatDuration(observation.sample_window_seconds)}` : "等待第二次计数采样"} tone="accent" />
+      <ObservationMetric label="总错误率" value={aggregateErrorRate} detail={`观测时间 ${formatTimestamp(observation.observed_at)}`} tone={observation.total_error_rate !== undefined && observation.total_error_rate > 0 ? "danger" : "neutral"} />
+      <ObservationMetric label="共享 Worker 队列" value={observationNumber(observation.shared_worker_queue_depth, observation.shared_worker_load_state, (value) => value.toLocaleString("zh-CN"))} detail={`运行中 ${observationCounter(observation.shared_worker_running_jobs, observation.shared_worker_load_state)} / 容量 ${observationCounter(observation.shared_worker_capacity, observation.shared_worker_load_state)}`} tone={observation.shared_worker_queue_depth !== undefined && observation.shared_worker_queue_depth > 0 ? "warning" : observationTone(observation.shared_worker_load_state)} />
+    </div>
+
+    <div className="deployment-traffic-distribution">
+      <div className="deployment-observation-subheading"><strong>流量分布</strong><span>按两个连续计数采样计算</span></div>
+      <div className={`deployment-traffic-bar ${observation.slots.some((slot) => slot.traffic.share !== undefined) ? "" : "is-unmeasured"}`} role="img" aria-label={observation.slots.some((slot) => slot.traffic.share !== undefined) ? "两个槽位的实际请求流量分布" : "流量分布尚未完成采样"}>
+        {observation.slots.map((slot) => {
+          const share = slot.traffic.share === undefined ? 0 : Math.max(0, Math.min(1, slot.traffic.share));
+          return <span className={`deployment-traffic-bar-segment deployment-traffic-bar-${slot.slot}`} key={slot.slot} style={{ width: `${share * 100}%` }} />;
+        })}
+        {!observation.slots.some((slot) => slot.traffic.share !== undefined) && <span className="deployment-traffic-bar-label">采样中</span>}
+      </div>
+      <div className="deployment-traffic-legend">{observation.slots.map((slot) => <span key={slot.slot}><i className={`deployment-traffic-legend-dot deployment-traffic-legend-${slot.slot}`} aria-hidden="true" />{slotLabels[slot.slot] ?? slot.slot} {observationPercent(slot.traffic.share, observation.state)}</span>)}</div>
+    </div>
+
+    <div className="deployment-observation-subheading deployment-observation-slots-heading"><strong>槽位实时负载</strong><span>HTTP 活跃请求 + Worker generation</span></div>
+    <div className="deployment-observation-slot-list">{observation.slots.map((slot) => <DeploymentSlotObservationRow key={slot.slot} slot={slot} observationState={observation.state} />)}</div>
+  </section>;
+}
+
+function DeploymentSlotObservationRow({ slot, observationState }: { slot: DeploymentSlotObservation; observationState: string }) {
+  const trafficState = slot.traffic.state;
+  const loadState = slot.load.state;
+  const workerState = loadState === "measured" ? slot.worker.load_state : loadState;
+  const source = slot.server.candidate_source_sha || slot.worker.candidate_source_sha;
+  return <article className={`deployment-observation-slot deployment-observation-slot-${slot.slot}`}>
+    <div className="deployment-observation-slot-heading"><div><strong>{slotLabels[slot.slot] ?? slot.slot}</strong><small>{source ? `${source.slice(0, 12)} · generation ${slot.worker_generation ?? slot.worker.worker_generation ?? "--"}` : "候选物版本未确认"}</small></div><span className={`deployment-status deployment-status-${slot.desired_state}`}>{slot.desired_state}</span></div>
+    <div className="deployment-observation-slot-grid">
+      <ObservationMetric label="流量占比" value={observationPercent(slot.traffic.share, observationState)} detail={slot.traffic.request_rate === undefined ? "速率等待连续采样" : `${formatRate(slot.traffic.request_rate)} · 错误 ${observationNumber(slot.traffic.error_rate, trafficState, formatPercent)}`} tone={observationTone(trafficState)} />
+      <ObservationMetric label="累计请求" value={observationCounter(slot.traffic.requests_total, trafficState)} detail={`当前活跃 ${observationCounter(slot.server.active_requests, slot.server.state)}`} tone="neutral" />
+      <ObservationMetric label="HTTP 活跃" value={observationCounter(slot.load.http_active_requests, slot.server.state)} detail={`Server ${observationStateLabels[slot.server.state] ?? slot.server.state}`} tone="accent" />
+      <ObservationMetric label="Worker 运行中" value={observationCounter(slot.load.worker_running_jobs, workerState)} detail={`容量 ${observationCounter(slot.load.worker_capacity, workerState)} · ${slot.worker.load_reason || `Worker ${observationStateLabels[workerState] ?? workerState}`}`} tone={slot.load.worker_running_jobs !== undefined && slot.load.worker_capacity !== undefined && slot.load.worker_running_jobs >= slot.load.worker_capacity ? "danger" : "neutral"} />
+      <ObservationMetric label="Worker 利用率" value={slot.load.worker_utilization === undefined ? observationNumber(undefined, workerState, formatPercent) : formatPercent(slot.load.worker_utilization)} detail={slot.worker.load_reason || `Worker ${observationStateLabels[workerState] ?? workerState}`} tone={slot.load.worker_utilization !== undefined && slot.load.worker_utilization >= 1 ? "danger" : "neutral"} />
+    </div>
+  </article>;
+}
+
+function ObservationMetric({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: string }) {
+  return <div className={`deployment-observation-metric deployment-observation-metric-${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
 }
 
 function SummaryMetric({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: "success" | "accent" | "danger" | "neutral" }) {
@@ -264,4 +348,55 @@ function operationTone(status?: string): "success" | "accent" | "danger" | "neut
 function formatTimestamp(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" });
+}
+
+const observationStateLabels: Record<string, string> = {
+  measured: "已测量",
+  warming_up: "采样中",
+  degraded: "部分降级",
+  stale: "上次有效采样",
+  unavailable: "不可用",
+  unknown: "未知"
+};
+
+const migrationStateLabels: Record<string, string> = {
+  stable: "路由稳定",
+  draining: "旧槽排空中",
+  route_mismatch: "路由与期望不一致",
+  unknown: "路由未确认"
+};
+
+function observationTone(state?: string) {
+  if (state === "measured" || state === "stable") return "success";
+  if (state === "warming_up" || state === "draining" || state === "degraded") return "warning";
+  if (state === "stale" || state === "unknown" || state === "route_mismatch" || state === "unavailable") return "danger";
+  return "neutral";
+}
+
+function observationNumber(value: number | undefined, state: string | undefined, format: (value: number) => string) {
+  if (value !== undefined && state !== "unavailable" && state !== "unknown") return format(value);
+  if (state === "warming_up") return "采样中";
+  if (state === "unavailable" || state === "unknown") return "不可用";
+  return "--";
+}
+
+function observationCounter(value: number | undefined, state: string | undefined) {
+  return observationNumber(value, state, (current) => current.toLocaleString("zh-CN"));
+}
+
+function observationPercent(value: number | undefined, state?: string) {
+  return observationNumber(value, state, formatPercent);
+}
+
+function formatRate(value: number) {
+  return `${value.toLocaleString("zh-CN", { maximumFractionDigits: 1 })} req/s`;
+}
+
+function formatPercent(value: number) {
+  return `${(value * 100).toLocaleString("zh-CN", { maximumFractionDigits: 1 })}%`;
+}
+
+function formatDuration(value: number) {
+  if (value < 60) return `${value.toLocaleString("zh-CN", { maximumFractionDigits: 1 })} 秒`;
+  return `${(value / 60).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} 分钟`;
 }
