@@ -233,7 +233,19 @@ for slot in ("blue", "green"):
         assert slot != active_slot and not require_inactive, (slot, worker)
         continue
     assert worker.get("state") == "measured", (slot, worker)
-    assert worker.get("live") is True and worker.get("ready") is True, (slot, worker)
+    # Starting a staged Worker claims the next generation and fences the
+    # active Worker before HTTP promotion. During that bounded window the old
+    # Worker must stay observable and live, but it is intentionally not ready.
+    old_worker_fenced = (
+        require_inactive
+        and slot == active_slot
+        and state.get("pending_slot") not in (None, active_slot)
+    )
+    assert worker.get("live") is True, (slot, worker)
+    if old_worker_fenced:
+        assert worker.get("ready") is False, (slot, worker)
+    else:
+        assert worker.get("ready") is True, (slot, worker)
     assert worker.get("candidate_source_sha") == record["source_sha"], (slot, worker)
     assert worker.get("artifact_digest") == record["artifact_digest"], (slot, worker)
     assert worker.get("worker_generation") == record["generation"], (slot, worker)
