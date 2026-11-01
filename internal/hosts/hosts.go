@@ -508,10 +508,14 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Credential, e
 	if credential.RevokedAt != nil {
 		return Credential{}, ErrCredentialRevoked
 	}
-	if _, err := s.pool.Exec(ctx, `
+	result, err := s.pool.Exec(ctx, `
 		UPDATE host_credentials SET last_used_at = $2 WHERE id = $1 AND revoked_at IS NULL
-	`, credential.ID, s.now()); err != nil {
+	`, credential.ID, s.now())
+	if err != nil {
 		return Credential{}, fmt.Errorf("record host credential use: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return Credential{}, ErrCredentialRevoked
 	}
 	return credential, nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestInterruptRunGenerationFailureDoesNotReserveRun(t *testing.T) {
@@ -36,9 +37,10 @@ func TestInterruptRunGenerationFailureDoesNotReserveRun(t *testing.T) {
 			Session:    protocol.Session{ID: run.SessionID},
 			Generation: run.Generation,
 		}},
-		Runs:      runs,
-		Approvals: controlServiceApprovalStore{},
-		Authorize: func(context.Context, auth.Principal, string, bool) error { return nil },
+		Runs:        runs,
+		Approvals:   controlServiceApprovalStore{},
+		Authorize:   func(context.Context, auth.Principal, string, bool) error { return nil },
+		AuthorizeTx: func(context.Context, pgx.Tx, auth.Principal, string, bool) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("NewControlService() error = %v", err)
@@ -50,6 +52,25 @@ func TestInterruptRunGenerationFailureDoesNotReserveRun(t *testing.T) {
 	}
 	if runs.requestInterruptCalls != 0 {
 		t.Fatalf("RequestInterrupt calls = %d, want 0", runs.requestInterruptCalls)
+	}
+}
+
+func TestNewControlServiceRequiresTransactionAuthorizer(t *testing.T) {
+	controller, err := NewController(&Store{}, controlServiceTransport{}, ControllerConfig{
+		ResolveGeneration: func(context.Context, string) (string, error) { return "generation-1", nil },
+	})
+	if err != nil {
+		t.Fatalf("NewController() error = %v", err)
+	}
+	_, err = NewControlService(ControlServiceConfig{
+		Controller: controller,
+		Sessions:   controlServiceSessionReader{},
+		Runs:       &controlServiceRunStore{},
+		Approvals:  controlServiceApprovalStore{},
+		Authorize:  func(context.Context, auth.Principal, string, bool) error { return nil },
+	})
+	if !errors.Is(err, ErrControlServiceUnavailable) {
+		t.Fatalf("missing transaction authorizer error = %v, want %v", err, ErrControlServiceUnavailable)
 	}
 }
 

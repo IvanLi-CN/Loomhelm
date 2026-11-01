@@ -43,13 +43,19 @@ func (s *connectorDeviceStoreFake) Authorize(_ context.Context, userCodeHash []b
 }
 
 func (s *connectorDeviceStoreFake) Claim(_ context.Context, authorizationCodeHash []byte, now time.Time) (connectorDeviceAuthorization, error) {
-	if string(authorizationCodeHash) != string(s.authorization) || !s.record.ExpiresAt.After(now) {
+	if string(authorizationCodeHash) != string(s.authorization) {
 		return connectorDeviceAuthorization{}, ErrInvalid
 	}
 	if s.consumed {
+		if now.After(s.record.ExpiresAt.Add(connectorDeviceReplayGrace)) {
+			return connectorDeviceAuthorization{}, ErrInvalid
+		}
 		replay := s.record
 		replay.Consumed = true
 		return replay, nil
+	}
+	if !s.record.ExpiresAt.After(now) {
+		return connectorDeviceAuthorization{}, ErrInvalid
 	}
 	if s.claimed && now.Sub(s.claimedAt) < connectorExchangeClaim {
 		return connectorDeviceAuthorization{}, ErrConflict
@@ -116,9 +122,10 @@ func TestConnectorDeviceFlowRejectsNonLoopbackCallback(t *testing.T) {
 
 func TestConnectorDeviceFlowReplaysCompletedAuthorizationIdempotently(t *testing.T) {
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	current := now
 	store := &connectorDeviceStoreFake{}
 	enroller := &connectorEnrollerFake{credential: ConnectorCredential{HostID: "host-1", Token: "token-1"}}
-	flow := &connectorDeviceFlow{store: store, enroller: enroller, now: func() time.Time { return now }}
+	flow := &connectorDeviceFlow{store: store, enroller: enroller, now: func() time.Time { return current }}
 	started, err := flow.start(context.Background(), connectorDeviceStartRequest{
 		RedirectURI: "http://127.0.0.1:43123/callback",
 		State:       strings.Repeat("s", 32),
@@ -143,6 +150,7 @@ func TestConnectorDeviceFlowReplaysCompletedAuthorizationIdempotently(t *testing
 	if err != nil || credential != enroller.credential {
 		t.Fatalf("exchanged credential = %+v, error = %v", credential, err)
 	}
+	current = now.Add(connectorDeviceLifetime + time.Minute)
 	replayedKey, err := flow.exchange(context.Background(), parsed.Query().Get("code"))
 	if err != nil {
 		t.Fatalf("replayed exchange error = %v", err)

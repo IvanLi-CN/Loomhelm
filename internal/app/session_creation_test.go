@@ -13,6 +13,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -120,6 +121,18 @@ type fakeSessionCreationHost struct {
 
 func (f *fakeSessionCreationHost) ConfiguredHostForUser(context.Context, string) (hosts.Host, error) {
 	f.calls++
+	return f.host, nil
+}
+
+func (f *fakeSessionCreationHost) AuthorizeUserTx(context.Context, pgx.Tx, string, string) error {
+	return nil
+}
+
+type fakeSessionCreationHostWithoutTransactionAuthorization struct {
+	host hosts.Host
+}
+
+func (f fakeSessionCreationHostWithoutTransactionAuthorization) ConfiguredHostForUser(context.Context, string) (hosts.Host, error) {
 	return f.host, nil
 }
 
@@ -390,6 +403,23 @@ func TestSessionCreationRechecksProjectAuthorizationInsideCreationIntent(t *test
 	}
 	if host.calls != 1 || len(transport.commands) != 0 || len(records.intents) != 0 {
 		t.Fatalf("transaction-scoped authorization crossed write boundary: host=%d commands=%d intents=%d", host.calls, len(transport.commands), len(records.intents))
+	}
+}
+
+func TestSessionCreationFailsClosedWithoutTransactionHostAuthorization(t *testing.T) {
+	records := &fakeSessionCreationRecords{}
+	transport := &fakeSessionCreationTransport{ack: protocol.CommandAck{State: protocol.CommandStateSucceeded}}
+	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, fakeSessionCreationHostWithoutTransactionAuthorization{host: hosts.Host{ID: "host-1"}}, transport, nil)
+
+	_, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, protocol.CreateSessionRequest{
+		CommandID: "create-missing-host-authorizer",
+		Path:      protocol.SessionPathNew,
+	})
+	if !errors.Is(err, runs.ErrControlServiceUnavailable) {
+		t.Fatalf("missing transaction Host authorizer error = %v, want %v", err, runs.ErrControlServiceUnavailable)
+	}
+	if len(records.intents) != 0 || len(transport.commands) != 0 {
+		t.Fatalf("session creation crossed fail-closed boundary: intents=%d commands=%d", len(records.intents), len(transport.commands))
 	}
 }
 

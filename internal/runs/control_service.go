@@ -85,6 +85,9 @@ func NewControlService(config ControlServiceConfig) (*ControlService, error) {
 	if config.Authorize == nil {
 		return nil, fmt.Errorf("%w: authorizer is required", ErrControlServiceUnavailable)
 	}
+	if config.AuthorizeTx == nil {
+		return nil, fmt.Errorf("%w: transaction authorizer is required", ErrControlServiceUnavailable)
+	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
@@ -389,7 +392,9 @@ func (s *ControlService) authorizedSession(ctx context.Context, principal auth.P
 
 func (s *ControlService) admissionAuthorizer(principal auth.Principal, sessionID string) AdmissionAuthorizer {
 	if s.authorizeTx == nil {
-		return nil
+		return func(context.Context, pgx.Tx, protocol.Command) error {
+			return ErrControlServiceUnavailable
+		}
 	}
 	return func(ctx context.Context, tx pgx.Tx, command protocol.Command) error {
 		if command.SessionID != sessionID {
@@ -400,7 +405,7 @@ func (s *ControlService) admissionAuthorizer(principal auth.Principal, sessionID
 }
 
 func (s *ControlService) ready(ctx context.Context) error {
-	if s == nil || s.controller == nil || s.controller.store == nil || s.controller.transport == nil || s.sessions == nil || s.runs == nil || s.approvals == nil || s.authorize == nil || s.now == nil {
+	if s == nil || s.controller == nil || s.controller.store == nil || s.controller.transport == nil || s.sessions == nil || s.runs == nil || s.approvals == nil || s.authorize == nil || s.authorizeTx == nil || s.now == nil {
 		return ErrControlServiceUnavailable
 	}
 	if ctx == nil {

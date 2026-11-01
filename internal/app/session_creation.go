@@ -140,29 +140,25 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 		AuthorizeUserTx(context.Context, pgx.Tx, string, string) error
 	})
 	projectAuthorizer, hasProjectAuthorizer := s.projects.(sessionProjectBindingAccess)
-	if hasHostAuthorizer || hasProjectAuthorizer {
-		createIntent = func(createCtx context.Context, input sessions.CreationIntentInput) (sessions.CreationIntent, error) {
-			return s.records.CreateIntentAuthorized(createCtx, input, func(authorizeCtx context.Context, tx pgx.Tx, authorizedInput sessions.CreationIntentInput) error {
-				if authorizedInput.ProjectID != "" {
-					if !hasProjectAuthorizer {
-						return runs.ErrControlServiceUnavailable
-					}
-					allowed, err := projectAuthorizer.CanWriteProjectTx(authorizeCtx, tx, principal, authorizedInput.ProjectID)
-					if err != nil {
-						return fmt.Errorf("authorize session project in creation transaction: %w", err)
-					}
-					if !allowed {
-						return auth.ErrNotFound
-					}
+	if !hasHostAuthorizer {
+		return protocol.SessionResponse{}, fmt.Errorf("%w: transaction-scoped Host authorizer is required", runs.ErrControlServiceUnavailable)
+	}
+	createIntent = func(createCtx context.Context, input sessions.CreationIntentInput) (sessions.CreationIntent, error) {
+		return s.records.CreateIntentAuthorized(createCtx, input, func(authorizeCtx context.Context, tx pgx.Tx, authorizedInput sessions.CreationIntentInput) error {
+			if authorizedInput.ProjectID != "" {
+				if !hasProjectAuthorizer {
+					return runs.ErrControlServiceUnavailable
 				}
-				if hasHostAuthorizer {
-					return hostAuthorizer.AuthorizeUserTx(authorizeCtx, tx, principal.UserID, authorizedInput.HostID)
+				allowed, err := projectAuthorizer.CanWriteProjectTx(authorizeCtx, tx, principal, authorizedInput.ProjectID)
+				if err != nil {
+					return fmt.Errorf("authorize session project in creation transaction: %w", err)
 				}
-				return nil
-			})
-		}
-	} else {
-		createIntent = s.records.CreateIntent
+				if !allowed {
+					return auth.ErrNotFound
+				}
+			}
+			return hostAuthorizer.AuthorizeUserTx(authorizeCtx, tx, principal.UserID, authorizedInput.HostID)
+		})
 	}
 	intent, err := createIntent(ctx, intentInput)
 	if err != nil {
