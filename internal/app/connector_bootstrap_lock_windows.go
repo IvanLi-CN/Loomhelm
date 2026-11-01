@@ -18,6 +18,7 @@ const (
 	connectorLockExclusive             = 0x00000002
 	connectorLockFailImmediately       = 0x00000001
 	connectorLockViolation             = syscall.Errno(33)
+	connectorFileFlagWriteThrough      = 0x80000000
 )
 
 var (
@@ -107,6 +108,30 @@ func closeConnectorBootstrapLock(file *os.File) error {
 	return file.Close()
 }
 
-func syncConnectorStateDirectory(string) error {
+func syncConnectorStateDirectory(path string) (syncErr error) {
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("format Connector state directory path: %w", err)
+	}
+	handle, err := syscall.CreateFile(
+		name,
+		syscall.GENERIC_WRITE,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
+		nil,
+		syscall.OPEN_EXISTING,
+		syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT|connectorFileFlagWriteThrough,
+		0,
+	)
+	if err != nil {
+		return fmt.Errorf("open Connector state directory for sync: %w", err)
+	}
+	defer func() {
+		if closeErr := syscall.CloseHandle(handle); closeErr != nil {
+			syncErr = errors.Join(syncErr, fmt.Errorf("close Connector state directory sync handle: %w", closeErr))
+		}
+	}()
+	if err := syscall.FlushFileBuffers(handle); err != nil {
+		return fmt.Errorf("flush Connector state directory: %w", err)
+	}
 	return nil
 }

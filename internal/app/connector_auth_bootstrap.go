@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
@@ -49,6 +50,11 @@ type connectorPendingAuthorization struct {
 type connectorCredentialBootstrapper struct {
 	client      *http.Client
 	openBrowser func(context.Context, string) error
+}
+
+type connectorAuthorizationCallbackResult struct {
+	code string
+	err  error
 }
 
 func connectorCredentialFromConfig(cfg platform.Config) (auth.ConnectorCredential, bool, error) {
@@ -185,15 +191,12 @@ func (b connectorCredentialBootstrapper) authorizeAndCache(ctx context.Context, 
 		parsed, _ := url.Parse(cfg.ConnectorServerURL)
 		logger.Info("connector browser authorization required", "server_host", parsed.Host)
 	}
-	authorizationCode, err := b.authorizeInBrowser(ctx, cfg.ConnectorServerURL, requestedHostID)
-	if err != nil {
-		return auth.ConnectorCredential{}, err
-	}
 	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
 	if err != nil {
 		return auth.ConnectorCredential{}, err
 	}
-	if err := saveConnectorPendingAuthorization(pendingPath, cfg.ConnectorServerURL, requestedHostID, authorizationCode); err != nil {
+	authorizationCode, err := b.authorizeInBrowser(ctx, cfg.ConnectorServerURL, requestedHostID, pendingPath)
+	if err != nil {
 		return auth.ConnectorCredential{}, err
 	}
 	credential, err := b.exchangeConnectorAuthorization(ctx, cfg.ConnectorServerURL, authorizationCode, requestedHostID)
@@ -284,7 +287,7 @@ func (b connectorCredentialBootstrapper) resolveAPIKey(ctx context.Context, base
 	return decoded, nil
 }
 
-func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context, baseURL, requestedHostID string) (string, error) {
+func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context, baseURL, requestedHostID, pendingPath string) (string, error) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return "", fmt.Errorf("listen for Connector authorization callback: %w", err)
@@ -295,7 +298,9 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 		return "", err
 	}
 	callbackURL := "http://" + listener.Addr().String() + "/callback"
-	codeResult := make(chan string, 1)
+	codeResult := make(chan connectorAuthorizationCallbackResult, 1)
+	var callbackMu sync.Mutex
+	callbackCompleted := false
 	callbackServer := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet || request.URL.Path != "/callback" {
 			writer.WriteHeader(http.StatusNotFound)
@@ -310,9 +315,23 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		callbackMu.Lock()
+		defer callbackMu.Unlock()
+		if callbackCompleted {
+			writer.WriteHeader(http.StatusConflict)
+			return
+		}
+		if err := saveConnectorPendingAuthorization(pendingPath, baseURL, requestedHostID, code); err != nil {
+			callbackCompleted = true
+			select {
+			case codeResult <- connectorAuthorizationCallbackResult{err: fmt.Errorf("persist Connector pending authorization from callback: %w", err)}:
+			}
+			http.Error(writer, "Connector authorization could not be saved", http.StatusInternalServerError)
+			return
+		}
+		callbackCompleted = true
 		select {
-		case codeResult <- code:
-		default:
+		case codeResult <- connectorAuthorizationCallbackResult{code: code}:
 		}
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -359,7 +378,11 @@ func (b connectorCredentialBootstrapper) authorizeInBrowser(ctx context.Context,
 	defer cancel()
 	var authorizationCode string
 	select {
-	case authorizationCode = <-codeResult:
+	case result := <-codeResult:
+		if result.err != nil {
+			return "", result.err
+		}
+		authorizationCode = result.code
 	case <-waitCtx.Done():
 		return "", fmt.Errorf("wait for Connector browser authorization: %w", waitCtx.Err())
 	}

@@ -134,6 +134,12 @@ func TestConnectorBootstrapLockHonorsContextCancellation(t *testing.T) {
 func TestConnectorBrowserBootstrapUsesLoopbackCallbackAndCachesCredential(t *testing.T) {
 	var callbackURL string
 	var callbackState string
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	pendingObserved := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/api/v1/auth/device/start":
@@ -156,6 +162,8 @@ func TestConnectorBrowserBootstrapUsesLoopbackCallbackAndCachesCredential(t *tes
 				http.Error(writer, "bad token", http.StatusBadRequest)
 				return
 			}
+			_, pendingErr := os.Stat(pendingPath)
+			pendingObserved <- pendingErr
 			apiKey, _ := auth.EncodeConnectorAPIKey("host-browser", "token-browser")
 			writer.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(writer, `{"api_key":"`+apiKey+`"}`)
@@ -165,7 +173,6 @@ func TestConnectorBrowserBootstrapUsesLoopbackCallbackAndCachesCredential(t *tes
 	}))
 	defer server.Close()
 
-	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
 	bootstrapper := connectorCredentialBootstrapper{
 		client: server.Client(),
 		openBrowser: func(_ context.Context, verificationURL string) error {
@@ -194,6 +201,9 @@ func TestConnectorBrowserBootstrapUsesLoopbackCallbackAndCachesCredential(t *tes
 	}
 	if credential != (auth.ConnectorCredential{HostID: "host-browser", Token: "token-browser"}) {
 		t.Fatalf("browser credential = %+v", credential)
+	}
+	if err := <-pendingObserved; err != nil {
+		t.Fatalf("pending authorization was not durable before token exchange: %v", err)
 	}
 	if _, ok, err := loadConnectorCredential(cachePath, server.URL); err != nil || !ok {
 		t.Fatalf("cached browser credential = (%t, %v), want hit", ok, err)
