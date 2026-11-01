@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -106,6 +107,73 @@ func TestPostgresSessionStoreSurvivesDatabaseReopen(t *testing.T) {
 	getHandler.ServeHTTP(getResponse, getRequest)
 	if getResponse.Code != http.StatusNoContent || getResponse.Header().Get("X-Test-User-ID") != userID {
 		t.Fatalf("session after reopen status = %d, user = %q", getResponse.Code, getResponse.Header().Get("X-Test-User-ID"))
+	}
+}
+
+func TestPostgresConnectorDeviceStoreReplaysCompletedCodeDuringCleanupGrace(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	config := authDatabaseConfigForTest(t)
+	db, err := database.Open(ctx, config)
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("database.Migrate() error = %v", err)
+	}
+
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102T150405.000000000Z07:00"), ":", "")
+	userID := "p01_device_replay_" + suffix
+	authorizationID := "p01_device_auth_" + suffix
+	userCodeHash := sha256.Sum256([]byte("user-code-" + suffix))
+	authorizationCodeHash := sha256.Sum256([]byte("authorization-code-" + suffix))
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	expiresAt := now.Add(connectorDeviceLifetime)
+	t.Cleanup(func() {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupDB, cleanupErr := database.Open(cleanupContext, config)
+		if cleanupErr != nil {
+			t.Errorf("open device replay cleanup database: %v", cleanupErr)
+			return
+		}
+		defer cleanupDB.Close()
+		if _, cleanupErr := cleanupDB.Pool().Exec(cleanupContext, `DELETE FROM connector_device_authorizations WHERE id = $1`, authorizationID); cleanupErr != nil {
+			t.Errorf("delete test device authorization: %v", cleanupErr)
+		}
+		if _, cleanupErr := cleanupDB.Pool().Exec(cleanupContext, `DELETE FROM auth_users WHERE id = $1`, userID); cleanupErr != nil {
+			t.Errorf("delete test device user: %v", cleanupErr)
+		}
+	})
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO auth_users (id, issuer, subject)
+		VALUES ($1, 'device-replay-integration', $1)
+	`, userID); err != nil {
+		t.Fatalf("seed device user: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO connector_device_authorizations (
+			id, user_code_hash, redirect_uri, state, expires_at,
+			authorized_user_id, authorization_code_hash, authorized_at
+		) VALUES ($1, $2, 'http://127.0.0.1:43123/callback', $3, $4, $5, $6, $7)
+	`, authorizationID, userCodeHash[:], strings.Repeat("s", 32), expiresAt, userID, authorizationCodeHash[:], now); err != nil {
+		t.Fatalf("seed device authorization: %v", err)
+	}
+
+	store := &postgresConnectorDeviceStore{pool: db.Pool()}
+	if _, err := store.Claim(ctx, authorizationCodeHash[:], now); err != nil {
+		t.Fatalf("claim device authorization: %v", err)
+	}
+	if err := store.Complete(ctx, authorizationCodeHash[:], now); err != nil {
+		t.Fatalf("complete device authorization: %v", err)
+	}
+	replayed, err := store.Claim(ctx, authorizationCodeHash[:], expiresAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("replay completed device authorization after nominal expiry: %v", err)
+	}
+	if replayed.ID != authorizationID || !replayed.Consumed || replayed.AuthorizedUserID != userID {
+		t.Fatalf("replayed device authorization = %+v", replayed)
 	}
 }
 

@@ -93,6 +93,12 @@ func resourceSpecFor(definition protocol.MCPResourceDefinition) (resourceSpec, b
 
 func routeForOperation(operationID string) (routeSpec, bool) {
 	routes := map[string]routeSpec{
+		"listHosts":                 {method: "GET", path: "/hosts"},
+		"listHostCredentials":       {method: "GET", path: "/hosts/{host_id}/credentials", pathParams: []string{"host_id"}},
+		"revokeHostCredential":      {method: "DELETE", path: "/hosts/{host_id}/credentials/{credential_id}", pathParams: []string{"host_id", "credential_id"}},
+		"listHostShares":            {method: "GET", path: "/hosts/{host_id}/shares", pathParams: []string{"host_id"}},
+		"grantHostShare":            {method: "PUT", path: "/hosts/{host_id}/shares/{user_id}", pathParams: []string{"host_id", "user_id"}},
+		"revokeHostShare":           {method: "DELETE", path: "/hosts/{host_id}/shares/{user_id}", pathParams: []string{"host_id", "user_id"}},
 		"getDeploymentStatus":       {method: "GET", path: "/deployment"},
 		"getDeploymentObservations": {method: "GET", path: "/deployment/observations"},
 		"listDeploymentCandidates":  {method: "GET", path: "/deployment/candidates"},
@@ -179,6 +185,15 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 		add("project_ids", arrayOfStrings(), false)
 	case "revokeUserCredential":
 		add("credential_id", stringField(), true)
+	case "listHosts":
+	case "listHostCredentials", "listHostShares":
+		add("host_id", stringField(), true)
+	case "revokeHostCredential":
+		add("host_id", stringField(), true)
+		add("credential_id", stringField(), true)
+	case "grantHostShare", "revokeHostShare":
+		add("host_id", stringField(), true)
+		add("user_id", stringField(), true)
 	case "listProjects":
 		add("after_cursor", stringField(), false)
 		add("limit", integerField(), false)

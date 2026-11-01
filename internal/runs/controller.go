@@ -24,6 +24,10 @@ type CommandTransport interface {
 	ReconcileCommand(context.Context, protocol.Command) (protocol.Reconciliation, error)
 }
 
+// AdmissionAuthorizer is invoked inside the durable command transaction after
+// the Session/Run rows are locked and before the transaction commits.
+type AdmissionAuthorizer func(context.Context, pgx.Tx, protocol.Command) error
+
 type GenerationResolver func(context.Context, string) (string, error)
 
 // DraftCommandLifecycle is the narrow durable seam between Run command
@@ -102,7 +106,11 @@ func NewController(store *Store, transport CommandTransport, config ControllerCo
 }
 
 func (c *Controller) AcceptCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
-	return c.acceptCommand(ctx, command, nil)
+	return c.acceptCommand(ctx, command, nil, nil)
+}
+
+func (c *Controller) AcceptCommandWithAuthorization(ctx context.Context, command protocol.Command, authorize AdmissionAuthorizer) (protocol.CommandAck, error) {
+	return c.acceptCommand(ctx, command, nil, authorize)
 }
 
 // AcceptCommandWithDraft admits a Run send while binding the exact draft
@@ -119,10 +127,23 @@ func (c *Controller) AcceptCommandWithDraft(ctx context.Context, command protoco
 	if draft.CommandID != command.CommandID || draft.SessionID != command.SessionID {
 		return protocol.CommandAck{}, fmt.Errorf("%w: command and draft identities do not match", ErrInvalidCommand)
 	}
-	return c.acceptCommand(ctx, command, &draft)
+	return c.acceptCommand(ctx, command, &draft, nil)
 }
 
-func (c *Controller) acceptCommand(ctx context.Context, command protocol.Command, draft *drafts.CommandDraftInput) (protocol.CommandAck, error) {
+func (c *Controller) AcceptCommandWithDraftAndAuthorization(ctx context.Context, command protocol.Command, draft drafts.CommandDraftInput, authorize AdmissionAuthorizer) (protocol.CommandAck, error) {
+	if c == nil || c.draftCommands == nil {
+		return protocol.CommandAck{}, fmt.Errorf("%w: draft command lifecycle is required", ErrDraftRecoveryRequired)
+	}
+	if command.Kind != protocol.CommandKindRunSend {
+		return protocol.CommandAck{}, fmt.Errorf("%w: draft binding requires %q", ErrInvalidCommand, protocol.CommandKindRunSend)
+	}
+	if draft.CommandID != command.CommandID || draft.SessionID != command.SessionID {
+		return protocol.CommandAck{}, fmt.Errorf("%w: command and draft identities do not match", ErrInvalidCommand)
+	}
+	return c.acceptCommand(ctx, command, &draft, authorize)
+}
+
+func (c *Controller) acceptCommand(ctx context.Context, command protocol.Command, draft *drafts.CommandDraftInput, authorize AdmissionAuthorizer) (protocol.CommandAck, error) {
 	if c == nil || c.store == nil || c.transport == nil {
 		return protocol.CommandAck{}, errors.New("run controller is not initialized")
 	}
@@ -154,9 +175,17 @@ func (c *Controller) acceptCommand(ctx context.Context, command protocol.Command
 		}
 		lease := c.leaseForIntent(intent)
 		var mutation CommandAdmissionMutation
-		if draft != nil {
+		if draft != nil || authorize != nil {
 			mutation = func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
-				return c.draftCommands.PrepareCommandTx(mutationCtx, tx, *draft)
+				if authorize != nil {
+					if err := authorize(mutationCtx, tx, command); err != nil {
+						return err
+					}
+				}
+				if draft != nil {
+					return c.draftCommands.PrepareCommandTx(mutationCtx, tx, *draft)
+				}
+				return nil
 			}
 		}
 		accepted, _, err := c.store.AcceptRunWithLeaseAndMutation(ctx, intent, NewRunInput{
@@ -172,7 +201,13 @@ func (c *Controller) acceptCommand(ctx context.Context, command protocol.Command
 	}
 	if command.Kind == protocol.CommandKindRunInterrupt {
 		lease := c.leaseForIntent(intent)
-		accepted, err := c.store.AcceptInterruptWithLease(ctx, intent, *lease)
+		var mutation CommandAdmissionMutation
+		if authorize != nil {
+			mutation = func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
+				return authorize(mutationCtx, tx, command)
+			}
+		}
+		accepted, err := c.store.AcceptInterruptWithLeaseAndMutation(ctx, intent, *lease, mutation)
 		if err != nil {
 			return protocol.CommandAck{}, err
 		}
@@ -189,6 +224,14 @@ func (c *Controller) acceptCommand(ctx context.Context, command protocol.Command
 // boundary. The command ledger row and the Run interrupt reservation commit
 // before transport delivery, preserving reconciliation across process exits.
 func (c *Controller) AcceptInterruptCommand(ctx context.Context, command protocol.Command) (protocol.CommandAck, error) {
+	return c.acceptInterruptCommand(ctx, command, nil)
+}
+
+func (c *Controller) AcceptInterruptCommandWithAuthorization(ctx context.Context, command protocol.Command, authorize AdmissionAuthorizer) (protocol.CommandAck, error) {
+	return c.acceptInterruptCommand(ctx, command, authorize)
+}
+
+func (c *Controller) acceptInterruptCommand(ctx context.Context, command protocol.Command, authorize AdmissionAuthorizer) (protocol.CommandAck, error) {
 	if c == nil || c.store == nil || c.transport == nil {
 		return protocol.CommandAck{}, errors.New("run controller is not initialized")
 	}
@@ -209,7 +252,13 @@ func (c *Controller) AcceptInterruptCommand(ctx context.Context, command protoco
 	}
 	intent := CommandIntent{Command: command, Generation: generation}
 	lease := c.leaseForIntent(intent)
-	accepted, err := c.store.AcceptInterruptWithLease(ctx, intent, *lease)
+	var mutation CommandAdmissionMutation
+	if authorize != nil {
+		mutation = func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
+			return authorize(mutationCtx, tx, command)
+		}
+	}
+	accepted, err := c.store.AcceptInterruptWithLeaseAndMutation(ctx, intent, *lease, mutation)
 	if err != nil {
 		return protocol.CommandAck{}, err
 	}
@@ -220,6 +269,14 @@ func (c *Controller) AcceptInterruptCommand(ctx context.Context, command protoco
 // approval transaction. Transport delivery starts only after both durable
 // writes commit, so a process exit leaves a command that can be reconciled.
 func (c *Controller) AcceptApprovalCommand(ctx context.Context, command protocol.Command, resolver ApprovalTransactionResolver, request approvals.ResolveRequest) (protocol.CommandAck, error) {
+	return c.acceptApprovalCommand(ctx, command, resolver, request, nil)
+}
+
+func (c *Controller) AcceptApprovalCommandWithAuthorization(ctx context.Context, command protocol.Command, resolver ApprovalTransactionResolver, request approvals.ResolveRequest, authorize AdmissionAuthorizer) (protocol.CommandAck, error) {
+	return c.acceptApprovalCommand(ctx, command, resolver, request, authorize)
+}
+
+func (c *Controller) acceptApprovalCommand(ctx context.Context, command protocol.Command, resolver ApprovalTransactionResolver, request approvals.ResolveRequest, authorize AdmissionAuthorizer) (protocol.CommandAck, error) {
 	if c == nil || c.store == nil || c.transport == nil {
 		return protocol.CommandAck{}, errors.New("run controller is not initialized")
 	}
@@ -240,7 +297,13 @@ func (c *Controller) AcceptApprovalCommand(ctx context.Context, command protocol
 	}
 	intent := CommandIntent{Command: command, Generation: generation}
 	lease := c.leaseForIntent(intent)
-	accepted, _, err := c.store.AcceptApprovalWithLease(ctx, resolver, intent, request, *lease)
+	var mutation CommandAdmissionMutation
+	if authorize != nil {
+		mutation = func(mutationCtx context.Context, tx pgx.Tx, _ AcceptResult) error {
+			return authorize(mutationCtx, tx, command)
+		}
+	}
+	accepted, _, err := c.store.AcceptApprovalWithLeaseAndMutation(ctx, resolver, intent, request, *lease, mutation)
 	if err != nil {
 		return protocol.CommandAck{}, err
 	}

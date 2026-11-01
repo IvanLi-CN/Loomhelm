@@ -53,7 +53,7 @@ Deployment consumes the schema 2 manifest through a separate envelope generated 
 
 ## Workflow Gates
 
-`Candidate CI` runs on PR, merge-queue and manual candidate events with a PR-cancellable but merge-queue-stable concurrency group. Its required checks are `Quality Gates`, `Bootstrap Verification`, `React Doctor`, `Repository Verification`, and `Candidate Build`; `Candidate Reproducibility` is informational, allowed to fail without changing the workflow's success conclusion, and repeats the build identity check.
+`Candidate CI` runs on PR, merge-queue and manual candidate events with a PR-cancellable but merge-queue-stable concurrency group. Its required checks are `Quality Gates`, `Bootstrap Verification`, `React Doctor`, `Repository Verification`, and `Candidate Build`; `Candidate Reproducibility` is informational, allowed to fail without changing the workflow's success conclusion, and repeats the build identity check. `Candidate Build` also compiles the Windows Connector and application test binary so the platform-specific Connector state protection remains part of the required candidate gate.
 
 `Quality Gates` runs the checked-in declaration, dprint Markdown, shell/Python syntax and development/preview Compose configuration checks. `Bootstrap Verification` runs the canonical `scripts/setup` with the verified Go, Bun and sqlc toolchain. `Repository Verification` runs generated-state drift, Go tests/race/shuffle/vet, real PostgreSQL database/job tests and the full Web typecheck/build/Storybook checks. The `React Doctor` job is required even when its changed-file calculation reports an explicit empty-set skip.
 

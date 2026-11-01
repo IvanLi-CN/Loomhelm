@@ -40,7 +40,7 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	registration, err := hosts.NewService(db.Pool()).Register(ctx, hosts.RegisterRequest{Name: "isolated session test", CredentialName: "test-only"})
+	registration, err := hosts.NewService(db.Pool()).RegisterForUser(ctx, aliceIdentity.UserID, hosts.RegisterRequest{Name: "isolated session test", CredentialName: "test-only"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +96,13 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
 	memberURL := baseURL + "/api/v1/projects/" + project.Project.ID + "/members/" + bobIdentity.UserID
 	applicationRequest(t, alice, http.MethodPut, memberURL, map[string]string{"role": "viewer"}, nil, http.StatusOK).Body.Close()
+	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
+	hostShareURL := baseURL + "/api/v1/hosts/" + registration.Host.ID + "/shares/" + bobIdentity.UserID
+	applicationRequest(t, alice, http.MethodPut, hostShareURL, nil, nil, http.StatusOK).Body.Close()
 	read(bob, "shared", nil, http.StatusOK).Body.Close()
 	applicationRequest(t, alice, http.MethodDelete, memberURL, nil, nil, http.StatusNoContent).Body.Close()
+	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
+	applicationRequest(t, alice, http.MethodDelete, hostShareURL, nil, nil, http.StatusNoContent).Body.Close()
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
 	var credential struct {
 		Credential struct {

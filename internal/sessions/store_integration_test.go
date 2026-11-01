@@ -13,6 +13,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/db/migrations"
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -197,6 +198,50 @@ func TestCreationIntentLifecycleAndCompatibility(t *testing.T) {
 		ExecutionGeneration: active.Generation,
 	}); !errors.Is(err, protocol.ErrIdempotencyConflict) {
 		t.Fatalf("conflicting activation error = %v, want %v", err, protocol.ErrIdempotencyConflict)
+	}
+}
+
+func TestCreationIntentAuthorizedRechecksExistingIntent(t *testing.T) {
+	db := openSessionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "e01-authorized-retry-user-" + suffix
+	host := ensureSessionHost(t, ctx, db)
+	seedSessionUser(t, ctx, db, userID)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupSessionIdentity(t, cleanupCtx, db, sessionIntegrationIDs{user: userID}, host)
+	})
+
+	input := CreationIntentInput{
+		SessionID:     "e01-authorized-retry-session-" + suffix,
+		CommandID:     "e01-authorized-retry-command-" + suffix,
+		CreatorUserID: userID,
+		HostID:        host.ID,
+		Path:          protocol.SessionPathNew,
+		Parameters:    []byte(`{"path":"new"}`),
+		Summary:       "authorized retry",
+	}
+	authorizerCalls := 0
+	authorizer := func(context.Context, pgx.Tx, CreationIntentInput) error {
+		authorizerCalls++
+		if authorizerCalls > 1 {
+			return auth.ErrForbidden
+		}
+		return nil
+	}
+	store := NewStore(db.Pool())
+	if _, err := store.CreateIntentAuthorized(ctx, input, authorizer); err != nil {
+		t.Fatalf("create authorized intent: %v", err)
+	}
+	if _, err := store.CreateIntentAuthorized(ctx, input, authorizer); !errors.Is(err, auth.ErrForbidden) {
+		t.Fatalf("authorized existing intent retry error = %v, want %v", err, auth.ErrForbidden)
+	}
+	if authorizerCalls != 2 {
+		t.Fatalf("authorizer calls = %d, want 2", authorizerCalls)
 	}
 }
 

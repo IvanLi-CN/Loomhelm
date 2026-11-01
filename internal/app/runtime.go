@@ -160,7 +160,8 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
 		approvalStore := approvals.NewStore(db.Pool())
-		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth, cfg.DeploymentOwnerUserIDs)
+		hostRegistry := hosts.NewService(db.Pool())
+		services, serviceErr := newApplicationServices(ctx, db.Pool(), cfg.BrowserAuth, connectorAuthService{registry: hostRegistry}, cfg.DeploymentOwnerUserIDs)
 		if serviceErr != nil {
 			db.Close()
 			return nil, serviceErr
@@ -199,7 +200,6 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			eventStore: events.NewStore(db.Pool()),
 			now:        time.Now,
 		}
-		hostRegistry := hosts.NewService(db.Pool())
 		runtime.gateway, err = gateway.NewServer(hostRegistry, gateway.ServerOptions{
 			EventHandler:    transport.HandleEvent,
 			AckHandler:      transport.HandleCommandAck,
@@ -210,6 +210,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			return nil, fmt.Errorf("initialize Connector gateway: %w", err)
 		}
 		transport.gateway = runtime.gateway
+		authorizer := services.sessionAccess()
 		controller, controllerErr := runs.NewController(runStore, transport, runs.ControllerConfig{
 			ResolveGeneration: func(resolveCtx context.Context, sessionID string) (string, error) {
 				session, resolveErr := sessionStore.Get(resolveCtx, sessionID)
@@ -225,7 +226,6 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			db.Close()
 			return nil, fmt.Errorf("initialize run controller: %w", controllerErr)
 		}
-		authorizer := services.sessionAccess()
 		control, controlErr := runs.NewControlService(runs.ControlServiceConfig{
 			Controller: controller,
 			Sessions:   sessionStore,
@@ -235,12 +235,15 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 				_, authorizeErr := authorizer.authorize(authorizeCtx, principal, sessionID, write)
 				return authorizeErr
 			},
+			AuthorizeTx: func(authorizeCtx context.Context, tx pgx.Tx, principal auth.Principal, sessionID string, write bool) error {
+				return authorizer.authorizeTx(authorizeCtx, tx, principal, sessionID, write)
+			},
 		})
 		if controlErr != nil {
 			db.Close()
 			return nil, fmt.Errorf("initialize run control: %w", controlErr)
 		}
-		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, hostRegistry, transport, control)
+		services.sessionCreation = newSessionCreationService(sessionStore, services.projects, services.hosts, transport, control)
 		runtime.api, err = services.handler(control)
 		if err != nil {
 			db.Close()

@@ -157,6 +157,13 @@ jobs:
           bun-version: 1.4.4
       - name: Build immutable candidate
         run: scripts/build-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate"
+      - name: Compile Windows Connector and application
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -o "$RUNNER_TEMP/loomhelm-connector-windows.exe" ./cmd/connector
+          go test -c -o "$RUNNER_TEMP/loomhelm-app-windows.test.exe" ./internal/app
       - name: Validate and expose candidate identity
         id: candidate
         run: |

@@ -101,11 +101,28 @@ func (s *Store) Get(ctx context.Context, sessionID string) (Session, error) {
 	return stored, err
 }
 
+// CreationIntentAuthorizer runs inside the creation-intent transaction before
+// a new intent is inserted. It must perform only durable checks and mutations;
+// external side effects belong after the transaction commits.
+type CreationIntentAuthorizer func(context.Context, pgx.Tx, CreationIntentInput) error
+
 // CreateIntent persists the creation identity and all inputs that define its
 // idempotency before any Gateway or Connector side effect. The unique command
 // key is scoped to the authenticated creator, so command IDs from separate
 // owner namespaces cannot disclose or merge one another's sessions.
 func (s *Store) CreateIntent(ctx context.Context, input CreationIntentInput) (CreationIntent, error) {
+	return s.createIntent(ctx, input, nil)
+}
+
+// CreateIntentAuthorized adds a transaction-scoped admission check for both a
+// new intent and an idempotent retry. Existing intents are re-admitted before
+// they are returned so a retry cannot bypass current project or Host access;
+// a new intent cannot commit after that access has been revoked.
+func (s *Store) CreateIntentAuthorized(ctx context.Context, input CreationIntentInput, authorize CreationIntentAuthorizer) (CreationIntent, error) {
+	return s.createIntent(ctx, input, authorize)
+}
+
+func (s *Store) createIntent(ctx context.Context, input CreationIntentInput, authorize CreationIntentAuthorizer) (CreationIntent, error) {
 	if err := s.ready(ctx); err != nil {
 		return CreationIntent{}, err
 	}
@@ -132,6 +149,11 @@ func (s *Store) CreateIntent(ctx context.Context, input CreationIntentInput) (Cr
 		if err := compareCreationIntent(existing, normalized, digest, true); err != nil {
 			return CreationIntent{}, err
 		}
+		if authorize != nil {
+			if err := authorize(ctx, tx, normalized); err != nil {
+				return CreationIntent{}, err
+			}
+		}
 		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
 			return CreationIntent{}, err
 		}
@@ -147,6 +169,11 @@ func (s *Store) CreateIntent(ctx context.Context, input CreationIntentInput) (Cr
 		if err := compareCreationIntent(existing, normalized, digest, false); err != nil {
 			return CreationIntent{}, err
 		}
+		if authorize != nil {
+			if err := authorize(ctx, tx, normalized); err != nil {
+				return CreationIntent{}, err
+			}
+		}
 		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
 			return CreationIntent{}, err
 		}
@@ -154,6 +181,12 @@ func (s *Store) CreateIntent(ctx context.Context, input CreationIntentInput) (Cr
 			return CreationIntent{}, fmt.Errorf("commit existing session creation intent: %w", err)
 		}
 		return existing.Intent, nil
+	}
+
+	if authorize != nil {
+		if err := authorize(ctx, tx, normalized); err != nil {
+			return CreationIntent{}, err
+		}
 	}
 
 	if normalized.TaskID != "" {
@@ -474,16 +507,39 @@ func (s *Store) GetAccess(ctx context.Context, sessionID string) (SessionAccess,
 	if strings.TrimSpace(sessionID) == "" {
 		return SessionAccess{}, fmt.Errorf("%w: session id is required", ErrInvalidSession)
 	}
-	var access SessionAccess
-	var creatorUserID, hostID, projectID *string
-	var state string
-	var externalThreadRef, executionGeneration *string
-	err := s.pool.QueryRow(ctx, `
+	return scanSessionAccess(s.pool.QueryRow(ctx, `
 		SELECT id, creator_user_id, host_id, project_id, creation_state,
 		       external_thread_ref, generation
 		FROM execution_sessions
 		WHERE id = $1
-	`, sessionID).Scan(
+	`, sessionID))
+}
+
+// GetAccessTx reads and locks the Session access facts for a durable command
+// admission transaction. The Host authorization callback must run after this
+// lock and before the transaction commits.
+func (s *Store) GetAccessTx(ctx context.Context, tx pgx.Tx, sessionID string) (SessionAccess, error) {
+	if err := s.ready(ctx); err != nil {
+		return SessionAccess{}, err
+	}
+	if tx == nil || strings.TrimSpace(sessionID) == "" {
+		return SessionAccess{}, fmt.Errorf("%w: session id and transaction are required", ErrInvalidSession)
+	}
+	return scanSessionAccess(tx.QueryRow(ctx, `
+		SELECT id, creator_user_id, host_id, project_id, creation_state,
+		       external_thread_ref, generation
+		FROM execution_sessions
+		WHERE id = $1
+		FOR UPDATE
+	`, sessionID))
+}
+
+func scanSessionAccess(row interface{ Scan(...any) error }) (SessionAccess, error) {
+	var access SessionAccess
+	var creatorUserID, hostID, projectID *string
+	var state string
+	var externalThreadRef, executionGeneration *string
+	err := row.Scan(
 		&access.SessionID, &creatorUserID, &hostID, &projectID, &state,
 		&externalThreadRef, &executionGeneration,
 	)

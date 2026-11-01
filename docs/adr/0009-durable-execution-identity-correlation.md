@@ -24,7 +24,7 @@ The journal stores only opaque identifiers, timestamps, state and raw protocol p
 
 ## Consequences
 
-The next creation assembly can authorize the caller and validate project/task facts before checking any prior result, select the single configured host through the existing private host service seam, persist the platform-attributed creation intent before native `thread/start`, call the app-owned identity-preserving session opener, and then record the explicit SessionAlias after `session.start` resolves. A retry can rebuild a missing alias only from the exact platform-attributed proof, while `existing_active` remains an admission-time unsupported path with no fallback.
+The next creation assembly can authorize the caller and validate project/task facts before checking any prior result, select the caller's authorized default Host through the existing host service seam, persist the platform-attributed creation intent before native `thread/start`, call the app-owned identity-preserving session opener, and then record the explicit SessionAlias after `session.start` resolves. A retry can rebuild a missing alias only from the exact platform-attributed proof, while `existing_active` remains an admission-time unsupported path with no fallback.
 
 The next run assembly can persist a RunBinding before or while waiting for the native ACK, record a native operation identity when available, advance it with the exact native turn, and then use `ReadMappedEvents` for delivery. Unknown ACKs remain unknown until a reconciler records exact evidence. A future approval or interrupt path can reverse-lookup by the complete generation-qualified native identity without selecting an active or nearest turn.
 

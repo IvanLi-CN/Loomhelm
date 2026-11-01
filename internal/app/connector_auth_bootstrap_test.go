@@ -1,0 +1,567 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/platform"
+)
+
+func TestConnectorCredentialCacheIsPrivateAndBoundToServer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "connector-credential.json")
+	want := auth.ConnectorCredential{HostID: "host-cache", Token: "token-cache"}
+	if err := saveConnectorCredential(path, "https://loomhelm.example.test/", want); err != nil {
+		t.Fatalf("saveConnectorCredential() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat cache: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("cache mode = %o, want 600", info.Mode().Perm())
+	}
+	got, ok, err := loadConnectorCredential(path, "https://loomhelm.example.test")
+	if err != nil || !ok || got != want {
+		t.Fatalf("loadConnectorCredential() = (%+v, %t, %v), want cached credential", got, ok, err)
+	}
+	if _, ok, err := loadConnectorCredential(path, "https://other.example.test"); err != nil || ok {
+		t.Fatalf("cache from another server = (%t, %v), want miss", ok, err)
+	}
+}
+
+func TestConnectorCredentialCacheInvalidContentIsUnavailable(t *testing.T) {
+	for _, contents := range []string{"{", `{"version":1,"server_url":"https://loomhelm.example.test"}`} {
+		directory := t.TempDir()
+		if err := os.Chmod(directory, 0o700); err != nil {
+			t.Fatalf("secure cache directory: %v", err)
+		}
+		path := filepath.Join(directory, "connector-credential.json")
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write invalid cache: %v", err)
+		}
+		if credential, ok, err := loadConnectorCredential(path, "https://loomhelm.example.test"); err != nil || ok || credential != (auth.ConnectorCredential{}) {
+			t.Fatalf("invalid cache = (%+v, %t, %v), want unavailable cache", credential, ok, err)
+		}
+	}
+}
+
+func TestConnectorCredentialCacheRejectsSymlinkedDirectory(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatalf("create target directory: %v", err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := saveConnectorCredential(filepath.Join(link, "connector-credential.json"), "https://loomhelm.example.test", auth.ConnectorCredential{HostID: "host", Token: "token"}); err == nil {
+		t.Fatal("saveConnectorCredential() succeeded through a symlinked directory")
+	}
+}
+
+func TestConnectorBootstrapLockSerializesProcesses(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "connector-credential.json.lock")
+	first, err := openConnectorBootstrapLock(context.Background(), lockPath)
+	if err != nil {
+		t.Fatalf("open first bootstrap lock: %v", err)
+	}
+	acquired := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		second, openErr := openConnectorBootstrapLock(context.Background(), lockPath)
+		if openErr != nil {
+			done <- openErr
+			return
+		}
+		close(acquired)
+		done <- closeConnectorBootstrapLock(second)
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("second bootstrap lock acquired before the first was released")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := closeConnectorBootstrapLock(first); err != nil {
+		t.Fatalf("close first bootstrap lock: %v", err)
+	}
+	select {
+	case <-acquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second bootstrap lock was not released after the first closed")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("close second bootstrap lock: %v", err)
+	}
+}
+
+func TestConnectorBootstrapLockHonorsContextCancellation(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "connector-credential.json.lock")
+	first, err := openConnectorBootstrapLock(context.Background(), lockPath)
+	if err != nil {
+		t.Fatalf("open first bootstrap lock: %v", err)
+	}
+	defer func() {
+		if err := closeConnectorBootstrapLock(first); err != nil {
+			t.Fatalf("close first bootstrap lock: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	second, err := openConnectorBootstrapLock(ctx, lockPath)
+	if second != nil {
+		_ = closeConnectorBootstrapLock(second)
+		t.Fatal("second bootstrap lock acquired while the first was held")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("canceled bootstrap lock error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestConnectorBrowserBootstrapUsesLoopbackCallbackAndCachesCredential(t *testing.T) {
+	var callbackURL string
+	var callbackState string
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	pendingObserved := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/auth/device/start":
+			var payload struct {
+				RedirectURI string `json:"redirect_uri"`
+				State       string `json:"state"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				http.Error(writer, "bad request", http.StatusBadRequest)
+				return
+			}
+			callbackURL, callbackState = payload.RedirectURI, payload.State
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"verification_uri":"/verify","user_code":"ABCD-2345","expires_in":600}`)
+		case "/api/v1/auth/device/token":
+			var payload struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Code != "authorization-code" {
+				http.Error(writer, "bad token", http.StatusBadRequest)
+				return
+			}
+			_, pendingErr := os.Stat(pendingPath)
+			pendingObserved <- pendingErr
+			apiKey, _ := auth.EncodeConnectorAPIKey("host-browser", "token-browser")
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"api_key":"`+apiKey+`"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(_ context.Context, verificationURL string) error {
+			parsed, err := url.Parse(verificationURL)
+			if err != nil || parsed.Path != "/verify" {
+				t.Fatalf("verification URL = %q, error = %v", verificationURL, err)
+			}
+			callback := callbackURL + "?code=authorization-code&state=" + url.QueryEscape(callbackState)
+			response, err := server.Client().Get(callback)
+			if err != nil {
+				return err
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				return io.ErrUnexpectedEOF
+			}
+			return nil
+		},
+	}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("browser bootstrap error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-browser", Token: "token-browser"}) {
+		t.Fatalf("browser credential = %+v", credential)
+	}
+	if err := <-pendingObserved; err != nil {
+		t.Fatalf("pending authorization was not durable before token exchange: %v", err)
+	}
+	if _, ok, err := loadConnectorCredential(cachePath, server.URL); err != nil || !ok {
+		t.Fatalf("cached browser credential = (%t, %v), want hit", ok, err)
+	}
+}
+
+func TestConnectorBootstrapPrefersValidCachedCredentialAfterConfiguredKeyRejection(t *testing.T) {
+	configuredKey, err := auth.EncodeConnectorAPIKey("host-stale", "token-stale")
+	if err != nil {
+		t.Fatalf("encode configured key: %v", err)
+	}
+	cachedCredential := auth.ConnectorCredential{HostID: "host-stale", Token: "token-cache"}
+	cachedKey, err := auth.EncodeConnectorAPIKey(cachedCredential.HostID, cachedCredential.Token)
+	if err != nil {
+		t.Fatalf("encode cached key: %v", err)
+	}
+	identityCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/connector/identity" {
+			http.NotFound(writer, request)
+			return
+		}
+		identityCalls++
+		if request.Header.Get("Authorization") == "Bearer "+configuredKey {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if request.Header.Get("Authorization") != "Bearer "+cachedKey {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"host_id":"host-stale"}`)
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	if err := saveConnectorCredential(cachePath, server.URL, cachedCredential); err != nil {
+		t.Fatalf("save cached credential: %v", err)
+	}
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(context.Context, string) error {
+			t.Fatal("browser recovery was started despite a valid cached credential")
+			return nil
+		},
+	}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorAPIKey:         configuredKey,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("bootstrap error = %v", err)
+	}
+	if credential != cachedCredential || identityCalls != 2 {
+		t.Fatalf("bootstrap result = (%+v, %d identity calls), want cached credential and two checks", credential, identityCalls)
+	}
+}
+
+func TestConnectorBootstrapRecoversRejectedCachedCredential(t *testing.T) {
+	var callbackURL string
+	var callbackState string
+	var requestedHostID string
+	identityCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/auth/connector/identity":
+			identityCalls++
+			writer.WriteHeader(http.StatusUnauthorized)
+		case "/api/v1/auth/device/start":
+			var payload struct {
+				RedirectURI string `json:"redirect_uri"`
+				State       string `json:"state"`
+				HostID      string `json:"host_id"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				http.Error(writer, "bad request", http.StatusBadRequest)
+				return
+			}
+			callbackURL, callbackState, requestedHostID = payload.RedirectURI, payload.State, payload.HostID
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"verification_uri":"/verify","user_code":"ABCD-2345","expires_in":600}`)
+		case "/api/v1/auth/device/token":
+			apiKey, _ := auth.EncodeConnectorAPIKey("host-cache", "token-recovered")
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"api_key":"`+apiKey+`"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	if err := saveConnectorCredential(cachePath, server.URL, auth.ConnectorCredential{HostID: "host-cache", Token: "token-revoked"}); err != nil {
+		t.Fatalf("save cached credential: %v", err)
+	}
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(_ context.Context, _ string) error {
+			callback := callbackURL + "?code=authorization-code&state=" + url.QueryEscape(callbackState)
+			response, err := server.Client().Get(callback)
+			if err != nil {
+				return err
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				return io.ErrUnexpectedEOF
+			}
+			return nil
+		},
+	}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("cached credential recovery error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-cache", Token: "token-recovered"}) {
+		t.Fatalf("recovered credential = %+v", credential)
+	}
+	if identityCalls != 1 || requestedHostID != "host-cache" {
+		t.Fatalf("recovery binding = identity calls %d, requested host %q", identityCalls, requestedHostID)
+	}
+}
+
+func TestConnectorBootstrapRecoversPendingAuthorizationAfterCachePublicationFailure(t *testing.T) {
+	var callbackURL string
+	var callbackState string
+	tokenCalls := 0
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/auth/device/start":
+			var payload struct {
+				RedirectURI string `json:"redirect_uri"`
+				State       string `json:"state"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				http.Error(writer, "bad request", http.StatusBadRequest)
+				return
+			}
+			callbackURL, callbackState = payload.RedirectURI, payload.State
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"verification_uri":"/verify","user_code":"ABCD-2345","expires_in":600}`)
+		case "/api/v1/auth/device/token":
+			var payload struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Code != "authorization-code" {
+				http.Error(writer, "bad token", http.StatusBadRequest)
+				return
+			}
+			tokenCalls++
+			if tokenCalls == 1 {
+				if err := os.Mkdir(cachePath, 0o700); err != nil {
+					t.Fatalf("create cache publication blocker: %v", err)
+				}
+			}
+			apiKey, _ := auth.EncodeConnectorAPIKey("host-pending", "token-pending")
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"api_key":"`+apiKey+`"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	openBrowser := func(_ context.Context, verificationURL string) error {
+		parsed, err := url.Parse(verificationURL)
+		if err != nil {
+			return err
+		}
+		if parsed.Path != "/verify" {
+			return io.ErrUnexpectedEOF
+		}
+		callback := callbackURL + "?code=authorization-code&state=" + url.QueryEscape(callbackState)
+		response, err := server.Client().Get(callback)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			return io.ErrUnexpectedEOF
+		}
+		return nil
+	}
+	first := connectorCredentialBootstrapper{client: server.Client(), openBrowser: openBrowser}
+	if _, err := first.bootstrap(context.Background(), platform.Config{ConnectorServerURL: server.URL, ConnectorCredentialPath: cachePath}, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+		t.Fatal("first bootstrap succeeded despite cache publication failure")
+	}
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("pending authorization was not retained: %v", err)
+	}
+	if err := os.Remove(cachePath); err != nil {
+		t.Fatalf("remove cache publication blocker: %v", err)
+	}
+	second := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(context.Context, string) error {
+			t.Fatal("browser authorization restarted despite a pending authorization")
+			return nil
+		},
+	}
+	credential, err := second.bootstrap(context.Background(), platform.Config{ConnectorServerURL: server.URL, ConnectorCredentialPath: cachePath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("pending authorization recovery error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-pending", Token: "token-pending"}) || tokenCalls != 2 {
+		t.Fatalf("pending recovery = (%+v, %d token calls), want the same credential and two exchanges", credential, tokenCalls)
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("pending authorization remains after recovery, stat error = %v", err)
+	}
+}
+
+func TestConnectorBootstrapRetainsPendingAuthorizationDuringActiveExchange(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/device/token" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	if err := saveConnectorPendingAuthorization(pendingPath, server.URL, "", "authorization-code"); err != nil {
+		t.Fatalf("save pending authorization: %v", err)
+	}
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(context.Context, string) error {
+			t.Fatal("browser authorization restarted while exchange was active")
+			return nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if _, err := bootstrapper.bootstrap(ctx, platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+		t.Fatal("bootstrap succeeded despite an active exchange")
+	}
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("pending authorization was removed during an active exchange: %v", err)
+	}
+}
+
+func TestConnectorBootstrapRetriesTransientExchange(t *testing.T) {
+	tokenCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/device/token" {
+			http.NotFound(writer, request)
+			return
+		}
+		tokenCalls++
+		if tokenCalls <= 2 {
+			status := http.StatusConflict
+			if tokenCalls == 2 {
+				status = http.StatusServiceUnavailable
+			}
+			writer.WriteHeader(status)
+			return
+		}
+		apiKey, err := auth.EncodeConnectorAPIKey("host-retried", "token-retried")
+		if err != nil {
+			t.Fatalf("encode retried API key: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"api_key":"`+apiKey+`"}`)
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "connector-credential.json")
+	pendingPath, err := connectorPendingAuthorizationPath(cachePath)
+	if err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	if err := saveConnectorPendingAuthorization(pendingPath, server.URL, "", "authorization-code"); err != nil {
+		t.Fatalf("save pending authorization: %v", err)
+	}
+	bootstrapper := connectorCredentialBootstrapper{
+		client: server.Client(),
+		openBrowser: func(context.Context, string) error {
+			t.Fatal("browser authorization restarted during retry")
+			return nil
+		},
+	}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorCredentialPath: cachePath,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("active exchange retry error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-retried", Token: "token-retried"}) || tokenCalls != 3 {
+		t.Fatalf("transient exchange retry = (%+v, %d token calls), want two retries and the credential", credential, tokenCalls)
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("pending authorization remains after successful retry, stat error = %v", err)
+	}
+}
+
+func TestConnectorBootstrapValidatesOpaqueAPIKeyAndUsesRawTokenForGateway(t *testing.T) {
+	apiKey, err := auth.EncodeConnectorAPIKey("host-api-key", "token-api-key")
+	if err != nil {
+		t.Fatalf("encode API key: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/auth/connector/identity" {
+			http.NotFound(writer, request)
+			return
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer "+apiKey {
+			t.Fatalf("identity Authorization = %q, want opaque API key", got)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"host_id":"host-api-key"}`)
+	}))
+	defer server.Close()
+
+	bootstrapper := connectorCredentialBootstrapper{client: server.Client()}
+	credential, err := bootstrapper.bootstrap(context.Background(), platform.Config{
+		ConnectorServerURL:      server.URL,
+		ConnectorAPIKey:         apiKey,
+		ConnectorCredentialPath: filepath.Join(t.TempDir(), "connector-credential.json"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("API key bootstrap error = %v", err)
+	}
+	if credential != (auth.ConnectorCredential{HostID: "host-api-key", Token: "token-api-key"}) {
+		t.Fatalf("API key credential = %+v", credential)
+	}
+}
+
+func TestConnectorVerificationURLPreservesBasePath(t *testing.T) {
+	got, err := resolveConnectorVerificationURL("https://loomhelm.example.test/loomhelm", "/api/v1/auth/device/verify")
+	if err != nil {
+		t.Fatalf("resolveConnectorVerificationURL() error = %v", err)
+	}
+	if got != "https://loomhelm.example.test/loomhelm/api/v1/auth/device/verify" {
+		t.Fatalf("verification URL = %q", got)
+	}
+}
+
+func TestConnectorVerificationURLRejectsExternalSchemeRelativeAddress(t *testing.T) {
+	if _, err := resolveConnectorVerificationURL("https://loomhelm.example.test", "//evil.example.test/verify"); err == nil {
+		t.Fatal("scheme-relative external verification URL was accepted")
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/deployment"
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
+	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
@@ -29,6 +30,7 @@ type applicationServices struct {
 	projects        *projects.Service
 	tasks           *tasks.Service
 	sessions        *sessions.Store
+	hosts           *hosts.Service
 	runHistory      sessionRunStore
 	runRecords      artifactRunRecords
 	drafts          draftStore
@@ -47,7 +49,7 @@ func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform
 // Host transport are ready. An absent dependency exposes explicit unavailable
 // responses, never a simulated command acknowledgement.
 func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, control runControlApplication, deploymentOwnerUserIDs ...[]string) (http.Handler, error) {
-	services, err := newApplicationServices(ctx, pool, cfg, deploymentOwnerUserIDs...)
+	services, err := newApplicationServices(ctx, pool, cfg, nil, deploymentOwnerUserIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +60,7 @@ func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool
 	return handler, nil
 }
 
-func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, deploymentOwnerUserIDs ...[]string) (*applicationServices, error) {
+func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, connectorAuth auth.ConnectorAuth, deploymentOwnerUserIDs ...[]string) (*applicationServices, error) {
 	var provider auth.Provider
 	if cfg.OIDCEnabled() {
 		configured, err := auth.NewOIDCProvider(ctx, auth.OIDCConfig{
@@ -71,7 +73,11 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		}
 		provider = configured
 	}
-	identity, err := auth.NewService(pool, auth.Config{SecureCookies: cfg.SecureCookies}, provider)
+	authConfig := auth.Config{SecureCookies: cfg.SecureCookies}
+	if connectorAuth != nil {
+		authConfig.ConnectorAuth = connectorAuth
+	}
+	identity, err := auth.NewService(pool, authConfig, provider)
 	if err != nil {
 		return nil, fmt.Errorf("initialize browser authentication: %w", err)
 	}
@@ -90,6 +96,7 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		projects:   projectService,
 		tasks:      tasks.NewService(pool, identity, projectService),
 		sessions:   sessions.NewStore(pool),
+		hosts:      hosts.NewService(pool),
 		runHistory: runs.NewStore(pool),
 		runRecords: runs.NewStore(pool),
 		drafts:     drafts.NewStore(pool),
@@ -101,6 +108,7 @@ func (s *applicationServices) handler(control runControlApplication) (http.Handl
 	s.identity.Mount(router)
 	s.identity.MountAPI(router)
 	deployment.MountAPI(router, s.identity, s.deployment, true)
+	(&hostHTTP{principal: s.identity, registry: s.hosts}).mount(router)
 	s.projects.Mount(router)
 	s.tasks.Mount(router)
 	sessionAccess := s.sessionAccess()
@@ -286,7 +294,7 @@ func unavailableArtifactDownload(writer http.ResponseWriter, request *http.Reque
 }
 
 func (s *applicationServices) sessionAccess() *sessionService {
-	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions, creation: s.sessionCreation, binding: s.sessions}
+	return &sessionService{principal: s.identity, projects: s.projects, records: s.sessions, hosts: s.hosts, creation: s.sessionCreation, binding: s.sessions}
 }
 
 func writeApplicationError(writer http.ResponseWriter, request *http.Request, status int, message string) {

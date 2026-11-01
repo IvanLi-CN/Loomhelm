@@ -13,8 +13,10 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 type fakeSessionCreationRecords struct {
@@ -52,6 +54,15 @@ func (f *fakeSessionCreationRecords) CreateIntent(_ context.Context, input sessi
 	}
 	f.intents[intent.SessionID] = intent
 	return intent, nil
+}
+
+func (f *fakeSessionCreationRecords) CreateIntentAuthorized(ctx context.Context, input sessions.CreationIntentInput, authorize sessions.CreationIntentAuthorizer) (sessions.CreationIntent, error) {
+	if authorize != nil {
+		if err := authorize(ctx, nil, input); err != nil {
+			return sessions.CreationIntent{}, err
+		}
+	}
+	return f.CreateIntent(ctx, input)
 }
 
 func (f *fakeSessionCreationRecords) MarkIntentUnknown(ctx context.Context, input sessions.UnknownIntentInput) (sessions.CreationIntent, error) {
@@ -108,8 +119,20 @@ type fakeSessionCreationHost struct {
 	calls int
 }
 
-func (f *fakeSessionCreationHost) ConfiguredHost(context.Context) (hosts.Host, error) {
+func (f *fakeSessionCreationHost) ConfiguredHostForUser(context.Context, string) (hosts.Host, error) {
 	f.calls++
+	return f.host, nil
+}
+
+func (f *fakeSessionCreationHost) AuthorizeUserTx(context.Context, pgx.Tx, string, string) error {
+	return nil
+}
+
+type fakeSessionCreationHostWithoutTransactionAuthorization struct {
+	host hosts.Host
+}
+
+func (f fakeSessionCreationHostWithoutTransactionAuthorization) ConfiguredHostForUser(context.Context, string) (hosts.Host, error) {
 	return f.host, nil
 }
 
@@ -146,13 +169,23 @@ func (f *fakeSessionInitialRun) SubmitRun(_ context.Context, _ auth.Principal, _
 	return protocol.CommandAckResponse{Ack: ack}, f.err
 }
 
-type fakeSessionCreationProjects struct{ write bool }
+type fakeSessionCreationProjects struct {
+	write   bool
+	txWrite *bool
+}
 
 func (fakeSessionCreationProjects) CanReadProject(context.Context, auth.Principal, string) (bool, error) {
 	return true, nil
 }
 
 func (f fakeSessionCreationProjects) CanWriteProject(context.Context, auth.Principal, string) (bool, error) {
+	return f.write, nil
+}
+
+func (f fakeSessionCreationProjects) CanWriteProjectTx(context.Context, pgx.Tx, auth.Principal, string) (bool, error) {
+	if f.txWrite != nil {
+		return *f.txWrite, nil
+	}
 	return f.write, nil
 }
 
@@ -350,6 +383,43 @@ func TestSessionCreationRejectsUnauthorizedProjectBeforeHostCommand(t *testing.T
 	}
 	if host.calls != 0 || len(transport.commands) != 0 || len(records.intents) != 0 {
 		t.Fatalf("authorization crossed side-effect boundary: host=%d commands=%d intents=%d", host.calls, len(transport.commands), len(records.intents))
+	}
+}
+
+func TestSessionCreationRechecksProjectAuthorizationInsideCreationIntent(t *testing.T) {
+	txWrite := false
+	host := &fakeSessionCreationHost{host: hosts.Host{ID: "host-1"}}
+	records := &fakeSessionCreationRecords{}
+	transport := &fakeSessionCreationTransport{ack: protocol.CommandAck{State: protocol.CommandStateSucceeded}}
+	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true, txWrite: &txWrite}, host, transport, nil)
+	projectID := "project-1"
+	_, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, protocol.CreateSessionRequest{
+		CommandID: "create-revoked-project",
+		Path:      protocol.SessionPathNew,
+		ProjectID: &projectID,
+	})
+	if !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("transaction-scoped project authorization error = %v", err)
+	}
+	if host.calls != 1 || len(transport.commands) != 0 || len(records.intents) != 0 {
+		t.Fatalf("transaction-scoped authorization crossed write boundary: host=%d commands=%d intents=%d", host.calls, len(transport.commands), len(records.intents))
+	}
+}
+
+func TestSessionCreationFailsClosedWithoutTransactionHostAuthorization(t *testing.T) {
+	records := &fakeSessionCreationRecords{}
+	transport := &fakeSessionCreationTransport{ack: protocol.CommandAck{State: protocol.CommandStateSucceeded}}
+	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, fakeSessionCreationHostWithoutTransactionAuthorization{host: hosts.Host{ID: "host-1"}}, transport, nil)
+
+	_, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, protocol.CreateSessionRequest{
+		CommandID: "create-missing-host-authorizer",
+		Path:      protocol.SessionPathNew,
+	})
+	if !errors.Is(err, runs.ErrControlServiceUnavailable) {
+		t.Fatalf("missing transaction Host authorizer error = %v, want %v", err, runs.ErrControlServiceUnavailable)
+	}
+	if len(records.intents) != 0 || len(transport.commands) != 0 {
+		t.Fatalf("session creation crossed fail-closed boundary: intents=%d commands=%d", len(records.intents), len(transport.commands))
 	}
 }
 

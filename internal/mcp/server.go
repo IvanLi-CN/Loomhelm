@@ -69,6 +69,7 @@ var (
 		"updateDraft":          "draft",
 		"resolveApproval":      "ack",
 		"interruptRun":         "ack",
+		"grantHostShare":       "share",
 	}
 	mutationResponseRequiredFields = map[string][]string{
 		"createUserCredential": {"id", "name", "project_ids", "created_at", "token"},
@@ -83,6 +84,7 @@ var (
 		"updateDraft":          {"session_id", "content", "revision", "updated_at"},
 		"resolveApproval":      {"command_id", "state", "received_at", "deduplicated"},
 		"interruptRun":         {"command_id", "state", "received_at", "deduplicated"},
+		"grantHostShare":       {"host_id", "user_id", "granted_by", "created_at"},
 	}
 )
 
@@ -456,6 +458,9 @@ func validToolResponse(operationID string, body []byte) bool {
 	case "grantProjectMember":
 		var response protocol.ProjectMemberResponse
 		return json.Unmarshal(body, &response) == nil && validProjectMember(response.Member)
+	case "grantHostShare":
+		var response protocol.HostShareResponse
+		return json.Unmarshal(body, &response) == nil && validHostShare(response.Share)
 	case "createTask", "updateTask":
 		var response protocol.TaskResponse
 		return json.Unmarshal(body, &response) == nil && validTask(response.Task)
@@ -471,6 +476,10 @@ func validToolResponse(operationID string, body []byte) bool {
 	default:
 		return false
 	}
+}
+
+func validHostShare(value protocol.HostShare) bool {
+	return value.HostID != "" && value.UserID != "" && value.GrantedBy != "" && value.CreatedAt != ""
 }
 
 func validCreatedCredential(value protocol.CreatedUserCredential) bool {

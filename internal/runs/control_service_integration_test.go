@@ -15,6 +15,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestNewControlServiceRequiresTransport(t *testing.T) {
@@ -1009,12 +1010,13 @@ func newControlServiceFixture(t *testing.T, db *database.DB, fixture controlFixt
 		t.Fatalf("create run controller: %v", err)
 	}
 	service, err := NewControlService(ControlServiceConfig{
-		Controller: controller,
-		Sessions:   sessionStore,
-		Runs:       runStore,
-		Approvals:  approvals.NewStore(db.Pool()),
-		Authorize:  authorizer.Authorize,
-		Now:        func() time.Time { return time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC) },
+		Controller:  controller,
+		Sessions:    sessionStore,
+		Runs:        runStore,
+		Approvals:   approvals.NewStore(db.Pool()),
+		Authorize:   authorizer.Authorize,
+		AuthorizeTx: authorizer.AuthorizeTx,
+		Now:         func() time.Time { return time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("create run control service: %v", err)
@@ -1042,6 +1044,24 @@ func (a *recordingAuthorizer) Authorize(ctx context.Context, principal auth.Prin
 		return err
 	}
 	if session.ProjectID == nil || !principal.HasProjectScope(*session.ProjectID) {
+		return auth.ErrForbidden
+	}
+	return nil
+}
+
+func (a *recordingAuthorizer) AuthorizeTx(ctx context.Context, tx pgx.Tx, principal auth.Principal, sessionID string, _ bool) error {
+	var projectID *string
+	if err := tx.QueryRow(ctx, `
+		SELECT project_id
+		FROM execution_sessions
+		WHERE id = $1
+		FOR UPDATE
+	`, sessionID).Scan(&projectID); errors.Is(err, pgx.ErrNoRows) {
+		return sessions.ErrSessionNotFound
+	} else if err != nil {
+		return err
+	}
+	if projectID == nil || !principal.HasProjectScope(*projectID) {
 		return auth.ErrForbidden
 	}
 	return nil

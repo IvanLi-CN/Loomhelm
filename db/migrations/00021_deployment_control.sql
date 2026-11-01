@@ -8,7 +8,6 @@ CREATE TABLE deployment_installations (
     next_worker_generation BIGINT NOT NULL DEFAULT 1 CHECK (next_worker_generation > 0),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
 INSERT INTO deployment_installations (id) VALUES ('default') ON CONFLICT (id) DO NOTHING;
 
 CREATE TABLE deployment_candidates (
@@ -27,7 +26,6 @@ CREATE TABLE deployment_candidates (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
 CREATE TABLE deployment_slots (
     slot TEXT PRIMARY KEY CHECK (slot IN ('blue', 'green')),
     state TEXT NOT NULL DEFAULT 'empty' CHECK (state IN ('empty', 'staging', 'staged', 'active', 'draining', 'retained', 'failed')),
@@ -84,11 +82,3 @@ CREATE TABLE deployment_roles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
--- +goose Down
-DROP TABLE IF EXISTS deployment_roles;
-DROP TABLE IF EXISTS deployment_events;
-DROP TABLE IF EXISTS deployment_operations;
-DROP TABLE IF EXISTS deployment_slots;
-DROP TABLE IF EXISTS deployment_candidates;
-DROP TABLE IF EXISTS deployment_installations;
