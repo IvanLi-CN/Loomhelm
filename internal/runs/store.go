@@ -97,14 +97,18 @@ func (s *Store) AcceptForGeneration(ctx context.Context, currentGeneration strin
 // reservation together. A failed validation or commit rolls back both writes,
 // so a retry cannot observe a consumed interrupt without a command ledger row.
 func (s *Store) AcceptInterrupt(ctx context.Context, intent CommandIntent) (AcceptResult, error) {
-	return s.acceptInterrupt(ctx, intent, nil)
+	return s.acceptInterrupt(ctx, intent, nil, nil)
 }
 
 func (s *Store) AcceptInterruptWithLease(ctx context.Context, intent CommandIntent, lease DurableLeaseIdentity) (AcceptResult, error) {
-	return s.acceptInterrupt(ctx, intent, &lease)
+	return s.acceptInterrupt(ctx, intent, &lease, nil)
 }
 
-func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease *DurableLeaseIdentity) (AcceptResult, error) {
+func (s *Store) AcceptInterruptWithLeaseAndMutation(ctx context.Context, intent CommandIntent, lease DurableLeaseIdentity, mutation CommandAdmissionMutation) (AcceptResult, error) {
+	return s.acceptInterrupt(ctx, intent, &lease, mutation)
+}
+
+func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease *DurableLeaseIdentity, mutation CommandAdmissionMutation) (AcceptResult, error) {
 	if err := s.ready(ctx); err != nil {
 		return AcceptResult{}, err
 	}
@@ -161,6 +165,11 @@ func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease
 	if err := refreshTaskProtectionTx(ctx, tx, updated.SessionID); err != nil {
 		return AcceptResult{}, err
 	}
+	if mutation != nil {
+		if err := mutation(ctx, tx, accepted); err != nil {
+			return AcceptResult{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return AcceptResult{}, fmt.Errorf("commit command and interrupt acceptance: %w", err)
 	}
@@ -171,14 +180,18 @@ func (s *Store) acceptInterrupt(ctx context.Context, intent CommandIntent, lease
 // one transaction. The command row is locked before the approval row so races
 // on a shared command ID cannot consume a different approval.
 func (s *Store) AcceptApproval(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest) (AcceptResult, approvals.Resolution, error) {
-	return s.acceptApproval(ctx, resolver, intent, request, nil)
+	return s.acceptApproval(ctx, resolver, intent, request, nil, nil)
 }
 
 func (s *Store) AcceptApprovalWithLease(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest, lease DurableLeaseIdentity) (AcceptResult, approvals.Resolution, error) {
-	return s.acceptApproval(ctx, resolver, intent, request, &lease)
+	return s.acceptApproval(ctx, resolver, intent, request, &lease, nil)
 }
 
-func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest, lease *DurableLeaseIdentity) (AcceptResult, approvals.Resolution, error) {
+func (s *Store) AcceptApprovalWithLeaseAndMutation(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest, lease DurableLeaseIdentity, mutation CommandAdmissionMutation) (AcceptResult, approvals.Resolution, error) {
+	return s.acceptApproval(ctx, resolver, intent, request, &lease, mutation)
+}
+
+func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransactionResolver, intent CommandIntent, request approvals.ResolveRequest, lease *DurableLeaseIdentity, mutation CommandAdmissionMutation) (AcceptResult, approvals.Resolution, error) {
 	if err := s.ready(ctx); err != nil {
 		return AcceptResult{}, approvals.Resolution{}, err
 	}
@@ -225,6 +238,11 @@ func (s *Store) acceptApproval(ctx context.Context, resolver ApprovalTransaction
 	}
 	if lease != nil && !accepted.Deduplicated && !isTerminalCommandState(accepted.Record.State) {
 		if _, err := acquireLeaseTx(ctx, tx, *lease, defaultControlLeaseTTL); err != nil {
+			return AcceptResult{}, approvals.Resolution{}, err
+		}
+	}
+	if mutation != nil && !accepted.Deduplicated {
+		if err := mutation(ctx, tx, accepted); err != nil {
 			return AcceptResult{}, approvals.Resolution{}, err
 		}
 	}

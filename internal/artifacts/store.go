@@ -14,7 +14,6 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -894,9 +893,9 @@ func openStoredFile(path string) (*os.File, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("stored artifact is not a regular file: %w", ErrIntegrity)
 	}
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	file, err := openStoredArtifactFile(path)
 	if err != nil {
-		if errors.Is(err, syscall.ELOOP) {
+		if isStoredArtifactSymlinkError(err) {
 			return nil, fmt.Errorf("stored artifact is a symlink: %w", ErrIntegrity)
 		}
 		return nil, fmt.Errorf("open stored artifact: %w", ErrStoreUnavailable)

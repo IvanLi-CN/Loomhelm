@@ -93,3 +93,24 @@ func TestPlatformOperationIDKeepsSafeValue(t *testing.T) {
 		t.Fatalf("platformOperationID(%q) = %v, want original value", raw, value)
 	}
 }
+
+func TestIsConnectorCredentialRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "coder websocket handshake", err: errors.New("expected handshake response status code 101 but got 401"), want: true},
+		{name: "http status", err: errors.New("gateway returned status 401"), want: true},
+		{name: "colon status", err: errors.New("unexpected status code: 401"), want: true},
+		{name: "server error", err: errors.New("expected handshake response status code 101 but got 503"), want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isConnectorCredentialRejected(test.err); got != test.want {
+				t.Fatalf("isConnectorCredentialRejected(%v) = %t, want %t", test.err, got, test.want)
+			}
+		})
+	}
+}

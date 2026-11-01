@@ -19,6 +19,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -106,16 +107,22 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Pool().Exec(ctx, `
-		INSERT INTO host_registrations (id, name) VALUES ('host-artifact-download', 'artifact download fixture')
-	`); err != nil {
+	hostRegistration, err := hosts.NewService(db.Pool()).RegisterForUser(ctx, aliceSession.UserID, hosts.RegisterRequest{
+		Name:           "artifact download fixture",
+		CredentialName: "artifact-download-fixture",
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	hostID := hostRegistration.Host.ID
+	if _, err := hosts.NewService(db.Pool()).GrantShare(ctx, aliceSession.UserID, hostID, bobIdentity.UserID); err != nil {
+		t.Fatalf("grant artifact Host share: %v", err)
 	}
 	if _, err := db.Pool().Exec(ctx, `
 		INSERT INTO execution_sessions (
 			id, external_thread_ref, path, state, generation, creator_user_id, host_id, creation_state
-		) VALUES ('session-artifact-download', 'thread-artifact-download', 'new', 'active', 'generation-1', $1, 'host-artifact-download', 'confirmed')
-	`, aliceSession.UserID); err != nil {
+		) VALUES ('session-artifact-download', 'thread-artifact-download', 'new', 'active', 'generation-1', $1, $2, 'confirmed')
+	`, aliceSession.UserID, hostID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Pool().Exec(ctx, `
@@ -137,15 +144,15 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 	if _, err := db.Pool().Exec(ctx, `
 		INSERT INTO execution_sessions (
 			id, external_thread_ref, path, state, project_id, generation, creator_user_id, host_id, creation_state
-		) VALUES ('session-artifact-project', 'thread-artifact-project', 'new', 'active', 'project-artifact-download', 'generation-1', $1, 'host-artifact-download', 'confirmed')
-	`, aliceSession.UserID); err != nil {
+		) VALUES ('session-artifact-project', 'thread-artifact-project', 'new', 'active', 'project-artifact-download', 'generation-1', $1, $2, 'confirmed')
+	`, aliceSession.UserID, hostID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Pool().Exec(ctx, `
 		INSERT INTO execution_sessions (
 			id, external_thread_ref, path, state, generation, creator_user_id, host_id, creation_state
-		) VALUES ('session-artifact-other', 'thread-artifact-other', 'new', 'active', 'generation-1', $1, 'host-artifact-download', 'confirmed')
-	`, aliceSession.UserID); err != nil {
+		) VALUES ('session-artifact-other', 'thread-artifact-other', 'new', 'active', 'generation-1', $1, $2, 'confirmed')
+	`, aliceSession.UserID, hostID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Pool().Exec(ctx, `
@@ -159,10 +166,10 @@ func TestServerAuthorizedArtifactDownloadStreamsOriginalBytesAndHidesPrivateArti
 			id, external_thread_ref, path, state, generation, creator_user_id, host_id,
 			creation_state, creation_command_id, creation_payload, creation_digest
 		) VALUES (
-			'session-artifact-unconfirmed', NULL, 'new', 'starting', NULL, $1, 'host-artifact-download',
+			'session-artifact-unconfirmed', NULL, 'new', 'starting', NULL, $1, $2,
 			'pending', 'command-artifact-unconfirmed', decode('00', 'hex'), repeat('0', 64)
 		)
-	`, aliceSession.UserID); err != nil {
+	`, aliceSession.UserID, hostID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Pool().Exec(ctx, `

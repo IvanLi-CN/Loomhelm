@@ -70,6 +70,121 @@ func TestDatabaseMigrateAndReopen(t *testing.T) {
 	}
 }
 
+func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
+	baseConfig := databaseConfigForTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	admin, err := pgx.Connect(ctx, baseConfig.URL)
+	if err != nil {
+		t.Fatalf("open migration upgrade admin connection: %v", err)
+	}
+	schema := fmt.Sprintf("loomhelm_upgrade_%d", time.Now().UnixNano())
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
+		admin.Close(context.Background())
+		t.Fatalf("create migration upgrade schema: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := admin.Exec(cleanupCtx, "DROP SCHEMA "+pgx.Identifier{schema}.Sanitize()+" CASCADE"); err != nil {
+			t.Errorf("drop migration upgrade schema: %v", err)
+		}
+		admin.Close(cleanupCtx)
+	})
+
+	migrationURL := withURLQuery(t, baseConfig.URL, "search_path", schema+",public")
+	migrationConfig, err := pgx.ParseConfig(migrationURL)
+	if err != nil {
+		t.Fatalf("parse migration upgrade config: %v", err)
+	}
+	migrationSQLDB := stdlib.OpenDB(*migrationConfig)
+	migrationSQLDB.SetMaxOpenConns(1)
+	migrationSQLDB.SetMaxIdleConns(1)
+	t.Cleanup(func() { migrationSQLDB.Close() })
+	migrationProvider, err := goose.NewProvider(goose.DialectPostgres, migrationSQLDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("create migration upgrade provider: %v", err)
+	}
+
+	for _, version := range []int64{17, 18, 19, 20} {
+		if _, err := migrationProvider.UpTo(ctx, version); err != nil {
+			t.Fatalf("upgrade schema to migration %d: %v", version, err)
+		}
+		var appliedVersion int64
+		if err := migrationSQLDB.QueryRowContext(ctx, `
+			SELECT version_id
+			FROM goose_db_version
+			WHERE is_applied
+			ORDER BY version_id DESC
+			LIMIT 1
+		`).Scan(&appliedVersion); err != nil {
+			t.Fatalf("read applied migration after %d: %v", version, err)
+		}
+		if appliedVersion != version {
+			t.Fatalf("applied migration after upgrade to %d = %d", version, appliedVersion)
+		}
+	}
+
+	var authorizationTable string
+	if err := migrationSQLDB.QueryRowContext(ctx, `
+		SELECT table_name
+		FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'connector_device_authorizations'
+	`).Scan(&authorizationTable); err != nil {
+		t.Fatalf("read connector authorization table after upgrade: %v", err)
+	}
+	if authorizationTable != "connector_device_authorizations" {
+		t.Fatalf("connector authorization table = %q", authorizationTable)
+	}
+
+	for _, column := range []struct {
+		table  string
+		column string
+	}{
+		{table: "host_registrations", column: "owner_user_id"},
+		{table: "connector_device_authorizations", column: "requested_host_id"},
+		{table: "host_credentials", column: "connector_device_authorization_id"},
+	} {
+		var exists bool
+		if err := migrationSQLDB.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = current_schema()
+				  AND table_name = $1
+				  AND column_name = $2
+			)
+		`, column.table, column.column).Scan(&exists); err != nil {
+			t.Fatalf("check migration upgrade column %s.%s: %v", column.table, column.column, err)
+		}
+		if !exists {
+			t.Fatalf("migration upgrade column %s.%s is missing", column.table, column.column)
+		}
+	}
+
+	for _, index := range []string{
+		"host_registrations_connector_device_idx",
+		"host_credentials_connector_device_idx",
+	} {
+		var exists bool
+		if err := migrationSQLDB.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_indexes
+				WHERE schemaname = current_schema()
+				  AND indexname = $1
+			)
+		`, index).Scan(&exists); err != nil {
+			t.Fatalf("check migration upgrade index %q: %v", index, err)
+		}
+		if !exists {
+			t.Fatalf("migration upgrade index %q is missing", index)
+		}
+	}
+}
+
 func TestDatabaseMigrateDoesNotLeakSessionSearchPathToPool(t *testing.T) {
 	baseConfig := databaseConfigForTest(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

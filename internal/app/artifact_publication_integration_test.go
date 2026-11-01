@@ -56,7 +56,12 @@ func TestConnectorArtifactPublicationThroughWSS(t *testing.T) {
 		t.Fatalf("open integration persistence: %v", err)
 	}
 	defer persistence.Close()
-	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+	browser := applicationBrowser(t)
+	browser.Transport = insecureTestHTTPClient().Transport
+	loginApplicationBrowser(t, browser, baseURL, "e01-artifact-publication")
+	var browserIdentity protocol.BrowserSessionResponse
+	decodeApplicationResponse(t, applicationRequest(t, browser, http.MethodGet, baseURL+"/api/v1/auth/session", nil, nil, http.StatusOK), &browserIdentity)
+	hostRegistration, err := hosts.NewService(persistence.Pool()).RegisterForUser(ctx, browserIdentity.UserID, hosts.RegisterRequest{
 		Name:           "h01 E01 artifact publication",
 		CredentialName: "e01-artifact-publication",
 	})
@@ -109,9 +114,6 @@ func TestConnectorArtifactPublicationThroughWSS(t *testing.T) {
 		stopServer()
 	}()
 
-	browser := applicationBrowser(t)
-	browser.Transport = insecureTestHTTPClient().Transport
-	loginApplicationBrowser(t, browser, baseURL, "e01-artifact-publication")
 	prompt := "publish the controlled artifact fixture"
 	createResponse := applicationRequest(t, browser, http.MethodPost, baseURL+"/api/v1/sessions", protocol.CreateSessionRequest{
 		CommandID: "e01-artifact-session",

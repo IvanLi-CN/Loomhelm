@@ -2,7 +2,6 @@ package platform
 
 import (
 	"math"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -188,11 +187,8 @@ func TestDatabaseConfigurationBoundaries(t *testing.T) {
 		})
 	}
 	connector, err := LoadConfigWithLookup(ComponentConnector, envLookup(map[string]string{
-		"LOOMHELM_CONNECTOR_SERVER_URL":   "https://platform.example.test",
-		"LOOMHELM_CONNECTOR_HOST_ID":      "host-test",
-		"LOOMHELM_CONNECTOR_TOKEN":        "token-test",
-		"LOOMHELM_CONNECTOR_JOURNAL_PATH": "/tmp/loomhelm-connector-test.jsonl",
-		"LOOMHELM_DATABASE_URL":           "invalid", "LOOMHELM_DATABASE_MAX_CONNS": "invalid",
+		"LOOMHELM_CONNECTOR_BASE_URL": "https://platform.example.test",
+		"LOOMHELM_DATABASE_URL":       "invalid", "LOOMHELM_DATABASE_MAX_CONNS": "invalid",
 		"LOOMHELM_STARTUP_TIMEOUT": "invalid",
 		"LOOMHELM_POSTGRES_PORT":   "invalid",
 	}))
@@ -258,31 +254,32 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 		{
 			name:      "invalid connector URL",
 			component: ComponentConnector,
-			env:       map[string]string{"LOOMHELM_CONNECTOR_SERVER_URL": "ftp://example.test"},
-			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
-		},
-		{
-			name:      "missing connector URL",
-			component: ComponentConnector,
-			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
+			env:       map[string]string{"LOOMHELM_CONNECTOR_BASE_URL": "ftp://example.test"},
+			wantError: "LOOMHELM_CONNECTOR_BASE_URL",
 		},
 		{
 			name:      "connector URL with credentials",
 			component: ComponentConnector,
-			env:       map[string]string{"LOOMHELM_CONNECTOR_SERVER_URL": "https://user:pass@example.test"},
-			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
+			env:       map[string]string{"LOOMHELM_CONNECTOR_BASE_URL": "https://user:pass@example.test"},
+			wantError: "LOOMHELM_CONNECTOR_BASE_URL",
 		},
 		{
 			name:      "connector URL with invalid port",
 			component: ComponentConnector,
-			env:       map[string]string{"LOOMHELM_CONNECTOR_SERVER_URL": "https://platform.example.test:65536"},
-			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
+			env:       map[string]string{"LOOMHELM_CONNECTOR_BASE_URL": "https://platform.example.test:65536"},
+			wantError: "LOOMHELM_CONNECTOR_BASE_URL",
 		},
 		{
 			name:      "connector URL with non-numeric port",
 			component: ComponentConnector,
-			env:       map[string]string{"LOOMHELM_CONNECTOR_SERVER_URL": "https://platform.example.test:bad"},
-			wantError: "LOOMHELM_CONNECTOR_SERVER_URL",
+			env:       map[string]string{"LOOMHELM_CONNECTOR_BASE_URL": "https://platform.example.test:bad"},
+			wantError: "LOOMHELM_CONNECTOR_BASE_URL",
+		},
+		{
+			name:      "connector API key whitespace",
+			component: ComponentConnector,
+			env:       map[string]string{"LOOMHELM_CONNECTOR_API_KEY": "key value"},
+			wantError: "connector API key",
 		},
 	}
 
@@ -296,36 +293,26 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestConnectorConfigurationRequiresHostCredentialAndJournal(t *testing.T) {
-	base := map[string]string{
-		"LOOMHELM_CONNECTOR_SERVER_URL":   "https://platform.example.test",
-		"LOOMHELM_CONNECTOR_HOST_ID":      "host-test",
-		"LOOMHELM_CONNECTOR_TOKEN":        "token-test",
-		"LOOMHELM_CONNECTOR_JOURNAL_PATH": filepath.Join(t.TempDir(), "connector.jsonl"),
+func TestConnectorConfigurationDefaultsToBrowserEnrollment(t *testing.T) {
+	config, err := LoadConfigWithLookup(ComponentConnector, envLookup(nil))
+	if err != nil {
+		t.Fatalf("LoadConfigWithLookup() error = %v", err)
 	}
-	for _, test := range []struct {
-		name  string
-		key   string
-		value string
-		want  string
-	}{
-		{name: "missing host id", key: "LOOMHELM_CONNECTOR_HOST_ID", value: "", want: "connector host id"},
-		{name: "host id whitespace", key: "LOOMHELM_CONNECTOR_HOST_ID", value: "host id", want: "connector host id"},
-		{name: "missing token", key: "LOOMHELM_CONNECTOR_TOKEN", value: "", want: "connector token"},
-		{name: "token whitespace", key: "LOOMHELM_CONNECTOR_TOKEN", value: "token value", want: "connector token"},
-		{name: "missing journal", key: "LOOMHELM_CONNECTOR_JOURNAL_PATH", value: "", want: "connector journal path"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			env := make(map[string]string, len(base))
-			for key, value := range base {
-				env[key] = value
-			}
-			env[test.key] = test.value
-			_, err := LoadConfigWithLookup(ComponentConnector, envLookup(env))
-			if err == nil || !strings.Contains(err.Error(), test.want) || strings.Contains(err.Error(), "token-test") {
-				t.Fatalf("connector configuration error = %v, want %q without credential", err, test.want)
-			}
-		})
+	if config.ConnectorServerURL != DefaultConnectorBaseURL || config.ConnectorAPIKey != "" {
+		t.Fatalf("unexpected Connector public configuration: %+v", config)
+	}
+	if config.ConnectorHostID != "" || config.ConnectorToken != "" || config.ConnectorJournalPath == "" || config.ConnectorCredentialPath == "" || config.ConnectorAppServerCommand != "codex" {
+		t.Fatalf("Connector defaults still require internal credentials: %+v", config)
+	}
+	config, err = LoadConfigWithLookup(ComponentConnector, envLookup(map[string]string{
+		"LOOMHELM_CONNECTOR_BASE_URL": "https://platform.example.test/loomhelm",
+		"LOOMHELM_CONNECTOR_API_KEY":  "lhk_test",
+	}))
+	if err != nil {
+		t.Fatalf("Connector override error = %v", err)
+	}
+	if config.ConnectorServerURL != "https://platform.example.test/loomhelm" || config.ConnectorAPIKey != "lhk_test" {
+		t.Fatalf("Connector override was not applied: %+v", config)
 	}
 }
 

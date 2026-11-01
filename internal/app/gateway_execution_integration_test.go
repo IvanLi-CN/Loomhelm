@@ -64,7 +64,7 @@ func TestServerGatewayRunControlTLSWSSRoundTrip(t *testing.T) {
 		t.Fatalf("open fixture persistence: %v", err)
 	}
 	t.Cleanup(persistence.Close)
-	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+	hostRegistration, err := hosts.NewService(persistence.Pool()).RegisterForUser(ctx, identity.UserID, hosts.RegisterRequest{
 		Name:           "h01 app gateway integration",
 		CredentialName: "connector-fixture",
 	})
@@ -248,7 +248,7 @@ func TestServerSessionCreationTLSWSSRoundTrip(t *testing.T) {
 		t.Fatalf("open fixture persistence: %v", err)
 	}
 	t.Cleanup(persistence.Close)
-	hostRegistration, err := hosts.NewService(persistence.Pool()).Register(ctx, hosts.RegisterRequest{
+	hostRegistration, err := hosts.NewService(persistence.Pool()).RegisterForUser(ctx, identity.UserID, hosts.RegisterRequest{
 		Name:           "h01 session creation integration",
 		CredentialName: "session-creation-fixture",
 	})

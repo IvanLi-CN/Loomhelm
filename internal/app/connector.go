@@ -101,17 +101,14 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 	if err != nil {
 		return nil, fmt.Errorf("initialize connector controller: %w", err)
 	}
-	platformURL, err := connectorGatewayURL(cfg.ConnectorServerURL)
-	if err != nil {
-		return nil, fmt.Errorf("build connector gateway URL: %w", err)
-	}
-	platformClient, err := gateway.NewClient(gateway.ClientOptions{
-		URL:    platformURL,
-		HostID: cfg.ConnectorHostID,
-		Token:  cfg.ConnectorToken,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize connector platform gateway: %w", err)
+	var platformClient *gateway.Client
+	if credential, ok, credentialErr := connectorCredentialFromConfig(cfg); credentialErr != nil {
+		return nil, fmt.Errorf("initialize connector platform credential: %w", credentialErr)
+	} else if ok {
+		platformClient, err = newConnectorPlatformClient(cfg, credential)
+		if err != nil {
+			return nil, err
+		}
 	}
 	closeJournal = false
 	closeArtifactOutbox = false
@@ -166,6 +163,26 @@ func (c *Connector) Run(ctx context.Context) error {
 		cancel()
 		return nil
 	}
+	if c.platform == nil {
+		credential, err := bootstrapConnectorCredential(ctx, c.cfg, c.logger)
+		if err != nil {
+			c.lifecycle.Stop()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), c.cfg.ShutdownTimeout)
+			shutdownErr := c.closeResources(shutdownCtx)
+			cancel()
+			c.runMu.Unlock()
+			return errors.Join(fmt.Errorf("bootstrap Connector credential: %w", err), shutdownErr)
+		}
+		c.platform, err = newConnectorPlatformClient(c.cfg, credential)
+		if err != nil {
+			c.lifecycle.Stop()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), c.cfg.ShutdownTimeout)
+			shutdownErr := c.closeResources(shutdownCtx)
+			cancel()
+			c.runMu.Unlock()
+			return errors.Join(err, shutdownErr)
+		}
+	}
 	if err := c.lifecycle.Start(); err != nil {
 		c.runMu.Unlock()
 		return err
@@ -202,6 +219,15 @@ func (c *Connector) connectionLoop(ctx context.Context) error {
 		connection, err := c.platform.Connect(dialCtx)
 		cancel()
 		if err != nil {
+			if isConnectorCredentialRejected(err) {
+				if refreshErr := c.refreshPlatformCredential(ctx); refreshErr != nil {
+					c.logger.Warn("connector credential recovery failed", "error_class", connectorRecoveryErrorClass(refreshErr))
+				} else {
+					c.logger.Info("connector credential recovered")
+					delay = connectorInitialReconnectDelay
+					continue
+				}
+			}
 			c.logger.Warn("connector platform gateway connect failed", "error_class", connectorGatewayErrorClass(err), "retry_after", delay)
 			if !waitConnectorRetry(ctx, delay) {
 				return ctx.Err()
@@ -228,6 +254,30 @@ func (c *Connector) connectionLoop(ctx context.Context) error {
 		}
 		delay = nextConnectorRetry(delay)
 	}
+}
+
+func (c *Connector) refreshPlatformCredential(ctx context.Context) error {
+	credential, err := bootstrapConnectorCredential(ctx, c.cfg, c.logger)
+	if err != nil {
+		return err
+	}
+	client, err := newConnectorPlatformClient(c.cfg, credential)
+	if err != nil {
+		return err
+	}
+	c.platform = client
+	return nil
+}
+
+func isConnectorCredentialRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "status 401") ||
+		strings.Contains(message, "status code: 401") ||
+		strings.Contains(message, "status code 401") ||
+		strings.Contains(message, "got 401")
 }
 
 func connectorDialTimeoutFor(shutdownTimeout time.Duration) time.Duration {

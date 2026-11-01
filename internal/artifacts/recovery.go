@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
@@ -1871,11 +1870,10 @@ func (s *Store) stagingIdentity(name string) (*string, error) {
 		}
 		return nil, fmt.Errorf("stat artifact staging object: %w", ErrStoreUnavailable)
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, fmt.Errorf("read artifact staging identity: %w", ErrStoreUnavailable)
+	identity, identityErr := artifactStagingIdentity(path, info)
+	if identityErr != nil {
+		return nil, identityErr
 	}
-	identity := fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
 	return &identity, nil
 }
 
