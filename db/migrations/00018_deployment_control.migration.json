@@ -15,8 +15,8 @@
     "description": "One installation row, immutable candidate identities, two slot rows, durable operation intent/result rows, append-only deployment events, idempotency request hashes and installation-level deployment roles.",
     "storage_implementation": "PostgreSQL tables managed by the embedded Goose migration history; no existing row rewrite or down-migration is used by the program.",
     "source_compatibility_range": {
-      "from_program_versions": "Phase-one candidates before deployment control migration 00017",
-      "to_program_version": "Phase-one candidates containing deployment control migration 00017",
+      "from_program_versions": "Phase-one candidates before deployment control migration 00018",
+      "to_program_version": "Phase-one candidates containing deployment control migration 00018",
       "readable_earlier_state": true,
       "older_program_can_read_new_state": true,
       "direct_major_skips_supported": false,
@@ -29,7 +29,7 @@
     ],
     "backfill": "none",
     "rollout_signals": [
-      "Goose records migration 00017 before the deployment controller reports ready.",
+      "Goose records migration 00018 before the deployment controller reports ready.",
       "The controller exposes no deployment write capability until the installation state and role tables are queryable."
     ],
     "recovery": {
@@ -38,7 +38,7 @@
     }
   },
   "validation": [
-    "Empty-database startup applies migration 00017 idempotently before controller readiness.",
+    "Empty-database startup applies migration 00018 idempotently before controller readiness.",
     "Repeated idempotency keys with the same request hash return the original operation and a changed hash fails closed.",
     "A stale expected-current fingerprint cannot start a mutating operation.",
     "Unknown operations remain observable and can be reconciled without creating a second side effect."
