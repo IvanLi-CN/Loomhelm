@@ -430,17 +430,31 @@ func (s *Service) ApplyCodexTitle(ctx context.Context, hostID, threadID string, 
 		return fmt.Errorf("begin Codex title notification: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var localTitle, state string
-	if err := tx.QueryRow(ctx, `SELECT conversation_title, title_sync_state FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE`, hostID, threadID).Scan(&localTitle, &state); errors.Is(err, pgx.ErrNoRows) {
+	var localTitle, state, sourceStatus, titleOperationID string
+	if err := tx.QueryRow(ctx, `SELECT conversation_title, title_sync_state, source_status, title_operation_id FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE`, hostID, threadID).Scan(&localTitle, &state, &sourceStatus, &titleOperationID); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return fmt.Errorf("read Codex title state: %w", err)
 	}
 	now := s.now()
-	if localTitle == title || state == string(protocol.CodexTitleSyncStateUnsupported) {
-		_, err = tx.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = 'synced', title_sync_error = '', title_conflict_codex_title = NULL, title_conflict_detected_at = NULL, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, title, now)
+	if localTitle == title {
+		nextState := "synced"
+		if sourceStatus != string(protocol.CodexSourceStatusActive) {
+			nextState = "paused"
+		}
+		_, err = tx.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = $4, title_sync_error = CASE WHEN $4 = 'paused' THEN title_sync_error ELSE '' END, title_conflict_codex_title = NULL, title_conflict_detected_at = NULL, title_operation_id = CASE WHEN $4 = 'synced' THEN '' ELSE title_operation_id END, updated_at = $5 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, title, nextState, now)
+		if err == nil && titleOperationID != "" {
+			operationState := "title_sync_complete"
+			if nextState == "paused" {
+				operationState = "title_sync_paused"
+			}
+			_, err = tx.Exec(ctx, `UPDATE codex_title_operations SET state = $2, attempts = attempts + 1, updated_at = $3 WHERE operation_id = $1 AND state = 'title_sync_pending' AND desired_title = $4`, titleOperationID, operationState, now, title)
+		}
 	} else if state == string(protocol.CodexTitleSyncStatePending) || state == string(protocol.CodexTitleSyncStateFailed) || state == string(protocol.CodexTitleSyncStateConflict) {
 		_, err = tx.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = 'conflict', title_conflict_codex_title = $3, title_conflict_detected_at = $4, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, title, now)
+		if err == nil && titleOperationID != "" {
+			_, err = tx.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_conflict', last_error = 'Codex title changed before local acknowledgement', updated_at = $2 WHERE operation_id = $1 AND state = 'title_sync_pending'`, titleOperationID, now)
+		}
 	} else {
 		_, err = tx.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = 'conflict', title_conflict_codex_title = $3, title_conflict_detected_at = $4, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, title, now)
 	}
@@ -520,6 +534,9 @@ func (s *Service) ListProjects(ctx context.Context, principal auth.Principal, qu
 	limit := normalizeLimit(query.Limit)
 	args := []any{access.host.ID}
 	where := "WHERE p.host_id = $1"
+	if !access.owner {
+		where += " AND p.loomhelm_project_id IS NOT NULL"
+	}
 	if cursor := valueOrEmpty(query.AfterCursor); cursor != "" {
 		where += " AND p.project_id > $2"
 		args = append(args, cursor)
@@ -542,6 +559,18 @@ func (s *Service) ListProjects(ctx context.Context, principal auth.Principal, qu
 			return protocol.CodexProjectListResponse{}, fmt.Errorf("scan Codex project: %w", err)
 		}
 		item.Cwd, item.LoomhelmProjectID = cwd, mapping
+		if !access.owner {
+			if item.LoomhelmProjectID == nil {
+				continue
+			}
+			allowed, authorizeErr := s.projects.CanReadProject(ctx, principal, *item.LoomhelmProjectID)
+			if authorizeErr != nil {
+				return protocol.CodexProjectListResponse{}, authorizeErr
+			}
+			if !allowed {
+				continue
+			}
+		}
 		if len(items) == limit {
 			cursor := item.ProjectID
 			next = &cursor
@@ -755,7 +784,7 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 	var operationHost, operationThread, operationDesired string
 	var operationExpected *string
 	var operationState string
-	err = s.pool.QueryRow(ctx, `SELECT host_id, thread_id, desired_title, expected_codex_title, state FROM codex_title_operations WHERE request_id = $1`, request.RequestID).Scan(&operationHost, &operationThread, &operationDesired, &operationExpected, &operationState)
+	err = s.pool.QueryRow(ctx, `SELECT operation_id, host_id, thread_id, desired_title, expected_codex_title, state FROM codex_title_operations WHERE request_id = $1`, request.RequestID).Scan(&operationID, &operationHost, &operationThread, &operationDesired, &operationExpected, &operationState)
 	if err != nil {
 		return protocol.CodexConversation{}, fmt.Errorf("read Codex title operation: %w", err)
 	}
@@ -774,40 +803,77 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 	_, err = s.pool.Exec(ctx, `
 		UPDATE codex_threads
 		SET conversation_title = $3, title_sync_state = 'pending', title_sync_error = '',
-		    title_conflict_codex_title = NULL, title_conflict_detected_at = NULL, updated_at = $4
+		    title_conflict_codex_title = NULL, title_conflict_detected_at = NULL, title_operation_id = $4, updated_at = $5
 		WHERE host_id = $1 AND thread_id = $2
-	`, hostID, threadID, operationDesired, now)
+	`, hostID, threadID, operationDesired, operationID, now)
 	if err != nil {
 		return protocol.CodexConversation{}, fmt.Errorf("persist Loomhelm conversation title: %w", err)
 	}
 	if s.titleWriter != nil {
 		writeErr := s.titleWriter.SetTitle(ctx, hostID, threadID, operationDesired)
-		if writeErr == nil {
-			threadTag, threadErr := s.pool.Exec(ctx, `
-				UPDATE codex_threads
-				SET codex_title = $3, title_sync_state = 'synced', title_sync_error = '', updated_at = $4
-				WHERE host_id = $1 AND thread_id = $2 AND title_sync_state = 'pending' AND conversation_title = $3
-			`, hostID, threadID, operationDesired, s.now())
-			if threadErr != nil {
-				err = fmt.Errorf("persist successful Codex title state: %w", threadErr)
-			} else if threadTag.RowsAffected() == 0 {
-				_, conflictErr := s.pool.Exec(ctx, `
-					UPDATE codex_title_operations
-					SET state = 'title_sync_conflict', last_error = 'local title changed before remote acknowledgement', updated_at = $2
-					WHERE request_id = $1 AND state = 'title_sync_pending'
-				`, request.RequestID, s.now())
-				if conflictErr != nil {
-					err = errors.Join(ErrConflict, fmt.Errorf("persist Codex title conflict: %w", conflictErr))
-				} else {
-					err = ErrConflict
-				}
-			} else {
-				_, err = s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_complete', attempts = attempts + 1, updated_at = $3 WHERE request_id = $1 AND state = 'title_sync_pending'`, request.RequestID, operationDesired, s.now())
-			}
+		titleTx, txErr := s.pool.Begin(ctx)
+		if txErr != nil {
+			err = errors.Join(writeErr, fmt.Errorf("begin Codex title result: %w", txErr))
 		} else {
-			_, operationErr := s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_failed', attempts = attempts + 1, last_error = $2, updated_at = $3 WHERE request_id = $1`, request.RequestID, writeErr.Error(), s.now())
-			_, threadErr := s.pool.Exec(ctx, `UPDATE codex_threads SET title_sync_state = 'failed', title_sync_error = $3, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, writeErr.Error(), s.now())
-			err = errors.Join(writeErr, operationErr, threadErr)
+			defer titleTx.Rollback(ctx)
+			resultNow := s.now()
+			var currentTitle, currentState, currentSourceStatus, currentOperationID string
+			readErr := titleTx.QueryRow(ctx, `
+				SELECT conversation_title, title_sync_state, source_status, title_operation_id
+				FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE
+			`, hostID, threadID).Scan(&currentTitle, &currentState, &currentSourceStatus, &currentOperationID)
+			if readErr != nil {
+				err = errors.Join(writeErr, fmt.Errorf("read Codex title result state: %w", readErr))
+			} else if writeErr != nil {
+				_, operationErr := titleTx.Exec(ctx, `
+					UPDATE codex_title_operations
+					SET state = 'title_sync_failed', attempts = attempts + 1, last_error = $2, updated_at = $3
+					WHERE operation_id = $1 AND state = 'title_sync_pending'
+				`, operationID, writeErr.Error(), resultNow)
+				_, threadErr := titleTx.Exec(ctx, `
+					UPDATE codex_threads
+					SET title_sync_state = 'failed', title_sync_error = $3, updated_at = $4
+					WHERE host_id = $1 AND thread_id = $2 AND title_sync_state = 'pending' AND title_operation_id = $5
+				`, hostID, threadID, writeErr.Error(), resultNow, operationID)
+				err = errors.Join(writeErr, operationErr, threadErr)
+			} else if currentOperationID != operationID || currentTitle != operationDesired || currentState != "pending" {
+				var operationState string
+				if opErr := titleTx.QueryRow(ctx, `SELECT state FROM codex_title_operations WHERE operation_id = $1 FOR UPDATE`, operationID).Scan(&operationState); opErr != nil {
+					err = errors.Join(ErrConflict, fmt.Errorf("read Codex title operation state: %w", opErr))
+				} else if operationState == "title_sync_complete" {
+					err = nil
+				} else {
+					_, conflictErr := titleTx.Exec(ctx, `
+						UPDATE codex_title_operations
+						SET state = 'title_sync_conflict', last_error = 'local title changed before remote acknowledgement', updated_at = $2
+						WHERE operation_id = $1 AND state = 'title_sync_pending'
+					`, operationID, resultNow)
+					err = errors.Join(ErrConflict, conflictErr)
+				}
+			} else if currentSourceStatus != string(protocol.CodexSourceStatusActive) {
+				_, threadErr := titleTx.Exec(ctx, `
+					UPDATE codex_threads SET title_sync_state = 'paused', title_sync_error = 'Codex source became unavailable before title acknowledgement', updated_at = $4
+					WHERE host_id = $1 AND thread_id = $2 AND title_operation_id = $3
+				`, hostID, threadID, operationID, resultNow)
+				_, operationErr := titleTx.Exec(ctx, `
+					UPDATE codex_title_operations SET state = 'title_sync_paused', attempts = attempts + 1, last_error = 'Codex source became unavailable before title acknowledgement', updated_at = $2
+					WHERE operation_id = $1 AND state = 'title_sync_pending'
+				`, operationID, resultNow)
+				err = errors.Join(ErrSourceUnavailable, threadErr, operationErr)
+			} else {
+				_, threadErr := titleTx.Exec(ctx, `
+					UPDATE codex_threads SET codex_title = $3, title_sync_state = 'synced', title_sync_error = '', title_conflict_codex_title = NULL, title_conflict_detected_at = NULL, title_operation_id = '', updated_at = $4
+					WHERE host_id = $1 AND thread_id = $2 AND title_sync_state = 'pending' AND title_operation_id = $5 AND conversation_title = $3
+				`, hostID, threadID, operationDesired, resultNow, operationID)
+				_, operationErr := titleTx.Exec(ctx, `
+					UPDATE codex_title_operations SET state = 'title_sync_complete', attempts = attempts + 1, last_error = '', updated_at = $2
+					WHERE operation_id = $1 AND state = 'title_sync_pending'
+				`, operationID, resultNow)
+				err = errors.Join(threadErr, operationErr)
+			}
+			if commitErr := titleTx.Commit(ctx); commitErr != nil {
+				err = errors.Join(err, fmt.Errorf("commit Codex title result: %w", commitErr))
+			}
 		}
 	}
 	if err != nil {
@@ -831,17 +897,27 @@ func (s *Service) MapProject(ctx context.Context, principal auth.Principal, host
 	if !allowed {
 		return protocol.CodexProject{}, auth.ErrForbidden
 	}
-	_, err = s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return protocol.CodexProject{}, fmt.Errorf("begin Codex project mapping: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO codex_project_mappings (host_id, project_id, loomhelm_project_id, created_by, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $5)
 		ON CONFLICT (host_id, project_id) DO UPDATE SET loomhelm_project_id = EXCLUDED.loomhelm_project_id, updated_at = EXCLUDED.updated_at
-	`, access.host.ID, projectID, request.LoomhelmProjectID, principal.UserID, s.now())
-	if err != nil {
+	`, access.host.ID, projectID, request.LoomhelmProjectID, principal.UserID, s.now()); err != nil {
 		return protocol.CodexProject{}, fmt.Errorf("map Codex project: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE codex_projects SET loomhelm_project_id = $3, updated_at = $4 WHERE host_id = $1 AND project_id = $2`, access.host.ID, projectID, request.LoomhelmProjectID, s.now())
+	result, err := tx.Exec(ctx, `UPDATE codex_projects SET loomhelm_project_id = $3, updated_at = $4 WHERE host_id = $1 AND project_id = $2`, access.host.ID, projectID, request.LoomhelmProjectID, s.now())
 	if err != nil {
 		return protocol.CodexProject{}, err
+	}
+	if result.RowsAffected() == 0 {
+		return protocol.CodexProject{}, ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return protocol.CodexProject{}, fmt.Errorf("commit Codex project mapping: %w", err)
 	}
 	return s.readProject(ctx, access.host.ID, projectID)
 }
@@ -979,6 +1055,9 @@ func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, req
 	if err != nil {
 		return protocol.CodexSyncResponse{}, err
 	}
+	if !access.owner {
+		return protocol.CodexSyncResponse{}, auth.ErrForbidden
+	}
 	operationID := strings.TrimSpace(valueOrEmpty(request.RequestID))
 	if operationID == "" {
 		operationID = newID("codex-sync")
@@ -1008,7 +1087,7 @@ func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, req
 	_, err = tx.Exec(ctx, `
 		INSERT INTO codex_sync_sources (host_id, state, sync_state, sync_operation_id, as_of, updated_at)
 		VALUES ($1, CASE WHEN (SELECT status FROM host_registrations WHERE id = $1) = 'online' THEN 'online' ELSE 'offline' END, 'syncing', $2, $3, $3)
-		ON CONFLICT (host_id) DO UPDATE SET sync_state = 'syncing', sync_operation_id = EXCLUDED.sync_operation_id, as_of = EXCLUDED.as_of, updated_at = EXCLUDED.updated_at
+		ON CONFLICT (host_id) DO UPDATE SET sync_state = 'syncing', sync_operation_id = EXCLUDED.sync_operation_id, as_of = GREATEST(codex_sync_sources.as_of, EXCLUDED.as_of), updated_at = EXCLUDED.updated_at
 	`, access.host.ID, operationID, now)
 	if err != nil {
 		return protocol.CodexSyncResponse{}, fmt.Errorf("record Codex sync request: %w", err)

@@ -73,6 +73,7 @@ var (
 		"updateCodexConversationTitle": "conversation",
 		"mapCodexProject":              "project",
 		"bindCodexConversation":        "conversation",
+		"syncCodex":                    "",
 	}
 	mutationResponseRequiredFields = map[string][]string{
 		"createUserCredential":         {"id", "name", "project_ids", "created_at", "token"},
@@ -91,6 +92,7 @@ var (
 		"updateCodexConversationTitle": {"host_id", "thread_id", "conversation_title", "history_state", "files_complete", "read_only", "title_sync_state", "as_of", "updated_at"},
 		"bindCodexConversation":        {"host_id", "thread_id", "conversation_title", "history_state", "files_complete", "read_only", "title_sync_state", "as_of", "updated_at"},
 		"mapCodexProject":              {"host_id", "project_id", "name", "snapshot_state", "as_of"},
+		"syncCodex":                    {"operation_id", "state"},
 	}
 )
 
@@ -439,6 +441,15 @@ func validToolResponse(operationID string, body []byte) bool {
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(body, &envelope) != nil || envelope == nil {
 		return false
+	}
+	if field == "" {
+		for _, requiredField := range requiredFields {
+			value, ok := envelope[requiredField]
+			if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return false
+			}
+		}
+		return true
 	}
 	value, ok := envelope[field]
 	if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {

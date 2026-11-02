@@ -29,12 +29,13 @@ const (
 )
 
 type ServerOptions struct {
-	MaxFrameBytes    int64
-	HandshakeTimeout time.Duration
-	EventHandler     EventHandler
-	AckHandler       CommandAckHandler
-	ArtifactHandler  ArtifactUploadHandler
-	SourceHandler    SourceNotificationHandler
+	MaxFrameBytes         int64
+	HandshakeTimeout      time.Duration
+	EventHandler          EventHandler
+	AckHandler            CommandAckHandler
+	ArtifactHandler       ArtifactUploadHandler
+	SourceHandler         SourceNotificationHandler
+	SourceSnapshotHandler SourceSnapshotHandler
 }
 
 type Server struct {
@@ -50,14 +51,15 @@ type Server struct {
 }
 
 type serverConnection struct {
-	ws         *websocket.Conn
-	registry   Registry
-	connection hosts.Connection
-	maxFrame   int64
-	onEvent    EventHandler
-	onAck      CommandAckHandler
-	onArtifact ArtifactUploadHandler
-	onSource   SourceNotificationHandler
+	ws               *websocket.Conn
+	registry         Registry
+	connection       hosts.Connection
+	maxFrame         int64
+	onEvent          EventHandler
+	onAck            CommandAckHandler
+	onArtifact       ArtifactUploadHandler
+	onSource         SourceNotificationHandler
+	onSourceSnapshot SourceSnapshotHandler
 
 	writeMu     sync.Mutex
 	done        chan struct{}
@@ -97,6 +99,7 @@ func NewServer(registry Registry, options ...ServerOptions) (*Server, error) {
 		config.AckHandler = options[0].AckHandler
 		config.ArtifactHandler = options[0].ArtifactHandler
 		config.SourceHandler = options[0].SourceHandler
+		config.SourceSnapshotHandler = options[0].SourceSnapshotHandler
 	}
 	if config.MaxFrameBytes <= 0 {
 		return nil, errors.New("gateway frame limit must be greater than zero")
@@ -186,20 +189,21 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		return nil, fmt.Errorf("open host gateway connection: %w", err)
 	}
 	result := &serverConnection{
-		ws:              ws,
-		registry:        s.registry,
-		connection:      connection,
-		maxFrame:        s.options.MaxFrameBytes,
-		onEvent:         s.options.EventHandler,
-		onAck:           s.options.AckHandler,
-		onArtifact:      s.options.ArtifactHandler,
-		onSource:        s.options.SourceHandler,
-		done:            make(chan struct{}),
-		ready:           make(chan struct{}),
-		handlerDone:     make(chan struct{}),
-		pending:         make(map[string]chan commandResponse),
-		pendingSources:  make(map[string]chan sourceResponse),
-		artifactUploads: make(map[string]*pendingServerArtifactUpload),
+		ws:               ws,
+		registry:         s.registry,
+		connection:       connection,
+		maxFrame:         s.options.MaxFrameBytes,
+		onEvent:          s.options.EventHandler,
+		onAck:            s.options.AckHandler,
+		onArtifact:       s.options.ArtifactHandler,
+		onSource:         s.options.SourceHandler,
+		onSourceSnapshot: s.options.SourceSnapshotHandler,
+		done:             make(chan struct{}),
+		ready:            make(chan struct{}),
+		handlerDone:      make(chan struct{}),
+		pending:          make(map[string]chan commandResponse),
+		pendingSources:   make(map[string]chan sourceResponse),
+		artifactUploads:  make(map[string]*pendingServerArtifactUpload),
 	}
 	ack := helloAckMessage(connection)
 	if _, err := encodeMessage(ack, s.options.MaxFrameBytes); err != nil {
@@ -660,6 +664,10 @@ func (c *serverConnection) resolveSource(ctx context.Context, message Message) e
 	}
 	if response != nil {
 		response <- sourceResponse{ack: message.SourceAck}
+		return nil
+	}
+	if c.onSourceSnapshot != nil && message.SourceAck.State == "succeeded" && len(message.SourceAck.Payload) > 0 {
+		return c.onSourceSnapshot(ctx, c.connection, message.SourceAck.OperationID, append([]byte(nil), message.SourceAck.Payload...))
 	}
 	return nil
 }

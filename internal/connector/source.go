@@ -54,13 +54,25 @@ func (e *SourceRPCError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
-	if e.Code == -32601 || strings.Contains(strings.ToLower(e.Message), "unsupported") {
-		return ErrSourceCapabilityUnsupported
-	}
 	if e.Code == -32602 {
 		return ErrSourceInvalidParams
 	}
+	if isCapabilityUnsupported(e.Code, e.Message) {
+		return ErrSourceCapabilityUnsupported
+	}
 	return nil
+}
+
+func isCapabilityUnsupported(code int, message string) bool {
+	if code == -32601 {
+		return true
+	}
+	if code == -32602 {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(message))
+	return code == -32600 &&
+		(strings.Contains(lower, "requires") && strings.Contains(lower, "capability"))
 }
 
 type SourceThread struct {
@@ -149,11 +161,12 @@ type SourceNotification struct {
 // SourceClient is the read/import and title-write boundary for one
 // Host-local app-server transport. It never starts or resumes a thread.
 type SourceClient struct {
-	transport  RPCTransport
-	handshake  AppServerHandshake
-	capMu      sync.RWMutex
-	noticeMu   sync.Mutex
-	seenNotice map[string]struct{}
+	transport     RPCTransport
+	handshake     AppServerHandshake
+	capMu         sync.RWMutex
+	noticeMu      sync.Mutex
+	seenNotice    map[string]struct{}
+	pendingNotice *SourceNotification
 }
 
 func NewSourceClient(ctx context.Context, transport RPCTransport, client ClientInfo) (*SourceClient, error) {
@@ -419,7 +432,7 @@ func sourceThreadStatus(thread SourceThread) protocol.CodexSourceStatus {
 		return protocol.CodexSourceStatusArchived
 	case "deleted":
 		return protocol.CodexSourceStatusDeleted
-	case "unavailable":
+	case "unavailable", "not_found", "not-found":
 		return protocol.CodexSourceStatusUnavailable
 	default:
 		return protocol.CodexSourceStatusActive
@@ -585,6 +598,13 @@ func (c *SourceClient) NextNotification(ctx context.Context) (SourceNotification
 		return SourceNotification{}, ErrTransportClosed
 	}
 	for {
+		c.noticeMu.Lock()
+		if c.pendingNotice != nil {
+			pending := cloneSourceNotification(*c.pendingNotice)
+			c.noticeMu.Unlock()
+			return pending, nil
+		}
+		c.noticeMu.Unlock()
 		select {
 		case <-ctx.Done():
 			return SourceNotification{}, ctx.Err()
@@ -596,18 +616,33 @@ func (c *SourceClient) NextNotification(ctx context.Context) (SourceNotification
 			if !ok {
 				continue
 			}
-			key := notificationKey(notification)
 			c.noticeMu.Lock()
+			key := notificationKey(notification)
 			_, seen := c.seenNotice[key]
-			if !seen {
-				c.seenNotice[key] = struct{}{}
-			}
-			c.noticeMu.Unlock()
 			if seen {
+				c.noticeMu.Unlock()
 				continue
 			}
+			c.pendingNotice = &notification
+			c.noticeMu.Unlock()
 			return notification, nil
 		}
+	}
+}
+
+// MarkNotificationDelivered advances the source cursor only after the
+// platform gateway accepted the notification. A failed gateway write can be
+// retried after reconnect without losing the source event.
+func (c *SourceClient) MarkNotificationDelivered(notification SourceNotification) {
+	if c == nil {
+		return
+	}
+	key := notificationKey(notification)
+	c.noticeMu.Lock()
+	defer c.noticeMu.Unlock()
+	c.seenNotice[key] = struct{}{}
+	if c.pendingNotice != nil && notificationKey(*c.pendingNotice) == key {
+		c.pendingNotice = nil
 	}
 }
 
@@ -620,7 +655,7 @@ func (c *SourceClient) call(ctx context.Context, method string, params any) (jso
 		return nil, err
 	}
 	if result.Error != nil {
-		if result.Error.Code == -32601 || strings.Contains(strings.ToLower(result.Error.Message), "unsupported") {
+		if isCapabilityUnsupported(result.Error.Code, result.Error.Message) {
 			c.setCapability(method, CapabilityUnsupported)
 		}
 		return nil, &SourceRPCError{Method: method, Code: result.Error.Code, Message: result.Error.Message}
@@ -668,8 +703,8 @@ func (c *SourceClient) readTurns(ctx context.Context, threadID string) ([]Source
 		if err != nil {
 			return nil, err
 		}
-		for index, value := range values {
-			events = append(events, rawHistoryEvent(value, int64(len(events)+index+1), "turn"))
+		for _, value := range values {
+			events = append(events, rawHistoryEvent(value, int64(len(events)+1), "turn"))
 		}
 		if next == "" {
 			return events, nil
@@ -698,8 +733,8 @@ func (c *SourceClient) readItems(ctx context.Context, threadID string) ([]Source
 		if err != nil {
 			return nil, err
 		}
-		for index, value := range values {
-			events = append(events, rawHistoryEvent(value, int64(len(events)+index+1), "item"))
+		for _, value := range values {
+			events = append(events, rawHistoryEvent(value, int64(len(events)+1), "item"))
 		}
 		if next == "" {
 			return events, nil
@@ -905,6 +940,27 @@ func decodeThread(raw json.RawMessage) (SourceThread, error) {
 		var statusText string
 		if json.Unmarshal(item.Status, &statusText) == nil {
 			status = statusText
+		} else {
+			var statusObject struct {
+				Type      string `json:"type"`
+				State     string `json:"state"`
+				Status    string `json:"status"`
+				Archived  bool   `json:"archived"`
+				Deleted   bool   `json:"deleted"`
+				Available *bool  `json:"available"`
+			}
+			if json.Unmarshal(item.Status, &statusObject) == nil {
+				switch {
+				case statusObject.Deleted:
+					status = "deleted"
+				case statusObject.Archived:
+					status = "archived"
+				case statusObject.Available != nil && !*statusObject.Available:
+					status = "unavailable"
+				default:
+					status = firstNonEmpty(statusObject.Type, statusObject.State, statusObject.Status)
+				}
+			}
 		}
 	}
 	return SourceThread{ID: item.ID, Name: item.Name, Preview: firstNonEmpty(item.Preview, item.FirstMessage), CWD: item.CWD, ProjectID: item.ProjectID, ParentThread: item.ParentID, SourceKind: item.SourceKind, Status: status, Archived: item.Archived, CreatedAt: timestampText(item.CreatedAt), UpdatedAt: timestampText(item.UpdatedAt), Raw: append(json.RawMessage(nil), raw...)}, nil
@@ -926,6 +982,17 @@ func timestampText(raw json.RawMessage) string {
 }
 
 func decodeRawPage(raw json.RawMessage, field string) ([]json.RawMessage, string, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, "", err
+	}
+	if _, ok := object[field]; !ok {
+		if _, ok := object["data"]; !ok {
+			if _, ok := object["items"]; !ok {
+				return nil, "", fmt.Errorf("Codex %s response has no page data", field)
+			}
+		}
+	}
 	var page struct {
 		Data        []json.RawMessage `json:"data"`
 		Items       []json.RawMessage `json:"items"`
@@ -975,7 +1042,7 @@ func rawHistoryEvent(raw json.RawMessage, sequence int64, fallbackType string) S
 	_ = json.Unmarshal(raw, &value)
 	id := strings.TrimSpace(value.ID)
 	if id == "" {
-		digest := sha256.Sum256(raw)
+		digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", fallbackType, sequence, raw)))
 		id = "codex-" + hex.EncodeToString(digest[:12])
 	}
 	eventType := firstNonEmpty(value.Type, fallbackType)
@@ -1075,12 +1142,25 @@ func parseSourceNotification(message RPCMessage) (SourceNotification, bool) {
 	if title == nil {
 		title = params.Name
 	}
+	if kind == SourceNotificationTitle && (title == nil || strings.TrimSpace(*title) == "") {
+		return SourceNotification{}, false
+	}
 	return SourceNotification{Kind: kind, ThreadID: params.ThreadID, Title: title, Raw: append(json.RawMessage(nil), message.Raw...)}, true
 }
 
 func notificationKey(notification SourceNotification) string {
 	digest := sha256.Sum256(notification.Raw)
 	return notification.ThreadID + ":" + string(notification.Kind) + ":" + hex.EncodeToString(digest[:])
+}
+
+func cloneSourceNotification(notification SourceNotification) SourceNotification {
+	cloned := notification
+	cloned.Raw = append(json.RawMessage(nil), notification.Raw...)
+	if notification.Title != nil {
+		title := *notification.Title
+		cloned.Title = &title
+	}
+	return cloned
 }
 
 // SourceRuntime owns reconnection boundaries. Each reconnect creates a fresh
@@ -1118,6 +1198,14 @@ func (r *SourceRuntime) Connect(ctx context.Context) (*SourceClient, error) {
 	r.mu.Lock()
 	source.noticeMu.Lock()
 	source.seenNotice = r.seenNotice
+	if r.source != nil {
+		r.source.noticeMu.Lock()
+		if r.source.pendingNotice != nil {
+			pending := cloneSourceNotification(*r.source.pendingNotice)
+			source.pendingNotice = &pending
+		}
+		r.source.noticeMu.Unlock()
+	}
 	source.noticeMu.Unlock()
 	previous := r.transport
 	r.transport = transport
@@ -1129,24 +1217,25 @@ func (r *SourceRuntime) Connect(ctx context.Context) (*SourceClient, error) {
 	return source, nil
 }
 
-func (r *SourceRuntime) ReconnectAndRecover(ctx context.Context, threadIDs []string) (*SourceClient, []SourceHistorySnapshot, error) {
+func (r *SourceRuntime) ReconnectAndRecover(ctx context.Context, threadIDs []string) (*SourceClient, *protocol.CodexSourceSnapshot, []SourceHistorySnapshot, error) {
 	source, err := r.Connect(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(threadIDs) == 0 {
-		if _, err := source.Sync(ctx, fmt.Sprintf("reconnect-%d", time.Now().UnixNano())); err != nil {
-			return source, nil, err
+		snapshot, err := source.Sync(ctx, fmt.Sprintf("reconnect-%d", time.Now().UnixNano()))
+		if err != nil {
+			return source, nil, nil, err
 		}
-		return source, nil, nil
+		return source, &snapshot, nil, nil
 	}
 	snapshots := make([]SourceHistorySnapshot, 0, len(threadIDs))
 	for _, threadID := range threadIDs {
 		snapshot, readErr := source.ReadHistory(ctx, threadID)
 		if readErr != nil {
-			return source, snapshots, readErr
+			return source, nil, snapshots, readErr
 		}
 		snapshots = append(snapshots, snapshot)
 	}
-	return source, snapshots, nil
+	return source, nil, snapshots, nil
 }

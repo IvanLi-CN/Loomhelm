@@ -96,6 +96,7 @@ func TestSourceClientDeduplicatesRepeatedTitleNotifications(t *testing.T) {
 	if err != nil || notification.ThreadID != "thread-1" || notification.Title == nil || *notification.Title != "Codex 标题" {
 		t.Fatalf("notification = %+v, error = %v", notification, err)
 	}
+	source.MarkNotificationDelivered(notification)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if _, err := source.NextNotification(ctx); !errors.Is(err, context.DeadlineExceeded) {
@@ -111,6 +112,18 @@ func TestSourceRPCErrorDistinguishesInvalidParamsFromUnsupported(t *testing.T) {
 	unsupported := &SourceRPCError{Code: -32601, Message: "method not found"}
 	if !errors.Is(unsupported, ErrSourceCapabilityUnsupported) {
 		t.Fatalf("unsupported classification = %v", unsupported)
+	}
+	requiresCapability := &SourceRPCError{Code: -32600, Message: "project/list requires experimentalApi capability"}
+	if !errors.Is(requiresCapability, ErrSourceCapabilityUnsupported) {
+		t.Fatalf("capability requirement classification = %v", requiresCapability)
+	}
+	transientUnsupported := &SourceRPCError{Code: -32000, Message: "unsupported temporarily"}
+	if errors.Is(transientUnsupported, ErrSourceCapabilityUnsupported) {
+		t.Fatalf("transient unsupported classification = %v", transientUnsupported)
+	}
+	invalidUnsupported := &SourceRPCError{Code: -32602, Message: "unsupported parameter"}
+	if !errors.Is(invalidUnsupported, ErrSourceInvalidParams) || errors.Is(invalidUnsupported, ErrSourceCapabilityUnsupported) {
+		t.Fatalf("invalid unsupported classification = %v", invalidUnsupported)
 	}
 }
 
@@ -244,5 +257,46 @@ func TestSourceClientParsesCurrentProtocolShapes(t *testing.T) {
 	})
 	if !ok || notification.Title == nil || *notification.Title != "更新后的标题" {
 		t.Fatalf("notification = %+v, ok = %t", notification, ok)
+	}
+	if _, ok := parseSourceNotification(RPCMessage{
+		Method: SourceNotificationName,
+		Params: json.RawMessage(`{"threadId":"thread-1","name":""}`),
+	}); ok {
+		t.Fatal("empty title notification was accepted")
+	}
+}
+
+func TestSourceClientPreservesHistorySequenceAcrossPages(t *testing.T) {
+	transport := newSourceTestTransport()
+	transport.responses["initialize"] = RPCMessage{Result: sourceInitializeResult()}
+	transport.responses[SourceMethodThreadRead] = RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-1"}}`)}
+	transport.responseQueues[SourceMethodThreadTurnsList] = []RPCMessage{
+		{Result: json.RawMessage(`{"data":[{"id":"turn-1"},{"id":"turn-2"}],"nextCursor":"next"}`)},
+		{Result: json.RawMessage(`{"data":[{"id":"turn-3"}]}`)},
+	}
+	transport.responses[SourceMethodThreadItemsList] = RPCMessage{Error: &RPCError{Code: -32601, Message: "method unsupported"}}
+	transport.responses[SourceMethodAttachmentList] = RPCMessage{Result: json.RawMessage(`{"data":[]}`)}
+	source, err := NewSourceClient(context.Background(), transport, ClientInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.ReadHistory(context.Background(), "thread-1")
+	if err != nil || len(snapshot.Events) != 3 {
+		t.Fatalf("ReadHistory() = %+v, error = %v", snapshot, err)
+	}
+	for index, event := range snapshot.Events {
+		if event.Sequence != int64(index+1) {
+			t.Fatalf("event %d sequence = %d", index, event.Sequence)
+		}
+	}
+}
+
+func TestDecodeThreadStatusObjectAndRejectsEmptyPageShape(t *testing.T) {
+	thread, err := decodeThread(json.RawMessage(`{"id":"thread-1","status":{"type":"deleted"}}`))
+	if err != nil || sourceThreadStatus(thread) != protocol.CodexSourceStatusDeleted {
+		t.Fatalf("thread status = %+v, error = %v", thread, err)
+	}
+	if _, _, err := decodeRawPage(json.RawMessage(`{}`), "threads"); err == nil {
+		t.Fatal("empty page response was accepted")
 	}
 }

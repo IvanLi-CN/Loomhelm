@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -67,11 +68,22 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 	}
 	defer tx.Rollback(ctx)
 	var currentAsOf time.Time
+	var currentOperationID string
 	if err := tx.QueryRow(ctx, `
-		SELECT as_of FROM codex_sync_sources WHERE host_id = $1 FOR UPDATE
-	`, hostID).Scan(&currentAsOf); err == nil {
-		if currentAsOf.After(snapshot.AsOf) {
+		SELECT as_of, sync_operation_id FROM codex_sync_sources WHERE host_id = $1 FOR UPDATE
+	`, hostID).Scan(&currentAsOf, &currentOperationID); err == nil {
+		if !snapshot.AsOf.After(currentAsOf) && currentOperationID != strings.TrimSpace(snapshot.OperationID) {
+			if _, staleErr := tx.Exec(ctx, `
+				UPDATE codex_sync_snapshots
+				SET state = 'stale', complete = FALSE, error = 'superseded by a newer Codex source snapshot', updated_at = $3
+				WHERE id = $1 AND host_id = $2 AND state = 'syncing'
+			`, snapshot.OperationID, hostID, currentAsOf); staleErr != nil {
+				return fmt.Errorf("mark stale Codex snapshot: %w", staleErr)
+			}
 			return tx.Commit(ctx)
+		}
+		if currentAsOf.After(snapshot.AsOf) {
+			snapshot.AsOf = currentAsOf
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("read current Codex source snapshot: %w", err)
@@ -179,8 +191,8 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 				preview = EXCLUDED.preview,
 				cwd = EXCLUDED.cwd,
 				source_status = EXCLUDED.source_status,
-				history_state = CASE WHEN codex_threads.history_state = 'complete' AND EXCLUDED.history_state <> 'complete' THEN codex_threads.history_state ELSE EXCLUDED.history_state END,
-				files_complete = codex_threads.files_complete OR EXCLUDED.files_complete,
+				history_state = EXCLUDED.history_state,
+				files_complete = EXCLUDED.files_complete,
 				as_of = EXCLUDED.as_of,
 				last_activity_at = EXCLUDED.last_activity_at,
 				updated_at = EXCLUDED.updated_at,
@@ -191,13 +203,13 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 
 		for index, event := range thread.Events {
 			eventID := strings.TrimSpace(event.EventID)
-			if eventID == "" {
-				digest := sha256.Sum256(event.RawPayload)
-				eventID = "codex-" + hex.EncodeToString(digest[:12])
-			}
 			sequence := event.Sequence
 			if sequence < 1 {
 				sequence = int64(index + 1)
+			}
+			if eventID == "" {
+				digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", strings.TrimSpace(event.EventType), sequence, event.RawPayload)))
+				eventID = "codex-" + hex.EncodeToString(digest[:12])
 			}
 			rawPayload := event.RawPayload
 			if len(rawPayload) == 0 {
@@ -217,7 +229,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO codex_thread_history (host_id, thread_id, event_id, sequence, event_type, raw_payload, readable_fallback, occurred_at)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				ON CONFLICT DO NOTHING
+				ON CONFLICT (host_id, thread_id, event_id) DO NOTHING
 			`, hostID, threadID, eventID, sequence, strings.TrimSpace(event.EventType), string(rawPayload), fallback, occurredAt); err != nil {
 				return fmt.Errorf("persist Codex history snapshot: %w", err)
 			}
@@ -231,12 +243,38 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			if len(file.Content) > 0 && file.Size == 0 {
 				file.Size = int64(len(file.Content))
 			}
+			if len(file.Content) > 0 && file.Size != int64(len(file.Content)) {
+				return ErrInvalid
+			}
+			if len(file.Content) > 0 && strings.TrimSpace(file.SHA256) != "" {
+				digest := sha256.Sum256(file.Content)
+				if !strings.EqualFold(strings.TrimSpace(file.SHA256), hex.EncodeToString(digest[:])) {
+					return ErrInvalid
+				}
+			}
+			if file.Complete && len(file.Content) == 0 && strings.TrimSpace(file.ContentRef) == "" {
+				return ErrInvalid
+			}
 			if !file.Complete {
 				allFilesComplete = false
 			}
 			contentType := strings.TrimSpace(file.ContentType)
 			if contentType == "" {
 				contentType = "application/octet-stream"
+			}
+			var existingComplete bool
+			var existingSize int64
+			var existingSHA, existingRef string
+			var existingContent []byte
+			existingErr := tx.QueryRow(ctx, `
+				SELECT size, sha256, content_bytes, content_ref, complete
+				FROM codex_thread_files WHERE host_id = $1 AND thread_id = $2 AND path = $3
+			`, hostID, threadID, strings.TrimSpace(file.Path)).Scan(&existingSize, &existingSHA, &existingContent, &existingRef, &existingComplete)
+			if existingErr != nil && !errors.Is(existingErr, pgx.ErrNoRows) {
+				return fmt.Errorf("read existing Codex file material: %w", existingErr)
+			}
+			if existingErr == nil && existingComplete && file.Complete && !sameFileMaterial(existingSize, existingSHA, existingContent, existingRef, file) {
+				return fmt.Errorf("Codex file material changed for %q: %w", strings.TrimSpace(file.Path), ErrConflict)
 			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO codex_thread_files (host_id, thread_id, path, content_type, size, sha256, content_bytes, content_ref, complete, updated_at)
@@ -249,15 +287,15 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 					content_ref = EXCLUDED.content_ref,
 					complete = EXCLUDED.complete,
 					updated_at = EXCLUDED.updated_at
-				WHERE NOT codex_thread_files.complete OR EXCLUDED.complete
+				WHERE NOT codex_thread_files.complete
 			`, hostID, threadID, strings.TrimSpace(file.Path), contentType, file.Size, strings.TrimSpace(file.SHA256), file.Content, strings.TrimSpace(file.ContentRef), file.Complete, snapshot.AsOf); err != nil {
 				return fmt.Errorf("persist Codex file snapshot: %w", err)
 			}
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE codex_threads
-			SET history_state = CASE WHEN codex_threads.history_state = 'complete' AND $3 <> 'complete' THEN codex_threads.history_state ELSE $3 END,
-				files_complete = codex_threads.files_complete OR $4,
+			SET history_state = $3,
+				files_complete = $4,
 				title_sync_error = CASE WHEN NULLIF(trim($5), '') IS NOT NULL THEN $5 ELSE title_sync_error END,
 				updated_at = $6
 			WHERE host_id = $1 AND thread_id = $2
@@ -281,18 +319,26 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		}
 	}
 	if status.Complete {
-		if len(threadIDs) == 0 {
-			if _, err := tx.Exec(ctx, `
-				UPDATE codex_threads SET source_status = 'unavailable', updated_at = $2
-				WHERE host_id = $1 AND source_status = 'active'
-			`, hostID, snapshot.AsOf); err != nil {
-				return fmt.Errorf("mark missing Codex threads unavailable: %w", err)
-			}
-		} else if _, err := tx.Exec(ctx, `
-			UPDATE codex_threads SET source_status = 'unavailable', updated_at = $3
+		reason := "Codex source thread was not present in a complete snapshot"
+		if _, err := tx.Exec(ctx, `
+			UPDATE codex_threads
+			SET source_status = 'unavailable', title_sync_state = 'paused', title_sync_error = $3, updated_at = $4
 			WHERE host_id = $1 AND source_status = 'active' AND NOT (thread_id = ANY($2::text[]))
-		`, hostID, threadIDs, snapshot.AsOf); err != nil {
+		`, hostID, threadIDs, reason, snapshot.AsOf); err != nil {
 			return fmt.Errorf("mark missing Codex threads unavailable: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE codex_title_operations
+			SET state = 'title_sync_paused', last_error = $3, updated_at = $4
+			WHERE host_id = $1 AND state = 'title_sync_pending'
+				AND EXISTS (
+					SELECT 1 FROM codex_threads t
+					WHERE t.host_id = codex_title_operations.host_id
+					  AND t.thread_id = codex_title_operations.thread_id
+					  AND t.source_status = 'unavailable'
+				)
+		`, hostID, threadIDs, reason, snapshot.AsOf); err != nil {
+			return fmt.Errorf("pause missing Codex title operations: %w", err)
 		}
 	}
 
@@ -323,19 +369,44 @@ func (s *Service) FailSync(ctx context.Context, hostID, operationID string, sync
 		reason = syncErr.Error()
 	}
 	now := s.now()
-	if _, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	result, err := tx.Exec(ctx, `
 		UPDATE codex_sync_sources
 		SET sync_state = 'failed', last_error = $3, as_of = $4, updated_at = $4
 		WHERE host_id = $1 AND sync_operation_id = $2
-	`, hostID, operationID, reason, now); err != nil {
+	`, hostID, operationID, reason, now)
+	if err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `
+	if result.RowsAffected() == 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE codex_sync_snapshots
+			SET state = 'stale', complete = FALSE, error = 'superseded by a newer Codex source snapshot', updated_at = $3
+			WHERE id = $1 AND host_id = $2 AND state = 'syncing'
+		`, operationID, hostID, now); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	if _, err := tx.Exec(ctx, `
 		UPDATE codex_sync_snapshots
 		SET state = 'failed', complete = FALSE, error = $3, as_of = $4, updated_at = $4
 		WHERE id = $1 AND host_id = $2
-	`, operationID, hostID, reason, now)
-	return err
+	`, operationID, hostID, reason, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func sameFileMaterial(existingSize int64, existingSHA string, existingContent []byte, existingRef string, incoming protocol.CodexSourceFileMaterial) bool {
+	return existingSize == incoming.Size &&
+		strings.EqualFold(strings.TrimSpace(existingSHA), strings.TrimSpace(incoming.SHA256)) &&
+		bytes.Equal(existingContent, incoming.Content) &&
+		strings.TrimSpace(existingRef) == strings.TrimSpace(incoming.ContentRef)
 }
 
 func sourceSnapshotStatus(snapshot protocol.CodexSourceSnapshot) snapshotStatus {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -240,6 +241,20 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 				default:
 					return errors.New("unsupported Codex source notification")
 				}
+			},
+			SourceSnapshotHandler: func(sourceCtx context.Context, connection hosts.Connection, operationID string, payload []byte) error {
+				var snapshot protocol.CodexSourceSnapshot
+				if err := json.Unmarshal(payload, &snapshot); err != nil {
+					return fmt.Errorf("decode recovered Codex source snapshot: %w", err)
+				}
+				snapshot.HostID = connection.HostID
+				if snapshot.OperationID == "" {
+					snapshot.OperationID = operationID
+				}
+				if snapshot.OperationID != operationID {
+					return fmt.Errorf("recovered Codex source snapshot operation identity mismatch")
+				}
+				return services.codex.ImportSnapshot(sourceCtx, snapshot)
 			},
 		})
 		if err != nil {

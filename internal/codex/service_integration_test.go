@@ -154,11 +154,19 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ImportSnapshot(partial) error = %v", err)
 	}
-	if err := db.Pool().QueryRow(ctx, `SELECT files_complete FROM codex_threads WHERE host_id = $1 AND thread_id = $2`, hostID, threadID).Scan(&filesComplete); err != nil {
+	if err := db.Pool().QueryRow(ctx, `SELECT history_state, files_complete FROM codex_threads WHERE host_id = $1 AND thread_id = $2`, hostID, threadID).Scan(&historyState, &filesComplete); err != nil {
 		t.Fatalf("read partial thread readiness: %v", err)
 	}
-	if filesComplete {
-		t.Fatal("partial snapshot made the thread project-visible")
+	if historyState != "partial" || filesComplete {
+		t.Fatalf("partial snapshot readiness = (%q, %t)", historyState, filesComplete)
+	}
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT content_bytes FROM codex_thread_files WHERE host_id = $1 AND thread_id = $2 AND path = 'notes.txt'
+	`, hostID, threadID).Scan(&fileBytes); err != nil {
+		t.Fatalf("read retained partial file: %v", err)
+	}
+	if string(fileBytes) != "hello" {
+		t.Fatalf("retained partial file bytes = %q", fileBytes)
 	}
 	var snapshotState string
 	var complete bool

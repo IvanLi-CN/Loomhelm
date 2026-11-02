@@ -34,15 +34,17 @@ type Connector struct {
 	lifecycle *platform.Lifecycle
 	runMu     sync.Mutex
 
-	journal        *connectorruntime.Journal
-	artifactOutbox *connectorruntime.ArtifactOutbox
-	appGateway     *connectorruntime.Gateway
-	adapter        *connectorruntime.Adapter
-	controller     *connectorruntime.Controller
-	platform       *gateway.Client
-	sourceRuntime  *connectorruntime.SourceRuntime
-	sourceMu       sync.Mutex
-	source         *connectorruntime.SourceClient
+	journal             *connectorruntime.Journal
+	artifactOutbox      *connectorruntime.ArtifactOutbox
+	appGateway          *connectorruntime.Gateway
+	adapter             *connectorruntime.Adapter
+	controller          *connectorruntime.Controller
+	platform            *gateway.Client
+	sourceRuntime       *connectorruntime.SourceRuntime
+	sourceMu            sync.Mutex
+	source              *connectorruntime.SourceClient
+	sourceNoticeMu      sync.Mutex
+	pendingSourceNotice *connectorruntime.SourceNotification
 
 	connectionMu sync.Mutex
 	connection   *gateway.ClientConnection
@@ -460,16 +462,31 @@ func (c *Connector) resetSource(source *connectorruntime.SourceClient) {
 	}
 }
 
-func (c *Connector) recoverSource(ctx context.Context) error {
+func (c *Connector) recoverSource(ctx context.Context, connection *gateway.ClientConnection) error {
 	if c.sourceRuntime == nil {
 		return errors.New("Connector Codex source runtime is unavailable")
 	}
-	source, _, err := c.sourceRuntime.ReconnectAndRecover(ctx, nil)
+	source, snapshot, _, err := c.sourceRuntime.ReconnectAndRecover(ctx, nil)
 	if err != nil {
 		if source != nil {
 			_ = source.Close()
 		}
 		return err
+	}
+	if snapshot != nil {
+		payload, marshalErr := json.Marshal(snapshot)
+		if marshalErr != nil {
+			_ = source.Close()
+			return fmt.Errorf("encode recovered Codex source snapshot: %w", marshalErr)
+		}
+		if err := connection.AcknowledgeSource(ctx, snapshot.OperationID, gateway.SourceAck{
+			OperationID: snapshot.OperationID,
+			State:       "succeeded",
+			Payload:     payload,
+		}); err != nil {
+			_ = source.Close()
+			return fmt.Errorf("deliver recovered Codex source snapshot: %w", err)
+		}
 	}
 	c.sourceMu.Lock()
 	c.source = source
@@ -489,13 +506,22 @@ func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *
 			}
 			continue
 		}
-		notification, err := source.NextNotification(ctx)
-		if err != nil {
+		c.sourceNoticeMu.Lock()
+		pending := c.pendingSourceNotice
+		c.sourceNoticeMu.Unlock()
+		var notification connectorruntime.SourceNotification
+		var notificationErr error
+		if pending != nil {
+			notification = *pending
+		} else {
+			notification, notificationErr = source.NextNotification(ctx)
+		}
+		if notificationErr != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			c.resetSource(source)
-			if recoverErr := c.recoverSource(ctx); recoverErr == nil {
+			if recoverErr := c.recoverSource(ctx, connection); recoverErr == nil {
 				continue
 			}
 			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
@@ -509,8 +535,18 @@ func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *
 			Title:    notification.Title,
 			Raw:      append(json.RawMessage(nil), notification.Raw...),
 		}); err != nil {
+			c.sourceNoticeMu.Lock()
+			pendingCopy := notification
+			c.pendingSourceNotice = &pendingCopy
+			c.sourceNoticeMu.Unlock()
 			return err
 		}
+		c.sourceNoticeMu.Lock()
+		if pending != nil {
+			c.pendingSourceNotice = nil
+		}
+		c.sourceNoticeMu.Unlock()
+		source.MarkNotificationDelivered(notification)
 	}
 }
 

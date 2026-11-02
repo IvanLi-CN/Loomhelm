@@ -1154,6 +1154,15 @@ func TestServerAcceptsCodexMutationResponses(t *testing.T) {
 	}
 }
 
+func TestServerValidatesCodexSyncResponse(t *testing.T) {
+	if !validToolResponse("syncCodex", []byte(`{"operation_id":"sync-1","state":"syncing"}`)) {
+		t.Fatal("valid Codex sync response was rejected")
+	}
+	if validToolResponse("syncCodex", []byte(`{}`)) {
+		t.Fatal("empty Codex sync response was accepted")
+	}
+}
+
 func TestServerReportsOversizedReadResponseAsServiceFailure(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

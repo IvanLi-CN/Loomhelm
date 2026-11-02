@@ -55,6 +55,7 @@ CREATE TABLE codex_threads (
     title_sync_error TEXT NOT NULL DEFAULT '',
     title_conflict_codex_title TEXT,
     title_conflict_detected_at TIMESTAMPTZ,
+    title_operation_id TEXT NOT NULL DEFAULT '',
     bound_task_id TEXT REFERENCES tasks (id) ON DELETE RESTRICT,
     bound_session_id TEXT REFERENCES execution_sessions (id) ON DELETE RESTRICT,
     imported_by TEXT REFERENCES auth_users (id) ON DELETE RESTRICT,
@@ -68,6 +69,9 @@ CREATE TABLE codex_threads (
 
 CREATE INDEX codex_threads_activity_idx
     ON codex_threads (host_id, source_status, last_activity_at DESC, thread_id);
+CREATE INDEX codex_threads_title_operation_idx
+    ON codex_threads (title_operation_id)
+    WHERE title_operation_id <> '';
 CREATE INDEX codex_threads_search_idx
     ON codex_threads USING GIN (to_tsvector('simple', conversation_title || ' ' || preview || ' ' || cwd));
 CREATE UNIQUE INDEX codex_threads_task_idx
