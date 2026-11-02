@@ -9,6 +9,7 @@ import {
   LogOut,
   Menu,
   Plus,
+  Settings2,
   X
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type PropsWithChildren } from "react";
@@ -293,6 +294,7 @@ function ProductionBreadcrumb({ pathname, source }: { pathname: string; source: 
   const project = source?.getProject(projectId);
   const task = source?.getTask(taskId);
   if (pathname === "/") return <span>工作台</span>;
+  if (pathname.startsWith("/deployment")) return <span>部署控制</span>;
   if (task) return <span>任务 / {task.id}</span>;
   if (pathname.startsWith("/tasks")) return <span>任务 / 全部项目</span>;
   if (project) return <span>{project.name} / 任务</span>;
@@ -346,6 +348,10 @@ function ProductionShell() {
         <Link to="/tasks" className="nav-link" activeProps={{ "aria-current": "page" }} onClick={() => closeDrawer("navigate")}>
           <ListTodo size={17} aria-hidden="true" />
           <span>任务</span>
+        </Link>
+        <Link to="/deployment" className="nav-link" activeProps={{ "aria-current": "page" }} onClick={() => closeDrawer("navigate")}>
+          <Settings2 size={17} aria-hidden="true" />
+          <span>部署控制</span>
         </Link>
       </div>
       <ProductionProjectTree source={source} expanded={expanded} onToggle={toggle} onNavigate={() => closeDrawer("navigate")} />

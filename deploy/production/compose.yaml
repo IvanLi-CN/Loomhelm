@@ -1,0 +1,159 @@
+services:
+  caddy:
+    image: "${LOOMHELM_CADDY_IMAGE:?LOOMHELM_CADDY_IMAGE is required}"
+    environment:
+      LOOMHELM_CADDY_CONTROL_IP: "${LOOMHELM_CADDY_CONTROL_IP:?LOOMHELM_CADDY_CONTROL_IP is required}"
+    ports:
+      - "127.0.0.1:${LOOMHELM_HTTP_PORT:?LOOMHELM_HTTP_PORT is required}:80"
+    volumes:
+      - "${LOOMHELM_CADDY_CONFIG_DIR:?LOOMHELM_CADDY_CONFIG_DIR is required}:/etc/caddy:ro"
+      - "${LOOMHELM_WEB_ROOT:?LOOMHELM_WEB_ROOT is required}:/srv/web:ro"
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    networks:
+      control:
+        aliases:
+          - caddy-control
+        ipv4_address: "${LOOMHELM_CADDY_CONTROL_IP:?LOOMHELM_CADDY_CONTROL_IP is required}"
+      application: {}
+    restart: unless-stopped
+
+  deployment-controller:
+    image: "${LOOMHELM_CONTROLLER_IMAGE:?LOOMHELM_CONTROLLER_IMAGE is required}"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_CONTROLLER_VERSION:?LOOMHELM_CONTROLLER_VERSION is required}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_DEPLOYMENT_HTTP_ADDR: "0.0.0.0:8090"
+      LOOMHELM_DEPLOYMENT_COMPOSE_FILE: "/opt/loomhelm-install/deploy/production/compose.yaml"
+      LOOMHELM_DEPLOYMENT_ENV_FILE: "/run/secrets/loomhelm-deployment.env"
+      LOOMHELM_DEPLOYMENT_CADDY_FILE: "/etc/caddy/Caddyfile"
+      LOOMHELM_DEPLOYMENT_CADDY_TEMPLATE: "/opt/loomhelm-install/deploy/production/Caddyfile.tmpl"
+      LOOMHELM_CADDY_CONTROL_IP: "${LOOMHELM_CADDY_CONTROL_IP:?LOOMHELM_CADDY_CONTROL_IP is required}"
+      LOOMHELM_DEPLOYMENT_CADDY_ADMIN_URL: "http://caddy-control:2019"
+      LOOMHELM_DEPLOYMENT_PUBLIC_URL: "http://caddy:80"
+      LOOMHELM_DEPLOYMENT_WEB_ROOT: "/opt/loomhelm-web"
+      LOOMHELM_DEPLOYMENT_COMPOSE_PROJECT: "${LOOMHELM_COMPOSE_PROJECT:?LOOMHELM_COMPOSE_PROJECT is required}"
+      LOOMHELM_DEPLOYMENT_OWNER_USER_IDS: "${LOOMHELM_DEPLOYMENT_OWNER_USER_IDS:?LOOMHELM_DEPLOYMENT_OWNER_USER_IDS is required}"
+      LOOMHELM_DEPLOYMENT_BLUE_URL: "http://server-blue:8080"
+      LOOMHELM_DEPLOYMENT_GREEN_URL: "http://server-green:8080"
+      LOOMHELM_DEPLOYMENT_BLUE_WORKER_URL: "http://worker-blue:8081"
+      LOOMHELM_DEPLOYMENT_GREEN_WORKER_URL: "http://worker-green:8081"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+    volumes:
+      - "${LOOMHELM_DEPLOYMENT_STATE_DIR:?LOOMHELM_DEPLOYMENT_STATE_DIR is required}:/var/lib/loomhelm/deployment"
+      - "${LOOMHELM_INSTALLATION_ROOT:?LOOMHELM_INSTALLATION_ROOT is required}:/opt/loomhelm-install:ro"
+      - "${LOOMHELM_WEB_ROOT:?LOOMHELM_WEB_ROOT is required}:/opt/loomhelm-web:ro"
+      - "${LOOMHELM_CADDY_CONFIG_DIR:?LOOMHELM_CADDY_CONFIG_DIR is required}:/etc/caddy"
+      - "${LOOMHELM_DEPLOYMENT_ENV_FILE:?LOOMHELM_DEPLOYMENT_ENV_FILE is required}:/run/secrets/loomhelm-deployment.env:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    group_add:
+      - "${LOOMHELM_DOCKER_GID:?LOOMHELM_DOCKER_GID is required}"
+    networks:
+      control:
+        ipv4_address: "${LOOMHELM_CONTROLLER_CONTROL_IP:?LOOMHELM_CONTROLLER_CONTROL_IP is required}"
+      application: {}
+    expose:
+      - "8090"
+    restart: unless-stopped
+
+  server-blue:
+    image: "${LOOMHELM_BLUE_SERVER_IMAGE:?LOOMHELM_BLUE_SERVER_IMAGE is required}"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_BLUE_SOURCE_SHA:?LOOMHELM_BLUE_SOURCE_SHA is required}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_BLUE_SOURCE_SHA:?LOOMHELM_BLUE_SOURCE_SHA is required}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_BLUE_ARTIFACT_DIGEST:?LOOMHELM_BLUE_ARTIFACT_DIGEST is required}"
+      LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_ARTIFACT_ROOT: "/var/lib/loomhelm/artifacts"
+      LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
+      LOOMHELM_OIDC_CLIENT_ID: "${LOOMHELM_OIDC_CLIENT_ID:-}"
+      LOOMHELM_OIDC_CLIENT_SECRET: "${LOOMHELM_OIDC_CLIENT_SECRET:-}"
+      LOOMHELM_OIDC_REDIRECT_URL: "${LOOMHELM_OIDC_REDIRECT_URL:-}"
+      LOOMHELM_SESSION_COOKIE_SECURE: "${LOOMHELM_SESSION_COOKIE_SECURE:-true}"
+    volumes:
+      - "${LOOMHELM_ARTIFACT_ROOT:?LOOMHELM_ARTIFACT_ROOT is required}:/var/lib/loomhelm/artifacts"
+    expose:
+      - "8080"
+    networks:
+      - application
+
+  server-green:
+    image: "${LOOMHELM_GREEN_SERVER_IMAGE:?LOOMHELM_GREEN_SERVER_IMAGE is required}"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_GREEN_SOURCE_SHA:?LOOMHELM_GREEN_SOURCE_SHA is required}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_GREEN_SOURCE_SHA:?LOOMHELM_GREEN_SOURCE_SHA is required}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_GREEN_ARTIFACT_DIGEST:?LOOMHELM_GREEN_ARTIFACT_DIGEST is required}"
+      LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_ARTIFACT_ROOT: "/var/lib/loomhelm/artifacts"
+      LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
+      LOOMHELM_OIDC_CLIENT_ID: "${LOOMHELM_OIDC_CLIENT_ID:-}"
+      LOOMHELM_OIDC_CLIENT_SECRET: "${LOOMHELM_OIDC_CLIENT_SECRET:-}"
+      LOOMHELM_OIDC_REDIRECT_URL: "${LOOMHELM_OIDC_REDIRECT_URL:-}"
+      LOOMHELM_SESSION_COOKIE_SECURE: "${LOOMHELM_SESSION_COOKIE_SECURE:-true}"
+    volumes:
+      - "${LOOMHELM_ARTIFACT_ROOT:?LOOMHELM_ARTIFACT_ROOT is required}:/var/lib/loomhelm/artifacts"
+    expose:
+      - "8080"
+    networks:
+      - application
+
+  worker-blue:
+    profiles: ["deployment-controller"]
+    image: "${LOOMHELM_BLUE_WORKER_IMAGE:?LOOMHELM_BLUE_WORKER_IMAGE is required}"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_BLUE_SOURCE_SHA:?LOOMHELM_BLUE_SOURCE_SHA is required}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_BLUE_SOURCE_SHA:?LOOMHELM_BLUE_SOURCE_SHA is required}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_BLUE_ARTIFACT_DIGEST:?LOOMHELM_BLUE_ARTIFACT_DIGEST is required}"
+      LOOMHELM_WORKER_GENERATION: "${LOOMHELM_BLUE_WORKER_GENERATION:?LOOMHELM_BLUE_WORKER_GENERATION is required}"
+      LOOMHELM_WORKER_LEASE_KEY: "${LOOMHELM_WORKER_LEASE_KEY:-loomhelm-worker}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+    expose:
+      - "8081"
+    networks:
+      - application
+
+  worker-green:
+    profiles: ["deployment-controller"]
+    image: "${LOOMHELM_GREEN_WORKER_IMAGE:?LOOMHELM_GREEN_WORKER_IMAGE is required}"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_GREEN_SOURCE_SHA:?LOOMHELM_GREEN_SOURCE_SHA is required}"
+      LOOMHELM_CANDIDATE_SOURCE_SHA: "${LOOMHELM_GREEN_SOURCE_SHA:?LOOMHELM_GREEN_SOURCE_SHA is required}"
+      LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_GREEN_ARTIFACT_DIGEST:?LOOMHELM_GREEN_ARTIFACT_DIGEST is required}"
+      LOOMHELM_WORKER_GENERATION: "${LOOMHELM_GREEN_WORKER_GENERATION:?LOOMHELM_GREEN_WORKER_GENERATION is required}"
+      LOOMHELM_WORKER_LEASE_KEY: "${LOOMHELM_WORKER_LEASE_KEY:-loomhelm-worker}"
+      LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
+      LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
+      LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+    expose:
+      - "8081"
+    networks:
+      - application
+
+  connector:
+    image: "${LOOMHELM_CONNECTOR_IMAGE:?LOOMHELM_CONNECTOR_IMAGE is required}"
+    environment:
+      LOOMHELM_VERSION: "${LOOMHELM_CONNECTOR_VERSION:?LOOMHELM_CONNECTOR_VERSION is required}"
+      LOOMHELM_CONNECTOR_SERVER_URL: "${LOOMHELM_CONNECTOR_SERVER_URL:?LOOMHELM_CONNECTOR_SERVER_URL is required}"
+      LOOMHELM_CONNECTOR_HOST_ID: "${LOOMHELM_CONNECTOR_HOST_ID:?LOOMHELM_CONNECTOR_HOST_ID is required}"
+      LOOMHELM_CONNECTOR_TOKEN: "${LOOMHELM_CONNECTOR_TOKEN:?LOOMHELM_CONNECTOR_TOKEN is required}"
+      LOOMHELM_CONNECTOR_JOURNAL_PATH: "/var/lib/loomhelm/connector/journal.jsonl"
+      LOOMHELM_CONNECTOR_APP_SERVER_COMMAND: "${LOOMHELM_CONNECTOR_APP_SERVER_COMMAND:-codex}"
+      LOOMHELM_CONNECTOR_WORKING_DIR: "${LOOMHELM_CONNECTOR_WORKING_DIR:-/workspace}"
+    volumes:
+      - "${LOOMHELM_CONNECTOR_JOURNAL_ROOT:?LOOMHELM_CONNECTOR_JOURNAL_ROOT is required}:/var/lib/loomhelm/connector"
+      - "${LOOMHELM_CONNECTOR_WORKSPACE_ROOT:?LOOMHELM_CONNECTOR_WORKSPACE_ROOT is required}:/workspace"
+    networks:
+      - application
+
+networks:
+  control:
+    internal: true
+    ipam:
+      config:
+        - subnet: "${LOOMHELM_CONTROL_SUBNET:?LOOMHELM_CONTROL_SUBNET is required}"
+  application:
+    internal: true

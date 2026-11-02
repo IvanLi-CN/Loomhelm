@@ -71,7 +71,7 @@ check_quality() {
 }
 
 check_syntax() {
-	for script in scripts/accept-v01 scripts/build-candidate scripts/build-connector-release scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
+	for script in scripts/accept-v01 scripts/build-candidate scripts/build-connector-release scripts/build-deployment-envelope scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
 		sh -n "$script"
 	done
 	python3 - <<'PY'
@@ -113,6 +113,77 @@ check_deployment() {
 	LOOMHELM_DRAIN_TOKEN=quality-check-token \
 		docker compose --project-name loomhelm-quality-preview -f deploy/preview/compose.yaml config >/dev/null
 	docker compose --project-name loomhelm-quality-example --env-file deploy/example/.env.example -f deploy/example/compose.yaml config >/dev/null
+	cat >"$tmp_dir/production.env" <<EOF
+LOOMHELM_CADDY_IMAGE=caddy:2.10-alpine
+LOOMHELM_CONTROLLER_IMAGE=ghcr.io/example/loomhelm-controller:quality
+LOOMHELM_CONTROLLER_VERSION=quality
+LOOMHELM_DATABASE_URL=postgres://loomhelm:loomhelm_dev_only@127.0.0.1:55432/loomhelm?sslmode=disable
+LOOMHELM_COMPOSE_PROJECT=loomhelm-quality-production
+LOOMHELM_DEPLOYMENT_OWNER_USER_IDS=quality-owner
+LOOMHELM_DOCKER_GID=0
+LOOMHELM_CONTROL_SUBNET=172.31.240.0/28
+LOOMHELM_CADDY_CONTROL_IP=172.31.240.2
+LOOMHELM_CONTROLLER_CONTROL_IP=172.31.240.3
+LOOMHELM_HTTP_PORT=18090
+LOOMHELM_CADDY_CONFIG_DIR=$tmp_dir/caddy
+LOOMHELM_INSTALLATION_ROOT=$tmp_dir/install
+LOOMHELM_DEPLOYMENT_ENV_FILE=$tmp_dir/production.env
+LOOMHELM_DEPLOYMENT_BLUE_URL=http://server-blue:8080
+LOOMHELM_DEPLOYMENT_GREEN_URL=http://server-green:8080
+LOOMHELM_DEPLOYMENT_BLUE_WORKER_URL=http://worker-blue:8081
+LOOMHELM_DEPLOYMENT_GREEN_WORKER_URL=http://worker-green:8081
+LOOMHELM_WEB_ROOT=$tmp_dir/web
+LOOMHELM_DEPLOYMENT_STATE_DIR=$tmp_dir/deployment
+LOOMHELM_ARTIFACT_ROOT=$tmp_dir/artifacts
+LOOMHELM_DRAIN_TOKEN=quality-check-token
+LOOMHELM_CONNECTOR_IMAGE=ghcr.io/example/loomhelm-connector@sha256:0000000000000000000000000000000000000000000000000000000000000000
+LOOMHELM_CONNECTOR_VERSION=quality-connector
+LOOMHELM_CONNECTOR_SERVER_URL=https://connector.example.test
+LOOMHELM_CONNECTOR_HOST_ID=quality-host
+LOOMHELM_CONNECTOR_TOKEN=quality-token
+LOOMHELM_CONNECTOR_JOURNAL_ROOT=$tmp_dir/connector
+LOOMHELM_CONNECTOR_WORKSPACE_ROOT=$tmp_dir/workspace
+LOOMHELM_WORKER_LEASE_KEY=loomhelm-worker
+LOOMHELM_SESSION_COOKIE_SECURE=true
+LOOMHELM_BLUE_SERVER_IMAGE=ghcr.io/example/loomhelm-server:quality
+LOOMHELM_BLUE_WORKER_IMAGE=ghcr.io/example/loomhelm-worker:quality
+LOOMHELM_BLUE_SOURCE_SHA=0000000000000000000000000000000000000000
+LOOMHELM_BLUE_ARTIFACT_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
+LOOMHELM_BLUE_WORKER_GENERATION=1
+LOOMHELM_GREEN_SERVER_IMAGE=ghcr.io/example/loomhelm-server:quality
+LOOMHELM_GREEN_WORKER_IMAGE=ghcr.io/example/loomhelm-worker:quality
+LOOMHELM_GREEN_SOURCE_SHA=0000000000000000000000000000000000000000
+LOOMHELM_GREEN_ARTIFACT_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
+LOOMHELM_GREEN_WORKER_GENERATION=2
+EOF
+	production_config="$tmp_dir/production.json"
+	docker compose --env-file "$tmp_dir/production.env" --project-name loomhelm-quality-production -f deploy/production/compose.yaml config --format json >"$production_config" || return 1
+	python3 - "$production_config" <<'PY'
+import json
+import sys
+
+services = json.loads(open(sys.argv[1], encoding="utf-8").read())["services"]
+for service_name in ("worker-blue", "worker-green"):
+    if service_name in services:
+        raise SystemExit(f"{service_name} must not be enabled without the controller profile")
+PY
+	production_profile_config="$tmp_dir/production-profile.json"
+	docker compose --env-file "$tmp_dir/production.env" --project-name loomhelm-quality-production --profile deployment-controller -f deploy/production/compose.yaml config --format json >"$production_profile_config" || return 1
+	python3 - "$production_profile_config" <<'PY'
+import json
+import sys
+
+services = json.loads(open(sys.argv[1], encoding="utf-8").read())["services"]
+for service_name in ("worker-blue", "worker-green"):
+    if service_name not in services:
+        raise SystemExit(f"{service_name} must be present with the controller profile")
+    profiles = services[service_name].get("profiles")
+    if profiles != ["deployment-controller"]:
+        raise SystemExit(f"{service_name} must be controller-profiled, got {profiles!r}")
+controller_volumes = services["deployment-controller"]["volumes"]
+if not any(volume.get("target") == "/opt/loomhelm-web" for volume in controller_volumes):
+    raise SystemExit("deployment-controller must mount the public Web root directly")
+PY
 }
 
 check_bootstrap() {

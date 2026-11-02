@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/deployment"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
 
@@ -51,6 +52,18 @@ func TestWorkerHealthAndDrainEndpoints(t *testing.T) {
 	}
 	if version["candidate_source_sha"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || version["artifact_digest"] != "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Fatalf("unexpected version identity: %+v", version)
+	}
+	observationResponse := httptest.NewRecorder()
+	worker.healthRouter().ServeHTTP(observationResponse, httptest.NewRequest(http.MethodGet, "/-/observe", nil))
+	if observationResponse.Code != http.StatusOK {
+		t.Fatalf("observation status = %d, want %d", observationResponse.Code, http.StatusOK)
+	}
+	var observation deployment.ComponentObservation
+	if err := json.NewDecoder(observationResponse.Body).Decode(&observation); err != nil {
+		t.Fatalf("decode observation: %v", err)
+	}
+	if observation.State != deployment.ObservationMeasured || observation.LoadState != deployment.ObservationUnavailable || observation.WorkerGeneration == nil || *observation.WorkerGeneration != 1 || observation.QueueDepth != nil {
+		t.Fatalf("unexpected worker observation: %+v", observation)
 	}
 
 	for _, authorization := range []string{"", "Bearer wrong-token"} {

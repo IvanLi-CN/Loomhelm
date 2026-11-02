@@ -30,6 +30,8 @@ type Server struct {
 	resources                 processRuntime
 	activeMCPRequests         atomic.Int64
 	activeApplicationRequests atomic.Int64
+	activeGatewayRequests     atomic.Int64
+	requestMetrics            requestMetrics
 }
 
 // The production MCP path may spend up to 15 seconds reading a body and 25
@@ -355,6 +357,7 @@ func (s *Server) registerRoutes() {
 	s.router.Get("/livez", s.handleLive)
 	s.router.Get("/readyz", s.handleReady)
 	s.router.Get("/version", s.handleVersion)
+	s.router.Get("/-/observe", s.handleObservation)
 	s.router.Get("/-/drain", s.handleDrainStatus)
 	s.router.Post("/-/drain", s.handleDrain)
 }
@@ -374,7 +377,11 @@ func (s *Server) handleGateway(writer http.ResponseWriter, request *http.Request
 	}
 	// Connector authentication is a Host credential and intentionally bypasses
 	// browser session middleware and the public /api/v1 contract.
-	handler.ServeHTTP(writer, request)
+	s.requestMetrics.track(&s.activeGatewayRequests, writer, handler, request)
+}
+
+func (s *Server) handleObservation(writer http.ResponseWriter, _ *http.Request) {
+	writeRuntimeObservation(writer, s.serverObservation())
 }
 
 type healthResponse struct {
