@@ -224,6 +224,10 @@ The sixth capture is `assets/task-graph-storybook-desktop.png`, rendered from ca
 
 The TaskGraph image documents the current component presentation and does not establish authenticated production UI, backend authorization, relationship persistence or complete product UI approval. Its source-managed DOM preflight and exact-path comparison remain recorded in the external candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/batch16-0723f90`.
 
+### U04 Codex source conversation workspace
+
+The Codex source workspace uses the login-free `ui_demo` route `/demo/codex-conversations` and current browser viewport evidence at `1440x1000` and `393x852` CSS pixels. The captures use `capture_scope=browser-viewport`, `viewport_strategy=devtools-emulate`, a full viewport screenshot without clipping, and show the Host status, source search, complete/unbound conversation states and the compact mobile source card. Both viewports have `scrollWidth == clientWidth`; the mobile source strip keeps its icon/status row and facts row without wasted blank space. The owner confirmed the compact layout after the viewport review. Images: ![Codex source workspace desktop](./assets/u04-codex-source-page-desktop-1440x1000.png) and ![Codex source workspace mobile](./assets/u04-codex-source-page-mobile-393x852.png).
+
 ### U04 Artifact and PWA component evidence
 
 The U04 visual evidence set contains three owner-confirmed mock-only Storybook canvas captures registered against repair candidate `ede05721f14dc05780f852010291e1c73504deb0` and base `b8d79fab2e0f6abd817027c3a4e9f8b206a35bc`; each uses `capture_scope=element`, `target_program=mock-only`, `margin_policy=require_margin`, `evidence_surface=component`, `sensitive_exclusion=N/A` and `submission_gate=approved`; the first two use Storybook source surfaces, while the mobile PWA capture records its browser-resize fallback explicitly. The registered files below are the owner-confirmed updated captures.
