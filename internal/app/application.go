@@ -11,6 +11,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/codex"
+	"github.com/IvanLi-CN/Loomhelm/internal/deployment"
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	loomhelmMCP "github.com/IvanLi-CN/Loomhelm/internal/mcp"
@@ -26,6 +27,7 @@ import (
 
 type applicationServices struct {
 	identity        *auth.Service
+	deployment      *deployment.Service
 	projects        *projects.Service
 	tasks           *tasks.Service
 	sessions        *sessions.Store
@@ -48,8 +50,8 @@ func newApplicationHandler(ctx context.Context, pool *pgxpool.Pool, cfg platform
 // The runtime supplies the real control service once its durable stores and
 // Host transport are ready. An absent dependency exposes explicit unavailable
 // responses, never a simulated command acknowledgement.
-func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, control runControlApplication) (http.Handler, error) {
-	services, err := newApplicationServices(ctx, pool, cfg)
+func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, control runControlApplication, deploymentOwnerUserIDs ...[]string) (http.Handler, error) {
+	services, err := newApplicationServices(ctx, pool, cfg, nil, deploymentOwnerUserIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +62,7 @@ func newApplicationHandlerWithRunControl(ctx context.Context, pool *pgxpool.Pool
 	return handler, nil
 }
 
-func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, connectorAuth ...auth.ConnectorAuth) (*applicationServices, error) {
+func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platform.BrowserAuthConfig, connectorAuth auth.ConnectorAuth, deploymentOwnerUserIDs ...[]string) (*applicationServices, error) {
 	var provider auth.Provider
 	if cfg.OIDCEnabled() {
 		configured, err := auth.NewOIDCProvider(ctx, auth.OIDCConfig{
@@ -74,8 +76,8 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		provider = configured
 	}
 	authConfig := auth.Config{SecureCookies: cfg.SecureCookies}
-	if len(connectorAuth) > 0 {
-		authConfig.ConnectorAuth = connectorAuth[0]
+	if connectorAuth != nil {
+		authConfig.ConnectorAuth = connectorAuth
 	}
 	identity, err := auth.NewService(pool, authConfig, provider)
 	if err != nil {
@@ -83,8 +85,17 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 	}
 	projectService := projects.NewService(pool, identity)
 	hostService := hosts.NewService(pool)
+	var ownerUserIDs []string
+	if len(deploymentOwnerUserIDs) > 0 {
+		ownerUserIDs = deploymentOwnerUserIDs[0]
+	}
+	deploymentService, err := deployment.NewService(pool, deployment.Config{OwnerUserIDs: ownerUserIDs, ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("initialize deployment service: %w", err)
+	}
 	return &applicationServices{
 		identity:   identity,
+		deployment: deploymentService,
 		projects:   projectService,
 		tasks:      tasks.NewService(pool, identity, projectService),
 		sessions:   sessions.NewStore(pool),
@@ -100,6 +111,7 @@ func (s *applicationServices) handler(control runControlApplication) (http.Handl
 	router := chi.NewRouter()
 	s.identity.Mount(router)
 	s.identity.MountAPI(router)
+	deployment.MountAPI(router, s.identity, s.deployment, true)
 	(&hostHTTP{principal: s.identity, registry: s.hosts}).mount(router)
 	if s.codex != nil {
 		s.codex.Mount(router)
@@ -303,42 +315,42 @@ func writeApplicationError(writer http.ResponseWriter, request *http.Request, st
 }
 
 func (s *Server) handleApplication(writer http.ResponseWriter, request *http.Request) {
-	s.activeApplicationRequests.Add(1)
-	defer s.activeApplicationRequests.Add(-1)
-	s.resourceMu.RLock()
-	var handler http.Handler
-	if runtime, ok := s.resources.(interface{ APIHandler() http.Handler }); ok {
-		handler = runtime.APIHandler()
-	}
-	s.resourceMu.RUnlock()
-	if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
-		writer.Header().Set("Cache-Control", "no-store")
-		writer.Header().Set("Retry-After", "1")
-		writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
-		return
-	}
-	// Do not hold resourceMu across request execution: a long event stream must
-	// not prevent lifecycle/drain coordination from progressing.
-	handler.ServeHTTP(writer, request)
+	s.requestMetrics.track(&s.activeApplicationRequests, writer, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		s.resourceMu.RLock()
+		var handler http.Handler
+		if runtime, ok := s.resources.(interface{ APIHandler() http.Handler }); ok {
+			handler = runtime.APIHandler()
+		}
+		s.resourceMu.RUnlock()
+		if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
+			writer.Header().Set("Cache-Control", "no-store")
+			writer.Header().Set("Retry-After", "1")
+			writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
+			return
+		}
+		// Do not hold resourceMu across request execution: a long event stream must
+		// not prevent lifecycle/drain coordination from progressing.
+		handler.ServeHTTP(writer, request)
+	}), request)
 }
 
 func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
-	s.activeMCPRequests.Add(1)
-	defer s.activeMCPRequests.Add(-1)
-	s.resourceMu.RLock()
-	var handler http.Handler
-	if runtime, ok := s.resources.(interface{ MCPHandler() http.Handler }); ok {
-		handler = runtime.MCPHandler()
-	}
-	s.resourceMu.RUnlock()
-	if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
-		loomhelmMCP.CloseRejectedRequestBody(writer, request)
-		writer.Header().Set("Cache-Control", "no-store")
-		writer.Header().Set("Retry-After", "1")
-		writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
-		return
-	}
-	// MCP shares the application handler and lifecycle admission boundary with
-	// REST; the MCP adapter adds only protocol discovery and delegation.
-	handler.ServeHTTP(writer, request)
+	s.requestMetrics.track(&s.activeMCPRequests, writer, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		s.resourceMu.RLock()
+		var handler http.Handler
+		if runtime, ok := s.resources.(interface{ MCPHandler() http.Handler }); ok {
+			handler = runtime.MCPHandler()
+		}
+		s.resourceMu.RUnlock()
+		if handler == nil || s.lifecycle.Snapshot().State != platform.StateRunning {
+			loomhelmMCP.CloseRejectedRequestBody(writer, request)
+			writer.Header().Set("Cache-Control", "no-store")
+			writer.Header().Set("Retry-After", "1")
+			writeApplicationError(writer, request, http.StatusServiceUnavailable, "application is not ready")
+			return
+		}
+		// MCP shares the application handler and lifecycle admission boundary with
+		// REST; the MCP adapter adds only protocol discovery and delegation.
+		handler.ServeHTTP(writer, request)
+	}), request)
 }

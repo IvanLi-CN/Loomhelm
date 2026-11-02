@@ -4773,8 +4773,8 @@ func verifyArtifactTestMigrationState(scopedURL string) error {
 	`).Scan(&count, &maxVersion, &allApplied); err != nil {
 		return fmt.Errorf("read artifact migration history: %w", err)
 	}
-	if count != 21 || maxVersion != 20 || !allApplied {
-		return fmt.Errorf("artifact migration history = count %d/max %d/all_applied %t, want 21/20/true", count, maxVersion, allApplied)
+	if count != 22 || maxVersion != 21 || !allApplied {
+		return fmt.Errorf("artifact migration history = count %d/max %d/all_applied %t, want 22/21/true", count, maxVersion, allApplied)
 	}
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/deployment"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
 
@@ -74,6 +75,7 @@ func (w *Worker) healthRouter() http.Handler {
 	mux.HandleFunc("/livez", w.handleWorkerLive)
 	mux.HandleFunc("/readyz", w.handleWorkerReady)
 	mux.HandleFunc("/version", w.handleWorkerVersion)
+	mux.HandleFunc("/-/observe", w.handleWorkerObservation)
 	mux.HandleFunc("/-/drain", w.handleWorkerDrainEndpoint)
 	return mux
 }
@@ -123,6 +125,54 @@ func (w *Worker) handleWorkerVersion(writer http.ResponseWriter, _ *http.Request
 		CandidateSourceSHA: w.cfg.CandidateSource(),
 		ArtifactDigest:     w.cfg.CandidateArtifactDigest(),
 	})
+}
+
+func (w *Worker) handleWorkerObservation(writer http.ResponseWriter, request *http.Request) {
+	snapshot := w.Lifecycle()
+	workerGeneration := int64(w.cfg.WorkerGeneration)
+	if generation := w.GenerationController(); generation != nil {
+		workerGeneration = int64(generation.Current())
+	}
+	loadState := deployment.ObservationUnavailable
+	loadReason := "worker queue observation is unavailable"
+	var load workerLoadSnapshot
+	w.resourceMu.RLock()
+	resources := w.resources
+	w.resourceMu.RUnlock()
+	if observer, ok := resources.(runtimeLoadObserver); ok {
+		loadCtx, cancel := context.WithTimeout(request.Context(), time.Second)
+		observed, err := observer.ObserveLoad(loadCtx)
+		cancel()
+		if err == nil {
+			load = observed
+			loadState = deployment.ObservationMeasured
+			loadReason = ""
+		} else {
+			loadState = deployment.ObservationDegraded
+			loadReason = "worker queue observation failed"
+		}
+	}
+	writeRuntimeObservation(writer, deployment.ComponentObservation{
+		State:              deployment.ObservationMeasured,
+		LoadState:          loadState,
+		LoadReason:         loadReason,
+		ObservedAt:         time.Now().UTC(),
+		Live:               snapshot.Live,
+		Ready:              snapshot.Ready,
+		CandidateSourceSHA: w.cfg.CandidateSource(),
+		ArtifactDigest:     w.cfg.CandidateArtifactDigest(),
+		QueueDepth:         int64Pointer(load.QueueDepth, loadState == deployment.ObservationMeasured),
+		RunningJobs:        int64Pointer(load.RunningJobs, loadState == deployment.ObservationMeasured),
+		WorkerCapacity:     int64Pointer(load.WorkerCapacity, loadState == deployment.ObservationMeasured),
+		WorkerGeneration:   &workerGeneration,
+	})
+}
+
+func int64Pointer(value int64, available bool) *int64 {
+	if !available {
+		return nil
+	}
+	return &value
 }
 
 func (w *Worker) handleWorkerDrainStatus(writer http.ResponseWriter, _ *http.Request) {

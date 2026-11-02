@@ -141,6 +141,11 @@ func routeForOperation(operationID string) (routeSpec, bool) {
 		"listRunEvents":                {method: "GET", path: "/runs/{run_id}/events", pathParams: []string{"run_id"}, queryParams: []string{"after_cursor", "limit"}},
 		"getArtifact":                  {method: "GET", path: "/artifacts/{artifact_id}", pathParams: []string{"artifact_id"}},
 		"downloadArtifactContent":      {method: "GET", path: "/artifacts/{artifact_id}/content", pathParams: []string{"artifact_id"}, queryParams: []string{"content_version", "offset", "limit"}},
+		"getDeploymentStatus":          {method: "GET", path: "/deployment"},
+		"getDeploymentObservations":    {method: "GET", path: "/deployment/observations"},
+		"listDeploymentCandidates":     {method: "GET", path: "/deployment/candidates"},
+		"listDeploymentEvents":         {method: "GET", path: "/deployment/events", queryParams: []string{"limit"}},
+		"getDeploymentOperation":       {method: "GET", path: "/deployment/operations/{operation_id}", pathParams: []string{"operation_id"}},
 	}
 	route, ok := routes[operationID]
 	return route, ok
@@ -178,6 +183,11 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 	}
 
 	switch operationID {
+	case "getDeploymentStatus", "getDeploymentObservations", "listDeploymentCandidates":
+	case "listDeploymentEvents":
+		add("limit", integerField(), false)
+	case "getDeploymentOperation":
+		add("operation_id", stringField(), true)
 	case "createUserCredential":
 		add("name", stringField(), true)
 		add("project_ids", arrayOfStrings(), false)

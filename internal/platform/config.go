@@ -17,11 +17,12 @@ import (
 type Component string
 
 const (
-	ComponentServer         Component = "server"
-	ComponentWorker         Component = "worker"
-	ComponentConnector      Component = "connector"
-	DefaultStartupTimeout             = 10 * time.Minute
-	DefaultConnectorBaseURL           = "https://loomhelm.ivanli.cc"
+	ComponentServer               Component = "server"
+	ComponentWorker               Component = "worker"
+	ComponentConnector            Component = "connector"
+	ComponentDeploymentController Component = "deployment-controller"
+	DefaultStartupTimeout                   = 10 * time.Minute
+	DefaultConnectorBaseURL                 = "https://loomhelm.ivanli.cc"
 )
 
 type Config struct {
@@ -49,6 +50,8 @@ type Config struct {
 	ConnectorAppServerCommand string
 	ConnectorWorkingDir       string
 	BrowserAuth               BrowserAuthConfig
+	DeploymentHTTPAddr        string
+	DeploymentOwnerUserIDs    []string
 }
 
 // DatabaseConfig is shared by processes and database-only tools so their
@@ -178,6 +181,20 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		if err := validateListenAddress(config.HTTPAddr); err != nil {
 			return Config{}, fmt.Errorf("invalid LOOMHELM_HTTP_ADDR: %w", err)
 		}
+	case ComponentDeploymentController:
+		config.DeploymentHTTPAddr = lookupOrDefault(lookup, "LOOMHELM_DEPLOYMENT_HTTP_ADDR", "127.0.0.1:8090")
+		config.BrowserAuth, err = browserAuthFromLookup(lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		for _, value := range strings.Split(lookupOrDefault(lookup, "LOOMHELM_DEPLOYMENT_OWNER_USER_IDS", ""), ",") {
+			if value = strings.TrimSpace(value); value != "" {
+				config.DeploymentOwnerUserIDs = append(config.DeploymentOwnerUserIDs, value)
+			}
+		}
+		if err := validateListenAddress(config.DeploymentHTTPAddr); err != nil {
+			return Config{}, fmt.Errorf("invalid LOOMHELM_DEPLOYMENT_HTTP_ADDR: %w", err)
+		}
 	case ComponentWorker:
 		config.WorkerHTTPAddr = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_WORKER_HTTP_ADDR", ""))
 		config.DrainToken = lookupOrDefault(lookup, "LOOMHELM_DRAIN_TOKEN", "")
@@ -246,6 +263,13 @@ func (c Config) Validate() error {
 		}
 		if strings.ContainsAny(c.DrainToken, " \t\r\n") {
 			return fmt.Errorf("drain token must not contain whitespace")
+		}
+	case ComponentDeploymentController:
+		if err := c.BrowserAuth.Validate(); err != nil {
+			return err
+		}
+		if err := validateListenAddress(c.DeploymentHTTPAddr); err != nil {
+			return fmt.Errorf("invalid deployment HTTP address: %w", err)
 		}
 	case ComponentWorker:
 		if c.WorkerGeneration == 0 {
@@ -364,7 +388,7 @@ func poolSizeFromEnv(lookup func(string) (string, bool), key string, fallback in
 
 func isKnownComponent(component Component) bool {
 	switch component {
-	case ComponentServer, ComponentWorker, ComponentConnector:
+	case ComponentServer, ComponentWorker, ComponentConnector, ComponentDeploymentController:
 		return true
 	default:
 		return false

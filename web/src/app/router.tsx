@@ -12,6 +12,7 @@ import { useOptionalDemoRuntime } from "@/demo/context";
 import { AppShell } from "@/components/product/ProductShell";
 import { CreateConversationRoute } from "@/routes/CreateConversationRoute";
 import { CreateTaskRoute } from "@/routes/CreateTaskRoute";
+import { DeploymentRoute } from "@/routes/DeploymentRoute";
 import { ConversationsRoute } from "@/routes/ConversationsRoute";
 import { DemoProductionConversationRoute } from "@/routes/DemoProductionConversationRoute";
 import { DemoCodexConversationsRoute } from "@/routes/DemoCodexConversationsRoute";
@@ -85,6 +86,12 @@ const statusRoute = createRoute({
   component: StatusRoute
 });
 
+const deploymentRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/deployment",
+  component: DeploymentRoute
+});
+
 const demoProductionConversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/demo/production-session",
@@ -145,6 +152,7 @@ const projectRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   homeRoute,
   statusRoute,
+  deploymentRoute,
   demoProductionConversationRoute,
   demoCodexConversationsRoute,
   tasksRoute,
