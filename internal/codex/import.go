@@ -329,7 +329,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE codex_title_operations
-			SET state = 'title_sync_paused', last_error = $3, updated_at = $4
+			SET state = 'title_sync_paused', last_error = $2, updated_at = $3
 			WHERE host_id = $1 AND state = 'title_sync_pending'
 				AND EXISTS (
 					SELECT 1 FROM codex_threads t
@@ -337,7 +337,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 					  AND t.thread_id = codex_title_operations.thread_id
 					  AND t.source_status = 'unavailable'
 				)
-		`, hostID, threadIDs, reason, snapshot.AsOf); err != nil {
+		`, hostID, reason, snapshot.AsOf); err != nil {
 			return fmt.Errorf("pause missing Codex title operations: %w", err)
 		}
 	}
