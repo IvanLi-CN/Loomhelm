@@ -130,6 +130,16 @@ The system MUST allow an authorized user to create and operate a standalone conv
 
 Association MUST retain the same Session and the identities and continuity of its messages, Runs, events, original-file references and shared unsent draft; it MUST NOT fork or replace the conversation or create duplicate list identities. Every Task MUST retain at most one directly associated main Session, and every Session MUST retain at most one associated Task. Only an unbound Session and a Task without a main Session MAY be bound. Phase one MUST NOT replace or detach an established binding or migrate it across projects. Creation, execution, retrieval and association MUST enforce authorization. A failed association MUST leave the original conversation, ownership and visibility intact.
 
+### REQ-LH-013
+
+The default Host MUST be represented explicitly by a stable `host_id` at every Codex source boundary. Codex discovery MUST be performed by the account owning that Host and MUST import only existing Codex history; a shared user MUST see only conversations explicitly created or shared by Loomhelm. Legacy rows with a null Host identity MUST remain readable and MUST NOT receive a guessed Host assignment.
+
+Loomhelm MUST persist the complete supported protocol history for an imported Codex thread, including raw unknown or malformed events, a readable fallback projection, supported file bytes or immutable references, an `as_of` value and snapshot completeness state. A thread MUST NOT become project-visible until its history and supported file materials are complete. An unbound thread MUST remain read-only until that readiness condition holds, and Task creation and thread binding MUST remain separate idempotent operations with immutable established bindings.
+
+The Loomhelm conversation title MUST be non-empty and MUST synchronize bidirectionally with the Codex thread name when either side changes. A missing Codex name MAY use preview or auto-title fallback for display but MUST NOT be written back. Task titles MUST remain independent; the only title shortcuts MUST be Task title to conversation title and conversation title to Task title, and neither shortcut MAY directly write a Codex title. Title writes MUST pass both conversation and Host permissions, preserve both values on conflict, persist `title_sync_pending` with a bounded retry reason on failure, and expose manual retry without claiming success. Codex archived, deleted or unavailable state MUST retain Loomhelm history and pause title writeback.
+
+REST and MCP MUST expose the same source discovery, project mapping, conversation list/detail, binding, title update and synchronization behavior, including `GET /api/v1/codex/sources`, `GET /api/v1/codex/projects`, `GET /api/v1/codex/conversations`, `GET /api/v1/codex/conversations/{host_id}/{thread_id}`, `PATCH /api/v1/codex/conversations/{host_id}/{thread_id}/title`, `POST /api/v1/codex/projects/{host_id}/{project_id}/mapping`, `POST /api/v1/codex/conversations/{host_id}/{thread_id}/bind` and `POST /api/v1/codex/sync`.
+
 ## Verification
 
 ### VER-LH-001
@@ -199,6 +209,12 @@ Association MUST retain the same Session and the identities and continuity of it
 - Method: authenticated Web/HTTP/MCP creation of a conversation without a project or task, real execution and file production, later task association, failure/conflict and authorization scenarios, reconnect and process restart.
 - covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-005`, `REQ-LH-008`, `REQ-LH-011`, `REQ-LH-012`
 - Pass condition: projectless conversations are creator-private and executable; association requires explicit sharing confirmation, preserves Session/Run/event/message/file/draft continuity and applies target-project history permissions while keeping drafts private. Both association cardinalities hold, occupied/replacement/detach and cross-project Session reassociation operations are rejected, and failed association leaves prior state intact. Cross-project task hierarchy and prerequisite relationships remain supported independently of Session binding.
+
+### VER-LH-012
+
+- Method: a disposable default Host-local app-server with recorded build/capabilities, repeated journal delivery across reconnect, interrupted history/file transfer, malformed events, legacy null-Host rows, unbound/bound permission matrices and bidirectional title changes.
+- covers: `REQ-LH-013`
+- Pass condition: discovery imports only the owning account's existing history, logical events are deduplicated, snapshot readiness remains explicit until all supported materials are complete, legacy rows remain readable without guessed Host assignment, unbound rows are read-only, binding is idempotent and immutable, both title values remain visible on conflict, failed writes expose retry state and reasons, Task title shortcuts never directly change Codex title, and archive/delete/unavailable source states retain Loomhelm history while pausing writeback.
 
 ## Visual Evidence
 
