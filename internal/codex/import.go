@@ -99,7 +99,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			protocol_version = EXCLUDED.protocol_version,
 			capabilities = EXCLUDED.capabilities,
 			capability_states = EXCLUDED.capability_states,
-			sync_operation_id = EXCLUDED.sync_operation_id,
+			sync_operation_id = CASE WHEN EXCLUDED.sync_state IN ('complete', 'partial', 'failed', 'stale') THEN '' ELSE EXCLUDED.sync_operation_id END,
 			last_error = EXCLUDED.last_error,
 			as_of = EXCLUDED.as_of,
 			updated_at = EXCLUDED.updated_at
@@ -415,7 +415,7 @@ func (s *Service) FailSync(ctx context.Context, hostID, operationID string, sync
 	defer tx.Rollback(ctx)
 	result, err := tx.Exec(ctx, `
 		UPDATE codex_sync_sources
-		SET sync_state = 'failed', last_error = $3, as_of = $4, updated_at = $4
+		SET sync_state = 'failed', sync_operation_id = '', last_error = $3, as_of = $4, updated_at = $4
 		WHERE host_id = $1 AND sync_operation_id = $2
 	`, hostID, operationID, reason, now)
 	if err != nil {
