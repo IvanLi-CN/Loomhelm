@@ -73,6 +73,7 @@ type SourceAck struct {
 }
 
 type SourceNotification struct {
+	EventID  string          `json:"event_id,omitempty"`
 	Kind     string          `json:"kind"`
 	ThreadID string          `json:"thread_id"`
 	Title    *string         `json:"title,omitempty"`

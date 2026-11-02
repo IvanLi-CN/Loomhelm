@@ -70,6 +70,32 @@ export function useCodexTitleMutation(hostId: string, threadId: string) {
   });
 }
 
+export function useCodexBindConversation(hostId: string, threadId: string) {
+  const assembly = useOptionalProductionApi();
+  const queryClient = useQueryClient();
+  const principalId = assembly?.auth.principalId ?? "anonymous";
+  const sessionGeneration = assembly?.auth.sessionGeneration ?? 0;
+  return useMutation({
+    mutationFn: (body: { task_id: string; expected_as_of?: string }) => {
+      if (!assembly) throw new Error("浏览器会话尚未就绪");
+      return assembly.client.bindCodexConversation({
+        host_id: hostId,
+        thread_id: threadId,
+        body: {
+          request_id: requestID("codex-bind"),
+          task_id: body.task_id,
+          confirm_share: true,
+          expected_as_of: body.expected_as_of
+        }
+      });
+    },
+    onSuccess: async (response) => {
+      queryClient.setQueryData(codexQueryKeys.detail(principalId, sessionGeneration, hostId, threadId), (current: CodexConversationDetail | undefined) => current ? { ...current, conversation: response.conversation } : current);
+      await queryClient.invalidateQueries({ queryKey: ["loomhelm", principalId, sessionGeneration, "codex", "overview"] });
+    }
+  });
+}
+
 export function useCodexSync() {
   const assembly = useOptionalProductionApi();
   const queryClient = useQueryClient();

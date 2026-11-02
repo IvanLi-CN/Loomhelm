@@ -502,15 +502,33 @@ func (c *serverConnection) handleEvent(ctx context.Context, message Message) err
 }
 
 func (c *serverConnection) handleSourceEvent(ctx context.Context, message Message) error {
-	if c.onSource == nil {
-		return errors.New("gateway source notification handler is not configured")
-	}
 	if message.Generation != c.connection.Generation || message.SourceEvent == nil {
 		return hosts.ErrConnectionStale
 	}
-	return c.registry.AuthorizeCommand(ctx, c.connection, func() error {
-		return c.onSource(ctx, c.connection, *message.SourceEvent)
-	})
+	var err error
+	if c.onSource == nil {
+		err = errors.New("gateway source notification handler is not configured")
+	} else {
+		notification := *message.SourceEvent
+		if strings.TrimSpace(notification.EventID) == "" {
+			notification.EventID = strings.TrimSpace(message.RequestID)
+		}
+		err = c.registry.AuthorizeCommand(ctx, c.connection, func() error {
+			return c.onSource(ctx, c.connection, notification)
+		})
+	}
+	if strings.TrimSpace(message.RequestID) == "" {
+		return err
+	}
+	ack := &SourceAck{OperationID: message.RequestID, State: "succeeded"}
+	if err != nil {
+		ack.State = "failed"
+		ack.Error = &WireError{Code: connectionErrorCode(err, "source_event_rejected"), Message: err.Error()}
+	}
+	if writeErr := c.write(ctx, Message{Type: MessageSourceAck, RequestID: message.RequestID, Generation: c.connection.Generation, SourceAck: ack}); writeErr != nil {
+		return writeErr
+	}
+	return nil
 }
 
 func eventRunID(event protocol.Event) string {
@@ -666,8 +684,26 @@ func (c *serverConnection) resolveSource(ctx context.Context, message Message) e
 		response <- sourceResponse{ack: message.SourceAck}
 		return nil
 	}
-	if c.onSourceSnapshot != nil && message.SourceAck.State == "succeeded" && len(message.SourceAck.Payload) > 0 {
-		return c.onSourceSnapshot(ctx, c.connection, message.SourceAck.OperationID, append([]byte(nil), message.SourceAck.Payload...))
+	if c.onSourceSnapshot != nil {
+		var snapshotErr error
+		if message.SourceAck.State == "succeeded" && len(message.SourceAck.Payload) > 0 {
+			snapshotErr = c.onSourceSnapshot(ctx, c.connection, message.SourceAck.OperationID, append([]byte(nil), message.SourceAck.Payload...))
+		} else if message.SourceAck.State == "succeeded" {
+			snapshotErr = errors.New("Connector source snapshot acknowledgement has no payload")
+		} else {
+			snapshotErr = fmt.Errorf("Connector source snapshot returned state %q", message.SourceAck.State)
+		}
+		ack := &SourceAck{OperationID: message.SourceAck.OperationID, State: "succeeded"}
+		if snapshotErr != nil {
+			ack.State = "failed"
+			ack.Error = &WireError{Code: "source_snapshot_rejected", Message: snapshotErr.Error()}
+		}
+		if strings.TrimSpace(message.RequestID) != "" {
+			if err := c.write(ctx, Message{Type: MessageSourceAck, RequestID: message.RequestID, Generation: c.connection.Generation, SourceAck: ack}); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return nil
 }

@@ -190,7 +190,7 @@ while IFS= read -r line; do
   method=$(printf '%%s\n' "$line" | sed 's/.*"method":"//; s/".*//')
   case "$method" in
     initialize)
-      printf '{"jsonrpc":"2.0","id":%%s,"result":{"userAgent":"loomhelm-e01-fixture"}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%%s,"result":{"userAgent":"loomhelm-e01-fixture","build":"loomhelm-e01-fixture"}}\n' "$id"
       ;;
     initialized)
       ;;

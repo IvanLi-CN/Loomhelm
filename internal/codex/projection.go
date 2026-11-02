@@ -110,7 +110,7 @@ func (s *Service) readConversation(ctx context.Context, access sourceAccess, pri
 }
 
 func (s *Service) readProjectedConversation(ctx context.Context, access sourceAccess, principal auth.Principal, threadID string) (protocol.CodexConversation, error) {
-	item, capabilities, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
+	item, _, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
 	if err != nil {
 		return protocol.CodexConversation{}, err
 	}
@@ -122,7 +122,7 @@ func (s *Service) readProjectedConversation(ctx context.Context, access sourceAc
 			return protocol.CodexConversation{}, authorizeErr
 		}
 		item.ReadOnly = !allowed
-		item.CanEditTitle = boolPointer(allowed && capabilityContains(capabilities, "thread/name/set"))
+		item.CanEditTitle = boolPointer(allowed)
 	}
 	return item, nil
 }

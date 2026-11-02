@@ -479,7 +479,7 @@ func (c *Connector) recoverSource(ctx context.Context, connection *gateway.Clien
 			_ = source.Close()
 			return fmt.Errorf("encode recovered Codex source snapshot: %w", marshalErr)
 		}
-		if err := connection.AcknowledgeSource(ctx, snapshot.OperationID, gateway.SourceAck{
+		if err := connection.SendSourceSnapshot(ctx, snapshot.OperationID, gateway.SourceAck{
 			OperationID: snapshot.OperationID,
 			State:       "succeeded",
 			Payload:     payload,
@@ -530,6 +530,7 @@ func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *
 			continue
 		}
 		if err := connection.SendSourceNotification(ctx, gateway.SourceNotification{
+			EventID:  notification.EventID,
 			Kind:     string(notification.Kind),
 			ThreadID: notification.ThreadID,
 			Title:    notification.Title,

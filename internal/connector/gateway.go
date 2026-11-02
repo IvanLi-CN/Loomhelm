@@ -420,7 +420,10 @@ func initializeAppServer(ctx context.Context, transport RPCTransport, client Cli
 	if len(response.Result) == 0 {
 		return AppServerHandshake{}, errors.New("app-server initialize returned no result")
 	}
-	handshake := parseAppServerHandshake(response.Result)
+	handshake, err := parseAppServerHandshake(response.Result)
+	if err != nil {
+		return AppServerHandshake{}, err
+	}
 	if err := transport.Notify(ctx, "initialized", json.RawMessage(`{}`)); err != nil {
 		return AppServerHandshake{}, err
 	}

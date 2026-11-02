@@ -617,6 +617,14 @@ func routeQuery(names []string, arguments map[string]json.RawMessage) (string, e
 			values.Set(name, strings.TrimSpace(string(raw)))
 			continue
 		}
+		if name == "bound" || name == "include_archived" {
+			value, err := queryBooleanArgument(arguments, name)
+			if err != nil {
+				return "", err
+			}
+			values.Set(name, strconv.FormatBool(value))
+			continue
+		}
 		value, err := queryStringArgument(arguments, name)
 		if err != nil {
 			return "", err
@@ -624,6 +632,18 @@ func routeQuery(names []string, arguments map[string]json.RawMessage) (string, e
 		values.Set(name, value)
 	}
 	return values.Encode(), nil
+}
+
+func queryBooleanArgument(arguments map[string]json.RawMessage, name string) (bool, error) {
+	raw, ok := arguments[name]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return false, fmt.Errorf("MCP parameter %q is required", name)
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, fmt.Errorf("MCP parameter %q must be a boolean", name)
+	}
+	return value, nil
 }
 
 func routeBody(route routeSpec, arguments map[string]json.RawMessage) ([]byte, error) {

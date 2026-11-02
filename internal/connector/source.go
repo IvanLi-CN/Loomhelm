@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -156,6 +157,7 @@ type SourceNotification struct {
 	ThreadID string
 	Title    *string
 	Raw      json.RawMessage
+	EventID  string
 }
 
 // SourceClient is the read/import and title-write boundary for one
@@ -797,7 +799,7 @@ func initializeSourceCapabilities(value map[string]CapabilityState) {
 	}
 }
 
-func parseAppServerHandshake(raw json.RawMessage) AppServerHandshake {
+func parseAppServerHandshake(raw json.RawMessage) (AppServerHandshake, error) {
 	var payload struct {
 		ProtocolVersion string `json:"protocolVersion"`
 		ServerInfo      struct {
@@ -811,7 +813,9 @@ func parseAppServerHandshake(raw json.RawMessage) AppServerHandshake {
 		Version      string                     `json:"version"`
 		Capabilities map[string]json.RawMessage `json:"capabilities"`
 	}
-	_ = json.Unmarshal(raw, &payload)
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return AppServerHandshake{}, fmt.Errorf("decode app-server initialize result: %w", err)
+	}
 	capabilities := make(map[string]CapabilityState)
 	experimental := false
 	for key, value := range payload.Capabilities {
@@ -827,7 +831,10 @@ func parseAppServerHandshake(raw json.RawMessage) AppServerHandshake {
 	}
 	initializeSourceCapabilities(capabilities)
 	userAgentBuild, userAgentVersion := userAgentIdentity(payload.UserAgent)
-	build := firstNonEmpty(payload.ServerInfo.Build, payload.Build, payload.ServerInfo.Version, payload.Version, userAgentBuild)
+	build := firstNonEmpty(payload.ServerInfo.Build, payload.Build, userAgentBuild)
+	if strings.TrimSpace(build) == "" {
+		return AppServerHandshake{}, errors.New("app-server initialize did not provide an exact build")
+	}
 	return AppServerHandshake{
 		ProtocolVersion: payload.ProtocolVersion,
 		ServerName:      firstNonEmpty(payload.ServerInfo.Name, payload.UserAgent),
@@ -837,7 +844,7 @@ func parseAppServerHandshake(raw json.RawMessage) AppServerHandshake {
 		ExperimentalAPI: experimental,
 		Capabilities:    capabilities,
 		Raw:             append(json.RawMessage(nil), raw...),
-	}
+	}, nil
 }
 
 func userAgentIdentity(userAgent string) (build, version string) {
@@ -986,12 +993,18 @@ func decodeRawPage(raw json.RawMessage, field string) ([]json.RawMessage, string
 	if err := json.Unmarshal(raw, &object); err != nil {
 		return nil, "", err
 	}
-	if _, ok := object[field]; !ok {
-		if _, ok := object["data"]; !ok {
-			if _, ok := object["items"]; !ok {
-				return nil, "", fmt.Errorf("Codex %s response has no page data", field)
-			}
+	pageField := field
+	if _, ok := object[pageField]; !ok {
+		if _, ok := object["data"]; ok {
+			pageField = "data"
+		} else if _, ok := object["items"]; ok {
+			pageField = "items"
+		} else {
+			return nil, "", fmt.Errorf("Codex %s response has no page data", field)
 		}
+	}
+	if bytes.Equal(bytes.TrimSpace(object[pageField]), []byte("null")) {
+		return nil, "", fmt.Errorf("Codex %s response has null page data", field)
 	}
 	var page struct {
 		Data        []json.RawMessage `json:"data"`
@@ -1021,8 +1034,11 @@ func decodeRawPage(raw json.RawMessage, field string) ([]json.RawMessage, string
 	default:
 		return nil, "", fmt.Errorf("unsupported Codex page field %q", field)
 	}
-	if values == nil {
+	if pageField == "data" {
 		values = page.Data
+	}
+	if values == nil {
+		return nil, "", fmt.Errorf("Codex %s response has malformed page data", field)
 	}
 	next := ""
 	if page.NextCursor != nil {
@@ -1042,7 +1058,7 @@ func rawHistoryEvent(raw json.RawMessage, sequence int64, fallbackType string) S
 	_ = json.Unmarshal(raw, &value)
 	id := strings.TrimSpace(value.ID)
 	if id == "" {
-		digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", fallbackType, sequence, raw)))
+		digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%s", fallbackType, raw)))
 		id = "codex-" + hex.EncodeToString(digest[:12])
 	}
 	eventType := firstNonEmpty(value.Type, fallbackType)
@@ -1145,7 +1161,9 @@ func parseSourceNotification(message RPCMessage) (SourceNotification, bool) {
 	if kind == SourceNotificationTitle && (title == nil || strings.TrimSpace(*title) == "") {
 		return SourceNotification{}, false
 	}
-	return SourceNotification{Kind: kind, ThreadID: params.ThreadID, Title: title, Raw: append(json.RawMessage(nil), message.Raw...)}, true
+	notification := SourceNotification{Kind: kind, ThreadID: params.ThreadID, Title: title, Raw: append(json.RawMessage(nil), message.Raw...)}
+	notification.EventID = notificationKey(notification)
+	return notification, true
 }
 
 func notificationKey(notification SourceNotification) string {

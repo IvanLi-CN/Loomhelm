@@ -237,7 +237,10 @@ func TestSourceClientAcceptsItemsAsTheCompleteHistorySource(t *testing.T) {
 }
 
 func TestSourceClientParsesCurrentProtocolShapes(t *testing.T) {
-	handshake := parseAppServerHandshake(json.RawMessage(`{"userAgent":"Codex Desktop/0.166.0 (Mac OS 27.2.0; arm64)"}`))
+	handshake, err := parseAppServerHandshake(json.RawMessage(`{"userAgent":"Codex Desktop/0.166.0 (Mac OS 27.2.0; arm64)"}`))
+	if err != nil {
+		t.Fatalf("parse app-server handshake: %v", err)
+	}
 	if handshake.Build != "Codex Desktop/0.166.0" || handshake.ServerVersion != "0.166.0" {
 		t.Fatalf("handshake identity = (%q, %q)", handshake.Build, handshake.ServerVersion)
 	}
@@ -257,6 +260,14 @@ func TestSourceClientParsesCurrentProtocolShapes(t *testing.T) {
 	})
 	if !ok || notification.Title == nil || *notification.Title != "更新后的标题" {
 		t.Fatalf("notification = %+v, ok = %t", notification, ok)
+	}
+	repeated, repeatedOK := parseSourceNotification(RPCMessage{
+		Method: SourceNotificationName,
+		Params: json.RawMessage(`{"threadId":"thread-1","threadName":"更新后的标题"}`),
+		Raw:    json.RawMessage(`{"method":"thread/name/updated","params":{"threadId":"thread-1","threadName":"更新后的标题"}}`),
+	})
+	if !repeatedOK || notification.EventID == "" || repeated.EventID != notification.EventID {
+		t.Fatalf("notification event identity = (%q, %q), want stable non-empty identity", notification.EventID, repeated.EventID)
 	}
 	if _, ok := parseSourceNotification(RPCMessage{
 		Method: SourceNotificationName,
@@ -298,5 +309,8 @@ func TestDecodeThreadStatusObjectAndRejectsEmptyPageShape(t *testing.T) {
 	}
 	if _, _, err := decodeRawPage(json.RawMessage(`{}`), "threads"); err == nil {
 		t.Fatal("empty page response was accepted")
+	}
+	if _, err := parseAppServerHandshake(json.RawMessage(`{"serverInfo":{"name":"codex"}}`)); err == nil {
+		t.Fatal("handshake without exact build was accepted")
 	}
 }

@@ -15,6 +15,7 @@ import {
   conversationLabel,
   sourceStateLabel,
   useCodexConversationDetail,
+  useCodexBindConversation,
   useCodexOverview,
   useCodexSync,
   useCodexTitleMutation,
@@ -125,17 +126,20 @@ export function CodexConversationWorkspace({ hostId, threadId }: { hostId: strin
   const detailQuery = useCodexConversationDetail(hostId, threadId);
   const detail = detailQuery.data;
   const titleMutation = useCodexTitleMutation(hostId, threadId);
+  const bindMutation = useCodexBindConversation(hostId, threadId);
   const taskSource = useOptionalProjectTaskSource();
   const taskId = detail?.conversation.bound_task_id;
   const taskReplacement = useTaskTitleReplacement(taskId);
   const [title, setTitle] = useState("");
   const [shortcutMessage, setShortcutMessage] = useState<string | undefined>();
+  const [bindTaskId, setBindTaskId] = useState("");
   useEffect(() => {
     if (detail) setTitle(detail.conversation.conversation_title);
   }, [detail?.conversation.conversation_title]);
 
   const conversation = detail?.conversation;
   const titleWritable = Boolean(conversation?.can_edit_title && !conversation.read_only && conversation.history_state === "complete" && conversation.files_complete);
+  const bindableTasks = taskSource?.tasks.filter((task) => !task.conversationId && taskSource.getProjectPermissions(task.projectId).canWrite) ?? [];
   const saveTitle = async (nextTitle: string, resolution?: string) => {
     if (!conversation || !nextTitle.trim() || !titleWritable) return;
     setShortcutMessage(undefined);
@@ -156,6 +160,17 @@ export function CodexConversationWorkspace({ hostId, threadId }: { hostId: strin
     const result = await applyTaskTitleUpdate(taskSource, taskReplacement.task.id, title.trim());
     setShortcutMessage(result.ok ? "已按“对话标题 → Task 标题”执行。" : result.message ?? "Task 标题更新失败。");
   };
+  const bindConversation = async () => {
+    if (!conversation || conversation.bound_task_id || !bindTaskId || conversation.history_state !== "complete" || !conversation.files_complete) return;
+    setShortcutMessage(undefined);
+    try {
+      await bindMutation.mutateAsync({ task_id: bindTaskId, expected_as_of: conversation.as_of });
+      setBindTaskId("");
+      setShortcutMessage("已绑定到所选 Task；对话历史仍保持 Host-scoped 记录。");
+    } catch (error) {
+      setShortcutMessage(error instanceof Error ? error.message : "绑定 Task 失败，请刷新后重试。");
+    }
+  };
 
   if (detailQuery.isLoading) return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">CODEX 对话</span><h1>正在读取对话材料</h1><p>正在读取完整历史、文件材料和标题状态。</p></section>;
   if (detailQuery.isError || !detail || !conversation) return <section className="page-section unavailable-page"><span className="eyebrow">CODEX 对话</span><h1>对话材料不可用</h1><p>{detailQuery.error instanceof Error ? detailQuery.error.message : "当前对话不在授权的 Host 历史中。"}</p><Link to="/conversations" className="button button-secondary">返回 Codex 对话</Link></section>;
@@ -169,7 +184,7 @@ export function CodexConversationWorkspace({ hostId, threadId }: { hostId: strin
           {taskReplacement.task && <div className="codex-shortcuts"><div><strong>标题快捷替换</strong><small>Task 标题与对话标题独立；每次只执行一个明确方向。</small></div><Button type="button" variant="ghost" className="button button-secondary" onClick={() => void useTaskTitle()} disabled={!titleWritable || titleMutation.isPending}><ArrowLeftRight size={15} aria-hidden="true" />Task → 对话</Button><Button type="button" variant="ghost" className="button button-secondary" onClick={() => void useConversationTitle()} disabled={!taskReplacement.canWrite || !title.trim()}><ArrowLeftRight size={15} aria-hidden="true" />对话 → Task</Button></div>}
           {shortcutMessage && <p className="codex-feedback" role="status">{shortcutMessage}</p>}
         </section>
-        <section className="codex-status-panel"><div className="codex-detail-heading"><span><ShieldAlert size={15} aria-hidden="true" />来源与权限</span></div><dl className="codex-facts"><dt>来源状态</dt><dd>{sourceStatusLabel(conversation.source_status)}</dd><dt>历史完整度</dt><dd>{historyStateLabel(conversation.history_state)}</dd><dt>文件材料</dt><dd>{conversation.files_complete ? "完整" : "未完整"}</dd><dt>项目可见</dt><dd>{conversation.bound_task_id ? "已绑定" : "未绑定，只读"}</dd><dt>快照时间</dt><dd>{formatTime(conversation.as_of)}</dd><dt>最近更新</dt><dd>{formatTime(conversation.updated_at)}</dd></dl>{incomplete && <p className="codex-readonly-note"><ShieldAlert size={15} aria-hidden="true" />历史或文件材料未完整，当前只能查看，不能绑定到项目或写回标题。</p>}</section>
+        <section className="codex-status-panel"><div className="codex-detail-heading"><span><ShieldAlert size={15} aria-hidden="true" />来源与权限</span></div><dl className="codex-facts"><dt>来源状态</dt><dd>{sourceStatusLabel(conversation.source_status)}</dd><dt>历史完整度</dt><dd>{historyStateLabel(conversation.history_state)}</dd><dt>文件材料</dt><dd>{conversation.files_complete ? "完整" : "未完整"}</dd><dt>项目可见</dt><dd>{conversation.bound_task_id ? "已绑定" : "未绑定，只读"}</dd><dt>快照时间</dt><dd>{formatTime(conversation.as_of)}</dd><dt>最近更新</dt><dd>{formatTime(conversation.updated_at)}</dd></dl>{incomplete && <p className="codex-readonly-note"><ShieldAlert size={15} aria-hidden="true" />历史或文件材料未完整，当前只能查看，不能绑定到项目或写回标题。</p>}{!conversation.bound_task_id && !incomplete && conversation.source_status === "active" && <div className="codex-bind-panel"><strong>绑定到 Task</strong><small>绑定是独立动作；确认后只会建立固定关联，不会把 Task 标题直接写入 Codex。</small>{taskSource ? <><select aria-label="选择要绑定的 Task" className="codex-bind-select" value={bindTaskId} onChange={(event) => setBindTaskId(event.target.value)} disabled={bindMutation.isPending || !bindableTasks.length}><option value="">选择一个可写 Task</option>{bindableTasks.map((task) => <option value={task.id} key={task.id}>{task.title} · {task.projectId}</option>)}</select><Button type="button" variant="secondary" className="button button-secondary" onClick={() => void bindConversation()} disabled={!bindTaskId || bindMutation.isPending}>{bindMutation.isPending ? "绑定中" : "确认绑定"}</Button>{!bindableTasks.length && <small>当前没有可绑定的授权 Task。</small>}</> : <small>Task 数据尚未加载，当前保持只读。</small>}</div>}</section>
       </div>
       <div className="codex-detail-sections"><HistoryList detail={detail} /><FileList detail={detail} /></div>
     </section>

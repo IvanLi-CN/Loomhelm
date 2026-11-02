@@ -6,7 +6,7 @@ The repository contains the Go lifecycle/persistence foundations, versioned publ
 
 The deployment-control slice adds migration 00021 after the Connector migrations 00018 through 00020, immutable schema 2 deployment envelopes, the stable `deployment-controller`, installation roles, durable operations and audit events, authenticated REST operations and read-only MCP queries, plus the approved installation Deployment page. The implementation and branch-preview scope are documented in [Deployment Control](../../deployment.md) and [ADR 0014](../../adr/0014-deployment-control-plane-and-blue-green.md); 101 migration and production switching remain owner-authorized follow-up gates.
 
-The Codex source synchronization slice adds migration 00022, a Host-scoped app-server adapter, durable source/project/thread snapshots, complete history and supported-file retention, binding and title-write state, generated REST/MCP operations and the Chinese-first Codex conversation workspace. The real Host-local smoke records the installed `codex-cli 0.166.0` build and capability negotiation; focused tests cover replay, permissions, title conflict/retry and legacy null-Host compatibility, while PostgreSQL/Compose integration remains an Agent VM gate.
+The Codex source synchronization slice adds migrations 00022 and 00023, a Host-scoped app-server adapter, durable source/project/thread snapshots and source-event acknowledgements, complete history and supported-file retention, binding and title-write state, generated REST/MCP operations and the Chinese-first Codex conversation workspace. The real Host-local smoke records the installed `codex-cli 0.166.0` build and capability negotiation; focused tests cover replay, permissions, title conflict/retry and legacy null-Host compatibility, while PostgreSQL/Compose integration remains an Agent VM gate.
 
 ## Implementation Coverage
 
@@ -61,9 +61,25 @@ Wave 8 candidate `ab3100c` adds optional caller-selected project/task identities
 
 ## Codex Source Synchronization
 
-F06 adds migration 00022 and a Host-scoped Codex source adapter around the host-local app-server. It records exact build and capability evidence, imports existing projects and threads without fabricating unavailable control, preserves raw protocol events and readable fallbacks, retains supported file bytes or references, and exposes explicit snapshot completeness and source state. Discovery is account-owned; shared users see only Loomhelm-created or explicitly shared conversations. Null-Host legacy rows remain readable without guessed backfill, unbound rows stay read-only until complete, and binding remains a separate idempotent immutable operation.
+F06 adds migrations 00022 and 00023 and a Host-scoped Codex source adapter around the host-local app-server. It records exact build and capability evidence, imports existing projects and threads without fabricating unavailable control, preserves raw protocol events and readable fallbacks, retains supported file bytes or references, persists source-event acknowledgement state, and exposes explicit snapshot completeness and source state. Discovery is account-owned; shared users see only Loomhelm-created or explicitly shared conversations. Null-Host legacy rows remain readable without guessed backfill, unbound rows stay read-only until complete, and binding remains a separate idempotent immutable operation.
 
 F06 also adds generated REST/MCP source operations and a React-backed conversation workspace. Conversation titles are bidirectionally synchronized with Codex thread names through permission checks, conflict-preserving values, bounded retry state and manual retry; missing Codex names remain display-only fallbacks. Task titles remain independent, with only the two approved shortcut directions, and Codex archived, deleted or unavailable states retain Loomhelm history while pausing writeback. Focused Go/Web tests and the real Host-local read-only smoke pass; PostgreSQL/Compose integration and full deployment validation remain separate runtime gates.
+
+### F06 验收映射
+
+下表将计划中的 A1-A9 逐项映射到实现、测试和交付证据；“待补证据”表示该项仍是合并前门禁，不把本地夹具或单元测试冒充为正式验收。
+
+| 验收项 | 实现与测试边界 | 当前证据与门禁 |
+| - | - | - |
+| A1 契约与真实能力 | Gateway、Connector、REST/MCP 使用生成契约；严格记录 exact build，未知能力可见并由实际 RPC 判定 | `contracts/loomhelm-v1.json`、生成文件、真实 Host-local smoke；需保留当前候选 build/capability 输出 |
+| A2 快照、历史、文件与重连 | 00022/00023、不可变历史/文件材料、操作身份 fencing、source event durable ack、重启 stale reconcile | `internal/codex`、`internal/connector`、`internal/gateway` 聚焦测试；待 Agent VM PostgreSQL/Compose 重连运行 |
+| A3 Host-scoped 迁移兼容 | Host identity 保留，legacy null-Host 行不猜测回填，00022/00023 仅 forward repair | migration records、升级测试与唯一性检查；待 Agent VM upgrade fixture |
+| A4 只读与绑定权限 | 未绑定或材料不完整行只读；绑定要求 Task 写权限、创建者身份和显式确认；分页先做项目授权过滤 | REST/MCP/服务测试和当前详情绑定入口；需补完整授权矩阵运行记录 |
+| A5 双向标题同步 | Loomhelm/Codex 双值冲突保留，标题操作持久化 pending/failed/conflict/paused，retry 仍校验 expected title | 标题服务、Gateway ack、重试/权限测试；需保留失败写回与手动重试输出 |
+| A6 两个快捷替换方向 | 仅提供 Task → 对话、对话 → Task；Task 标题不直接调用 Codex 写回 | `CodexConversations.tsx`、Task update 测试、Storybook/浏览器交互证据 |
+| A7 归档、删除、不可用 | Loomhelm 历史保留，来源状态单独记录，标题写回暂停，source event 重放幂等 | source status 测试与状态投影；需补真实通知重放运行记录 |
+| A8 fallback 与文件材料 | raw event、readable fallback、文件字节/引用和 complete 状态在 project-visible 前可查询 | `service_integration_test.go`、connector page/error fixtures；待 Agent VM 材料完整性运行 |
+| A9 fast-track 交付 | 当前头、live PR、CI、Tier 3 review、Step 5C release decision card 和 merge guard | PR #37、Phase A visual gate、CI tracker；需完成最终 review、版本预期和合并方式确认 |
 
 ## U02 Repair Batch 9
 
