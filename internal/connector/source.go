@@ -18,6 +18,7 @@ import (
 
 var (
 	ErrSourceCapabilityUnsupported = errors.New("Codex source capability is unsupported")
+	ErrSourceInvalidParams         = errors.New("Codex source request parameters are invalid")
 	ErrSourceHistoryIncomplete     = errors.New("Codex source history is incomplete")
 )
 
@@ -53,8 +54,11 @@ func (e *SourceRPCError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
-	if e.Code == -32601 || e.Code == -32602 || strings.Contains(strings.ToLower(e.Message), "unsupported") {
+	if e.Code == -32601 || strings.Contains(strings.ToLower(e.Message), "unsupported") {
 		return ErrSourceCapabilityUnsupported
+	}
+	if e.Code == -32602 {
+		return ErrSourceInvalidParams
 	}
 	return nil
 }
@@ -616,7 +620,7 @@ func (c *SourceClient) call(ctx context.Context, method string, params any) (jso
 		return nil, err
 	}
 	if result.Error != nil {
-		if result.Error.Code == -32601 || result.Error.Code == -32602 || strings.Contains(strings.ToLower(result.Error.Message), "unsupported") {
+		if result.Error.Code == -32601 || strings.Contains(strings.ToLower(result.Error.Message), "unsupported") {
 			c.setCapability(method, CapabilityUnsupported)
 		}
 		return nil, &SourceRPCError{Method: method, Code: result.Error.Code, Message: result.Error.Message}
@@ -709,23 +713,37 @@ func (c *SourceClient) readItems(ctx context.Context, threadID string) ([]Source
 }
 
 func (c *SourceClient) readFiles(ctx context.Context, threadID string) ([]SourceFileMaterial, error) {
-	result, err := c.call(ctx, SourceMethodAttachmentList, map[string]any{"threadId": threadID})
-	if err != nil {
-		return nil, err
-	}
-	values, _, err := decodeRawPage(result, "attachments")
-	if err != nil {
-		return nil, err
-	}
-	files := make([]SourceFileMaterial, 0, len(values))
-	for _, value := range values {
-		file, err := decodeFileMaterial(value)
+	files := make([]SourceFileMaterial, 0)
+	cursor := ""
+	for page := 0; page < 100; page++ {
+		params := map[string]any{"threadId": threadID, "limit": 100}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		result, err := c.call(ctx, SourceMethodAttachmentList, params)
 		if err != nil {
 			return nil, err
 		}
-		files = append(files, file)
+		values, next, err := decodeRawPage(result, "attachments")
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range values {
+			file, err := decodeFileMaterial(value)
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, file)
+		}
+		if next == "" {
+			return files, nil
+		}
+		if next == cursor {
+			return nil, errors.New("Codex thread/attachment/list returned a repeated cursor")
+		}
+		cursor = next
 	}
-	return files, nil
+	return nil, errors.New("Codex thread/attachment/list exceeded the pagination limit")
 }
 
 func initializeSourceCapabilities(value map[string]CapabilityState) {
@@ -1007,12 +1025,23 @@ func decodeFileMaterial(raw json.RawMessage) (SourceFileMaterial, error) {
 	} else if value.Content != "" {
 		content = []byte(value.Content)
 	}
-	complete := value.Complete != nil && *value.Complete
-	if value.ContentRef != "" || len(content) > 0 {
-		complete = true
+	if value.Size < 0 {
+		return SourceFileMaterial{}, errors.New("Codex attachment size must not be negative")
 	}
 	if value.Size == 0 && len(content) > 0 {
 		value.Size = int64(len(content))
+	} else if value.Size > 0 && int64(len(content)) > 0 && value.Size != int64(len(content)) {
+		return SourceFileMaterial{}, fmt.Errorf("Codex attachment size %d does not match %d decoded bytes", value.Size, len(content))
+	}
+	if value.SHA256 != "" && len(content) > 0 {
+		digest := sha256.Sum256(content)
+		if !strings.EqualFold(value.SHA256, hex.EncodeToString(digest[:])) {
+			return SourceFileMaterial{}, errors.New("Codex attachment sha256 does not match decoded bytes")
+		}
+	}
+	complete := value.Complete == nil && (value.ContentRef != "" || len(content) > 0)
+	if value.Complete != nil {
+		complete = *value.Complete
 	}
 	return SourceFileMaterial{Path: path, ContentType: value.ContentType, Size: value.Size, SHA256: value.SHA256, Bytes: content, ContentRef: value.ContentRef, Complete: complete, Raw: append(json.RawMessage(nil), raw...)}, nil
 }
@@ -1058,18 +1087,19 @@ func notificationKey(notification SourceNotification) string {
 // initialize handshake and cold-reads the requested threads before callers can
 // treat the source snapshot as current.
 type SourceRuntime struct {
-	factory   TransportFactory
-	client    ClientInfo
-	mu        sync.Mutex
-	transport RPCTransport
-	source    *SourceClient
+	factory    TransportFactory
+	client     ClientInfo
+	mu         sync.Mutex
+	transport  RPCTransport
+	source     *SourceClient
+	seenNotice map[string]struct{}
 }
 
 func NewSourceRuntime(factory TransportFactory, client ClientInfo) (*SourceRuntime, error) {
 	if factory == nil {
 		return nil, errors.New("Codex source transport factory must not be nil")
 	}
-	return &SourceRuntime{factory: factory, client: client}, nil
+	return &SourceRuntime{factory: factory, client: client, seenNotice: make(map[string]struct{})}, nil
 }
 
 func (r *SourceRuntime) Connect(ctx context.Context) (*SourceClient, error) {
@@ -1086,6 +1116,9 @@ func (r *SourceRuntime) Connect(ctx context.Context) (*SourceClient, error) {
 		return nil, err
 	}
 	r.mu.Lock()
+	source.noticeMu.Lock()
+	source.seenNotice = r.seenNotice
+	source.noticeMu.Unlock()
 	previous := r.transport
 	r.transport = transport
 	r.source = source
@@ -1100,6 +1133,12 @@ func (r *SourceRuntime) ReconnectAndRecover(ctx context.Context, threadIDs []str
 	source, err := r.Connect(ctx)
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(threadIDs) == 0 {
+		if _, err := source.Sync(ctx, fmt.Sprintf("reconnect-%d", time.Now().UnixNano())); err != nil {
+			return source, nil, err
+		}
+		return source, nil, nil
 	}
 	snapshots := make([]SourceHistorySnapshot, 0, len(threadIDs))
 	for _, threadID := range threadIDs {

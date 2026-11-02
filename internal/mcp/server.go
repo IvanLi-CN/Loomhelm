@@ -479,6 +479,12 @@ func validToolResponse(operationID string, body []byte) bool {
 	case "updateDraft":
 		var response protocol.DraftResponse
 		return json.Unmarshal(body, &response) == nil && validDraft(response.Draft)
+	case "updateCodexConversationTitle", "bindCodexConversation":
+		var response protocol.CodexConversationResponse
+		return json.Unmarshal(body, &response) == nil && response.Conversation.HostID != "" && response.Conversation.ThreadID != ""
+	case "mapCodexProject":
+		var response protocol.CodexProjectResponse
+		return json.Unmarshal(body, &response) == nil && response.Project.HostID != "" && response.Project.ProjectID != ""
 	default:
 		return false
 	}
@@ -1370,13 +1376,15 @@ func rpcCodeForHTTP(status int) int {
 }
 
 func errorCodeForHTTP(status int) protocol.ErrorCode {
-	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return protocol.ErrorCodeUnauthorized
-	case http.StatusNotFound:
+	case status == http.StatusNotFound:
 		return protocol.ErrorCodeNotFound
-	case http.StatusConflict:
+	case status == http.StatusConflict:
 		return protocol.ErrorCodeConflict
+	case status >= http.StatusInternalServerError:
+		return protocol.ErrorCodeServiceUnavailable
 	default:
 		return protocol.ErrorCodeInvalidRequest
 	}

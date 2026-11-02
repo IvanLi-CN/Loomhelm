@@ -1143,6 +1143,17 @@ func TestServerAcceptsHostShareResponse(t *testing.T) {
 	}
 }
 
+func TestServerAcceptsCodexMutationResponses(t *testing.T) {
+	conversation := `{"host_id":"host-1","thread_id":"thread-1","conversation_title":"标题","history_state":"complete","files_complete":true,"read_only":false,"title_sync_state":"synced","as_of":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`
+	if !validToolResponse("updateCodexConversationTitle", []byte(`{"conversation":`+conversation+`}`)) || !validToolResponse("bindCodexConversation", []byte(`{"conversation":`+conversation+`}`)) {
+		t.Fatal("valid Codex conversation mutation response was rejected")
+	}
+	project := `{"host_id":"host-1","project_id":"project-1","name":"项目","snapshot_state":"complete","as_of":"2026-01-01T00:00:00Z"}`
+	if !validToolResponse("mapCodexProject", []byte(`{"project":`+project+`}`)) {
+		t.Fatal("valid Codex project mutation response was rejected")
+	}
+}
+
 func TestServerReportsOversizedReadResponseAsServiceFailure(t *testing.T) {
 	server, err := NewServer(Config{
 		RESTHandler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

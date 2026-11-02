@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/jackc/pgx/v5"
 )
 
 // SyncRunner is the Host-local connector boundary. The runner returns a
@@ -63,10 +66,20 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		return fmt.Errorf("begin Codex snapshot import: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var currentAsOf time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT as_of FROM codex_sync_sources WHERE host_id = $1 FOR UPDATE
+	`, hostID).Scan(&currentAsOf); err == nil {
+		if currentAsOf.After(snapshot.AsOf) {
+			return tx.Commit(ctx)
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("read current Codex source snapshot: %w", err)
+	}
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO codex_sync_sources (host_id, state, sync_state, build, protocol_version, capabilities, capability_states, as_of, last_error, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $8)
+		INSERT INTO codex_sync_sources (host_id, state, sync_state, build, protocol_version, capabilities, capability_states, sync_operation_id, as_of, last_error, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $9)
 		ON CONFLICT (host_id) DO UPDATE SET
 			state = EXCLUDED.state,
 			sync_state = EXCLUDED.sync_state,
@@ -74,10 +87,11 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			protocol_version = EXCLUDED.protocol_version,
 			capabilities = EXCLUDED.capabilities,
 			capability_states = EXCLUDED.capability_states,
+			sync_operation_id = EXCLUDED.sync_operation_id,
 			last_error = EXCLUDED.last_error,
 			as_of = EXCLUDED.as_of,
 			updated_at = EXCLUDED.updated_at
-	`, hostID, snapshot.State, status.State, strings.TrimSpace(snapshot.Build), strings.TrimSpace(snapshot.ProtocolVersion), capabilities, capabilityStates, snapshot.AsOf, strings.TrimSpace(status.Error)); err != nil {
+	`, hostID, snapshot.State, status.State, strings.TrimSpace(snapshot.Build), strings.TrimSpace(snapshot.ProtocolVersion), capabilities, capabilityStates, snapshot.OperationID, snapshot.AsOf, strings.TrimSpace(status.Error)); err != nil {
 		return fmt.Errorf("persist Codex source snapshot: %w", err)
 	}
 
@@ -103,11 +117,13 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		}
 	}
 
+	threadIDs := make([]string, 0, len(snapshot.Threads))
 	for _, thread := range snapshot.Threads {
 		threadID := strings.TrimSpace(thread.ThreadID)
 		if threadID == "" {
 			return ErrInvalid
 		}
+		threadIDs = append(threadIDs, threadID)
 		projectID := strings.TrimSpace(valueOrEmpty(thread.ProjectID))
 		projectIDValue := nullableStringValue(projectID)
 		if projectID != "" {
@@ -163,8 +179,8 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 				preview = EXCLUDED.preview,
 				cwd = EXCLUDED.cwd,
 				source_status = EXCLUDED.source_status,
-				history_state = EXCLUDED.history_state,
-				files_complete = EXCLUDED.files_complete,
+				history_state = CASE WHEN codex_threads.history_state = 'complete' AND EXCLUDED.history_state <> 'complete' THEN codex_threads.history_state ELSE EXCLUDED.history_state END,
+				files_complete = codex_threads.files_complete OR EXCLUDED.files_complete,
 				as_of = EXCLUDED.as_of,
 				last_activity_at = EXCLUDED.last_activity_at,
 				updated_at = EXCLUDED.updated_at,
@@ -201,12 +217,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO codex_thread_history (host_id, thread_id, event_id, sequence, event_type, raw_payload, readable_fallback, occurred_at)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				ON CONFLICT (host_id, thread_id, event_id) DO UPDATE SET
-					sequence = EXCLUDED.sequence,
-					event_type = EXCLUDED.event_type,
-					raw_payload = EXCLUDED.raw_payload,
-					readable_fallback = EXCLUDED.readable_fallback,
-					occurred_at = EXCLUDED.occurred_at
+				ON CONFLICT DO NOTHING
 			`, hostID, threadID, eventID, sequence, strings.TrimSpace(event.EventType), string(rawPayload), fallback, occurredAt); err != nil {
 				return fmt.Errorf("persist Codex history snapshot: %w", err)
 			}
@@ -238,13 +249,17 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 					content_ref = EXCLUDED.content_ref,
 					complete = EXCLUDED.complete,
 					updated_at = EXCLUDED.updated_at
+				WHERE NOT codex_thread_files.complete OR EXCLUDED.complete
 			`, hostID, threadID, strings.TrimSpace(file.Path), contentType, file.Size, strings.TrimSpace(file.SHA256), file.Content, strings.TrimSpace(file.ContentRef), file.Complete, snapshot.AsOf); err != nil {
 				return fmt.Errorf("persist Codex file snapshot: %w", err)
 			}
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE codex_threads
-			SET history_state = $3, files_complete = $4, title_sync_error = CASE WHEN NULLIF(trim($5), '') IS NOT NULL THEN $5 ELSE title_sync_error END, updated_at = $6
+			SET history_state = CASE WHEN codex_threads.history_state = 'complete' AND $3 <> 'complete' THEN codex_threads.history_state ELSE $3 END,
+				files_complete = codex_threads.files_complete OR $4,
+				title_sync_error = CASE WHEN NULLIF(trim($5), '') IS NOT NULL THEN $5 ELSE title_sync_error END,
+				updated_at = $6
 			WHERE host_id = $1 AND thread_id = $2
 		`, hostID, threadID, threadHistoryState(thread, threadStatus), allFilesComplete, strings.TrimSpace(thread.Error), snapshot.AsOf); err != nil {
 			return fmt.Errorf("finalize Codex thread snapshot: %w", err)
@@ -263,6 +278,21 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 				updated_at = EXCLUDED.updated_at
 		`, threadSnapshotID, hostID, threadID, threadStatus.State, threadComplete, snapshot.AsOf, strings.TrimSpace(thread.Error)); err != nil {
 			return fmt.Errorf("persist Codex thread snapshot state: %w", err)
+		}
+	}
+	if status.Complete {
+		if len(threadIDs) == 0 {
+			if _, err := tx.Exec(ctx, `
+				UPDATE codex_threads SET source_status = 'unavailable', updated_at = $2
+				WHERE host_id = $1 AND source_status = 'active'
+			`, hostID, snapshot.AsOf); err != nil {
+				return fmt.Errorf("mark missing Codex threads unavailable: %w", err)
+			}
+		} else if _, err := tx.Exec(ctx, `
+			UPDATE codex_threads SET source_status = 'unavailable', updated_at = $3
+			WHERE host_id = $1 AND source_status = 'active' AND NOT (thread_id = ANY($2::text[]))
+		`, hostID, threadIDs, snapshot.AsOf); err != nil {
+			return fmt.Errorf("mark missing Codex threads unavailable: %w", err)
 		}
 	}
 
@@ -296,7 +326,7 @@ func (s *Service) FailSync(ctx context.Context, hostID, operationID string, sync
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE codex_sync_sources
 		SET sync_state = 'failed', last_error = $3, as_of = $4, updated_at = $4
-		WHERE host_id = $1
+		WHERE host_id = $1 AND sync_operation_id = $2
 	`, hostID, operationID, reason, now); err != nil {
 		return err
 	}

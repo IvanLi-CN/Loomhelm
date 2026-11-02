@@ -42,10 +42,14 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 	operationID := "codex-import-operation-" + suffix
 	_, err = db.Pool().Exec(ctx, `
 		INSERT INTO auth_users (id, issuer, subject)
-		VALUES ($1, 'test', $1);
-		INSERT INTO host_registrations (id, singleton_key, name, status, owner_user_id)
-		VALUES ($2, NULL, 'Codex import test', 'online', $1);
-	`, userID, hostID)
+		VALUES ($1, 'test', $1)
+	`, userID)
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `
+			INSERT INTO host_registrations (id, singleton_key, name, status, owner_user_id)
+			VALUES ($1, NULL, 'Codex import test', 'online', $2)
+		`, hostID, userID)
+	}
 	if err != nil {
 		t.Fatalf("seed Host: %v", err)
 	}

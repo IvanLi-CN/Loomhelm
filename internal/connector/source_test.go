@@ -12,21 +12,27 @@ import (
 )
 
 type sourceTestTransport struct {
-	mu        sync.Mutex
-	responses map[string]RPCMessage
-	calls     []string
-	events    chan RPCMessage
-	closed    bool
+	mu             sync.Mutex
+	responses      map[string]RPCMessage
+	responseQueues map[string][]RPCMessage
+	calls          []string
+	events         chan RPCMessage
+	closed         bool
 }
 
 func newSourceTestTransport() *sourceTestTransport {
-	return &sourceTestTransport{responses: make(map[string]RPCMessage), events: make(chan RPCMessage, 8)}
+	return &sourceTestTransport{responses: make(map[string]RPCMessage), responseQueues: make(map[string][]RPCMessage), events: make(chan RPCMessage, 8)}
 }
 
 func (t *sourceTestTransport) Call(_ context.Context, method string, _ json.RawMessage) (RPCMessage, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.calls = append(t.calls, method)
+	if queue := t.responseQueues[method]; len(queue) > 0 {
+		response := queue[0]
+		t.responseQueues[method] = queue[1:]
+		return response, nil
+	}
 	if response, ok := t.responses[method]; ok {
 		return response, nil
 	}
@@ -94,6 +100,37 @@ func TestSourceClientDeduplicatesRepeatedTitleNotifications(t *testing.T) {
 	defer cancel()
 	if _, err := source.NextNotification(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("duplicate notification error = %v, want deadline", err)
+	}
+}
+
+func TestSourceRPCErrorDistinguishesInvalidParamsFromUnsupported(t *testing.T) {
+	invalidParams := &SourceRPCError{Code: -32602, Message: "invalid params"}
+	if !errors.Is(invalidParams, ErrSourceInvalidParams) || errors.Is(invalidParams, ErrSourceCapabilityUnsupported) {
+		t.Fatalf("invalid params classification = %v", invalidParams)
+	}
+	unsupported := &SourceRPCError{Code: -32601, Message: "method not found"}
+	if !errors.Is(unsupported, ErrSourceCapabilityUnsupported) {
+		t.Fatalf("unsupported classification = %v", unsupported)
+	}
+}
+
+func TestSourceClientReadsAttachmentPagesAndPreservesExplicitIncomplete(t *testing.T) {
+	transport := newSourceTestTransport()
+	transport.responses["initialize"] = RPCMessage{Result: sourceInitializeResult()}
+	transport.responses[SourceMethodThreadRead] = RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-1"}}`)}
+	transport.responses[SourceMethodThreadTurnsList] = RPCMessage{Result: json.RawMessage(`{"data":[]}`)}
+	transport.responses[SourceMethodThreadItemsList] = RPCMessage{Result: json.RawMessage(`{"data":[{"id":"item-1","type":"message"}]}`)}
+	transport.responseQueues[SourceMethodAttachmentList] = []RPCMessage{
+		{Result: json.RawMessage(`{"attachments":[{"path":"one.txt","content":"one","complete":false}],"nextCursor":"cursor-1"}`)},
+		{Result: json.RawMessage(`{"attachments":[{"path":"two.txt","content":"two","complete":true}]}`)},
+	}
+	source, err := NewSourceClient(context.Background(), transport, ClientInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.ReadHistory(context.Background(), "thread-1")
+	if !errors.Is(err, ErrSourceHistoryIncomplete) || len(snapshot.Files) != 2 || snapshot.Files[0].Complete {
+		t.Fatalf("snapshot = %+v, error = %v", snapshot, err)
 	}
 }
 

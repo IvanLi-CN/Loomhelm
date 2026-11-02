@@ -591,7 +591,7 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 	}
 	if value := strings.TrimSpace(valueOrEmpty(query.LoomhelmProjectID)); value != "" {
 		args = append(args, value)
-		where += fmt.Sprintf(" AND task.project_id = $%d", len(args))
+		where += fmt.Sprintf(" AND cp.loomhelm_project_id = $%d", len(args))
 	}
 	if value := strings.TrimSpace(valueOrEmpty(query.Search)); value != "" {
 		args = append(args, "%"+value+"%")
@@ -783,13 +783,31 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 	if s.titleWriter != nil {
 		writeErr := s.titleWriter.SetTitle(ctx, hostID, threadID, operationDesired)
 		if writeErr == nil {
-			_, err = s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_complete', attempts = attempts + 1, updated_at = $3 WHERE request_id = $1 AND state = 'title_sync_pending'`, request.RequestID, operationDesired, s.now())
-			if err == nil {
-				_, err = s.pool.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = 'synced', title_sync_error = '', updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, operationDesired, s.now())
+			threadTag, threadErr := s.pool.Exec(ctx, `
+				UPDATE codex_threads
+				SET codex_title = $3, title_sync_state = 'synced', title_sync_error = '', updated_at = $4
+				WHERE host_id = $1 AND thread_id = $2 AND title_sync_state = 'pending' AND conversation_title = $3
+			`, hostID, threadID, operationDesired, s.now())
+			if threadErr != nil {
+				err = fmt.Errorf("persist successful Codex title state: %w", threadErr)
+			} else if threadTag.RowsAffected() == 0 {
+				_, conflictErr := s.pool.Exec(ctx, `
+					UPDATE codex_title_operations
+					SET state = 'title_sync_conflict', last_error = 'local title changed before remote acknowledgement', updated_at = $2
+					WHERE request_id = $1 AND state = 'title_sync_pending'
+				`, request.RequestID, s.now())
+				if conflictErr != nil {
+					err = errors.Join(ErrConflict, fmt.Errorf("persist Codex title conflict: %w", conflictErr))
+				} else {
+					err = ErrConflict
+				}
+			} else {
+				_, err = s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_complete', attempts = attempts + 1, updated_at = $3 WHERE request_id = $1 AND state = 'title_sync_pending'`, request.RequestID, operationDesired, s.now())
 			}
 		} else {
-			_, _ = s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_failed', attempts = attempts + 1, last_error = $2, updated_at = $3 WHERE request_id = $1`, request.RequestID, writeErr.Error(), s.now())
-			_, _ = s.pool.Exec(ctx, `UPDATE codex_threads SET title_sync_state = 'failed', title_sync_error = $3, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, writeErr.Error(), s.now())
+			_, operationErr := s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_failed', attempts = attempts + 1, last_error = $2, updated_at = $3 WHERE request_id = $1`, request.RequestID, writeErr.Error(), s.now())
+			_, threadErr := s.pool.Exec(ctx, `UPDATE codex_threads SET title_sync_state = 'failed', title_sync_error = $3, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, writeErr.Error(), s.now())
+			err = errors.Join(writeErr, operationErr, threadErr)
 		}
 	}
 	if err != nil {
@@ -842,23 +860,50 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	}
 	defer tx.Rollback(ctx)
 	var conversationTitle, sourceStatus, historyState string
+	var codexProjectID *string
 	var filesComplete bool
 	var existingTask, existingSession *string
 	var importedBy *string
 	var snapshotAsOf time.Time
 	if err := tx.QueryRow(ctx, `
-		SELECT conversation_title, source_status, history_state, files_complete, bound_task_id, bound_session_id, imported_by, as_of
+		SELECT conversation_title, project_id, source_status, history_state, files_complete, bound_task_id, bound_session_id, imported_by, as_of
 		FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE
-	`, access.host.ID, threadID).Scan(&conversationTitle, &sourceStatus, &historyState, &filesComplete, &existingTask, &existingSession, &importedBy, &snapshotAsOf); errors.Is(err, pgx.ErrNoRows) {
+	`, access.host.ID, threadID).Scan(&conversationTitle, &codexProjectID, &sourceStatus, &historyState, &filesComplete, &existingTask, &existingSession, &importedBy, &snapshotAsOf); errors.Is(err, pgx.ErrNoRows) {
 		return protocol.CodexConversation{}, ErrNotFound
 	} else if err != nil {
 		return protocol.CodexConversation{}, fmt.Errorf("lock Codex conversation: %w", err)
 	}
-	if existingTask != nil {
-		if *existingTask == request.TaskID {
-			return s.readProjectedConversation(ctx, access, principal, threadID)
+	var taskProjectID string
+	var taskSessionID *string
+	if err := tx.QueryRow(ctx, `SELECT project_id, session_id FROM tasks WHERE id = $1 FOR UPDATE`, request.TaskID).Scan(&taskProjectID, &taskSessionID); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, auth.ErrNotFound
+	} else if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("lock binding Task: %w", err)
+	}
+	allowed, err := s.projects.CanWriteProjectTx(ctx, tx, principal, taskProjectID)
+	if err != nil {
+		return protocol.CodexConversation{}, err
+	}
+	if !allowed {
+		return protocol.CodexConversation{}, auth.ErrNotFound
+	}
+	if codexProjectID != nil && strings.TrimSpace(*codexProjectID) != "" {
+		var mappedProjectID *string
+		if err := tx.QueryRow(ctx, `SELECT loomhelm_project_id FROM codex_projects WHERE host_id = $1 AND project_id = $2`, access.host.ID, *codexProjectID).Scan(&mappedProjectID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return protocol.CodexConversation{}, fmt.Errorf("read Codex project mapping: %w", err)
 		}
-		return protocol.CodexConversation{}, ErrConflict
+		if mappedProjectID != nil && *mappedProjectID != taskProjectID {
+			return protocol.CodexConversation{}, ErrConflict
+		}
+	}
+	if existingTask != nil {
+		if *existingTask != request.TaskID {
+			return protocol.CodexConversation{}, ErrConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return protocol.CodexConversation{}, fmt.Errorf("commit idempotent Codex binding: %w", err)
+		}
+		return s.readProjectedConversation(ctx, access, principal, threadID)
 	}
 	if request.ExpectedAsOf != nil {
 		expectedAsOf, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(*request.ExpectedAsOf))
@@ -879,20 +924,6 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 		if request.ConfirmShare == nil || !*request.ConfirmShare {
 			return protocol.CodexConversation{}, ErrForbidden
 		}
-	}
-	var taskProjectID string
-	var taskSessionID *string
-	if err := tx.QueryRow(ctx, `SELECT project_id, session_id FROM tasks WHERE id = $1 FOR UPDATE`, request.TaskID).Scan(&taskProjectID, &taskSessionID); errors.Is(err, pgx.ErrNoRows) {
-		return protocol.CodexConversation{}, auth.ErrNotFound
-	} else if err != nil {
-		return protocol.CodexConversation{}, fmt.Errorf("lock binding Task: %w", err)
-	}
-	allowed, err := s.projects.CanWriteProjectTx(ctx, tx, principal, taskProjectID)
-	if err != nil {
-		return protocol.CodexConversation{}, err
-	}
-	if !allowed {
-		return protocol.CodexConversation{}, auth.ErrNotFound
 	}
 	if taskSessionID != nil {
 		return protocol.CodexConversation{}, ErrConflict
@@ -975,10 +1006,10 @@ func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, req
 		return protocol.CodexSyncResponse{}, fmt.Errorf("read existing Codex sync request: %w", existingErr)
 	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO codex_sync_sources (host_id, state, sync_state, as_of, updated_at)
-		VALUES ($1, CASE WHEN (SELECT status FROM host_registrations WHERE id = $1) = 'online' THEN 'online' ELSE 'offline' END, 'syncing', $2, $2)
-		ON CONFLICT (host_id) DO UPDATE SET sync_state = 'syncing', as_of = EXCLUDED.as_of, updated_at = EXCLUDED.updated_at
-	`, access.host.ID, now)
+		INSERT INTO codex_sync_sources (host_id, state, sync_state, sync_operation_id, as_of, updated_at)
+		VALUES ($1, CASE WHEN (SELECT status FROM host_registrations WHERE id = $1) = 'online' THEN 'online' ELSE 'offline' END, 'syncing', $2, $3, $3)
+		ON CONFLICT (host_id) DO UPDATE SET sync_state = 'syncing', sync_operation_id = EXCLUDED.sync_operation_id, as_of = EXCLUDED.as_of, updated_at = EXCLUDED.updated_at
+	`, access.host.ID, operationID, now)
 	if err != nil {
 		return protocol.CodexSyncResponse{}, fmt.Errorf("record Codex sync request: %w", err)
 	}

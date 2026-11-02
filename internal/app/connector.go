@@ -460,6 +460,23 @@ func (c *Connector) resetSource(source *connectorruntime.SourceClient) {
 	}
 }
 
+func (c *Connector) recoverSource(ctx context.Context) error {
+	if c.sourceRuntime == nil {
+		return errors.New("Connector Codex source runtime is unavailable")
+	}
+	source, _, err := c.sourceRuntime.ReconnectAndRecover(ctx, nil)
+	if err != nil {
+		if source != nil {
+			_ = source.Close()
+		}
+		return err
+	}
+	c.sourceMu.Lock()
+	c.source = source
+	c.sourceMu.Unlock()
+	return nil
+}
+
 func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *gateway.ClientConnection) error {
 	for {
 		source, err := c.sourceClient(ctx)
@@ -478,6 +495,9 @@ func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *
 				return ctx.Err()
 			}
 			c.resetSource(source)
+			if recoverErr := c.recoverSource(ctx); recoverErr == nil {
+				continue
+			}
 			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
 				return ctx.Err()
 			}

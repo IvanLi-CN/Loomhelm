@@ -15,6 +15,7 @@ CREATE TABLE codex_sync_sources (
     protocol_version TEXT NOT NULL DEFAULT '',
     capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
     capability_states JSONB NOT NULL DEFAULT '{}'::jsonb,
+    sync_operation_id TEXT NOT NULL DEFAULT '',
     as_of TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_error TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
