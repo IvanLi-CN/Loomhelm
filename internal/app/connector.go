@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +40,9 @@ type Connector struct {
 	adapter        *connectorruntime.Adapter
 	controller     *connectorruntime.Controller
 	platform       *gateway.Client
+	sourceRuntime  *connectorruntime.SourceRuntime
+	sourceMu       sync.Mutex
+	source         *connectorruntime.SourceClient
 
 	connectionMu sync.Mutex
 	connection   *gateway.ClientConnection
@@ -101,6 +105,19 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 	if err != nil {
 		return nil, fmt.Errorf("initialize connector controller: %w", err)
 	}
+	sourceRuntime, err := connectorruntime.NewSourceRuntime(func(factoryCtx context.Context) (connectorruntime.RPCTransport, error) {
+		return connectorruntime.NewProcessTransport(context.WithoutCancel(factoryCtx), connectorruntime.ProcessTransportConfig{
+			CommandPath: cfg.ConnectorAppServerCommand,
+			WorkingDir:  cfg.ConnectorWorkingDir,
+		})
+	}, connectorruntime.ClientInfo{
+		Name:    "loomhelm_connector_source",
+		Title:   "Loomhelm Codex Source",
+		Version: cfg.Version,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize connector Codex source runtime: %w", err)
+	}
 	var platformClient *gateway.Client
 	if credential, ok, credentialErr := connectorCredentialFromConfig(cfg); credentialErr != nil {
 		return nil, fmt.Errorf("initialize connector platform credential: %w", credentialErr)
@@ -121,6 +138,7 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 		appGateway:     appGateway,
 		adapter:        adapter,
 		controller:     controller,
+		sourceRuntime:  sourceRuntime,
 		platform:       platformClient,
 	}, nil
 }
@@ -312,10 +330,12 @@ func (c *Connector) serveConnection(ctx context.Context, connection *gateway.Cli
 	eventResult := make(chan error, 1)
 	artifactResult := make(chan error, 1)
 	heartbeatResult := make(chan error, 1)
+	sourceResult := make(chan error, 1)
 	go func() { readResult <- c.readGatewayMessages(connectionCtx, connection) }()
 	go func() { eventResult <- c.deliverJournalEvents(connectionCtx, connection) }()
 	go func() { artifactResult <- c.uploadPendingArtifacts(connectionCtx, connection) }()
 	go func() { heartbeatResult <- c.sendGatewayHeartbeats(connectionCtx, connection) }()
+	go func() { sourceResult <- c.deliverSourceNotifications(connectionCtx, connection) }()
 	select {
 	case err := <-readResult:
 		cancel()
@@ -327,6 +347,9 @@ func (c *Connector) serveConnection(ctx context.Context, connection *gateway.Cli
 		cancel()
 		return err
 	case err := <-heartbeatResult:
+		cancel()
+		return err
+	case err := <-sourceResult:
 		cancel()
 		return err
 	case <-ctx.Done():
@@ -347,6 +370,10 @@ func (c *Connector) readGatewayMessages(ctx context.Context, connection *gateway
 			if err := c.handleGatewayCommand(ctx, connection, message); err != nil {
 				return err
 			}
+		case gateway.MessageSourceCommand:
+			if err := c.handleGatewaySourceCommand(ctx, connection, message); err != nil {
+				return err
+			}
 		case gateway.MessageHeartbeatAck:
 			continue
 		case gateway.MessageError:
@@ -356,6 +383,113 @@ func (c *Connector) readGatewayMessages(ctx context.Context, connection *gateway
 			return fmt.Errorf("platform gateway rejected the Connector: %s", message.Error.Code)
 		default:
 			return fmt.Errorf("unexpected platform gateway message %q", message.Type)
+		}
+	}
+}
+
+func (c *Connector) handleGatewaySourceCommand(ctx context.Context, connection *gateway.ClientConnection, message gateway.Message) error {
+	if message.SourceCommand == nil {
+		return errors.New("Connector source command payload is missing")
+	}
+	command := *message.SourceCommand
+	ack := gateway.SourceAck{OperationID: command.OperationID, State: "failed"}
+	source, err := c.sourceClient(ctx)
+	if err == nil {
+		switch command.Method {
+		case connectorruntime.SourceMethodSetThreadName:
+			err = source.SetTitleWithRetry(ctx, command.ThreadID, command.Title, connectorruntime.SourceRetryPolicy{})
+		case connectorruntime.SourceMethodSync:
+			var snapshot protocol.CodexSourceSnapshot
+			var payload json.RawMessage
+			snapshot, err = source.Sync(ctx, command.OperationID)
+			if err == nil {
+				payload, err = json.Marshal(snapshot)
+				ack.Payload = payload
+			}
+		default:
+			err = fmt.Errorf("unsupported Connector source method %q", command.Method)
+		}
+	}
+	if err == nil {
+		ack.State = "succeeded"
+	} else {
+		ack.Error = &gateway.WireError{Code: connectorSourceErrorCode(err), Message: "Connector could not complete the Codex source operation"}
+		if errors.Is(err, connectorruntime.ErrSourceCapabilityUnsupported) {
+			ack.State = "unsupported"
+		}
+	}
+	return connection.AcknowledgeSource(ctx, message.RequestID, ack)
+}
+
+func connectorSourceErrorCode(err error) string {
+	switch {
+	case errors.Is(err, connectorruntime.ErrSourceCapabilityUnsupported):
+		return "unsupported_capability"
+	case errors.Is(err, connectorruntime.ErrTransportClosed):
+		return "source_unavailable"
+	default:
+		return "source_operation_failed"
+	}
+}
+
+func (c *Connector) sourceClient(ctx context.Context) (*connectorruntime.SourceClient, error) {
+	c.sourceMu.Lock()
+	defer c.sourceMu.Unlock()
+	if c.source != nil {
+		return c.source, nil
+	}
+	if c.sourceRuntime == nil {
+		return nil, errors.New("Connector Codex source runtime is unavailable")
+	}
+	source, err := c.sourceRuntime.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.source = source
+	return source, nil
+}
+
+func (c *Connector) resetSource(source *connectorruntime.SourceClient) {
+	c.sourceMu.Lock()
+	if c.source == source {
+		c.source = nil
+	}
+	c.sourceMu.Unlock()
+	if source != nil {
+		_ = source.Close()
+	}
+}
+
+func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *gateway.ClientConnection) error {
+	for {
+		source, err := c.sourceClient(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
+				return ctx.Err()
+			}
+			continue
+		}
+		notification, err := source.NextNotification(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			c.resetSource(source)
+			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
+				return ctx.Err()
+			}
+			continue
+		}
+		if err := connection.SendSourceNotification(ctx, gateway.SourceNotification{
+			Kind:     string(notification.Kind),
+			ThreadID: notification.ThreadID,
+			Title:    notification.Title,
+			Raw:      append(json.RawMessage(nil), notification.Raw...),
+		}); err != nil {
+			return err
 		}
 	}
 }
@@ -681,6 +815,15 @@ func (c *Connector) closeResources(ctx context.Context) error {
 	if c.artifactOutbox != nil {
 		if err := c.artifactOutbox.Close(); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close connector artifact outbox: %w", err))
+		}
+	}
+	c.sourceMu.Lock()
+	source := c.source
+	c.source = nil
+	c.sourceMu.Unlock()
+	if source != nil {
+		if err := source.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close connector Codex source: %w", err))
 		}
 	}
 	if c.journal != nil {

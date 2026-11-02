@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -1738,6 +1739,40 @@ func TestGatewayValidatesEvents(t *testing.T) {
 	unknown := `{"type":"event","event":{"event_id":"event_unknown","cursor":"cursor_unknown","sequence":2,"session_id":"session_1","type":"unknown","occurred_at":"2026-10-22T12:00:00Z","source":"host-observation","payload":["opaque",null]}}`
 	if _, err := decodeMessage([]byte(unknown), DefaultMaxFrame); err != nil {
 		t.Fatalf("EventTypeUnknown or raw payload rejected: %v", err)
+	}
+}
+
+func TestGatewayValidatesSourceEvents(t *testing.T) {
+	title := "Codex 标题"
+	valid := Message{
+		Type:       MessageSourceEvent,
+		Generation: 1,
+		SourceEvent: &SourceNotification{
+			Kind:     "title_updated",
+			ThreadID: "thread-1",
+			Title:    &title,
+			Raw:      json.RawMessage(`{"method":"thread/name/updated"}`),
+		},
+	}
+	data, err := encodeMessage(valid, DefaultMaxFrame)
+	if err != nil {
+		t.Fatalf("encodeMessage(valid source event) error = %v", err)
+	}
+	if _, err := decodeMessage(data, DefaultMaxFrame); err != nil {
+		t.Fatalf("decodeMessage(valid source event) error = %v", err)
+	}
+	invalid := []Message{
+		{Type: MessageSourceEvent, SourceEvent: valid.SourceEvent, Generation: 0},
+		{Type: MessageSourceEvent, Generation: 1, SourceEvent: &SourceNotification{Kind: "title_updated", ThreadID: "thread-1"}},
+		{Type: MessageSourceEvent, Generation: 1, SourceEvent: &SourceNotification{Kind: "unknown", ThreadID: "thread-1"}},
+		{Type: MessageSourceEvent, Generation: 1, SourceEvent: &SourceNotification{Kind: "title_updated", ThreadID: "thread-1", Title: &title, Raw: json.RawMessage(`{invalid`)}},
+	}
+	for index, message := range invalid {
+		t.Run(fmt.Sprintf("invalid_%d", index), func(t *testing.T) {
+			if _, err := encodeMessage(message, DefaultMaxFrame); err == nil {
+				t.Fatal("encodeMessage() accepted malformed source event")
+			}
+		})
 	}
 }
 

@@ -34,6 +34,7 @@ type ServerOptions struct {
 	EventHandler     EventHandler
 	AckHandler       CommandAckHandler
 	ArtifactHandler  ArtifactUploadHandler
+	SourceHandler    SourceNotificationHandler
 }
 
 type Server struct {
@@ -56,6 +57,7 @@ type serverConnection struct {
 	onEvent    EventHandler
 	onAck      CommandAckHandler
 	onArtifact ArtifactUploadHandler
+	onSource   SourceNotificationHandler
 
 	writeMu     sync.Mutex
 	done        chan struct{}
@@ -65,11 +67,17 @@ type serverConnection struct {
 
 	pendingMu       sync.Mutex
 	pending         map[string]chan commandResponse
+	pendingSources  map[string]chan sourceResponse
 	artifactUploads map[string]*pendingServerArtifactUpload
 }
 
 type commandResponse struct {
 	ack *protocol.CommandAck
+	err error
+}
+
+type sourceResponse struct {
+	ack *SourceAck
 	err error
 }
 
@@ -88,6 +96,7 @@ func NewServer(registry Registry, options ...ServerOptions) (*Server, error) {
 		config.EventHandler = options[0].EventHandler
 		config.AckHandler = options[0].AckHandler
 		config.ArtifactHandler = options[0].ArtifactHandler
+		config.SourceHandler = options[0].SourceHandler
 	}
 	if config.MaxFrameBytes <= 0 {
 		return nil, errors.New("gateway frame limit must be greater than zero")
@@ -184,10 +193,12 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		onEvent:         s.options.EventHandler,
 		onAck:           s.options.AckHandler,
 		onArtifact:      s.options.ArtifactHandler,
+		onSource:        s.options.SourceHandler,
 		done:            make(chan struct{}),
 		ready:           make(chan struct{}),
 		handlerDone:     make(chan struct{}),
 		pending:         make(map[string]chan commandResponse),
+		pendingSources:  make(map[string]chan sourceResponse),
 		artifactUploads: make(map[string]*pendingServerArtifactUpload),
 	}
 	ack := helloAckMessage(connection)
@@ -274,6 +285,68 @@ func (s *Server) SendCommand(ctx context.Context, hostID string, command protoco
 	return connection.sendCommand(ctx, command)
 }
 
+func (s *Server) SendSourceCommand(ctx context.Context, hostID string, command SourceCommand) (SourceAck, error) {
+	if ctx == nil {
+		return SourceAck{}, errors.New("gateway source command context must not be nil")
+	}
+	if err := command.validate(); err != nil {
+		return SourceAck{}, err
+	}
+	s.mu.RLock()
+	connection := s.connections[strings.TrimSpace(hostID)]
+	s.mu.RUnlock()
+	if connection == nil {
+		return SourceAck{}, ErrNoActiveConnection
+	}
+	if err := connection.waitReady(ctx); err != nil {
+		return SourceAck{}, err
+	}
+	requestID, err := newRequestID()
+	if err != nil {
+		return SourceAck{}, err
+	}
+	data, err := encodeMessage(Message{
+		Type:          MessageSourceCommand,
+		RequestID:     requestID,
+		Generation:    connection.connection.Generation,
+		SourceCommand: &command,
+	}, connection.maxFrame)
+	if err != nil {
+		return SourceAck{}, err
+	}
+	response := make(chan sourceResponse, 1)
+	connection.pendingMu.Lock()
+	connection.pendingSources[requestID] = response
+	connection.pendingMu.Unlock()
+	deliveryErr := connection.registry.AuthorizeCommand(ctx, connection.connection, func() error {
+		return connection.writeData(ctx, data)
+	})
+	if deliveryErr != nil {
+		connection.removeSourcePending(requestID)
+		if errors.Is(deliveryErr, hosts.ErrCommandNotDelivered) || errors.Is(deliveryErr, ErrConnectionClosed) || errors.Is(deliveryErr, hosts.ErrConnectionStale) {
+			return SourceAck{}, deliveryErr
+		}
+		return SourceAck{}, fmt.Errorf("%w: %v", ErrUnknownDelivery, deliveryErr)
+	}
+	select {
+	case result := <-response:
+		connection.removeSourcePending(requestID)
+		if result.err != nil {
+			return SourceAck{}, result.err
+		}
+		if result.ack == nil || result.ack.OperationID != command.OperationID {
+			return SourceAck{}, fmt.Errorf("%w: gateway source acknowledgement identity mismatch", ErrUnknownDelivery)
+		}
+		return *result.ack, nil
+	case <-ctx.Done():
+		connection.removeSourcePending(requestID)
+		return SourceAck{}, ErrUnknownDelivery
+	case <-connection.done:
+		connection.removeSourcePending(requestID)
+		return SourceAck{}, ErrUnknownDelivery
+	}
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("gateway shutdown context must not be nil")
@@ -355,6 +428,14 @@ func (c *serverConnection) readLoop(ctx context.Context) error {
 			if err := c.resolve(ctx, message); err != nil {
 				return err
 			}
+		case MessageSourceAck:
+			if err := c.resolveSource(ctx, message); err != nil {
+				return err
+			}
+		case MessageSourceEvent:
+			if err := c.handleSourceEvent(ctx, message); err != nil {
+				return err
+			}
 		case MessageArtifactBegin:
 			if err := c.handleArtifactBegin(message); err != nil {
 				return err
@@ -414,6 +495,18 @@ func (c *serverConnection) handleEvent(ctx context.Context, message Message) err
 		return err
 	}
 	return nil
+}
+
+func (c *serverConnection) handleSourceEvent(ctx context.Context, message Message) error {
+	if c.onSource == nil {
+		return errors.New("gateway source notification handler is not configured")
+	}
+	if message.Generation != c.connection.Generation || message.SourceEvent == nil {
+		return hosts.ErrConnectionStale
+	}
+	return c.registry.AuthorizeCommand(ctx, c.connection, func() error {
+		return c.onSource(ctx, c.connection, *message.SourceEvent)
+	})
 }
 
 func eventRunID(event protocol.Event) string {
@@ -541,6 +634,34 @@ func (c *serverConnection) removePending(requestID string) {
 	c.pendingMu.Lock()
 	delete(c.pending, requestID)
 	c.pendingMu.Unlock()
+}
+
+func (c *serverConnection) removeSourcePending(requestID string) {
+	c.pendingMu.Lock()
+	delete(c.pendingSources, requestID)
+	c.pendingMu.Unlock()
+}
+
+func (c *serverConnection) resolveSource(ctx context.Context, message Message) error {
+	if message.Generation != c.connection.Generation || message.SourceAck == nil {
+		return hosts.ErrConnectionStale
+	}
+	var response chan sourceResponse
+	if err := c.registry.AuthorizeCommand(ctx, c.connection, func() error {
+		c.pendingMu.Lock()
+		response = c.pendingSources[message.RequestID]
+		if response != nil {
+			delete(c.pendingSources, message.RequestID)
+		}
+		c.pendingMu.Unlock()
+		return nil
+	}); err != nil {
+		return err
+	}
+	if response != nil {
+		response <- sourceResponse{ack: message.SourceAck}
+	}
+	return nil
 }
 
 func (c *serverConnection) write(ctx context.Context, message Message) error {

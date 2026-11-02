@@ -112,6 +112,225 @@
         "items": {"type": "array", "items": {"$ref": "#/types/HostShare"}}
       }
     },
+    "CodexSourceState": {
+      "type": "string",
+      "enum": ["online", "offline", "unavailable"]
+    },
+    "CodexSyncState": {
+      "type": "string",
+      "enum": ["never", "syncing", "complete", "partial", "stale", "failed"]
+    },
+    "CodexSourceStatus": {
+      "type": "string",
+      "enum": ["active", "archived", "deleted", "unavailable"]
+    },
+    "CodexHistoryState": {
+      "type": "string",
+      "enum": ["pending", "complete", "partial", "failed"]
+    },
+    "CodexTitleSyncState": {
+      "type": "string",
+      "enum": ["synced", "pending", "failed", "conflict", "paused", "unsupported"]
+    },
+    "CodexThreadSourceKind": {
+      "type": "string",
+      "enum": ["main", "subagent"]
+    },
+    "CodexTitleConflict": {
+      "type": "object",
+      "required": ["loomhelm_title", "codex_title", "detected_at"],
+      "properties": {
+        "loomhelm_title": {"type": "string"},
+        "codex_title": {"type": "string"},
+        "detected_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CodexSource": {
+      "type": "object",
+      "required": ["host_id", "host_name", "state", "sync_state", "build", "capabilities", "capability_states", "as_of"],
+      "properties": {
+        "host_id": {"type": "string"},
+        "host_name": {"type": "string"},
+        "state": {"$ref": "#/types/CodexSourceState"},
+        "sync_state": {"$ref": "#/types/CodexSyncState"},
+        "build": {"type": "string"},
+        "protocol_version": {"type": "string"},
+        "capabilities": {"type": "array", "items": {"type": "string"}},
+        "capability_states": {"type": "object"},
+        "as_of": {"type": "string", "format": "date-time"},
+        "last_error": {"type": "string"}
+      }
+    },
+    "CodexProject": {
+      "type": "object",
+      "required": ["host_id", "project_id", "name", "snapshot_state", "as_of"],
+      "properties": {
+        "host_id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "name": {"type": "string"},
+        "cwd": {"type": "string"},
+        "loomhelm_project_id": {"type": "string"},
+        "snapshot_state": {"$ref": "#/types/CodexSyncState"},
+        "as_of": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CodexConversation": {
+      "type": "object",
+      "required": ["host_id", "thread_id", "conversation_title", "preview", "source_kind", "source_status", "history_state", "files_complete", "read_only", "title_sync_state", "as_of", "updated_at"],
+      "properties": {
+        "host_id": {"type": "string"},
+        "thread_id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "project_name": {"type": "string"},
+        "conversation_title": {"type": "string"},
+        "codex_title": {"type": "string"},
+        "preview": {"type": "string"},
+        "cwd": {"type": "string"},
+        "source_kind": {"$ref": "#/types/CodexThreadSourceKind"},
+        "source_status": {"$ref": "#/types/CodexSourceStatus"},
+        "history_state": {"$ref": "#/types/CodexHistoryState"},
+        "files_complete": {"type": "boolean"},
+        "read_only": {"type": "boolean"},
+        "can_edit_title": {"type": "boolean"},
+        "title_sync_state": {"$ref": "#/types/CodexTitleSyncState"},
+        "title_sync_error": {"type": "string"},
+        "title_conflict": {"$ref": "#/types/CodexTitleConflict"},
+        "bound_task_id": {"type": "string"},
+        "bound_session_id": {"type": "string"},
+        "as_of": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CodexHistoryEvent": {
+      "type": "object",
+      "required": ["event_id", "sequence", "event_type", "raw_payload", "readable_fallback", "occurred_at"],
+      "properties": {
+        "event_id": {"type": "string"},
+        "sequence": {"type": "integer", "format": "int64"},
+        "event_type": {"type": "string"},
+        "raw_payload": {"kind": "raw-json"},
+        "readable_fallback": {"type": "string"},
+        "occurred_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CodexFileMaterial": {
+      "type": "object",
+      "required": ["path", "content_type", "size", "sha256", "complete"],
+      "properties": {
+        "path": {"type": "string"},
+        "content_type": {"type": "string"},
+        "size": {"type": "integer", "format": "int64"},
+        "sha256": {"type": "string"},
+        "content_ref": {"type": "string"},
+        "complete": {"type": "boolean"}
+      }
+    },
+    "CodexSourceListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {"items": {"type": "array", "items": {"$ref": "#/types/CodexSource"}}}
+    },
+    "CodexProjectListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/CodexProject"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "CodexConversationListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/CodexConversation"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"},
+        "as_of": {"type": "string", "format": "date-time"},
+        "snapshot_state": {"$ref": "#/types/CodexSyncState"}
+      }
+    },
+    "CodexConversationDetail": {
+      "type": "object",
+      "required": ["conversation", "history", "files"],
+      "properties": {
+        "conversation": {"$ref": "#/types/CodexConversation"},
+        "history": {"type": "array", "items": {"$ref": "#/types/CodexHistoryEvent"}},
+        "files": {"type": "array", "items": {"$ref": "#/types/CodexFileMaterial"}}
+      }
+    },
+    "CodexTitleUpdateRequest": {
+      "type": "object",
+      "required": ["title", "request_id"],
+      "properties": {
+        "title": {"type": "string"},
+        "request_id": {"type": "string"},
+        "expected_codex_title": {"type": "string"},
+        "resolution": {"type": "string", "enum": ["use_loomhelm", "use_codex", "retry"]}
+      }
+    },
+    "CodexConversationResponse": {
+      "type": "object",
+      "required": ["conversation"],
+      "properties": {"conversation": {"$ref": "#/types/CodexConversation"}}
+    },
+    "CodexMappingRequest": {
+      "type": "object",
+      "required": ["loomhelm_project_id"],
+      "properties": {"loomhelm_project_id": {"type": "string"}}
+    },
+    "CodexProjectResponse": {
+      "type": "object",
+      "required": ["project"],
+      "properties": {"project": {"$ref": "#/types/CodexProject"}}
+    },
+    "CodexBindRequest": {
+      "type": "object",
+      "required": ["task_id", "request_id"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "request_id": {"type": "string"},
+        "confirm_share": {"type": "boolean"},
+        "expected_as_of": {"type": "string"}
+      }
+    },
+    "CodexSyncRequest": {
+      "type": "object",
+      "properties": {
+        "host_id": {"type": "string"},
+        "request_id": {"type": "string"}
+      }
+    },
+    "CodexSyncResponse": {
+      "type": "object",
+      "required": ["operation_id", "state"],
+      "properties": {
+        "operation_id": {"type": "string"},
+        "state": {"$ref": "#/types/CodexSyncState"},
+        "as_of": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ListCodexProjectsQuery": {
+      "type": "object",
+      "properties": {
+        "host_id": {"type": "string"},
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "ListCodexConversationsQuery": {
+      "type": "object",
+      "properties": {
+        "host_id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "loomhelm_project_id": {"type": "string"},
+        "search": {"type": "string"},
+        "bound": {"type": "boolean"},
+        "include_archived": {"type": "boolean"},
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
     "CreateUserCredentialRequest": {
       "type": "object",
       "required": ["name"],
@@ -787,6 +1006,81 @@
         "response_status": 204,
         "summary": "Revoke explicit Host access from a user",
         "mcp_tool": {"name": "loomhelm.revoke_host_share", "description": "Let only the Host owner revoke an explicit share grant."}
+      },
+      {
+        "operation_id": "listCodexSources",
+        "method": "GET",
+        "path": "/codex/sources",
+        "response_type": "CodexSourceListResponse",
+        "summary": "List Codex source snapshots for Hosts visible to the current user",
+        "mcp_tool": {"name": "loomhelm.list_codex_sources", "description": "List Host-scoped Codex source capability and synchronization snapshots without inventing unsupported capability state."}
+      },
+      {
+        "operation_id": "listCodexProjects",
+        "method": "GET",
+        "path": "/codex/projects",
+        "query_type": "ListCodexProjectsQuery",
+        "response_type": "CodexProjectListResponse",
+        "summary": "List Host-scoped Codex projects and explicit Loomhelm mappings",
+        "mcp_tool": {"name": "loomhelm.list_codex_projects", "description": "List imported Codex project metadata and explicit Loomhelm project mappings."}
+      },
+      {
+        "operation_id": "listCodexConversations",
+        "method": "GET",
+        "path": "/codex/conversations",
+        "query_type": "ListCodexConversationsQuery",
+        "response_type": "CodexConversationListResponse",
+        "summary": "List authorized Codex conversation snapshots with bounded metadata search",
+        "mcp_tool": {"name": "loomhelm.list_codex_conversations", "description": "List Host-scoped Codex conversations using title, preview and metadata search only; incomplete history remains outside project visibility."}
+      },
+      {
+        "operation_id": "getCodexConversation",
+        "method": "GET",
+        "path": "/codex/conversations/{host_id}/{thread_id}",
+        "path_params": {"host_id": "string", "thread_id": "string"},
+        "response_type": "CodexConversationDetail",
+        "summary": "Read one Host-scoped Codex conversation snapshot, preserved history and file materials",
+        "mcp_tool": {"name": "loomhelm.get_codex_conversation", "description": "Read an authorized Codex conversation including raw-preserved events, readable fallbacks and supported file material status."}
+      },
+      {
+        "operation_id": "updateCodexConversationTitle",
+        "method": "PATCH",
+        "path": "/codex/conversations/{host_id}/{thread_id}/title",
+        "path_params": {"host_id": "string", "thread_id": "string"},
+        "body_type": "CodexTitleUpdateRequest",
+        "response_type": "CodexConversationResponse",
+        "summary": "Update the Loomhelm conversation title with explicit Codex writeback state",
+        "mcp_tool": {"name": "loomhelm.update_codex_conversation_title", "description": "Update a non-empty Loomhelm conversation title; dual write permission, source capability, conflict and bounded retry state remain explicit."}
+      },
+      {
+        "operation_id": "mapCodexProject",
+        "method": "POST",
+        "path": "/codex/projects/{host_id}/{project_id}/mapping",
+        "path_params": {"host_id": "string", "project_id": "string"},
+        "body_type": "CodexMappingRequest",
+        "response_type": "CodexProjectResponse",
+        "summary": "Explicitly map a Codex project to a Loomhelm project",
+        "mcp_tool": {"name": "loomhelm.map_codex_project", "description": "Create or confirm an explicit Codex project to Loomhelm project mapping; source grouping never grants project access."}
+      },
+      {
+        "operation_id": "bindCodexConversation",
+        "method": "POST",
+        "path": "/codex/conversations/{host_id}/{thread_id}/bind",
+        "path_params": {"host_id": "string", "thread_id": "string"},
+        "body_type": "CodexBindRequest",
+        "response_type": "CodexConversationResponse",
+        "summary": "Bind a complete Codex conversation snapshot to one existing Task",
+        "mcp_tool": {"name": "loomhelm.bind_codex_conversation", "description": "Bind one Host-scoped Codex thread to an authorized Task only after complete history and supported file material are ready; retries are idempotent."}
+      },
+      {
+        "operation_id": "syncCodex",
+        "method": "POST",
+        "path": "/codex/sync",
+        "body_type": "CodexSyncRequest",
+        "response_type": "CodexSyncResponse",
+        "response_status": 202,
+        "summary": "Request a bounded Codex source refresh without fabricating completion",
+        "mcp_tool": {"name": "loomhelm.sync_codex", "description": "Request a bounded default-Host Codex refresh and return an observable operation identity and current snapshot state."}
       },
       {
         "operation_id": "listProjects",

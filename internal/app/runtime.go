@@ -12,6 +12,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/codex"
 	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
@@ -19,6 +20,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/jackc/pgx/v5"
@@ -204,11 +206,48 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			EventHandler:    transport.HandleEvent,
 			AckHandler:      transport.HandleCommandAck,
 			ArtifactHandler: artifactUploadHandler,
+			SourceHandler: func(sourceCtx context.Context, connection hosts.Connection, notification gateway.SourceNotification) error {
+				switch notification.Kind {
+				case "title_updated":
+					if notification.Title == nil {
+						return errors.New("Codex title notification has no title")
+					}
+					if err := services.codex.ApplyCodexTitle(sourceCtx, connection.HostID, notification.ThreadID, *notification.Title); errors.Is(err, codex.ErrNotFound) {
+						// A live source can notify before its first cold snapshot. The
+						// next sync retains the authoritative title and history.
+						return nil
+					} else {
+						return err
+					}
+				case "archived":
+					if err := services.codex.MarkSourceStatus(sourceCtx, connection.HostID, notification.ThreadID, protocol.CodexSourceStatusArchived, "Codex source marked archived"); errors.Is(err, codex.ErrNotFound) {
+						return nil
+					} else {
+						return err
+					}
+				case "deleted":
+					if err := services.codex.MarkSourceStatus(sourceCtx, connection.HostID, notification.ThreadID, protocol.CodexSourceStatusDeleted, "Codex source marked deleted"); errors.Is(err, codex.ErrNotFound) {
+						return nil
+					} else {
+						return err
+					}
+				case "unavailable":
+					if err := services.codex.MarkSourceStatus(sourceCtx, connection.HostID, notification.ThreadID, protocol.CodexSourceStatusUnavailable, "Codex source marked unavailable"); errors.Is(err, codex.ErrNotFound) {
+						return nil
+					} else {
+						return err
+					}
+				default:
+					return errors.New("unsupported Codex source notification")
+				}
+			},
 		})
 		if err != nil {
 			db.Close()
 			return nil, fmt.Errorf("initialize Connector gateway: %w", err)
 		}
+		services.codex.SetTitleWriter(gatewayCodexTitleWriter{server: runtime.gateway})
+		services.codex.SetSyncRunner(gatewayCodexSyncRunner{server: runtime.gateway})
 		transport.gateway = runtime.gateway
 		authorizer := services.sessionAccess()
 		controller, controllerErr := runs.NewController(runStore, transport, runs.ControllerConfig{

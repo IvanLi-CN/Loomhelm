@@ -239,6 +239,27 @@ func (c *ClientConnection) AcknowledgeForSession(ctx context.Context, sessionID,
 	return c.write(ctx, Message{Type: MessageCommandAck, RequestID: requestID, Generation: c.generation, SessionID: sessionID, Ack: &ack})
 }
 
+func (c *ClientConnection) AcknowledgeSource(ctx context.Context, requestID string, ack SourceAck) error {
+	if c == nil {
+		return ErrConnectionClosed
+	}
+	if strings.TrimSpace(requestID) == "" {
+		return errors.New("gateway source acknowledgement request id must not be empty")
+	}
+	return c.write(ctx, Message{Type: MessageSourceAck, RequestID: requestID, Generation: c.generation, SourceAck: &ack})
+}
+
+func (c *ClientConnection) SendSourceNotification(ctx context.Context, notification SourceNotification) error {
+	if c == nil {
+		return ErrConnectionClosed
+	}
+	return c.write(ctx, Message{
+		Type:        MessageSourceEvent,
+		Generation:  c.generation,
+		SourceEvent: &notification,
+	})
+}
+
 func (c *ClientConnection) Close() error {
 	if c == nil || c.ws == nil {
 		return nil

@@ -1,0 +1,1144 @@
+// Package codex owns Host-scoped Codex source snapshots and the explicit
+// boundary between source history, Loomhelm conversations and Task bindings.
+package codex
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
+	"github.com/IvanLi-CN/Loomhelm/internal/projects"
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	ErrInvalid               = errors.New("invalid Codex source request")
+	ErrNotFound              = errors.New("Codex source conversation not found")
+	ErrForbidden             = errors.New("Codex source operation is not authorized")
+	ErrConflict              = errors.New("Codex source state conflicts with the request")
+	ErrIncompleteHistory     = errors.New("Codex conversation history is incomplete")
+	ErrCapabilityUnsupported = errors.New("Codex capability is unsupported")
+	ErrSourceUnavailable     = errors.New("Codex source is unavailable")
+)
+
+const (
+	defaultPageSize = 50
+	maxPageSize     = 200
+	maxTitleLength  = 300
+)
+
+type Config struct {
+	Now         func() time.Time
+	TitleWriter TitleWriter
+	SyncRunner  SyncRunner
+}
+
+// TitleWriter is implemented by the Connector bridge. A nil writer is
+// intentional: the server still persists a pending operation and exposes it
+// to the caller instead of claiming a remote Codex write succeeded.
+type TitleWriter interface {
+	SetTitle(context.Context, string, string, string) error
+}
+
+type Service struct {
+	pool        *pgxpool.Pool
+	principal   auth.PrincipalResolver
+	hosts       *hosts.Service
+	projects    *projects.Service
+	now         func() time.Time
+	titleWriter TitleWriter
+	syncRunner  SyncRunner
+}
+
+func NewService(pool *pgxpool.Pool, principal auth.PrincipalResolver, registry *hosts.Service, projectService *projects.Service, configs ...Config) *Service {
+	cfg := Config{Now: time.Now}
+	if len(configs) > 0 {
+		if configs[0].Now != nil {
+			cfg.Now = configs[0].Now
+		}
+		cfg.TitleWriter = configs[0].TitleWriter
+		cfg.SyncRunner = configs[0].SyncRunner
+	}
+	return &Service{pool: pool, principal: principal, hosts: registry, projects: projectService, now: cfg.Now, titleWriter: cfg.TitleWriter, syncRunner: cfg.SyncRunner}
+}
+
+// SetTitleWriter is called during application composition, after the
+// authenticated Host gateway is ready. Keeping this setter at the boundary
+// avoids giving the REST service direct access to Connector internals.
+func (s *Service) SetTitleWriter(writer TitleWriter) {
+	if s != nil {
+		s.titleWriter = writer
+	}
+}
+
+type sourceAccess struct {
+	host      hosts.Host
+	owner     bool
+	principal auth.Principal
+}
+
+func (s *Service) defaultHost(ctx context.Context, principal auth.Principal, hostID string) (sourceAccess, error) {
+	if principal.UserID == "" {
+		return sourceAccess{}, auth.ErrUnauthenticated
+	}
+	if s == nil || s.pool == nil || s.hosts == nil {
+		return sourceAccess{}, auth.ErrUnavailable
+	}
+	if strings.TrimSpace(hostID) == "" {
+		host, err := s.hosts.ConfiguredHostForUser(ctx, principal.UserID)
+		if errors.Is(err, hosts.ErrNotFound) {
+			return sourceAccess{}, auth.ErrNotFound
+		}
+		if err != nil {
+			return sourceAccess{}, fmt.Errorf("resolve default Host: %w", err)
+		}
+		return sourceAccess{host: host, owner: host.OwnerUserID == principal.UserID, principal: principal}, nil
+	}
+	host, err := s.hosts.GetHost(ctx, strings.TrimSpace(hostID))
+	if errors.Is(err, hosts.ErrNotFound) {
+		return sourceAccess{}, auth.ErrNotFound
+	}
+	if err != nil {
+		return sourceAccess{}, fmt.Errorf("read Codex Host: %w", err)
+	}
+	if err := s.hosts.AuthorizeUser(ctx, principal.UserID, host.ID); err != nil {
+		if errors.Is(err, hosts.ErrForbidden) || errors.Is(err, hosts.ErrNotFound) {
+			return sourceAccess{}, auth.ErrNotFound
+		}
+		return sourceAccess{}, fmt.Errorf("authorize Codex Host: %w", err)
+	}
+	return sourceAccess{host: host, owner: host.OwnerUserID == principal.UserID, principal: principal}, nil
+}
+
+func (s *Service) principalForRequest(request *http.Request) (auth.Principal, error) {
+	if s == nil || s.principal == nil {
+		return auth.Principal{}, auth.ErrUnavailable
+	}
+	principal, err := s.principal.ResolvePrincipal(request.Context(), request)
+	if err != nil {
+		return auth.Principal{}, err
+	}
+	if principal.UserID == "" {
+		return auth.Principal{}, auth.ErrUnauthenticated
+	}
+	return principal, nil
+}
+
+func (s *Service) Mount(router chi.Router) {
+	router.Get("/codex/sources", s.handleListSources)
+	router.Get("/codex/projects", s.handleListProjects)
+	router.Get("/codex/conversations", s.handleListConversations)
+	router.Get("/codex/conversations/{host_id}/{thread_id}", s.handleGetConversation)
+	router.Patch("/codex/conversations/{host_id}/{thread_id}/title", s.handleUpdateTitle)
+	router.Post("/codex/projects/{host_id}/{project_id}/mapping", s.handleMapProject)
+	router.Post("/codex/conversations/{host_id}/{thread_id}/bind", s.handleBind)
+	router.Post("/codex/sync", s.handleSync)
+}
+
+type UpsertSourceInput struct {
+	HostID           string
+	State            protocol.CodexSourceState
+	SyncState        protocol.CodexSyncState
+	Build            string
+	ProtocolVersion  string
+	Capabilities     []string
+	CapabilityStates map[string]string
+	LastError        string
+}
+
+func (s *Service) UpsertSource(ctx context.Context, input UpsertSourceInput) error {
+	if strings.TrimSpace(input.HostID) == "" {
+		return ErrInvalid
+	}
+	capabilities, err := json.Marshal(uniqueStrings(input.Capabilities))
+	if err != nil {
+		return fmt.Errorf("encode Codex capabilities: %w", err)
+	}
+	capabilityStates, err := json.Marshal(input.CapabilityStates)
+	if err != nil {
+		return fmt.Errorf("encode Codex capability states: %w", err)
+	}
+	if input.CapabilityStates == nil {
+		capabilityStates = []byte(`{}`)
+	}
+	if input.State == "" {
+		input.State = protocol.CodexSourceStateOffline
+	}
+	input.State = sourceStateOrDefault(input.State)
+	if input.SyncState == "" {
+		input.SyncState = protocol.CodexSyncStateNever
+	}
+	if !validSyncState(input.SyncState) {
+		input.SyncState = protocol.CodexSyncStatePartial
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO codex_sync_sources (host_id, state, sync_state, build, protocol_version, capabilities, capability_states, as_of, last_error, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $8)
+		ON CONFLICT (host_id) DO UPDATE SET
+			state = EXCLUDED.state,
+			sync_state = EXCLUDED.sync_state,
+			build = EXCLUDED.build,
+			protocol_version = EXCLUDED.protocol_version,
+			capabilities = EXCLUDED.capabilities,
+			capability_states = EXCLUDED.capability_states,
+			as_of = EXCLUDED.as_of,
+			last_error = EXCLUDED.last_error,
+			updated_at = EXCLUDED.updated_at
+	`, input.HostID, input.State, input.SyncState, strings.TrimSpace(input.Build), strings.TrimSpace(input.ProtocolVersion), capabilities, capabilityStates, s.now(), strings.TrimSpace(input.LastError))
+	return err
+}
+
+type UpsertProjectInput struct {
+	HostID          string
+	ProjectID       string
+	Name            string
+	CWD             string
+	SnapshotState   protocol.CodexSyncState
+	LoomhelmProject *string
+}
+
+func (s *Service) UpsertProject(ctx context.Context, input UpsertProjectInput) error {
+	if strings.TrimSpace(input.HostID) == "" || strings.TrimSpace(input.ProjectID) == "" {
+		return ErrInvalid
+	}
+	if input.SnapshotState == "" {
+		input.SnapshotState = protocol.CodexSyncStateComplete
+	}
+	if !validSyncState(input.SnapshotState) {
+		input.SnapshotState = protocol.CodexSyncStatePartial
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO codex_projects (host_id, project_id, name, cwd, loomhelm_project_id, snapshot_state, as_of, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+		ON CONFLICT (host_id, project_id) DO UPDATE SET
+			name = EXCLUDED.name,
+			cwd = EXCLUDED.cwd,
+			loomhelm_project_id = COALESCE(EXCLUDED.loomhelm_project_id, codex_projects.loomhelm_project_id),
+			snapshot_state = EXCLUDED.snapshot_state,
+			as_of = EXCLUDED.as_of,
+			updated_at = EXCLUDED.updated_at
+	`, input.HostID, input.ProjectID, strings.TrimSpace(input.Name), strings.TrimSpace(input.CWD), input.LoomhelmProject, input.SnapshotState, s.now())
+	return err
+}
+
+type UpsertThreadInput struct {
+	HostID         string
+	ThreadID       string
+	ProjectID      *string
+	ParentThreadID *string
+	SourceKind     protocol.CodexThreadSourceKind
+	CodexTitle     *string
+	Preview        string
+	CWD            string
+	SourceStatus   protocol.CodexSourceStatus
+	HistoryState   protocol.CodexHistoryState
+	FilesComplete  bool
+	ImportedBy     string
+	LastActivityAt time.Time
+}
+
+func (s *Service) UpsertThread(ctx context.Context, input UpsertThreadInput) error {
+	if strings.TrimSpace(input.HostID) == "" || strings.TrimSpace(input.ThreadID) == "" {
+		return ErrInvalid
+	}
+	if input.SourceKind == "" {
+		input.SourceKind = protocol.CodexThreadSourceKindMain
+	}
+	input.SourceKind = sourceKindOrDefault(input.SourceKind)
+	if input.SourceStatus == "" {
+		input.SourceStatus = protocol.CodexSourceStatusActive
+	}
+	input.SourceStatus = sourceStatusOrDefault(input.SourceStatus)
+	if input.HistoryState == "" {
+		input.HistoryState = protocol.CodexHistoryStatePending
+	}
+	if !validHistoryState(input.HistoryState) {
+		input.HistoryState = protocol.CodexHistoryStatePartial
+	}
+	if input.LastActivityAt.IsZero() {
+		input.LastActivityAt = s.now()
+	}
+	importedBy := strings.TrimSpace(input.ImportedBy)
+	if importedBy == "" {
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(owner_user_id, '') FROM host_registrations WHERE id = $1`, input.HostID).Scan(&importedBy); err != nil {
+			return fmt.Errorf("resolve Codex importer: %w", err)
+		}
+	}
+	conversationTitle := strings.TrimSpace(valueOrEmpty(input.CodexTitle))
+	if conversationTitle == "" {
+		conversationTitle = strings.TrimSpace(input.Preview)
+	}
+	if conversationTitle == "" {
+		conversationTitle = "自动标题"
+	}
+	titleState := protocol.CodexTitleSyncStateUnsupported
+	if input.CodexTitle != nil && strings.TrimSpace(*input.CodexTitle) != "" {
+		titleState = protocol.CodexTitleSyncStateSynced
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO codex_threads (
+			host_id, thread_id, project_id, parent_thread_id, source_kind, codex_title,
+			conversation_title, preview, cwd, source_status, history_state, files_complete,
+			title_sync_state, imported_by, as_of, last_activity_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $15)
+		ON CONFLICT (host_id, thread_id) DO UPDATE SET
+			project_id = COALESCE(EXCLUDED.project_id, codex_threads.project_id),
+			parent_thread_id = COALESCE(EXCLUDED.parent_thread_id, codex_threads.parent_thread_id),
+			source_kind = EXCLUDED.source_kind,
+			codex_title = COALESCE(EXCLUDED.codex_title, codex_threads.codex_title),
+			conversation_title = CASE
+				WHEN codex_threads.title_sync_state IN ('pending', 'failed', 'conflict') THEN codex_threads.conversation_title
+				WHEN EXCLUDED.codex_title IS NOT NULL AND length(trim(EXCLUDED.codex_title)) > 0 THEN EXCLUDED.codex_title
+				ELSE codex_threads.conversation_title
+			END,
+			preview = EXCLUDED.preview,
+			cwd = EXCLUDED.cwd,
+			source_status = EXCLUDED.source_status,
+			history_state = EXCLUDED.history_state,
+			files_complete = EXCLUDED.files_complete,
+			as_of = EXCLUDED.as_of,
+			last_activity_at = EXCLUDED.last_activity_at,
+			updated_at = EXCLUDED.updated_at
+	`, input.HostID, input.ThreadID, nullableString(input.ProjectID), nullableString(input.ParentThreadID), input.SourceKind, nullableString(input.CodexTitle), conversationTitle, strings.TrimSpace(input.Preview), strings.TrimSpace(input.CWD), input.SourceStatus, input.HistoryState, input.FilesComplete, titleState, nullableString(&importedBy), s.now(), input.LastActivityAt)
+	return err
+}
+
+func (s *Service) AppendHistory(ctx context.Context, hostID, threadID, eventID string, sequence int64, eventType string, rawPayload json.RawMessage, readableFallback string, occurredAt time.Time) error {
+	if strings.TrimSpace(hostID) == "" || strings.TrimSpace(threadID) == "" || strings.TrimSpace(eventID) == "" || sequence < 1 {
+		return ErrInvalid
+	}
+	if occurredAt.IsZero() {
+		occurredAt = s.now()
+	}
+	if len(rawPayload) == 0 {
+		rawPayload = json.RawMessage(`null`)
+	}
+	if strings.TrimSpace(readableFallback) == "" {
+		readableFallback = strings.TrimSpace(eventType)
+		if readableFallback == "" {
+			readableFallback = "未知 Codex 事件"
+		}
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO codex_thread_history (host_id, thread_id, event_id, sequence, event_type, raw_payload, readable_fallback, occurred_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (host_id, thread_id, event_id) DO UPDATE SET
+			sequence = EXCLUDED.sequence,
+			event_type = EXCLUDED.event_type,
+			raw_payload = EXCLUDED.raw_payload,
+			readable_fallback = EXCLUDED.readable_fallback,
+			occurred_at = EXCLUDED.occurred_at
+	`, hostID, threadID, eventID, sequence, strings.TrimSpace(eventType), string(rawPayload), strings.TrimSpace(readableFallback), occurredAt)
+	if err != nil {
+		return fmt.Errorf("persist Codex history event: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE codex_threads
+		SET as_of = $3, updated_at = $3
+		WHERE host_id = $1 AND thread_id = $2
+	`, hostID, threadID, s.now())
+	return err
+}
+
+// MarkHistoryState is called by the source adapter after the complete history
+// transfer has been observed. Individual events must never make a snapshot
+// projectable because a later transfer can still be interrupted.
+func (s *Service) MarkHistoryState(ctx context.Context, hostID, threadID string, state protocol.CodexHistoryState, reason string) error {
+	if strings.TrimSpace(hostID) == "" || strings.TrimSpace(threadID) == "" {
+		return ErrInvalid
+	}
+	switch state {
+	case protocol.CodexHistoryStatePending, protocol.CodexHistoryStatePartial, protocol.CodexHistoryStateComplete, protocol.CodexHistoryStateFailed:
+	default:
+		return ErrInvalid
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE codex_threads
+		SET history_state = $3,
+		    title_sync_error = CASE WHEN $3 IN ('failed', 'partial') AND NULLIF(trim($4), '') IS NOT NULL THEN $4 ELSE title_sync_error END,
+		    updated_at = $5
+		WHERE host_id = $1 AND thread_id = $2
+	`, hostID, threadID, state, strings.TrimSpace(reason), s.now())
+	return err
+}
+
+type FileInput struct {
+	HostID      string
+	ThreadID    string
+	Path        string
+	ContentType string
+	Size        int64
+	Sha256      string
+	Content     []byte
+	ContentRef  string
+	Complete    bool
+}
+
+func (s *Service) UpsertFile(ctx context.Context, input FileInput) error {
+	if strings.TrimSpace(input.HostID) == "" || strings.TrimSpace(input.ThreadID) == "" || strings.TrimSpace(input.Path) == "" || input.Size < 0 {
+		return ErrInvalid
+	}
+	if input.ContentType == "" {
+		input.ContentType = "application/octet-stream"
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO codex_thread_files (host_id, thread_id, path, content_type, size, sha256, content_bytes, content_ref, complete, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (host_id, thread_id, path) DO UPDATE SET
+			content_type = EXCLUDED.content_type,
+			size = EXCLUDED.size,
+			sha256 = EXCLUDED.sha256,
+			content_bytes = EXCLUDED.content_bytes,
+			content_ref = EXCLUDED.content_ref,
+			complete = EXCLUDED.complete,
+			updated_at = EXCLUDED.updated_at
+	`, input.HostID, input.ThreadID, strings.TrimSpace(input.Path), input.ContentType, input.Size, strings.TrimSpace(input.Sha256), input.Content, strings.TrimSpace(input.ContentRef), input.Complete, s.now())
+	if err != nil {
+		return fmt.Errorf("persist Codex file material: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE codex_threads
+		SET files_complete = NOT EXISTS (
+			SELECT 1 FROM codex_thread_files WHERE host_id = $1 AND thread_id = $2 AND complete = FALSE
+		), updated_at = $3
+		WHERE host_id = $1 AND thread_id = $2
+	`, input.HostID, input.ThreadID, s.now())
+	return err
+}
+
+func (s *Service) ApplyCodexTitle(ctx context.Context, hostID, threadID string, title string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ErrInvalid
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin Codex title notification: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var localTitle, state string
+	if err := tx.QueryRow(ctx, `SELECT conversation_title, title_sync_state FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE`, hostID, threadID).Scan(&localTitle, &state); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("read Codex title state: %w", err)
+	}
+	now := s.now()
+	if localTitle == title || state == string(protocol.CodexTitleSyncStateUnsupported) {
+		_, err = tx.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = 'synced', title_sync_error = '', title_conflict_codex_title = NULL, title_conflict_detected_at = NULL, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, title, now)
+	} else if state == string(protocol.CodexTitleSyncStatePending) || state == string(protocol.CodexTitleSyncStateFailed) || state == string(protocol.CodexTitleSyncStateConflict) {
+		_, err = tx.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = 'conflict', title_conflict_codex_title = $3, title_conflict_detected_at = $4, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, title, now)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = 'conflict', title_conflict_codex_title = $3, title_conflict_detected_at = $4, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, title, now)
+	}
+	if err != nil {
+		return fmt.Errorf("apply Codex title notification: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Service) MarkSourceStatus(ctx context.Context, hostID, threadID string, status protocol.CodexSourceStatus, reason string) error {
+	if strings.TrimSpace(hostID) == "" || strings.TrimSpace(threadID) == "" {
+		return ErrInvalid
+	}
+	switch status {
+	case protocol.CodexSourceStatusActive, protocol.CodexSourceStatusArchived, protocol.CodexSourceStatusDeleted, protocol.CodexSourceStatusUnavailable:
+	default:
+		return ErrInvalid
+	}
+	result, err := s.pool.Exec(ctx, `
+		UPDATE codex_threads
+		SET source_status = $3,
+		    title_sync_state = CASE WHEN $3 = 'active' THEN title_sync_state ELSE 'paused' END,
+		    title_sync_error = CASE WHEN $3 = 'active' THEN title_sync_error ELSE $4 END,
+		    updated_at = $5
+		WHERE host_id = $1 AND thread_id = $2
+	`, hostID, threadID, status, strings.TrimSpace(reason), s.now())
+	if err == nil && result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
+func (s *Service) ListSources(ctx context.Context, principal auth.Principal) (protocol.CodexSourceListResponse, error) {
+	access, err := s.defaultHost(ctx, principal, "")
+	if errors.Is(err, auth.ErrNotFound) {
+		return protocol.CodexSourceListResponse{Items: []protocol.CodexSource{}}, nil
+	}
+	if err != nil {
+		return protocol.CodexSourceListResponse{}, err
+	}
+	var source protocol.CodexSource
+	var state, syncState, build, version, lastError string
+	var capabilities, capabilityStates []byte
+	var asOf time.Time
+	err = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(s.state, CASE WHEN h.status = 'online' THEN 'online' ELSE 'offline' END),
+		       COALESCE(s.sync_state, 'never'), COALESCE(s.build, ''), COALESCE(s.protocol_version, ''),
+		       COALESCE(s.capabilities, '[]'::jsonb), COALESCE(s.capability_states, '{}'::jsonb), COALESCE(s.as_of, h.updated_at), COALESCE(s.last_error, '')
+		FROM host_registrations h
+		LEFT JOIN codex_sync_sources s ON s.host_id = h.id
+		WHERE h.id = $1
+	`, access.host.ID).Scan(&state, &syncState, &build, &version, &capabilities, &capabilityStates, &asOf, &lastError)
+	if err != nil {
+		return protocol.CodexSourceListResponse{}, fmt.Errorf("read Codex source: %w", err)
+	}
+	_ = json.Unmarshal(capabilities, &source.Capabilities)
+	if source.CapabilityStates == nil {
+		source.CapabilityStates = make(map[string]any)
+	}
+	_ = json.Unmarshal(capabilityStates, &source.CapabilityStates)
+	source.HostID = access.host.ID
+	source.HostName = access.host.Name
+	source.State = protocol.CodexSourceState(state)
+	source.SyncState = protocol.CodexSyncState(syncState)
+	source.Build = build
+	source.ProtocolVersion = nullableStringValue(version)
+	source.AsOf = formatTime(asOf)
+	source.LastError = nullableStringValue(lastError)
+	return protocol.CodexSourceListResponse{Items: []protocol.CodexSource{source}}, nil
+}
+
+func (s *Service) ListProjects(ctx context.Context, principal auth.Principal, query protocol.ListCodexProjectsQuery) (protocol.CodexProjectListResponse, error) {
+	access, err := s.defaultHost(ctx, principal, valueOrEmpty(query.HostID))
+	if err != nil {
+		return protocol.CodexProjectListResponse{}, err
+	}
+	limit := normalizeLimit(query.Limit)
+	args := []any{access.host.ID}
+	where := "WHERE p.host_id = $1"
+	if cursor := valueOrEmpty(query.AfterCursor); cursor != "" {
+		where += " AND p.project_id > $2"
+		args = append(args, cursor)
+	}
+	args = append(args, limit+1)
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT p.host_id, p.project_id, p.name, p.cwd, p.loomhelm_project_id, p.snapshot_state, p.as_of
+		FROM codex_projects p %s ORDER BY p.project_id LIMIT $%d
+	`, where, len(args)), args...)
+	if err != nil {
+		return protocol.CodexProjectListResponse{}, fmt.Errorf("list Codex projects: %w", err)
+	}
+	defer rows.Close()
+	items := make([]protocol.CodexProject, 0, limit)
+	var next *string
+	for rows.Next() {
+		var item protocol.CodexProject
+		var cwd, mapping *string
+		if err := rows.Scan(&item.HostID, &item.ProjectID, &item.Name, &cwd, &mapping, &item.SnapshotState, &item.AsOf); err != nil {
+			return protocol.CodexProjectListResponse{}, fmt.Errorf("scan Codex project: %w", err)
+		}
+		item.Cwd, item.LoomhelmProjectID = cwd, mapping
+		if len(items) == limit {
+			cursor := item.ProjectID
+			next = &cursor
+			break
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return protocol.CodexProjectListResponse{}, fmt.Errorf("read Codex projects: %w", err)
+	}
+	return protocol.CodexProjectListResponse{Items: items, HasMore: next != nil, NextCursor: next}, nil
+}
+
+func (s *Service) ListConversations(ctx context.Context, principal auth.Principal, query protocol.ListCodexConversationsQuery) (protocol.CodexConversationListResponse, error) {
+	access, err := s.defaultHost(ctx, principal, valueOrEmpty(query.HostID))
+	if err != nil {
+		return protocol.CodexConversationListResponse{}, err
+	}
+	limit := normalizeLimit(query.Limit)
+	var asOf time.Time
+	var sourceAvailability, syncState string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(state, 'offline'), COALESCE(sync_state, 'never'), COALESCE(as_of, CURRENT_TIMESTAMP)
+		FROM codex_sync_sources WHERE host_id = $1
+	`, access.host.ID).Scan(&sourceAvailability, &syncState, &asOf); errors.Is(err, pgx.ErrNoRows) {
+		sourceAvailability = string(protocol.CodexSourceStateOffline)
+		syncState = string(protocol.CodexSyncStateNever)
+		asOf = s.now()
+	} else if err != nil {
+		return protocol.CodexConversationListResponse{}, fmt.Errorf("read Codex source snapshot: %w", err)
+	}
+	args := []any{access.host.ID, principal.UserID}
+	where := `WHERE t.host_id = $1 AND (t.imported_by = $2 OR t.bound_task_id IS NOT NULL)`
+	if !boolValue(query.IncludeArchived) {
+		where += " AND t.source_status = 'active'"
+	}
+	if query.Bound != nil {
+		if *query.Bound {
+			where += " AND t.bound_task_id IS NOT NULL"
+		} else {
+			where += " AND t.bound_task_id IS NULL"
+		}
+	}
+	if value := strings.TrimSpace(valueOrEmpty(query.ProjectID)); value != "" {
+		args = append(args, value)
+		where += fmt.Sprintf(" AND t.project_id = $%d", len(args))
+	}
+	if value := strings.TrimSpace(valueOrEmpty(query.LoomhelmProjectID)); value != "" {
+		args = append(args, value)
+		where += fmt.Sprintf(" AND task.project_id = $%d", len(args))
+	}
+	if value := strings.TrimSpace(valueOrEmpty(query.Search)); value != "" {
+		args = append(args, "%"+value+"%")
+		where += fmt.Sprintf(" AND (t.conversation_title ILIKE $%d OR t.preview ILIKE $%d OR t.cwd ILIKE $%d)", len(args), len(args), len(args))
+	}
+	if cursor := decodeConversationCursor(valueOrEmpty(query.AfterCursor)); cursor != nil {
+		args = append(args, cursor.UpdatedAt, cursor.ThreadID)
+		where += fmt.Sprintf(" AND (t.last_activity_at, t.thread_id) < ($%d, $%d)", len(args)-1, len(args))
+	}
+	args = append(args, limit+1)
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT t.host_id, t.thread_id, t.project_id, cp.name, t.conversation_title, t.codex_title,
+		       t.preview, t.cwd, t.source_kind, t.source_status, t.history_state, t.files_complete,
+		       t.title_sync_state, t.title_sync_error, t.title_conflict_codex_title, t.title_conflict_detected_at,
+		       t.bound_task_id, t.bound_session_id, t.as_of, t.updated_at, t.last_activity_at,
+		       COALESCE(src.capabilities, '[]'::jsonb), task.project_id, COALESCE(src.state, 'offline')
+		FROM codex_threads t
+		LEFT JOIN codex_projects cp ON cp.host_id = t.host_id AND cp.project_id = t.project_id
+		LEFT JOIN tasks task ON task.id = t.bound_task_id
+		LEFT JOIN codex_sync_sources src ON src.host_id = t.host_id
+		%s
+		ORDER BY t.last_activity_at DESC, t.thread_id DESC
+		LIMIT $%d
+	`, where, len(args)), args...)
+	if err != nil {
+		return protocol.CodexConversationListResponse{}, fmt.Errorf("list Codex conversations: %w", err)
+	}
+	defer rows.Close()
+	items := make([]protocol.CodexConversation, 0, limit)
+	var next *string
+	for rows.Next() {
+		item, capabilities, taskProjectID, activity, threadSourceState, scanErr := scanConversation(rows)
+		if scanErr != nil {
+			return protocol.CodexConversationListResponse{}, scanErr
+		}
+		if taskProjectID != nil {
+			allowed, authorizeErr := s.projects.CanReadProject(ctx, principal, *taskProjectID)
+			if authorizeErr != nil {
+				return protocol.CodexConversationListResponse{}, authorizeErr
+			}
+			if !allowed {
+				continue
+			}
+		}
+		item.ReadOnly, item.CanEditTitle = true, boolPointer(false)
+		if item.BoundTaskID != nil && sourceAvailability == string(protocol.CodexSourceStateOnline) && threadSourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && taskProjectID != nil {
+			allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
+			if authorizeErr != nil {
+				return protocol.CodexConversationListResponse{}, authorizeErr
+			}
+			item.ReadOnly = !allowed
+			item.CanEditTitle = boolPointer(allowed && capabilityContains(capabilities, "thread/name/set"))
+		}
+		if len(items) == limit {
+			cursor := encodeConversationCursor(conversationCursor{UpdatedAt: activity, ThreadID: item.ThreadID})
+			next = &cursor
+			break
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return protocol.CodexConversationListResponse{}, fmt.Errorf("read Codex conversations: %w", err)
+	}
+	if asOf.IsZero() {
+		asOf = s.now()
+	}
+	state := protocol.CodexSyncState(syncState)
+	if state == "" {
+		state = protocol.CodexSyncStateNever
+	}
+	asOfText := formatTime(asOf)
+	return protocol.CodexConversationListResponse{Items: items, HasMore: next != nil, NextCursor: next, AsOf: &asOfText, SnapshotState: &state}, nil
+}
+
+func (s *Service) GetConversation(ctx context.Context, principal auth.Principal, hostID, threadID string) (protocol.CodexConversationDetail, error) {
+	access, err := s.defaultHost(ctx, principal, hostID)
+	if err != nil {
+		return protocol.CodexConversationDetail{}, err
+	}
+	item, capabilities, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
+	if err != nil {
+		return protocol.CodexConversationDetail{}, err
+	}
+	if taskProjectID != nil {
+		allowed, authorizeErr := s.projects.CanReadProject(ctx, principal, *taskProjectID)
+		if authorizeErr != nil || !allowed {
+			return protocol.CodexConversationDetail{}, auth.ErrNotFound
+		}
+	}
+	item.ReadOnly, item.CanEditTitle = true, boolPointer(false)
+	if item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete {
+		allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
+		if authorizeErr != nil {
+			return protocol.CodexConversationDetail{}, authorizeErr
+		}
+		item.ReadOnly = !allowed
+		item.CanEditTitle = boolPointer(allowed && capabilityContains(capabilities, "thread/name/set"))
+	}
+	history, err := s.readHistory(ctx, access.host.ID, threadID)
+	if err != nil {
+		return protocol.CodexConversationDetail{}, err
+	}
+	files, err := s.readFiles(ctx, access.host.ID, threadID)
+	if err != nil {
+		return protocol.CodexConversationDetail{}, err
+	}
+	return protocol.CodexConversationDetail{Conversation: item, History: history, Files: files}, nil
+}
+
+func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hostID, threadID string, request protocol.CodexTitleUpdateRequest) (protocol.CodexConversation, error) {
+	access, err := s.defaultHost(ctx, principal, hostID)
+	if err != nil {
+		return protocol.CodexConversation{}, err
+	}
+	if strings.TrimSpace(request.RequestID) == "" || strings.TrimSpace(request.Title) == "" || len([]rune(strings.TrimSpace(request.Title))) > maxTitleLength {
+		return protocol.CodexConversation{}, ErrInvalid
+	}
+	item, capabilities, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
+	if err != nil {
+		return protocol.CodexConversation{}, err
+	}
+	if item.BoundTaskID == nil || taskProjectID == nil {
+		return protocol.CodexConversation{}, ErrForbidden
+	}
+	allowed, err := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
+	if err != nil {
+		return protocol.CodexConversation{}, err
+	}
+	if !allowed {
+		return protocol.CodexConversation{}, auth.ErrForbidden
+	}
+	if !capabilityContains(capabilities, "thread/name/set") {
+		return item, ErrCapabilityUnsupported
+	}
+	if sourceState != string(protocol.CodexSourceStateOnline) || item.SourceStatus != protocol.CodexSourceStatusActive {
+		return item, ErrSourceUnavailable
+	}
+	if request.ExpectedCodexTitle != nil && valueOrEmpty(request.ExpectedCodexTitle) != valueOrEmpty(item.CodexTitle) && request.Resolution == nil {
+		return item, ErrConflict
+	}
+	if request.Resolution != nil && *request.Resolution == "use_codex" {
+		if strings.TrimSpace(valueOrEmpty(item.CodexTitle)) == "" {
+			return item, ErrInvalid
+		}
+		request.Title = *item.CodexTitle
+	}
+	if request.Resolution != nil && *request.Resolution != "use_codex" && *request.Resolution != "use_loomhelm" && *request.Resolution != "retry" {
+		return item, ErrInvalid
+	}
+
+	now := s.now()
+	operationID := newID("codex-title")
+	insertTag, err := s.pool.Exec(ctx, `
+		INSERT INTO codex_title_operations (operation_id, request_id, host_id, thread_id, desired_title, expected_codex_title, state, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'title_sync_pending', $7, $7)
+		ON CONFLICT (request_id) DO NOTHING
+	`, operationID, request.RequestID, hostID, threadID, strings.TrimSpace(request.Title), nullableString(request.ExpectedCodexTitle), now)
+	if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("persist Codex title operation: %w", err)
+	}
+	var operationHost, operationThread, operationDesired string
+	var operationExpected *string
+	var operationState string
+	err = s.pool.QueryRow(ctx, `SELECT host_id, thread_id, desired_title, expected_codex_title, state FROM codex_title_operations WHERE request_id = $1`, request.RequestID).Scan(&operationHost, &operationThread, &operationDesired, &operationExpected, &operationState)
+	if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("read Codex title operation: %w", err)
+	}
+	if operationHost != hostID || operationThread != threadID || operationDesired != strings.TrimSpace(request.Title) || valueOrEmpty(operationExpected) != valueOrEmpty(request.ExpectedCodexTitle) {
+		return protocol.CodexConversation{}, ErrConflict
+	}
+	if insertTag.RowsAffected() == 0 {
+		if operationState == "title_sync_failed" && request.Resolution != nil && *request.Resolution == "retry" {
+			if _, err := s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_pending', last_error = '', next_retry_at = NULL, updated_at = $2 WHERE request_id = $1`, request.RequestID, now); err != nil {
+				return protocol.CodexConversation{}, fmt.Errorf("reopen Codex title operation: %w", err)
+			}
+		} else {
+			return s.readProjectedConversation(ctx, access, principal, threadID)
+		}
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE codex_threads
+		SET conversation_title = $3, title_sync_state = 'pending', title_sync_error = '',
+		    title_conflict_codex_title = NULL, title_conflict_detected_at = NULL, updated_at = $4
+		WHERE host_id = $1 AND thread_id = $2
+	`, hostID, threadID, operationDesired, now)
+	if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("persist Loomhelm conversation title: %w", err)
+	}
+	if s.titleWriter != nil {
+		writeErr := s.titleWriter.SetTitle(ctx, hostID, threadID, operationDesired)
+		if writeErr == nil {
+			_, err = s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_complete', attempts = attempts + 1, updated_at = $3 WHERE request_id = $1 AND state = 'title_sync_pending'`, request.RequestID, operationDesired, s.now())
+			if err == nil {
+				_, err = s.pool.Exec(ctx, `UPDATE codex_threads SET codex_title = $3, title_sync_state = 'synced', title_sync_error = '', updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, operationDesired, s.now())
+			}
+		} else {
+			_, _ = s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_failed', attempts = attempts + 1, last_error = $2, updated_at = $3 WHERE request_id = $1`, request.RequestID, writeErr.Error(), s.now())
+			_, _ = s.pool.Exec(ctx, `UPDATE codex_threads SET title_sync_state = 'failed', title_sync_error = $3, updated_at = $4 WHERE host_id = $1 AND thread_id = $2`, hostID, threadID, writeErr.Error(), s.now())
+		}
+	}
+	if err != nil {
+		return protocol.CodexConversation{}, err
+	}
+	return s.readProjectedConversation(ctx, access, principal, threadID)
+}
+
+func (s *Service) MapProject(ctx context.Context, principal auth.Principal, hostID, projectID string, request protocol.CodexMappingRequest) (protocol.CodexProject, error) {
+	access, err := s.defaultHost(ctx, principal, hostID)
+	if err != nil {
+		return protocol.CodexProject{}, err
+	}
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(request.LoomhelmProjectID) == "" {
+		return protocol.CodexProject{}, ErrInvalid
+	}
+	allowed, err := s.projects.CanWriteProject(ctx, principal, request.LoomhelmProjectID)
+	if err != nil {
+		return protocol.CodexProject{}, err
+	}
+	if !allowed {
+		return protocol.CodexProject{}, auth.ErrForbidden
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO codex_project_mappings (host_id, project_id, loomhelm_project_id, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $5)
+		ON CONFLICT (host_id, project_id) DO UPDATE SET loomhelm_project_id = EXCLUDED.loomhelm_project_id, updated_at = EXCLUDED.updated_at
+	`, access.host.ID, projectID, request.LoomhelmProjectID, principal.UserID, s.now())
+	if err != nil {
+		return protocol.CodexProject{}, fmt.Errorf("map Codex project: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `UPDATE codex_projects SET loomhelm_project_id = $3, updated_at = $4 WHERE host_id = $1 AND project_id = $2`, access.host.ID, projectID, request.LoomhelmProjectID, s.now())
+	if err != nil {
+		return protocol.CodexProject{}, err
+	}
+	return s.readProject(ctx, access.host.ID, projectID)
+}
+
+func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, threadID string, request protocol.CodexBindRequest) (protocol.CodexConversation, error) {
+	access, err := s.defaultHost(ctx, principal, hostID)
+	if err != nil {
+		return protocol.CodexConversation{}, err
+	}
+	if strings.TrimSpace(request.RequestID) == "" || strings.TrimSpace(request.TaskID) == "" {
+		return protocol.CodexConversation{}, ErrInvalid
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("begin Codex binding: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var conversationTitle, sourceStatus, historyState string
+	var filesComplete bool
+	var existingTask, existingSession *string
+	var importedBy *string
+	var snapshotAsOf time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT conversation_title, source_status, history_state, files_complete, bound_task_id, bound_session_id, imported_by, as_of
+		FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE
+	`, access.host.ID, threadID).Scan(&conversationTitle, &sourceStatus, &historyState, &filesComplete, &existingTask, &existingSession, &importedBy, &snapshotAsOf); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, ErrNotFound
+	} else if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("lock Codex conversation: %w", err)
+	}
+	if existingTask != nil {
+		if *existingTask == request.TaskID {
+			return s.readProjectedConversation(ctx, access, principal, threadID)
+		}
+		return protocol.CodexConversation{}, ErrConflict
+	}
+	if request.ExpectedAsOf != nil {
+		expectedAsOf, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(*request.ExpectedAsOf))
+		if parseErr != nil {
+			return protocol.CodexConversation{}, ErrInvalid
+		}
+		if !snapshotAsOf.Equal(expectedAsOf) {
+			return protocol.CodexConversation{}, ErrConflict
+		}
+	}
+	if sourceStatus != string(protocol.CodexSourceStatusActive) {
+		return protocol.CodexConversation{}, ErrSourceUnavailable
+	}
+	if historyState != string(protocol.CodexHistoryStateComplete) || !filesComplete {
+		return protocol.CodexConversation{}, ErrIncompleteHistory
+	}
+	if importedBy == nil || *importedBy != principal.UserID {
+		if request.ConfirmShare == nil || !*request.ConfirmShare {
+			return protocol.CodexConversation{}, ErrForbidden
+		}
+	}
+	var taskProjectID string
+	var taskSessionID *string
+	if err := tx.QueryRow(ctx, `SELECT project_id, session_id FROM tasks WHERE id = $1 FOR UPDATE`, request.TaskID).Scan(&taskProjectID, &taskSessionID); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, auth.ErrNotFound
+	} else if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("lock binding Task: %w", err)
+	}
+	allowed, err := s.projects.CanWriteProjectTx(ctx, tx, principal, taskProjectID)
+	if err != nil {
+		return protocol.CodexConversation{}, err
+	}
+	if !allowed {
+		return protocol.CodexConversation{}, auth.ErrNotFound
+	}
+	if taskSessionID != nil {
+		return protocol.CodexConversation{}, ErrConflict
+	}
+	var linkedTask, linkedSession string
+	var linkedHost, linkedThread string
+	if err := tx.QueryRow(ctx, `SELECT host_id, thread_id, task_id, session_id FROM codex_thread_links WHERE request_id = $1`, request.RequestID).Scan(&linkedHost, &linkedThread, &linkedTask, &linkedSession); err == nil {
+		if linkedHost != access.host.ID || linkedThread != threadID || linkedTask != request.TaskID || linkedSession == "" {
+			return protocol.CodexConversation{}, ErrConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return protocol.CodexConversation{}, err
+		}
+		return s.readProjectedConversation(ctx, access, principal, threadID)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, fmt.Errorf("read binding idempotency record: %w", err)
+	}
+	sessionID := newID("session")
+	generation := newID("codex-source")
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO execution_sessions (id, host_id, external_thread_ref, path, state, project_id, generation, terminal_reason)
+		VALUES ($1, $2, $3, 'existing_active', 'unsupported', $4, $5, 'Codex source binding is read-only until execution control is separately verified')
+	`, sessionID, access.host.ID, threadID, taskProjectID, generation); err != nil {
+		if isUniqueViolation(err) {
+			return protocol.CodexConversation{}, ErrConflict
+		}
+		return protocol.CodexConversation{}, fmt.Errorf("create bound Codex Session: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE tasks SET session_id = $2, updated_at = $3 WHERE id = $1 AND session_id IS NULL`, request.TaskID, sessionID, s.now()); err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("bind Task Session: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO codex_thread_links (host_id, thread_id, task_id, session_id, request_id, linked_by)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, access.host.ID, threadID, request.TaskID, sessionID, request.RequestID, principal.UserID); err != nil {
+		if isUniqueViolation(err) {
+			return protocol.CodexConversation{}, ErrConflict
+		}
+		return protocol.CodexConversation{}, fmt.Errorf("persist Codex binding: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE codex_threads SET bound_task_id = $3, bound_session_id = $4, updated_at = $5 WHERE host_id = $1 AND thread_id = $2`, access.host.ID, threadID, request.TaskID, sessionID, s.now()); err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("project Codex binding: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("commit Codex binding: %w", err)
+	}
+	return s.readProjectedConversation(ctx, access, principal, threadID)
+}
+
+func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, request protocol.CodexSyncRequest) (protocol.CodexSyncResponse, error) {
+	hostID := valueOrEmpty(request.HostID)
+	access, err := s.defaultHost(ctx, principal, hostID)
+	if err != nil {
+		return protocol.CodexSyncResponse{}, err
+	}
+	operationID := strings.TrimSpace(valueOrEmpty(request.RequestID))
+	if operationID == "" {
+		operationID = newID("codex-sync")
+	}
+	now := s.now()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return protocol.CodexSyncResponse{}, fmt.Errorf("begin Codex sync request: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var existingHost, existingState string
+	var existingAsOf time.Time
+	existingErr := tx.QueryRow(ctx, `SELECT host_id, state, as_of FROM codex_sync_snapshots WHERE id = $1 FOR UPDATE`, operationID).Scan(&existingHost, &existingState, &existingAsOf)
+	if existingErr == nil {
+		if existingHost != access.host.ID {
+			return protocol.CodexSyncResponse{}, ErrConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return protocol.CodexSyncResponse{}, fmt.Errorf("commit existing Codex sync request: %w", err)
+		}
+		asOf := formatTime(existingAsOf)
+		return protocol.CodexSyncResponse{OperationID: operationID, State: protocol.CodexSyncState(existingState), AsOf: &asOf}, nil
+	}
+	if !errors.Is(existingErr, pgx.ErrNoRows) {
+		return protocol.CodexSyncResponse{}, fmt.Errorf("read existing Codex sync request: %w", existingErr)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO codex_sync_sources (host_id, state, sync_state, as_of, updated_at)
+		VALUES ($1, CASE WHEN (SELECT status FROM host_registrations WHERE id = $1) = 'online' THEN 'online' ELSE 'offline' END, 'syncing', $2, $2)
+		ON CONFLICT (host_id) DO UPDATE SET sync_state = 'syncing', as_of = EXCLUDED.as_of, updated_at = EXCLUDED.updated_at
+	`, access.host.ID, now)
+	if err != nil {
+		return protocol.CodexSyncResponse{}, fmt.Errorf("record Codex sync request: %w", err)
+	}
+	insertTag, err := tx.Exec(ctx, `
+		INSERT INTO codex_sync_snapshots (id, host_id, scope, state, complete, as_of, cursor, error, created_at, updated_at)
+		VALUES ($1, $2, 'source', 'syncing', FALSE, $3, '', '', $3, $3)
+		ON CONFLICT (id) DO NOTHING
+	`, operationID, access.host.ID, now)
+	if err != nil {
+		return protocol.CodexSyncResponse{}, fmt.Errorf("record Codex sync snapshot: %w", err)
+	}
+	if insertTag.RowsAffected() == 0 {
+		if err := tx.QueryRow(ctx, `SELECT host_id, state, as_of FROM codex_sync_snapshots WHERE id = $1 FOR UPDATE`, operationID).Scan(&existingHost, &existingState, &existingAsOf); err != nil {
+			return protocol.CodexSyncResponse{}, fmt.Errorf("read existing Codex sync request: %w", err)
+		}
+		if existingHost != access.host.ID {
+			return protocol.CodexSyncResponse{}, ErrConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return protocol.CodexSyncResponse{}, fmt.Errorf("commit existing Codex sync request: %w", err)
+		}
+		asOf := formatTime(existingAsOf)
+		return protocol.CodexSyncResponse{OperationID: operationID, State: protocol.CodexSyncState(existingState), AsOf: &asOf}, nil
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return protocol.CodexSyncResponse{}, fmt.Errorf("commit Codex sync request: %w", err)
+	}
+	if runner := s.syncRunner; runner != nil {
+		hostID := access.host.ID
+		go func() {
+			syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			defer cancel()
+			snapshot, syncErr := runner.Sync(syncCtx, hostID, operationID)
+			if syncErr != nil {
+				_ = s.FailSync(context.Background(), hostID, operationID, syncErr)
+				return
+			}
+			snapshot.HostID = hostID
+			snapshot.OperationID = operationID
+			if importErr := s.ImportSnapshot(syncCtx, snapshot); importErr != nil {
+				_ = s.FailSync(context.Background(), hostID, operationID, importErr)
+			}
+		}()
+	}
+	asOf := formatTime(now)
+	return protocol.CodexSyncResponse{OperationID: operationID, State: protocol.CodexSyncStateSyncing, AsOf: &asOf}, nil
+}
+
+type conversationCursor struct {
+	UpdatedAt time.Time
+	ThreadID  string
+}
+
+func encodeConversationCursor(cursor conversationCursor) string {
+	data, _ := json.Marshal(struct {
+		UpdatedAt string `json:"updated_at"`
+		ThreadID  string `json:"thread_id"`
+	}{cursor.UpdatedAt.UTC().Format(time.RFC3339Nano), cursor.ThreadID})
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodeConversationCursor(value string) *conversationCursor {
+	if value == "" {
+		return nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return nil
+	}
+	var decoded struct {
+		UpdatedAt string `json:"updated_at"`
+		ThreadID  string `json:"thread_id"`
+	}
+	if json.Unmarshal(data, &decoded) != nil || decoded.ThreadID == "" {
+		return nil
+	}
+	updated, err := time.Parse(time.RFC3339Nano, decoded.UpdatedAt)
+	if err != nil {
+		return nil
+	}
+	return &conversationCursor{UpdatedAt: updated, ThreadID: decoded.ThreadID}
+}
+
+func normalizeLimit(value *int64) int {
+	if value == nil || *value <= 0 {
+		return defaultPageSize
+	}
+	if *value > maxPageSize {
+		return maxPageSize
+	}
+	return int(*value)
+}
+
+func boolValue(value *bool) bool { return value != nil && *value }
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func nullableString(value *string) any {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(*value)
+}
+
+func nullableStringValue(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	value = strings.TrimSpace(value)
+	return &value
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func formatTime(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func capabilityContains(raw []byte, capability string) bool {
+	var values []string
+	if json.Unmarshal(raw, &values) != nil {
+		return false
+	}
+	for _, value := range values {
+		if value == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func newID(prefix string) string {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return prefix + "-fallback"
+	}
+	return prefix + "_" + hex.EncodeToString(bytes[:])
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
