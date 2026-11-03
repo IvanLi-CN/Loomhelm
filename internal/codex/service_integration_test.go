@@ -3,15 +3,19 @@ package codex_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/codex"
+	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
+	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
 
@@ -212,6 +216,105 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 		t.Fatalf("late snapshot changed Codex sync fence = (%q, %q)", currentOperation, currentSyncState)
 	}
 
+}
+
+func TestUpdateTitlePersistsPreflightFailuresForRetry(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		t.Fatalf("load database configuration: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "codex-title-user-" + suffix
+	hostID := "codex-title-host-" + suffix
+	projectID := "codex-title-project-" + suffix
+	taskID := "codex-title-task-" + suffix
+	threadID := "codex-title-thread-" + suffix
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_, err = db.Pool().Exec(ctx, `INSERT INTO auth_users (id, issuer, subject) VALUES ($1, 'test', $1)`, userID)
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `INSERT INTO host_registrations (id, singleton_key, name, status, owner_user_id) VALUES ($1, NULL, 'Codex title test', 'online', $2)`, hostID, userID)
+	}
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `INSERT INTO projects (id, name, created_by) VALUES ($1, 'Codex title project', $2)`, projectID, userID)
+	}
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')`, projectID, userID)
+	}
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `INSERT INTO tasks (id, project_id, title, goal) VALUES ($1, $2, 'Existing Task', 'Verify title synchronization')`, taskID, projectID)
+	}
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `INSERT INTO codex_sync_sources (host_id, state, sync_state, as_of, updated_at) VALUES ($1, 'offline', 'complete', $2, $2)`, hostID, now)
+	}
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `INSERT INTO codex_projects (host_id, project_id, name, cwd, snapshot_state, as_of, updated_at) VALUES ($1, 'codex-project', 'Codex Project', '/workspace', 'complete', $2, $2)`, hostID, now)
+	}
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `
+			INSERT INTO codex_threads (host_id, thread_id, project_id, codex_title, conversation_title, preview, cwd, source_status, history_state, files_complete, title_sync_state, bound_task_id, imported_by, as_of, last_activity_at, updated_at)
+			VALUES ($1, $2, 'codex-project', 'Codex 原标题', '旧标题', 'preview', '/workspace', 'active', 'complete', TRUE, 'synced', $3, $4, $5, $5, $5)
+		`, hostID, threadID, taskID, userID, now)
+	}
+	if err != nil {
+		t.Fatalf("seed Codex title fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM codex_sync_sources WHERE host_id = $1`, hostID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM tasks WHERE id = $1`, taskID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM projects WHERE id = $1`, projectID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM host_registrations WHERE id = $1`, hostID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM auth_users WHERE id = $1`, userID)
+	})
+
+	service := codex.NewService(db.Pool(), nil, hosts.NewService(db.Pool()), projects.NewService(db.Pool(), nil))
+	principal := auth.Principal{UserID: userID}
+	first, firstErr := service.UpdateTitle(ctx, principal, hostID, threadID, protocol.CodexTitleUpdateRequest{RequestID: "title-request-offline-" + suffix, Title: "离线标题"})
+	if !errors.Is(firstErr, codex.ErrSourceUnavailable) {
+		t.Fatalf("offline UpdateTitle() error = %v, want source unavailable", firstErr)
+	}
+	if first.ConversationTitle != "离线标题" || first.TitleSyncState != protocol.CodexTitleSyncStatePaused {
+		t.Fatalf("offline projected title = %+v", first)
+	}
+	var desired, operationState, operationError string
+	if err := db.Pool().QueryRow(ctx, `SELECT desired_title, state, last_error FROM codex_title_operations WHERE request_id = $1`, "title-request-offline-"+suffix).Scan(&desired, &operationState, &operationError); err != nil {
+		t.Fatalf("read offline title operation: %v", err)
+	}
+	if desired != "离线标题" || operationState != "title_sync_paused" || operationError == "" {
+		t.Fatalf("offline title operation = (%q, %q, %q)", desired, operationState, operationError)
+	}
+
+	if _, err := db.Pool().Exec(ctx, `UPDATE codex_sync_sources SET state = 'online', capabilities = '[]'::jsonb, updated_at = $2 WHERE host_id = $1`, hostID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("make Codex source online without title capability: %v", err)
+	}
+	second, secondErr := service.UpdateTitle(ctx, principal, hostID, threadID, protocol.CodexTitleUpdateRequest{RequestID: "title-request-unsupported-" + suffix, Title: "能力缺失标题"})
+	if !errors.Is(secondErr, codex.ErrCapabilityUnsupported) {
+		t.Fatalf("unsupported UpdateTitle() error = %v, want capability unsupported", secondErr)
+	}
+	if second.ConversationTitle != "能力缺失标题" || second.TitleSyncState != protocol.CodexTitleSyncStateUnsupported {
+		t.Fatalf("unsupported projected title = %+v", second)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT state, last_error FROM codex_title_operations WHERE request_id = $1`, "title-request-unsupported-"+suffix).Scan(&operationState, &operationError); err != nil {
+		t.Fatalf("read unsupported title operation: %v", err)
+	}
+	if operationState != "title_sync_failed" || operationError == "" {
+		t.Fatalf("unsupported title operation = (%q, %q)", operationState, operationError)
+	}
 }
 
 func stringPointer(value string) *string { return &value }

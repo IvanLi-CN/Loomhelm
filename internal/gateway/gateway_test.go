@@ -1184,6 +1184,101 @@ func TestGatewayLateSourceAckCannotBecomeRecoverySnapshot(t *testing.T) {
 	}
 }
 
+func TestGatewayStreamsLargeSourceSnapshots(t *testing.T) {
+	registry := newFakeRegistry()
+	const maxFrame = int64(1 << 20)
+	largeText := strings.Repeat("snapshot-data-", 180000)
+	largeValue := `"` + largeText + `"`
+	var recoveredPayload []byte
+	var recoveredOperation string
+	server, err := NewServer(registry, ServerOptions{
+		MaxFrameBytes: maxFrame,
+		SourceSnapshotHandler: func(_ context.Context, _ hosts.Connection, operationID string, payload []byte) error {
+			recoveredOperation = operationID
+			recoveredPayload = append([]byte(nil), payload...)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	httpServer := httptest.NewTLSServer(server)
+	t.Cleanup(httpServer.Close)
+	client, err := NewClient(ClientOptions{
+		URL:           strings.Replace(httpServer.URL, "https://", "wss://", 1),
+		HostID:        registry.credential.HostID,
+		Token:         registry.token,
+		HTTPClient:    httpServer.Client(),
+		MaxFrameBytes: maxFrame,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	connection := connectTestClient(t, client)
+	defer connection.Close()
+	firstReadCtx, cancelFirstRead := context.WithCancel(context.Background())
+	defer cancelFirstRead()
+	readErr := make(chan error, 1)
+	go func() {
+		for {
+			message, readError := connection.Read(firstReadCtx)
+			if readError != nil {
+				readErr <- readError
+				return
+			}
+			if message.Type != MessageSourceCommand || message.SourceCommand == nil {
+				continue
+			}
+			readErr <- connection.AcknowledgeSource(context.Background(), message.RequestID, SourceAck{
+				OperationID: message.SourceCommand.OperationID,
+				State:       "succeeded",
+				Payload:     json.RawMessage(largeValue),
+			})
+			return
+		}
+	}()
+
+	commandAck, err := server.SendSourceCommand(context.Background(), registry.credential.HostID, SourceCommand{OperationID: "source-sync-large", Method: "source/sync"})
+	if err != nil {
+		t.Fatalf("SendSourceCommand() error = %v", err)
+	}
+	if string(commandAck.Payload) != largeValue {
+		t.Fatalf("large source command payload length = %d, want %d", len(commandAck.Payload), len(largeValue))
+	}
+	select {
+	case err := <-readErr:
+		if err != nil {
+			t.Fatalf("source command reader error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("source command reader did not acknowledge the chunked snapshot")
+	}
+
+	recovery := protocol.CodexSourceSnapshot{OperationID: "reconnect-large", Recovery: true, Error: largeValue}
+	recoveryPayload, err := json.Marshal(recovery)
+	if err != nil {
+		t.Fatalf("marshal recovery snapshot: %v", err)
+	}
+	// Restart the reader for the recovery acknowledgement after the command
+	// acknowledgement goroutine has completed.
+	secondReadCtx, cancelSecondRead := context.WithCancel(context.Background())
+	defer cancelSecondRead()
+	go func() {
+		for {
+			if _, readError := connection.Read(secondReadCtx); readError != nil {
+				readErr <- readError
+				return
+			}
+		}
+	}()
+	if err := connection.SendSourceSnapshot(context.Background(), "reconnect-large", SourceAck{OperationID: recovery.OperationID, State: "succeeded", Payload: recoveryPayload}); err != nil {
+		t.Fatalf("SendSourceSnapshot() error = %v", err)
+	}
+	if recoveredOperation != recovery.OperationID || string(recoveredPayload) != string(recoveryPayload) {
+		t.Fatalf("recovered source snapshot = operation %q, payload length %d; want operation %q, payload length %d", recoveredOperation, len(recoveredPayload), recovery.OperationID, len(recoveryPayload))
+	}
+}
+
 func TestGatewayWSSLateCommandAckCallsDurableHandlerAfterPendingRemoval(t *testing.T) {
 	registry := newFakeRegistry()
 	ackCalls := make(chan struct {

@@ -122,13 +122,13 @@ func (s *Service) readConversation(ctx context.Context, access sourceAccess, pri
 }
 
 func (s *Service) readProjectedConversation(ctx context.Context, access sourceAccess, principal auth.Principal, threadID string) (protocol.CodexConversation, error) {
-	item, _, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
+	item, capabilities, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
 	if err != nil {
 		return protocol.CodexConversation{}, err
 	}
 	item.ReadOnly = true
 	item.CanEditTitle = boolPointer(false)
-	if item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete {
+	if item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && capabilityContains(capabilities, "thread/name/set") {
 		allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
 		if authorizeErr != nil {
 			return protocol.CodexConversation{}, authorizeErr

@@ -171,6 +171,7 @@ type SourceClient struct {
 	noticeMu       sync.Mutex
 	seenNotice     map[string]struct{}
 	pendingNotice  *SourceNotification
+	pendingNotices []SourceNotification
 	noticeEvents   chan RPCMessage
 	noticeErrors   chan error
 	noticePumpDone chan struct{}
@@ -620,6 +621,17 @@ func (c *SourceClient) NextNotification(ctx context.Context) (SourceNotification
 			c.noticeMu.Unlock()
 			return pending, nil
 		}
+		for len(c.pendingNotices) > 0 {
+			notification := c.pendingNotices[0]
+			c.pendingNotices = c.pendingNotices[1:]
+			key := notificationKey(notification)
+			if _, seen := c.seenNotice[key]; seen {
+				continue
+			}
+			c.pendingNotice = &notification
+			c.noticeMu.Unlock()
+			return notification, nil
+		}
 		c.noticeMu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -695,6 +707,67 @@ func (c *SourceClient) MarkNotificationDelivered(notification SourceNotification
 	if c.pendingNotice != nil && notificationKey(*c.pendingNotice) == key {
 		c.pendingNotice = nil
 	}
+	for index, pending := range c.pendingNotices {
+		if notificationKey(pending) == key {
+			c.pendingNotices = append(c.pendingNotices[:index], c.pendingNotices[index+1:]...)
+			break
+		}
+	}
+}
+
+type sourceNotificationHandoff struct {
+	pending *SourceNotification
+	queued  []SourceNotification
+}
+
+// takeNotificationHandoff closes the old transport before draining its
+// bounded notification queue. The runtime can then move both the in-flight
+// notification and every unread queued event to the replacement client.
+func (c *SourceClient) takeNotificationHandoff(ctx context.Context) sourceNotificationHandoff {
+	if c == nil {
+		return sourceNotificationHandoff{}
+	}
+	_ = c.Close()
+	select {
+	case <-c.noticePumpDone:
+	case <-ctx.Done():
+	}
+
+	handoff := sourceNotificationHandoff{queued: make([]SourceNotification, 0)}
+	c.noticeMu.Lock()
+	if c.pendingNotice != nil {
+		pending := cloneSourceNotification(*c.pendingNotice)
+		handoff.pending = &pending
+		c.pendingNotice = nil
+	}
+	c.noticeMu.Unlock()
+	for {
+		select {
+		case message, ok := <-c.noticeEvents:
+			if !ok {
+				return handoff
+			}
+			notification, ok := parseSourceNotification(message)
+			if ok {
+				handoff.queued = append(handoff.queued, notification)
+			}
+		default:
+			return handoff
+		}
+	}
+}
+
+func (c *SourceClient) enqueueNotificationHandoff(handoff sourceNotificationHandoff) {
+	if c == nil {
+		return
+	}
+	c.noticeMu.Lock()
+	defer c.noticeMu.Unlock()
+	if handoff.pending != nil {
+		pending := cloneSourceNotification(*handoff.pending)
+		c.pendingNotice = &pending
+	}
+	c.pendingNotices = append(c.pendingNotices, handoff.queued...)
 }
 
 func (c *SourceClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
@@ -1315,22 +1388,16 @@ func (r *SourceRuntime) Connect(ctx context.Context) (*SourceClient, error) {
 	r.mu.Lock()
 	source.noticeMu.Lock()
 	source.seenNotice = r.seenNotice
-	if r.source != nil {
-		r.source.noticeMu.Lock()
-		if r.source.pendingNotice != nil {
-			pending := cloneSourceNotification(*r.source.pendingNotice)
-			source.pendingNotice = &pending
-		}
-		r.source.noticeMu.Unlock()
-	}
 	source.noticeMu.Unlock()
-	previous := r.transport
+	previousSource := r.source
+	var handoff sourceNotificationHandoff
+	if previousSource != nil {
+		handoff = previousSource.takeNotificationHandoff(ctx)
+		source.enqueueNotificationHandoff(handoff)
+	}
 	r.transport = transport
 	r.source = source
 	r.mu.Unlock()
-	if previous != nil {
-		_ = previous.Close()
-	}
 	return source, nil
 }
 

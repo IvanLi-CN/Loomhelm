@@ -793,12 +793,87 @@ func (s *Service) GetConversation(ctx context.Context, principal auth.Principal,
 	return protocol.CodexConversationDetail{Conversation: item, History: history, Files: files}, nil
 }
 
+type titleOperationRecord struct {
+	OperationID        string
+	HostID             string
+	ThreadID           string
+	DesiredTitle       string
+	ExpectedCodexTitle *string
+	State              string
+}
+
+func (s *Service) readTitleOperation(ctx context.Context, requestID string) (titleOperationRecord, bool, error) {
+	var record titleOperationRecord
+	err := s.pool.QueryRow(ctx, `
+		SELECT operation_id, host_id, thread_id, desired_title, expected_codex_title, state
+		FROM codex_title_operations WHERE request_id = $1
+	`, requestID).Scan(&record.OperationID, &record.HostID, &record.ThreadID, &record.DesiredTitle, &record.ExpectedCodexTitle, &record.State)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return titleOperationRecord{}, false, nil
+	}
+	if err != nil {
+		return titleOperationRecord{}, false, fmt.Errorf("read Codex title operation: %w", err)
+	}
+	return record, true, nil
+}
+
+// persistTitlePreflightFailure keeps the attempted local title and its retry
+// identity even when the remote write cannot be started. This is deliberately
+// after both application permission checks, so an unauthorized caller cannot
+// create or alter a title operation.
+func (s *Service) persistTitlePreflightFailure(ctx context.Context, access sourceAccess, principal auth.Principal, threadID string, request protocol.CodexTitleUpdateRequest, cause error, threadState, operationState, reason string) (protocol.CodexConversation, error) {
+	now := s.now()
+	desiredTitle := strings.TrimSpace(request.Title)
+	operationID := newID("codex-title")
+	insertTag, err := s.pool.Exec(ctx, `
+		INSERT INTO codex_title_operations (operation_id, request_id, host_id, thread_id, desired_title, expected_codex_title, state, last_error, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+		ON CONFLICT (request_id) DO NOTHING
+	`, operationID, request.RequestID, access.host.ID, threadID, desiredTitle, nullableString(request.ExpectedCodexTitle), operationState, reason, now)
+	if err != nil {
+		return protocol.CodexConversation{}, errors.Join(cause, fmt.Errorf("persist Codex title preflight failure: %w", err))
+	}
+	record, found, err := s.readTitleOperation(ctx, request.RequestID)
+	if err != nil {
+		return protocol.CodexConversation{}, errors.Join(cause, err)
+	}
+	if !found || record.HostID != access.host.ID || record.ThreadID != threadID || record.DesiredTitle != desiredTitle || valueOrEmpty(record.ExpectedCodexTitle) != valueOrEmpty(request.ExpectedCodexTitle) {
+		return protocol.CodexConversation{}, errors.Join(cause, ErrConflict)
+	}
+	operationID = record.OperationID
+	if insertTag.RowsAffected() == 0 && request.Resolution != nil && *request.Resolution == "retry" {
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE codex_title_operations
+			SET state = $2, attempts = attempts + 1, last_error = $3, next_retry_at = NULL, updated_at = $4
+			WHERE operation_id = $1 AND state <> 'title_sync_complete'
+		`, operationID, operationState, reason, now); err != nil {
+			return protocol.CodexConversation{}, errors.Join(cause, fmt.Errorf("refresh Codex title retry state: %w", err))
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE codex_threads
+		SET conversation_title = $3, title_sync_state = $4, title_sync_error = $5,
+			title_conflict_codex_title = NULL, title_conflict_detected_at = NULL,
+			title_operation_id = $6, updated_at = $7
+		WHERE host_id = $1 AND thread_id = $2
+	`, access.host.ID, threadID, desiredTitle, threadState, reason, operationID, now); err != nil {
+		return protocol.CodexConversation{}, errors.Join(cause, fmt.Errorf("persist failed Loomhelm conversation title: %w", err))
+	}
+	projected, readErr := s.readProjectedConversation(ctx, access, principal, threadID)
+	if readErr != nil {
+		return protocol.CodexConversation{}, errors.Join(cause, readErr)
+	}
+	return projected, cause
+}
+
 func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hostID, threadID string, request protocol.CodexTitleUpdateRequest) (protocol.CodexConversation, error) {
 	access, err := s.defaultHost(ctx, principal, hostID)
 	if err != nil {
 		return protocol.CodexConversation{}, err
 	}
-	if strings.TrimSpace(request.RequestID) == "" || strings.TrimSpace(request.Title) == "" || len([]rune(strings.TrimSpace(request.Title))) > maxTitleLength {
+	request.RequestID = strings.TrimSpace(request.RequestID)
+	request.Title = strings.TrimSpace(request.Title)
+	if request.RequestID == "" || request.Title == "" || len([]rune(request.Title)) > maxTitleLength {
 		return protocol.CodexConversation{}, ErrInvalid
 	}
 	item, capabilities, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
@@ -815,28 +890,45 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 	if !allowed {
 		return protocol.CodexConversation{}, auth.ErrForbidden
 	}
+	if request.Resolution != nil {
+		switch *request.Resolution {
+		case "use_codex":
+			if strings.TrimSpace(valueOrEmpty(item.CodexTitle)) == "" {
+				return item, ErrInvalid
+			}
+			request.Title = strings.TrimSpace(valueOrEmpty(item.CodexTitle))
+		case "use_loomhelm", "retry":
+		default:
+			return item, ErrInvalid
+		}
+		if request.Title == "" || len([]rune(request.Title)) > maxTitleLength {
+			return item, ErrInvalid
+		}
+	}
+	existingOperation, found, err := s.readTitleOperation(ctx, request.RequestID)
+	if err != nil {
+		return protocol.CodexConversation{}, err
+	}
+	if found {
+		if existingOperation.HostID != hostID || existingOperation.ThreadID != threadID || existingOperation.DesiredTitle != request.Title || valueOrEmpty(existingOperation.ExpectedCodexTitle) != valueOrEmpty(request.ExpectedCodexTitle) {
+			return item, ErrConflict
+		}
+		if existingOperation.State == "title_sync_complete" || request.Resolution == nil || *request.Resolution != "retry" {
+			return s.readProjectedConversation(ctx, access, principal, threadID)
+		}
+	}
 	if sourceState != string(protocol.CodexSourceStateOnline) || item.SourceStatus != protocol.CodexSourceStatusActive {
-		return item, ErrSourceUnavailable
+		return s.persistTitlePreflightFailure(ctx, access, principal, threadID, request, ErrSourceUnavailable, "paused", "title_sync_paused", "Codex source is unavailable; title writeback is paused")
 	}
 	if item.HistoryState != protocol.CodexHistoryStateComplete || !item.FilesComplete {
-		return item, ErrIncompleteHistory
+		return s.persistTitlePreflightFailure(ctx, access, principal, threadID, request, ErrIncompleteHistory, "failed", "title_sync_failed", "Codex conversation materials are incomplete; title writeback is waiting for a complete snapshot")
 	}
 	if !capabilityContains(capabilities, "thread/name/set") {
-		return item, ErrCapabilityUnsupported
+		return s.persistTitlePreflightFailure(ctx, access, principal, threadID, request, ErrCapabilityUnsupported, "unsupported", "title_sync_failed", "Codex source does not support thread/name/set")
 	}
 	if request.ExpectedCodexTitle != nil && valueOrEmpty(request.ExpectedCodexTitle) != valueOrEmpty(item.CodexTitle) && (request.Resolution == nil || *request.Resolution == "retry") {
 		return item, ErrConflict
 	}
-	if request.Resolution != nil && *request.Resolution == "use_codex" {
-		if strings.TrimSpace(valueOrEmpty(item.CodexTitle)) == "" {
-			return item, ErrInvalid
-		}
-		request.Title = *item.CodexTitle
-	}
-	if request.Resolution != nil && *request.Resolution != "use_codex" && *request.Resolution != "use_loomhelm" && *request.Resolution != "retry" {
-		return item, ErrInvalid
-	}
-
 	now := s.now()
 	operationID := newID("codex-title")
 	insertTag, err := s.pool.Exec(ctx, `

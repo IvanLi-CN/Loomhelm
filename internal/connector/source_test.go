@@ -131,6 +131,46 @@ func TestSourceClientDrainsRPCResponsesWhileSyncing(t *testing.T) {
 	}
 }
 
+func TestSourceRuntimeTransfersUnreadNotificationsAcrossReconnect(t *testing.T) {
+	firstTransport := newSourceTestTransport()
+	firstTransport.responses["initialize"] = RPCMessage{Result: sourceInitializeResult()}
+	secondTransport := newSourceTestTransport()
+	secondTransport.responses["initialize"] = RPCMessage{Result: sourceInitializeResult()}
+	transports := []RPCTransport{firstTransport, secondTransport}
+	runtime, err := NewSourceRuntime(func(context.Context) (RPCTransport, error) {
+		transport := transports[0]
+		transports = transports[1:]
+		return transport, nil
+	}, ClientInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := runtime.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTransport.events <- RPCMessage{Method: SourceNotificationName, Params: json.RawMessage(`{"threadId":"thread-1","name":"标题一"}`), Raw: json.RawMessage(`{"method":"thread/name/updated","params":{"threadId":"thread-1","name":"标题一"}}`)}
+	firstTransport.events <- RPCMessage{Method: SourceNotificationName, Params: json.RawMessage(`{"threadId":"thread-2","name":"标题二"}`), Raw: json.RawMessage(`{"method":"thread/name/updated","params":{"threadId":"thread-2","name":"标题二"}}`)}
+	deadline := time.Now().Add(time.Second)
+	for len(first.noticeEvents) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(first.noticeEvents) != 2 {
+		t.Fatalf("queued notifications before reconnect = %d, want 2", len(first.noticeEvents))
+	}
+	second, err := runtime.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, want := range []string{"thread-1", "thread-2"} {
+		notification, nextErr := second.NextNotification(context.Background())
+		if nextErr != nil || notification.ThreadID != want {
+			t.Fatalf("notification %d = %+v, error = %v, want thread %q", index, notification, nextErr, want)
+		}
+		second.MarkNotificationDelivered(notification)
+	}
+}
+
 func TestSourceRPCErrorDistinguishesInvalidParamsFromUnsupported(t *testing.T) {
 	invalidParams := &SourceRPCError{Code: -32602, Message: "invalid params"}
 	if !errors.Is(invalidParams, ErrSourceInvalidParams) || errors.Is(invalidParams, ErrSourceCapabilityUnsupported) {

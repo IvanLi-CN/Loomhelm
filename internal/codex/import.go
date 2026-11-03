@@ -119,7 +119,12 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 	`, hostID).Scan(&currentAsOf, &currentOperationID, &currentSyncState, &currentSourceState); err == nil {
 		incomingOperationID := strings.TrimSpace(snapshot.OperationID)
 		currentOperationID = strings.TrimSpace(currentOperationID)
-		recoveryAllowed := snapshot.Recovery && hostStatus == "online" && currentSourceState == string(protocol.CodexSourceStateOffline)
+		// A Server restart marks an in-flight source sync stale while the Host
+		// connection may remain online. A recovery snapshot must be able to
+		// replace that interrupted operation without allowing it to overwrite a
+		// currently active sync.
+		recoveryAllowed := snapshot.Recovery && hostStatus == "online" &&
+			(currentSourceState == string(protocol.CodexSourceStateOffline) || currentSyncState == string(protocol.CodexSyncStateStale))
 		if currentOperationID != "" && currentOperationID != incomingOperationID && (currentSyncState == "syncing" || !recoveryAllowed) {
 			if _, staleErr := tx.Exec(ctx, `
 				UPDATE codex_sync_snapshots

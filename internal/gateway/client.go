@@ -255,7 +255,7 @@ func (c *ClientConnection) AcknowledgeSource(ctx context.Context, requestID stri
 	if strings.TrimSpace(requestID) == "" {
 		return errors.New("gateway source acknowledgement request id must not be empty")
 	}
-	return c.write(ctx, Message{Type: MessageSourceAck, RequestID: requestID, Generation: c.generation, SourceAck: &ack})
+	return c.writeSourceSnapshot(ctx, requestID, ack)
 }
 
 func (c *ClientConnection) SendSourceNotification(ctx context.Context, notification SourceNotification) error {
@@ -308,7 +308,7 @@ func (c *ClientConnection) SendSourceSnapshot(ctx context.Context, requestID str
 	}
 	c.sourcePending[requestID] = response
 	c.sourceMu.Unlock()
-	if err := c.write(ctx, Message{Type: MessageSourceAck, RequestID: requestID, Generation: c.generation, SourceAck: &ack}); err != nil {
+	if err := c.writeSourceSnapshot(ctx, requestID, ack); err != nil {
 		c.removeSourcePending(requestID)
 		return err
 	}

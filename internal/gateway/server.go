@@ -72,6 +72,7 @@ type serverConnection struct {
 	pending         map[string]chan commandResponse
 	pendingSources  map[string]chan sourceResponse
 	artifactUploads map[string]*pendingServerArtifactUpload
+	sourceSnapshots map[string]*pendingServerSourceSnapshot
 }
 
 type commandResponse struct {
@@ -205,6 +206,7 @@ func (s *Server) acceptHello(ctx context.Context, ws *websocket.Conn, credential
 		pending:          make(map[string]chan commandResponse),
 		pendingSources:   make(map[string]chan sourceResponse),
 		artifactUploads:  make(map[string]*pendingServerArtifactUpload),
+		sourceSnapshots:  make(map[string]*pendingServerSourceSnapshot),
 	}
 	ack := helloAckMessage(connection)
 	if _, err := encodeMessage(ack, s.options.MaxFrameBytes); err != nil {
@@ -439,6 +441,22 @@ func (c *serverConnection) readLoop(ctx context.Context) error {
 			}
 		case MessageSourceEvent:
 			if err := c.handleSourceEvent(ctx, message); err != nil {
+				return err
+			}
+		case MessageSourceSnapshotBegin:
+			if err := c.handleSourceSnapshotBegin(message); err != nil {
+				return err
+			}
+		case MessageSourceSnapshotChunk:
+			if err := c.handleSourceSnapshotChunk(message); err != nil {
+				return err
+			}
+		case MessageSourceSnapshotCommit:
+			if err := c.handleSourceSnapshotCommit(ctx, message); err != nil {
+				return err
+			}
+		case MessageSourceSnapshotAbort:
+			if err := c.handleSourceSnapshotAbort(message); err != nil {
 				return err
 			}
 		case MessageArtifactBegin:

@@ -29,22 +29,26 @@ const (
 type MessageType string
 
 const (
-	MessageHello          MessageType = "hello"
-	MessageHelloAck       MessageType = "hello_ack"
-	MessageCommand        MessageType = "command"
-	MessageCommandAck     MessageType = "command_ack"
-	MessageEvent          MessageType = "event"
-	MessageHeartbeat      MessageType = "heartbeat"
-	MessageHeartbeatAck   MessageType = "heartbeat_ack"
-	MessageArtifactBegin  MessageType = "artifact_begin"
-	MessageArtifactChunk  MessageType = "artifact_chunk"
-	MessageArtifactCommit MessageType = "artifact_commit"
-	MessageArtifactAbort  MessageType = "artifact_abort"
-	MessageArtifactAck    MessageType = "artifact_ack"
-	MessageSourceCommand  MessageType = "source_command"
-	MessageSourceAck      MessageType = "source_ack"
-	MessageSourceEvent    MessageType = "source_event"
-	MessageError          MessageType = "error"
+	MessageHello                MessageType = "hello"
+	MessageHelloAck             MessageType = "hello_ack"
+	MessageCommand              MessageType = "command"
+	MessageCommandAck           MessageType = "command_ack"
+	MessageEvent                MessageType = "event"
+	MessageHeartbeat            MessageType = "heartbeat"
+	MessageHeartbeatAck         MessageType = "heartbeat_ack"
+	MessageArtifactBegin        MessageType = "artifact_begin"
+	MessageArtifactChunk        MessageType = "artifact_chunk"
+	MessageArtifactCommit       MessageType = "artifact_commit"
+	MessageArtifactAbort        MessageType = "artifact_abort"
+	MessageArtifactAck          MessageType = "artifact_ack"
+	MessageSourceCommand        MessageType = "source_command"
+	MessageSourceAck            MessageType = "source_ack"
+	MessageSourceEvent          MessageType = "source_event"
+	MessageSourceSnapshotBegin  MessageType = "source_snapshot_begin"
+	MessageSourceSnapshotChunk  MessageType = "source_snapshot_chunk"
+	MessageSourceSnapshotCommit MessageType = "source_snapshot_commit"
+	MessageSourceSnapshotAbort  MessageType = "source_snapshot_abort"
+	MessageError                MessageType = "error"
 )
 
 type WireError struct {
@@ -74,6 +78,12 @@ type SourceAck struct {
 	Error       *WireError      `json:"error,omitempty"`
 }
 
+type SourceSnapshotBegin struct {
+	OperationID string `json:"operation_id"`
+	TotalBytes  int64  `json:"total_bytes"`
+	SHA256      string `json:"sha256"`
+}
+
 type SourceNotification struct {
 	EventID  string          `json:"event_id,omitempty"`
 	Kind     string          `json:"kind"`
@@ -83,28 +93,29 @@ type SourceNotification struct {
 }
 
 type Message struct {
-	Type           MessageType          `json:"type"`
-	RequestID      string               `json:"request_id,omitempty"`
-	Protocol       string               `json:"protocol,omitempty"`
-	HostID         string               `json:"host_id,omitempty"`
-	Generation     int64                `json:"generation,omitempty"`
-	SessionID      string               `json:"session_id,omitempty"`
-	RunID          string               `json:"run_id,omitempty"`
-	Cursor         string               `json:"cursor,omitempty"`
-	Cursors        []WireCursor         `json:"cursors,omitempty"`
-	Command        *protocol.Command    `json:"command,omitempty"`
-	Ack            *protocol.CommandAck `json:"ack,omitempty"`
-	Event          *protocol.Event      `json:"event,omitempty"`
-	Artifact       *protocol.Artifact   `json:"artifact,omitempty"`
-	SourceCommand  *SourceCommand       `json:"source_command,omitempty"`
-	SourceAck      *SourceAck           `json:"source_ack,omitempty"`
-	SourceEvent    *SourceNotification  `json:"source_event,omitempty"`
-	EventID        string               `json:"event_id,omitempty"`
-	SourceEventID  string               `json:"source_event_id,omitempty"`
-	IdempotencyKey string               `json:"idempotency_key,omitempty"`
-	ChunkIndex     int64                `json:"chunk_index,omitempty"`
-	ChunkData      string               `json:"chunk_data,omitempty"`
-	Error          *WireError           `json:"error,omitempty"`
+	Type                MessageType          `json:"type"`
+	RequestID           string               `json:"request_id,omitempty"`
+	Protocol            string               `json:"protocol,omitempty"`
+	HostID              string               `json:"host_id,omitempty"`
+	Generation          int64                `json:"generation,omitempty"`
+	SessionID           string               `json:"session_id,omitempty"`
+	RunID               string               `json:"run_id,omitempty"`
+	Cursor              string               `json:"cursor,omitempty"`
+	Cursors             []WireCursor         `json:"cursors,omitempty"`
+	Command             *protocol.Command    `json:"command,omitempty"`
+	Ack                 *protocol.CommandAck `json:"ack,omitempty"`
+	Event               *protocol.Event      `json:"event,omitempty"`
+	Artifact            *protocol.Artifact   `json:"artifact,omitempty"`
+	SourceCommand       *SourceCommand       `json:"source_command,omitempty"`
+	SourceAck           *SourceAck           `json:"source_ack,omitempty"`
+	SourceEvent         *SourceNotification  `json:"source_event,omitempty"`
+	SourceSnapshotBegin *SourceSnapshotBegin `json:"source_snapshot_begin,omitempty"`
+	EventID             string               `json:"event_id,omitempty"`
+	SourceEventID       string               `json:"source_event_id,omitempty"`
+	IdempotencyKey      string               `json:"idempotency_key,omitempty"`
+	ChunkIndex          int64                `json:"chunk_index,omitempty"`
+	ChunkData           string               `json:"chunk_data,omitempty"`
+	Error               *WireError           `json:"error,omitempty"`
 }
 
 func (m Message) Validate() error {
@@ -177,6 +188,18 @@ func (m Message) Validate() error {
 			return errors.New("gateway source event requires generation and payload")
 		}
 		if err := m.SourceEvent.validate(); err != nil {
+			return err
+		}
+	case MessageSourceSnapshotBegin:
+		if err := validateSourceSnapshotBeginMessage(m); err != nil {
+			return err
+		}
+	case MessageSourceSnapshotChunk:
+		if err := validateSourceSnapshotChunkMessage(m); err != nil {
+			return err
+		}
+	case MessageSourceSnapshotCommit, MessageSourceSnapshotAbort:
+		if err := validateSourceSnapshotTerminalMessage(m); err != nil {
 			return err
 		}
 	case MessageEvent:
