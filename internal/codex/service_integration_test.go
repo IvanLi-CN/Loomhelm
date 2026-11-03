@@ -317,4 +317,68 @@ func TestUpdateTitlePersistsPreflightFailuresForRetry(t *testing.T) {
 	}
 }
 
+func TestApplySourceEventDoesNotAcknowledgeActiveDuplicate(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		t.Fatalf("load database configuration: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "codex-source-event-user-" + suffix
+	hostID := "codex-source-event-host-" + suffix
+	eventID := "codex-source-event-" + suffix
+	threadID := "codex-source-event-thread-" + suffix
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_, err = db.Pool().Exec(ctx, `INSERT INTO auth_users (id, issuer, subject) VALUES ($1, 'test', $1)`, userID)
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `INSERT INTO host_registrations (id, singleton_key, name, status, owner_user_id) VALUES ($1, NULL, 'Codex source event test', 'online', $2)`, hostID, userID)
+	}
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `INSERT INTO codex_sync_sources (host_id, state, sync_state, as_of, updated_at) VALUES ($1, 'online', 'complete', $2, $2)`, hostID, now)
+	}
+	if err == nil {
+		_, err = db.Pool().Exec(ctx, `
+			INSERT INTO codex_source_events (host_id, event_id, kind, thread_id, raw_payload, state, updated_at)
+			VALUES ($1, $2, 'title_updated', $3, $4, 'processing', $5)
+		`, hostID, eventID, threadID, `{"method":"thread/name/updated","params":{"threadId":"`+threadID+`","name":"重复标题"}}`, now)
+	}
+	if err != nil {
+		t.Fatalf("seed active source event: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM codex_sync_sources WHERE host_id = $1`, hostID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM host_registrations WHERE id = $1`, hostID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM auth_users WHERE id = $1`, userID)
+	})
+
+	service := codex.NewService(db.Pool(), nil, nil, nil)
+	title := "重复标题"
+	err = service.ApplySourceEvent(ctx, hostID, eventID, "title_updated", threadID, &title, json.RawMessage(`{"method":"thread/name/updated","params":{"threadId":"`+threadID+`","name":"重复标题"}}`))
+	if !errors.Is(err, codex.ErrSourceEventInProgress) {
+		t.Fatalf("duplicate ApplySourceEvent() error = %v, want ErrSourceEventInProgress", err)
+	}
+	var state string
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM codex_source_events WHERE host_id = $1 AND event_id = $2`, hostID, eventID).Scan(&state); err != nil {
+		t.Fatalf("read duplicate source event state: %v", err)
+	}
+	if state != "processing" {
+		t.Fatalf("duplicate source event state = %q, want processing", state)
+	}
+}
+
 func stringPointer(value string) *string { return &value }

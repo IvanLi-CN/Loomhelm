@@ -13,6 +13,12 @@ import (
 
 const sourceEventProcessingLease = time.Minute
 
+// ErrSourceEventInProgress tells the gateway that another delivery still owns
+// the processing lease. It must not be acknowledged as applied: the Connector
+// keeps the notification pending and retries after the original delivery
+// reaches a terminal state.
+var ErrSourceEventInProgress = errors.New("Codex source event is already being applied")
+
 // ApplySourceEvent records the source identity before applying its side effect.
 // The gateway acknowledgement is emitted only after this method returns nil.
 func (s *Service) ApplySourceEvent(ctx context.Context, hostID, eventID, kind, threadID string, title *string, raw json.RawMessage) error {
@@ -63,10 +69,10 @@ func (s *Service) ApplySourceEvent(ctx context.Context, hostID, eventID, kind, t
 			return tx.Commit(ctx)
 		}
 		if state == "processing" && time.Since(updatedAt) < sourceEventProcessingLease {
-			// Another delivery already owns the short processing lease. Treat the
-			// duplicate as accepted so the Connector does not reconnect while the
-			// original delivery finishes its idempotent side effect.
-			return tx.Commit(ctx)
+			// Another delivery still owns the short processing lease. Returning a
+			// retryable error prevents the duplicate from being acknowledged while
+			// the original side effect is still unresolved.
+			return ErrSourceEventInProgress
 		}
 		if _, err := tx.Exec(ctx, `UPDATE codex_source_events SET state = 'processing', last_error = '', updated_at = CURRENT_TIMESTAMP WHERE host_id = $1 AND event_id = $2`, hostID, eventID); err != nil {
 			return fmt.Errorf("reopen Codex source event: %w", err)
