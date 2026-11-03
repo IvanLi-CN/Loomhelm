@@ -2,7 +2,6 @@ package database_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -111,6 +110,14 @@ func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
 	for _, version := range []int64{17, 18, 19, 20, 23} {
 		if _, err := migrationProvider.UpTo(ctx, version); err != nil {
 			t.Fatalf("upgrade schema to migration %d: %v", version, err)
+		}
+		if version == 20 {
+			if _, err := migrationSQLDB.ExecContext(ctx, `
+				INSERT INTO execution_sessions (id, external_thread_ref, path, state, generation)
+				VALUES ('legacy-null-host-session', 'legacy-null-host-thread', 'new', 'closed', 'legacy-generation')
+			`); err != nil {
+				t.Fatalf("seed legacy NULL-Host execution session: %v", err)
+			}
 		}
 		var appliedVersion int64
 		if err := migrationSQLDB.QueryRowContext(ctx, `
@@ -225,8 +232,8 @@ func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
 	}
 	var hostID *string
 	if err := migrationSQLDB.QueryRowContext(ctx, `
-		SELECT host_id FROM execution_sessions ORDER BY id LIMIT 1
-	`).Scan(&hostID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		SELECT host_id FROM execution_sessions WHERE id = 'legacy-null-host-session'
+	`).Scan(&hostID); err != nil {
 		t.Fatalf("read legacy execution session Host provenance: %v", err)
 	}
 	if hostID != nil {
