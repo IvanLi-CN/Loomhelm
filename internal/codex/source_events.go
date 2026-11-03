@@ -63,7 +63,10 @@ func (s *Service) ApplySourceEvent(ctx context.Context, hostID, eventID, kind, t
 			return tx.Commit(ctx)
 		}
 		if state == "processing" && time.Since(updatedAt) < sourceEventProcessingLease {
-			return ErrConflict
+			// Another delivery already owns the short processing lease. Treat the
+			// duplicate as accepted so the Connector does not reconnect while the
+			// original delivery finishes its idempotent side effect.
+			return tx.Commit(ctx)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE codex_source_events SET state = 'processing', last_error = '', updated_at = CURRENT_TIMESTAMP WHERE host_id = $1 AND event_id = $2`, hostID, eventID); err != nil {
 			return fmt.Errorf("reopen Codex source event: %w", err)

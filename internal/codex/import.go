@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var errStaleSnapshot = errors.New("Codex source snapshot is stale")
+
 // SyncRunner is the Host-local connector boundary. The runner returns a
 // complete or explicitly partial snapshot; persistence decides what becomes
 // project-visible and records the same operation state for later inspection.
@@ -105,7 +107,10 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		`, snapshot.OperationID, hostID); staleErr != nil {
 			return fmt.Errorf("mark stale Host-generation Codex snapshot: %w", staleErr)
 		}
-		return tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return errStaleSnapshot
 	}
 	var currentAsOf time.Time
 	var currentOperationID, currentSyncState, currentSourceState string
@@ -123,7 +128,13 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			`, snapshot.OperationID, hostID, currentAsOf); staleErr != nil {
 				return fmt.Errorf("mark stale Codex snapshot: %w", staleErr)
 			}
-			return tx.Commit(ctx)
+			if err := tx.Commit(ctx); err != nil {
+				return err
+			}
+			if snapshot.ConnectionGeneration > 0 {
+				return errStaleSnapshot
+			}
+			return nil
 		}
 		if currentAsOf.After(snapshot.AsOf) {
 			snapshot.AsOf = currentAsOf

@@ -20,6 +20,18 @@ type sourceTestTransport struct {
 	closed         bool
 }
 
+type sourceResponseEventTransport struct {
+	*sourceTestTransport
+}
+
+func (t *sourceResponseEventTransport) Call(ctx context.Context, method string, params json.RawMessage) (RPCMessage, error) {
+	response, err := t.sourceTestTransport.Call(ctx, method, params)
+	if err == nil {
+		t.events <- RPCMessage{ID: json.RawMessage(`1`), Result: response.Result, Error: response.Error}
+	}
+	return response, err
+}
+
 func newSourceTestTransport() *sourceTestTransport {
 	return &sourceTestTransport{responses: make(map[string]RPCMessage), responseQueues: make(map[string][]RPCMessage), events: make(chan RPCMessage, 8)}
 }
@@ -101,6 +113,21 @@ func TestSourceClientDeduplicatesRepeatedTitleNotifications(t *testing.T) {
 	defer cancel()
 	if _, err := source.NextNotification(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("duplicate notification error = %v, want deadline", err)
+	}
+}
+
+func TestSourceClientDrainsRPCResponsesWhileSyncing(t *testing.T) {
+	base := newSourceTestTransport()
+	base.responses["initialize"] = RPCMessage{Result: sourceInitializeResult()}
+	base.responses[SourceMethodProjectList] = RPCMessage{Result: json.RawMessage(`{"data":[{"id":"project-1","name":"来源项目"}]}`)}
+	base.responses[SourceMethodThreadList] = RPCMessage{Result: json.RawMessage(`{"data":[]}`)}
+	transport := &sourceResponseEventTransport{sourceTestTransport: base}
+	source, err := NewSourceClient(context.Background(), transport, ClientInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Sync(context.Background(), "sync-event-pump"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
 	}
 }
 

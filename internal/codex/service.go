@@ -86,9 +86,10 @@ func (s *Service) SetTitleWriter(writer TitleWriter) {
 }
 
 type sourceAccess struct {
-	host      hosts.Host
-	owner     bool
-	principal auth.Principal
+	host       hosts.Host
+	owner      bool
+	restricted bool
+	principal  auth.Principal
 }
 
 func (s *Service) defaultHost(ctx context.Context, principal auth.Principal, hostID string) (sourceAccess, error) {
@@ -106,7 +107,8 @@ func (s *Service) defaultHost(ctx context.Context, principal auth.Principal, hos
 		if err != nil {
 			return sourceAccess{}, fmt.Errorf("resolve default Host: %w", err)
 		}
-		return sourceAccess{host: host, owner: host.OwnerUserID == principal.UserID, principal: principal}, nil
+		owner := host.OwnerUserID == principal.UserID && len(principal.ProjectScope) == 0
+		return sourceAccess{host: host, owner: owner, restricted: len(principal.ProjectScope) > 0, principal: principal}, nil
 	}
 	host, err := s.hosts.GetHost(ctx, strings.TrimSpace(hostID))
 	if errors.Is(err, hosts.ErrNotFound) {
@@ -121,7 +123,8 @@ func (s *Service) defaultHost(ctx context.Context, principal auth.Principal, hos
 		}
 		return sourceAccess{}, fmt.Errorf("authorize Codex Host: %w", err)
 	}
-	return sourceAccess{host: host, owner: host.OwnerUserID == principal.UserID, principal: principal}, nil
+	owner := host.OwnerUserID == principal.UserID && len(principal.ProjectScope) == 0
+	return sourceAccess{host: host, owner: owner, restricted: len(principal.ProjectScope) > 0, principal: principal}, nil
 }
 
 func (s *Service) principalForRequest(request *http.Request) (auth.Principal, error) {
@@ -657,6 +660,9 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 	}
 	args := []any{access.host.ID, principal.UserID}
 	where := `WHERE t.host_id = $1 AND (t.imported_by = $2 OR (t.bound_task_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)))`
+	if access.restricted {
+		where = `WHERE t.host_id = $1 AND t.bound_task_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)`
+	}
 	if !boolValue(query.IncludeArchived) {
 		where += " AND t.source_status = 'active'"
 	}
@@ -709,7 +715,7 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 	items := make([]protocol.CodexConversation, 0, limit)
 	var next *string
 	for rows.Next() {
-		item, _, taskProjectID, activity, threadSourceState, scanErr := scanConversation(rows)
+		item, capabilities, taskProjectID, activity, threadSourceState, scanErr := scanConversation(rows)
 		if scanErr != nil {
 			return protocol.CodexConversationListResponse{}, scanErr
 		}
@@ -723,7 +729,7 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 			}
 		}
 		item.ReadOnly, item.CanEditTitle = true, boolPointer(false)
-		if item.BoundTaskID != nil && sourceAvailability == string(protocol.CodexSourceStateOnline) && threadSourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && taskProjectID != nil {
+		if item.BoundTaskID != nil && sourceAvailability == string(protocol.CodexSourceStateOnline) && threadSourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && taskProjectID != nil && capabilityContains(capabilities, "thread/name/set") {
 			allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
 			if authorizeErr != nil {
 				return protocol.CodexConversationListResponse{}, authorizeErr
@@ -757,7 +763,7 @@ func (s *Service) GetConversation(ctx context.Context, principal auth.Principal,
 	if err != nil {
 		return protocol.CodexConversationDetail{}, err
 	}
-	item, _, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
+	item, capabilities, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
 	if err != nil {
 		return protocol.CodexConversationDetail{}, err
 	}
@@ -768,7 +774,7 @@ func (s *Service) GetConversation(ctx context.Context, principal auth.Principal,
 		}
 	}
 	item.ReadOnly, item.CanEditTitle = true, boolPointer(false)
-	if item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete {
+	if item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && capabilityContains(capabilities, "thread/name/set") {
 		allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
 		if authorizeErr != nil {
 			return protocol.CodexConversationDetail{}, authorizeErr
@@ -795,7 +801,7 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 	if strings.TrimSpace(request.RequestID) == "" || strings.TrimSpace(request.Title) == "" || len([]rune(strings.TrimSpace(request.Title))) > maxTitleLength {
 		return protocol.CodexConversation{}, ErrInvalid
 	}
-	item, _, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
+	item, capabilities, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
 	if err != nil {
 		return protocol.CodexConversation{}, err
 	}
@@ -811,6 +817,12 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 	}
 	if sourceState != string(protocol.CodexSourceStateOnline) || item.SourceStatus != protocol.CodexSourceStatusActive {
 		return item, ErrSourceUnavailable
+	}
+	if item.HistoryState != protocol.CodexHistoryStateComplete || !item.FilesComplete {
+		return item, ErrIncompleteHistory
+	}
+	if !capabilityContains(capabilities, "thread/name/set") {
+		return item, ErrCapabilityUnsupported
 	}
 	if request.ExpectedCodexTitle != nil && valueOrEmpty(request.ExpectedCodexTitle) != valueOrEmpty(item.CodexTitle) && (request.Resolution == nil || *request.Resolution == "retry") {
 		return item, ErrConflict
@@ -944,6 +956,9 @@ func (s *Service) MapProject(ctx context.Context, principal auth.Principal, host
 	}
 	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(request.LoomhelmProjectID) == "" {
 		return protocol.CodexProject{}, ErrInvalid
+	}
+	if !access.owner {
+		return protocol.CodexProject{}, auth.ErrForbidden
 	}
 	allowed, err := s.projects.CanWriteProject(ctx, principal, request.LoomhelmProjectID)
 	if err != nil {

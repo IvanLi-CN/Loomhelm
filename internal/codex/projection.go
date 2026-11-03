@@ -87,8 +87,20 @@ func (s *Service) readConversation(ctx context.Context, access sourceAccess, pri
 	if err != nil {
 		return protocol.CodexConversation{}, nil, nil, time.Time{}, "", fmt.Errorf("read Codex conversation: %w", err)
 	}
-	if importedBy == nil || (*importedBy != principal.UserID && boundTask == nil) {
+	if importedBy == nil {
 		return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
+	}
+	if *importedBy != principal.UserID || access.restricted {
+		if boundTask == nil || taskProjectID == nil {
+			return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
+		}
+		allowed, authorizeErr := s.projects.CanReadProject(ctx, principal, *taskProjectID)
+		if authorizeErr != nil {
+			return protocol.CodexConversation{}, nil, nil, time.Time{}, "", authorizeErr
+		}
+		if !allowed {
+			return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
+		}
 	}
 	item.ProjectID = projectID
 	item.ProjectName = projectName

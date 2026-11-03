@@ -21,6 +21,7 @@ var (
 	ErrSourceCapabilityUnsupported = errors.New("Codex source capability is unsupported")
 	ErrSourceInvalidParams         = errors.New("Codex source request parameters are invalid")
 	ErrSourceHistoryIncomplete     = errors.New("Codex source history is incomplete")
+	ErrSourceNotificationOverflow  = errors.New("Codex source notification queue exceeded its memory limit")
 )
 
 const (
@@ -164,12 +165,15 @@ type SourceNotification struct {
 // SourceClient is the read/import and title-write boundary for one
 // Host-local app-server transport. It never starts or resumes a thread.
 type SourceClient struct {
-	transport     RPCTransport
-	handshake     AppServerHandshake
-	capMu         sync.RWMutex
-	noticeMu      sync.Mutex
-	seenNotice    map[string]struct{}
-	pendingNotice *SourceNotification
+	transport      RPCTransport
+	handshake      AppServerHandshake
+	capMu          sync.RWMutex
+	noticeMu       sync.Mutex
+	seenNotice     map[string]struct{}
+	pendingNotice  *SourceNotification
+	noticeEvents   chan RPCMessage
+	noticeErrors   chan error
+	noticePumpDone chan struct{}
 }
 
 func NewSourceClient(ctx context.Context, transport RPCTransport, client ClientInfo) (*SourceClient, error) {
@@ -192,7 +196,16 @@ func NewSourceClient(ctx context.Context, transport RPCTransport, client ClientI
 	if err != nil {
 		return nil, err
 	}
-	return &SourceClient{transport: transport, handshake: handshake, seenNotice: make(map[string]struct{})}, nil
+	source := &SourceClient{
+		transport:      transport,
+		handshake:      handshake,
+		seenNotice:     make(map[string]struct{}),
+		noticeEvents:   make(chan RPCMessage, 256),
+		noticeErrors:   make(chan error, 1),
+		noticePumpDone: make(chan struct{}),
+	}
+	go source.pumpNotifications()
+	return source, nil
 }
 
 func (c *SourceClient) Handshake() AppServerHandshake {
@@ -611,7 +624,12 @@ func (c *SourceClient) NextNotification(ctx context.Context) (SourceNotification
 		select {
 		case <-ctx.Done():
 			return SourceNotification{}, ctx.Err()
-		case message, ok := <-c.transport.Events():
+		case err := <-c.noticeErrors:
+			if err == nil {
+				return SourceNotification{}, ErrTransportClosed
+			}
+			return SourceNotification{}, err
+		case message, ok := <-c.noticeEvents:
 			if !ok {
 				return SourceNotification{}, ErrTransportClosed
 			}
@@ -629,6 +647,36 @@ func (c *SourceClient) NextNotification(ctx context.Context) (SourceNotification
 			c.pendingNotice = &notification
 			c.noticeMu.Unlock()
 			return notification, nil
+		}
+	}
+}
+
+// pumpNotifications drains the transport event stream while RPC calls are in
+// flight. JSON-RPC responses are already delivered to their waiters, so only
+// source notifications need to cross the SourceClient boundary. Keeping this
+// consumer alive prevents a cold history read from filling the transport's
+// shared event queue with responses that Sync does not otherwise inspect.
+func (c *SourceClient) pumpNotifications() {
+	defer close(c.noticePumpDone)
+	defer close(c.noticeEvents)
+	events := c.transport.Events()
+	if events == nil {
+		c.noticeErrors <- ErrTransportClosed
+		return
+	}
+	for message := range events {
+		if _, ok := parseSourceNotification(message); !ok {
+			continue
+		}
+		select {
+		case c.noticeEvents <- message:
+		default:
+			select {
+			case c.noticeErrors <- ErrSourceNotificationOverflow:
+			default:
+			}
+			_ = c.transport.Close()
+			return
 		}
 	}
 }

@@ -21,7 +21,9 @@ const (
 	// Artifact publication adds new frames and therefore requires both ends of
 	// the authenticated link to be upgraded together.
 	ProtocolVersion = "loomhelm.gateway.v2"
-	DefaultMaxFrame = 4 << 20
+	// Source snapshots carry complete history and supported file material. The
+	// gateway keeps one bounded frame contract for both sides of the link.
+	DefaultMaxFrame = 32 << 20
 )
 
 type MessageType string

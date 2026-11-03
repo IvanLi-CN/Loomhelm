@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -523,7 +524,7 @@ func (c *serverConnection) handleSourceEvent(ctx context.Context, message Messag
 	ack := &SourceAck{OperationID: message.RequestID, State: "succeeded"}
 	if err != nil {
 		ack.State = "failed"
-		ack.Error = &WireError{Code: connectionErrorCode(err, "source_event_rejected"), Message: err.Error()}
+		ack.Error = &WireError{Code: connectionErrorCode(err, "source_event_rejected"), Message: "source event was rejected"}
 	}
 	if writeErr := c.write(ctx, Message{Type: MessageSourceAck, RequestID: message.RequestID, Generation: c.connection.Generation, SourceAck: ack}); writeErr != nil {
 		return writeErr
@@ -684,6 +685,13 @@ func (c *serverConnection) resolveSource(ctx context.Context, message Message) e
 		response <- sourceResponse{ack: message.SourceAck}
 		return nil
 	}
+	// A source/sync acknowledgement without a live pending request is a late
+	// response and must never be reinterpreted as a recovered snapshot. Only an
+	// explicit recovery payload may cross the asynchronous snapshot callback.
+	var recovered protocol.CodexSourceSnapshot
+	if len(message.SourceAck.Payload) == 0 || json.Unmarshal(message.SourceAck.Payload, &recovered) != nil || !recovered.Recovery {
+		return nil
+	}
 	if c.onSourceSnapshot != nil {
 		var snapshotErr error
 		if message.SourceAck.State == "succeeded" && len(message.SourceAck.Payload) > 0 {
@@ -696,7 +704,7 @@ func (c *serverConnection) resolveSource(ctx context.Context, message Message) e
 		ack := &SourceAck{OperationID: message.SourceAck.OperationID, State: "succeeded"}
 		if snapshotErr != nil {
 			ack.State = "failed"
-			ack.Error = &WireError{Code: "source_snapshot_rejected", Message: snapshotErr.Error()}
+			ack.Error = &WireError{Code: "source_snapshot_rejected", Message: "recovered source snapshot was rejected"}
 		}
 		if strings.TrimSpace(message.RequestID) != "" {
 			if err := c.write(ctx, Message{Type: MessageSourceAck, RequestID: message.RequestID, Generation: c.connection.Generation, SourceAck: ack}); err != nil {

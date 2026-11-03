@@ -1137,6 +1137,53 @@ func TestGatewayLateCommandAckCallsDurableHandlerWithoutPending(t *testing.T) {
 	}
 }
 
+func TestGatewayLateSourceAckCannotBecomeRecoverySnapshot(t *testing.T) {
+	registry := newFakeRegistry()
+	connection, err := registry.OpenConnection(context.Background(), registry.credential)
+	if err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	called := 0
+	serverConnection := &serverConnection{
+		registry:       registry,
+		connection:     connection,
+		pendingSources: map[string]chan sourceResponse{},
+		onSourceSnapshot: func(context.Context, hosts.Connection, string, []byte) error {
+			called++
+			return nil
+		},
+	}
+	latePayload, err := json.Marshal(protocol.CodexSourceSnapshot{OperationID: "sync-late"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serverConnection.resolveSource(context.Background(), Message{
+		Type:       MessageSourceAck,
+		Generation: connection.Generation,
+		SourceAck:  &SourceAck{OperationID: "sync-late", State: "succeeded", Payload: latePayload},
+	}); err != nil {
+		t.Fatalf("resolveSource(late) error = %v", err)
+	}
+	if called != 0 {
+		t.Fatalf("late source ACK invoked recovery callback %d times", called)
+	}
+
+	recoveryPayload, err := json.Marshal(protocol.CodexSourceSnapshot{OperationID: "reconnect-1", Recovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serverConnection.resolveSource(context.Background(), Message{
+		Type:       MessageSourceAck,
+		Generation: connection.Generation,
+		SourceAck:  &SourceAck{OperationID: "reconnect-1", State: "succeeded", Payload: recoveryPayload},
+	}); err != nil {
+		t.Fatalf("resolveSource(recovery) error = %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("recovery source ACK callback calls = %d, want 1", called)
+	}
+}
+
 func TestGatewayWSSLateCommandAckCallsDurableHandlerAfterPendingRemoval(t *testing.T) {
 	registry := newFakeRegistry()
 	ackCalls := make(chan struct {

@@ -222,6 +222,9 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 					return fmt.Errorf("decode recovered Codex source snapshot: %w", err)
 				}
 				snapshot.HostID = connection.HostID
+				// The gateway connection is the trusted source of generation
+				// identity. Ignore any value supplied by the Connector payload.
+				snapshot.ConnectionGeneration = connection.Generation
 				if snapshot.OperationID == "" {
 					snapshot.OperationID = operationID
 				}

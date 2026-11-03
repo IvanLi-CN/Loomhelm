@@ -41,6 +41,7 @@ type Connector struct {
 	controller          *connectorruntime.Controller
 	platform            *gateway.Client
 	sourceRuntime       *connectorruntime.SourceRuntime
+	sourceLifecycleMu   sync.Mutex
 	sourceMu            sync.Mutex
 	source              *connectorruntime.SourceClient
 	sourceNoticeMu      sync.Mutex
@@ -403,7 +404,8 @@ func (c *Connector) handleGatewaySourceCommand(ctx context.Context, connection *
 	}
 	command := *message.SourceCommand
 	ack := gateway.SourceAck{OperationID: command.OperationID, State: "failed"}
-	source, err := c.sourceClient(ctx)
+	c.sourceLifecycleMu.Lock()
+	source, err := c.sourceClientLocked(ctx)
 	if err == nil {
 		switch command.Method {
 		case connectorruntime.SourceMethodSetThreadName:
@@ -420,6 +422,7 @@ func (c *Connector) handleGatewaySourceCommand(ctx context.Context, connection *
 			err = fmt.Errorf("unsupported Connector source method %q", command.Method)
 		}
 	}
+	c.sourceLifecycleMu.Unlock()
 	if err == nil {
 		ack.State = "succeeded"
 	} else {
@@ -443,6 +446,12 @@ func connectorSourceErrorCode(err error) string {
 }
 
 func (c *Connector) sourceClient(ctx context.Context) (*connectorruntime.SourceClient, error) {
+	c.sourceLifecycleMu.Lock()
+	defer c.sourceLifecycleMu.Unlock()
+	return c.sourceClientLocked(ctx)
+}
+
+func (c *Connector) sourceClientLocked(ctx context.Context) (*connectorruntime.SourceClient, error) {
 	c.sourceMu.Lock()
 	defer c.sourceMu.Unlock()
 	if c.source != nil {
@@ -471,11 +480,20 @@ func (c *Connector) resetSource(source *connectorruntime.SourceClient) {
 }
 
 func (c *Connector) recoverSource(ctx context.Context, connection *gateway.ClientConnection) error {
+	c.sourceLifecycleMu.Lock()
+	defer c.sourceLifecycleMu.Unlock()
+	return c.recoverSourceLocked(ctx, connection)
+}
+
+func (c *Connector) recoverSourceLocked(ctx context.Context, connection *gateway.ClientConnection) error {
 	if c.sourceRuntime == nil {
 		return errors.New("Connector Codex source runtime is unavailable")
 	}
 	source, snapshot, _, err := c.sourceRuntime.ReconnectAndRecover(ctx, nil)
 	if err != nil {
+		c.sourceMu.Lock()
+		c.source = nil
+		c.sourceMu.Unlock()
 		if source != nil {
 			_ = source.Close()
 		}
@@ -485,6 +503,9 @@ func (c *Connector) recoverSource(ctx context.Context, connection *gateway.Clien
 		snapshot.ConnectionGeneration = connection.Generation()
 		payload, marshalErr := json.Marshal(snapshot)
 		if marshalErr != nil {
+			c.sourceMu.Lock()
+			c.source = nil
+			c.sourceMu.Unlock()
 			_ = source.Close()
 			return fmt.Errorf("encode recovered Codex source snapshot: %w", marshalErr)
 		}
@@ -493,6 +514,9 @@ func (c *Connector) recoverSource(ctx context.Context, connection *gateway.Clien
 			State:       "succeeded",
 			Payload:     payload,
 		}); err != nil {
+			c.sourceMu.Lock()
+			c.source = nil
+			c.sourceMu.Unlock()
 			_ = source.Close()
 			return fmt.Errorf("deliver recovered Codex source snapshot: %w", err)
 		}
@@ -505,22 +529,21 @@ func (c *Connector) recoverSource(ctx context.Context, connection *gateway.Clien
 
 func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *gateway.ClientConnection, sourceNeedsRecovery bool) error {
 	for {
-		source, err := c.sourceClient(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		if sourceNeedsRecovery {
+			if recoverErr := c.recoverSource(ctx, connection); recoverErr == nil {
+				sourceNeedsRecovery = false
+				continue
 			}
 			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
 				return ctx.Err()
 			}
 			continue
 		}
-		if sourceNeedsRecovery {
-			if recoverErr := c.recoverSource(ctx, connection); recoverErr == nil {
-				sourceNeedsRecovery = false
-				continue
+		source, err := c.sourceClient(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			c.resetSource(source)
 			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
 				return ctx.Err()
 			}
@@ -540,7 +563,6 @@ func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			c.resetSource(source)
 			if recoverErr := c.recoverSource(ctx, connection); recoverErr == nil {
 				sourceNeedsRecovery = false
 				continue
@@ -896,6 +918,7 @@ func (c *Connector) closeResources(ctx context.Context) error {
 			closeErrors = append(closeErrors, fmt.Errorf("close connector artifact outbox: %w", err))
 		}
 	}
+	c.sourceLifecycleMu.Lock()
 	c.sourceMu.Lock()
 	source := c.source
 	c.source = nil
@@ -905,6 +928,7 @@ func (c *Connector) closeResources(ctx context.Context) error {
 			closeErrors = append(closeErrors, fmt.Errorf("close connector Codex source: %w", err))
 		}
 	}
+	c.sourceLifecycleMu.Unlock()
 	if c.journal != nil {
 		if err := c.journal.Close(); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close connector journal: %w", err))

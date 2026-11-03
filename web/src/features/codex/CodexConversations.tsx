@@ -140,20 +140,23 @@ export function CodexConversationWorkspace({ hostId, threadId }: { hostId: strin
   const conversation = detail?.conversation;
   const titleWritable = Boolean(conversation?.can_edit_title && !conversation.read_only && conversation.history_state === "complete" && conversation.files_complete);
   const bindableTasks = taskSource?.tasks.filter((task) => !task.conversationId && taskSource.getProjectPermissions(task.projectId).canWrite) ?? [];
-  const saveTitle = async (nextTitle: string, resolution?: string) => {
-    if (!conversation || !nextTitle.trim() || !titleWritable) return;
+  const saveTitle = async (nextTitle: string, resolution?: string): Promise<boolean> => {
+    if (!conversation || !nextTitle.trim() || !titleWritable) return false;
     setShortcutMessage(undefined);
     try {
       await titleMutation.mutateAsync({ title: nextTitle.trim(), expected_codex_title: conversation.codex_title, resolution });
       setTitle(nextTitle.trim());
+      return true;
     } catch (error) {
       setShortcutMessage(error instanceof Error ? error.message : "标题保存失败，请稍后重试。");
+      return false;
     }
   };
   const useTaskTitle = async () => {
     if (!taskReplacement.task || !titleWritable) return;
-    await saveTitle(taskReplacement.task.title);
-    setShortcutMessage("已按“Task 标题 → 对话标题”执行；Codex 标题只会随对话标题同步。");
+    if (await saveTitle(taskReplacement.task.title)) {
+      setShortcutMessage("已按“Task 标题 → 对话标题”执行；Codex 标题只会随对话标题同步。");
+    }
   };
   const useConversationTitle = async () => {
     if (!taskReplacement.task || !taskReplacement.canWrite || !title.trim()) return;
