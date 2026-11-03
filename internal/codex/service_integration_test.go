@@ -139,6 +139,19 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 	}
 
 	partialOperation := operationID + "-partial"
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE codex_sync_sources
+		SET sync_state = 'syncing', sync_operation_id = $2, as_of = $3, updated_at = $3
+		WHERE host_id = $1
+	`, hostID, partialOperation, now.Add(time.Minute)); err != nil {
+		t.Fatalf("admit partial snapshot operation: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO codex_sync_snapshots (id, host_id, scope, state, complete, as_of, cursor, error, created_at, updated_at)
+		VALUES ($1, $2, 'source', 'syncing', FALSE, $3, '', '', $3, $3)
+	`, partialOperation, hostID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("seed partial snapshot operation: %v", err)
+	}
 	if err := service.ImportSnapshot(ctx, protocol.CodexSourceSnapshot{
 		OperationID: partialOperation,
 		HostID:      hostID,
@@ -175,6 +188,28 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 	}
 	if snapshotState != "partial" || complete {
 		t.Fatalf("partial snapshot state = (%q, %t)", snapshotState, complete)
+	}
+	var currentOperation, currentSyncState string
+	if err := db.Pool().QueryRow(ctx, `SELECT sync_operation_id, sync_state FROM codex_sync_sources WHERE host_id = $1`, hostID).Scan(&currentOperation, &currentSyncState); err != nil {
+		t.Fatalf("read current Codex sync fence: %v", err)
+	}
+	if currentOperation != partialOperation || currentSyncState != "partial" {
+		t.Fatalf("current Codex sync fence = (%q, %q)", currentOperation, currentSyncState)
+	}
+	if err := service.ImportSnapshot(ctx, protocol.CodexSourceSnapshot{
+		OperationID: operationID,
+		HostID:      hostID,
+		State:       protocol.CodexSourceStateOnline,
+		SyncState:   protocol.CodexSyncStateComplete,
+		AsOf:        now.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("late snapshot import error = %v", err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT sync_operation_id, sync_state FROM codex_sync_sources WHERE host_id = $1`, hostID).Scan(&currentOperation, &currentSyncState); err != nil {
+		t.Fatalf("read retained Codex sync fence: %v", err)
+	}
+	if currentOperation != partialOperation || currentSyncState != "partial" {
+		t.Fatalf("late snapshot changed Codex sync fence = (%q, %q)", currentOperation, currentSyncState)
 	}
 
 }

@@ -34,6 +34,10 @@ type snapshotStatus struct {
 	Error    string
 }
 
+func isRecoveryOperation(operationID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(operationID), "reconnect-")
+}
+
 func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSourceSnapshot) error {
 	hostID := strings.TrimSpace(snapshot.HostID)
 	if s == nil || s.pool == nil || hostID == "" {
@@ -68,11 +72,13 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 	}
 	defer tx.Rollback(ctx)
 	var currentAsOf time.Time
-	var currentOperationID string
+	var currentOperationID, currentSyncState string
 	if err := tx.QueryRow(ctx, `
-		SELECT as_of, sync_operation_id FROM codex_sync_sources WHERE host_id = $1 FOR UPDATE
-	`, hostID).Scan(&currentAsOf, &currentOperationID); err == nil {
-		if strings.TrimSpace(currentOperationID) != "" && currentOperationID != strings.TrimSpace(snapshot.OperationID) {
+		SELECT as_of, sync_operation_id, sync_state FROM codex_sync_sources WHERE host_id = $1 FOR UPDATE
+	`, hostID).Scan(&currentAsOf, &currentOperationID, &currentSyncState); err == nil {
+		incomingOperationID := strings.TrimSpace(snapshot.OperationID)
+		currentOperationID = strings.TrimSpace(currentOperationID)
+		if currentOperationID != "" && currentOperationID != incomingOperationID && (currentSyncState == "syncing" || !isRecoveryOperation(incomingOperationID)) {
 			if _, staleErr := tx.Exec(ctx, `
 				UPDATE codex_sync_snapshots
 				SET state = 'stale', complete = FALSE, error = 'superseded by a newer Codex source snapshot', updated_at = $3
@@ -99,7 +105,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			protocol_version = EXCLUDED.protocol_version,
 			capabilities = EXCLUDED.capabilities,
 			capability_states = EXCLUDED.capability_states,
-			sync_operation_id = CASE WHEN EXCLUDED.sync_state IN ('complete', 'partial', 'failed', 'stale') THEN '' ELSE EXCLUDED.sync_operation_id END,
+			sync_operation_id = EXCLUDED.sync_operation_id,
 			last_error = EXCLUDED.last_error,
 			as_of = EXCLUDED.as_of,
 			updated_at = EXCLUDED.updated_at
@@ -190,12 +196,12 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 				END,
 				preview = EXCLUDED.preview,
 				cwd = EXCLUDED.cwd,
-				source_status = EXCLUDED.source_status,
-				history_state = EXCLUDED.history_state,
-				files_complete = EXCLUDED.files_complete,
-				as_of = EXCLUDED.as_of,
-				last_activity_at = EXCLUDED.last_activity_at,
-				updated_at = EXCLUDED.updated_at,
+				source_status = CASE WHEN codex_threads.updated_at > EXCLUDED.updated_at THEN codex_threads.source_status ELSE EXCLUDED.source_status END,
+				history_state = CASE WHEN codex_threads.updated_at > EXCLUDED.updated_at THEN codex_threads.history_state ELSE EXCLUDED.history_state END,
+				files_complete = CASE WHEN codex_threads.updated_at > EXCLUDED.updated_at THEN codex_threads.files_complete ELSE EXCLUDED.files_complete END,
+				as_of = GREATEST(codex_threads.as_of, EXCLUDED.as_of),
+				last_activity_at = GREATEST(codex_threads.last_activity_at, EXCLUDED.last_activity_at),
+				updated_at = GREATEST(codex_threads.updated_at, EXCLUDED.updated_at),
 				metadata = CASE WHEN EXCLUDED.metadata <> '{}'::jsonb THEN EXCLUDED.metadata ELSE codex_threads.metadata END
 			`, hostID, threadID, projectIDValue, nullableString(thread.ParentThreadID), sourceKindOrDefault(thread.SourceKind), nullableString(thread.CodexTitle), conversationTitle, strings.TrimSpace(thread.Preview), strings.TrimSpace(thread.CWD), sourceStatusOrDefault(thread.SourceStatus), threadHistoryState(thread, threadStatus), threadStatus.Complete && filesCompleteForThread(thread), titleState, snapshot.AsOf, lastActivity, metadata); err != nil {
 			return fmt.Errorf("persist Codex thread snapshot: %w", err)
@@ -324,7 +330,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 				files_complete = $4,
 				title_sync_error = CASE WHEN NULLIF(trim($5), '') IS NOT NULL THEN $5 ELSE title_sync_error END,
 				updated_at = $6
-			WHERE host_id = $1 AND thread_id = $2
+			WHERE host_id = $1 AND thread_id = $2 AND updated_at <= $6
 		`, hostID, threadID, threadHistoryState(thread, threadStatus), allFilesComplete, strings.TrimSpace(thread.Error), snapshot.AsOf); err != nil {
 			return fmt.Errorf("finalize Codex thread snapshot: %w", err)
 		}
@@ -415,7 +421,7 @@ func (s *Service) FailSync(ctx context.Context, hostID, operationID string, sync
 	defer tx.Rollback(ctx)
 	result, err := tx.Exec(ctx, `
 		UPDATE codex_sync_sources
-		SET sync_state = 'failed', sync_operation_id = '', last_error = $3, as_of = $4, updated_at = $4
+		SET sync_state = 'failed', sync_operation_id = $2, last_error = $3, as_of = $4, updated_at = $4
 		WHERE host_id = $1 AND sync_operation_id = $2
 	`, hostID, operationID, reason, now)
 	if err != nil {
@@ -463,10 +469,34 @@ func (s *Service) ReconcileSyncOperations(ctx context.Context) error {
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE codex_sync_sources
-		SET sync_state = 'stale', sync_operation_id = '', last_error = 'Codex synchronization was interrupted by a Server restart', updated_at = $1
+		SET sync_state = 'stale', last_error = 'Codex synchronization was interrupted by a Server restart', updated_at = $1
 		WHERE sync_state = 'syncing'
 	`, now); err != nil {
 		return fmt.Errorf("stale Codex sync sources: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE codex_title_operations
+		SET state = 'title_sync_failed', attempts = attempts + 1,
+			last_error = 'Codex title synchronization was interrupted by a Server restart',
+			next_retry_at = NULL, updated_at = $1
+		WHERE state = 'title_sync_pending'
+	`, now); err != nil {
+		return fmt.Errorf("fail interrupted Codex title operations: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE codex_threads
+		SET title_sync_state = 'failed',
+			title_sync_error = 'Codex title synchronization was interrupted by a Server restart',
+			updated_at = $1
+		WHERE title_sync_state = 'pending'
+		  AND title_operation_id <> ''
+		  AND NOT EXISTS (
+			SELECT 1 FROM codex_title_operations o
+			WHERE o.operation_id = codex_threads.title_operation_id
+			  AND o.state = 'title_sync_pending'
+		  )
+	`, now); err != nil {
+		return fmt.Errorf("fail interrupted Codex thread titles: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE codex_source_events

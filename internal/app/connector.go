@@ -328,6 +328,14 @@ func waitConnectorRetry(ctx context.Context, delay time.Duration) bool {
 func (c *Connector) serveConnection(ctx context.Context, connection *gateway.ClientConnection) error {
 	connectionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	sourceRecovered := c.sourceRuntime == nil
+	if c.sourceRuntime != nil {
+		if err := c.recoverSource(connectionCtx, connection); err != nil {
+			c.logger.Warn("initial Codex source recovery unavailable", "error_class", connectorRecoveryErrorClass(err))
+		} else {
+			sourceRecovered = true
+		}
+	}
 	readResult := make(chan error, 1)
 	eventResult := make(chan error, 1)
 	artifactResult := make(chan error, 1)
@@ -337,7 +345,7 @@ func (c *Connector) serveConnection(ctx context.Context, connection *gateway.Cli
 	go func() { eventResult <- c.deliverJournalEvents(connectionCtx, connection) }()
 	go func() { artifactResult <- c.uploadPendingArtifacts(connectionCtx, connection) }()
 	go func() { heartbeatResult <- c.sendGatewayHeartbeats(connectionCtx, connection) }()
-	go func() { sourceResult <- c.deliverSourceNotifications(connectionCtx, connection) }()
+	go func() { sourceResult <- c.deliverSourceNotifications(connectionCtx, connection, !sourceRecovered) }()
 	select {
 	case err := <-readResult:
 		cancel()
@@ -494,13 +502,24 @@ func (c *Connector) recoverSource(ctx context.Context, connection *gateway.Clien
 	return nil
 }
 
-func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *gateway.ClientConnection) error {
+func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *gateway.ClientConnection, sourceNeedsRecovery bool) error {
 	for {
 		source, err := c.sourceClient(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
+				return ctx.Err()
+			}
+			continue
+		}
+		if sourceNeedsRecovery {
+			if recoverErr := c.recoverSource(ctx, connection); recoverErr == nil {
+				sourceNeedsRecovery = false
+				continue
+			}
+			c.resetSource(source)
 			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
 				return ctx.Err()
 			}
@@ -522,8 +541,10 @@ func (c *Connector) deliverSourceNotifications(ctx context.Context, connection *
 			}
 			c.resetSource(source)
 			if recoverErr := c.recoverSource(ctx, connection); recoverErr == nil {
+				sourceNeedsRecovery = false
 				continue
 			}
+			sourceNeedsRecovery = true
 			if !waitConnectorRetry(ctx, connectorInitialReconnectDelay) {
 				return ctx.Err()
 			}

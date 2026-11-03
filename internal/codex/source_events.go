@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
@@ -86,15 +87,23 @@ func (s *Service) ApplySourceEvent(ctx context.Context, hostID, eventID, kind, t
 	default:
 		applyErr = ErrInvalid
 	}
-	if errors.Is(applyErr, ErrNotFound) {
-		applyErr = nil
-	}
 	if applyErr != nil {
-		_, _ = s.pool.Exec(ctx, `UPDATE codex_source_events SET state = 'failed', last_error = $3, updated_at = CURRENT_TIMESTAMP WHERE host_id = $1 AND event_id = $2`, hostID, eventID, applyErr.Error())
-		return applyErr
+		stateErr := s.updateSourceEventState(hostID, eventID, "failed", applyErr.Error())
+		return errors.Join(applyErr, stateErr)
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE codex_source_events SET state = 'applied', last_error = '', updated_at = CURRENT_TIMESTAMP WHERE host_id = $1 AND event_id = $2`, hostID, eventID); err != nil {
+	if err := s.updateSourceEventState(hostID, eventID, "applied", ""); err != nil {
 		return fmt.Errorf("mark Codex source event applied: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) updateSourceEventState(hostID, eventID, state, lastError string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE codex_source_events
+		SET state = $3, last_error = $4, updated_at = CURRENT_TIMESTAMP
+		WHERE host_id = $1 AND event_id = $2
+	`, hostID, eventID, state, strings.TrimSpace(lastError))
+	return err
 }

@@ -269,6 +269,14 @@ func TestSourceClientParsesCurrentProtocolShapes(t *testing.T) {
 	if !repeatedOK || notification.EventID == "" || repeated.EventID != notification.EventID {
 		t.Fatalf("notification event identity = (%q, %q), want stable non-empty identity", notification.EventID, repeated.EventID)
 	}
+	identified, identifiedOK := parseSourceNotification(RPCMessage{
+		Method: SourceNotificationName,
+		Params: json.RawMessage(`{"threadId":"thread-1","name":"更新后的标题","eventId":"source-event-7"}`),
+		Raw:    json.RawMessage(`{"method":"thread/name/updated","params":{"threadId":"thread-1","name":"更新后的标题","eventId":"source-event-7"}}`),
+	})
+	if !identifiedOK || identified.SourceIdentity != "source-event-7" || identified.EventID == notification.EventID {
+		t.Fatalf("source notification identity = %+v, want upstream event identity", identified)
+	}
 	if _, ok := parseSourceNotification(RPCMessage{
 		Method: SourceNotificationName,
 		Params: json.RawMessage(`{"threadId":"thread-1","name":""}`),

@@ -153,11 +153,12 @@ const (
 )
 
 type SourceNotification struct {
-	Kind     SourceNotificationKind
-	ThreadID string
-	Title    *string
-	Raw      json.RawMessage
-	EventID  string
+	Kind           SourceNotificationKind
+	ThreadID       string
+	Title          *string
+	Raw            json.RawMessage
+	EventID        string
+	SourceIdentity string
 }
 
 // SourceClient is the read/import and title-write boundary for one
@@ -1131,9 +1132,14 @@ func decodeFileMaterial(raw json.RawMessage) (SourceFileMaterial, error) {
 
 func parseSourceNotification(message RPCMessage) (SourceNotification, bool) {
 	var params struct {
-		ThreadID   string  `json:"threadId"`
-		Name       *string `json:"name"`
-		ThreadName *string `json:"threadName"`
+		ThreadID        string          `json:"threadId"`
+		Name            *string         `json:"name"`
+		ThreadName      *string         `json:"threadName"`
+		EventID         string          `json:"eventId"`
+		EventIDSnake    string          `json:"event_id"`
+		Sequence        json.RawMessage `json:"sequence"`
+		SequenceSnake   json.RawMessage `json:"eventSequence"`
+		SequenceSnakeID json.RawMessage `json:"event_sequence"`
 	}
 	if !message.IsNotification() || strings.TrimSpace(message.Method) == "" {
 		return SourceNotification{}, false
@@ -1161,12 +1167,32 @@ func parseSourceNotification(message RPCMessage) (SourceNotification, bool) {
 	if kind == SourceNotificationTitle && (title == nil || strings.TrimSpace(*title) == "") {
 		return SourceNotification{}, false
 	}
-	notification := SourceNotification{Kind: kind, ThreadID: params.ThreadID, Title: title, Raw: append(json.RawMessage(nil), message.Raw...)}
+	sourceIdentity := firstNonEmpty(params.EventID, params.EventIDSnake)
+	if sourceIdentity == "" {
+		for _, candidate := range []json.RawMessage{params.Sequence, params.SequenceSnake, params.SequenceSnakeID} {
+			if len(candidate) == 0 || string(candidate) == "null" {
+				continue
+			}
+			var text string
+			if json.Unmarshal(candidate, &text) == nil {
+				sourceIdentity = strings.TrimSpace(text)
+			} else if json.Valid(candidate) {
+				sourceIdentity = strings.TrimSpace(string(candidate))
+			}
+			if sourceIdentity != "" {
+				break
+			}
+		}
+	}
+	notification := SourceNotification{Kind: kind, ThreadID: params.ThreadID, Title: title, Raw: append(json.RawMessage(nil), message.Raw...), SourceIdentity: sourceIdentity}
 	notification.EventID = notificationKey(notification)
 	return notification, true
 }
 
 func notificationKey(notification SourceNotification) string {
+	if identity := strings.TrimSpace(notification.SourceIdentity); identity != "" {
+		return notification.ThreadID + ":" + string(notification.Kind) + ":source:" + identity
+	}
 	digest := sha256.Sum256(notification.Raw)
 	return notification.ThreadID + ":" + string(notification.Kind) + ":" + hex.EncodeToString(digest[:])
 }
