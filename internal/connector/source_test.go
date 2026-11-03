@@ -311,6 +311,14 @@ func TestSourceClientParsesCurrentProtocolShapes(t *testing.T) {
 	if handshake.Build != "Codex Desktop/0.166.0" || handshake.ServerVersion != "0.166.0" {
 		t.Fatalf("handshake identity = (%q, %q)", handshake.Build, handshake.ServerVersion)
 	}
+	originatorUserAgent := "loomhelm_connector/0.166.0 (Mac OS 27.2.0; arm64) dumb (loomhelm_connector; dev)"
+	originatorHandshake, err := parseAppServerHandshake(json.RawMessage(`{"userAgent":"` + originatorUserAgent + `"}`))
+	if err != nil {
+		t.Fatalf("parse originator app-server handshake: %v", err)
+	}
+	if originatorHandshake.Build != originatorUserAgent {
+		t.Fatalf("originator handshake build = %q, want %q", originatorHandshake.Build, originatorUserAgent)
+	}
 
 	thread, err := decodeThread(json.RawMessage(`{"id":"thread-1","name":"标题","createdAt":1793628559,"updatedAt":1793628560,"status":{"type":"idle"}}`))
 	if err != nil {

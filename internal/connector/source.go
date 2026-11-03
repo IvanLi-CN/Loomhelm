@@ -986,7 +986,10 @@ func userAgentIdentity(userAgent string) (build, version string) {
 			return prefix + version, version
 		}
 	}
-	return "", ""
+	// Host-local app-server builds may use the negotiated client originator as
+	// the user-agent prefix. Preserve that exact observed identity even when
+	// its prefix is not one of the known Codex variants.
+	return value, ""
 }
 
 func firstNonEmpty(values ...string) string {
