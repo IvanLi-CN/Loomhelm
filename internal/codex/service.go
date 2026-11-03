@@ -846,7 +846,7 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 		return protocol.CodexConversation{}, ErrConflict
 	}
 	if insertTag.RowsAffected() == 0 {
-		if operationState == "title_sync_failed" && request.Resolution != nil && *request.Resolution == "retry" {
+		if (operationState == "title_sync_failed" || operationState == "title_sync_paused") && request.Resolution != nil && *request.Resolution == "retry" {
 			if _, err := s.pool.Exec(ctx, `UPDATE codex_title_operations SET state = 'title_sync_pending', last_error = '', next_retry_at = NULL, updated_at = $2 WHERE request_id = $1`, request.RequestID, now); err != nil {
 				return protocol.CodexConversation{}, fmt.Errorf("reopen Codex title operation: %w", err)
 			}
@@ -879,16 +879,17 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 			if readErr != nil {
 				err = errors.Join(writeErr, fmt.Errorf("read Codex title result state: %w", readErr))
 			} else if writeErr != nil {
+				safeError := safeCodexError(writeErr.Error())
 				_, operationErr := titleTx.Exec(ctx, `
 					UPDATE codex_title_operations
 					SET state = 'title_sync_failed', attempts = attempts + 1, last_error = $2, updated_at = $3
 					WHERE operation_id = $1 AND state = 'title_sync_pending'
-				`, operationID, writeErr.Error(), resultNow)
+					`, operationID, safeError, resultNow)
 				_, threadErr := titleTx.Exec(ctx, `
 					UPDATE codex_threads
 					SET title_sync_state = 'failed', title_sync_error = $3, updated_at = $4
 					WHERE host_id = $1 AND thread_id = $2 AND title_sync_state = 'pending' AND title_operation_id = $5
-				`, hostID, threadID, writeErr.Error(), resultNow, operationID)
+					`, hostID, threadID, safeError, resultNow, operationID)
 				err = errors.Join(writeErr, operationErr, threadErr)
 			} else if currentOperationID != operationID || currentTitle != operationDesired || currentState != "pending" {
 				var operationState string
@@ -1111,6 +1112,9 @@ func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, req
 		return protocol.CodexSyncResponse{}, auth.ErrForbidden
 	}
 	operationID := strings.TrimSpace(valueOrEmpty(request.RequestID))
+	if strings.HasPrefix(operationID, "reconnect-") {
+		return protocol.CodexSyncResponse{}, ErrInvalid
+	}
 	if operationID == "" {
 		operationID = newID("codex-sync")
 	}
@@ -1135,6 +1139,12 @@ func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, req
 	}
 	if !errors.Is(existingErr, pgx.ErrNoRows) {
 		return protocol.CodexSyncResponse{}, fmt.Errorf("read existing Codex sync request: %w", existingErr)
+	}
+	var connectionGeneration int64
+	if err := tx.QueryRow(ctx, `
+		SELECT connection_generation FROM host_registrations WHERE id = $1
+	`, access.host.ID).Scan(&connectionGeneration); err != nil {
+		return protocol.CodexSyncResponse{}, fmt.Errorf("read Codex Host connection generation: %w", err)
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO codex_sync_sources (host_id, state, sync_state, sync_operation_id, as_of, updated_at)
@@ -1170,6 +1180,7 @@ func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, req
 	}
 	if runner := s.syncRunner; runner != nil {
 		hostID := access.host.ID
+		expectedGeneration := connectionGeneration
 		go func() {
 			syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 			defer cancel()
@@ -1180,6 +1191,7 @@ func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, req
 			}
 			snapshot.HostID = hostID
 			snapshot.OperationID = operationID
+			snapshot.ConnectionGeneration = expectedGeneration
 			if importErr := s.ImportSnapshot(syncCtx, snapshot); importErr != nil {
 				_ = s.FailSync(context.Background(), hostID, operationID, importErr)
 			}

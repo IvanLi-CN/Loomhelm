@@ -328,6 +328,8 @@ func waitConnectorRetry(ctx context.Context, delay time.Duration) bool {
 func (c *Connector) serveConnection(ctx context.Context, connection *gateway.ClientConnection) error {
 	connectionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	readResult := make(chan error, 1)
+	go func() { readResult <- c.readGatewayMessages(connectionCtx, connection) }()
 	sourceRecovered := c.sourceRuntime == nil
 	if c.sourceRuntime != nil {
 		if err := c.recoverSource(connectionCtx, connection); err != nil {
@@ -336,12 +338,10 @@ func (c *Connector) serveConnection(ctx context.Context, connection *gateway.Cli
 			sourceRecovered = true
 		}
 	}
-	readResult := make(chan error, 1)
 	eventResult := make(chan error, 1)
 	artifactResult := make(chan error, 1)
 	heartbeatResult := make(chan error, 1)
 	sourceResult := make(chan error, 1)
-	go func() { readResult <- c.readGatewayMessages(connectionCtx, connection) }()
 	go func() { eventResult <- c.deliverJournalEvents(connectionCtx, connection) }()
 	go func() { artifactResult <- c.uploadPendingArtifacts(connectionCtx, connection) }()
 	go func() { heartbeatResult <- c.sendGatewayHeartbeats(connectionCtx, connection) }()
@@ -482,6 +482,7 @@ func (c *Connector) recoverSource(ctx context.Context, connection *gateway.Clien
 		return err
 	}
 	if snapshot != nil {
+		snapshot.ConnectionGeneration = connection.Generation()
 		payload, marshalErr := json.Marshal(snapshot)
 		if marshalErr != nil {
 			_ = source.Close()

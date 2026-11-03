@@ -310,6 +310,20 @@ func TestSourceClientPreservesHistorySequenceAcrossPages(t *testing.T) {
 	}
 }
 
+func TestMergeHistoryEventsSortsByOccurredAtAcrossSources(t *testing.T) {
+	base := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	merged := mergeHistoryEvents(
+		[]SourceHistoryEvent{{ID: "turn-1", Sequence: 1, OccurredAt: base.Add(2 * time.Minute).Format(time.RFC3339Nano)}},
+		[]SourceHistoryEvent{{ID: "item-1", Sequence: 1, OccurredAt: base.Add(time.Minute).Format(time.RFC3339Nano)}},
+	)
+	if len(merged) != 2 || merged[0].ID != "item-1" || merged[1].ID != "turn-1" {
+		t.Fatalf("merged history order = %+v", merged)
+	}
+	if merged[0].Sequence != 1 || merged[1].Sequence != 2 {
+		t.Fatalf("merged history sequence = (%d, %d)", merged[0].Sequence, merged[1].Sequence)
+	}
+}
+
 func TestDecodeThreadStatusObjectAndRejectsEmptyPageShape(t *testing.T) {
 	thread, err := decodeThread(json.RawMessage(`{"id":"thread-1","status":{"type":"deleted"}}`))
 	if err != nil || sourceThreadStatus(thread) != protocol.CodexSourceStatusDeleted {

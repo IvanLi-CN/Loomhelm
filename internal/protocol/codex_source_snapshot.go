@@ -10,19 +10,21 @@ import (
 // from the public REST contract so a large source replay cannot accidentally
 // become a browser API shape.
 type CodexSourceSnapshot struct {
-	OperationID      string                       `json:"operation_id"`
-	HostID           string                       `json:"host_id"`
-	State            CodexSourceState             `json:"state"`
-	SyncState        CodexSyncState               `json:"sync_state"`
-	Build            string                       `json:"build"`
-	ProtocolVersion  string                       `json:"protocol_version"`
-	Capabilities     []string                     `json:"capabilities"`
-	CapabilityStates map[string]string            `json:"capability_states"`
-	Projects         []CodexSourceProjectSnapshot `json:"projects"`
-	Threads          []CodexSourceThreadSnapshot  `json:"threads"`
-	AsOf             time.Time                    `json:"as_of"`
-	Cursor           string                       `json:"cursor"`
-	Error            string                       `json:"error"`
+	OperationID          string                       `json:"operation_id"`
+	HostID               string                       `json:"host_id"`
+	ConnectionGeneration int64                        `json:"connection_generation,omitempty"`
+	Recovery             bool                         `json:"recovery,omitempty"`
+	State                CodexSourceState             `json:"state"`
+	SyncState            CodexSyncState               `json:"sync_state"`
+	Build                string                       `json:"build"`
+	ProtocolVersion      string                       `json:"protocol_version"`
+	Capabilities         []string                     `json:"capabilities"`
+	CapabilityStates     map[string]string            `json:"capability_states"`
+	Projects             []CodexSourceProjectSnapshot `json:"projects"`
+	Threads              []CodexSourceThreadSnapshot  `json:"threads"`
+	AsOf                 time.Time                    `json:"as_of"`
+	Cursor               string                       `json:"cursor"`
+	Error                string                       `json:"error"`
 }
 
 type CodexSourceProjectSnapshot struct {

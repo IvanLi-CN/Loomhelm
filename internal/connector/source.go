@@ -1074,10 +1074,35 @@ func mergeHistoryEvents(left, right []SourceHistoryEvent) []SourceHistoryEvent {
 			continue
 		}
 		seen[event.ID] = struct{}{}
-		event.Sequence = int64(len(result) + 1)
 		result = append(result, event)
 	}
+	sort.SliceStable(result, func(leftIndex, rightIndex int) bool {
+		leftEvent, rightEvent := result[leftIndex], result[rightIndex]
+		leftOccurredAt, leftKnown := parseHistoryEventTime(leftEvent.OccurredAt)
+		rightOccurredAt, rightKnown := parseHistoryEventTime(rightEvent.OccurredAt)
+		if leftKnown != rightKnown {
+			return leftKnown
+		}
+		if leftKnown && !leftOccurredAt.Equal(rightOccurredAt) {
+			return leftOccurredAt.Before(rightOccurredAt)
+		}
+		if leftEvent.Sequence != rightEvent.Sequence {
+			return leftEvent.Sequence < rightEvent.Sequence
+		}
+		return leftEvent.ID < rightEvent.ID
+	})
+	for index := range result {
+		result[index].Sequence = int64(index + 1)
+	}
 	return result
+}
+
+func parseHistoryEventTime(value string) (time.Time, bool) {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
 }
 
 func decodeFileMaterial(raw json.RawMessage) (SourceFileMaterial, error) {
@@ -1271,6 +1296,7 @@ func (r *SourceRuntime) ReconnectAndRecover(ctx context.Context, threadIDs []str
 		if err != nil {
 			return source, nil, nil, err
 		}
+		snapshot.Recovery = true
 		return source, &snapshot, nil, nil
 	}
 	snapshots := make([]SourceHistorySnapshot, 0, len(threadIDs))

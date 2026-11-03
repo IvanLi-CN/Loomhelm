@@ -108,7 +108,7 @@ func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
 		t.Fatalf("create migration upgrade provider: %v", err)
 	}
 
-	for _, version := range []int64{17, 18, 19, 20, 22} {
+	for _, version := range []int64{17, 18, 19, 20, 23} {
 		if _, err := migrationProvider.UpTo(ctx, version); err != nil {
 			t.Fatalf("upgrade schema to migration %d: %v", version, err)
 		}
@@ -169,6 +169,7 @@ func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
 		"host_registrations_connector_device_idx",
 		"host_credentials_connector_device_idx",
 		"execution_sessions_host_thread_idx",
+		"codex_source_events_recovery_idx",
 	} {
 		var exists bool
 		if err := migrationSQLDB.QueryRowContext(ctx, `
@@ -192,6 +193,7 @@ func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
 		"codex_thread_history",
 		"codex_thread_files",
 		"codex_sync_snapshots",
+		"codex_source_events",
 	} {
 		var exists bool
 		if err := migrationSQLDB.QueryRowContext(ctx, `
