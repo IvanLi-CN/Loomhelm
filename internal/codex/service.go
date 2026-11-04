@@ -818,13 +818,33 @@ func (s *Service) GetConversationFile(ctx context.Context, principal auth.Princi
 	if _, _, _, _, _, err := s.readConversation(ctx, access, principal, threadID); err != nil {
 		return protocol.CodexFileContentResponse{}, err
 	}
+	offset := int64(0)
+	if query.Offset != nil {
+		offset = *query.Offset
+	}
+	limit := int64(defaultFileChunkSize)
+	if query.Limit != nil {
+		limit = *query.Limit
+	}
+	if offset < 0 || limit <= 0 {
+		return protocol.CodexFileContentResponse{}, ErrInvalid
+	}
+	if offset > int64(1<<31-1) {
+		return protocol.CodexFileContentResponse{}, ErrInvalid
+	}
+	if limit > maxFileChunkSize {
+		limit = maxFileChunkSize
+	}
 	var file protocol.CodexFileMaterial
 	var contentRef sql.NullString
 	var content []byte
+	var contentLength int64
 	if err := s.pool.QueryRow(ctx, `
-		SELECT path, content_type, size, sha256, content_ref, content_bytes, complete
+		SELECT path, content_type, size, sha256, content_ref,
+		       COALESCE(octet_length(content_bytes), 0),
+		       substring(content_bytes FROM $4::integer FOR $5::integer), complete
 		FROM codex_thread_files WHERE host_id = $1 AND thread_id = $2 AND path = $3
-	`, access.host.ID, threadID, strings.TrimSpace(query.Path)).Scan(&file.Path, &file.ContentType, &file.Size, &file.Sha256, &contentRef, &content, &file.Complete); errors.Is(err, pgx.ErrNoRows) {
+	`, access.host.ID, threadID, strings.TrimSpace(query.Path), offset+1, limit).Scan(&file.Path, &file.ContentType, &file.Size, &file.Sha256, &contentRef, &contentLength, &content, &file.Complete); errors.Is(err, pgx.ErrNoRows) {
 		return protocol.CodexFileContentResponse{}, ErrNotFound
 	} else if err != nil {
 		return protocol.CodexFileContentResponse{}, fmt.Errorf("read Codex file content: %w", err)
@@ -834,45 +854,30 @@ func (s *Service) GetConversationFile(ctx context.Context, principal auth.Princi
 	}
 	version := strings.TrimSpace(file.Sha256)
 	if version == "" {
-		digest := sha256.Sum256(content)
-		version = hex.EncodeToString(digest[:])
+		if contentRef.Valid && strings.TrimSpace(contentRef.String) != "" {
+			version = strings.TrimSpace(contentRef.String)
+		} else {
+			digest := sha256.Sum256(content)
+			version = hex.EncodeToString(digest[:])
+		}
 	}
 	if expected := strings.TrimSpace(valueOrEmpty(query.ContentVersion)); expected != "" && expected != version {
 		return protocol.CodexFileContentResponse{}, ErrConflict
 	}
-	offset := int64(0)
-	if query.Offset != nil {
-		offset = *query.Offset
-	}
-	if offset < 0 || offset > int64(len(content)) || offset > file.Size {
+	if offset > file.Size || (contentLength > 0 && offset > contentLength) {
 		return protocol.CodexFileContentResponse{}, ErrInvalid
 	}
-	limit := int64(defaultFileChunkSize)
-	if query.Limit != nil {
-		limit = *query.Limit
-	}
-	if limit <= 0 {
-		return protocol.CodexFileContentResponse{}, ErrInvalid
-	}
-	if limit > maxFileChunkSize {
-		limit = maxFileChunkSize
-	}
-	end := offset + limit
-	if end > file.Size {
-		end = file.Size
-	}
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	fileBytes := content[offset:end]
+	end := offset + int64(len(content))
+	bytesAvailable := file.Size == 0 || contentLength > 0
 	return protocol.CodexFileContentResponse{
 		File:           file,
-		ContentBase64:  base64.StdEncoding.EncodeToString(fileBytes),
+		ContentBase64:  base64.StdEncoding.EncodeToString(content),
 		ContentVersion: version,
 		Offset:         offset,
 		NextOffset:     end,
 		TotalSize:      file.Size,
-		Complete:       file.Complete && end >= file.Size,
+		Complete:       bytesAvailable && file.Complete && end >= file.Size,
+		BytesAvailable: bytesAvailable,
 	}, nil
 }
 

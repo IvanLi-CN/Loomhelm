@@ -103,6 +103,7 @@ type SourceProject struct {
 
 type SourceHistoryEvent struct {
 	ID         string
+	Source     string
 	Sequence   int64
 	Type       string
 	Raw        json.RawMessage
@@ -1183,24 +1184,31 @@ func rawHistoryEvent(raw json.RawMessage, sequence int64, fallbackType string) S
 	_ = json.Unmarshal(raw, &value)
 	id := strings.TrimSpace(value.ID)
 	if id == "" {
-		// Turns and items can expose the same event without an upstream ID. The
-		// payload is the canonical identity; source collection must not create a
-		// duplicate merely because the event arrived through another endpoint.
-		digest := sha256.Sum256(raw)
+		// Keep same-source repeated payloads distinct by occurrence, then let
+		// mergeHistoryEvents collapse the same payload across turns/items.
+		digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", fallbackType, sequence, raw)))
 		id = "codex-" + hex.EncodeToString(digest[:12])
 	}
 	eventType := firstNonEmpty(value.Type, fallbackType)
-	return SourceHistoryEvent{ID: id, Sequence: sequence, Type: eventType, Raw: append(json.RawMessage(nil), raw...), Fallback: eventType, OccurredAt: timestampText(value.CreatedAt)}
+	return SourceHistoryEvent{ID: id, Source: fallbackType, Sequence: sequence, Type: eventType, Raw: append(json.RawMessage(nil), raw...), Fallback: eventType, OccurredAt: timestampText(value.CreatedAt)}
 }
 
 func mergeHistoryEvents(left, right []SourceHistoryEvent) []SourceHistoryEvent {
 	seen := make(map[string]struct{}, len(left)+len(right))
+	seenPayloadSource := make(map[string]string, len(left)+len(right))
 	result := make([]SourceHistoryEvent, 0, len(left)+len(right))
 	for _, event := range append(append([]SourceHistoryEvent(nil), left...), right...) {
 		if _, ok := seen[event.ID]; ok {
 			continue
 		}
+		payloadKey := historyEventPayloadKey(event.Raw)
+		if priorSource, ok := seenPayloadSource[payloadKey]; ok && priorSource != "" && event.Source != "" && priorSource != event.Source {
+			continue
+		}
 		seen[event.ID] = struct{}{}
+		if event.Source != "" {
+			seenPayloadSource[payloadKey] = event.Source
+		}
 		result = append(result, event)
 	}
 	sort.SliceStable(result, func(leftIndex, rightIndex int) bool {
@@ -1222,6 +1230,15 @@ func mergeHistoryEvents(left, right []SourceHistoryEvent) []SourceHistoryEvent {
 		result[index].Sequence = int64(index + 1)
 	}
 	return result
+}
+
+func historyEventPayloadKey(raw json.RawMessage) string {
+	var compact bytes.Buffer
+	if json.Compact(&compact, raw) == nil {
+		raw = compact.Bytes()
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
 }
 
 func parseHistoryEventTime(value string) (time.Time, bool) {

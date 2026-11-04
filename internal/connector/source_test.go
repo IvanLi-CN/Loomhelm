@@ -403,8 +403,8 @@ func TestRawHistoryEventDeduplicatesIdenticalUnidentifiedPayloadsAcrossSources(t
 	raw := json.RawMessage(`{"type":"message","text":"same"}`)
 	turn := rawHistoryEvent(raw, 1, "turn")
 	item := rawHistoryEvent(raw, 2, "item")
-	if turn.ID != item.ID {
-		t.Fatalf("unidentified payload IDs differ: turn=%q item=%q", turn.ID, item.ID)
+	if turn.ID == item.ID {
+		t.Fatalf("unidentified payload IDs unexpectedly match: %q", turn.ID)
 	}
 	merged := mergeHistoryEvents([]SourceHistoryEvent{turn}, []SourceHistoryEvent{item})
 	if len(merged) != 1 {

@@ -324,7 +324,7 @@ func (c *ClientConnection) waitForSourceResponse(ctx context.Context, requestID 
 		if result.ack == nil {
 			return errors.New("gateway source acknowledgement was empty")
 		}
-		if result.ack.State != "succeeded" {
+		if result.ack.State != "succeeded" && result.ack.State != "pending" {
 			if result.ack.Error != nil && strings.TrimSpace(result.ack.Error.Message) != "" {
 				return fmt.Errorf("gateway source operation failed: %s", result.ack.Error.Message)
 			}

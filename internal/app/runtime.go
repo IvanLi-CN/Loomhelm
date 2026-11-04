@@ -13,6 +13,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/codex"
 	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
@@ -214,7 +215,11 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			AckHandler:      transport.HandleCommandAck,
 			ArtifactHandler: artifactUploadHandler,
 			SourceHandler: func(sourceCtx context.Context, connection hosts.Connection, notification gateway.SourceNotification) error {
-				return services.codex.ApplySourceEvent(sourceCtx, connection.HostID, notification.EventID, notification.Kind, notification.ThreadID, notification.Title, notification.Raw)
+				err := services.codex.ApplySourceEvent(sourceCtx, connection.HostID, notification.EventID, notification.Kind, notification.ThreadID, notification.Title, notification.Raw)
+				if errors.Is(err, codex.ErrSourceEventPending) {
+					return errors.Join(gateway.ErrSourceEventPending, err)
+				}
+				return err
 			},
 			SourceSnapshotHandler: func(sourceCtx context.Context, connection hosts.Connection, operationID string, payload []byte) error {
 				var snapshot protocol.CodexSourceSnapshot

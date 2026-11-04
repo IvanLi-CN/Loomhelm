@@ -106,7 +106,10 @@ func (s *Service) ApplySourceEvent(ctx context.Context, hostID, eventID, kind, t
 	}
 	if errors.Is(applyErr, ErrNotFound) {
 		stateErr := s.updateSourceEventState(hostID, eventID, "pending", "Codex thread is not materialized; awaiting source snapshot reconciliation")
-		return errors.Join(ErrSourceEventPending, stateErr)
+		if stateErr != nil {
+			return stateErr
+		}
+		return ErrSourceEventPending
 	}
 	if applyErr != nil {
 		stateErr := s.updateSourceEventState(hostID, eventID, "failed", safeCodexError(applyErr.Error()))

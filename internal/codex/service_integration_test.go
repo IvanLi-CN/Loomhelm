@@ -232,6 +232,20 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 	if currentOperation != partialOperation || currentSyncState != "partial" {
 		t.Fatalf("late snapshot changed Codex sync fence = (%q, %q)", currentOperation, currentSyncState)
 	}
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE codex_thread_files
+		SET content_bytes = NULL, size = 5, sha256 = '', content_ref = 'codex-ref://notes.txt', complete = TRUE
+		WHERE host_id = $1 AND thread_id = $2 AND path = 'notes.txt'
+	`, hostID, threadID); err != nil {
+		t.Fatalf("seed reference-only Codex file: %v", err)
+	}
+	refChunk, err := reader.GetConversationFile(ctx, auth.Principal{UserID: userID}, hostID, threadID, protocol.GetCodexConversationFileQuery{Path: "notes.txt"})
+	if err != nil {
+		t.Fatalf("GetConversationFile() reference-only error = %v", err)
+	}
+	if refChunk.BytesAvailable || refChunk.Complete || refChunk.NextOffset != 0 || refChunk.File.ContentRef == nil {
+		t.Fatalf("reference-only Codex file chunk = %+v", refChunk)
+	}
 
 }
 

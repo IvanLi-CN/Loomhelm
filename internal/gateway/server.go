@@ -22,6 +22,7 @@ var (
 	ErrServerDraining          = errors.New("host gateway is draining")
 	ErrConnectionSuperseded    = errors.New("host gateway connection was superseded")
 	ErrEventHandlerUnavailable = errors.New("gateway event handler is not configured")
+	ErrSourceEventPending      = errors.New("source event was durably retained pending materialization")
 )
 
 const (
@@ -541,8 +542,13 @@ func (c *serverConnection) handleSourceEvent(ctx context.Context, message Messag
 	}
 	ack := &SourceAck{OperationID: message.RequestID, State: "succeeded"}
 	if err != nil {
-		ack.State = "failed"
-		ack.Error = &WireError{Code: connectionErrorCode(err, "source_event_rejected"), Message: "source event was rejected"}
+		if errors.Is(err, ErrSourceEventPending) {
+			ack.State = "pending"
+			ack.Error = &WireError{Code: "source_event_pending", Message: "source event was durably retained and will be replayed after materialization"}
+		} else {
+			ack.State = "failed"
+			ack.Error = &WireError{Code: connectionErrorCode(err, "source_event_rejected"), Message: "source event was rejected"}
+		}
 	}
 	if writeErr := c.write(ctx, Message{Type: MessageSourceAck, RequestID: message.RequestID, Generation: c.connection.Generation, SourceAck: ack}); writeErr != nil {
 		return writeErr

@@ -268,7 +268,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			if eventID == "" {
 				// The raw payload is the stable logical identity across the
 				// connector's turns/items collection paths.
-				digest := sha256.Sum256(event.RawPayload)
+				digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", strings.TrimSpace(event.EventType), sequence, event.RawPayload)))
 				eventID = "codex-" + hex.EncodeToString(digest[:12])
 			}
 			rawPayload := event.RawPayload

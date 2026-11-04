@@ -227,7 +227,7 @@
     },
     "CodexFileContentResponse": {
       "type": "object",
-      "required": ["file", "content_base64", "content_version", "offset", "next_offset", "total_size", "complete"],
+      "required": ["file", "content_base64", "content_version", "offset", "next_offset", "total_size", "complete", "bytes_available"],
       "properties": {
         "file": {"$ref": "#/types/CodexFileMaterial"},
         "content_base64": {"type": "string"},
@@ -235,7 +235,8 @@
         "offset": {"type": "integer", "format": "int64"},
         "next_offset": {"type": "integer", "format": "int64"},
         "total_size": {"type": "integer", "format": "int64"},
-        "complete": {"type": "boolean"}
+        "complete": {"type": "boolean"},
+        "bytes_available": {"type": "boolean"}
       }
     },
     "CodexSourceListResponse": {
@@ -1376,8 +1377,8 @@
         "method": "GET",
         "path": "/codex/sources",
         "response_type": "CodexSourceListResponse",
-        "summary": "List Codex source snapshots for Hosts visible to the current user",
-        "mcp_tool": {"name": "loomhelm.list_codex_sources", "description": "List Host-scoped Codex source capability and synchronization snapshots without inventing unsupported capability state."}
+        "summary": "Read the configured default Host Codex source snapshot",
+        "mcp_tool": {"name": "loomhelm.list_codex_sources", "description": "Read the configured default Host's Codex source capability and synchronization snapshot without inventing unsupported capability state."}
       },
       {
         "operation_id": "listCodexProjects",

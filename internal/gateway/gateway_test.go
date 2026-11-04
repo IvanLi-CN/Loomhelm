@@ -1184,6 +1184,18 @@ func TestGatewayLateSourceAckCannotBecomeRecoverySnapshot(t *testing.T) {
 	}
 }
 
+func TestGatewayAcceptsDurablyPendingSourceAck(t *testing.T) {
+	connection := &ClientConnection{sourcePending: map[string]chan sourceResponse{}}
+	response := make(chan sourceResponse, 1)
+	connection.sourcePending["event-pending"] = response
+	go func() {
+		response <- sourceResponse{ack: &SourceAck{OperationID: "event-pending", State: "pending"}}
+	}()
+	if err := connection.waitForSourceResponse(context.Background(), "event-pending", response); err != nil {
+		t.Fatalf("pending source ACK was rejected: %v", err)
+	}
+}
+
 func TestGatewayStreamsLargeSourceSnapshots(t *testing.T) {
 	registry := newFakeRegistry()
 	const maxFrame = int64(1 << 20)
