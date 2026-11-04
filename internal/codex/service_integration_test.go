@@ -141,6 +141,23 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 	if historyState != "complete" || !filesComplete {
 		t.Fatalf("imported thread readiness = (%q, %t)", historyState, filesComplete)
 	}
+	reader := codex.NewService(db.Pool(), nil, hosts.NewService(db.Pool()), projects.NewService(db.Pool(), nil))
+	fileLimit := int64(3)
+	fileChunk, err := reader.GetConversationFile(ctx, auth.Principal{UserID: userID}, hostID, threadID, protocol.GetCodexConversationFileQuery{Path: "notes.txt", Limit: &fileLimit})
+	if err != nil {
+		t.Fatalf("GetConversationFile() error = %v", err)
+	}
+	if fileChunk.File.Path != "notes.txt" || fileChunk.ContentBase64 == "" || fileChunk.NextOffset != 3 || fileChunk.Complete {
+		t.Fatalf("first Codex file chunk = %+v", fileChunk)
+	}
+	fileOffset := fileChunk.NextOffset
+	fileChunk, err = reader.GetConversationFile(ctx, auth.Principal{UserID: userID}, hostID, threadID, protocol.GetCodexConversationFileQuery{Path: "notes.txt", ContentVersion: &fileChunk.ContentVersion, Offset: &fileOffset, Limit: &fileLimit})
+	if err != nil {
+		t.Fatalf("GetConversationFile() second chunk error = %v", err)
+	}
+	if fileChunk.NextOffset != 5 || !fileChunk.Complete {
+		t.Fatalf("second Codex file chunk = %+v", fileChunk)
+	}
 
 	partialOperation := operationID + "-partial"
 	if _, err := db.Pool().Exec(ctx, `
@@ -378,6 +395,17 @@ func TestApplySourceEventDoesNotAcknowledgeActiveDuplicate(t *testing.T) {
 	}
 	if state != "processing" {
 		t.Fatalf("duplicate source event state = %q, want processing", state)
+	}
+	pendingEventID := eventID + "-pending"
+	err = service.ApplySourceEvent(ctx, hostID, pendingEventID, "title_updated", threadID, &title, json.RawMessage(`{"method":"thread/name/updated","params":{"threadId":"`+threadID+`","name":"等待材料"}}`))
+	if !errors.Is(err, codex.ErrSourceEventPending) {
+		t.Fatalf("unmaterialized ApplySourceEvent() error = %v, want ErrSourceEventPending", err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT state FROM codex_source_events WHERE host_id = $1 AND event_id = $2`, hostID, pendingEventID).Scan(&state); err != nil {
+		t.Fatalf("read pending source event state: %v", err)
+	}
+	if state != "pending" {
+		t.Fatalf("unmaterialized source event state = %q, want pending", state)
 	}
 }
 

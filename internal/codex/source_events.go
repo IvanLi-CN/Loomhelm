@@ -19,6 +19,11 @@ const sourceEventProcessingLease = time.Minute
 // reaches a terminal state.
 var ErrSourceEventInProgress = errors.New("Codex source event is already being applied")
 
+// ErrSourceEventPending tells the gateway that the event was durably retained
+// but its thread is not materialized yet. The Connector must keep the event
+// pending so replay can apply it after the next complete snapshot.
+var ErrSourceEventPending = errors.New("Codex source event is pending materialization")
+
 // ApplySourceEvent records the source identity before applying its side effect.
 // The gateway acknowledgement is emitted only after this method returns nil.
 func (s *Service) ApplySourceEvent(ctx context.Context, hostID, eventID, kind, threadID string, title *string, raw json.RawMessage) error {
@@ -101,7 +106,7 @@ func (s *Service) ApplySourceEvent(ctx context.Context, hostID, eventID, kind, t
 	}
 	if errors.Is(applyErr, ErrNotFound) {
 		stateErr := s.updateSourceEventState(hostID, eventID, "pending", "Codex thread is not materialized; awaiting source snapshot reconciliation")
-		return stateErr
+		return errors.Join(ErrSourceEventPending, stateErr)
 	}
 	if applyErr != nil {
 		stateErr := s.updateSourceEventState(hostID, eventID, "failed", safeCodexError(applyErr.Error()))

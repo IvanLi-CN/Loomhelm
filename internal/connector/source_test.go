@@ -399,6 +399,19 @@ func TestMergeHistoryEventsSortsByOccurredAtAcrossSources(t *testing.T) {
 	}
 }
 
+func TestRawHistoryEventDeduplicatesIdenticalUnidentifiedPayloadsAcrossSources(t *testing.T) {
+	raw := json.RawMessage(`{"type":"message","text":"same"}`)
+	turn := rawHistoryEvent(raw, 1, "turn")
+	item := rawHistoryEvent(raw, 2, "item")
+	if turn.ID != item.ID {
+		t.Fatalf("unidentified payload IDs differ: turn=%q item=%q", turn.ID, item.ID)
+	}
+	merged := mergeHistoryEvents([]SourceHistoryEvent{turn}, []SourceHistoryEvent{item})
+	if len(merged) != 1 {
+		t.Fatalf("merged identical unidentified events = %d, want 1", len(merged))
+	}
+}
+
 func TestDecodeThreadStatusObjectAndRejectsEmptyPageShape(t *testing.T) {
 	thread, err := decodeThread(json.RawMessage(`{"id":"thread-1","status":{"type":"deleted"}}`))
 	if err != nil || sourceThreadStatus(thread) != protocol.CodexSourceStatusDeleted {

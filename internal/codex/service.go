@@ -6,12 +6,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,9 +39,11 @@ var (
 )
 
 const (
-	defaultPageSize = 50
-	maxPageSize     = 200
-	maxTitleLength  = 300
+	defaultPageSize      = 50
+	maxPageSize          = 200
+	maxTitleLength       = 300
+	defaultFileChunkSize = 64 << 10
+	maxFileChunkSize     = 1 << 20
 )
 
 type Config struct {
@@ -146,6 +151,7 @@ func (s *Service) Mount(router chi.Router) {
 	router.Get("/codex/projects", s.handleListProjects)
 	router.Get("/codex/conversations", s.handleListConversations)
 	router.Get("/codex/conversations/{host_id}/{thread_id}", s.handleGetConversation)
+	router.Get("/codex/conversations/{host_id}/{thread_id}/file", s.handleGetConversationFile)
 	router.Patch("/codex/conversations/{host_id}/{thread_id}/title", s.handleUpdateTitle)
 	router.Post("/codex/projects/{host_id}/{project_id}/mapping", s.handleMapProject)
 	router.Post("/codex/conversations/{host_id}/{thread_id}/bind", s.handleBind)
@@ -593,6 +599,10 @@ func (s *Service) ListProjects(ctx context.Context, principal auth.Principal, qu
 		args = append(args, principal.UserID)
 		where += " AND p.loomhelm_project_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.loomhelm_project_id AND pm.user_id = $2)"
 	}
+	if len(principal.ProjectScope) > 0 {
+		args = append(args, sortedProjectScopeValues(principal.ProjectScope))
+		where += fmt.Sprintf(" AND p.loomhelm_project_id = ANY($%d::text[])", len(args))
+	}
 	if cursor := valueOrEmpty(query.AfterCursor); cursor != "" {
 		args = append(args, cursor)
 		where += fmt.Sprintf(" AND p.project_id > $%d", len(args))
@@ -662,6 +672,10 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 	where := `WHERE t.host_id = $1 AND (t.imported_by = $2 OR (t.bound_task_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)))`
 	if access.restricted {
 		where = `WHERE t.host_id = $1 AND t.bound_task_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)`
+	}
+	if len(principal.ProjectScope) > 0 {
+		args = append(args, sortedProjectScopeValues(principal.ProjectScope))
+		where += fmt.Sprintf(" AND task.project_id = ANY($%d::text[])", len(args))
 	}
 	if !boolValue(query.IncludeArchived) {
 		where += " AND t.source_status = 'active'"
@@ -791,6 +805,75 @@ func (s *Service) GetConversation(ctx context.Context, principal auth.Principal,
 		return protocol.CodexConversationDetail{}, err
 	}
 	return protocol.CodexConversationDetail{Conversation: item, History: history, Files: files}, nil
+}
+
+func (s *Service) GetConversationFile(ctx context.Context, principal auth.Principal, hostID, threadID string, query protocol.GetCodexConversationFileQuery) (protocol.CodexFileContentResponse, error) {
+	access, err := s.defaultHost(ctx, principal, hostID)
+	if err != nil {
+		return protocol.CodexFileContentResponse{}, err
+	}
+	if strings.TrimSpace(query.Path) == "" {
+		return protocol.CodexFileContentResponse{}, ErrInvalid
+	}
+	if _, _, _, _, _, err := s.readConversation(ctx, access, principal, threadID); err != nil {
+		return protocol.CodexFileContentResponse{}, err
+	}
+	var file protocol.CodexFileMaterial
+	var contentRef sql.NullString
+	var content []byte
+	if err := s.pool.QueryRow(ctx, `
+		SELECT path, content_type, size, sha256, content_ref, content_bytes, complete
+		FROM codex_thread_files WHERE host_id = $1 AND thread_id = $2 AND path = $3
+	`, access.host.ID, threadID, strings.TrimSpace(query.Path)).Scan(&file.Path, &file.ContentType, &file.Size, &file.Sha256, &contentRef, &content, &file.Complete); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexFileContentResponse{}, ErrNotFound
+	} else if err != nil {
+		return protocol.CodexFileContentResponse{}, fmt.Errorf("read Codex file content: %w", err)
+	}
+	if contentRef.Valid && strings.TrimSpace(contentRef.String) != "" {
+		file.ContentRef = &contentRef.String
+	}
+	version := strings.TrimSpace(file.Sha256)
+	if version == "" {
+		digest := sha256.Sum256(content)
+		version = hex.EncodeToString(digest[:])
+	}
+	if expected := strings.TrimSpace(valueOrEmpty(query.ContentVersion)); expected != "" && expected != version {
+		return protocol.CodexFileContentResponse{}, ErrConflict
+	}
+	offset := int64(0)
+	if query.Offset != nil {
+		offset = *query.Offset
+	}
+	if offset < 0 || offset > int64(len(content)) || offset > file.Size {
+		return protocol.CodexFileContentResponse{}, ErrInvalid
+	}
+	limit := int64(defaultFileChunkSize)
+	if query.Limit != nil {
+		limit = *query.Limit
+	}
+	if limit <= 0 {
+		return protocol.CodexFileContentResponse{}, ErrInvalid
+	}
+	if limit > maxFileChunkSize {
+		limit = maxFileChunkSize
+	}
+	end := offset + limit
+	if end > file.Size {
+		end = file.Size
+	}
+	if end > int64(len(content)) {
+		end = int64(len(content))
+	}
+	fileBytes := content[offset:end]
+	return protocol.CodexFileContentResponse{
+		File:           file,
+		ContentBase64:  base64.StdEncoding.EncodeToString(fileBytes),
+		ContentVersion: version,
+		Offset:         offset,
+		NextOffset:     end,
+		TotalSize:      file.Size,
+		Complete:       file.Complete && end >= file.Size,
+	}, nil
 }
 
 type titleOperationRecord struct {
@@ -1396,6 +1479,17 @@ func uniqueStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func sortedProjectScopeValues(scope map[string]struct{}) []string {
+	values := make([]string, 0, len(scope))
+	for projectID := range scope {
+		if strings.TrimSpace(projectID) != "" {
+			values = append(values, projectID)
+		}
+	}
+	sort.Strings(values)
+	return values
 }
 
 func capabilityContains(raw []byte, capability string) bool {

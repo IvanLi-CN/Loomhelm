@@ -225,6 +225,19 @@
         "complete": {"type": "boolean"}
       }
     },
+    "CodexFileContentResponse": {
+      "type": "object",
+      "required": ["file", "content_base64", "content_version", "offset", "next_offset", "total_size", "complete"],
+      "properties": {
+        "file": {"$ref": "#/types/CodexFileMaterial"},
+        "content_base64": {"type": "string"},
+        "content_version": {"type": "string"},
+        "offset": {"type": "integer", "format": "int64"},
+        "next_offset": {"type": "integer", "format": "int64"},
+        "total_size": {"type": "integer", "format": "int64"},
+        "complete": {"type": "boolean"}
+      }
+    },
     "CodexSourceListResponse": {
       "type": "object",
       "required": ["items"],
@@ -328,6 +341,16 @@
         "bound": {"type": "boolean"},
         "include_archived": {"type": "boolean"},
         "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "GetCodexConversationFileQuery": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string"},
+        "content_version": {"type": "string"},
+        "offset": {"type": "integer", "format": "int64"},
         "limit": {"type": "integer", "format": "int64"}
       }
     },
@@ -1382,6 +1405,16 @@
         "response_type": "CodexConversationDetail",
         "summary": "Read one Host-scoped Codex conversation snapshot, preserved history and file materials",
         "mcp_tool": {"name": "loomhelm.get_codex_conversation", "description": "Read an authorized Codex conversation including raw-preserved events, readable fallbacks and supported file material status."}
+      },
+      {
+        "operation_id": "getCodexConversationFile",
+        "method": "GET",
+        "path": "/codex/conversations/{host_id}/{thread_id}/file",
+        "path_params": {"host_id": "string", "thread_id": "string"},
+        "query_type": "GetCodexConversationFileQuery",
+        "response_type": "CodexFileContentResponse",
+        "summary": "Read a bounded chunk of an authorized Codex conversation file material",
+        "mcp_tool": {"name": "loomhelm.get_codex_conversation_file", "description": "Read bounded chunks of persisted, authorized Codex conversation file bytes and verify them with the returned sha256 and content_version."}
       },
       {
         "operation_id": "updateCodexConversationTitle",

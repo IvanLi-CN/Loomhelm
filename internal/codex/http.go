@@ -81,6 +81,25 @@ func (s *Service) handleGetConversation(writer http.ResponseWriter, request *htt
 	auth.WriteJSON(writer, http.StatusOK, response)
 }
 
+func (s *Service) handleGetConversationFile(writer http.ResponseWriter, request *http.Request) {
+	principal, err := s.principalForRequest(request)
+	if err != nil {
+		s.writeError(writer, request, err, "Codex 文件材料不可用")
+		return
+	}
+	query, err := parseConversationFileQuery(request)
+	if err != nil {
+		s.writeError(writer, request, err, "Codex 文件材料查询无效")
+		return
+	}
+	response, err := s.GetConversationFile(request.Context(), principal, chi.URLParam(request, "host_id"), chi.URLParam(request, "thread_id"), query)
+	if err != nil {
+		s.writeError(writer, request, err, "读取 Codex 文件材料失败")
+		return
+	}
+	auth.WriteJSON(writer, http.StatusOK, response)
+}
+
 func (s *Service) handleUpdateTitle(writer http.ResponseWriter, request *http.Request) {
 	principal, err := s.principalForRequest(request)
 	if err != nil {
@@ -210,6 +229,33 @@ func parseConversationQuery(request *http.Request) (protocol.ListCodexConversati
 		} else {
 			query.IncludeArchived = &parsed
 		}
+	}
+	return query, nil
+}
+
+func parseConversationFileQuery(request *http.Request) (protocol.GetCodexConversationFileQuery, error) {
+	values := request.URL.Query()
+	path := strings.TrimSpace(values.Get("path"))
+	if path == "" {
+		return protocol.GetCodexConversationFileQuery{}, fmt.Errorf("%w: path is required", ErrInvalid)
+	}
+	query := protocol.GetCodexConversationFileQuery{Path: path, ContentVersion: optionalQuery(values.Get("content_version"))}
+	for _, field := range []struct {
+		name   string
+		target **int64
+	}{
+		{name: "offset", target: &query.Offset},
+		{name: "limit", target: &query.Limit},
+	} {
+		value := strings.TrimSpace(values.Get(field.name))
+		if value == "" {
+			continue
+		}
+		parsed, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil {
+			return query, fmt.Errorf("%w: %s must be an integer", ErrInvalid, field.name)
+		}
+		*field.target = &parsed
 	}
 	return query, nil
 }

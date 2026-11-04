@@ -1183,7 +1183,10 @@ func rawHistoryEvent(raw json.RawMessage, sequence int64, fallbackType string) S
 	_ = json.Unmarshal(raw, &value)
 	id := strings.TrimSpace(value.ID)
 	if id == "" {
-		digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%s", fallbackType, raw)))
+		// Turns and items can expose the same event without an upstream ID. The
+		// payload is the canonical identity; source collection must not create a
+		// duplicate merely because the event arrived through another endpoint.
+		digest := sha256.Sum256(raw)
 		id = "codex-" + hex.EncodeToString(digest[:12])
 	}
 	eventType := firstNonEmpty(value.Type, fallbackType)

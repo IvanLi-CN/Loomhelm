@@ -123,8 +123,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		// connection may remain online. A recovery snapshot must be able to
 		// replace that interrupted operation without allowing it to overwrite a
 		// currently active sync.
-		recoveryAllowed := snapshot.Recovery && hostStatus == "online" &&
-			(currentSourceState == string(protocol.CodexSourceStateOffline) || currentSyncState == string(protocol.CodexSyncStateStale))
+		recoveryAllowed := recoverySnapshotAllowed(snapshot.Recovery, hostStatus, currentSyncState)
 		if currentOperationID != "" && currentOperationID != incomingOperationID && (currentSyncState == "syncing" || !recoveryAllowed) {
 			if _, staleErr := tx.Exec(ctx, `
 				UPDATE codex_sync_snapshots
@@ -458,6 +457,14 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 	}
 	s.replayPendingSourceEvents(hostID)
 	return nil
+}
+
+// recoverySnapshotAllowed accepts a verified recovery snapshot after a Server
+// restart even when the Host connection itself stayed online. The active sync
+// operation remains fenced; only a source that is not currently syncing may be
+// replaced by the new Connector generation.
+func recoverySnapshotAllowed(recovery bool, hostStatus, syncState string) bool {
+	return recovery && hostStatus == "online" && syncState != string(protocol.CodexSyncStateSyncing)
 }
 
 func (s *Service) FailSync(ctx context.Context, hostID, operationID string, syncErr error) error {

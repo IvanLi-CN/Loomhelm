@@ -106,6 +106,7 @@ func routeForOperation(operationID string) (routeSpec, bool) {
 		"listCodexProjects":            {method: "GET", path: "/codex/projects", queryParams: []string{"host_id", "after_cursor", "limit"}},
 		"listCodexConversations":       {method: "GET", path: "/codex/conversations", queryParams: []string{"host_id", "project_id", "loomhelm_project_id", "search", "bound", "include_archived", "after_cursor", "limit"}},
 		"getCodexConversation":         {method: "GET", path: "/codex/conversations/{host_id}/{thread_id}", pathParams: []string{"host_id", "thread_id"}},
+		"getCodexConversationFile":     {method: "GET", path: "/codex/conversations/{host_id}/{thread_id}/file", pathParams: []string{"host_id", "thread_id"}, queryParams: []string{"path", "content_version", "offset", "limit"}},
 		"updateCodexConversationTitle": {method: "PATCH", path: "/codex/conversations/{host_id}/{thread_id}/title", pathParams: []string{"host_id", "thread_id"}, body: true},
 		"mapCodexProject":              {method: "POST", path: "/codex/projects/{host_id}/{project_id}/mapping", pathParams: []string{"host_id", "project_id"}, body: true},
 		"bindCodexConversation":        {method: "POST", path: "/codex/conversations/{host_id}/{thread_id}/bind", pathParams: []string{"host_id", "thread_id"}, body: true},
@@ -219,6 +220,13 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 	case "getCodexConversation":
 		add("host_id", stringField(), true)
 		add("thread_id", stringField(), true)
+	case "getCodexConversationFile":
+		add("host_id", stringField(), true)
+		add("thread_id", stringField(), true)
+		add("path", stringField(), true)
+		add("content_version", stringField(), false)
+		add("offset", integerField(), false)
+		add("limit", integerField(), false)
 	case "updateCodexConversationTitle":
 		add("host_id", stringField(), true)
 		add("thread_id", stringField(), true)
