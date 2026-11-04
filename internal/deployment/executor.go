@@ -25,8 +25,9 @@ import (
 var ErrDrainTimeout = errors.New("deployment drain timed out")
 
 const (
-	allowlistedComposeBinary = "/usr/bin/docker"
-	allowlistedCaddyBinary   = "/usr/local/bin/caddy"
+	allowlistedComposeBinary   = "/usr/bin/docker"
+	allowlistedCaddyBinary     = "/usr/local/bin/caddy"
+	deploymentReadinessTimeout = 2 * time.Minute
 )
 
 type DegradedError struct{ Err error }
@@ -375,7 +376,7 @@ func (e *CommandExecutor) caddyArguments(action string) []string {
 
 func (e *CommandExecutor) caddyArgumentsFor(action, configFile string) []string {
 	args := []string{action}
-	if e.CaddyAdminAddress != "" {
+	if action == "reload" && e.CaddyAdminAddress != "" {
 		args = append(args, "--address", e.CaddyAdminAddress)
 	}
 	return append(args, "--config", configFile, "--adapter", "caddyfile")
@@ -634,12 +635,30 @@ func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker boo
 	if baseURL == "" {
 		return ErrExecutorUnavailable
 	}
-	return e.requestStatus(ctx, http.MethodGet, baseURL+"/readyz", nil, func(status int, _ []byte) error {
-		if status < http.StatusOK || status >= http.StatusMultipleChoices {
-			return fmt.Errorf("deployment %s readiness returned HTTP %d", component, status)
+	readinessCtx, cancel := context.WithTimeout(ctx, deploymentReadinessTimeout)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		lastErr = e.requestStatus(readinessCtx, http.MethodGet, baseURL+"/readyz", nil, func(status int, _ []byte) error {
+			if status < http.StatusOK || status >= http.StatusMultipleChoices {
+				return fmt.Errorf("deployment %s readiness returned HTTP %d", component, status)
+			}
+			return nil
+		})
+		if lastErr == nil {
+			return nil
 		}
-		return nil
-	})
+		select {
+		case <-readinessCtx.Done():
+			if errors.Is(readinessCtx.Err(), context.DeadlineExceeded) && lastErr != nil {
+				return fmt.Errorf("deployment %s readiness timed out: %w", component, lastErr)
+			}
+			return readinessCtx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (e *CommandExecutor) verifyVersion(ctx context.Context, baseURL string, operation Operation, component string) error {

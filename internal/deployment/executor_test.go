@@ -65,6 +65,19 @@ func TestNewCommandExecutorPassesCaddyHostToCLI(t *testing.T) {
 	}
 }
 
+func TestNewCommandExecutorOmitsCaddyHostForValidate(t *testing.T) {
+	t.Setenv("LOOMHELM_DEPLOYMENT_CADDY_ADMIN_URL", "http://caddy-control:2019")
+	executor, err := NewCommandExecutorFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := executor.caddyArguments("validate")
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--address") || strings.Contains(joined, "caddy-control:2019") {
+		t.Fatalf("Caddy validate arguments = %v", args)
+	}
+}
+
 func TestCommandExecutorStagesAndDrainsWithFixedHTTPContracts(t *testing.T) {
 	var draining atomic.Bool
 	var drainRequests []string
@@ -122,6 +135,38 @@ func TestCommandExecutorStagesAndDrainsWithFixedHTTPContracts(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(commands[0], " "), "drain-secret") {
 		t.Fatalf("drain secret leaked into Compose argv: %v", commands[0])
+	}
+}
+
+func TestCommandExecutorWaitsForReadiness(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/readyz" {
+			http.NotFound(writer, request)
+			return
+		}
+		if attempts.Add(1) == 1 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	executor := &CommandExecutor{
+		ComposeBinary: "docker",
+		ComposeFile:   "/srv/compose.yaml",
+		ProjectName:   "loomhelm",
+		SlotURLs:      map[string]string{"green": server.URL},
+		Run: func(_ context.Context, _ string, _ ...string) error {
+			return nil
+		},
+	}
+	if err := executor.Execute(context.Background(), Operation{Kind: "stage", Slot: "green"}); err != nil {
+		t.Fatalf("stage error = %v", err)
+	}
+	if attempts.Load() < 2 {
+		t.Fatalf("readiness attempts = %d, want a retry", attempts.Load())
 	}
 }
 
