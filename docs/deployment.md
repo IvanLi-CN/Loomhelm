@@ -4,7 +4,7 @@ Loomhelm deployment control manages one preconfigured execution environment with
 
 ## Current state
 
-The 101 installation is currently a single-slot Compose stack with `server`, `worker`, `web` and PostgreSQL. The production template in `deploy/production/` is a validation-safe target shape; it does not apply changes to 101 and does not contain secrets.
+The deployment contract assumes that an installation is provisioned with the dual-slot Compose topology from the beginning. The production template in `deploy/production/` is a validation-safe shape; it does not apply changes to an installation and does not contain secrets.
 
 The candidate builder emits schema 2. The deployment envelope binds the candidate digest, source SHA, component artifact digests, immutable Server/Worker image references, Web tree digest, state compatibility range and migration mode. A candidate is immutable after publication and must be promoted without rebuilding.
 
@@ -64,7 +64,7 @@ The migration is additive and forward-only. `migration_mode=none` is the default
 
 ## Operator workflow
 
-1. Publish the immutable Web tree at `/srv/loomhelm/web/candidates/<candidate_id>` (or the configured `LOOMHELM_WEB_ROOT`) and verify its deterministic Web digest; the production template mounts this same host directory read-only into Caddy and the controller.
+1. Publish the immutable Web tree at `<LOOMHELM_WEB_ROOT>/candidates/<candidate_id>` and verify its deterministic Web digest; the production template mounts this same host directory read-only into Caddy and the controller.
 2. Register the generated deployment envelope through `POST /api/v1/deployment/candidates`; the controller stores the exact manifest, image digests and compatibility window.
 3. Open the installation Deployment page and inspect active identity, desired versus observed route, traffic shares, sample freshness, shared Worker queue load, per-slot HTTP active requests, generation-attributed Worker capacity, Connector status and the latest audit events.
 4. Select an immutable candidate and run preflight; review compatibility and migration results.
@@ -73,9 +73,9 @@ The migration is additive and forward-only. `migration_mode=none` is the default
 7. If the operation is degraded or unknown, wait for reconcile rather than repeating the action.
 8. Roll back only to a retained compatible candidate and continue to observe Connector recovery separately.
 
-## 101 migration path
+## Installation rollout path
 
-First validate the complete dual-slot stack in the Agent VM. Then add the stable controller in read-only mode to 101, adopt the current single slot as blue with its exact source SHA, artifact digest, Web tree and Worker generation, and enable the dedicated private Caddy admin address. Add green Server/Worker services while preserving PostgreSQL, artifact volumes, secrets, Traefik labels and the existing `/mcp` and `/gateway` paths. Keep both Worker services disabled unless explicitly targeted by the controller's deployment profile. Perform the first real promotion only after a controlled rehearsal proves public route identity, traffic-share movement, per-slot load sampling, WebSocket reconnect, Worker fencing, bounded drain, retained Web fallback and compatible rollback.
+Validate the complete dual-slot stack in the Agent VM before connecting it to an installation. Provision both Server/Worker slots, the stable controller, the private Caddy admin address, shared PostgreSQL, artifact storage and the existing external proxy boundary together. Keep both Worker services disabled unless explicitly targeted by the controller's deployment profile. Perform the first promotion only after a controlled rehearsal proves public route identity, traffic-share movement, per-slot load sampling, WebSocket reconnect, Worker fencing, bounded drain, retained Web fallback and compatible rollback. This contract does not define a single-slot-to-blue-green migration; an installation that cannot satisfy the dual-slot prerequisites is not ready for this deployment path.
 
 ## Validation
 
