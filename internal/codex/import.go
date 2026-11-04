@@ -326,6 +326,10 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			if strings.TrimSpace(file.Path) == "" || file.Size < 0 {
 				return ErrInvalid
 			}
+			if strings.TrimSpace(file.SHA256) == "" && len(file.Content) > 0 {
+				digest := sha256.Sum256(file.Content)
+				file.SHA256 = hex.EncodeToString(digest[:])
+			}
 			if len(file.Content) > 0 && file.Size == 0 {
 				file.Size = int64(len(file.Content))
 			}

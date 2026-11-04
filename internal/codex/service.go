@@ -414,6 +414,10 @@ func (s *Service) UpsertFile(ctx context.Context, input FileInput) error {
 	if strings.TrimSpace(input.HostID) == "" || strings.TrimSpace(input.ThreadID) == "" || strings.TrimSpace(input.Path) == "" || input.Size < 0 {
 		return ErrInvalid
 	}
+	if strings.TrimSpace(input.Sha256) == "" && len(input.Content) > 0 {
+		digest := sha256.Sum256(input.Content)
+		input.Sha256 = hex.EncodeToString(digest[:])
+	}
 	if input.ContentType == "" {
 		input.ContentType = "application/octet-stream"
 	}
