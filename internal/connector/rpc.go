@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultMaxFrameBytes      = 4 << 20
+	defaultMaxFrameBytes      = 32 << 20
 	maxEventQueueBytes        = 64 << 20
 	maxAbandonedRPC           = 4096
 	eventQueueMessageOverhead = 1024

@@ -13,9 +13,9 @@ import (
 
 func TestGatewayKeepsDesktopAttachUnsupportedAndColdResumeExplicit(t *testing.T) {
 	startTransport := newFakeTransport()
-	startTransport.responses["initialize"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"userAgent":"fixture"}`)}}}
+	startTransport.responses["initialize"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"userAgent":"fixture","build":"fixture-build"}`)}}}
 	recoveryTransport := newFakeTransport()
-	recoveryTransport.responses["initialize"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"userAgent":"fixture"}`)}}}
+	recoveryTransport.responses["initialize"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"userAgent":"fixture","build":"fixture-build"}`)}}}
 	recoveryTransport.responses["thread/resume"] = []fakeResult{{message: RPCMessage{Result: json.RawMessage(`{"thread":{"id":"thread-known"}}`)}}}
 	transports := []RPCTransport{startTransport, recoveryTransport}
 	created := 0

@@ -107,9 +107,17 @@ func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
 		t.Fatalf("create migration upgrade provider: %v", err)
 	}
 
-	for _, version := range []int64{17, 18, 19, 20} {
+	for _, version := range []int64{17, 18, 19, 20, 23} {
 		if _, err := migrationProvider.UpTo(ctx, version); err != nil {
 			t.Fatalf("upgrade schema to migration %d: %v", version, err)
+		}
+		if version == 20 {
+			if _, err := migrationSQLDB.ExecContext(ctx, `
+				INSERT INTO execution_sessions (id, external_thread_ref, path, state, generation)
+				VALUES ('legacy-null-host-session', 'legacy-null-host-thread', 'new', 'closed', 'legacy-generation')
+			`); err != nil {
+				t.Fatalf("seed legacy NULL-Host execution session: %v", err)
+			}
 		}
 		var appliedVersion int64
 		if err := migrationSQLDB.QueryRowContext(ctx, `
@@ -167,6 +175,8 @@ func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
 	for _, index := range []string{
 		"host_registrations_connector_device_idx",
 		"host_credentials_connector_device_idx",
+		"execution_sessions_host_thread_idx",
+		"codex_source_events_recovery_idx",
 	} {
 		var exists bool
 		if err := migrationSQLDB.QueryRowContext(ctx, `
@@ -182,6 +192,52 @@ func TestDatabaseUpgradeFromDraftOrderingToConnectorEnrollment(t *testing.T) {
 		if !exists {
 			t.Fatalf("migration upgrade index %q is missing", index)
 		}
+	}
+	for _, table := range []string{
+		"codex_sync_sources",
+		"codex_projects",
+		"codex_threads",
+		"codex_thread_history",
+		"codex_thread_files",
+		"codex_sync_snapshots",
+		"codex_source_events",
+	} {
+		var exists bool
+		if err := migrationSQLDB.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = current_schema() AND table_name = $1
+			)
+		`, table).Scan(&exists); err != nil {
+			t.Fatalf("check migration upgrade table %q: %v", table, err)
+		}
+		if !exists {
+			t.Fatalf("migration upgrade table %q is missing", table)
+		}
+	}
+	var capabilityStates bool
+	if err := migrationSQLDB.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = 'codex_sync_sources'
+			  AND column_name = 'capability_states'
+		)
+	`).Scan(&capabilityStates); err != nil {
+		t.Fatalf("check Codex capability state column: %v", err)
+	}
+	if !capabilityStates {
+		t.Fatal("codex_sync_sources.capability_states is missing")
+	}
+	var hostID *string
+	if err := migrationSQLDB.QueryRowContext(ctx, `
+		SELECT host_id FROM execution_sessions WHERE id = 'legacy-null-host-session'
+	`).Scan(&hostID); err != nil {
+		t.Fatalf("read legacy execution session Host provenance: %v", err)
+	}
+	if hostID != nil {
+		t.Fatalf("legacy execution session unexpectedly received Host %q", *hostID)
 	}
 }
 

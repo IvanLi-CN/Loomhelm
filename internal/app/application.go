@@ -10,6 +10,7 @@ import (
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/codex"
 	"github.com/IvanLi-CN/Loomhelm/internal/deployment"
 	"github.com/IvanLi-CN/Loomhelm/internal/drafts"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
@@ -31,6 +32,7 @@ type applicationServices struct {
 	tasks           *tasks.Service
 	sessions        *sessions.Store
 	hosts           *hosts.Service
+	codex           *codex.Service
 	runHistory      sessionRunStore
 	runRecords      artifactRunRecords
 	drafts          draftStore
@@ -82,6 +84,7 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		return nil, fmt.Errorf("initialize browser authentication: %w", err)
 	}
 	projectService := projects.NewService(pool, identity)
+	hostService := hosts.NewService(pool)
 	var ownerUserIDs []string
 	if len(deploymentOwnerUserIDs) > 0 {
 		ownerUserIDs = deploymentOwnerUserIDs[0]
@@ -96,7 +99,8 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 		projects:   projectService,
 		tasks:      tasks.NewService(pool, identity, projectService),
 		sessions:   sessions.NewStore(pool),
-		hosts:      hosts.NewService(pool),
+		hosts:      hostService,
+		codex:      codex.NewService(pool, identity, hostService, projectService),
 		runHistory: runs.NewStore(pool),
 		runRecords: runs.NewStore(pool),
 		drafts:     drafts.NewStore(pool),
@@ -109,6 +113,9 @@ func (s *applicationServices) handler(control runControlApplication) (http.Handl
 	s.identity.MountAPI(router)
 	deployment.MountAPI(router, s.identity, s.deployment, true)
 	(&hostHTTP{principal: s.identity, registry: s.hosts}).mount(router)
+	if s.codex != nil {
+		s.codex.Mount(router)
+	}
 	s.projects.Mount(router)
 	s.tasks.Mount(router)
 	sessionAccess := s.sessionAccess()

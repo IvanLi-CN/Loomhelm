@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/approvals"
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
+	"github.com/IvanLi-CN/Loomhelm/internal/codex"
 	"github.com/IvanLi-CN/Loomhelm/internal/events"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
@@ -19,6 +21,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/runs"
 	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/jackc/pgx/v5"
@@ -166,6 +169,13 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			db.Close()
 			return nil, serviceErr
 		}
+		recoveryCtx, cancelCodexRecovery := context.WithTimeout(ctx, cfg.StartupBudget())
+		if recoveryErr := services.codex.ReconcileSyncOperations(recoveryCtx); recoveryErr != nil {
+			cancelCodexRecovery()
+			db.Close()
+			return nil, fmt.Errorf("recover Codex sync operations: %w", recoveryErr)
+		}
+		cancelCodexRecovery()
 		if cfg.ArtifactRoot != "" {
 			artifactStore, artifactErr := artifacts.NewStore(db.Pool(), artifacts.Config{
 				Root: cfg.ArtifactRoot,
@@ -204,11 +214,37 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			EventHandler:    transport.HandleEvent,
 			AckHandler:      transport.HandleCommandAck,
 			ArtifactHandler: artifactUploadHandler,
+			SourceHandler: func(sourceCtx context.Context, connection hosts.Connection, notification gateway.SourceNotification) error {
+				err := services.codex.ApplySourceEvent(sourceCtx, connection.HostID, notification.EventID, notification.Kind, notification.ThreadID, notification.Title, notification.Raw)
+				if errors.Is(err, codex.ErrSourceEventPending) {
+					return errors.Join(gateway.ErrSourceEventPending, err)
+				}
+				return err
+			},
+			SourceSnapshotHandler: func(sourceCtx context.Context, connection hosts.Connection, operationID string, payload []byte) error {
+				var snapshot protocol.CodexSourceSnapshot
+				if err := json.Unmarshal(payload, &snapshot); err != nil {
+					return fmt.Errorf("decode recovered Codex source snapshot: %w", err)
+				}
+				snapshot.HostID = connection.HostID
+				// The gateway connection is the trusted source of generation
+				// identity. Ignore any value supplied by the Connector payload.
+				snapshot.ConnectionGeneration = connection.Generation
+				if snapshot.OperationID == "" {
+					snapshot.OperationID = operationID
+				}
+				if snapshot.OperationID != operationID {
+					return fmt.Errorf("recovered Codex source snapshot operation identity mismatch")
+				}
+				return services.codex.ImportSnapshot(sourceCtx, snapshot)
+			},
 		})
 		if err != nil {
 			db.Close()
 			return nil, fmt.Errorf("initialize Connector gateway: %w", err)
 		}
+		services.codex.SetTitleWriter(gatewayCodexTitleWriter{server: runtime.gateway})
+		services.codex.SetSyncRunner(gatewayCodexSyncRunner{server: runtime.gateway})
 		transport.gateway = runtime.gateway
 		authorizer := services.sessionAccess()
 		controller, controllerErr := runs.NewController(runStore, transport, runs.ControllerConfig{

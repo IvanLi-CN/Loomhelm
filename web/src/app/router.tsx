@@ -15,12 +15,14 @@ import { CreateTaskRoute } from "@/routes/CreateTaskRoute";
 import { DeploymentRoute } from "@/routes/DeploymentRoute";
 import { ConversationsRoute } from "@/routes/ConversationsRoute";
 import { DemoProductionConversationRoute } from "@/routes/DemoProductionConversationRoute";
+import { DemoCodexConversationsRoute } from "@/routes/DemoCodexConversationsRoute";
 import { ProjectRoute } from "@/routes/ProjectRoute";
 import { StatusRoute } from "@/routes/StatusRoute";
 import { TasksRoute } from "@/routes/TasksRoute";
 import { ConversationWorkspaceRoute, TaskWorkspaceRoute } from "@/routes/WorkspaceRoute";
 import { WorkbenchRoute } from "@/routes/WorkbenchRoute";
 import { ProductionConversationWorkspace } from "@/features/conversations/ProductionConversationWorkspace";
+import { CodexConversationsRoute } from "@/features/codex/CodexConversations";
 import { createPublishedSessionApi } from "@/features/sessions/api";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 
@@ -40,7 +42,7 @@ function RootRoute() {
 function ConversationsEntryRoute() {
   return useOptionalDemoRuntime()
     ? <ConversationsRoute />
-    : <ProductionNotReadyRoute eyebrow="CONVERSATIONS" title="对话服务尚未接通" description="当前显示真实的项目和任务数据；对话功能将在服务可用后开放。" />;
+    : <CodexConversationsRoute />;
 }
 
 function CreateConversationEntryRoute() {
@@ -96,6 +98,12 @@ const demoProductionConversationRoute = createRoute({
   component: DemoProductionConversationRoute
 });
 
+const demoCodexConversationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/demo/codex-conversations",
+  component: DemoCodexConversationsRoute
+});
+
 const tasksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks",
@@ -146,6 +154,7 @@ const routeTree = rootRoute.addChildren([
   statusRoute,
   deploymentRoute,
   demoProductionConversationRoute,
+  demoCodexConversationsRoute,
   tasksRoute,
   createTaskRoute,
   taskWorkspaceRoute,

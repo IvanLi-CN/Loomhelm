@@ -57,34 +57,42 @@ var (
 	// to distinguish a confirmed response from a malformed or ambiguous one.
 	// Empty-response mutations intentionally remain outside this map.
 	mutationResponseFields = map[string]string{
-		"createUserCredential": "credential",
-		"createProject":        "project",
-		"updateProject":        "project",
-		"grantProjectMember":   "member",
-		"createTask":           "task",
-		"updateTask":           "task",
-		"createSession":        "session",
-		"bindSessionTask":      "session",
-		"submitRun":            "ack",
-		"updateDraft":          "draft",
-		"resolveApproval":      "ack",
-		"interruptRun":         "ack",
-		"grantHostShare":       "share",
+		"createUserCredential":         "credential",
+		"createProject":                "project",
+		"updateProject":                "project",
+		"grantProjectMember":           "member",
+		"createTask":                   "task",
+		"updateTask":                   "task",
+		"createSession":                "session",
+		"bindSessionTask":              "session",
+		"submitRun":                    "ack",
+		"updateDraft":                  "draft",
+		"resolveApproval":              "ack",
+		"interruptRun":                 "ack",
+		"grantHostShare":               "share",
+		"updateCodexConversationTitle": "conversation",
+		"mapCodexProject":              "project",
+		"bindCodexConversation":        "conversation",
+		"syncCodex":                    "",
 	}
 	mutationResponseRequiredFields = map[string][]string{
-		"createUserCredential": {"id", "name", "project_ids", "created_at", "token"},
-		"createProject":        {"id", "name", "created_at", "updated_at"},
-		"updateProject":        {"id", "name", "created_at", "updated_at"},
-		"grantProjectMember":   {"project_id", "user_id", "role", "created_at"},
-		"createTask":           {"id", "project_id", "title", "goal", "status", "created_at", "updated_at"},
-		"updateTask":           {"id", "project_id", "title", "goal", "status", "created_at", "updated_at"},
-		"createSession":        {"id", "path", "state", "external_thread_ref", "created_at", "updated_at"},
-		"bindSessionTask":      {"id", "path", "state", "external_thread_ref", "created_at", "updated_at"},
-		"submitRun":            {"command_id", "state", "received_at", "deduplicated"},
-		"updateDraft":          {"session_id", "content", "revision", "updated_at"},
-		"resolveApproval":      {"command_id", "state", "received_at", "deduplicated"},
-		"interruptRun":         {"command_id", "state", "received_at", "deduplicated"},
-		"grantHostShare":       {"host_id", "user_id", "granted_by", "created_at"},
+		"createUserCredential":         {"id", "name", "project_ids", "created_at", "token"},
+		"createProject":                {"id", "name", "created_at", "updated_at"},
+		"updateProject":                {"id", "name", "created_at", "updated_at"},
+		"grantProjectMember":           {"project_id", "user_id", "role", "created_at"},
+		"createTask":                   {"id", "project_id", "title", "goal", "status", "created_at", "updated_at"},
+		"updateTask":                   {"id", "project_id", "title", "goal", "status", "created_at", "updated_at"},
+		"createSession":                {"id", "path", "state", "external_thread_ref", "created_at", "updated_at"},
+		"bindSessionTask":              {"id", "path", "state", "external_thread_ref", "created_at", "updated_at"},
+		"submitRun":                    {"command_id", "state", "received_at", "deduplicated"},
+		"updateDraft":                  {"session_id", "content", "revision", "updated_at"},
+		"resolveApproval":              {"command_id", "state", "received_at", "deduplicated"},
+		"interruptRun":                 {"command_id", "state", "received_at", "deduplicated"},
+		"grantHostShare":               {"host_id", "user_id", "granted_by", "created_at"},
+		"updateCodexConversationTitle": {"host_id", "thread_id", "conversation_title", "history_state", "files_complete", "read_only", "title_sync_state", "as_of", "updated_at"},
+		"bindCodexConversation":        {"host_id", "thread_id", "conversation_title", "history_state", "files_complete", "read_only", "title_sync_state", "as_of", "updated_at"},
+		"mapCodexProject":              {"host_id", "project_id", "name", "snapshot_state", "as_of"},
+		"syncCodex":                    {"operation_id", "state"},
 	}
 )
 
@@ -434,6 +442,15 @@ func validToolResponse(operationID string, body []byte) bool {
 	if json.Unmarshal(body, &envelope) != nil || envelope == nil {
 		return false
 	}
+	if field == "" {
+		for _, requiredField := range requiredFields {
+			value, ok := envelope[requiredField]
+			if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return false
+			}
+		}
+		return true
+	}
 	value, ok := envelope[field]
 	if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 		return false
@@ -473,6 +490,12 @@ func validToolResponse(operationID string, body []byte) bool {
 	case "updateDraft":
 		var response protocol.DraftResponse
 		return json.Unmarshal(body, &response) == nil && validDraft(response.Draft)
+	case "updateCodexConversationTitle", "bindCodexConversation":
+		var response protocol.CodexConversationResponse
+		return json.Unmarshal(body, &response) == nil && response.Conversation.HostID != "" && response.Conversation.ThreadID != ""
+	case "mapCodexProject":
+		var response protocol.CodexProjectResponse
+		return json.Unmarshal(body, &response) == nil && response.Project.HostID != "" && response.Project.ProjectID != ""
 	default:
 		return false
 	}
@@ -1364,13 +1387,15 @@ func rpcCodeForHTTP(status int) int {
 }
 
 func errorCodeForHTTP(status int) protocol.ErrorCode {
-	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return protocol.ErrorCodeUnauthorized
-	case http.StatusNotFound:
+	case status == http.StatusNotFound:
 		return protocol.ErrorCodeNotFound
-	case http.StatusConflict:
+	case status == http.StatusConflict:
 		return protocol.ErrorCodeConflict
+	case status >= http.StatusInternalServerError:
+		return protocol.ErrorCodeServiceUnavailable
 	default:
 		return protocol.ErrorCodeInvalidRequest
 	}

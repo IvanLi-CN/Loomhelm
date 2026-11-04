@@ -1276,6 +1276,9 @@ func (t *connectorSessionTransport) Call(_ context.Context, method string, _ jso
 		t.threadIndex++
 	}
 	t.mu.Unlock()
+	if method == "initialize" {
+		return connectorruntime.RPCMessage{Result: json.RawMessage(`{"protocolVersion":"v2","serverInfo":{"name":"fixture","build":"fixture-build","version":"fixture"},"capabilities":{"experimentalApi":true}}`)}, nil
+	}
 	if method == "thread/start" {
 		if threadID == "" {
 			threadID = "thread-explicit"

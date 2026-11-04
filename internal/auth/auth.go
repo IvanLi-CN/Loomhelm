@@ -68,7 +68,7 @@ type Provider interface {
 	Exchange(context.Context, string, string) (Identity, error)
 }
 
-// ConnectorEnrollment issues an independent host deployment credential after
+// ConnectorEnrollment issues an independent Host credential after
 // a browser user authorizes a local Connector device.
 type ConnectorEnrollment interface {
 	EnrollConnector(context.Context, string, string, string, string) (ConnectorCredential, error)

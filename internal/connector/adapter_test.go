@@ -44,7 +44,13 @@ type fakeResult struct {
 const adapterTestSynchronizationTimeout = 5 * time.Second
 
 func newFakeTransport() *fakeTransport {
-	return &fakeTransport{responses: make(map[string][]fakeResult), responseEvents: make(map[string]RPCMessage), events: make(chan RPCMessage, 32)}
+	return &fakeTransport{
+		responses: map[string][]fakeResult{
+			"initialize": {{message: RPCMessage{Result: json.RawMessage(`{"userAgent":"fixture","build":"fixture-build"}`)}}},
+		},
+		responseEvents: make(map[string]RPCMessage),
+		events:         make(chan RPCMessage, 32),
+	}
 }
 
 func (f *fakeTransport) Call(_ context.Context, method string, params json.RawMessage) (RPCMessage, error) {

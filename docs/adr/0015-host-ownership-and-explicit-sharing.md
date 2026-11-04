@@ -24,15 +24,15 @@ Connector device approval creates a new Host owned by the approving user unless 
 
 Each device authorization is also the idempotency key for its Connector enrollment. Migration 00020 binds at most one newly created Host and one credential to that authorization. Retries after a claim lease expires, a committed completion with a lost response or a Connector restart reuse those rows and derive the same opaque token from the authorization code and durable identities. A completed authorization may replay during the bounded cleanup grace period after its short device lifetime, while an uncompleted authorization still expires at that lifetime; the raw code and token are never stored in PostgreSQL, while the Connector may retain the raw code in a short-lived mode-0600 pending file until credential-cache publication succeeds. A local cache publication failure therefore remains recoverable through the same enrollment, followed by owner-authorized revocation if needed.
 
-Host inventory, credential and share operations are available through authenticated REST and MCP with the same application authorization. Host administration requires an unrestricted user principal; project-scoped bearers and project membership cannot be used as an installation-management substitute. No browser Host-management surface is introduced by this decision.
+Host inventory, credential and share operations are available through authenticated REST and MCP with the same application authorization. Host administration requires an authenticated user principal without a project scope; only the Host owner may mutate credentials or shares, while an explicitly shared user may use the Host. Project-scoped bearers and project membership cannot substitute for Host-owner authorization. No browser Host-management surface is introduced by this decision.
 
 ## Alternatives Rejected
 
 - Keep one global configured Host: rejected because ownership, credential revocation and multi-user routing remain ambiguous.
 - Infer Host access from Project membership: rejected because project organization and execution-machine authority are separate boundaries.
-- Let shared users administer credentials or shares: rejected because delegation would allow a non-owner to create or revoke deployment authority.
+- Let shared users administer credentials or shares: rejected because delegation would allow a non-owner to create or revoke Host credential or share authority.
 - Accept a caller-selected Host on every session request: rejected because it widens the routing surface and makes default authorization easy to bypass.
-- Automatically assign legacy singleton rows to the first user: rejected because migration cannot infer ownership without disclosing or transferring deployment authority.
+- Automatically assign legacy singleton rows to the first user: rejected because migration cannot infer ownership without disclosing or transferring Host ownership.
 
 ## Compatibility
 
