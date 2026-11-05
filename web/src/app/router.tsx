@@ -26,13 +26,54 @@ import { CodexConversationsRoute } from "@/features/codex/CodexConversations";
 import { createPublishedSessionApi } from "@/features/sessions/api";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 
-function ProductionNotReadyRoute({ eyebrow, title, description, to = "/tasks", linkLabel = "查看任务" }: { eyebrow: string; title: string; description: string; to?: "/" | "/tasks"; linkLabel?: string }) {
-  return <section className="page-section unavailable-page"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p><Button asChild variant="secondary" className="button button-secondary"><Link to={to}>{linkLabel}</Link></Button></section>;
-}
-
 function ProductionWorkbenchRoute() {
+  const navigate = useNavigate();
   const assembly = useOptionalProductionApi();
-  return <ProductionNotReadyRoute eyebrow="WORKBENCH" title="工作台等待会话接入" description={assembly?.auth.message ?? "当前已接入浏览器身份与项目、任务数据；会话、审批和执行能力将在服务可用后显示。"} />;
+  const source = useOptionalProjectTaskSource();
+  const api = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
+
+  if (!source || source.status === "loading") {
+    return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">WORKBENCH</span><h1>正在读取工作台</h1><p>正在读取项目和任务范围，随后可以创建新的 Session。</p></section>;
+  }
+  if (source.status === "error" || source.status === "permission-changed") {
+    return <section className="page-section unavailable-page"><span className="eyebrow">WORKBENCH</span><h1>工作台暂时不可用</h1><p>{source.notice ?? "项目和任务范围尚未完成核对，当前不会显示未确认的数据。"}</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">前往任务列表核对</Link></Button></section>;
+  }
+
+  return (
+    <section className="page-section grid min-w-0 gap-6">
+      <div className="page-heading">
+        <div><span className="eyebrow">WORKBENCH</span><h1>工作台</h1><p>从这里创建新的 Session，或进入已有的项目、任务和 Codex 对话。</p></div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="secondary" className="button button-secondary"><Link to="/conversations">查看 Codex 对话</Link></Button>
+          <Button asChild variant="secondary" className="button button-secondary"><Link to="/deployment">部署控制</Link></Button>
+        </div>
+      </div>
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
+        <ProductionConversationWorkspace
+          api={api}
+          conversationTitle="新建独立会话"
+          onSessionCreated={(sessionId, initialRunId) => navigate({ params: { conversationId: sessionId }, search: initialRunId ? { runId: initialRunId } : {}, to: "/conversations/$conversationId" })}
+          principalId={assembly?.auth.principalId}
+          projectCanWrite={(projectId) => source.getProjectPermissions(projectId).canWrite}
+          projectOptions={source.projects}
+          readOnly={assembly?.permissions.isReadOnly ?? true}
+        />
+        <aside className="grid content-start gap-4" aria-label="工作台状态">
+          <section className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[var(--shadow)]">
+            <span className="section-kicker">执行前提</span>
+            <h2 className="text-base font-semibold text-[var(--ink)]">Connector</h2>
+            <p className="text-xs leading-5 text-[var(--muted)]">新建 Desktop 对话需要已注册的 Connector。Connector 运行在执行机器上，不属于蓝绿 Web、Server、Worker 槽位。</p>
+            <Link to="/deployment" className="inline-link">查看部署状态</Link>
+          </section>
+          <section className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[var(--shadow)]">
+            <span className="section-kicker">当前范围</span>
+            <dl className="info-facts"><dt>项目</dt><dd>{source.projects.length}</dd><dt>任务</dt><dd>{source.tasks.length}</dd></dl>
+            <Link to="/tasks" className="inline-link">打开任务列表</Link>
+          </section>
+        </aside>
+      </div>
+    </section>
+  );
 }
 
 function RootRoute() {
