@@ -31,6 +31,10 @@ describe("production session project selection", () => {
     expect(shouldRetainSessionCreationIntent(false, new ApiClientError(403, { code: "forbidden" }))).toBe(false);
   });
 
+  test("retains a creation intent when local persistence fails after the Session response", () => {
+    expect(shouldRetainSessionCreationIntent(false, new Error("local draft persistence failed"))).toBe(true);
+  });
+
   test("reads every authorized Session page", async () => {
     const cursors: Array<string | undefined> = [];
     const session = (id: string) => ({

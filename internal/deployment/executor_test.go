@@ -1052,6 +1052,44 @@ func TestCommandExecutorWorkerVersionFailureIsObservationUnavailable(t *testing.
 	}
 }
 
+func TestCommandExecutorWorkerReadinessFailureIsObservationUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/readyz" {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+
+	executor := &CommandExecutor{
+		WorkerURLs:       map[string]string{"green": server.URL},
+		ReadinessTimeout: 10 * time.Millisecond,
+	}
+	err := executor.waitWorkerIdentity(context.Background(), Operation{Slot: "green"})
+	if err == nil || !errors.Is(err, errWorkerObservationUnavailable) {
+		t.Fatalf("waitWorkerIdentity() error = %v, want unavailable observation error", err)
+	}
+}
+
+func TestCommandExecutorWorkerReadinessCancellationIsObservationUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/readyz" {
+			<-request.Context().Done()
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := (&CommandExecutor{WorkerURLs: map[string]string{"green": server.URL}}).waitWorkerIdentity(ctx, Operation{Slot: "green"})
+	if err == nil || !errors.Is(err, errWorkerObservationUnavailable) {
+		t.Fatalf("waitWorkerIdentity() error = %v, want unavailable observation error", err)
+	}
+}
+
 func TestCommandExecutorRollbackRestoresServerBeforeWorker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {

@@ -1804,6 +1804,14 @@ export function ProductionConversationWorkspace({
     if (!mountedRef.current) {
       throw new Error("Session 已创建但工作区已卸载；已保留同一创建命令，请重新进入后完成对账。");
     }
+    const initialFailedRunHasPrompt = Boolean(initialAck && initialRunFailed && initialPrompt);
+    const initialFailedRunDraftKey = initialFailedRunHasPrompt ? getDraftKey(principalId, response.session.id) : undefined;
+    const initialFailedRunDraftStateKey = initialFailedRunHasPrompt ? getDraftStateKey(principalId, response.session.id) : undefined;
+    const initialFailedRunModificationOrder = initialFailedRunHasPrompt ? adapters.draft.nextModificationOrder(response.session.id) : undefined;
+    const initialFailedRunDraftStored = !initialFailedRunHasPrompt || writeStoredDraft(initialFailedRunDraftKey, initialFailedRunDraftStateKey, initialPrompt, { baseRevision: 0, content: initialPrompt, dirty: true, modificationOrder: initialFailedRunModificationOrder });
+    if (initialFailedRunHasPrompt && !initialFailedRunDraftStored) {
+      throw new Error("Session 已创建但首个 Run 已明确失败；原始提示无法持久化，已保留同一创建命令。请恢复浏览器存储后重新进入会话完成恢复。");
+    }
     if (beforeCommit && !(await beforeCommit())) return false;
     if (!mountedRef.current) {
       throw new Error("Session 已创建但工作区已卸载；已保留同一创建命令，请重新进入后完成对账。");
@@ -1844,14 +1852,11 @@ export function ProductionConversationWorkspace({
       setUncertainRunCommandId(undefined);
       pendingRunSubmission.current = undefined;
       if (initialPrompt) {
-        const createdDraftKey = getDraftKey(principalId, response.session.id);
-        const createdDraftStateKey = getDraftStateKey(principalId, response.session.id);
         draftRef.current = initialPrompt;
         draftInputSinceReadRef.current = true;
         draftDirtyRef.current = true;
         setDraft(initialPrompt);
-        const initialModificationOrder = adapters.draft.nextModificationOrder(response.session.id);
-        const storedInitialDraft = writeStoredDraft(createdDraftKey, createdDraftStateKey, initialPrompt, { baseRevision: 0, content: initialPrompt, dirty: true, modificationOrder: initialModificationOrder });
+        const storedInitialDraft = initialFailedRunDraftStored;
         if (!storedInitialDraft) {
           setDraftReadUncertain(true);
           setDraftFailure("本地草稿快照无法持久化；原始提示仅保留在当前页面，恢复浏览器存储后再试，刷新前不会自动重放。");

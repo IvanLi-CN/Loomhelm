@@ -724,7 +724,7 @@ func (e *CommandExecutor) probeServerIdentity(ctx context.Context, operation Ope
 
 func (e *CommandExecutor) waitWorkerIdentity(ctx context.Context, operation Operation) error {
 	if err := e.waitReady(ctx, operation.Slot, true); err != nil {
-		return err
+		return errors.Join(errWorkerObservationUnavailable, fmt.Errorf("deployment Worker readiness observation failed: %w", err))
 	}
 	if err := e.verifyVersion(ctx, e.WorkerURLs[operation.Slot], operation, "worker"); err != nil {
 		if errors.Is(err, errComponentIdentityMismatch) {
