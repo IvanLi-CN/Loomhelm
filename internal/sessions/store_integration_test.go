@@ -126,6 +126,13 @@ func TestCreationIntentLifecycleAndCompatibility(t *testing.T) {
 	if unknownRetry.State != IntentStateUnknown || unknownRetry.SessionID != input.SessionID {
 		t.Fatalf("unknown retry = %+v", unknownRetry)
 	}
+	byCommand, err := store.GetIntentByCreatorAndCommand(ctx, ids.user, input.CommandID)
+	if err != nil || byCommand.SessionID != input.SessionID {
+		t.Fatalf("creator-scoped command lookup = %+v, error = %v", byCommand, err)
+	}
+	if _, err := store.GetIntentByCreatorAndCommand(ctx, ids.user+"-other", input.CommandID); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("foreign creator command lookup error = %v, want ErrSessionNotFound", err)
+	}
 
 	active, err := store.ActivateIntent(ctx, ActivationInput{
 		SessionID:           input.SessionID,

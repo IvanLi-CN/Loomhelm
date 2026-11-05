@@ -362,6 +362,10 @@ function isUnknownSessionCreationError(error: unknown): boolean {
   return body?.code === "unknown_result" || error.status >= 500 || error.status === 408 || error.status === 504;
 }
 
+export function shouldRetainSessionCreationIntent(wasUncertain: boolean, error: unknown): boolean {
+  return wasUncertain || isUnknownSessionCreationError(error);
+}
+
 function isApiAccessFailure(error: unknown): boolean {
   return error instanceof ApiClientError && (error.status === 403 || error.status === 404);
 }
@@ -489,7 +493,7 @@ export function ProductionSessionCreationPanel({
       setCreationUncertain(false);
       clearStoredIntent(storageKey);
     } catch (error) {
-      const uncertain = isUnknownSessionCreationError(error);
+      const uncertain = shouldRetainSessionCreationIntent(creationUncertain, error);
       setCreationUncertain(uncertain);
       if (uncertain) {
         const pendingIntent = { ...intent, uncertain: true };

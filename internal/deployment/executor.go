@@ -25,12 +25,14 @@ import (
 var ErrDrainTimeout = errors.New("deployment drain timed out")
 
 const (
-	allowlistedComposeBinary   = "/usr/bin/docker"
-	allowlistedCaddyBinary     = "/usr/local/bin/caddy"
-	deploymentReadinessTimeout = 10 * time.Minute
+	allowlistedComposeBinary     = "/usr/bin/docker"
+	allowlistedCaddyBinary       = "/usr/local/bin/caddy"
+	deploymentReadinessTimeout   = 10 * time.Minute
+	deploymentPublicProbeTimeout = 30 * time.Second
 )
 
 var errNonRetryableReadiness = errors.New("deployment readiness failure is not retryable")
+var errRetryablePublicProbe = errors.New("public deployment probe is retryable")
 
 type DegradedError struct{ Err error }
 
@@ -73,23 +75,24 @@ func (e *DeterministicError) Unwrap() error {
 // only a registered candidate and slot; it can never provide a shell string,
 // Compose flag, binary path or Caddy endpoint.
 type CommandExecutor struct {
-	ComposeBinary     string
-	ComposeFile       string
-	ComposeEnvFile    string
-	ProjectName       string
-	CaddyBinary       string
-	CaddyFile         string
-	CaddyTemplate     string
-	CaddyAdminAddress string
-	PublicURL         string
-	DrainToken        string
-	WebRoot           string
-	SlotURLs          map[string]string
-	WorkerURLs        map[string]string
-	HTTPClient        *http.Client
-	ReadinessTimeout  time.Duration
-	DrainTimeout      time.Duration
-	Run               func(context.Context, string, ...string) error
+	ComposeBinary      string
+	ComposeFile        string
+	ComposeEnvFile     string
+	ProjectName        string
+	CaddyBinary        string
+	CaddyFile          string
+	CaddyTemplate      string
+	CaddyAdminAddress  string
+	PublicURL          string
+	DrainToken         string
+	WebRoot            string
+	SlotURLs           map[string]string
+	WorkerURLs         map[string]string
+	HTTPClient         *http.Client
+	ReadinessTimeout   time.Duration
+	PublicProbeTimeout time.Duration
+	DrainTimeout       time.Duration
+	Run                func(context.Context, string, ...string) error
 
 	observationMu     sync.Mutex
 	observationSample *observationSample
@@ -739,24 +742,92 @@ func (e *CommandExecutor) verifyVersion(ctx context.Context, baseURL string, ope
 }
 
 func (e *CommandExecutor) probePublic(ctx context.Context, operation Operation) error {
+	timeout := e.PublicProbeTimeout
+	if timeout <= 0 {
+		timeout = deploymentPublicProbeTimeout
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		lastErr = e.probePublicOnce(probeCtx, operation)
+		if lastErr == nil {
+			return nil
+		}
+		if !errors.Is(lastErr, errRetryablePublicProbe) {
+			return lastErr
+		}
+		select {
+		case <-probeCtx.Done():
+			if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("public deployment probe timed out: %w", lastErr)
+			}
+			return probeCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *CommandExecutor) probePublicOnce(ctx context.Context, operation Operation) error {
 	baseURL := strings.TrimRight(e.PublicURL, "/")
 	if baseURL == "" {
 		return ErrExecutorUnavailable
 	}
-	if err := e.verifyVersion(ctx, baseURL, operation, "public Server"); err != nil {
+	var version struct {
+		CandidateSourceSHA string `json:"candidate_source_sha"`
+		ArtifactDigest     string `json:"artifact_digest"`
+	}
+	if err := e.requestPublicStatus(ctx, http.MethodGet, baseURL+"/version", nil, func(status int, body []byte) error {
+		if status != http.StatusOK {
+			err := fmt.Errorf("deployment public Server version returned HTTP %d", status)
+			if isRetryablePublicProbeStatus(status) {
+				return fmt.Errorf("%w: %s", errRetryablePublicProbe, err)
+			}
+			return err
+		}
+		return json.Unmarshal(body, &version)
+	}); err != nil {
 		return err
 	}
+	if version.CandidateSourceSHA != operation.CandidateSourceSHA || version.ArtifactDigest != operation.ArtifactDigest {
+		return errors.New("deployment public Server identity does not match candidate")
+	}
 	for _, path := range []string{"/readyz", "/mcp", "/gateway"} {
-		if err := e.requestStatus(ctx, http.MethodGet, baseURL+path, nil, func(status int, _ []byte) error {
-			if (status >= http.StatusMultipleChoices && status < http.StatusBadRequest) || status == http.StatusNotFound || status >= http.StatusInternalServerError {
-				return fmt.Errorf("public deployment route %s returned HTTP %d", path, status)
-			}
-			return nil
+		if err := e.requestPublicStatus(ctx, http.MethodGet, baseURL+path, nil, func(status int, _ []byte) error {
+			return publicProbeRouteStatusError(path, status)
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func publicProbeRouteStatusError(path string, status int) error {
+	if path == "/readyz" && status >= http.StatusOK && status < http.StatusMultipleChoices {
+		return nil
+	}
+	if isRetryablePublicProbeStatus(status) {
+		err := fmt.Errorf("public deployment route %s returned HTTP %d", path, status)
+		return fmt.Errorf("%w: %s", errRetryablePublicProbe, err)
+	}
+	if path != "/readyz" && status >= http.StatusOK && status < http.StatusMultipleChoices {
+		return nil
+	}
+	if path != "/readyz" && status >= http.StatusBadRequest && status < http.StatusInternalServerError && status != http.StatusNotFound {
+		return nil
+	}
+	return fmt.Errorf("public deployment route %s returned HTTP %d", path, status)
+}
+
+func isRetryablePublicProbeStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *CommandExecutor) drain(ctx context.Context, slot string) error {
@@ -842,6 +913,26 @@ func (e *CommandExecutor) requestStatus(ctx context.Context, method, rawURL stri
 }
 
 func (e *CommandExecutor) request(_ context.Context, request *http.Request, check func(int, []byte) error) error {
+	status, body, err := e.doRequest(request)
+	if err != nil {
+		return err
+	}
+	return check(status, body)
+}
+
+func (e *CommandExecutor) requestPublicStatus(ctx context.Context, method, rawURL string, body io.Reader, check func(int, []byte) error) error {
+	request, err := http.NewRequestWithContext(ctx, method, rawURL, body)
+	if err != nil {
+		return err
+	}
+	status, responseBody, err := e.doRequest(request)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errRetryablePublicProbe, err)
+	}
+	return check(status, responseBody)
+}
+
+func (e *CommandExecutor) doRequest(request *http.Request) (int, []byte, error) {
 	client := e.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
@@ -852,14 +943,14 @@ func (e *CommandExecutor) request(_ context.Context, request *http.Request, chec
 	}
 	response, err := clientCopy.Do(request)
 	if err != nil {
-		return fmt.Errorf("deployment HTTP request failed: %w", err)
+		return 0, nil, fmt.Errorf("deployment HTTP request failed: %w", err)
 	}
 	defer response.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 	if readErr != nil {
-		return readErr
+		return 0, nil, readErr
 	}
-	return check(response.StatusCode, body)
+	return response.StatusCode, body, nil
 }
 
 func validCandidateID(value string) bool {

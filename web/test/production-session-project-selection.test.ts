@@ -1,6 +1,7 @@
+import { ApiClientError } from "@loomhelm/api-client";
 import { describe, expect, test } from "bun:test";
 
-import { normalizeProjectSelection } from "../src/features/conversations/ProductionConversationWorkspace";
+import { normalizeProjectSelection, shouldRetainSessionCreationIntent } from "../src/features/conversations/ProductionConversationWorkspace";
 import { listAllSessions } from "../src/features/conversations/session-list";
 
 describe("production session project selection", () => {
@@ -18,6 +19,11 @@ describe("production session project selection", () => {
 
   test("preserves an uncertain project-scoped intent while projects reload", () => {
     expect(normalizeProjectSelection("project-a", undefined, [], true)).toBe("project-a");
+  });
+
+  test("retains an uncertain creation intent when its original Host is no longer authorized", () => {
+    expect(shouldRetainSessionCreationIntent(true, new ApiClientError(403, { code: "forbidden" }))).toBe(true);
+    expect(shouldRetainSessionCreationIntent(false, new ApiClientError(403, { code: "forbidden" }))).toBe(false);
   });
 
   test("reads every authorized Session page", async () => {

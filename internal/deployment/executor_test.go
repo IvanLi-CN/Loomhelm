@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+type failOnceRoundTripper struct {
+	failed atomic.Bool
+	next   http.RoundTripper
+}
+
+func (r *failOnceRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	if r.failed.CompareAndSwap(false, true) {
+		return nil, errors.New("temporary public proxy failure")
+	}
+	return r.next.RoundTrip(request)
+}
+
 func TestCommandExecutorUsesOnlyAllowlistedArguments(t *testing.T) {
 	var binary string
 	var args []string
@@ -327,6 +339,92 @@ func TestCommandExecutorRejectsPublicRouteRedirect(t *testing.T) {
 	}
 	if redirectTargetRequests.Load() != 0 {
 		t.Fatalf("public probe followed redirect %d times", redirectTargetRequests.Load())
+	}
+}
+
+func TestCommandExecutorRetriesTransientPublicProbe(t *testing.T) {
+	var versionRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/version":
+			if versionRequests.Add(1) == 1 {
+				writer.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		case "/readyz", "/mcp", "/gateway":
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{PublicURL: server.URL, PublicProbeTimeout: 500 * time.Millisecond}).probePublic(context.Background(), Operation{
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+	})
+	if err != nil {
+		t.Fatalf("probePublic() error = %v, want transient 502 retry", err)
+	}
+	if versionRequests.Load() != 2 {
+		t.Fatalf("public version requests = %d, want one retry", versionRequests.Load())
+	}
+}
+
+func TestCommandExecutorRetriesPublicProbeTransportFailure(t *testing.T) {
+	var versionRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/version":
+			versionRequests.Add(1)
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		case "/readyz", "/mcp", "/gateway":
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	transport := &failOnceRoundTripper{next: http.DefaultTransport}
+	err := (&CommandExecutor{
+		PublicURL:          server.URL,
+		HTTPClient:         &http.Client{Transport: transport},
+		PublicProbeTimeout: 500 * time.Millisecond,
+	}).probePublic(context.Background(), Operation{
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+	})
+	if err != nil {
+		t.Fatalf("probePublic() error = %v, want transient transport retry", err)
+	}
+	if versionRequests.Load() != 1 {
+		t.Fatalf("public version requests = %d, want one successful request after transport retry", versionRequests.Load())
+	}
+}
+
+func TestCommandExecutorRejectsUnexpectedPublicReadinessStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/version":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		case "/readyz":
+			writer.WriteHeader(http.StatusForbidden)
+		default:
+			writer.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{PublicURL: server.URL, PublicProbeTimeout: 500 * time.Millisecond}).probePublic(context.Background(), Operation{
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+	})
+	if err == nil || !strings.Contains(err.Error(), "public deployment route /readyz returned HTTP 403") {
+		t.Fatalf("probePublic() error = %v, want unexpected readiness status rejection", err)
 	}
 }
 

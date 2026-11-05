@@ -316,16 +316,18 @@ func (s *Store) GetIntent(ctx context.Context, sessionID string) (CreationIntent
 	return record.Intent, nil
 }
 
-// GetIntentByCommand resolves the existing session-creation identity without
-// inventing a platform execution command row for a still-unconfirmed session.
-func (s *Store) GetIntentByCommand(ctx context.Context, commandID string) (CreationIntent, error) {
+// GetIntentByCreatorAndCommand resolves a caller-scoped session-creation
+// identity without inventing a platform execution command row for a
+// still-unconfirmed session.
+func (s *Store) GetIntentByCreatorAndCommand(ctx context.Context, creatorUserID, commandID string) (CreationIntent, error) {
 	if err := s.ready(ctx); err != nil {
 		return CreationIntent{}, err
 	}
-	if strings.TrimSpace(commandID) == "" {
-		return CreationIntent{}, fmt.Errorf("%w: command id is required", ErrInvalidSession)
+	creatorUserID, commandID = strings.TrimSpace(creatorUserID), strings.TrimSpace(commandID)
+	if creatorUserID == "" || commandID == "" {
+		return CreationIntent{}, fmt.Errorf("%w: creator user id and command id are required", ErrInvalidSession)
 	}
-	record, err := scanIntent(s.pool.QueryRow(ctx, intentQuery+` WHERE session.creation_command_id = $1`, commandID))
+	record, err := scanIntent(s.pool.QueryRow(ctx, intentQuery+` WHERE session.creator_user_id = $1 AND session.creation_command_id = $2`, creatorUserID, commandID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CreationIntent{}, ErrSessionNotFound
 	}

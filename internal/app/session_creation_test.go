@@ -115,8 +115,9 @@ func (f *fakeSessionCreationRecords) Get(_ context.Context, sessionID string) (s
 }
 
 type fakeSessionCreationHost struct {
-	host  hosts.Host
-	calls int
+	host         hosts.Host
+	calls        int
+	authorizeErr error
 }
 
 func (f *fakeSessionCreationHost) ConfiguredHostForUser(context.Context, string) (hosts.Host, error) {
@@ -125,7 +126,16 @@ func (f *fakeSessionCreationHost) ConfiguredHostForUser(context.Context, string)
 }
 
 func (f *fakeSessionCreationHost) AuthorizeUserTx(context.Context, pgx.Tx, string, string) error {
-	return nil
+	return f.authorizeErr
+}
+
+func (f *fakeSessionCreationRecords) GetIntentByCreatorAndCommand(_ context.Context, creatorUserID, commandID string) (sessions.CreationIntent, error) {
+	for _, intent := range f.intents {
+		if intent.CreatorUserID == creatorUserID && intent.CommandID == commandID {
+			return intent, nil
+		}
+	}
+	return sessions.CreationIntent{}, sessions.ErrSessionNotFound
 }
 
 type fakeSessionCreationHostWithoutTransactionAuthorization struct {
@@ -138,12 +148,14 @@ func (f fakeSessionCreationHostWithoutTransactionAuthorization) ConfiguredHostFo
 
 type fakeSessionCreationTransport struct {
 	commands []protocol.Command
+	hostIDs  []string
 	ack      protocol.CommandAck
 	err      error
 }
 
-func (f *fakeSessionCreationTransport) SendSessionCommand(_ context.Context, _ string, command protocol.Command) (protocol.CommandAck, error) {
+func (f *fakeSessionCreationTransport) SendSessionCommand(_ context.Context, hostID string, command protocol.Command) (protocol.CommandAck, error) {
 	f.commands = append(f.commands, command)
+	f.hostIDs = append(f.hostIDs, hostID)
 	return f.ack, f.err
 }
 
@@ -370,8 +382,40 @@ func TestSessionCreationRetriesUnknownIntentThroughExactCommand(t *testing.T) {
 	if len(transport.commands) != 1 || transport.commands[0].CommandID != request.CommandID || transport.commands[0].SessionID != "session-existing-unknown" {
 		t.Fatalf("reconciliation commands = %+v", transport.commands)
 	}
+	if host.calls != 0 || transport.hostIDs[0] != "host-1" {
+		t.Fatalf("reconciliation Host selection = calls %d command %+v, want persisted host-1 without default lookup", host.calls, transport.commands[0])
+	}
 	if records.unknown != 0 || records.intents["session-existing-unknown"].State != sessions.IntentStateConfirmed {
 		t.Fatalf("reconciled intent = %+v, mark count = %d", records.intents["session-existing-unknown"], records.unknown)
+	}
+}
+
+func TestSessionCreationRetainsUnknownIntentWhenOriginalHostAccessIsRevoked(t *testing.T) {
+	request := protocol.CreateSessionRequest{CommandID: "create-session-revoked-host", Path: protocol.SessionPathNew}
+	parameters, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := &fakeSessionCreationRecords{intents: map[string]sessions.CreationIntent{
+		"session-existing-revoked-host": {
+			SessionID:     "session-existing-revoked-host",
+			CommandID:     request.CommandID,
+			CreatorUserID: "user-1",
+			HostID:        "host-revoked",
+			Path:          protocol.SessionPathNew,
+			Parameters:    parameters,
+			State:         sessions.IntentStateUnknown,
+		},
+	}}
+	host := &fakeSessionCreationHost{host: hosts.Host{ID: "host-fallback"}, authorizeErr: auth.ErrNotFound}
+	transport := &fakeSessionCreationTransport{ack: protocol.CommandAck{State: protocol.CommandStateSucceeded}}
+	service := newSessionCreationService(records, fakeSessionCreationProjects{write: true}, host, transport, nil)
+
+	if _, err := service.CreateSession(context.Background(), auth.Principal{UserID: "user-1"}, request); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("revoked original Host error = %v, want %v", err, auth.ErrNotFound)
+	}
+	if host.calls != 0 || len(transport.commands) != 0 {
+		t.Fatalf("revoked original Host crossed retry boundary: default lookups=%d commands=%+v", host.calls, transport.commands)
 	}
 }
 
