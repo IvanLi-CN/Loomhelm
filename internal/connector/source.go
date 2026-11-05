@@ -393,6 +393,9 @@ func (c *SourceClient) discoverAllProjects(ctx context.Context) ([]SourceProject
 		if strings.TrimSpace(current.Next) == "" {
 			return result, nil
 		}
+		if current.Next == cursor {
+			return result, fmt.Errorf("%w: project/list returned a repeated cursor", ErrSourcePaginationIncomplete)
+		}
 		cursor = current.Next
 	}
 	return result, fmt.Errorf("%w: project/list exceeded the pagination safety limit", ErrSourcePaginationIncomplete)
@@ -421,6 +424,9 @@ func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, 
 			}
 			if strings.TrimSpace(current.Next) == "" {
 				break
+			}
+			if current.Next == cursor {
+				return result, fmt.Errorf("%w: thread/list returned a repeated cursor", ErrSourcePaginationIncomplete)
 			}
 			cursor = current.Next
 			if page == 999 {
