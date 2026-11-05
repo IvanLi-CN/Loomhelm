@@ -748,7 +748,7 @@ func (e *CommandExecutor) probePublic(ctx context.Context, operation Operation) 
 	}
 	for _, path := range []string{"/readyz", "/mcp", "/gateway"} {
 		if err := e.requestStatus(ctx, http.MethodGet, baseURL+path, nil, func(status int, _ []byte) error {
-			if status == http.StatusNotFound || status >= http.StatusInternalServerError {
+			if (status >= http.StatusMultipleChoices && status < http.StatusBadRequest) || status == http.StatusNotFound || status >= http.StatusInternalServerError {
 				return fmt.Errorf("public deployment route %s returned HTTP %d", path, status)
 			}
 			return nil

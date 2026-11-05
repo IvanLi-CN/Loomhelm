@@ -296,6 +296,40 @@ func TestCommandExecutorRejectsReadinessRedirect(t *testing.T) {
 	}
 }
 
+func TestCommandExecutorRejectsPublicRouteRedirect(t *testing.T) {
+	var redirectTargetRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/version":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		case "/readyz":
+			writer.WriteHeader(http.StatusNoContent)
+		case "/mcp":
+			http.Redirect(writer, request, "/redirect-target", http.StatusTemporaryRedirect)
+		case "/redirect-target":
+			redirectTargetRequests.Add(1)
+			writer.WriteHeader(http.StatusNoContent)
+		case "/gateway":
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{PublicURL: server.URL}).probePublic(context.Background(), Operation{
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+	})
+	if err == nil || !strings.Contains(err.Error(), "public deployment route /mcp returned HTTP 307") {
+		t.Fatalf("probePublic() error = %v, want the public redirect rejected", err)
+	}
+	if redirectTargetRequests.Load() != 0 {
+		t.Fatalf("public probe followed redirect %d times", redirectTargetRequests.Load())
+	}
+}
+
 func TestCommandExecutorRejectsInvalidReadinessEndpoint(t *testing.T) {
 	err := (&CommandExecutor{SlotURLs: map[string]string{"green": "not-a-url"}}).waitReady(context.Background(), "green", false)
 	if !errors.Is(err, errNonRetryableReadiness) {
