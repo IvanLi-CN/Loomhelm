@@ -20,6 +20,7 @@ type sessionAccessRecords struct {
 	access sessions.SessionAccess
 	err    error
 	reads  int
+	list   []sessions.Session
 }
 
 func (r *sessionAccessRecords) GetAccess(context.Context, string) (sessions.SessionAccess, error) {
@@ -29,6 +30,10 @@ func (r *sessionAccessRecords) GetAccess(context.Context, string) (sessions.Sess
 func (r *sessionAccessRecords) Get(context.Context, string) (sessions.Session, error) {
 	r.reads++
 	return sessions.Session{Session: protocol.Session{ID: "s", ExternalThreadRef: "private-thread"}}, nil
+}
+
+func (r *sessionAccessRecords) List(context.Context, string, []string, sessions.Cursor, int) ([]sessions.Session, *sessions.Cursor, error) {
+	return r.list, nil, nil
 }
 
 type sessionAccessProjects struct {
@@ -41,6 +46,13 @@ func (p sessionAccessProjects) CanReadProject(context.Context, auth.Principal, s
 
 func (p sessionAccessProjects) CanWriteProject(context.Context, auth.Principal, string) (bool, error) {
 	return p.write, nil
+}
+
+func (p sessionAccessProjects) AuthorizedProjectIDs(context.Context, auth.Principal) ([]string, error) {
+	if p.read || p.write {
+		return []string{"p"}, nil
+	}
+	return nil, nil
 }
 
 func (p sessionAccessProjects) CanWriteProjectTx(context.Context, pgx.Tx, auth.Principal, string) (bool, error) {
@@ -165,6 +177,32 @@ func TestSessionReadHTTPKeepsDependencyDetailsPrivate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSessionListHTTPAppliesSessionAuthorization(t *testing.T) {
+	records := &sessionAccessRecords{
+		access: sessions.SessionAccess{SessionID: "s", CreatorUserID: "owner", HostID: "h", Confirmed: true},
+		list:   []sessions.Session{{Session: protocol.Session{ID: "s", ExternalThreadRef: "thread-s", CreatedAt: "2026-11-05T00:00:00Z", UpdatedAt: "2026-11-05T00:00:00Z"}}},
+	}
+	service := &sessionService{
+		principal: sessionAccessPrincipal{principal: auth.Principal{UserID: "owner"}},
+		projects:  sessionAccessProjects{},
+		records:   records,
+	}
+	router := chi.NewRouter()
+	service.mount(router)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/sessions?limit=20", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var result protocol.SessionListResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].ID != "s" {
+		t.Fatalf("session list = %+v, want session s", result.Items)
 	}
 }
 

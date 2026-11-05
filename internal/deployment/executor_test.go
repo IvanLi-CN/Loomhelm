@@ -3,12 +3,14 @@ package deployment
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -171,6 +173,12 @@ func TestCommandExecutorWaitsForReadiness(t *testing.T) {
 	}
 }
 
+func TestDeploymentReadinessUsesTenMinuteDefault(t *testing.T) {
+	if deploymentReadinessTimeout != 10*time.Minute {
+		t.Fatalf("deploymentReadinessTimeout = %s, want 10m", deploymentReadinessTimeout)
+	}
+}
+
 func TestCommandExecutorFailsFastForPermanentReadinessErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/readyz" {
@@ -188,9 +196,12 @@ func TestCommandExecutorFailsFastForPermanentReadinessErrors(t *testing.T) {
 }
 
 func TestCommandExecutorPreservesReadinessCancellation(t *testing.T) {
+	started := make(chan struct{})
+	var startOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/readyz" {
-			writer.WriteHeader(http.StatusServiceUnavailable)
+			startOnce.Do(func() { close(started) })
+			<-request.Context().Done()
 			return
 		}
 		http.NotFound(writer, request)
@@ -198,8 +209,17 @@ func TestCommandExecutorPreservesReadinessCancellation(t *testing.T) {
 	defer server.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}}).waitReady(ctx, "green", false)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}}).waitReady(ctx, "green", false)
+	}()
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("readiness request did not start")
+	}
+	err := <-errCh
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitReady() error = %v, want context cancellation", err)
 	}
@@ -216,8 +236,46 @@ func TestCommandExecutorReportsReadinessTimeout(t *testing.T) {
 	defer server.Close()
 
 	err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}, ReadinessTimeout: time.Millisecond}).waitReady(context.Background(), "green", false)
-	if err == nil || !strings.Contains(err.Error(), "readiness timed out") {
+	if err == nil || !strings.Contains(err.Error(), "readiness timed out") || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("waitReady() error = %v, want timeout", err)
+	}
+}
+
+func TestCommandExecutorReadinessRetryBoundaries(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed} {
+		t.Run(fmt.Sprintf("permanent-%d", status), func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				attempts.Add(1)
+				writer.WriteHeader(status)
+			}))
+			defer server.Close()
+			err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}}).waitReady(context.Background(), "green", false)
+			if !errors.Is(err, errNonRetryableReadiness) || attempts.Load() != 1 {
+				t.Fatalf("waitReady() error = %v, attempts = %d", err, attempts.Load())
+			}
+		})
+	}
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusTooManyRequests} {
+		t.Run(fmt.Sprintf("retry-%d", status), func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				attempts.Add(1)
+				writer.WriteHeader(status)
+			}))
+			defer server.Close()
+			err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}, ReadinessTimeout: 250 * time.Millisecond}).waitReady(context.Background(), "green", false)
+			if errors.Is(err, errNonRetryableReadiness) || attempts.Load() < 2 {
+				t.Fatalf("waitReady() error = %v, attempts = %d, want retryable timeout", err, attempts.Load())
+			}
+		})
+	}
+}
+
+func TestCommandExecutorRejectsInvalidReadinessEndpoint(t *testing.T) {
+	err := (&CommandExecutor{SlotURLs: map[string]string{"green": "not-a-url"}}).waitReady(context.Background(), "green", false)
+	if !errors.Is(err, errNonRetryableReadiness) {
+		t.Fatalf("waitReady() error = %v, want invalid endpoint failure", err)
 	}
 }
 
@@ -246,6 +304,42 @@ func TestCommandExecutorRejectsStaleWorkerGeneration(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "Worker generation does not match operation") {
 		t.Fatalf("waitWorkerIdentity() error = %v, want generation mismatch", err)
+	}
+}
+
+func TestCommandExecutorVerifiesWorkerInIdentityOrder(t *testing.T) {
+	var paths []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		paths = append(paths, request.URL.Path)
+		mu.Unlock()
+		switch request.URL.Path {
+		case "/readyz":
+			writer.WriteHeader(http.StatusOK)
+		case "/version":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"` + strings.Repeat("a", 40) + `","artifact_digest":"sha256:` + strings.Repeat("b", 64) + `"}`))
+		case "/-/observe":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"state":"measured","ready":true,"worker_generation":2}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{WorkerURLs: map[string]string{"green": server.URL}}).waitWorkerIdentity(context.Background(), Operation{
+		Slot:               "green",
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+		WorkerGeneration:   2,
+	})
+	if err != nil {
+		t.Fatalf("waitWorkerIdentity() error = %v", err)
+	}
+	if !reflect.DeepEqual(paths, []string{"/readyz", "/version", "/-/observe"}) {
+		t.Fatalf("Worker identity request order = %v", paths)
 	}
 }
 

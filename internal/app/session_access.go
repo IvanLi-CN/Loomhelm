@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/auth"
 	"github.com/IvanLi-CN/Loomhelm/internal/gateway"
@@ -23,6 +25,7 @@ import (
 type sessionRecords interface {
 	GetAccess(context.Context, string) (sessions.SessionAccess, error)
 	Get(context.Context, string) (sessions.Session, error)
+	List(context.Context, string, []string, sessions.Cursor, int) ([]sessions.Session, *sessions.Cursor, error)
 }
 
 type sessionAccessRecordsTx interface {
@@ -32,6 +35,10 @@ type sessionAccessRecordsTx interface {
 type sessionProjectAccess interface {
 	CanReadProject(context.Context, auth.Principal, string) (bool, error)
 	CanWriteProject(context.Context, auth.Principal, string) (bool, error)
+}
+
+type sessionAuthorizedProjectIDs interface {
+	AuthorizedProjectIDs(context.Context, auth.Principal) ([]string, error)
 }
 
 type sessionProjectBindingAccess interface {
@@ -85,6 +92,9 @@ func (s *sessionService) authorize(ctx context.Context, principal auth.Principal
 	}
 	if !principal.HasProjectScope(access.ProjectID) {
 		return sessions.SessionAccess{}, auth.ErrNotFound
+	}
+	if s.projects == nil {
+		return sessions.SessionAccess{}, runs.ErrControlServiceUnavailable
 	}
 	var allowed bool
 	if write {
@@ -181,10 +191,124 @@ func (s *sessionService) GetSession(ctx context.Context, principal auth.Principa
 	return session.Session, nil
 }
 
+func (s *sessionService) ListSessions(ctx context.Context, principal auth.Principal, after sessions.Cursor, limit int) ([]protocol.Session, *sessions.Cursor, error) {
+	if principal.UserID == "" {
+		return nil, nil, auth.ErrUnauthenticated
+	}
+	if s.records == nil {
+		return nil, nil, runs.ErrControlServiceUnavailable
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	var projectIDs []string
+	if projectLister, ok := s.projects.(sessionAuthorizedProjectIDs); ok {
+		var err error
+		projectIDs, err = projectLister.AuthorizedProjectIDs(ctx, principal)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list authorized session projects: %w", err)
+		}
+	} else if s.projects != nil {
+		return nil, nil, runs.ErrControlServiceUnavailable
+	}
+	items := make([]protocol.Session, 0, limit)
+	cursor := after
+	for len(items) < limit {
+		candidates, next, err := s.records.List(ctx, principal.UserID, projectIDs, cursor, limit)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list session records: %w", err)
+		}
+		for _, candidate := range candidates {
+			access, err := s.authorize(ctx, principal, candidate.ID, false)
+			if errors.Is(err, auth.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, nil, fmt.Errorf("authorize listed session: %w", err)
+			}
+			if !access.Confirmed {
+				continue
+			}
+			items = append(items, candidate.Session)
+			if len(items) == limit {
+				updatedAt, parseErr := time.Parse(time.RFC3339Nano, candidate.UpdatedAt)
+				if parseErr != nil {
+					return nil, nil, fmt.Errorf("parse listed session timestamp: %w", parseErr)
+				}
+				lastVisible := sessions.Cursor{UpdatedAt: updatedAt, ID: candidate.ID}
+				return items, nextCursorForVisiblePage(next, lastVisible), nil
+			}
+		}
+		if next == nil {
+			return items, nil, nil
+		}
+		cursor = *next
+	}
+	return items, nil, nil
+}
+
+func nextCursorForVisiblePage(raw *sessions.Cursor, lastVisible sessions.Cursor) *sessions.Cursor {
+	if raw == nil {
+		return nil
+	}
+	return &lastVisible
+}
+
 func (s *sessionService) mount(router chi.Router) {
 	router.Post("/sessions", s.handleCreate)
+	router.Get("/sessions", s.handleList)
 	router.Get("/sessions/{session_id}", s.handleGet)
 	router.Post("/sessions/{session_id}/task", s.handleBindTask)
+}
+
+func (s *sessionService) handleList(writer http.ResponseWriter, request *http.Request) {
+	if s.principal == nil {
+		auth.WriteError(writer, request, http.StatusServiceUnavailable, runs.ErrControlServiceUnavailable, "session listing is temporarily unavailable")
+		return
+	}
+	principal, err := s.principal.ResolvePrincipal(request.Context(), request)
+	if err == nil && principal.UserID == "" {
+		err = auth.ErrUnauthenticated
+	}
+	if err != nil {
+		auth.WriteError(writer, request, auth.StatusForError(err), err, "session identity is unavailable")
+		return
+	}
+	limit, err := parseSessionListLimit(request.URL.Query().Get("limit"))
+	if err != nil {
+		auth.WriteError(writer, request, http.StatusBadRequest, err, "invalid session list query")
+		return
+	}
+	after, err := sessions.DecodeCursor(request.URL.Query().Get("after_cursor"))
+	if err != nil {
+		auth.WriteError(writer, request, http.StatusBadRequest, err, "invalid session cursor")
+		return
+	}
+	items, next, err := s.ListSessions(request.Context(), principal, after, limit)
+	if err != nil {
+		auth.WriteError(writer, request, auth.StatusForError(err), err, "failed to list sessions")
+		return
+	}
+	response := protocol.SessionListResponse{Items: items, HasMore: next != nil}
+	if next != nil {
+		cursor := sessions.EncodeCursor(*next)
+		response.NextCursor = &cursor
+	}
+	auth.WriteJSON(writer, http.StatusOK, response)
+}
+
+func parseSessionListLimit(raw string) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 50, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > 200 {
+		return 0, fmt.Errorf("%w: limit must be between 1 and 200", auth.ErrInvalid)
+	}
+	return limit, nil
 }
 
 func (s *sessionService) handleCreate(writer http.ResponseWriter, request *http.Request) {

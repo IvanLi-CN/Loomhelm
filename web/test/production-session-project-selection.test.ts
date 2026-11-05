@@ -1,0 +1,46 @@
+import { describe, expect, test } from "bun:test";
+
+import { normalizeProjectSelection } from "../src/features/conversations/ProductionConversationWorkspace";
+import { listAllSessions } from "../src/features/conversations/session-list";
+
+describe("production session project selection", () => {
+  test("falls back to a projectless session when the source is loading or unavailable", () => {
+    expect(normalizeProjectSelection("project-a", undefined, [])).toBe("__none__");
+  });
+
+  test("keeps a selected project while the authorized source still contains it", () => {
+    expect(normalizeProjectSelection("project-a", undefined, [{ id: "project-a", name: "A" }])).toBe("project-a");
+  });
+
+  test("does not rewrite a fixed task project", () => {
+    expect(normalizeProjectSelection("project-a", "project-a", [])).toBe("project-a");
+  });
+
+  test("reads every authorized Session page", async () => {
+    const cursors: Array<string | undefined> = [];
+    const session = (id: string) => ({
+      created_at: "2026-11-05T00:00:00Z",
+      external_thread_ref: `thread-${id}`,
+      id,
+      path: "new" as const,
+      state: "active" as const,
+      updated_at: "2026-11-05T00:00:00Z"
+    });
+    const sessions = await listAllSessions({
+      listSessions: async ({ after_cursor }) => {
+        cursors.push(after_cursor);
+        if (!after_cursor) return { has_more: true, items: [session("one")], next_cursor: "cursor-1" };
+        return { has_more: false, items: [session("two")] };
+      }
+    });
+
+    expect(sessions.map((item) => item.id)).toEqual(["one", "two"]);
+    expect(cursors).toEqual([undefined, "cursor-1"]);
+  });
+
+  test("fails closed when Session pagination does not advance", async () => {
+    await expect(listAllSessions({
+      listSessions: async () => ({ has_more: true, items: [], next_cursor: "same" })
+    })).rejects.toThrow("sessions pagination did not return a new cursor");
+  });
+});

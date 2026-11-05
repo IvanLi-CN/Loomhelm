@@ -71,6 +71,19 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 		}
 		return response
 	}
+	list := func(client *http.Client, headers map[string]string, status int) protocol.SessionListResponse {
+		t.Helper()
+		response := applicationRequest(t, client, http.MethodGet, baseURL+"/api/v1/sessions?limit=50", nil, headers, status)
+		defer response.Body.Close()
+		if response.Header.Get("Cache-Control") != "no-store" {
+			t.Fatal("session list response can be cached")
+		}
+		var result protocol.SessionListResponse
+		if status == http.StatusOK {
+			decodeApplicationResponse(t, response, &result)
+		}
+		return result
+	}
 	seed("private", "", true)
 	var private protocol.SessionResponse
 	decodeApplicationResponse(t, read(alice, "private", nil, http.StatusOK), &private)
@@ -78,6 +91,12 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 		t.Fatalf("wrong persisted session: %+v", private.Session)
 	}
 	read(bob, "private", nil, http.StatusNotFound).Body.Close()
+	if listed := list(alice, nil, http.StatusOK); len(listed.Items) != 1 || listed.Items[0].ID != "private" {
+		t.Fatalf("alice session list = %+v, want only private session", listed.Items)
+	}
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 0 {
+		t.Fatalf("bob session list exposed private session: %+v", listed.Items)
+	}
 	read(applicationBrowser(t), "private", nil, http.StatusUnauthorized).Body.Close()
 	seed("unknown", "", false)
 	var unknown protocol.ApiError
@@ -94,14 +113,26 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/projects", map[string]string{"name": "Session access"}, nil, http.StatusCreated), &project)
 	seed("shared", project.Project.ID, true)
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 0 {
+		t.Fatalf("bob session list exposed unshared Host session: %+v", listed.Items)
+	}
 	memberURL := baseURL + "/api/v1/projects/" + project.Project.ID + "/members/" + bobIdentity.UserID
 	applicationRequest(t, alice, http.MethodPut, memberURL, map[string]string{"role": "viewer"}, nil, http.StatusOK).Body.Close()
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 0 {
+		t.Fatalf("bob session list exposed session before Host share: %+v", listed.Items)
+	}
 	hostShareURL := baseURL + "/api/v1/hosts/" + registration.Host.ID + "/shares/" + bobIdentity.UserID
 	applicationRequest(t, alice, http.MethodPut, hostShareURL, nil, nil, http.StatusOK).Body.Close()
 	read(bob, "shared", nil, http.StatusOK).Body.Close()
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 1 || listed.Items[0].ID != "shared" {
+		t.Fatalf("bob session list = %+v, want shared session", listed.Items)
+	}
 	applicationRequest(t, alice, http.MethodDelete, memberURL, nil, nil, http.StatusNoContent).Body.Close()
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 0 {
+		t.Fatalf("bob session list retained revoked project session: %+v", listed.Items)
+	}
 	applicationRequest(t, alice, http.MethodDelete, hostShareURL, nil, nil, http.StatusNoContent).Body.Close()
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
 	var credential struct {

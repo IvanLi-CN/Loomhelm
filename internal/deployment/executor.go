@@ -658,6 +658,9 @@ func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker boo
 	if baseURL == "" {
 		return ErrExecutorUnavailable
 	}
+	if err := validateReadinessEndpoint(baseURL); err != nil {
+		return fmt.Errorf("%w: %v", errNonRetryableReadiness, err)
+	}
 	timeout := e.ReadinessTimeout
 	if timeout <= 0 {
 		timeout = deploymentReadinessTimeout
@@ -686,12 +689,23 @@ func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker boo
 		select {
 		case <-readinessCtx.Done():
 			if errors.Is(readinessCtx.Err(), context.DeadlineExceeded) && lastErr != nil {
-				return fmt.Errorf("deployment %s readiness timed out: %w", component, lastErr)
+				return errors.Join(fmt.Errorf("deployment %s readiness timed out: %w", component, context.DeadlineExceeded), lastErr)
 			}
 			return readinessCtx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+func validateReadinessEndpoint(baseURL string) error {
+	parsed, err := url.Parse(strings.TrimRight(baseURL, "/") + "/readyz")
+	if err != nil {
+		return fmt.Errorf("readiness endpoint is invalid: %w", err)
+	}
+	if parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("readiness endpoint must use an http or https URL")
+	}
+	return nil
 }
 
 func (e *CommandExecutor) verifyVersion(ctx context.Context, baseURL string, operation Operation, component string) error {

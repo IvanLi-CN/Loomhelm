@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-router";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMemo } from "react";
+import { MessageCircle } from "lucide-react";
 
 import { useOptionalProductionApi } from "@/app/providers";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,9 @@ import { CreateConversationRoute } from "@/routes/CreateConversationRoute";
 import { CreateTaskRoute } from "@/routes/CreateTaskRoute";
 import { DeploymentRoute } from "@/routes/DeploymentRoute";
 import { ConversationsRoute } from "@/routes/ConversationsRoute";
+import { ProductionConversationsRoute } from "@/routes/ProductionConversationsRoute";
 import { DemoProductionConversationRoute } from "@/routes/DemoProductionConversationRoute";
+import { DemoProductionConversationsRoute } from "@/routes/DemoProductionConversationsRoute";
 import { DemoCodexConversationsRoute } from "@/routes/DemoCodexConversationsRoute";
 import { ProjectRoute } from "@/routes/ProjectRoute";
 import { StatusRoute } from "@/routes/StatusRoute";
@@ -22,7 +25,6 @@ import { TasksRoute } from "@/routes/TasksRoute";
 import { ConversationWorkspaceRoute, TaskWorkspaceRoute } from "@/routes/WorkspaceRoute";
 import { WorkbenchRoute } from "@/routes/WorkbenchRoute";
 import { ProductionConversationWorkspace } from "@/features/conversations/ProductionConversationWorkspace";
-import { CodexConversationsRoute } from "@/features/codex/CodexConversations";
 import { createPublishedSessionApi } from "@/features/sessions/api";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 
@@ -43,13 +45,15 @@ function ProductionWorkbenchRoute() {
   return (
     <section className="page-section grid min-w-0 gap-6">
       <div className="page-heading">
-        <div><span className="eyebrow">WORKBENCH</span><h1>工作台</h1><p>从这里创建新的 Session，或进入已有的项目、任务和 Codex 对话。</p></div>
+        <div><span className="eyebrow">WORKBENCH</span><h1>工作台</h1><p>从这里创建新的 Session，或查看当前账户有权访问的全部对话。</p></div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="secondary" className="button button-secondary"><Link to="/conversations"><MessageCircle size={15} aria-hidden="true" />全部对话</Link></Button>
           <Button asChild variant="secondary" className="button button-secondary"><Link to="/deployment">部署控制</Link></Button>
         </div>
       </div>
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
         <ProductionConversationWorkspace
+          key={assembly?.auth.principalId ?? "anonymous"}
           api={api}
           conversationTitle="新建独立会话"
           onSessionCreated={(sessionId, initialRunId) => navigate({ params: { conversationId: sessionId }, search: initialRunId ? { runId: initialRunId } : {}, to: "/conversations/$conversationId" })}
@@ -84,7 +88,7 @@ function RootRoute() {
 function ConversationsEntryRoute() {
   return useOptionalDemoRuntime()
     ? <ConversationsRoute />
-    : <CodexConversationsRoute />;
+    : <ProductionConversationsRoute />;
 }
 
 function CreateConversationEntryRoute() {
@@ -138,6 +142,12 @@ const demoProductionConversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/demo/production-session",
   component: DemoProductionConversationRoute
+});
+
+const demoProductionConversationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/demo/production-conversations",
+  component: DemoProductionConversationsRoute
 });
 
 const demoCodexConversationsRoute = createRoute({
@@ -196,6 +206,7 @@ const routeTree = rootRoute.addChildren([
   statusRoute,
   deploymentRoute,
   demoProductionConversationRoute,
+  demoProductionConversationsRoute,
   demoCodexConversationsRoute,
   tasksRoute,
   createTaskRoute,

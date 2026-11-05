@@ -181,6 +181,14 @@ The U03 candidate uses the login-free, mock-only `ui_demo` route `/demo/producti
 
 ![U03 production conversation on a 393x852 mobile viewport](assets/u03-production-session-page-mobile-393x852.png)
 
+### U05 authorized conversation index
+
+The U05 candidate uses the login-free, mock-only `ui_demo` route `/demo/production-conversations`; the page reads the same typed Session-list contract as the authenticated production route, retains project and task context, and provides refresh, search and new-session entry points. The owner-confirmed desktop `1440x1000` and narrow `393x852` captures show the page without horizontal overflow; these images establish the navigation and presentation evidence only and do not by themselves establish authenticated backend behavior, persistence or production deployment.
+
+![U05 authorized conversation index on the desktop viewport](assets/u05-production-sessions-page-desktop-1440x1000.png)
+
+![U05 authorized conversation index on a 393x852 mobile viewport](assets/u05-production-sessions-page-mobile-393x852.png)
+
 ## Rollout and Compatibility
 
 The initial application schema retains platform short-job results; River retains queue state separately. There is no previously deployed application schema or production compatibility claim. Re-entering startup may apply pending migrations but must not reverse them, and a migration failure prevents readiness. Empty-database migration, startup re-entry and persistence after restart have VM observations; a backend image was built and identified by its local content hash. Immutable candidate publication/promotion and tar-based handoff are implemented; supported blue-green compatibility windows, traffic switching, cross-process Worker fencing and production deployment still require their deployment implementation and observations. The planned release channel is an isolated parent-branch preview; production configuration is not established here.

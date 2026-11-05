@@ -5,6 +5,7 @@ import {
 
 export interface PublishedSessionApi {
   createSession: GeneratedApiClient["createSession"];
+  listSessions: GeneratedApiClient["listSessions"];
   getSession: GeneratedApiClient["getSession"];
   submitRun: GeneratedApiClient["submitRun"];
   listSessionRuns: GeneratedApiClient["listSessionRuns"];
@@ -21,6 +22,7 @@ export interface PublishedSessionApi {
 export function createPublishedSessionApi(client: GeneratedApiClient = createGeneratedApiClient()): PublishedSessionApi {
   return {
     createSession: (request) => client.createSession(request),
+    listSessions: (request) => client.listSessions(request),
     getSession: (request) => client.getSession(request),
     submitRun: (request) => client.submitRun(request),
     listSessionRuns: (request) => client.listSessionRuns(request),

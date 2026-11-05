@@ -366,9 +366,14 @@ function isApiAccessFailure(error: unknown): boolean {
   return error instanceof ApiClientError && (error.status === 403 || error.status === 404);
 }
 
-interface ProjectOption {
+export interface ProjectOption {
   id: string;
   name: string;
+}
+
+export function normalizeProjectSelection(selectedProjectId: string, fixedProjectId: string | undefined, projectOptions: readonly ProjectOption[]): string {
+  if (fixedProjectId || selectedProjectId === NO_PROJECT || projectOptions.some((project) => project.id === selectedProjectId)) return selectedProjectId;
+  return NO_PROJECT;
 }
 
 export interface ProductionSessionCreationPanelProps {
@@ -434,6 +439,11 @@ export function ProductionSessionCreationPanel({
   const [creationUncertain, setCreationUncertain] = useState(() => storedIntent?.uncertain ?? false);
   const commandRef = useRef<SessionCreationIntent | undefined>(storedIntent);
   const selectedProjectReadOnly = selectedProjectId !== NO_PROJECT && Boolean(projectCanWrite && !projectCanWrite(selectedProjectId));
+
+  useEffect(() => {
+    const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions);
+    if (normalized !== selectedProjectId) setSelectedProjectId(normalized);
+  }, [fixedProjectId, projectOptions, selectedProjectId]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

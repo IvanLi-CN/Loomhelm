@@ -130,6 +130,7 @@ func routeForOperation(operationID string) (routeSpec, bool) {
 		"addTaskDependency":            {method: "POST", path: "/tasks/{task_id}/dependencies/{prerequisite_task_id}", pathParams: []string{"task_id", "prerequisite_task_id"}},
 		"removeTaskDependency":         {method: "DELETE", path: "/tasks/{task_id}/dependencies/{prerequisite_task_id}", pathParams: []string{"task_id", "prerequisite_task_id"}},
 		"createSession":                {method: "POST", path: "/sessions", body: true},
+		"listSessions":                 {method: "GET", path: "/sessions", queryParams: []string{"after_cursor", "limit"}},
 		"getSession":                   {method: "GET", path: "/sessions/{session_id}", pathParams: []string{"session_id"}},
 		"bindSessionTask":              {method: "POST", path: "/sessions/{session_id}/task", pathParams: []string{"session_id"}, body: true},
 		"submitRun":                    {method: "POST", path: "/sessions/{session_id}/runs", pathParams: []string{"session_id"}, body: true},
@@ -302,6 +303,9 @@ func schemaForOperation(operationID string) (json.RawMessage, []string, map[stri
 		add("task_id", stringField(), false)
 		add("prompt", stringField(), false)
 		add("active_thread_ref", stringField(), false)
+	case "listSessions":
+		add("after_cursor", stringField(), false)
+		add("limit", integerField(), false)
 	case "getSession":
 		add("session_id", stringField(), true)
 	case "bindSessionTask":

@@ -182,6 +182,10 @@ func (f fakeSessionCreationProjects) CanWriteProject(context.Context, auth.Princ
 	return f.write, nil
 }
 
+func (f fakeSessionCreationProjects) AuthorizedProjectIDs(context.Context, auth.Principal) ([]string, error) {
+	return []string{"project-1"}, nil
+}
+
 func (f fakeSessionCreationProjects) CanWriteProjectTx(context.Context, pgx.Tx, auth.Principal, string) (bool, error) {
 	if f.txWrite != nil {
 		return *f.txWrite, nil
