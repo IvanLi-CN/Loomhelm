@@ -14,18 +14,18 @@ Loomhelm 是面向个人与小型团队的自部署项目管理与 Agent 工作�
 - React/Vite/TypeScript 构建 Web/PWA，Bun workspaces 管理前端工程；产品界面在完整设计确认后实现。
 - 非生产候选采用固定源码 SHA 和产物 digest，通过 Caddy 蓝绿切流；Worker 交接与共享状态兼容分别验证。
 
-## Connector on macOS
+## Client on macOS
 
-当前计算机为 Apple silicon 时，安装器可从 GitHub Release 下载 `loomhelm-connector-darwin-arm64.tar.gz`，解压后运行 `loomhelm-connector`；首次运行只需设置可选的 `LOOMHELM_CONNECTOR_BASE_URL`，默认值为 `https://loomhelm.ivanli.cc`，没有 API key 时会打开浏览器完成一次性本机授权。
+当前计算机为 Apple silicon 时，安装器可从 GitHub Release 下载客户端包并运行本地客户端；首次运行只需设置可选的 `LOOMHELM_CONNECTOR_BASE_URL`，默认值为 `https://loomhelm.ivanli.cc`，没有 API key 时会打开浏览器完成一次性本机授权。客户端同时连接本机 Codex managed app-server daemon 的 Unix Socket。
 
 ```sh
 mkdir -p "$HOME/.local/loomhelm"
 curl -fL https://github.com/IvanLi-CN/Loomhelm/releases/latest/download/loomhelm-connector-darwin-arm64.tar.gz | tar -xzf - -C "$HOME/.local/loomhelm" --strip-components=1
 chmod 755 "$HOME/.local/loomhelm/loomhelm-connector"
-LOOMHELM_CONNECTOR_BASE_URL=https://loomhelm.ivanli.cc "$HOME/.local/loomhelm/loomhelm-connector"
+LOOMHELM_CONNECTOR_BASE_URL=https://loomhelm.ivanli.cc "$HOME/.local/loomhelm/loomhelm-client"
 ```
 
-Connector 会在当前计算机启动本机 `codex` app-server，Codex 登录凭据不会上传到 Loomhelm；该流程不连接或接管已经打开的 ChatGPT Desktop 会话。
+客户端不会启动替代的 `codex app-server`，而是连接当前用户的 managed daemon socket。Codex 登录凭据不会上传到 Loomhelm；客户端与 Codex CLI 使用同一 Host 运行时。
 
 ## Development
 

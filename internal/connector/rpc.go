@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,6 +117,235 @@ type ProcessTransportConfig struct {
 	Stderr            io.Writer
 	MaxFrameBytes     int
 	afterRequestWrite func(string)
+}
+
+// UnixSocketTransportConfig connects to an already running Codex app-server
+// daemon over its local WebSocket control socket. It never starts a process.
+type UnixSocketTransportConfig struct {
+	SocketPath    string
+	MaxFrameBytes int
+}
+
+// NewUnixSocketTransport connects to the managed app-server daemon's Unix
+// WebSocket endpoint. The daemon is the shared runtime used by Codex CLI.
+func NewUnixSocketTransport(ctx context.Context, config UnixSocketTransportConfig) (*ProcessTransport, error) {
+	if ctx == nil {
+		return nil, errors.New("transport context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(config.SocketPath) == "" {
+		return nil, errors.New("app-server daemon socket path must not be empty")
+	}
+	if config.MaxFrameBytes == 0 {
+		config.MaxFrameBytes = defaultMaxFrameBytes
+	}
+	if config.MaxFrameBytes < 1024 {
+		return nil, errors.New("maximum RPC frame size must be at least 1024 bytes")
+	}
+	if info, err := os.Stat(config.SocketPath); err != nil {
+		return nil, fmt.Errorf("stat app-server daemon socket: %w", err)
+	} else if info.Mode()&os.ModeSocket == 0 {
+		return nil, fmt.Errorf("app-server daemon path %q is not a socket", config.SocketPath)
+	}
+	conn, err := dialUnixWebSocket(ctx, config.SocketPath)
+	if err != nil {
+		return nil, fmt.Errorf("dial app-server daemon socket: %w", err)
+	}
+	stream := newUnixWebSocketStream(conn, config.MaxFrameBytes)
+	p := newStreamTransport(stream, config.MaxFrameBytes)
+	return p, nil
+}
+
+func dialUnixWebSocket(ctx context.Context, socketPath string) (net.Conn, error) {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	keyBytes := make([]byte, 16)
+	if _, err := rand.Read(keyBytes); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	key := base64.StdEncoding.EncodeToString(keyBytes)
+	request := "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
+	if _, err := io.WriteString(conn, request); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	reader := bufio.NewReader(conn)
+	response, err := reader.ReadString('\n')
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(response), "HTTP/1.1 101") {
+		conn.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("WebSocket handshake rejected: %s", strings.TrimSpace(response))
+	}
+	expected := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	expectedAccept := base64.StdEncoding.EncodeToString(expected[:])
+	foundAccept := ""
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			conn.Close()
+			return nil, readErr
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			break
+		}
+		if strings.HasPrefix(strings.ToLower(line), "sec-websocket-accept:") {
+			if parts := strings.SplitN(line, ":", 2); len(parts) == 2 {
+				foundAccept = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	if foundAccept != expectedAccept {
+		conn.Close()
+		return nil, errors.New("WebSocket handshake accept key mismatch")
+	}
+	return &bufferedUnixConn{Conn: conn, reader: reader}, nil
+}
+
+type bufferedUnixConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+type unixWebSocketStream struct {
+	conn          net.Conn
+	reader        *bufio.Reader
+	payload       []byte
+	maxFrameBytes int
+	mu            sync.Mutex
+}
+
+func newUnixWebSocketStream(conn net.Conn, maxFrameBytes int) *unixWebSocketStream {
+	buffered, ok := conn.(*bufferedUnixConn)
+	if ok {
+		return &unixWebSocketStream{conn: conn, reader: buffered.reader, maxFrameBytes: maxFrameBytes}
+	}
+	return &unixWebSocketStream{conn: conn, reader: bufio.NewReader(conn), maxFrameBytes: maxFrameBytes}
+}
+
+func (s *unixWebSocketStream) Read(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for {
+		if len(s.payload) > 0 {
+			n := copy(p, s.payload)
+			s.payload = s.payload[n:]
+			if len(s.payload) == 0 {
+				return n, io.EOF
+			}
+			return n, nil
+		}
+		payload, opcode, err := readWebSocketFrame(s.reader)
+		if err != nil {
+			return 0, err
+		}
+		switch opcode {
+		case 0x1:
+			if len(payload) > s.maxFrameBytes {
+				return 0, fmt.Errorf("WebSocket frame exceeds %d bytes", s.maxFrameBytes)
+			}
+			s.payload = payload
+		case 0x8:
+			return 0, io.EOF
+		case 0x9:
+			if err := writeWebSocketFrame(s.conn, 0xA, payload); err != nil {
+				return 0, err
+			}
+		}
+	}
+}
+
+func (s *unixWebSocketStream) Write(p []byte) (int, error) {
+	payload := bytes.TrimSuffix(p, []byte{'\n'})
+	if err := writeWebSocketFrame(s.conn, 0x1, payload); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func (s *unixWebSocketStream) Close() error {
+	return s.conn.Close()
+}
+
+func readWebSocketFrame(reader *bufio.Reader) ([]byte, byte, error) {
+	first, err := reader.ReadByte()
+	if err != nil {
+		return nil, 0, err
+	}
+	second, err := reader.ReadByte()
+	if err != nil {
+		return nil, 0, err
+	}
+	length := int(second & 0x7f)
+	if length == 126 {
+		var raw [2]byte
+		if _, err := io.ReadFull(reader, raw[:]); err != nil {
+			return nil, 0, err
+		}
+		length = int(raw[0])<<8 | int(raw[1])
+	} else if length == 127 {
+		var raw [8]byte
+		if _, err := io.ReadFull(reader, raw[:]); err != nil {
+			return nil, 0, err
+		}
+		if raw[0]&0x80 != 0 {
+			return nil, 0, errors.New("WebSocket frame length overflows int")
+		}
+		for _, b := range raw {
+			length = length<<8 | int(b)
+		}
+	}
+	if length > defaultMaxFrameBytes {
+		return nil, 0, fmt.Errorf("WebSocket frame exceeds %d bytes", defaultMaxFrameBytes)
+	}
+	mask := make([]byte, 4)
+	if second&0x80 != 0 {
+		if _, err := io.ReadFull(reader, mask); err != nil {
+			return nil, 0, err
+		}
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return nil, 0, err
+	}
+	if second&0x80 != 0 {
+		for i := range payload {
+			payload[i] ^= mask[i%4]
+		}
+	}
+	return payload, first & 0x0f, nil
+}
+
+func writeWebSocketFrame(conn net.Conn, opcode byte, payload []byte) error {
+	mask := make([]byte, 4)
+	if _, err := rand.Read(mask); err != nil {
+		return err
+	}
+	masked := make([]byte, len(payload))
+	for i := range payload {
+		masked[i] = payload[i] ^ mask[i%4]
+	}
+	header := []byte{0x80 | opcode}
+	switch {
+	case len(payload) < 126:
+		header = append(header, 0x80|byte(len(payload)))
+	case len(payload) <= 0xffff:
+		header = append(header, 0x80|126, byte(len(payload)>>8), byte(len(payload)))
+	default:
+		header = append(header, 0x80|127)
+		for shift := 56; shift >= 0; shift -= 8 {
+			header = append(header, byte(uint64(len(payload))>>shift))
+		}
+	}
+	_, err := conn.Write(append(append(header, mask...), masked...))
+	return err
 }
 
 func resolveProcessCommandPath(command string) (string, error) {
@@ -232,6 +465,27 @@ func NewProcessTransport(ctx context.Context, config ProcessTransportConfig) (*P
 		}
 	}()
 	return transport, nil
+}
+
+func newStreamTransport(stream io.ReadWriteCloser, maxFrameBytes int) *ProcessTransport {
+	transport := &ProcessTransport{
+		stdin:             stream,
+		stdout:            stream,
+		maxFrameBytes:     maxFrameBytes,
+		pending:           make(map[string]pendingRPC),
+		events:            make(chan RPCMessage),
+		done:              make(chan struct{}),
+		waitDone:          make(chan struct{}),
+		readDone:          make(chan struct{}),
+		eventDispatchDone: make(chan struct{}),
+		eventStop:         make(chan struct{}),
+		abandoned:         make(map[string]pendingRPC),
+	}
+	transport.eventCond = sync.NewCond(&transport.eventMu)
+	go transport.readLoop()
+	go transport.waitLoop()
+	go transport.dispatchEvents()
+	return transport
 }
 
 type pendingRPC struct {
@@ -836,6 +1090,12 @@ func (p *ProcessTransport) stopEventDispatch() {
 }
 
 func (p *ProcessTransport) waitLoop() {
+	if p.command == nil {
+		<-p.readDone
+		p.finishTransport(p.errValue())
+		close(p.waitDone)
+		return
+	}
 	err := p.command.Wait()
 	if err != nil && !p.closeRequested.Load() && !errors.Is(err, os.ErrProcessDone) {
 		p.setError(err)
@@ -867,6 +1127,12 @@ func (p *ProcessTransport) waitLoop() {
 	}
 	p.finishTransport(err)
 	close(p.waitDone)
+}
+
+func (p *ProcessTransport) errValue() error {
+	p.errMu.Lock()
+	defer p.errMu.Unlock()
+	return p.err
 }
 
 func (p *ProcessTransport) finishTransport(err error) {
