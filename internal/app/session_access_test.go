@@ -32,7 +32,7 @@ func (r *sessionAccessRecords) Get(context.Context, string) (sessions.Session, e
 	return sessions.Session{Session: protocol.Session{ID: "s", ExternalThreadRef: "private-thread"}}, nil
 }
 
-func (r *sessionAccessRecords) List(context.Context, string, []string, sessions.Cursor, int) ([]sessions.Session, *sessions.Cursor, error) {
+func (r *sessionAccessRecords) List(context.Context, string, []string, []string, sessions.Cursor, int) ([]sessions.Session, *sessions.Cursor, error) {
 	return r.list, nil, nil
 }
 

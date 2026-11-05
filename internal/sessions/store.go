@@ -101,7 +101,7 @@ func (s *Store) Get(ctx context.Context, sessionID string) (Session, error) {
 	return stored, err
 }
 
-func (s *Store) List(ctx context.Context, creatorUserID string, projectIDs []string, after Cursor, limit int) ([]Session, *Cursor, error) {
+func (s *Store) List(ctx context.Context, creatorUserID string, projectIDs, hostIDs []string, after Cursor, limit int) ([]Session, *Cursor, error) {
 	if err := s.ready(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -114,11 +114,12 @@ func (s *Store) List(ctx context.Context, creatorUserID string, projectIDs []str
 	if limit > 200 {
 		limit = 200
 	}
-	args := []any{creatorUserID, projectIDs}
+	args := []any{creatorUserID, projectIDs, hostIDs}
 	query := sessionQuery + `
 		WHERE session.external_thread_ref IS NOT NULL
 		  AND session.generation IS NOT NULL
 		  AND session.creation_state = 'confirmed'
+		  AND session.host_id = ANY($3::text[])
 		  AND (session.creator_user_id = $1 OR session.project_id = ANY($2::text[]))`
 	if after.ID != "" {
 		args = append(args, after.UpdatedAt, after.ID)

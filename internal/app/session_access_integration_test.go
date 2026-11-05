@@ -141,6 +141,7 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 	seed("visible-a", project.Project.ID, true)
 	seed("visible-b", project.Project.ID, true)
 	seedWithHost("hidden-newer", project.Project.ID, otherRegistration.Host.ID, true)
+	seedWithHost("hidden-older", project.Project.ID, otherRegistration.Host.ID, true)
 	for _, item := range []struct {
 		id        string
 		updatedAt string
@@ -149,6 +150,7 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 		{id: "visible-a", updatedAt: "2099-01-03T00:00:00Z"},
 		{id: "visible-b", updatedAt: "2099-01-03T00:00:00Z"},
 		{id: "shared", updatedAt: "2099-01-02T00:00:00Z"},
+		{id: "hidden-older", updatedAt: "2099-01-01T00:00:00Z"},
 	} {
 		if _, err := db.Pool().Exec(ctx, `UPDATE execution_sessions SET updated_at = $2::timestamptz WHERE id = $1`, item.id, item.updatedAt); err != nil {
 			t.Fatal(err)

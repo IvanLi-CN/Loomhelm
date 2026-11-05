@@ -25,7 +25,7 @@ import (
 type sessionRecords interface {
 	GetAccess(context.Context, string) (sessions.SessionAccess, error)
 	Get(context.Context, string) (sessions.Session, error)
-	List(context.Context, string, []string, sessions.Cursor, int) ([]sessions.Session, *sessions.Cursor, error)
+	List(context.Context, string, []string, []string, sessions.Cursor, int) ([]sessions.Session, *sessions.Cursor, error)
 }
 
 type sessionAccessRecordsTx interface {
@@ -214,10 +214,22 @@ func (s *sessionService) ListSessions(ctx context.Context, principal auth.Princi
 	} else if s.projects != nil {
 		return nil, nil, runs.ErrControlServiceUnavailable
 	}
+	var hostIDs []string
+	if s.hosts != nil {
+		visibleHosts, err := s.hosts.ListForUser(ctx, principal.UserID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list authorized session Hosts: %w", err)
+		}
+		hostIDs = make([]string, 0, len(visibleHosts))
+		for _, visibleHost := range visibleHosts {
+			hostIDs = append(hostIDs, visibleHost.Host.ID)
+		}
+	}
 	items := make([]protocol.Session, 0, limit)
 	cursor := after
-	for len(items) < limit {
-		candidates, next, err := s.records.List(ctx, principal.UserID, projectIDs, cursor, limit)
+	var lastVisible sessions.Cursor
+	for {
+		candidates, next, err := s.records.List(ctx, principal.UserID, projectIDs, hostIDs, cursor, limit)
 		if err != nil {
 			return nil, nil, fmt.Errorf("list session records: %w", err)
 		}
@@ -232,29 +244,26 @@ func (s *sessionService) ListSessions(ctx context.Context, principal auth.Princi
 			if !access.Confirmed {
 				continue
 			}
-			items = append(items, candidate.Session)
 			if len(items) == limit {
-				updatedAt, parseErr := time.Parse(time.RFC3339Nano, candidate.UpdatedAt)
-				if parseErr != nil {
-					return nil, nil, fmt.Errorf("parse listed session timestamp: %w", parseErr)
-				}
-				lastVisible := sessions.Cursor{UpdatedAt: updatedAt, ID: candidate.ID}
-				return items, nextCursorForVisiblePage(next, lastVisible), nil
+				// Only advertise a next page after an authorized visible record
+				// has been found beyond the page boundary.
+				return items, &lastVisible, nil
 			}
+			items = append(items, candidate.Session)
+			updatedAt, parseErr := time.Parse(time.RFC3339Nano, candidate.UpdatedAt)
+			if parseErr != nil {
+				return nil, nil, fmt.Errorf("parse listed session timestamp: %w", parseErr)
+			}
+			lastVisible = sessions.Cursor{UpdatedAt: updatedAt, ID: candidate.ID}
 		}
 		if next == nil {
 			return items, nil, nil
 		}
+		if next.ID == cursor.ID && next.UpdatedAt.Equal(cursor.UpdatedAt) {
+			return nil, nil, fmt.Errorf("list sessions cursor did not advance")
+		}
 		cursor = *next
 	}
-	return items, nil, nil
-}
-
-func nextCursorForVisiblePage(raw *sessions.Cursor, lastVisible sessions.Cursor) *sessions.Cursor {
-	if raw == nil {
-		return nil
-	}
-	return &lastVisible
 }
 
 func (s *sessionService) mount(router chi.Router) {
