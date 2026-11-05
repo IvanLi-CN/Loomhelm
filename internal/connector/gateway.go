@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,7 @@ type ClientInfo struct {
 type GatewayConfig struct {
 	TransportFactory TransportFactory
 	Process          ProcessTransportConfig
+	SocketPath       string
 	ClientInfo       ClientInfo
 }
 
@@ -49,8 +51,9 @@ type gatewayStartCall struct {
 	err           error
 }
 
-// Gateway owns independent app-server processes and never discovers or
-// controls the private stdio child owned by ChatGPT Desktop.
+// Gateway owns the logical client sessions connected to one Host-local
+// Codex runtime. The production factory uses the shared daemon socket;
+// Process is retained for isolated tests and explicit fixtures.
 type Gateway struct {
 	mu            sync.Mutex
 	reconcileMu   sync.Mutex
@@ -82,11 +85,16 @@ func NewGateway(config GatewayConfig) (*Gateway, error) {
 	}
 	factory := config.TransportFactory
 	if factory == nil {
-		processConfig := config.Process
-		factory = func(ctx context.Context) (RPCTransport, error) {
-			// The request context bounds initialize/thread-resume calls; it must
-			// not own the lifetime of the host-owned session process.
-			return NewProcessTransport(context.WithoutCancel(ctx), processConfig)
+		if strings.TrimSpace(config.SocketPath) != "" {
+			socketPath := config.SocketPath
+			factory = func(ctx context.Context) (RPCTransport, error) {
+				return NewUnixSocketTransport(context.WithoutCancel(ctx), UnixSocketTransportConfig{SocketPath: socketPath})
+			}
+		} else {
+			processConfig := config.Process
+			factory = func(ctx context.Context) (RPCTransport, error) {
+				return NewProcessTransport(context.WithoutCancel(ctx), processConfig)
+			}
 		}
 	}
 	return &Gateway{

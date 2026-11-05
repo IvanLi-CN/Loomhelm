@@ -77,6 +77,7 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 	}()
 
 	appGateway, err := connectorruntime.NewGateway(connectorruntime.GatewayConfig{
+		SocketPath: cfg.ConnectorAppServerSocket,
 		Process: connectorruntime.ProcessTransportConfig{
 			CommandPath: cfg.ConnectorAppServerCommand,
 			WorkingDir:  cfg.ConnectorWorkingDir,

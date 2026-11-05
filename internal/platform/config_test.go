@@ -301,7 +301,7 @@ func TestConnectorConfigurationDefaultsToBrowserEnrollment(t *testing.T) {
 	if config.ConnectorServerURL != DefaultConnectorBaseURL || config.ConnectorAPIKey != "" {
 		t.Fatalf("unexpected Connector public configuration: %+v", config)
 	}
-	if config.ConnectorHostID != "" || config.ConnectorToken != "" || config.ConnectorJournalPath == "" || config.ConnectorCredentialPath == "" || config.ConnectorAppServerCommand != "codex" {
+	if config.ConnectorHostID != "" || config.ConnectorToken != "" || config.ConnectorJournalPath == "" || config.ConnectorCredentialPath == "" || config.ConnectorAppServerCommand != "codex" || !strings.HasSuffix(config.ConnectorAppServerSocket, "/.codex/app-server-control/app-server-control.sock") {
 		t.Fatalf("Connector defaults still require internal credentials: %+v", config)
 	}
 	config, err = LoadConfigWithLookup(ComponentConnector, envLookup(map[string]string{
@@ -313,6 +313,12 @@ func TestConnectorConfigurationDefaultsToBrowserEnrollment(t *testing.T) {
 	}
 	if config.ConnectorServerURL != "https://platform.example.test/loomhelm" || config.ConnectorAPIKey != "lhk_test" {
 		t.Fatalf("Connector override was not applied: %+v", config)
+	}
+	config, err = LoadConfigWithLookup(ComponentConnector, envLookup(map[string]string{
+		"LOOMHELM_CODEX_APP_SERVER_SOCKET": "/tmp/codex-daemon.sock",
+	}))
+	if err != nil || config.ConnectorAppServerSocket != "/tmp/codex-daemon.sock" {
+		t.Fatalf("daemon socket override was not applied: config=%+v err=%v", config, err)
 	}
 }
 

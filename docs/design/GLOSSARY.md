@@ -4,6 +4,10 @@ Design vocabulary for the shared desktop and mobile workspace. Product meanings 
 
 ## Language
 
+**Client (客户端)**: The independently runnable local Loomhelm program on a Host that interacts with Codex and provides development-task assistance; it may connect to the Server for synchronization and collaboration.
+
+_Avoid_: Naming this product endpoint Connector, Host manager, or treating Codex or Host as additional product endpoints.
+
 **Workbench (工作台)**: The default global workspace spanning projects and their conversations, pending decisions and exceptions.
 
 _Avoid_: Project workbench when referring to the cross-project entry.
@@ -67,3 +71,11 @@ _Avoid_: Treating each sub-agent as another directly associated task session.
 **Conversation file (对话文件)**: A file referenced or produced within a conversation, understood in the context of the associated messages and work.
 
 _Avoid_: Artifacts module as a user-facing category for these files.
+
+**Codex app-server daemon (Codex app-server 守护进程)**: The shared local Codex execution service used by Codex CLI and authorized Loomhelm host-side operations to list, resume, send to and observe Codex threads.
+
+_Avoid_: Treating an independently spawned app-server process as the desktop's shared daemon.
+
+**Live session (活动会话)**: A Codex thread and its current turn state as observed through the shared app-server daemon, including pending events, approvals and interruption ownership.
+
+_Avoid_: Calling a history-only read or cold resume a live-session attachment.
