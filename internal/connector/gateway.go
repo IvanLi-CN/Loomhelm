@@ -22,6 +22,28 @@ type ClientInfo struct {
 	Version string
 }
 
+// CapabilityState is deliberately more precise than a boolean. A method is
+// unknown until the host actually advertises or accepts it; an unsupported
+// response must stay visible to the source projection.
+type CapabilityState string
+
+const (
+	CapabilityUnknown     CapabilityState = "unknown"
+	CapabilitySupported   CapabilityState = "supported"
+	CapabilityUnsupported CapabilityState = "unsupported"
+)
+
+type AppServerHandshake struct {
+	ProtocolVersion string
+	ServerName      string
+	ServerTitle     string
+	ServerVersion   string
+	Build           string
+	ExperimentalAPI bool
+	Capabilities    map[string]CapabilityState
+	Raw             json.RawMessage
+}
+
 type GatewayConfig struct {
 	TransportFactory TransportFactory
 	Process          ProcessTransportConfig
@@ -33,6 +55,7 @@ type gatewaySession struct {
 	session        protocol.GatewaySession
 	transport      RPCTransport
 	resumeResponse json.RawMessage
+	handshake      AppServerHandshake
 }
 
 type gatewayStartRecord struct {
@@ -162,7 +185,8 @@ func (g *Gateway) StartNewSessionInNamespace(ctx context.Context, namespace Comm
 	if err != nil {
 		return g.finishNewSessionStart(startKey, call, protocol.GatewaySession{}, err)
 	}
-	if err := g.initialize(ctx, transport); err != nil {
+	handshake, err := g.initialize(ctx, transport)
+	if err != nil {
 		_ = transport.Close()
 		return g.finishNewSessionStart(startKey, call, protocol.GatewaySession{}, err)
 	}
@@ -172,7 +196,7 @@ func (g *Gateway) StartNewSessionInNamespace(ctx context.Context, namespace Comm
 		Path:       protocol.SessionPathNew,
 	}
 	g.mu.Lock()
-	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport}
+	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport, handshake: handshake}
 	g.mu.Unlock()
 	return g.finishNewSessionStart(startKey, call, session, nil)
 }
@@ -243,7 +267,8 @@ func (g *Gateway) ReconcileSession(ctx context.Context, externalThreadRef string
 	if err != nil {
 		return protocol.Reconciliation{}, err
 	}
-	if err := g.initialize(ctx, transport); err != nil {
+	handshake, err := g.initialize(ctx, transport)
+	if err != nil {
 		_ = transport.Close()
 		return protocol.Reconciliation{}, err
 	}
@@ -280,7 +305,7 @@ func (g *Gateway) ReconcileSession(ctx context.Context, externalThreadRef string
 			previous = append(previous, entry.transport)
 		}
 	}
-	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport, resumeResponse: append(json.RawMessage(nil), result.Raw...)}
+	g.sessions[session.Handle] = gatewaySession{session: session, transport: transport, resumeResponse: append(json.RawMessage(nil), result.Raw...), handshake: handshake}
 	g.mu.Unlock()
 	g.startMu.Lock()
 	for startKey, cached := range g.startSessions {
@@ -333,6 +358,19 @@ func (g *Gateway) TransportFor(_ context.Context, session protocol.GatewaySessio
 	return entry.transport, nil
 }
 
+func (g *Gateway) HandshakeFor(_ context.Context, session protocol.GatewaySession) (AppServerHandshake, error) {
+	if session.Handle == "" {
+		return AppServerHandshake{}, errors.New("gateway session handle must not be empty")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	entry, ok := g.sessions[session.Handle]
+	if !ok {
+		return AppServerHandshake{}, fmt.Errorf("gateway session %q is not available", session.Handle)
+	}
+	return cloneHandshake(entry.handshake), nil
+}
+
 func (g *Gateway) CloseSession(_ context.Context, session protocol.GatewaySession) error {
 	g.reconcileMu.Lock()
 	defer g.reconcileMu.Unlock()
@@ -355,25 +393,49 @@ func (g *Gateway) CloseSession(_ context.Context, session protocol.GatewaySessio
 	return entry.transport.Close()
 }
 
-func (g *Gateway) initialize(ctx context.Context, transport RPCTransport) error {
+func (g *Gateway) initialize(ctx context.Context, transport RPCTransport) (AppServerHandshake, error) {
+	return initializeAppServer(ctx, transport, g.client)
+}
+
+func cloneHandshake(value AppServerHandshake) AppServerHandshake {
+	value.Raw = append(json.RawMessage(nil), value.Raw...)
+	if value.Capabilities != nil {
+		capabilities := make(map[string]CapabilityState, len(value.Capabilities))
+		for key, state := range value.Capabilities {
+			capabilities[key] = state
+		}
+		value.Capabilities = capabilities
+	}
+	return value
+}
+
+func initializeAppServer(ctx context.Context, transport RPCTransport, client ClientInfo) (AppServerHandshake, error) {
 	params := mustRawJSON(map[string]any{
 		"clientInfo": map[string]string{
-			"name":    g.client.Name,
-			"title":   g.client.Title,
-			"version": g.client.Version,
+			"name":    client.Name,
+			"title":   client.Title,
+			"version": client.Version,
 		},
+		"capabilities": map[string]any{"experimentalApi": true},
 	})
 	response, err := transport.Call(ctx, "initialize", params)
 	if err != nil {
-		return err
+		return AppServerHandshake{}, err
 	}
 	if response.Error != nil {
-		return fmt.Errorf("app-server initialize failed with code %d", response.Error.Code)
+		return AppServerHandshake{}, fmt.Errorf("app-server initialize failed with code %d: %s", response.Error.Code, response.Error.Message)
 	}
 	if len(response.Result) == 0 {
-		return errors.New("app-server initialize returned no result")
+		return AppServerHandshake{}, errors.New("app-server initialize returned no result")
 	}
-	return transport.Notify(ctx, "initialized", json.RawMessage(`{}`))
+	handshake, err := parseAppServerHandshake(response.Result)
+	if err != nil {
+		return AppServerHandshake{}, err
+	}
+	if err := transport.Notify(ctx, "initialized", json.RawMessage(`{}`)); err != nil {
+		return AppServerHandshake{}, err
+	}
+	return handshake, nil
 }
 
 func threadIDFromResult(result json.RawMessage) string {

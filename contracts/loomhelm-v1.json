@@ -112,6 +112,249 @@
         "items": {"type": "array", "items": {"$ref": "#/types/HostShare"}}
       }
     },
+    "CodexSourceState": {
+      "type": "string",
+      "enum": ["online", "offline", "unavailable"]
+    },
+    "CodexSyncState": {
+      "type": "string",
+      "enum": ["never", "syncing", "complete", "partial", "stale", "failed"]
+    },
+    "CodexSourceStatus": {
+      "type": "string",
+      "enum": ["active", "archived", "deleted", "unavailable"]
+    },
+    "CodexHistoryState": {
+      "type": "string",
+      "enum": ["pending", "complete", "partial", "failed"]
+    },
+    "CodexTitleSyncState": {
+      "type": "string",
+      "enum": ["synced", "pending", "failed", "conflict", "paused", "unsupported"]
+    },
+    "CodexThreadSourceKind": {
+      "type": "string",
+      "enum": ["main", "subagent"]
+    },
+    "CodexTitleConflict": {
+      "type": "object",
+      "required": ["loomhelm_title", "codex_title", "detected_at"],
+      "properties": {
+        "loomhelm_title": {"type": "string"},
+        "codex_title": {"type": "string"},
+        "detected_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CodexSource": {
+      "type": "object",
+      "required": ["host_id", "host_name", "state", "sync_state", "build", "capabilities", "capability_states", "as_of"],
+      "properties": {
+        "host_id": {"type": "string"},
+        "host_name": {"type": "string"},
+        "state": {"$ref": "#/types/CodexSourceState"},
+        "sync_state": {"$ref": "#/types/CodexSyncState"},
+        "build": {"type": "string"},
+        "protocol_version": {"type": "string"},
+        "capabilities": {"type": "array", "items": {"type": "string"}},
+        "capability_states": {"type": "object"},
+        "as_of": {"type": "string", "format": "date-time"},
+        "last_error": {"type": "string"}
+      }
+    },
+    "CodexProject": {
+      "type": "object",
+      "required": ["host_id", "project_id", "name", "snapshot_state", "as_of"],
+      "properties": {
+        "host_id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "name": {"type": "string"},
+        "cwd": {"type": "string"},
+        "loomhelm_project_id": {"type": "string"},
+        "snapshot_state": {"$ref": "#/types/CodexSyncState"},
+        "as_of": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CodexConversation": {
+      "type": "object",
+      "required": ["host_id", "thread_id", "conversation_title", "preview", "source_kind", "source_status", "history_state", "files_complete", "read_only", "title_sync_state", "as_of", "updated_at"],
+      "properties": {
+        "host_id": {"type": "string"},
+        "thread_id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "project_name": {"type": "string"},
+        "conversation_title": {"type": "string"},
+        "codex_title": {"type": "string"},
+        "preview": {"type": "string"},
+        "cwd": {"type": "string"},
+        "source_kind": {"$ref": "#/types/CodexThreadSourceKind"},
+        "source_status": {"$ref": "#/types/CodexSourceStatus"},
+        "history_state": {"$ref": "#/types/CodexHistoryState"},
+        "files_complete": {"type": "boolean"},
+        "read_only": {"type": "boolean"},
+        "can_edit_title": {"type": "boolean"},
+        "title_sync_state": {"$ref": "#/types/CodexTitleSyncState"},
+        "title_sync_error": {"type": "string"},
+        "title_conflict": {"$ref": "#/types/CodexTitleConflict"},
+        "bound_task_id": {"type": "string"},
+        "bound_session_id": {"type": "string"},
+        "as_of": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CodexHistoryEvent": {
+      "type": "object",
+      "required": ["event_id", "sequence", "event_type", "raw_payload", "readable_fallback", "occurred_at"],
+      "properties": {
+        "event_id": {"type": "string"},
+        "sequence": {"type": "integer", "format": "int64"},
+        "event_type": {"type": "string"},
+        "raw_payload": {"kind": "raw-json"},
+        "readable_fallback": {"type": "string"},
+        "occurred_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "CodexFileMaterial": {
+      "type": "object",
+      "required": ["path", "content_type", "size", "sha256", "complete"],
+      "properties": {
+        "path": {"type": "string"},
+        "content_type": {"type": "string"},
+        "size": {"type": "integer", "format": "int64"},
+        "sha256": {"type": "string"},
+        "content_ref": {"type": "string"},
+        "complete": {"type": "boolean"}
+      }
+    },
+    "CodexFileContentResponse": {
+      "type": "object",
+      "required": ["file", "content_base64", "content_version", "offset", "next_offset", "total_size", "complete", "bytes_available"],
+      "properties": {
+        "file": {"$ref": "#/types/CodexFileMaterial"},
+        "content_base64": {"type": "string"},
+        "content_version": {"type": "string"},
+        "offset": {"type": "integer", "format": "int64"},
+        "next_offset": {"type": "integer", "format": "int64"},
+        "total_size": {"type": "integer", "format": "int64"},
+        "complete": {"type": "boolean"},
+        "bytes_available": {"type": "boolean"}
+      }
+    },
+    "CodexSourceListResponse": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {"items": {"type": "array", "items": {"$ref": "#/types/CodexSource"}}}
+    },
+    "CodexProjectListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/CodexProject"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
+    "CodexConversationListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/CodexConversation"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"},
+        "as_of": {"type": "string", "format": "date-time"},
+        "snapshot_state": {"$ref": "#/types/CodexSyncState"}
+      }
+    },
+    "CodexConversationDetail": {
+      "type": "object",
+      "required": ["conversation", "history", "files"],
+      "properties": {
+        "conversation": {"$ref": "#/types/CodexConversation"},
+        "history": {"type": "array", "items": {"$ref": "#/types/CodexHistoryEvent"}},
+        "files": {"type": "array", "items": {"$ref": "#/types/CodexFileMaterial"}}
+      }
+    },
+    "CodexTitleUpdateRequest": {
+      "type": "object",
+      "required": ["title", "request_id"],
+      "properties": {
+        "title": {"type": "string"},
+        "request_id": {"type": "string"},
+        "expected_codex_title": {"type": "string"},
+        "resolution": {"type": "string", "enum": ["use_loomhelm", "use_codex", "retry"]}
+      }
+    },
+    "CodexConversationResponse": {
+      "type": "object",
+      "required": ["conversation"],
+      "properties": {"conversation": {"$ref": "#/types/CodexConversation"}}
+    },
+    "CodexMappingRequest": {
+      "type": "object",
+      "required": ["loomhelm_project_id"],
+      "properties": {"loomhelm_project_id": {"type": "string"}}
+    },
+    "CodexProjectResponse": {
+      "type": "object",
+      "required": ["project"],
+      "properties": {"project": {"$ref": "#/types/CodexProject"}}
+    },
+    "CodexBindRequest": {
+      "type": "object",
+      "required": ["task_id", "request_id"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "request_id": {"type": "string"},
+        "confirm_share": {"type": "boolean"},
+        "expected_as_of": {"type": "string"}
+      }
+    },
+    "CodexSyncRequest": {
+      "type": "object",
+      "properties": {
+        "host_id": {"type": "string"},
+        "request_id": {"type": "string"}
+      }
+    },
+    "CodexSyncResponse": {
+      "type": "object",
+      "required": ["operation_id", "state"],
+      "properties": {
+        "operation_id": {"type": "string"},
+        "state": {"$ref": "#/types/CodexSyncState"},
+        "as_of": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ListCodexProjectsQuery": {
+      "type": "object",
+      "properties": {
+        "host_id": {"type": "string"},
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "ListCodexConversationsQuery": {
+      "type": "object",
+      "properties": {
+        "host_id": {"type": "string"},
+        "project_id": {"type": "string"},
+        "loomhelm_project_id": {"type": "string"},
+        "search": {"type": "string"},
+        "bound": {"type": "boolean"},
+        "include_archived": {"type": "boolean"},
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "GetCodexConversationFileQuery": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string"},
+        "content_version": {"type": "string"},
+        "offset": {"type": "integer", "format": "int64"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
     "CreateUserCredentialRequest": {
       "type": "object",
       "required": ["name"],
@@ -686,11 +929,352 @@
         "after_cursor": {"type": "string"},
         "limit": {"type": "integer", "format": "int64"}
       }
+    },
+    "DeploymentRole": {
+      "type": "string",
+      "enum": ["deployment_observer", "deployment_operator", "deployment_releaser", "deployment_recovery", "installation_owner"]
+    },
+    "DeploymentCapability": {
+      "type": "string",
+      "enum": ["view", "preflight", "stage", "promote", "rollback", "reconcile", "emergency_drain"]
+    },
+    "DeploymentCandidate": {
+      "type": "object",
+      "required": ["id", "source_sha", "artifact_digest", "web_digest", "state_version", "read_min", "read_max", "migration_mode", "status", "created_at", "updated_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "source_sha": {"type": "string"},
+        "artifact_digest": {"type": "string"},
+        "web_digest": {"type": "string"},
+        "state_version": {"type": "integer", "format": "int64"},
+        "read_min": {"type": "integer", "format": "int64"},
+        "read_max": {"type": "integer", "format": "int64"},
+        "migration_mode": {"type": "string", "enum": ["none", "expand"]},
+        "status": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "DeploymentSlot": {
+      "type": "object",
+      "required": ["slot", "state"],
+      "properties": {
+        "slot": {"type": "string", "enum": ["blue", "green"]},
+        "state": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "worker_generation": {"type": "integer", "format": "int64"}
+      }
+    },
+    "DeploymentOperation": {
+      "type": "object",
+      "required": ["id", "kind", "status", "created_at", "updated_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string", "enum": ["preflight", "stage", "promote", "rollback", "drain", "reconcile"]},
+        "status": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "slot": {"type": "string", "enum": ["blue", "green"]},
+        "target_operation_id": {"type": "string"},
+        "expected_current_fingerprint": {"type": "string"},
+        "error_code": {"type": "string"},
+        "error_message": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "finished_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "DeploymentEvent": {
+      "type": "object",
+      "required": ["id", "operation_id", "type", "created_at"],
+      "properties": {
+        "id": {"type": "integer", "format": "int64"},
+        "operation_id": {"type": "string"},
+        "type": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "slot": {"type": "string", "enum": ["blue", "green"]},
+        "worker_generation": {"type": "integer", "format": "int64"},
+        "observed_fingerprint": {"type": "string"},
+        "details": {"$ref": "#/types/JSONValue"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "DeploymentStatus": {
+      "type": "object",
+      "required": ["active_slot", "active_candidate_id", "active_fingerprint", "next_worker_generation", "slots", "capabilities", "controller_ready"],
+      "properties": {
+        "active_slot": {"type": "string"},
+        "active_candidate_id": {"type": "string"},
+        "active_fingerprint": {"type": "string"},
+        "next_worker_generation": {"type": "integer", "format": "int64"},
+        "slots": {"type": "array", "items": {"$ref": "#/types/DeploymentSlot"}},
+        "latest_operation": {"$ref": "#/types/DeploymentOperation"},
+        "role": {"$ref": "#/types/DeploymentRole"},
+        "capabilities": {"type": "array", "items": {"$ref": "#/types/DeploymentCapability"}},
+        "controller_ready": {"type": "boolean"}
+      }
+    },
+    "DeploymentStatusResponse": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {"status": {"$ref": "#/types/DeploymentStatus"}}
+    },
+    "DeploymentComponentObservation": {
+      "type": "object",
+      "required": ["state", "load_state", "observed_at", "live", "ready", "requests_total", "responses_4xx", "responses_5xx", "active_requests", "active_mcp_requests", "active_gateway_requests"],
+      "properties": {
+        "state": {"type": "string"},
+        "reason": {"type": "string"},
+        "load_state": {"type": "string"},
+        "load_reason": {"type": "string"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "live": {"type": "boolean"},
+        "ready": {"type": "boolean"},
+        "candidate_source_sha": {"type": "string"},
+        "artifact_digest": {"type": "string"},
+        "requests_total": {"type": "integer", "format": "int64"},
+        "responses_4xx": {"type": "integer", "format": "int64"},
+        "responses_5xx": {"type": "integer", "format": "int64"},
+        "active_requests": {"type": "integer", "format": "int64"},
+        "active_mcp_requests": {"type": "integer", "format": "int64"},
+        "active_gateway_requests": {"type": "integer", "format": "int64"},
+        "queue_depth": {"type": "integer", "format": "int64"},
+        "running_jobs": {"type": "integer", "format": "int64"},
+        "worker_capacity": {"type": "integer", "format": "int64"},
+        "worker_generation": {"type": "integer", "format": "int64"}
+      }
+    },
+    "DeploymentSlotTrafficObservation": {
+      "type": "object",
+      "required": ["state", "requests_total", "active_requests"],
+      "properties": {
+        "state": {"type": "string"},
+        "reason": {"type": "string"},
+        "requests_total": {"type": "integer", "format": "int64"},
+        "request_rate": {"type": "number"},
+        "share": {"type": "number"},
+        "error_rate": {"type": "number"},
+        "active_requests": {"type": "integer", "format": "int64"}
+      }
+    },
+    "DeploymentSlotLoadObservation": {
+      "type": "object",
+      "required": ["state", "http_active_requests"],
+      "properties": {
+        "state": {"type": "string"},
+        "reason": {"type": "string"},
+        "http_active_requests": {"type": "integer", "format": "int64"},
+        "worker_running_jobs": {"type": "integer", "format": "int64"},
+        "worker_capacity": {"type": "integer", "format": "int64"},
+        "worker_utilization": {"type": "number"}
+      }
+    },
+    "DeploymentSlotObservation": {
+      "type": "object",
+      "required": ["slot", "desired_state", "server", "worker", "traffic", "load"],
+      "properties": {
+        "slot": {"type": "string", "enum": ["blue", "green"]},
+        "desired_state": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "worker_generation": {"type": "integer", "format": "int64"},
+        "server": {"$ref": "#/types/DeploymentComponentObservation"},
+        "worker": {"$ref": "#/types/DeploymentComponentObservation"},
+        "traffic": {"$ref": "#/types/DeploymentSlotTrafficObservation"},
+        "load": {"$ref": "#/types/DeploymentSlotLoadObservation"}
+      }
+    },
+    "DeploymentObservation": {
+      "type": "object",
+      "required": ["state", "observed_at", "desired_active_slot", "migration_state", "sample_window_seconds", "shared_worker_load_state", "slots"],
+      "properties": {
+        "state": {"type": "string"},
+        "reason": {"type": "string"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "desired_active_slot": {"type": "string"},
+        "observed_active_slot": {"type": "string", "enum": ["blue", "green"]},
+        "observed_active_candidate_sha": {"type": "string"},
+        "migration_state": {"type": "string"},
+        "sample_window_seconds": {"type": "number"},
+        "total_request_rate": {"type": "number"},
+        "total_error_rate": {"type": "number"},
+        "shared_worker_load_state": {"type": "string"},
+        "shared_worker_load_reason": {"type": "string"},
+        "shared_worker_queue_depth": {"type": "integer", "format": "int64"},
+        "shared_worker_running_jobs": {"type": "integer", "format": "int64"},
+        "shared_worker_capacity": {"type": "integer", "format": "int64"},
+        "shared_worker_utilization": {"type": "number"},
+        "slots": {"type": "array", "items": {"$ref": "#/types/DeploymentSlotObservation"}}
+      }
+    },
+    "DeploymentObservationResponse": {
+      "type": "object",
+      "required": ["observation"],
+      "properties": {"observation": {"$ref": "#/types/DeploymentObservation"}}
+    },
+    "DeploymentCandidateListResponse": {
+      "type": "object",
+      "required": ["candidates"],
+      "properties": {"candidates": {"type": "array", "items": {"$ref": "#/types/DeploymentCandidate"}}}
+    },
+    "DeploymentCandidateResponse": {
+      "type": "object",
+      "required": ["candidate"],
+      "properties": {"candidate": {"$ref": "#/types/DeploymentCandidate"}}
+    },
+    "DeploymentEventListResponse": {
+      "type": "object",
+      "required": ["events"],
+      "properties": {"events": {"type": "array", "items": {"$ref": "#/types/DeploymentEvent"}}}
+    },
+    "DeploymentOperationResponse": {
+      "type": "object",
+      "required": ["operation", "created"],
+      "properties": {
+        "operation": {"$ref": "#/types/DeploymentOperation"},
+        "created": {"type": "boolean"}
+      }
+    },
+    "DeploymentOperationRequest": {
+      "type": "object",
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "expected_current_fingerprint": {"type": "string"},
+        "slot": {"type": "string"},
+        "operation_id": {"type": "string"},
+        "confirm": {"type": "boolean"}
+      }
+    },
+    "ListDeploymentEventsQuery": {
+      "type": "object",
+      "properties": {"limit": {"type": "integer", "format": "int64"}}
     }
   },
   "rest": {
     "base_path": "/api/v1",
     "operations": [
+      {
+        "operation_id": "getDeploymentStatus",
+        "method": "GET",
+        "path": "/deployment",
+        "response_type": "DeploymentStatusResponse",
+        "response_status": 200,
+        "summary": "Read installation deployment status and the caller's deployment capabilities",
+        "mcp_tool": {"name": "loomhelm.get_deployment_status", "description": "Read deployment status, active and retained slots, worker generation and caller capabilities."}
+      },
+      {
+        "operation_id": "getDeploymentObservations",
+        "method": "GET",
+        "path": "/deployment/observations",
+        "response_type": "DeploymentObservationResponse",
+        "response_status": 200,
+        "summary": "Read live traffic migration and per-slot load observations",
+        "mcp_tool": {"name": "loomhelm.get_deployment_observations", "description": "Read live traffic migration, observed route, request rates, traffic shares and per-slot runtime load."}
+      },
+      {
+        "operation_id": "listDeploymentCandidates",
+        "method": "GET",
+        "path": "/deployment/candidates",
+        "response_type": "DeploymentCandidateListResponse",
+        "response_status": 200,
+        "summary": "List immutable deployment candidates visible to the installation",
+        "mcp_tool": {"name": "loomhelm.list_deployment_candidates", "description": "List immutable deployment candidate identities and compatibility windows."}
+      },
+      {
+        "operation_id": "registerDeploymentCandidate",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/candidates",
+        "body_type": "JSONValue",
+        "response_type": "DeploymentCandidateResponse",
+        "response_status": 201,
+        "summary": "Register an immutable deployment envelope for this installation"
+      },
+      {
+        "operation_id": "listDeploymentEvents",
+        "method": "GET",
+        "path": "/deployment/events",
+        "query_type": "ListDeploymentEventsQuery",
+        "response_type": "DeploymentEventListResponse",
+        "response_status": 200,
+        "summary": "Read deployment audit events",
+        "mcp_tool": {"name": "loomhelm.list_deployment_events", "description": "Read append-only deployment audit events without changing deployment state."}
+      },
+      {
+        "operation_id": "getDeploymentOperation",
+        "method": "GET",
+        "path": "/deployment/operations/{operation_id}",
+        "path_params": {"operation_id": "string"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 200,
+        "summary": "Read one durable deployment operation",
+        "mcp_tool": {"name": "loomhelm.get_deployment_operation", "description": "Read one deployment operation and reconcile its durable result before retrying."}
+      },
+      {
+        "operation_id": "preflightDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/preflight",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Start an idempotent deployment candidate preflight"
+      },
+      {
+        "operation_id": "stageDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/stage",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Stage a validated immutable candidate in the inactive slot"
+      },
+      {
+        "operation_id": "promoteDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/promote",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Promote the staged candidate after fencing and readiness checks"
+      },
+      {
+        "operation_id": "rollbackDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/rollback",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Start a compatibility-checked deployment switchback"
+      },
+      {
+        "operation_id": "drainDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/drain",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Start a bounded drain or recovery action"
+      },
+      {
+        "operation_id": "reconcileDeployment",
+        "browser_only": true,
+        "method": "POST",
+        "path": "/deployment/reconcile",
+        "body_type": "DeploymentOperationRequest",
+        "request_headers": {"idempotency_key": "Idempotency-Key"},
+        "response_type": "DeploymentOperationResponse",
+        "response_status": 202,
+        "summary": "Reconcile an accepted or unknown deployment operation"
+      },
       {
         "operation_id": "getBrowserSession",
         "browser_only": true,
@@ -787,6 +1371,91 @@
         "response_status": 204,
         "summary": "Revoke explicit Host access from a user",
         "mcp_tool": {"name": "loomhelm.revoke_host_share", "description": "Let only the Host owner revoke an explicit share grant."}
+      },
+      {
+        "operation_id": "listCodexSources",
+        "method": "GET",
+        "path": "/codex/sources",
+        "response_type": "CodexSourceListResponse",
+        "summary": "Read the configured default Host Codex source snapshot",
+        "mcp_tool": {"name": "loomhelm.list_codex_sources", "description": "Read the configured default Host's Codex source capability and synchronization snapshot without inventing unsupported capability state."}
+      },
+      {
+        "operation_id": "listCodexProjects",
+        "method": "GET",
+        "path": "/codex/projects",
+        "query_type": "ListCodexProjectsQuery",
+        "response_type": "CodexProjectListResponse",
+        "summary": "List Host-scoped Codex projects and explicit Loomhelm mappings",
+        "mcp_tool": {"name": "loomhelm.list_codex_projects", "description": "List imported Codex project metadata and explicit Loomhelm project mappings."}
+      },
+      {
+        "operation_id": "listCodexConversations",
+        "method": "GET",
+        "path": "/codex/conversations",
+        "query_type": "ListCodexConversationsQuery",
+        "response_type": "CodexConversationListResponse",
+        "summary": "List authorized Codex conversation snapshots with bounded metadata search",
+        "mcp_tool": {"name": "loomhelm.list_codex_conversations", "description": "List Host-scoped Codex conversations using title, preview and metadata search only; incomplete history remains outside project visibility."}
+      },
+      {
+        "operation_id": "getCodexConversation",
+        "method": "GET",
+        "path": "/codex/conversations/{host_id}/{thread_id}",
+        "path_params": {"host_id": "string", "thread_id": "string"},
+        "response_type": "CodexConversationDetail",
+        "summary": "Read one Host-scoped Codex conversation snapshot, preserved history and file materials",
+        "mcp_tool": {"name": "loomhelm.get_codex_conversation", "description": "Read an authorized Codex conversation including raw-preserved events, readable fallbacks and supported file material status."}
+      },
+      {
+        "operation_id": "getCodexConversationFile",
+        "method": "GET",
+        "path": "/codex/conversations/{host_id}/{thread_id}/file",
+        "path_params": {"host_id": "string", "thread_id": "string"},
+        "query_type": "GetCodexConversationFileQuery",
+        "response_type": "CodexFileContentResponse",
+        "summary": "Read a bounded chunk of an authorized Codex conversation file material",
+        "mcp_tool": {"name": "loomhelm.get_codex_conversation_file", "description": "Read bounded chunks of persisted, authorized Codex conversation file bytes and verify them with the returned sha256 and content_version."}
+      },
+      {
+        "operation_id": "updateCodexConversationTitle",
+        "method": "PATCH",
+        "path": "/codex/conversations/{host_id}/{thread_id}/title",
+        "path_params": {"host_id": "string", "thread_id": "string"},
+        "body_type": "CodexTitleUpdateRequest",
+        "response_type": "CodexConversationResponse",
+        "summary": "Update the Loomhelm conversation title with explicit Codex writeback state",
+        "mcp_tool": {"name": "loomhelm.update_codex_conversation_title", "description": "Update a non-empty Loomhelm conversation title; dual write permission, source capability, conflict and bounded retry state remain explicit."}
+      },
+      {
+        "operation_id": "mapCodexProject",
+        "method": "POST",
+        "path": "/codex/projects/{host_id}/{project_id}/mapping",
+        "path_params": {"host_id": "string", "project_id": "string"},
+        "body_type": "CodexMappingRequest",
+        "response_type": "CodexProjectResponse",
+        "summary": "Explicitly map a Codex project to a Loomhelm project",
+        "mcp_tool": {"name": "loomhelm.map_codex_project", "description": "Create or confirm an explicit Codex project to Loomhelm project mapping; source grouping never grants project access."}
+      },
+      {
+        "operation_id": "bindCodexConversation",
+        "method": "POST",
+        "path": "/codex/conversations/{host_id}/{thread_id}/bind",
+        "path_params": {"host_id": "string", "thread_id": "string"},
+        "body_type": "CodexBindRequest",
+        "response_type": "CodexConversationResponse",
+        "summary": "Bind a complete Codex conversation snapshot to one existing Task",
+        "mcp_tool": {"name": "loomhelm.bind_codex_conversation", "description": "Bind one Host-scoped Codex thread to an authorized Task only after complete history and supported file material are ready; retries are idempotent."}
+      },
+      {
+        "operation_id": "syncCodex",
+        "method": "POST",
+        "path": "/codex/sync",
+        "body_type": "CodexSyncRequest",
+        "response_type": "CodexSyncResponse",
+        "response_status": 202,
+        "summary": "Request a bounded Codex source refresh without fabricating completion",
+        "mcp_tool": {"name": "loomhelm.sync_codex", "description": "Request a bounded default-Host Codex refresh and return an observable operation identity and current snapshot state."}
       },
       {
         "operation_id": "listProjects",

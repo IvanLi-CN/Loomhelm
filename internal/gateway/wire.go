@@ -21,25 +21,34 @@ const (
 	// Artifact publication adds new frames and therefore requires both ends of
 	// the authenticated link to be upgraded together.
 	ProtocolVersion = "loomhelm.gateway.v2"
-	DefaultMaxFrame = 4 << 20
+	// Source snapshots carry complete history and supported file material. The
+	// gateway keeps one bounded frame contract for both sides of the link.
+	DefaultMaxFrame = 32 << 20
 )
 
 type MessageType string
 
 const (
-	MessageHello          MessageType = "hello"
-	MessageHelloAck       MessageType = "hello_ack"
-	MessageCommand        MessageType = "command"
-	MessageCommandAck     MessageType = "command_ack"
-	MessageEvent          MessageType = "event"
-	MessageHeartbeat      MessageType = "heartbeat"
-	MessageHeartbeatAck   MessageType = "heartbeat_ack"
-	MessageArtifactBegin  MessageType = "artifact_begin"
-	MessageArtifactChunk  MessageType = "artifact_chunk"
-	MessageArtifactCommit MessageType = "artifact_commit"
-	MessageArtifactAbort  MessageType = "artifact_abort"
-	MessageArtifactAck    MessageType = "artifact_ack"
-	MessageError          MessageType = "error"
+	MessageHello                MessageType = "hello"
+	MessageHelloAck             MessageType = "hello_ack"
+	MessageCommand              MessageType = "command"
+	MessageCommandAck           MessageType = "command_ack"
+	MessageEvent                MessageType = "event"
+	MessageHeartbeat            MessageType = "heartbeat"
+	MessageHeartbeatAck         MessageType = "heartbeat_ack"
+	MessageArtifactBegin        MessageType = "artifact_begin"
+	MessageArtifactChunk        MessageType = "artifact_chunk"
+	MessageArtifactCommit       MessageType = "artifact_commit"
+	MessageArtifactAbort        MessageType = "artifact_abort"
+	MessageArtifactAck          MessageType = "artifact_ack"
+	MessageSourceCommand        MessageType = "source_command"
+	MessageSourceAck            MessageType = "source_ack"
+	MessageSourceEvent          MessageType = "source_event"
+	MessageSourceSnapshotBegin  MessageType = "source_snapshot_begin"
+	MessageSourceSnapshotChunk  MessageType = "source_snapshot_chunk"
+	MessageSourceSnapshotCommit MessageType = "source_snapshot_commit"
+	MessageSourceSnapshotAbort  MessageType = "source_snapshot_abort"
+	MessageError                MessageType = "error"
 )
 
 type WireError struct {
@@ -55,26 +64,58 @@ type WireCursor struct {
 	RetainedUntil string `json:"retained_until"`
 }
 
+type SourceCommand struct {
+	OperationID string `json:"operation_id"`
+	Method      string `json:"method"`
+	ThreadID    string `json:"thread_id"`
+	Title       string `json:"title,omitempty"`
+}
+
+type SourceAck struct {
+	OperationID string          `json:"operation_id"`
+	State       string          `json:"state"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	Error       *WireError      `json:"error,omitempty"`
+}
+
+type SourceSnapshotBegin struct {
+	OperationID string `json:"operation_id"`
+	TotalBytes  int64  `json:"total_bytes"`
+	SHA256      string `json:"sha256"`
+}
+
+type SourceNotification struct {
+	EventID  string          `json:"event_id,omitempty"`
+	Kind     string          `json:"kind"`
+	ThreadID string          `json:"thread_id"`
+	Title    *string         `json:"title,omitempty"`
+	Raw      json.RawMessage `json:"raw,omitempty"`
+}
+
 type Message struct {
-	Type           MessageType          `json:"type"`
-	RequestID      string               `json:"request_id,omitempty"`
-	Protocol       string               `json:"protocol,omitempty"`
-	HostID         string               `json:"host_id,omitempty"`
-	Generation     int64                `json:"generation,omitempty"`
-	SessionID      string               `json:"session_id,omitempty"`
-	RunID          string               `json:"run_id,omitempty"`
-	Cursor         string               `json:"cursor,omitempty"`
-	Cursors        []WireCursor         `json:"cursors,omitempty"`
-	Command        *protocol.Command    `json:"command,omitempty"`
-	Ack            *protocol.CommandAck `json:"ack,omitempty"`
-	Event          *protocol.Event      `json:"event,omitempty"`
-	Artifact       *protocol.Artifact   `json:"artifact,omitempty"`
-	EventID        string               `json:"event_id,omitempty"`
-	SourceEventID  string               `json:"source_event_id,omitempty"`
-	IdempotencyKey string               `json:"idempotency_key,omitempty"`
-	ChunkIndex     int64                `json:"chunk_index,omitempty"`
-	ChunkData      string               `json:"chunk_data,omitempty"`
-	Error          *WireError           `json:"error,omitempty"`
+	Type                MessageType          `json:"type"`
+	RequestID           string               `json:"request_id,omitempty"`
+	Protocol            string               `json:"protocol,omitempty"`
+	HostID              string               `json:"host_id,omitempty"`
+	Generation          int64                `json:"generation,omitempty"`
+	SessionID           string               `json:"session_id,omitempty"`
+	RunID               string               `json:"run_id,omitempty"`
+	Cursor              string               `json:"cursor,omitempty"`
+	Cursors             []WireCursor         `json:"cursors,omitempty"`
+	Command             *protocol.Command    `json:"command,omitempty"`
+	Ack                 *protocol.CommandAck `json:"ack,omitempty"`
+	Event               *protocol.Event      `json:"event,omitempty"`
+	Artifact            *protocol.Artifact   `json:"artifact,omitempty"`
+	SourceCommand       *SourceCommand       `json:"source_command,omitempty"`
+	SourceAck           *SourceAck           `json:"source_ack,omitempty"`
+	SourceEvent         *SourceNotification  `json:"source_event,omitempty"`
+	SourceSnapshotBegin *SourceSnapshotBegin `json:"source_snapshot_begin,omitempty"`
+	EventID             string               `json:"event_id,omitempty"`
+	SourceEventID       string               `json:"source_event_id,omitempty"`
+	IdempotencyKey      string               `json:"idempotency_key,omitempty"`
+	ChunkIndex          int64                `json:"chunk_index,omitempty"`
+	ChunkData           string               `json:"chunk_data,omitempty"`
+	Error               *WireError           `json:"error,omitempty"`
 }
 
 func (m Message) Validate() error {
@@ -128,6 +169,39 @@ func (m Message) Validate() error {
 		if err := validateArtifactAckMessage(m); err != nil {
 			return err
 		}
+	case MessageSourceCommand:
+		if strings.TrimSpace(m.RequestID) == "" || m.Generation <= 0 || m.SourceCommand == nil {
+			return errors.New("gateway source command requires request id, generation and payload")
+		}
+		if err := m.SourceCommand.validate(); err != nil {
+			return err
+		}
+	case MessageSourceAck:
+		if strings.TrimSpace(m.RequestID) == "" || m.Generation <= 0 || m.SourceAck == nil {
+			return errors.New("gateway source acknowledgement requires request id, generation and payload")
+		}
+		if err := m.SourceAck.validate(); err != nil {
+			return err
+		}
+	case MessageSourceEvent:
+		if m.Generation <= 0 || m.SourceEvent == nil {
+			return errors.New("gateway source event requires generation and payload")
+		}
+		if err := m.SourceEvent.validate(); err != nil {
+			return err
+		}
+	case MessageSourceSnapshotBegin:
+		if err := validateSourceSnapshotBeginMessage(m); err != nil {
+			return err
+		}
+	case MessageSourceSnapshotChunk:
+		if err := validateSourceSnapshotChunkMessage(m); err != nil {
+			return err
+		}
+	case MessageSourceSnapshotCommit, MessageSourceSnapshotAbort:
+		if err := validateSourceSnapshotTerminalMessage(m); err != nil {
+			return err
+		}
 	case MessageEvent:
 		if m.Event == nil || strings.TrimSpace(m.Event.Cursor) == "" || strings.TrimSpace(m.Event.SessionID) == "" {
 			return errors.New("gateway event requires a session id and event cursor")
@@ -161,6 +235,61 @@ func (m Message) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unsupported gateway message type %q", m.Type)
+	}
+	return nil
+}
+
+func (c SourceCommand) validate() error {
+	if strings.TrimSpace(c.OperationID) == "" {
+		return errors.New("gateway source command requires operation id")
+	}
+	switch c.Method {
+	case "thread/name/set":
+		if strings.TrimSpace(c.ThreadID) == "" {
+			return errors.New("gateway source title command requires thread id")
+		}
+		if strings.TrimSpace(c.Title) == "" {
+			return errors.New("gateway source title command requires a non-empty title")
+		}
+	case "source/sync":
+	default:
+		return fmt.Errorf("unsupported gateway source method %q", c.Method)
+	}
+	return nil
+}
+
+func (a SourceAck) validate() error {
+	if strings.TrimSpace(a.OperationID) == "" {
+		return errors.New("gateway source acknowledgement requires operation id")
+	}
+	switch a.State {
+	case "succeeded", "failed", "unsupported", "unknown":
+	default:
+		return fmt.Errorf("gateway source acknowledgement has unsupported state %q", a.State)
+	}
+	if a.Error != nil && strings.TrimSpace(a.Error.Code) == "" {
+		return errors.New("gateway source acknowledgement error requires a code")
+	}
+	if len(a.Payload) > 0 && !json.Valid(a.Payload) {
+		return errors.New("gateway source acknowledgement payload must be valid JSON")
+	}
+	return nil
+}
+
+func (n SourceNotification) validate() error {
+	if strings.TrimSpace(n.ThreadID) == "" {
+		return errors.New("gateway source event requires thread id")
+	}
+	switch n.Kind {
+	case "title_updated", "archived", "deleted", "unavailable":
+	default:
+		return fmt.Errorf("unsupported gateway source event kind %q", n.Kind)
+	}
+	if n.Kind == "title_updated" && (n.Title == nil || strings.TrimSpace(*n.Title) == "") {
+		return errors.New("gateway title event requires a non-empty title")
+	}
+	if len(n.Raw) > 0 && !json.Valid(n.Raw) {
+		return errors.New("gateway source event raw payload must be valid JSON")
 	}
 	return nil
 }

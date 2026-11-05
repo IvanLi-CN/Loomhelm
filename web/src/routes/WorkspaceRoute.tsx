@@ -2,7 +2,7 @@ import { FileText, Info, MessageCircle, Pause, Send, ShieldCheck, UserRound } fr
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 
-import { useOptionalProductionApi } from "@/app/providers";
+import { AppProviders, useOptionalProductionApi } from "@/app/providers";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,6 +18,10 @@ import { TaskRelationshipEditor } from "@/features/tasks/TaskRelations";
 import { taskWriteBlockReason } from "@/features/tasks/types";
 import { TaskReadRecovery, TaskStateBadge } from "@/components/product/TaskViews";
 import { queueOwnedFocusRestore } from "@/lib/focus-ownership";
+import { CodexConversationWorkspace } from "@/features/codex/CodexConversations";
+import { createCodexDemoApi } from "@/features/codex/demo-api";
+import { parseCodexRouteKey } from "@/features/codex/source";
+import { createProductionApiAssembly } from "@/lib/api/client";
 
 function WorkspaceHeader({ taskId, conversationId }: { taskId?: string; conversationId?: string }) {
   const runtime = useDemoRuntime();
@@ -218,6 +222,16 @@ export function TaskWorkspaceRoute() {
   return useOptionalDemoRuntime() ? <WorkspaceRoute taskId={taskId} /> : <ProductionTaskWorkspaceRoute initialRunId={runId} taskId={taskId} />;
 }
 
+function DemoCodexConversationWorkspace({ hostId, threadId }: { hostId: string; threadId: string }) {
+  const runtime = useOptionalDemoRuntime();
+  const apiAssembly = useMemo(() => createProductionApiAssembly({
+    client: createCodexDemoApi(),
+    auth: { status: "authenticated", principalId: "demo-codex", workspaceId: "default", sessionGeneration: 1 },
+    permissions: { canWrite: runtime?.canWrite ?? false, canManageProjects: runtime?.canManageProjects ?? false, isReadOnly: runtime?.isReadOnly ?? true }
+  }), [runtime?.canManageProjects, runtime?.canWrite, runtime?.isReadOnly]);
+  return <AppProviders apiAssembly={apiAssembly}><div data-demo-surface="u04-codex-source" data-visual-evidence-surface="u04-codex-source"><CodexConversationWorkspace hostId={hostId} threadId={threadId} /></div></AppProviders>;
+}
+
 export function ConversationWorkspaceRoute() {
   const { conversationId } = useParams({ from: "/conversations/$conversationId" });
   const { runId } = useSearch({ from: "/conversations/$conversationId" });
@@ -226,6 +240,8 @@ export function ConversationWorkspaceRoute() {
   const source = useOptionalProjectTaskSource();
   const assembly = useOptionalProductionApi();
   const sessionApi = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
+  const codexConversation = parseCodexRouteKey(conversationId);
+  if (codexConversation) return runtime ? <DemoCodexConversationWorkspace hostId={codexConversation.hostId} threadId={codexConversation.threadId} /> : <CodexConversationWorkspace hostId={codexConversation.hostId} threadId={codexConversation.threadId} />;
   if (!runtime) {
     const task = source?.tasks.find((candidate) => candidate.conversationId === conversationId);
     const project = source?.getProject(task?.projectId);

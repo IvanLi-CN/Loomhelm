@@ -150,6 +150,24 @@ func TestArtifactContentDownloadExposesCursorAddressedAPIMCPResponse(t *testing.
 	t.Fatal("artifact content download operation missing from contract")
 }
 
+func TestRequiredQueryFieldsRemainRequiredInGeneratedClient(t *testing.T) {
+	data, err := os.ReadFile("../../contracts/loomhelm-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source contract
+	if err := json.Unmarshal(data, &source); err != nil {
+		t.Fatal(err)
+	}
+	generated := (generator{contract: source}).apiClientTypeScript()
+	if !strings.Contains(generated, "export interface GetCodexConversationFileParams") || !strings.Contains(generated, "  path: string;") {
+		t.Fatal("required Codex file path was generated as optional")
+	}
+	if !strings.Contains(generated, "async getCodexConversationFile(request: GetCodexConversationFileParams):") || !strings.Contains(generated, "query.set(\"path\", String(request.path));") {
+		t.Fatal("required Codex file path is not enforced by the generated client")
+	}
+}
+
 func TestExtensibleErrorCodeRemainsOpenToFutureValues(t *testing.T) {
 	data, err := os.ReadFile("../../contracts/loomhelm-v1.json")
 	if err != nil {

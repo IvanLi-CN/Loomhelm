@@ -822,12 +822,47 @@ func (s *Service) CloseConnection(ctx context.Context, connection Connection) er
 		return fmt.Errorf("delete host connection: %w", err)
 	}
 	if result.RowsAffected() == 1 {
+		now := s.now()
 		if _, err := tx.Exec(ctx, `
 			UPDATE host_registrations
 			SET status = 'offline', updated_at = $2
 			WHERE id = $1 AND connection_generation = $3
-		`, connection.HostID, s.now(), connection.Generation); err != nil {
+		`, connection.HostID, now, connection.Generation); err != nil {
 			return fmt.Errorf("mark host offline: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE codex_sync_sources
+			SET state = 'offline',
+				sync_state = CASE WHEN sync_state = 'syncing' THEN 'stale' ELSE sync_state END,
+				last_error = CASE WHEN sync_state = 'syncing' THEN 'Codex Host connection closed during synchronization' ELSE last_error END,
+				updated_at = $2
+			WHERE host_id = $1
+		`, connection.HostID, now); err != nil {
+			return fmt.Errorf("pause Codex source after Host disconnect: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE codex_sync_snapshots
+			SET state = 'stale', complete = FALSE,
+				error = 'Codex Host connection closed during synchronization', updated_at = $2
+			WHERE host_id = $1 AND state = 'syncing'
+		`, connection.HostID, now); err != nil {
+			return fmt.Errorf("stale Codex snapshots after Host disconnect: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE codex_threads
+			SET title_sync_state = 'paused',
+				title_sync_error = 'Codex Host connection closed before title acknowledgement', updated_at = $2
+			WHERE host_id = $1 AND title_sync_state = 'pending'
+		`, connection.HostID, now); err != nil {
+			return fmt.Errorf("pause Codex thread titles after Host disconnect: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE codex_title_operations
+			SET state = 'title_sync_paused',
+				last_error = 'Codex Host connection closed before title acknowledgement', updated_at = $2
+			WHERE host_id = $1 AND state = 'title_sync_pending'
+		`, connection.HostID, now); err != nil {
+			return fmt.Errorf("pause Codex title operations after Host disconnect: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -152,6 +152,10 @@ Repair Batch 4 completes the retry and idempotency fences: transient Connector e
 
 Repair Batch 5 closes the Windows Connector state boundary: Windows no longer interprets POSIX mode bits as ACLs, and state directories, cache/pending files and bootstrap locks use protected owner-only ACL validation while Unix retains strict mode checks. Windows runtime coverage and real process-crash recovery remain separate platform gates.
 
+## Codex Source Synchronization
+
+F06 adds migration 00022, Host-scoped Codex source identity, durable source snapshots, complete protocol-history and supported-file retention, raw-event fallback projection, idempotent immutable binding, and the shared REST/MCP source contract. The Connector records the real host-local app-server build and capability set, reconnects with journal deduplication and explicit snapshot states, retains Loomhelm history across Codex archive/delete/unavailable transitions, and keeps incomplete or unbound rows read-only. Conversation titles synchronize bidirectionally with Codex thread names after dual permission checks, conflicts retain both values, failed writes expose bounded retry state, missing Codex names remain display-only fallbacks, and Task title shortcuts stay independent with only the two approved directions. The merge candidate has focused Go/Web tests, a read-only real app-server smoke and browser viewport evidence; PostgreSQL/Compose integration and full deployment validation remain separate gates.
+
 ## References
 
 - [Requirements](SPEC.md)

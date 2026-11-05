@@ -130,6 +130,16 @@ The system MUST allow an authorized user to create and operate a standalone conv
 
 Association MUST retain the same Session and the identities and continuity of its messages, Runs, events, original-file references and shared unsent draft; it MUST NOT fork or replace the conversation or create duplicate list identities. Every Task MUST retain at most one directly associated main Session, and every Session MUST retain at most one associated Task. Only an unbound Session and a Task without a main Session MAY be bound. Phase one MUST NOT replace or detach an established binding or migrate it across projects. Creation, execution, retrieval and association MUST enforce authorization. A failed association MUST leave the original conversation, ownership and visibility intact.
 
+### REQ-LH-013
+
+The default Host MUST be represented explicitly by a stable `host_id` at every Codex source boundary. Codex discovery MUST be performed by the account owning that Host and MUST import only existing Codex history; a shared user MUST see only conversations explicitly created or shared by Loomhelm. Legacy rows with a null Host identity MUST remain readable and MUST NOT receive a guessed Host assignment.
+
+Loomhelm MUST persist the complete supported protocol history for an imported Codex thread, including raw unknown or malformed events, a readable fallback projection, supported file bytes or immutable references, an `as_of` value and snapshot completeness state. A thread MUST NOT become project-visible until its history and supported file materials are complete. An unbound thread MUST remain read-only until that readiness condition holds, and Task creation and thread binding MUST remain separate idempotent operations with immutable established bindings.
+
+The Loomhelm conversation title MUST be non-empty and MUST synchronize bidirectionally with the Codex thread name when either side changes. A missing Codex name MAY use preview or auto-title fallback for display but MUST NOT be written back. Task titles MUST remain independent; the only title shortcuts MUST be Task title to conversation title and conversation title to Task title, and neither shortcut MAY directly write a Codex title. Title writes MUST pass both conversation and Host permissions, preserve both values on conflict, persist `title_sync_pending` with a bounded retry reason on failure, and expose manual retry without claiming success. Codex archived, deleted or unavailable state MUST retain Loomhelm history and pause title writeback.
+
+REST and MCP MUST expose the same source discovery, project mapping, conversation list/detail, binding, title update and synchronization behavior, including `GET /api/v1/codex/sources`, `GET /api/v1/codex/projects`, `GET /api/v1/codex/conversations`, `GET /api/v1/codex/conversations/{host_id}/{thread_id}`, `PATCH /api/v1/codex/conversations/{host_id}/{thread_id}/title`, `POST /api/v1/codex/projects/{host_id}/{project_id}/mapping`, `POST /api/v1/codex/conversations/{host_id}/{thread_id}/bind` and `POST /api/v1/codex/sync`.
+
 ## Verification
 
 ### VER-LH-001
@@ -200,6 +210,12 @@ Association MUST retain the same Session and the identities and continuity of it
 - covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-005`, `REQ-LH-008`, `REQ-LH-011`, `REQ-LH-012`
 - Pass condition: projectless conversations are creator-private and executable; association requires explicit sharing confirmation, preserves Session/Run/event/message/file/draft continuity and applies target-project history permissions while keeping drafts private. Both association cardinalities hold, occupied/replacement/detach and cross-project Session reassociation operations are rejected, and failed association leaves prior state intact. Cross-project task hierarchy and prerequisite relationships remain supported independently of Session binding.
 
+### VER-LH-012
+
+- Method: a disposable default Host-local app-server with recorded build/capabilities, repeated journal delivery across reconnect, interrupted history/file transfer, malformed events, legacy null-Host rows, unbound/bound permission matrices and bidirectional title changes.
+- covers: `REQ-LH-013`
+- Pass condition: discovery imports only the owning account's existing history, logical events are deduplicated, snapshot readiness remains explicit until all supported materials are complete, legacy rows remain readable without guessed Host assignment, unbound rows are read-only, binding is idempotent and immutable, both title values remain visible on conflict, failed writes expose retry state and reasons, Task title shortcuts never directly change Codex title, and archive/delete/unavailable source states retain Loomhelm history while pausing writeback.
+
 ## Visual Evidence
 
 The current U02 Task Evidence Set contains six owner-confirmed mock-only captures: the five canonical task-form images and the current TaskGraph image. The five task-form images remain unchanged and retain their established page/component roles, density coverage and canonical paths under `docs/specs/phase1-core/assets/`.
@@ -207,6 +223,10 @@ The current U02 Task Evidence Set contains six owner-confirmed mock-only capture
 The sixth capture is `assets/task-graph-storybook-desktop.png`, rendered from candidate `0723f90af49582bd816e0a762e06c3234b37f2b2` against base `5666655ab69980265166e8ef8df46a9493f60568` using Storybook story `product-taskviews--explorer-consistency` after switching to its final graph view. It is a `1425x1061` full source-managed surface capture from a `1440x1000` CSS viewport, with 40px target-to-surface margins, no pixel trim and SHA-256 `d1360aac95bb0fd15d1bc2ff00b2ddcac043b17a2ca9cd7272a2c5c19a75ad25`. The exact destination is absent at the locked base, so its comparison is `current-only`; the owner confirmed the displayed image as accurate.
 
 The TaskGraph image documents the current component presentation and does not establish authenticated production UI, backend authorization, relationship persistence or complete product UI approval. Its source-managed DOM preflight and exact-path comparison remain recorded in the external candidate evidence package `/Users/ivan/.codex/verification/loomhelm-u02/batch16-0723f90`.
+
+### U04 Codex source conversation workspace
+
+The Codex source workspace uses the login-free `ui_demo` route `/demo/codex-conversations` and current browser viewport evidence at `1440x1000` and `393x852` CSS pixels. The captures use `capture_scope=browser-viewport`, `viewport_strategy=devtools-emulate`, a full viewport screenshot without clipping, and show the Host status, source search, complete/unbound conversation states and the compact mobile source card. Both viewports have `scrollWidth == clientWidth`; the mobile source strip keeps its icon/status row and facts row without wasted blank space. The owner confirmed the compact layout after the viewport review. Images: ![Codex source workspace desktop](./assets/u04-codex-source-page-desktop-1440x1000.png) and ![Codex source workspace mobile](./assets/u04-codex-source-page-mobile-393x852.png).
 
 ### U04 Artifact and PWA component evidence
 

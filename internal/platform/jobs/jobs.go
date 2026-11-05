@@ -21,6 +21,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivertype"
 )
 
 const ShortJobKind = "platform_short_job"
@@ -62,6 +63,12 @@ type Config struct {
 	ArtifactDigest         string
 	OwnerID                string
 	RegisterWorkers        WorkerRegistration
+}
+
+type LoadObservation struct {
+	QueueDepth     int64
+	RunningJobs    int64
+	WorkerCapacity int64
 }
 
 func (c Config) withDefaults() (Config, error) {
@@ -136,6 +143,7 @@ type Runner struct {
 	afterAcquire  func(*workerLease) error
 	stopping      atomic.Bool
 	ready         atomic.Bool
+	activeJobs    atomic.Int64
 }
 
 func NewRunner(db *database.DB, logger *slog.Logger, cfg Config) (*Runner, error) {
@@ -243,7 +251,8 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 		Queues: map[string]river.QueueConfig{
 			r.cfg.Queue: {MaxWorkers: r.cfg.MaxWorkers},
 		},
-		Workers: workers,
+		Workers:          workers,
+		WorkerMiddleware: []rivertype.WorkerMiddleware{workerLoadMiddleware(&r.activeJobs)},
 	})
 	if err != nil {
 		return fmt.Errorf("create River client: %w", err)
@@ -254,16 +263,17 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 			return startClient.Start(startContext)
 		}
 	}
+	clientStarted := false
 	stopClient := func() error {
+		if !clientStarted {
+			return nil
+		}
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), r.cfg.SoftStopTimeout)
 		defer stopCancel()
 		return client.StopAndCancel(stopCtx)
 	}
-	if err := startClient(ctx, client); err != nil {
-		return errors.Join(fmt.Errorf("start River client: %w", err), stopClient())
-	}
 	if err := lease.Acquire(ctx); err != nil {
-		return errors.Join(err, stopClient())
+		return err
 	}
 	defer func() {
 		if startErr == nil {
@@ -279,6 +289,10 @@ func (r *Runner) Start(ctx context.Context, generation Generation, lifecycle Lif
 		if err := r.afterAcquire(lease); err != nil {
 			return err
 		}
+	}
+	clientStarted = true
+	if err := startClient(ctx, client); err != nil {
+		return fmt.Errorf("start River client: %w", err)
 	}
 	monitorCtx, monitorCancel := context.WithCancel(ctx)
 	r.mu.Lock()
@@ -307,6 +321,35 @@ func (r *Runner) Enqueue(ctx context.Context, args ShortJobArgs) (int64, error) 
 		return 0, err
 	}
 	return r.EnqueueArgs(ctx, args, nil)
+}
+
+// ObserveLoad reads bounded queue gauges from River's durable queue. It is a
+// read-only diagnostic path and never participates in scheduling or fencing.
+func (r *Runner) ObserveLoad(ctx context.Context) (LoadObservation, error) {
+	if r == nil || r.db == nil || r.db.Pool() == nil {
+		return LoadObservation{}, errors.New("job runner is not initialized")
+	}
+	if ctx == nil {
+		return LoadObservation{}, errors.New("job context must not be nil")
+	}
+	var observation LoadObservation
+	if err := r.db.Pool().QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE state IN ('available', 'retryable', 'scheduled', 'pending'))
+		FROM river_job WHERE queue = $1
+	`, r.cfg.Queue).Scan(&observation.QueueDepth); err != nil {
+		return LoadObservation{}, fmt.Errorf("observe River queue load: %w", err)
+	}
+	observation.RunningJobs = r.activeJobs.Load()
+	observation.WorkerCapacity = int64(r.cfg.MaxWorkers)
+	return observation, nil
+}
+
+func workerLoadMiddleware(activeJobs *atomic.Int64) river.WorkerMiddlewareFunc {
+	return func(ctx context.Context, _ *rivertype.JobRow, doInner func(context.Context) error) error {
+		activeJobs.Add(1)
+		defer activeJobs.Add(-1)
+		return doInner(ctx)
+	}
 }
 
 // EnqueueArgs retains the same readiness and durable worker lease checks as
@@ -470,6 +513,7 @@ func validateGeneration(generation uint64) error {
 
 type shortJobWorker struct {
 	river.WorkerDefaults[ShortJobArgs]
+	db         *database.DB
 	queries    *generated.Queries
 	generation Generation
 	lease      *workerLease
@@ -496,15 +540,23 @@ func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs])
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if w.lease != nil {
-		if err := w.lease.Check(workCtx); err != nil {
-			if errors.Is(err, ErrWorkerLeaseLost) {
-				return river.JobCancel(err)
-			}
-			return err
-		}
+	if w.db == nil || w.db.Pool() == nil || w.queries == nil || w.lease == nil {
+		return river.JobCancel(ErrWorkerLeaseLost)
 	}
-	_, err := w.queries.RecordShortJobResult(workCtx, generated.RecordShortJobResultParams{
+	// The lease fence and result write share one transaction so a newer
+	// generation cannot replace the lease between the check and the commit.
+	tx, err := w.db.Pool().Begin(workCtx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(workCtx) }()
+	if err := w.lease.CheckTx(workCtx, tx); err != nil {
+		if errors.Is(err, ErrWorkerLeaseLost) {
+			return river.JobCancel(err)
+		}
+		return err
+	}
+	_, err = w.queries.WithTx(tx).RecordShortJobResult(workCtx, generated.RecordShortJobResultParams{
 		JobID:      job.ID,
 		Generation: int64(job.Args.Generation),
 		Payload:    job.Args.Payload,
@@ -512,7 +564,16 @@ func (w *shortJobWorker) Work(ctx context.Context, job *river.Job[ShortJobArgs])
 	if err != nil && generationCtx.Err() != nil {
 		return river.JobCancel(fmt.Errorf("generation %d stopped: %w", job.Args.Generation, generationCtx.Err()))
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(workCtx); err != nil {
+		if generationCtx.Err() != nil {
+			return river.JobCancel(fmt.Errorf("generation %d stopped: %w", job.Args.Generation, generationCtx.Err()))
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *Runner) Ready() bool {
@@ -586,7 +647,8 @@ func (r *Runner) restartClient(ctx context.Context, generation Generation) error
 		Queues: map[string]river.QueueConfig{
 			r.cfg.Queue: {MaxWorkers: r.cfg.MaxWorkers},
 		},
-		Workers: workers,
+		Workers:          workers,
+		WorkerMiddleware: []rivertype.WorkerMiddleware{workerLoadMiddleware(&r.activeJobs)},
 	})
 	if err != nil {
 		return fmt.Errorf("create River recovery client: %w", err)
@@ -608,7 +670,7 @@ func (r *Runner) restartClient(ctx context.Context, generation Generation) error
 func (r *Runner) workers(generation Generation, lease *workerLease) (*river.Workers, error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &shortJobWorker{
-		queries: r.db.Queries(), generation: generation, lease: lease,
+		db: r.db, queries: r.db.Queries(), generation: generation, lease: lease,
 	})
 	if register := r.cfg.RegisterWorkers; register != nil {
 		checkLease := func(ctx context.Context) error {

@@ -580,7 +580,8 @@ func (g generator) apiClientTypeScript() string {
 			query := g.contract.Types[operation.QueryType]
 			for _, property := range sortedKeys(query.Properties) {
 				child := query.Properties[property]
-				fmt.Fprintf(&out, "  %s?: %s;\n", property, g.tsType(child))
+				optional := !contains(query.Required, property)
+				fmt.Fprintf(&out, "  %s%s: %s;\n", property, ternary(optional, "?", ""), g.tsType(child))
 			}
 		}
 		if operation.BodyType != "" {
@@ -592,7 +593,7 @@ func (g generator) apiClientTypeScript() string {
 	out.WriteString("export class LoomhelmApiClient {\n  private readonly options: ApiClientOptions;\n\n  constructor(options: ApiClientOptions = {}) {\n    this.options = options;\n  }\n\n")
 	for _, operation := range g.contract.REST.Operations {
 		paramsType := operationParamsType(operation)
-		requestOptional := len(operation.PathParams) == 0 && operation.BodyType == ""
+		requestOptional := len(operation.PathParams) == 0 && operation.BodyType == "" && (operation.QueryType == "" || len(g.contract.Types[operation.QueryType].Required) == 0)
 		responseType := "void"
 		binaryResponse := false
 		if operation.ResponseType != "" {
@@ -622,7 +623,12 @@ func (g generator) apiClientTypeScript() string {
 		}
 		if operation.QueryType != "" {
 			fmt.Fprintf(&out, "    const query = new URLSearchParams();\n")
-			for _, property := range sortedKeys(g.contract.Types[operation.QueryType].Properties) {
+			query := g.contract.Types[operation.QueryType]
+			for _, property := range sortedKeys(query.Properties) {
+				if contains(query.Required, property) {
+					fmt.Fprintf(&out, "    query.set(%q, String(request.%s));\n", property, property)
+					continue
+				}
 				fmt.Fprintf(&out, "    if (request.%s !== undefined) query.set(%q, String(request.%s));\n", property, property, property)
 			}
 			out.WriteString("    const queryText = query.toString();\n    const requestPath = queryText ? `${path}?${queryText}` : path;\n")

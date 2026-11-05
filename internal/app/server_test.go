@@ -13,8 +13,46 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
+	"github.com/IvanLi-CN/Loomhelm/internal/deployment"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
+
+func TestServerObservationIncludesIdentityCountersAndActiveLoad(t *testing.T) {
+	server, err := newTestServer(platform.Config{
+		Component:          platform.ComponentServer,
+		Version:            "test-version",
+		CandidateSourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ArtifactDigest:     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		HTTPAddr:           "127.0.0.1:0",
+		DrainToken:         "test-token",
+		ShutdownTimeout:    time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if err := server.lifecycle.Start(); err != nil {
+		t.Fatalf("lifecycle.Start() error = %v", err)
+	}
+	server.requestMetrics.requestsTotal.Store(12)
+	server.requestMetrics.responses4xx.Store(2)
+	server.requestMetrics.responses5xx.Store(1)
+	server.activeApplicationRequests.Store(3)
+	server.activeMCPRequests.Store(1)
+	server.activeGatewayRequests.Store(2)
+
+	response := httptest.NewRecorder()
+	server.Router().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/-/observe", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("observation status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var observation deployment.ComponentObservation
+	if err := json.NewDecoder(response.Body).Decode(&observation); err != nil {
+		t.Fatalf("decode observation: %v", err)
+	}
+	if observation.State != deployment.ObservationMeasured || !observation.Live || observation.CandidateSourceSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || observation.RequestsTotal != 12 || observation.Responses4xx != 2 || observation.Responses5xx != 1 || observation.ActiveRequests != 6 {
+		t.Fatalf("unexpected observation: %+v", observation)
+	}
+}
 
 func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 	server, err := newTestServer(platform.Config{
