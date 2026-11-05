@@ -87,6 +87,7 @@ type CommandExecutor struct {
 	SlotURLs          map[string]string
 	WorkerURLs        map[string]string
 	HTTPClient        *http.Client
+	ReadinessTimeout  time.Duration
 	DrainTimeout      time.Duration
 	Run               func(context.Context, string, ...string) error
 
@@ -657,7 +658,11 @@ func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker boo
 	if baseURL == "" {
 		return ErrExecutorUnavailable
 	}
-	readinessCtx, cancel := context.WithTimeout(ctx, deploymentReadinessTimeout)
+	timeout := e.ReadinessTimeout
+	if timeout <= 0 {
+		timeout = deploymentReadinessTimeout
+	}
+	readinessCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

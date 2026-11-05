@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCommandExecutorUsesOnlyAllowlistedArguments(t *testing.T) {
@@ -183,6 +184,40 @@ func TestCommandExecutorFailsFastForPermanentReadinessErrors(t *testing.T) {
 	err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}}).waitReady(context.Background(), "green", false)
 	if !errors.Is(err, errNonRetryableReadiness) {
 		t.Fatalf("waitReady() error = %v, want a non-retryable readiness error", err)
+	}
+}
+
+func TestCommandExecutorPreservesReadinessCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/readyz" {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}}).waitReady(ctx, "green", false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitReady() error = %v, want context cancellation", err)
+	}
+}
+
+func TestCommandExecutorReportsReadinessTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/readyz" {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}, ReadinessTimeout: time.Millisecond}).waitReady(context.Background(), "green", false)
+	if err == nil || !strings.Contains(err.Error(), "readiness timed out") {
+		t.Fatalf("waitReady() error = %v, want timeout", err)
 	}
 }
 
