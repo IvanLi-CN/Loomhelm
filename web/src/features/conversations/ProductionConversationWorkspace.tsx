@@ -127,9 +127,19 @@ function clearStoredIntent(key: string | undefined): void {
   }
 }
 
-function clearSessionCreationIntents(primaryKey: string | undefined, migratedKey: string | undefined): void {
+function writeSessionCreationIntents(primaryKey: string | undefined, legacyKeys: readonly string[], intent: SessionCreationIntent): boolean {
+  if (!writeSessionCreationIntent(primaryKey, intent)) return false;
+  for (const key of legacyKeys) {
+    if (key !== primaryKey && !writeSessionCreationIntent(key, intent)) return false;
+  }
+  return true;
+}
+
+function clearSessionCreationIntents(primaryKey: string | undefined, legacyKeys: readonly string[]): void {
   clearStoredIntent(primaryKey);
-  if (migratedKey && migratedKey !== primaryKey) clearStoredIntent(migratedKey);
+  for (const key of legacyKeys) {
+    if (key !== primaryKey) clearStoredIntent(key);
+  }
 }
 
 function getIdentityScope(principalId: string | undefined): string {
@@ -464,9 +474,8 @@ export function ProductionSessionCreationPanel({
 
   useEffect(() => {
     if (!storedIntentEntry || !storageKey || storedIntentEntry.key === storageKey) return;
-    if (!writeSessionCreationIntent(storageKey, storedIntentEntry.intent)) return;
-    clearStoredIntent(storedIntentEntry.key);
-  }, [storageKey, storedIntentEntry]);
+    writeSessionCreationIntents(storageKey, legacyStorageKeys, storedIntentEntry.intent);
+  }, [legacyStorageKeys, storageKey, storedIntentEntry]);
 
   useEffect(() => {
     const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions, shouldPreserveProjectSelection(pending, creationUncertain));
@@ -502,7 +511,7 @@ export function ProductionSessionCreationPanel({
     }
     const commandId = commandRef.current?.fingerprint === fingerprint ? commandRef.current.commandId : createCommandId("session");
     const intent: SessionCreationIntent = { commandId, fingerprint, request: requestWithoutCommand, uncertain: true };
-    if (!writeSessionCreationIntent(storageKey, intent)) {
+    if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, intent)) {
       setPending(false);
       setFailure("当前浏览器无法持久化创建命令身份；为避免未知结果下重复创建，请先恢复存储后再试。");
       return;
@@ -515,17 +524,17 @@ export function ProductionSessionCreationPanel({
       });
       commandRef.current = undefined;
       setCreationUncertain(false);
-      clearSessionCreationIntents(storageKey, storedIntentEntry?.key);
+      clearSessionCreationIntents(storageKey, legacyStorageKeys);
     } catch (error) {
       const uncertain = shouldRetainSessionCreationIntent(creationUncertain, error);
       setCreationUncertain(uncertain);
       if (uncertain) {
         const pendingIntent = { ...intent, uncertain: true };
         commandRef.current = pendingIntent;
-        writeSessionCreationIntent(storageKey, pendingIntent);
+        writeSessionCreationIntents(storageKey, legacyStorageKeys, pendingIntent);
       } else {
         commandRef.current = undefined;
-        clearSessionCreationIntents(storageKey, storedIntentEntry?.key);
+        clearSessionCreationIntents(storageKey, legacyStorageKeys);
       }
       setFailure(errorMessage(error, "创建会话"));
     } finally {
@@ -537,7 +546,7 @@ export function ProductionSessionCreationPanel({
     commandRef.current = undefined;
     setCreationUncertain(false);
     setFailure("已放弃未确认的创建意图；修改后的表单会使用新的 command_id。");
-    clearSessionCreationIntents(storageKey, storedIntentEntry?.key);
+    clearSessionCreationIntents(storageKey, legacyStorageKeys);
   };
 
   return (
