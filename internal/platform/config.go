@@ -50,6 +50,7 @@ type Config struct {
 	ConnectorJournalPath      string
 	ConnectorCredentialPath   string
 	ConnectorAppServerCommand string
+	ConnectorAppServerSocket  string
 	ConnectorWorkingDir       string
 	BrowserAuth               BrowserAuthConfig
 	DeploymentHTTPAddr        string
@@ -231,6 +232,7 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		config.ConnectorJournalPath = journalPath
 		config.ConnectorCredentialPath = credentialPath
 		config.ConnectorAppServerCommand = "codex"
+		config.ConnectorAppServerSocket = strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CODEX_APP_SERVER_SOCKET", defaultCodexAppServerSocket(lookup)))
 		if err := validateServerURL(config.ConnectorServerURL); err != nil {
 			return Config{}, fmt.Errorf("invalid LOOMHELM_CONNECTOR_BASE_URL: %w", err)
 		}
@@ -333,6 +335,11 @@ func (c Config) Validate() error {
 		if err := validateConnectorValue(c.ConnectorAppServerCommand, "connector app-server command", false); err != nil {
 			return err
 		}
+		if strings.TrimSpace(c.ConnectorAppServerSocket) != "" {
+			if err := validateConnectorValue(c.ConnectorAppServerSocket, "connector app-server socket", false); err != nil {
+				return err
+			}
+		}
 	}
 	if c.Component != ComponentConnector {
 		database := DatabaseConfig{URL: c.DatabaseURL, MinConns: c.DatabaseMinConns, MaxConns: c.DatabaseMaxConns}
@@ -344,6 +351,19 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func defaultCodexAppServerSocket(lookup func(string) (string, bool)) string {
+	root := strings.TrimSpace(lookupOrDefault(lookup, "CODEX_HOME", ""))
+	if root == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			root = filepath.Join(home, ".codex")
+		}
+	}
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, "app-server-control", "app-server-control.sock")
 }
 
 // ValidateDevelopmentDatabaseTarget keeps an explicitly selected development

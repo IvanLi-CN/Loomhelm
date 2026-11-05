@@ -21,6 +21,7 @@ var (
 	ErrSourceCapabilityUnsupported = errors.New("Codex source capability is unsupported")
 	ErrSourceInvalidParams         = errors.New("Codex source request parameters are invalid")
 	ErrSourceHistoryIncomplete     = errors.New("Codex source history is incomplete")
+	ErrSourcePaginationIncomplete  = errors.New("Codex source pagination is incomplete")
 	ErrSourceNotificationOverflow  = errors.New("Codex source notification queue exceeded its memory limit")
 )
 
@@ -286,7 +287,7 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 		Threads:          make([]protocol.CodexSourceThreadSnapshot, 0),
 	}
 	projects, projectErr := c.discoverAllProjects(ctx)
-	if projectErr != nil && !errors.Is(projectErr, ErrSourceCapabilityUnsupported) {
+	if projectErr != nil && !errors.Is(projectErr, ErrSourceCapabilityUnsupported) && !errors.Is(projectErr, ErrSourcePaginationIncomplete) {
 		return protocol.CodexSourceSnapshot{}, projectErr
 	}
 	if projectErr != nil {
@@ -302,7 +303,7 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 		})
 	}
 	threads, threadErr := c.discoverAllThreads(ctx)
-	if threadErr != nil && !errors.Is(threadErr, ErrSourceCapabilityUnsupported) {
+	if threadErr != nil && !errors.Is(threadErr, ErrSourceCapabilityUnsupported) && !errors.Is(threadErr, ErrSourcePaginationIncomplete) {
 		return protocol.CodexSourceSnapshot{}, threadErr
 	}
 	if threadErr != nil {
@@ -311,25 +312,62 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 			snapshot.Error = threadErr.Error()
 		}
 	}
-	for _, thread := range threads {
-		history, readErr := c.ReadHistory(ctx, thread.ID)
-		if history.Thread.ID == "" {
-			history.Thread = thread
-		}
-		threadSnapshot := sourceThreadSnapshot(history.Thread, history)
-		if readErr != nil {
-			threadSnapshot.Error = readErr.Error()
-			if errors.Is(readErr, ErrSourceHistoryIncomplete) {
-				threadSnapshot.HistoryState = protocol.CodexHistoryStatePartial
+	threadSnapshots := make([]protocol.CodexSourceThreadSnapshot, len(threads))
+	threadErrors := make([]error, len(threads))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	// Full turn/item history is fetched lazily by the conversation endpoint;
+	// the source sync deadline is reserved for a complete, responsive thread
+	// inventory. Read one representative thread during sync so capability and
+	// history wiring are exercised without blocking on large rollouts.
+	const maxDetailedThreads = 1
+	for index, thread := range threads {
+		index, thread := index, thread
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			var history SourceHistorySnapshot
+			var readErr error
+			if index < maxDetailedThreads {
+				history, readErr = c.ReadHistory(ctx, thread.ID)
 			} else {
-				threadSnapshot.HistoryState = protocol.CodexHistoryStateFailed
+				history = SourceHistorySnapshot{Thread: thread, HistoryComplete: false, FilesComplete: false, AsOf: time.Now().UTC(), RawThread: append(json.RawMessage(nil), thread.Raw...)}
 			}
-			snapshot.SyncState = protocol.CodexSyncStatePartial
-			if snapshot.Error == "" {
-				snapshot.Error = readErr.Error()
+			if history.Thread.ID == "" {
+				history.Thread = thread
 			}
+			threadSnapshot := sourceThreadSnapshot(history.Thread, history)
+			if readErr != nil {
+				threadSnapshot.Error = readErr.Error()
+				if errors.Is(readErr, ErrSourceHistoryIncomplete) {
+					threadSnapshot.HistoryState = protocol.CodexHistoryStatePartial
+				} else {
+					threadSnapshot.HistoryState = protocol.CodexHistoryStateFailed
+				}
+				threadErrors[index] = readErr
+			}
+			threadSnapshots[index] = threadSnapshot
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return protocol.CodexSourceSnapshot{}, err
+	}
+	snapshot.Threads = append(snapshot.Threads, threadSnapshots...)
+	for _, threadErr := range threadErrors {
+		if threadErr == nil {
+			continue
 		}
-		snapshot.Threads = append(snapshot.Threads, threadSnapshot)
+		snapshot.SyncState = protocol.CodexSyncStatePartial
+		if snapshot.Error == "" {
+			snapshot.Error = threadErr.Error()
+		}
 	}
 	// History and attachment reads can discover capabilities that initialize
 	// did not advertise. Persist the post-discovery states, including explicit
@@ -343,21 +381,24 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 func (c *SourceClient) discoverAllProjects(ctx context.Context) ([]SourceProject, error) {
 	result := make([]SourceProject, 0)
 	cursor := ""
-	for page := 0; page < 100; page++ {
+	for page := 0; page < 1000; page++ {
 		current, err := c.DiscoverProjects(ctx, SourceListOptions{Cursor: cursor, Limit: 100})
 		if err != nil {
-			return nil, err
+			if len(result) > 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+				return result, fmt.Errorf("%w: project/list stopped after %d page(s): %v", ErrSourcePaginationIncomplete, page, err)
+			}
+			return result, err
 		}
 		result = append(result, current.Items...)
-		if current.Next == "" {
+		if strings.TrimSpace(current.Next) == "" {
 			return result, nil
 		}
 		if current.Next == cursor {
-			return nil, errors.New("Codex project/list returned a repeated cursor")
+			return result, fmt.Errorf("%w: project/list returned a repeated cursor", ErrSourcePaginationIncomplete)
 		}
 		cursor = current.Next
 	}
-	return nil, errors.New("Codex project/list exceeded the pagination limit")
+	return result, fmt.Errorf("%w: project/list exceeded the pagination safety limit", ErrSourcePaginationIncomplete)
 }
 
 func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, error) {
@@ -365,11 +406,13 @@ func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, 
 	seen := make(map[string]struct{})
 	for _, archived := range []bool{false, true} {
 		cursor := ""
-		completed := false
-		for page := 0; page < 100; page++ {
+		for page := 0; page < 1000; page++ {
 			current, err := c.DiscoverThreads(ctx, SourceListOptions{Cursor: cursor, Limit: 100, Archived: boolPointer(archived)})
 			if err != nil {
-				return nil, err
+				if len(result) > 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+					return result, fmt.Errorf("%w: thread/list stopped after %d page(s): %v", ErrSourcePaginationIncomplete, page, err)
+				}
+				return result, err
 			}
 			for _, thread := range current.Items {
 				thread.Archived = archived
@@ -379,17 +422,16 @@ func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, 
 				seen[thread.ID] = struct{}{}
 				result = append(result, thread)
 			}
-			if current.Next == "" {
-				completed = true
+			if strings.TrimSpace(current.Next) == "" {
 				break
 			}
 			if current.Next == cursor {
-				return nil, errors.New("Codex thread/list returned a repeated cursor")
+				return result, fmt.Errorf("%w: thread/list returned a repeated cursor", ErrSourcePaginationIncomplete)
 			}
 			cursor = current.Next
-		}
-		if !completed {
-			return nil, errors.New("Codex thread/list exceeded the pagination limit")
+			if page == 999 {
+				return result, fmt.Errorf("%w: thread/list exceeded the pagination safety limit", ErrSourcePaginationIncomplete)
+			}
 		}
 	}
 	return result, nil
@@ -1377,8 +1419,8 @@ func cloneSourceNotification(notification SourceNotification) SourceNotification
 }
 
 // SourceRuntime owns reconnection boundaries. Each reconnect creates a fresh
-// initialize handshake and cold-reads the requested threads before callers can
-// treat the source snapshot as current.
+// initialize handshake; callers explicitly request a source snapshot when
+// they need a cold read of thread material.
 type SourceRuntime struct {
 	factory    TransportFactory
 	client     ClientInfo
@@ -1422,6 +1464,13 @@ func (r *SourceRuntime) Connect(ctx context.Context) (*SourceClient, error) {
 	r.source = source
 	r.mu.Unlock()
 	return source, nil
+}
+
+// ConnectOnly establishes the daemon-backed source client without performing
+// a cold history read. Reconnection recovery uses this path; explicit source
+// synchronization owns the bounded full discovery operation.
+func (r *SourceRuntime) ConnectOnly(ctx context.Context) (*SourceClient, error) {
+	return r.Connect(ctx)
 }
 
 func (r *SourceRuntime) ReconnectAndRecover(ctx context.Context, threadIDs []string) (*SourceClient, *protocol.CodexSourceSnapshot, []SourceHistorySnapshot, error) {

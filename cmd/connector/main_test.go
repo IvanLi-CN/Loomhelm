@@ -63,6 +63,14 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 	if err != nil {
 		t.Fatalf("encode Connector API key: %v", err)
 	}
+	socketPath := os.Getenv("LOOMHELM_CODEX_APP_SERVER_SOCKET")
+	if socketPath == "" {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			t.Fatalf("resolve home directory: %v", homeErr)
+		}
+		socketPath = filepath.Join(home, ".codex", "app-server-control", "app-server-control.sock")
+	}
 	identityServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/api/v1/auth/connector/identity" || request.Header.Get("Authorization") != "Bearer "+apiKey {
 			http.Error(writer, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
@@ -83,8 +91,11 @@ func runConnectorSignalTest(t *testing.T, signal os.Signal) {
 		"LOOMHELM_VERSION":            "test",
 		"LOOMHELM_CONNECTOR_BASE_URL": identityServer.URL,
 		"LOOMHELM_CONNECTOR_API_KEY":  apiKey,
-		"XDG_CONFIG_HOME":             filepath.Dir(logPath),
-		"SSL_CERT_FILE":               certificatePath,
+		// Use the managed daemon so the source recovery path is exercised without
+		// starting a second app-server process in this lifecycle test.
+		"LOOMHELM_CODEX_APP_SERVER_SOCKET": socketPath,
+		"XDG_CONFIG_HOME":                  filepath.Dir(logPath),
+		"SSL_CERT_FILE":                    certificatePath,
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
