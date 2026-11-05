@@ -1419,8 +1419,8 @@ func cloneSourceNotification(notification SourceNotification) SourceNotification
 }
 
 // SourceRuntime owns reconnection boundaries. Each reconnect creates a fresh
-// initialize handshake and cold-reads the requested threads before callers can
-// treat the source snapshot as current.
+// initialize handshake; callers explicitly request a source snapshot when
+// they need a cold read of thread material.
 type SourceRuntime struct {
 	factory    TransportFactory
 	client     ClientInfo
