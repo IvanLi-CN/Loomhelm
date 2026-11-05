@@ -16,6 +16,10 @@ describe("production session project selection", () => {
     expect(normalizeProjectSelection("project-a", "project-a", [])).toBe("project-a");
   });
 
+  test("preserves an uncertain project-scoped intent while projects reload", () => {
+    expect(normalizeProjectSelection("project-a", undefined, [], true)).toBe("project-a");
+  });
+
   test("reads every authorized Session page", async () => {
     const cursors: Array<string | undefined> = [];
     const session = (id: string) => ({

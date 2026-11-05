@@ -371,8 +371,8 @@ export interface ProjectOption {
   name: string;
 }
 
-export function normalizeProjectSelection(selectedProjectId: string, fixedProjectId: string | undefined, projectOptions: readonly ProjectOption[]): string {
-  if (fixedProjectId || selectedProjectId === NO_PROJECT || projectOptions.some((project) => project.id === selectedProjectId)) return selectedProjectId;
+export function normalizeProjectSelection(selectedProjectId: string, fixedProjectId: string | undefined, projectOptions: readonly ProjectOption[], preserveSelection = false): string {
+  if (fixedProjectId || preserveSelection || selectedProjectId === NO_PROJECT || projectOptions.some((project) => project.id === selectedProjectId)) return selectedProjectId;
   return NO_PROJECT;
 }
 
@@ -441,9 +441,9 @@ export function ProductionSessionCreationPanel({
   const selectedProjectReadOnly = selectedProjectId !== NO_PROJECT && Boolean(projectCanWrite && !projectCanWrite(selectedProjectId));
 
   useEffect(() => {
-    const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions);
+    const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions, creationUncertain);
     if (normalized !== selectedProjectId) setSelectedProjectId(normalized);
-  }, [fixedProjectId, projectOptions, selectedProjectId]);
+  }, [creationUncertain, fixedProjectId, projectOptions, selectedProjectId]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

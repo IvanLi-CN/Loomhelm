@@ -242,7 +242,7 @@ func TestCommandExecutorReportsReadinessTimeout(t *testing.T) {
 }
 
 func TestCommandExecutorReadinessRetryBoundaries(t *testing.T) {
-	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed} {
+	for _, status := range []int{http.StatusMultipleChoices, http.StatusMovedPermanently, http.StatusTemporaryRedirect, http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented, http.StatusHTTPVersionNotSupported} {
 		t.Run(fmt.Sprintf("permanent-%d", status), func(t *testing.T) {
 			var attempts atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -256,7 +256,7 @@ func TestCommandExecutorReadinessRetryBoundaries(t *testing.T) {
 			}
 		})
 	}
-	for _, status := range []int{http.StatusRequestTimeout, http.StatusTooManyRequests} {
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout} {
 		t.Run(fmt.Sprintf("retry-%d", status), func(t *testing.T) {
 			var attempts atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -269,6 +269,30 @@ func TestCommandExecutorReadinessRetryBoundaries(t *testing.T) {
 				t.Fatalf("waitReady() error = %v, attempts = %d, want retryable timeout", err, attempts.Load())
 			}
 		})
+	}
+}
+
+func TestCommandExecutorRejectsReadinessRedirect(t *testing.T) {
+	var versionRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/readyz":
+			http.Redirect(writer, request, "/version", http.StatusTemporaryRedirect)
+		case "/version":
+			versionRequests.Add(1)
+			writer.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}}).waitReady(context.Background(), "green", false)
+	if !errors.Is(err, errNonRetryableReadiness) {
+		t.Fatalf("waitReady() error = %v, want a non-retryable redirect error", err)
+	}
+	if versionRequests.Load() != 0 {
+		t.Fatalf("redirect followed to /version %d times", versionRequests.Load())
 	}
 }
 

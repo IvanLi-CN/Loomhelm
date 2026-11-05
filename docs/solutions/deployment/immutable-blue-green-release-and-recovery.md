@@ -55,7 +55,7 @@ Worker lease 的 generation 是 fencing 机制的一部分。旧 Worker drain �
 
 在 stage 和 promote 中对 Server/Worker readiness 使用有界重试，例如固定超时和短间隔轮询。超时必须返回带最后一次错误的 failed 或 unknown 结果，不能因重试而无限占用控制器。
 
-Promote 按可审计顺序提交：先确认新槽位 identity、readiness、traffic 和 Worker capacity，再更新 active route 和 durable lease，最后执行旧槽位 drain。旧槽位 drain 超时但新 active 状态已经被控制器证明时，结果应为 `degraded`；若 active 状态或外部副作用无法证明，则保持 `unknown` 并先 reconcile。
+Promote 按可审计顺序提交：先确认新槽位 identity、readiness 和 Worker generation，再更新 active route 和 durable lease，随后执行旧槽位 drain。traffic share、Worker capacity 和公网探测属于独立的运行时观测与切换后验证；首次接入安装前必须在运行时演练中证明这些观测，而不能把单次采样当作同步 promote 前门禁。旧槽位 drain 超时但新 active 状态已经被控制器证明时，结果应为 `degraded`；若 active 状态或外部副作用无法证明，则保持 `unknown` 并先 reconcile。
 
 发布完成后保留旧槽位、旧候选和持久化数据，回滚通过认证 API、Idempotency-Key 和 expected fingerprint 执行。禁止用直接 SQL 修改 active slot、lease generation 或 operation status 来“修复”发布结果。
 
@@ -67,7 +67,7 @@ Promote 按可审计顺序提交：先确认新槽位 identity、readiness、tra
 
 Worker generation 只能单调递增。旧 lease、旧 crash-loop 实例和新 Worker 接管之间的关系必须进入操作记录，不能通过清库、降级或复用 generation 绕过 fencing。
 
-蓝绿切换前必须验证新槽位的 `/readyz`、运行身份、流量观察和 Worker capacity；切换后必须再次验证公网 `/version`、`/readyz`、关键静态资源和控制器查询结果。
+蓝绿切换前必须验证新槽位的 `/readyz`、运行身份和 Worker generation；切换后必须验证公网 `/version`、`/readyz`、关键静态资源和控制器查询结果，并在连续观测中核对 traffic share、Worker capacity 与负载。首次运行时演练还必须证明这些观测可用且与实际路由一致。
 
 `degraded` 表示核心切换已被证明，但非关键收尾步骤失败；`unknown` 表示无法证明外部状态。两者都不能被自动改写为 succeeded，后续动作应由 reconcile 或明确的人工运行手册处理。
 

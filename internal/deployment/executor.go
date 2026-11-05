@@ -672,13 +672,7 @@ func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker boo
 	var lastErr error
 	for {
 		lastErr = e.requestStatus(readinessCtx, http.MethodGet, baseURL+"/readyz", nil, func(status int, _ []byte) error {
-			if status < http.StatusOK || status >= http.StatusMultipleChoices {
-				if status >= http.StatusBadRequest && status < http.StatusInternalServerError && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests {
-					return fmt.Errorf("%w: deployment %s readiness returned HTTP %d", errNonRetryableReadiness, component, status)
-				}
-				return fmt.Errorf("deployment %s readiness returned HTTP %d", component, status)
-			}
-			return nil
+			return readinessStatusError(component, status)
 		})
 		if lastErr == nil {
 			return nil
@@ -694,6 +688,19 @@ func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker boo
 			return readinessCtx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+func readinessStatusError(component string, status int) error {
+	if status >= http.StatusOK && status < http.StatusMultipleChoices {
+		return nil
+	}
+	err := fmt.Errorf("deployment %s readiness returned HTTP %d", component, status)
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return err
+	default:
+		return fmt.Errorf("%w: %s", errNonRetryableReadiness, err)
 	}
 }
 
@@ -839,7 +846,11 @@ func (e *CommandExecutor) request(_ context.Context, request *http.Request, chec
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	response, err := client.Do(request)
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	response, err := clientCopy.Do(request)
 	if err != nil {
 		return fmt.Errorf("deployment HTTP request failed: %w", err)
 	}
