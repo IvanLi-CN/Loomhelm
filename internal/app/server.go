@@ -473,7 +473,7 @@ func (s *Server) handleDrainStatus(writer http.ResponseWriter, _ *http.Request) 
 }
 
 func (s *Server) handleDrain(writer http.ResponseWriter, request *http.Request) {
-	if !isAuthorizedDrainRequest(request, s.cfg.DrainControlSubnet) || !s.validDrainToken(request) {
+	if !isAuthorizedDrainRequest(request, s.cfg.DrainControlSubnet, s.cfg.DrainControllerIP) || !s.validDrainToken(request) {
 		snapshot := s.lifecycle.Snapshot()
 		s.writeJSON(writer, http.StatusForbidden, healthResponse{
 			Status:      "forbidden",
@@ -535,10 +535,10 @@ func (s *Server) validDrainToken(request *http.Request) bool {
 }
 
 func isLoopbackRequest(request *http.Request) bool {
-	return isAuthorizedDrainRequest(request, nil)
+	return isAuthorizedDrainRequest(request, nil, nil)
 }
 
-func isAuthorizedDrainRequest(request *http.Request, controlSubnet *net.IPNet) bool {
+func isAuthorizedDrainRequest(request *http.Request, controlSubnet *net.IPNet, controllerIP net.IP) bool {
 	if request == nil {
 		return false
 	}
@@ -547,7 +547,13 @@ func isAuthorizedDrainRequest(request *http.Request, controlSubnet *net.IPNet) b
 		host = request.RemoteAddr
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || controlSubnet != nil && controlSubnet.Contains(ip))
+	if ip == nil || ip.IsLoopback() {
+		return ip != nil && ip.IsLoopback()
+	}
+	if controllerIP != nil {
+		return controllerIP.Equal(ip)
+	}
+	return controlSubnet != nil && controlSubnet.Contains(ip)
 }
 
 func (s *Server) writeJSON(writer http.ResponseWriter, status int, value any) {

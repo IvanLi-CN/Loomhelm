@@ -35,6 +35,7 @@ type Config struct {
 	WorkerHTTPAddr            string
 	DrainToken                string
 	DrainControlSubnet        *net.IPNet
+	DrainControllerIP         net.IP
 	ShutdownTimeout           time.Duration
 	StartupTimeout            time.Duration
 	DatabaseURL               string
@@ -159,6 +160,10 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 	}
 	if component == ComponentServer || component == ComponentWorker {
 		config.DrainControlSubnet, err = drainControlSubnetFromLookup(lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		config.DrainControllerIP, err = drainControllerIPFromLookup(lookup)
 		if err != nil {
 			return Config{}, err
 		}
@@ -403,6 +408,18 @@ func drainControlSubnetFromLookup(lookup func(string) (string, bool)) (*net.IPNe
 		return nil, fmt.Errorf("invalid LOOMHELM_DRAIN_CONTROL_SUBNET")
 	}
 	return subnet, nil
+}
+
+func drainControllerIPFromLookup(lookup func(string) (string, bool)) (net.IP, error) {
+	raw := strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_DRAIN_CONTROLLER_IP", ""))
+	if raw == "" {
+		return nil, nil
+	}
+	ip := net.ParseIP(raw)
+	if ip == nil {
+		return nil, fmt.Errorf("invalid LOOMHELM_DRAIN_CONTROLLER_IP")
+	}
+	return ip, nil
 }
 
 func isKnownComponent(component Component) bool {

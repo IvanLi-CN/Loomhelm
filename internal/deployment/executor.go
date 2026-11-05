@@ -25,14 +25,18 @@ import (
 var ErrDrainTimeout = errors.New("deployment drain timed out")
 
 const (
-	allowlistedComposeBinary     = "/usr/bin/docker"
-	allowlistedCaddyBinary       = "/usr/local/bin/caddy"
-	deploymentReadinessTimeout   = 10 * time.Minute
-	deploymentPublicProbeTimeout = 30 * time.Second
+	allowlistedComposeBinary        = "/usr/bin/docker"
+	allowlistedCaddyBinary          = "/usr/local/bin/caddy"
+	deploymentReadinessTimeout      = 10 * time.Minute
+	deploymentPublicProbeTimeout    = 30 * time.Second
+	deploymentReconcileProbeTimeout = 5 * time.Second
 )
 
 var errNonRetryableReadiness = errors.New("deployment readiness failure is not retryable")
 var errRetryablePublicProbe = errors.New("public deployment probe is retryable")
+var errReconcileNeedsRecreate = errors.New("deployment reconcile target needs recreation")
+var errReconcileProbeUnavailable = errors.New("deployment reconcile target cannot be verified")
+var errComponentIdentityMismatch = errors.New("deployment component identity mismatch")
 
 type DegradedError struct{ Err error }
 
@@ -75,26 +79,27 @@ func (e *DeterministicError) Unwrap() error {
 // only a registered candidate and slot; it can never provide a shell string,
 // Compose flag, binary path or Caddy endpoint.
 type CommandExecutor struct {
-	ComposeBinary      string
-	ComposeFile        string
-	ComposeEnvFile     string
-	ProjectName        string
-	CaddyBinary        string
-	CaddyFile          string
-	CaddyTemplate      string
-	CaddyAdminAddress  string
-	PublicURL          string
-	DrainToken         string
-	DrainSlotURLs      map[string]string
-	DrainWorkerURLs    map[string]string
-	WebRoot            string
-	SlotURLs           map[string]string
-	WorkerURLs         map[string]string
-	HTTPClient         *http.Client
-	ReadinessTimeout   time.Duration
-	PublicProbeTimeout time.Duration
-	DrainTimeout       time.Duration
-	Run                func(context.Context, string, ...string) error
+	ComposeBinary         string
+	ComposeFile           string
+	ComposeEnvFile        string
+	ProjectName           string
+	CaddyBinary           string
+	CaddyFile             string
+	CaddyTemplate         string
+	CaddyAdminAddress     string
+	PublicURL             string
+	DrainToken            string
+	DrainSlotURLs         map[string]string
+	DrainWorkerURLs       map[string]string
+	WebRoot               string
+	SlotURLs              map[string]string
+	WorkerURLs            map[string]string
+	HTTPClient            *http.Client
+	ReadinessTimeout      time.Duration
+	ReconcileProbeTimeout time.Duration
+	PublicProbeTimeout    time.Duration
+	DrainTimeout          time.Duration
+	Run                   func(context.Context, string, ...string) error
 
 	observationMu     sync.Mutex
 	observationSample *observationSample
@@ -482,6 +487,8 @@ func (e *CommandExecutor) reconcileServer(ctx context.Context, operation Operati
 	}
 	if err := e.probeServerIdentity(ctx, operation); err == nil {
 		return nil
+	} else if !errors.Is(err, errReconcileNeedsRecreate) {
+		return err
 	}
 	if err := e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "server-"+operation.Slot)...); err != nil {
 		return err
@@ -658,17 +665,55 @@ func (e *CommandExecutor) probeServerIdentity(ctx context.Context, operation Ope
 		return ErrExecutorUnavailable
 	}
 	if err := validateReadinessEndpoint(baseURL); err != nil {
-		return err
+		return errors.Join(errReconcileProbeUnavailable, err)
 	}
-	if err := e.requestStatus(ctx, http.MethodGet, baseURL+"/readyz", nil, func(status int, _ []byte) error {
-		if status >= http.StatusOK && status < http.StatusMultipleChoices {
-			return nil
+	timeout := e.ReconcileProbeTimeout
+	if timeout <= 0 {
+		timeout = deploymentReconcileProbeTimeout
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		draining := false
+		lastErr = e.requestStatus(probeCtx, http.MethodGet, baseURL+"/readyz", nil, func(status int, body []byte) error {
+			if status >= http.StatusOK && status < http.StatusMultipleChoices {
+				return nil
+			}
+			if status == http.StatusServiceUnavailable {
+				var health struct {
+					State string `json:"state"`
+				}
+				if json.Unmarshal(body, &health) == nil && health.State == "draining" {
+					draining = true
+				}
+			}
+			return readinessStatusError("Server", status)
+		})
+		if lastErr == nil {
+			break
 		}
-		return fmt.Errorf("deployment Server readiness returned HTTP %d", status)
-	}); err != nil {
-		return err
+		if draining {
+			return errors.Join(errReconcileNeedsRecreate, lastErr)
+		}
+		if errors.Is(lastErr, errNonRetryableReadiness) {
+			return errors.Join(errReconcileProbeUnavailable, lastErr)
+		}
+		select {
+		case <-probeCtx.Done():
+			return errors.Join(errReconcileProbeUnavailable, lastErr)
+		case <-ticker.C:
+		}
 	}
-	return e.verifyVersion(ctx, baseURL, operation, "server")
+	if err := e.verifyVersion(probeCtx, baseURL, operation, "server"); err != nil {
+		if errors.Is(err, errComponentIdentityMismatch) {
+			return errors.Join(errReconcileNeedsRecreate, err)
+		}
+		return errors.Join(errReconcileProbeUnavailable, err)
+	}
+	return nil
 }
 
 func (e *CommandExecutor) waitWorkerIdentity(ctx context.Context, operation Operation) error {
@@ -783,7 +828,7 @@ func (e *CommandExecutor) verifyVersion(ctx context.Context, baseURL string, ope
 		return err
 	}
 	if version.CandidateSourceSHA != operation.CandidateSourceSHA || version.ArtifactDigest != operation.ArtifactDigest {
-		return fmt.Errorf("deployment %s identity does not match candidate", component)
+		return fmt.Errorf("%w: deployment %s identity does not match candidate", errComponentIdentityMismatch, component)
 	}
 	return nil
 }

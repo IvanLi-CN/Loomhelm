@@ -112,6 +112,8 @@ interface SessionCreationIntentEntry {
   intent: SessionCreationIntent;
 }
 
+type SessionCreationClearResult = "cleared" | "not_current" | "storage_failed";
+
 function readSessionCreationIntentEntries(keys: readonly string[]): SessionCreationIntentEntry[] {
   return keys.flatMap((key) => {
     const intent = readSessionCreationIntent(key);
@@ -127,13 +129,14 @@ function sameSessionCreationAttempt(left: SessionCreationIntent, right: SessionC
   return sameSessionCreationIntent(left, right) && left.attemptId === right.attemptId;
 }
 
-function clearStoredIntent(key: string | undefined): void {
+function clearStoredIntent(key: string | undefined): boolean {
   const storage = getSessionStorage();
-  if (!key || !storage) return;
+  if (!key || !storage) return !key;
   try {
     storage.removeItem(key);
+    return storage.getItem(key) === null;
   } catch {
-    // Best effort only; the server remains the source of truth.
+    return false;
   }
 }
 
@@ -174,18 +177,26 @@ function writeSessionCreationIntents(primaryKey: string | undefined, legacyKeys:
   }
 }
 
-function clearSessionCreationIntentIfCurrent(primaryKey: string | undefined, legacyKeys: readonly string[], intent: SessionCreationIntent): boolean {
-  const entries = readSessionCreationIntentEntries([primaryKey, ...legacyKeys].filter((key): key is string => Boolean(key)));
-  if (entries.some(({ intent: current }) => !sameSessionCreationAttempt(current, intent))) return false;
-  for (const entry of entries) clearStoredIntent(entry.key);
-  return true;
+function clearSessionCreationIntentIfCurrent(primaryKey: string | undefined, legacyKeys: readonly string[], intent: SessionCreationIntent): SessionCreationClearResult {
+  const keys = [...new Set([primaryKey, ...legacyKeys].filter((key): key is string => Boolean(key)))];
+  const storage = getSessionStorage();
+  if (!storage) return "storage_failed";
+  const entries = readSessionCreationIntentEntries(keys);
+  if (entries.some(({ intent: current }) => !sameSessionCreationAttempt(current, intent))) return "not_current";
+  let cleared = true;
+  for (const entry of entries) {
+    if (!clearStoredIntent(entry.key)) cleared = false;
+  }
+  try {
+    return cleared && keys.every((key) => storage.getItem(key) === null) ? "cleared" : "storage_failed";
+  } catch {
+    return "storage_failed";
+  }
 }
 
-function clearAllSessionCreationIntents(primaryKey: string | undefined, legacyKeys: readonly string[]): void {
-  clearStoredIntent(primaryKey);
-  for (const key of legacyKeys) {
-    if (key !== primaryKey) clearStoredIntent(key);
-  }
+function clearAllSessionCreationIntents(primaryKey: string | undefined, legacyKeys: readonly string[]): boolean {
+  const keys = [...new Set([primaryKey, ...legacyKeys].filter((key): key is string => Boolean(key)))];
+  return keys.every((key) => clearStoredIntent(key));
 }
 
 function getIdentityScope(principalId: string | undefined): string {
@@ -513,6 +524,8 @@ export function ProductionSessionCreationPanel({
   const [failure, setFailure] = useState<string | null>(null);
   const [creationUncertain, setCreationUncertain] = useState(() => storedIntent?.uncertain ?? false);
   const [creationIntentPersistenceRecovery, setCreationIntentPersistenceRecovery] = useState(false);
+  const [creationIntentCleanupRecovery, setCreationIntentCleanupRecovery] = useState<"created" | "abandoned" | null>(null);
+  const creationBlocked = creationUncertain || Boolean(creationIntentCleanupRecovery);
   const commandRef = useRef<SessionCreationIntent | undefined>(storedIntent);
   const selectedProjectReadOnly = selectedProjectId !== NO_PROJECT && Boolean(projectCanWrite && !projectCanWrite(selectedProjectId));
 
@@ -522,13 +535,19 @@ export function ProductionSessionCreationPanel({
   }, [legacyStorageKeys, storageKey, storedIntentConflict, storedIntentEntry]);
 
   useEffect(() => {
-    const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions, shouldPreserveProjectSelection(pending, creationUncertain));
+    const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions, shouldPreserveProjectSelection(pending, creationBlocked));
     if (normalized !== selectedProjectId) setSelectedProjectId(normalized);
-  }, [creationUncertain, fixedProjectId, pending, projectOptions, selectedProjectId]);
+  }, [creationBlocked, fixedProjectId, pending, projectOptions, selectedProjectId]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (pending || readOnly) return;
+    if (creationIntentCleanupRecovery) {
+      setFailure(creationIntentCleanupRecovery === "created"
+        ? "Session 已创建，但浏览器恢复身份尚未清理；请先恢复浏览器存储并完成清理。不会重复创建 Session。"
+        : "创建身份尚未清理；请先恢复浏览器存储并完成清理。不会自动发送或重复创建 Session。");
+      return;
+    }
     if (storedIntentConflict) {
       setFailure("检测到多个未确认的创建命令；为避免重复创建，请先完成人工对账并清理冲突意图。");
       return;
@@ -561,15 +580,16 @@ export function ProductionSessionCreationPanel({
     const commandId = existingIntent?.fingerprint === fingerprint ? existingIntent.commandId : createCommandId("session");
     const intent: SessionCreationIntent = { attemptId: createCommandId("session-attempt"), commandId, fingerprint, request: requestWithoutCommand, uncertain: true };
     if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, intent, { expectedAttemptId: existingIntent?.attemptId, requireCurrent: Boolean(existingIntent) && !creationIntentPersistenceRecovery })) {
-      commandRef.current = intent;
-      setCreationUncertain(true);
+      commandRef.current = existingIntent;
+      setCreationUncertain(Boolean(existingIntent?.uncertain));
       setCreationIntentPersistenceRecovery(true);
       setPending(false);
-      setFailure("创建命令身份未完整写入，尚未发送请求；请恢复浏览器存储后重试同一命令，或放弃这次创建。");
+      setFailure("创建命令身份未完整写入，尚未发送请求；请恢复浏览器存储后重试此表单，或放弃这次创建。");
       return;
     }
     commandRef.current = intent;
     setCreationIntentPersistenceRecovery(false);
+    setCreationIntentCleanupRecovery(null);
     try {
       await onCreate({
         ...requestWithoutCommand,
@@ -578,8 +598,14 @@ export function ProductionSessionCreationPanel({
       commandRef.current = undefined;
       setCreationUncertain(false);
       setCreationIntentPersistenceRecovery(false);
-      if (!clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent)) {
+      setCreationIntentCleanupRecovery(null);
+      const clearResult = clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent);
+      if (clearResult === "not_current") {
         setFailure("Session 已创建，但浏览器中仍有另一项创建命令待对账；未清理其恢复身份。");
+      } else if (clearResult === "storage_failed") {
+        commandRef.current = intent;
+        setCreationIntentCleanupRecovery("created");
+        setFailure("Session 已创建，但浏览器恢复身份未完整清理；请恢复浏览器存储后重试清理，不会重复创建。");
       } else {
         setIntentRevision((current) => current + 1);
       }
@@ -588,17 +614,26 @@ export function ProductionSessionCreationPanel({
       let failureText = errorMessage(error, "创建会话");
       if (uncertain) {
         const pendingIntent = { ...intent, uncertain: true };
-        commandRef.current = pendingIntent;
-        if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, pendingIntent, { expectedAttemptId: intent.attemptId, requireCurrent: true })) {
+        if (writeSessionCreationIntents(storageKey, legacyStorageKeys, pendingIntent, { expectedAttemptId: intent.attemptId, requireCurrent: true })) {
+          commandRef.current = pendingIntent;
+        } else {
+          commandRef.current = intent;
           failureText = "创建结果不确定，但浏览器中已有另一项创建命令；未覆盖其恢复身份，请先人工对账。";
         }
         setCreationUncertain(true);
       } else {
-        commandRef.current = undefined;
         setCreationIntentPersistenceRecovery(false);
-        if (!clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent)) {
+        setCreationIntentCleanupRecovery(null);
+        const clearResult = clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent);
+        if (clearResult === "not_current") {
+          commandRef.current = undefined;
           failureText = "创建请求已被服务拒绝，但浏览器中已有另一项创建命令；未清理其恢复身份。";
+        } else if (clearResult === "storage_failed") {
+          commandRef.current = intent;
+          setCreationIntentCleanupRecovery("abandoned");
+          failureText = "创建请求已被服务拒绝，但浏览器恢复身份未完整清理；请恢复浏览器存储后重试清理。";
         } else {
+          commandRef.current = undefined;
           setIntentRevision((current) => current + 1);
         }
         setCreationUncertain(false);
@@ -609,24 +644,78 @@ export function ProductionSessionCreationPanel({
     }
   };
 
+  const retryCreationIntentCleanup = () => {
+    const intent = commandRef.current ?? storedIntent;
+    if (!intent) {
+      setCreationIntentCleanupRecovery(null);
+      setFailure("浏览器中没有可清理的创建身份；可以重新填写表单。");
+      setIntentRevision((current) => current + 1);
+      return;
+    }
+    const clearResult = clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent);
+    if (clearResult === "cleared") {
+      commandRef.current = undefined;
+      setCreationIntentCleanupRecovery(null);
+      setCreationUncertain(false);
+      setFailure("已清理创建身份；不会重复创建 Session。");
+      setIntentRevision((current) => current + 1);
+    } else if (clearResult === "not_current") {
+      commandRef.current = undefined;
+      setCreationIntentCleanupRecovery(null);
+      setCreationUncertain(false);
+      setFailure("当前创建身份已被另一项请求接管；未清理其恢复身份，请先人工对账。");
+      setIntentRevision((current) => current + 1);
+    } else {
+      commandRef.current = intent;
+      setCreationIntentCleanupRecovery("abandoned");
+      setFailure("浏览器存储仍不可用；创建身份尚未清理，请恢复存储后重试。不会自动发送或重复创建。");
+    }
+  };
+
   const abandonUncertainCreation = () => {
     if (storedIntentConflict) {
+      if (!clearAllSessionCreationIntents(storageKey, legacyStorageKeys)) {
+        setFailure("冲突的创建身份未完整清理；请恢复浏览器存储后重试。");
+        setIntentRevision((current) => current + 1);
+        return;
+      }
       commandRef.current = undefined;
       setCreationUncertain(false);
       setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery(null);
       setFailure("已按人工对账确认，清理了冲突的创建意图；后续创建会使用新的 command_id。");
-      clearAllSessionCreationIntents(storageKey, legacyStorageKeys);
       setIntentRevision((current) => current + 1);
       return;
     }
     const intent = commandRef.current ?? storedIntent;
-    commandRef.current = undefined;
-    setCreationUncertain(false);
-    setCreationIntentPersistenceRecovery(false);
-    if (!intent || clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent)) {
+    if (!intent) {
+      commandRef.current = undefined;
+      setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery(null);
       setFailure("已放弃未确认的创建意图；修改后的表单会使用新的 command_id。");
       setIntentRevision((current) => current + 1);
+      return;
+    }
+    const clearResult = clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent);
+    if (clearResult === "cleared") {
+      commandRef.current = undefined;
+      setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery(null);
+      setFailure("已放弃未确认的创建意图；修改后的表单会使用新的 command_id。");
+      setIntentRevision((current) => current + 1);
+    } else if (clearResult === "storage_failed") {
+      commandRef.current = intent;
+      setCreationUncertain(intent.uncertain);
+      setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery("abandoned");
+      setFailure("创建身份未完整清理；请恢复浏览器存储后重试清理，不会自动发送或重复创建。");
     } else {
+      commandRef.current = undefined;
+      setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery(null);
       setFailure("当前创建命令已被另一项请求接管；未清理其恢复身份，请先人工对账。");
     }
   };
@@ -645,7 +734,7 @@ export function ProductionSessionCreationPanel({
       <form className="grid min-w-0 gap-4" onSubmit={submit}>
         <label className="grid gap-2 text-xs font-semibold">
           <span>Host 路径</span>
-          <Select value={path} onValueChange={(value) => setPath(value as SessionPath)} disabled={pending || readOnly || creationUncertain}>
+          <Select value={path} onValueChange={(value) => setPath(value as SessionPath)} disabled={pending || readOnly || creationBlocked}>
             <SelectTrigger aria-label="Host 路径"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="new">新建 Desktop 对话</SelectItem>
@@ -657,11 +746,11 @@ export function ProductionSessionCreationPanel({
         {path === "existing_active" ? (
           <label className="grid gap-2 text-xs font-semibold" htmlFor="production-active-thread-ref">
             <span>现有 Host thread ref</span>
-            <input id="production-active-thread-ref" className="h-10 rounded-[var(--radius-sm)] border border-[var(--line-strong)] bg-[var(--surface-glass)] px-3 text-sm font-normal text-[var(--ink)] outline-none focus:border-[var(--accent)]" value={activeThreadRef} onChange={(event) => setActiveThreadRef(event.target.value)} placeholder="例如 thread-abc" disabled={pending || readOnly || creationUncertain} required />
+            <input id="production-active-thread-ref" className="h-10 rounded-[var(--radius-sm)] border border-[var(--line-strong)] bg-[var(--surface-glass)] px-3 text-sm font-normal text-[var(--ink)] outline-none focus:border-[var(--accent)]" value={activeThreadRef} onChange={(event) => setActiveThreadRef(event.target.value)} placeholder="例如 thread-abc" disabled={pending || readOnly || creationBlocked} required />
           </label>
         ) : null}
         {path === "existing_active" && !existingActiveSupported ? <div className="rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status">当前后端尚未支持 existing_active；入口和 thread ref 保留，但提交按钮会禁用，避免把新建会话误报为接入现有活跃对话。</div> : null}
-        {storedIntentConflict ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert"><span>检测到多个未确认的创建命令；为避免用错误的 command_id 重试，创建已暂停。请先核对服务端事实，再清理冲突意图。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>我已人工对账，清理冲突意图</Button></div> : creationIntentPersistenceRecovery ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>创建请求尚未发送，但浏览器没有完整保存命令身份；请恢复存储后重试同一命令，或先放弃这次创建。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>放弃未发送的创建</Button></div> : creationUncertain ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>创建结果不确定；刷新后仍会保留同一请求身份。请先用相同请求重试或完成人工对账，不能直接改成另一项创建。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>我已对账，放弃这次创建</Button></div> : null}
+        {storedIntentConflict ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert"><span>检测到多个未确认的创建命令；为避免用错误的 command_id 重试，创建已暂停。请先核对服务端事实，再清理冲突意图。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>我已人工对账，清理冲突意图</Button></div> : creationIntentCleanupRecovery ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>{creationIntentCleanupRecovery === "created" ? "Session 已有明确结果，但浏览器恢复身份尚未完整清理；请恢复存储后重试清理，不会重复创建。" : "创建身份尚未完整清理；请恢复浏览器存储后重试清理，不会自动发送或重复创建。"}</span><Button type="button" variant="secondary" onClick={retryCreationIntentCleanup}>重试清理创建身份</Button></div> : creationIntentPersistenceRecovery ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>创建请求尚未发送，但浏览器没有完整保存命令身份；请恢复浏览器存储后重试此表单，或先放弃这次创建。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>放弃未发送的创建</Button></div> : creationUncertain ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>创建结果不确定；刷新后仍会保留同一请求身份。请先用相同请求重试或完成人工对账，不能直接改成另一项创建。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>我已对账，放弃这次创建</Button></div> : null}
 
         {fixedProjectId ? (
           <div className="grid gap-2 text-xs">
@@ -671,7 +760,7 @@ export function ProductionSessionCreationPanel({
         ) : projectOptions.length > 0 ? (
           <label className="grid gap-2 text-xs font-semibold">
             <span>项目（可选）</span>
-            <Select value={selectedProjectId} onValueChange={setSelectedProjectId} disabled={pending || readOnly || creationUncertain}>
+            <Select value={selectedProjectId} onValueChange={setSelectedProjectId} disabled={pending || readOnly || creationBlocked}>
               <SelectTrigger aria-label="项目"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_PROJECT}>独立会话，不归属项目</SelectItem>
@@ -688,7 +777,7 @@ export function ProductionSessionCreationPanel({
 
         <label className="grid gap-2 text-xs font-semibold" htmlFor={promptId}>
           <span>首条提示（可选）</span>
-          <Textarea id={promptId} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="明确说明要讨论或执行的目标…" disabled={pending || readOnly || creationUncertain} className="min-h-28 resize-y border-[var(--line-strong)] bg-[var(--surface-glass)] text-[var(--ink)] placeholder:text-[var(--muted)]" />
+          <Textarea id={promptId} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="明确说明要讨论或执行的目标…" disabled={pending || readOnly || creationBlocked} className="min-h-28 resize-y border-[var(--line-strong)] bg-[var(--surface-glass)] text-[var(--ink)] placeholder:text-[var(--muted)]" />
         </label>
 
         {readOnly ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><WifiOff className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>当前身份或项目权限为只读；表单保留展示，但不会创建 Session。</span></div> : null}
@@ -697,7 +786,7 @@ export function ProductionSessionCreationPanel({
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
           <span className="text-[11px] leading-5 text-[var(--muted)]">不会自动发送草稿；创建请求只提交一次 command_id。</span>
-          <Button type="submit" disabled={pending || readOnly || storedIntentConflict || selectedProjectReadOnly || (path === "existing_active" && !existingActiveSupported)}>
+          <Button type="submit" disabled={pending || readOnly || creationBlocked || storedIntentConflict || selectedProjectReadOnly || (path === "existing_active" && !existingActiveSupported)}>
             {pending ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
             {pending ? "正在创建" : creationUncertain ? "重试同一命令" : "创建会话"}
           </Button>

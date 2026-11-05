@@ -105,6 +105,7 @@ func TestWorkerHealthAndDrainEndpoints(t *testing.T) {
 		Version:            "test",
 		DrainToken:         "test-token",
 		DrainControlSubnet: controlSubnet,
+		DrainControllerIP:  net.ParseIP("10.42.0.3"),
 		ShutdownTimeout:    time.Second,
 		WorkerGeneration:   1,
 	}, nil)
@@ -114,8 +115,16 @@ func TestWorkerHealthAndDrainEndpoints(t *testing.T) {
 	if err := controlWorker.lifecycle.Start(); err != nil {
 		t.Fatalf("control worker lifecycle.Start() error = %v", err)
 	}
+	foreignRequest := httptest.NewRequest(http.MethodPost, "/-/drain", nil)
+	foreignRequest.RemoteAddr = "10.42.0.15:1234"
+	foreignRequest.Header.Set("Authorization", "Bearer test-token")
+	foreignResponse := httptest.NewRecorder()
+	controlWorker.healthRouter().ServeHTTP(foreignResponse, foreignRequest)
+	if foreignResponse.Code != http.StatusForbidden {
+		t.Fatalf("foreign control-network worker drain status = %d, want %d", foreignResponse.Code, http.StatusForbidden)
+	}
 	controlRequest := httptest.NewRequest(http.MethodPost, "/-/drain", nil)
-	controlRequest.RemoteAddr = "10.42.0.15:1234"
+	controlRequest.RemoteAddr = "10.42.0.3:1234"
 	controlRequest.Header.Set("Authorization", "Bearer test-token")
 	controlResponse := httptest.NewRecorder()
 	controlWorker.healthRouter().ServeHTTP(controlResponse, controlRequest)

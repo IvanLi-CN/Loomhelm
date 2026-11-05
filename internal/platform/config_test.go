@@ -168,6 +168,30 @@ func TestLoadConfigParsesDrainControlSubnet(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesDrainControllerIP(t *testing.T) {
+	config, err := LoadConfigWithLookup(ComponentWorker, envLookup(map[string]string{
+		"LOOMHELM_DATABASE_URL":        "postgres://test@localhost/loomhelm",
+		"LOOMHELM_DRAIN_TOKEN":         "test-token",
+		"LOOMHELM_DRAIN_CONTROLLER_IP": "10.42.0.3",
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigWithLookup() error = %v", err)
+	}
+	if config.DrainControllerIP == nil || !config.DrainControllerIP.Equal(net.ParseIP("10.42.0.3")) {
+		t.Fatalf("unexpected drain controller IP: %v", config.DrainControllerIP)
+	}
+}
+
+func TestLoadConfigRejectsInvalidDrainControllerIP(t *testing.T) {
+	_, err := LoadConfigWithLookup(ComponentServer, envLookup(map[string]string{
+		"LOOMHELM_DATABASE_URL":        "postgres://test@localhost/loomhelm",
+		"LOOMHELM_DRAIN_CONTROLLER_IP": "not-an-ip",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "LOOMHELM_DRAIN_CONTROLLER_IP") {
+		t.Fatalf("invalid drain controller IP error = %v", err)
+	}
+}
+
 func TestLoadConfigRejectsEmptyDrainControlSubnet(t *testing.T) {
 	_, err := LoadConfigWithLookup(ComponentWorker, envLookup(map[string]string{
 		"LOOMHELM_DATABASE_URL":         "postgres://test@localhost/loomhelm",

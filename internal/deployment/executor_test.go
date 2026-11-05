@@ -806,7 +806,9 @@ func TestCommandExecutorReconcileRecreatesUnreadyServerBeforeWorker(t *testing.T
 		switch request.URL.Path {
 		case "/readyz":
 			if !recreated.Load() {
+				writer.Header().Set("Content-Type", "application/json")
 				writer.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = writer.Write([]byte(`{"state":"draining","ready":false}`))
 				return
 			}
 			writer.WriteHeader(http.StatusNoContent)
@@ -867,6 +869,55 @@ func TestCommandExecutorReconcileRecreatesUnreadyServerBeforeWorker(t *testing.T
 	}
 	if serverIndex < 0 || workerIndex < 0 || serverIndex >= workerIndex {
 		t.Fatalf("reconcile unready commands = %v, want forced Server recovery before Worker", commands)
+	}
+}
+
+func TestCommandExecutorReconcileDoesNotRecreateOnTransientServerProbeFailure(t *testing.T) {
+	var commands []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/readyz" {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = writer.Write([]byte(`{"state":"warming_up","ready":false}`))
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+
+	executor := &CommandExecutor{
+		ComposeBinary:         "docker",
+		ComposeFile:           "/srv/compose.yaml",
+		ProjectName:           "loomhelm",
+		CaddyBinary:           "caddy",
+		CaddyFile:             "/etc/caddy/Caddyfile",
+		SlotURLs:              map[string]string{"green": server.URL},
+		WorkerURLs:            map[string]string{"green": server.URL},
+		ReconcileProbeTimeout: 25 * time.Millisecond,
+		Run: func(_ context.Context, binary string, args ...string) error {
+			commands = append(commands, binary+" "+strings.Join(args, " "))
+			return nil
+		},
+	}
+	operation := Operation{
+		Kind:               "reconcile",
+		ExecutionKind:      "rollback",
+		Slot:               "green",
+		CandidateID:        strings.Repeat("a", 64),
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+		ServerImage:        "ghcr.io/example/server@sha256:" + strings.Repeat("a", 64),
+		WorkerImage:        "ghcr.io/example/worker@sha256:" + strings.Repeat("b", 64),
+		WorkerGeneration:   2,
+	}
+	err := executor.Execute(context.Background(), operation)
+	if err == nil || !errors.Is(err, errReconcileProbeUnavailable) {
+		t.Fatalf("reconcile transient probe error = %v, want unavailable probe error", err)
+	}
+	for _, command := range commands {
+		if strings.Contains(command, "--force-recreate") || strings.Contains(command, "worker-green") {
+			t.Fatalf("reconcile transient probe issued destructive command: %v", commands)
+		}
 	}
 }
 
