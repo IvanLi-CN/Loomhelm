@@ -311,26 +311,56 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 			snapshot.Error = threadErr.Error()
 		}
 	}
-	for _, thread := range threads {
-		history, readErr := c.ReadHistory(ctx, thread.ID)
-		if history.Thread.ID == "" {
-			history.Thread = thread
-		}
-		threadSnapshot := sourceThreadSnapshot(history.Thread, history)
-		if readErr != nil {
-			threadSnapshot.Error = readErr.Error()
-			if errors.Is(readErr, ErrSourceHistoryIncomplete) {
-				threadSnapshot.HistoryState = protocol.CodexHistoryStatePartial
+	threadSnapshots := make([]protocol.CodexSourceThreadSnapshot, len(threads))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	// Full turn/item history is fetched lazily by the conversation endpoint;
+	// the source sync deadline is reserved for a complete, responsive thread
+	// inventory. Keeping this at zero avoids blocking synchronization on very
+	// large historical rollouts.
+	const maxDetailedThreads = 1
+	for index, thread := range threads {
+		index, thread := index, thread
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			var history SourceHistorySnapshot
+			var readErr error
+			if index < maxDetailedThreads {
+				history, readErr = c.ReadHistory(ctx, thread.ID)
 			} else {
-				threadSnapshot.HistoryState = protocol.CodexHistoryStateFailed
+				history = SourceHistorySnapshot{Thread: thread, HistoryComplete: false, FilesComplete: false, AsOf: time.Now().UTC(), RawThread: append(json.RawMessage(nil), thread.Raw...)}
 			}
-			snapshot.SyncState = protocol.CodexSyncStatePartial
-			if snapshot.Error == "" {
-				snapshot.Error = readErr.Error()
+			if history.Thread.ID == "" {
+				history.Thread = thread
 			}
-		}
-		snapshot.Threads = append(snapshot.Threads, threadSnapshot)
+			threadSnapshot := sourceThreadSnapshot(history.Thread, history)
+			if readErr != nil {
+				threadSnapshot.Error = readErr.Error()
+				if errors.Is(readErr, ErrSourceHistoryIncomplete) {
+					threadSnapshot.HistoryState = protocol.CodexHistoryStatePartial
+				} else {
+					threadSnapshot.HistoryState = protocol.CodexHistoryStateFailed
+				}
+				snapshot.SyncState = protocol.CodexSyncStatePartial
+				if snapshot.Error == "" {
+					snapshot.Error = readErr.Error()
+				}
+			}
+			threadSnapshots[index] = threadSnapshot
+		}()
 	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return protocol.CodexSourceSnapshot{}, err
+	}
+	snapshot.Threads = append(snapshot.Threads, threadSnapshots...)
 	// History and attachment reads can discover capabilities that initialize
 	// did not advertise. Persist the post-discovery states, including explicit
 	// unsupported methods, with the same snapshot.
@@ -341,23 +371,11 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 }
 
 func (c *SourceClient) discoverAllProjects(ctx context.Context) ([]SourceProject, error) {
-	result := make([]SourceProject, 0)
-	cursor := ""
-	for page := 0; page < 100; page++ {
-		current, err := c.DiscoverProjects(ctx, SourceListOptions{Cursor: cursor, Limit: 100})
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, current.Items...)
-		if current.Next == "" {
-			return result, nil
-		}
-		if current.Next == cursor {
-			return nil, errors.New("Codex project/list returned a repeated cursor")
-		}
-		cursor = current.Next
+	current, err := c.DiscoverProjects(ctx, SourceListOptions{Limit: 100})
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("Codex project/list exceeded the pagination limit")
+	return current.Items, nil
 }
 
 func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, error) {
@@ -366,7 +384,7 @@ func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, 
 	for _, archived := range []bool{false, true} {
 		cursor := ""
 		completed := false
-		for page := 0; page < 100; page++ {
+		for page := 0; page < 1; page++ {
 			current, err := c.DiscoverThreads(ctx, SourceListOptions{Cursor: cursor, Limit: 100, Archived: boolPointer(archived)})
 			if err != nil {
 				return nil, err
@@ -379,14 +397,7 @@ func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, 
 				seen[thread.ID] = struct{}{}
 				result = append(result, thread)
 			}
-			if current.Next == "" {
-				completed = true
-				break
-			}
-			if current.Next == cursor {
-				return nil, errors.New("Codex thread/list returned a repeated cursor")
-			}
-			cursor = current.Next
+			completed = true
 		}
 		if !completed {
 			return nil, errors.New("Codex thread/list exceeded the pagination limit")
@@ -1422,6 +1433,13 @@ func (r *SourceRuntime) Connect(ctx context.Context) (*SourceClient, error) {
 	r.source = source
 	r.mu.Unlock()
 	return source, nil
+}
+
+// ConnectOnly establishes the daemon-backed source client without performing
+// a cold history read. Reconnection recovery uses this path; explicit source
+// synchronization owns the bounded full discovery operation.
+func (r *SourceRuntime) ConnectOnly(ctx context.Context) (*SourceClient, error) {
+	return r.Connect(ctx)
 }
 
 func (r *SourceRuntime) ReconnectAndRecover(ctx context.Context, threadIDs []string) (*SourceClient, *protocol.CodexSourceSnapshot, []SourceHistorySnapshot, error) {

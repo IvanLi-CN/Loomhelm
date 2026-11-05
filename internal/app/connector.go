@@ -110,6 +110,11 @@ func NewConnector(cfg platform.Config, logger *slog.Logger) (*Connector, error) 
 		return nil, fmt.Errorf("initialize connector controller: %w", err)
 	}
 	sourceRuntime, err := connectorruntime.NewSourceRuntime(func(factoryCtx context.Context) (connectorruntime.RPCTransport, error) {
+		if strings.TrimSpace(cfg.ConnectorAppServerSocket) != "" {
+			return connectorruntime.NewUnixSocketTransport(context.WithoutCancel(factoryCtx), connectorruntime.UnixSocketTransportConfig{
+				SocketPath: cfg.ConnectorAppServerSocket,
+			})
+		}
 		return connectorruntime.NewProcessTransport(context.WithoutCancel(factoryCtx), connectorruntime.ProcessTransportConfig{
 			CommandPath: cfg.ConnectorAppServerCommand,
 			WorkingDir:  cfg.ConnectorWorkingDir,
@@ -404,6 +409,7 @@ func (c *Connector) handleGatewaySourceCommand(ctx context.Context, connection *
 		return errors.New("Connector source command payload is missing")
 	}
 	command := *message.SourceCommand
+	c.logger.Info("received Codex source command", "method", command.Method, "operation_id", command.OperationID)
 	ack := gateway.SourceAck{OperationID: command.OperationID, State: "failed"}
 	c.sourceLifecycleMu.Lock()
 	source, err := c.sourceClientLocked(ctx)
@@ -415,6 +421,9 @@ func (c *Connector) handleGatewaySourceCommand(ctx context.Context, connection *
 			var snapshot protocol.CodexSourceSnapshot
 			var payload json.RawMessage
 			snapshot, err = source.Sync(ctx, command.OperationID)
+			if err != nil {
+				c.logger.Warn("Codex source synchronization failed", "error", err)
+			}
 			if err == nil {
 				payload, err = json.Marshal(snapshot)
 				ack.Payload = payload
@@ -427,6 +436,7 @@ func (c *Connector) handleGatewaySourceCommand(ctx context.Context, connection *
 	if err == nil {
 		ack.State = "succeeded"
 	} else {
+		c.logger.Warn("Codex source command failed", "method", command.Method, "operation_id", command.OperationID, "error", err)
 		ack.Error = &gateway.WireError{Code: connectorSourceErrorCode(err), Message: "Connector could not complete the Codex source operation"}
 		if errors.Is(err, connectorruntime.ErrSourceCapabilityUnsupported) {
 			ack.State = "unsupported"
@@ -487,10 +497,14 @@ func (c *Connector) recoverSource(ctx context.Context, connection *gateway.Clien
 }
 
 func (c *Connector) recoverSourceLocked(ctx context.Context, connection *gateway.ClientConnection) error {
+	_ = connection
 	if c.sourceRuntime == nil {
 		return errors.New("Connector Codex source runtime is unavailable")
 	}
-	source, snapshot, _, err := c.sourceRuntime.ReconnectAndRecover(ctx, nil)
+	// Reconnect only restores the live source client. A full cold snapshot is
+	// requested explicitly by the Server's sync operation; doing it here would
+	// consume the operation deadline before the user asks for synchronization.
+	source, err := c.sourceRuntime.ConnectOnly(ctx)
 	if err != nil {
 		c.sourceMu.Lock()
 		c.source = nil
@@ -499,28 +513,6 @@ func (c *Connector) recoverSourceLocked(ctx context.Context, connection *gateway
 			_ = source.Close()
 		}
 		return err
-	}
-	if snapshot != nil {
-		snapshot.ConnectionGeneration = connection.Generation()
-		payload, marshalErr := json.Marshal(snapshot)
-		if marshalErr != nil {
-			c.sourceMu.Lock()
-			c.source = nil
-			c.sourceMu.Unlock()
-			_ = source.Close()
-			return fmt.Errorf("encode recovered Codex source snapshot: %w", marshalErr)
-		}
-		if err := connection.SendSourceSnapshot(ctx, snapshot.OperationID, gateway.SourceAck{
-			OperationID: snapshot.OperationID,
-			State:       "succeeded",
-			Payload:     payload,
-		}); err != nil {
-			c.sourceMu.Lock()
-			c.source = nil
-			c.sourceMu.Unlock()
-			_ = source.Close()
-			return fmt.Errorf("deliver recovered Codex source snapshot: %w", err)
-		}
 	}
 	c.sourceMu.Lock()
 	c.source = source
