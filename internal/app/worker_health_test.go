@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,12 +13,17 @@ import (
 )
 
 func TestWorkerHealthAndDrainEndpoints(t *testing.T) {
+	_, controlSubnet, err := net.ParseCIDR("10.42.0.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
 	worker, err := newTestWorker(platform.Config{
 		Component:          platform.ComponentWorker,
 		Version:            "test",
 		CandidateSourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ArtifactDigest:     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		DrainToken:         "test-token",
+		DrainControlSubnet: controlSubnet,
 		ShutdownTimeout:    time.Second,
 		WorkerGeneration:   1,
 	}, nil)
@@ -92,5 +98,28 @@ func TestWorkerHealthAndDrainEndpoints(t *testing.T) {
 	case <-worker.shutdown:
 	default:
 		t.Fatal("drain endpoint did not request worker shutdown")
+	}
+
+	controlWorker, err := newTestWorker(platform.Config{
+		Component:          platform.ComponentWorker,
+		Version:            "test",
+		DrainToken:         "test-token",
+		DrainControlSubnet: controlSubnet,
+		ShutdownTimeout:    time.Second,
+		WorkerGeneration:   1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewWorker() control-network error = %v", err)
+	}
+	if err := controlWorker.lifecycle.Start(); err != nil {
+		t.Fatalf("control worker lifecycle.Start() error = %v", err)
+	}
+	controlRequest := httptest.NewRequest(http.MethodPost, "/-/drain", nil)
+	controlRequest.RemoteAddr = "10.42.0.15:1234"
+	controlRequest.Header.Set("Authorization", "Bearer test-token")
+	controlResponse := httptest.NewRecorder()
+	controlWorker.healthRouter().ServeHTTP(controlResponse, controlRequest)
+	if controlResponse.Code != http.StatusAccepted {
+		t.Fatalf("control-network worker drain status = %d, want %d", controlResponse.Code, http.StatusAccepted)
 	}
 }

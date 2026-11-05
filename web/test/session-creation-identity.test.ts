@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { buildLegacySessionCreationIntentKey, buildSessionCreationIntentKey } from "../src/features/conversations/session-creation-identity";
+import { buildLegacySessionCreationIntentKey, buildSessionCreationIntentKey, hasSessionCreationIntentConflict } from "../src/features/conversations/session-creation-identity";
 
 describe("session creation identity", () => {
   test("keeps identical creation requests distinct across browser contexts", () => {
@@ -51,5 +51,16 @@ describe("session creation identity", () => {
 
     expect(buildLegacySessionCreationIntentKey({ ...request, pathname: "/" })).not.toBe(buildLegacySessionCreationIntentKey({ ...request, pathname: "/conversations/new" }));
     expect(buildLegacySessionCreationIntentKey({ ...request, pathname: "/conversations/new" })).not.toBe(buildSessionCreationIntentKey({ ...request, pathname: "/conversations/new" }));
+  });
+
+  test("detects divergent command identities across compatibility keys", () => {
+    expect(hasSessionCreationIntentConflict([
+      { commandId: "session-a", fingerprint: "request-a" },
+      { commandId: "session-a", fingerprint: "request-a" }
+    ])).toBe(false);
+    expect(hasSessionCreationIntentConflict([
+      { commandId: "session-a", fingerprint: "request-a" },
+      { commandId: "session-b", fingerprint: "request-b" }
+    ])).toBe(true);
   });
 });

@@ -129,6 +129,35 @@ func TestServerHealthVersionAndDrainLifecycle(t *testing.T) {
 	}
 }
 
+func TestServerDrainAllowsAuthenticatedControlNetwork(t *testing.T) {
+	_, controlSubnet, err := net.ParseCIDR("10.42.0.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := newTestServer(platform.Config{
+		Component:          platform.ComponentServer,
+		Version:            "test-version",
+		HTTPAddr:           "127.0.0.1:0",
+		DrainToken:         "test-token",
+		DrainControlSubnet: controlSubnet,
+		ShutdownTimeout:    time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if err := server.lifecycle.Start(); err != nil {
+		t.Fatalf("lifecycle.Start() error = %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/-/drain", nil)
+	request.RemoteAddr = "10.42.0.15:1234"
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	server.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("control-network drain status = %d, want %d", response.Code, http.StatusAccepted)
+	}
+}
+
 func TestServerSocketHealthDuringDrain(t *testing.T) {
 	server, err := newTestServer(platform.Config{
 		Component:       platform.ComponentServer,

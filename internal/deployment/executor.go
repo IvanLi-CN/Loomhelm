@@ -85,6 +85,8 @@ type CommandExecutor struct {
 	CaddyAdminAddress  string
 	PublicURL          string
 	DrainToken         string
+	DrainSlotURLs      map[string]string
+	DrainWorkerURLs    map[string]string
 	WebRoot            string
 	SlotURLs           map[string]string
 	WorkerURLs         map[string]string
@@ -170,6 +172,14 @@ func NewCommandExecutorFromEnvironment() (*CommandExecutor, error) {
 		WorkerURLs: map[string]string{
 			"blue":  strings.TrimRight(os.Getenv("LOOMHELM_DEPLOYMENT_BLUE_WORKER_URL"), "/"),
 			"green": strings.TrimRight(os.Getenv("LOOMHELM_DEPLOYMENT_GREEN_WORKER_URL"), "/"),
+		},
+		DrainSlotURLs: map[string]string{
+			"blue":  strings.TrimRight(os.Getenv("LOOMHELM_DEPLOYMENT_BLUE_DRAIN_URL"), "/"),
+			"green": strings.TrimRight(os.Getenv("LOOMHELM_DEPLOYMENT_GREEN_DRAIN_URL"), "/"),
+		},
+		DrainWorkerURLs: map[string]string{
+			"blue":  strings.TrimRight(os.Getenv("LOOMHELM_DEPLOYMENT_BLUE_WORKER_DRAIN_URL"), "/"),
+			"green": strings.TrimRight(os.Getenv("LOOMHELM_DEPLOYMENT_GREEN_WORKER_DRAIN_URL"), "/"),
 		},
 		HTTPClient:   &http.Client{Timeout: 5 * time.Second},
 		DrainTimeout: drainTimeout,
@@ -281,6 +291,14 @@ func (e *CommandExecutor) Execute(ctx context.Context, operation Operation) erro
 		if err := e.prepareCaddy(ctx, operation, false); err != nil {
 			return &DeterministicError{Err: err}
 		}
+		if kind == "rollback" {
+			if err := e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "server-"+operation.Slot)...); err != nil {
+				return e.cleanupStartedService(ctx, operation, "server", err)
+			}
+			if err := e.waitServerIdentity(ctx, operation); err != nil {
+				return e.cleanupStartedService(ctx, operation, "server", err)
+			}
+		}
 		if operation.CandidateID != "" {
 			if err := e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "worker-"+operation.Slot)...); err != nil {
 				return e.cleanupFailedWorker(ctx, operation, err)
@@ -330,7 +348,11 @@ func (e *CommandExecutor) Execute(ctx context.Context, operation Operation) erro
 			if err := e.prepareCaddy(ctx, operation, false); err != nil {
 				return err
 			}
-			if err := e.ensureService(ctx, operation, "server"); err != nil {
+			if operation.ExecutionKind == "rollback" {
+				if err := e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "server-"+operation.Slot)...); err != nil {
+					return err
+				}
+			} else if err := e.ensureService(ctx, operation, "server"); err != nil {
 				return err
 			}
 			if err := e.waitServerIdentity(ctx, operation); err != nil {
@@ -834,12 +856,20 @@ func (e *CommandExecutor) drain(ctx context.Context, slot string) error {
 	if e.SlotURLs[slot] == "" || e.WorkerURLs[slot] == "" || e.DrainToken == "" {
 		return ErrExecutorUnavailable
 	}
+	drainSlotURL := e.SlotURLs[slot]
+	if configured := e.DrainSlotURLs[slot]; configured != "" {
+		drainSlotURL = configured
+	}
+	drainWorkerURL := e.WorkerURLs[slot]
+	if configured := e.DrainWorkerURLs[slot]; configured != "" {
+		drainWorkerURL = configured
+	}
 	for _, target := range []struct {
 		baseURL   string
 		component string
 	}{
-		{baseURL: e.SlotURLs[slot], component: "Server"},
-		{baseURL: e.WorkerURLs[slot], component: "Worker"},
+		{baseURL: drainSlotURL, component: "Server"},
+		{baseURL: drainWorkerURL, component: "Worker"},
 	} {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(target.baseURL, "/")+"/-/drain", strings.NewReader(""))
 		if err != nil {

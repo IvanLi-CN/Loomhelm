@@ -197,7 +197,7 @@ func (w *Worker) handleWorkerDrainEndpoint(writer http.ResponseWriter, request *
 }
 
 func (w *Worker) handleWorkerDrain(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost || !isLoopbackRequest(request) || !validDrainToken(w.cfg.DrainToken, request) {
+	if request.Method != http.MethodPost || !isAuthorizedDrainRequest(request, w.cfg.DrainControlSubnet) || !validDrainToken(w.cfg.DrainToken, request) {
 		w.writeWorkerJSON(writer, http.StatusForbidden, healthResponse{
 			Status:    "forbidden",
 			Component: string(w.cfg.Component),

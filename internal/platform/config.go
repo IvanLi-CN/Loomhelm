@@ -34,6 +34,7 @@ type Config struct {
 	HTTPAddr                  string
 	WorkerHTTPAddr            string
 	DrainToken                string
+	DrainControlSubnet        *net.IPNet
 	ShutdownTimeout           time.Duration
 	StartupTimeout            time.Duration
 	DatabaseURL               string
@@ -155,6 +156,12 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		ArtifactDigest:     strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_DIGEST", "unknown")),
 		ArtifactRoot:       strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_ROOT", "")),
 		ShutdownTimeout:    shutdownTimeout,
+	}
+	if component == ComponentServer || component == ComponentWorker {
+		config.DrainControlSubnet, err = drainControlSubnetFromLookup(lookup)
+		if err != nil {
+			return Config{}, err
+		}
 	}
 	if component != ComponentConnector {
 		config.StartupTimeout, err = durationFromEnv(lookup, "LOOMHELM_STARTUP_TIMEOUT", DefaultStartupTimeout)
@@ -384,6 +391,18 @@ func poolSizeFromEnv(lookup func(string) (string, bool), key string, fallback in
 		return 0, fmt.Errorf("%s must be a nonnegative 32-bit integer", key)
 	}
 	return int32(value), nil
+}
+
+func drainControlSubnetFromLookup(lookup func(string) (string, bool)) (*net.IPNet, error) {
+	raw := strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_DRAIN_CONTROL_SUBNET", "127.0.0.0/8"))
+	if raw == "" {
+		return nil, fmt.Errorf("LOOMHELM_DRAIN_CONTROL_SUBNET must not be empty")
+	}
+	_, subnet, err := net.ParseCIDR(raw)
+	if err != nil || subnet == nil {
+		return nil, fmt.Errorf("invalid LOOMHELM_DRAIN_CONTROL_SUBNET")
+	}
+	return subnet, nil
 }
 
 func isKnownComponent(component Component) bool {

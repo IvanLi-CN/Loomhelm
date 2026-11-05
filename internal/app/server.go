@@ -473,7 +473,7 @@ func (s *Server) handleDrainStatus(writer http.ResponseWriter, _ *http.Request) 
 }
 
 func (s *Server) handleDrain(writer http.ResponseWriter, request *http.Request) {
-	if !isLoopbackRequest(request) || !s.validDrainToken(request) {
+	if !isAuthorizedDrainRequest(request, s.cfg.DrainControlSubnet) || !s.validDrainToken(request) {
 		snapshot := s.lifecycle.Snapshot()
 		s.writeJSON(writer, http.StatusForbidden, healthResponse{
 			Status:      "forbidden",
@@ -535,12 +535,19 @@ func (s *Server) validDrainToken(request *http.Request) bool {
 }
 
 func isLoopbackRequest(request *http.Request) bool {
+	return isAuthorizedDrainRequest(request, nil)
+}
+
+func isAuthorizedDrainRequest(request *http.Request, controlSubnet *net.IPNet) bool {
+	if request == nil {
+		return false
+	}
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {
 		host = request.RemoteAddr
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return ip != nil && (ip.IsLoopback() || controlSubnet != nil && controlSubnet.Contains(ip))
 }
 
 func (s *Server) writeJSON(writer http.ResponseWriter, status int, value any) {

@@ -153,6 +153,45 @@ func TestCommandExecutorStagesAndDrainsWithFixedHTTPContracts(t *testing.T) {
 	}
 }
 
+func TestCommandExecutorUsesPrivateDrainURLs(t *testing.T) {
+	var applicationDrainRequests atomic.Int32
+	application := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/readyz" {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		applicationDrainRequests.Add(1)
+		writer.WriteHeader(http.StatusNotFound)
+	}))
+	defer application.Close()
+
+	var controlDrainRequests atomic.Int32
+	control := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/-/drain" || request.Header.Get("Authorization") != "Bearer drain-secret" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		controlDrainRequests.Add(1)
+		writer.WriteHeader(http.StatusAccepted)
+	}))
+	defer control.Close()
+
+	executor := &CommandExecutor{
+		SlotURLs:        map[string]string{"green": application.URL},
+		WorkerURLs:      map[string]string{"green": application.URL},
+		DrainSlotURLs:   map[string]string{"green": control.URL},
+		DrainWorkerURLs: map[string]string{"green": control.URL},
+		DrainToken:      "drain-secret",
+		DrainTimeout:    time.Second,
+	}
+	if err := executor.Execute(context.Background(), Operation{Kind: "drain", Slot: "green"}); err != nil {
+		t.Fatalf("drain error = %v", err)
+	}
+	if controlDrainRequests.Load() != 2 || applicationDrainRequests.Load() != 0 {
+		t.Fatalf("drain requests = control %d, application %d; want control-only POSTs", controlDrainRequests.Load(), applicationDrainRequests.Load())
+	}
+}
+
 func TestCommandExecutorWaitsForReadiness(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -750,9 +789,74 @@ func TestCommandExecutorReconcileEnsuresUnpreparedRollbackServices(t *testing.T)
 	if serverIndex < 0 || workerIndex < 0 || serverIndex >= workerIndex {
 		t.Fatalf("reconcile commands = %v, want server and Worker ensured in order", commands)
 	}
+	if !strings.Contains(commands[serverIndex], "--force-recreate") {
+		t.Fatalf("reconcile rollback Server command = %q, want force recreate", commands[serverIndex])
+	}
 	for _, command := range commands {
 		if strings.Contains(command, "--force-recreate") && strings.Contains(command, "worker-green") {
 			t.Fatalf("reconcile unexpectedly force-recreated Worker: %v", command)
 		}
+	}
+}
+
+func TestCommandExecutorRollbackRestoresServerBeforeWorker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/readyz", "/mcp", "/gateway":
+			writer.WriteHeader(http.StatusNoContent)
+		case "/version":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		case "/-/observe":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"state":"measured","ready":true,"worker_generation":2}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	var commands []string
+	executor := &CommandExecutor{
+		ComposeBinary: "docker",
+		ComposeFile:   "/srv/compose.yaml",
+		ProjectName:   "loomhelm",
+		CaddyBinary:   "caddy",
+		CaddyFile:     "/etc/caddy/Caddyfile",
+		SlotURLs:      map[string]string{"green": server.URL},
+		WorkerURLs:    map[string]string{"green": server.URL},
+		PublicURL:     server.URL,
+		Run: func(_ context.Context, binary string, args ...string) error {
+			commands = append(commands, binary+" "+strings.Join(args, " "))
+			return nil
+		},
+	}
+	operation := Operation{
+		Kind:               "rollback",
+		Slot:               "green",
+		CandidateID:        strings.Repeat("a", 64),
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+		ServerImage:        "ghcr.io/example/server@sha256:" + strings.Repeat("a", 64),
+		WorkerImage:        "ghcr.io/example/worker@sha256:" + strings.Repeat("b", 64),
+		WorkerGeneration:   2,
+	}
+	if err := executor.Execute(context.Background(), operation); err != nil {
+		t.Fatalf("rollback error = %v", err)
+	}
+	serverIndex, workerIndex := -1, -1
+	for index, command := range commands {
+		if strings.Contains(command, "server-green") {
+			serverIndex = index
+		}
+		if strings.Contains(command, "worker-green") {
+			workerIndex = index
+		}
+	}
+	if serverIndex < 0 || workerIndex < 0 || serverIndex >= workerIndex {
+		t.Fatalf("rollback commands = %v, want restored Server before Worker", commands)
+	}
+	if !strings.Contains(commands[serverIndex], "--force-recreate") {
+		t.Fatalf("rollback Server command = %q, want force recreate", commands[serverIndex])
 	}
 }

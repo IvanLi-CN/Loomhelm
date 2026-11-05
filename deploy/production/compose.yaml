@@ -37,6 +37,10 @@ services:
       LOOMHELM_DEPLOYMENT_GREEN_URL: "http://server-green:8080"
       LOOMHELM_DEPLOYMENT_BLUE_WORKER_URL: "http://worker-blue:8081"
       LOOMHELM_DEPLOYMENT_GREEN_WORKER_URL: "http://worker-green:8081"
+      LOOMHELM_DEPLOYMENT_BLUE_DRAIN_URL: "http://server-blue-drain:8080"
+      LOOMHELM_DEPLOYMENT_GREEN_DRAIN_URL: "http://server-green-drain:8080"
+      LOOMHELM_DEPLOYMENT_BLUE_WORKER_DRAIN_URL: "http://worker-blue-drain:8081"
+      LOOMHELM_DEPLOYMENT_GREEN_WORKER_DRAIN_URL: "http://worker-green-drain:8081"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
     volumes:
       - "${LOOMHELM_DEPLOYMENT_STATE_DIR:?LOOMHELM_DEPLOYMENT_STATE_DIR is required}:/var/lib/loomhelm/deployment"
@@ -63,6 +67,7 @@ services:
       LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_BLUE_ARTIFACT_DIGEST:?LOOMHELM_BLUE_ARTIFACT_DIGEST is required}"
       LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_DRAIN_CONTROL_SUBNET: "${LOOMHELM_CONTROL_SUBNET:?LOOMHELM_CONTROL_SUBNET is required}"
       LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
       LOOMHELM_ARTIFACT_ROOT: "/var/lib/loomhelm/artifacts"
       LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
@@ -75,7 +80,10 @@ services:
     expose:
       - "8080"
     networks:
-      - application
+      control:
+        aliases:
+          - server-blue-drain
+      application: {}
 
   server-green:
     image: "${LOOMHELM_GREEN_SERVER_IMAGE:?LOOMHELM_GREEN_SERVER_IMAGE is required}"
@@ -85,6 +93,7 @@ services:
       LOOMHELM_ARTIFACT_DIGEST: "${LOOMHELM_GREEN_ARTIFACT_DIGEST:?LOOMHELM_GREEN_ARTIFACT_DIGEST is required}"
       LOOMHELM_HTTP_ADDR: "0.0.0.0:8080"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_DRAIN_CONTROL_SUBNET: "${LOOMHELM_CONTROL_SUBNET:?LOOMHELM_CONTROL_SUBNET is required}"
       LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
       LOOMHELM_ARTIFACT_ROOT: "/var/lib/loomhelm/artifacts"
       LOOMHELM_OIDC_ISSUER_URL: "${LOOMHELM_OIDC_ISSUER_URL:-}"
@@ -97,7 +106,10 @@ services:
     expose:
       - "8080"
     networks:
-      - application
+      control:
+        aliases:
+          - server-green-drain
+      application: {}
 
   worker-blue:
     profiles: ["deployment-controller"]
@@ -111,10 +123,14 @@ services:
       LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
       LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_DRAIN_CONTROL_SUBNET: "${LOOMHELM_CONTROL_SUBNET:?LOOMHELM_CONTROL_SUBNET is required}"
     expose:
       - "8081"
     networks:
-      - application
+      control:
+        aliases:
+          - worker-blue-drain
+      application: {}
 
   worker-green:
     profiles: ["deployment-controller"]
@@ -128,10 +144,14 @@ services:
       LOOMHELM_DATABASE_URL: "${LOOMHELM_DATABASE_URL:?LOOMHELM_DATABASE_URL is required}"
       LOOMHELM_WORKER_HTTP_ADDR: "0.0.0.0:8081"
       LOOMHELM_DRAIN_TOKEN: "${LOOMHELM_DRAIN_TOKEN:?LOOMHELM_DRAIN_TOKEN is required}"
+      LOOMHELM_DRAIN_CONTROL_SUBNET: "${LOOMHELM_CONTROL_SUBNET:?LOOMHELM_CONTROL_SUBNET is required}"
     expose:
       - "8081"
     networks:
-      - application
+      control:
+        aliases:
+          - worker-green-drain
+      application: {}
 
   connector:
     image: "${LOOMHELM_CONNECTOR_IMAGE:?LOOMHELM_CONNECTOR_IMAGE is required}"

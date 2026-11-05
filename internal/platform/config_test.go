@@ -2,6 +2,7 @@ package platform
 
 import (
 	"math"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -150,6 +151,31 @@ func TestLoadConfigValidatesComponentSpecificValues(t *testing.T) {
 	}
 	if config.Version != "test-version" || config.HTTPAddr != "127.0.0.1:0" || config.DrainToken != "test-token" || config.ShutdownTimeout != 250*time.Millisecond || config.ArtifactRoot != "/var/lib/loomhelm/artifacts" {
 		t.Fatalf("unexpected config: %+v", config)
+	}
+}
+
+func TestLoadConfigParsesDrainControlSubnet(t *testing.T) {
+	config, err := LoadConfigWithLookup(ComponentServer, envLookup(map[string]string{
+		"LOOMHELM_DATABASE_URL":         "postgres://test@localhost/loomhelm",
+		"LOOMHELM_DRAIN_TOKEN":          "test-token",
+		"LOOMHELM_DRAIN_CONTROL_SUBNET": "10.42.0.0/24",
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigWithLookup() error = %v", err)
+	}
+	if config.DrainControlSubnet == nil || !config.DrainControlSubnet.Contains(net.ParseIP("10.42.0.15")) || config.DrainControlSubnet.Contains(net.ParseIP("10.42.1.15")) {
+		t.Fatalf("unexpected drain control subnet: %+v", config.DrainControlSubnet)
+	}
+}
+
+func TestLoadConfigRejectsEmptyDrainControlSubnet(t *testing.T) {
+	_, err := LoadConfigWithLookup(ComponentWorker, envLookup(map[string]string{
+		"LOOMHELM_DATABASE_URL":         "postgres://test@localhost/loomhelm",
+		"LOOMHELM_DRAIN_TOKEN":          "test-token",
+		"LOOMHELM_DRAIN_CONTROL_SUBNET": " ",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "LOOMHELM_DRAIN_CONTROL_SUBNET") {
+		t.Fatalf("empty drain control subnet error = %v", err)
 	}
 }
 
