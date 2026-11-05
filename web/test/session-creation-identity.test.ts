@@ -27,4 +27,16 @@ describe("session creation identity", () => {
 
     expect(buildSessionCreationIntentKey(request)).toBe(buildSessionCreationIntentKey(request));
   });
+
+  test("shares one durable intent across the workbench and new-session routes", () => {
+    const request = {
+      browserContext: "tab-a",
+      conversationTitle: "新建独立会话",
+      principalId: "user-1",
+      projectId: "project-1",
+      taskId: "task-1"
+    };
+
+    expect(buildSessionCreationIntentKey({ ...request, pathname: "/" })).toBe(buildSessionCreationIntentKey({ ...request, pathname: "/conversations/new" }));
+  });
 });

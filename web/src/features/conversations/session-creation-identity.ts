@@ -46,7 +46,9 @@ export function buildSessionCreationIntentKey({
   projectId?: string;
   taskId?: string;
 }): string {
-  return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(browserContext)}:${encodeURIComponent([pathname, conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
+  // The workbench and /conversations/new are two entry points for one durable creation intent.
+  void pathname;
+  return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(browserContext)}:${encodeURIComponent([conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
 }
 
 export function getSessionCreationIntentKey(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string | undefined {

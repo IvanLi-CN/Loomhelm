@@ -170,6 +170,50 @@ func TestCommandExecutorWaitsForReadiness(t *testing.T) {
 	}
 }
 
+func TestCommandExecutorFailsFastForPermanentReadinessErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/readyz" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{SlotURLs: map[string]string{"green": server.URL}}).waitReady(context.Background(), "green", false)
+	if !errors.Is(err, errNonRetryableReadiness) {
+		t.Fatalf("waitReady() error = %v, want a non-retryable readiness error", err)
+	}
+}
+
+func TestCommandExecutorRejectsStaleWorkerGeneration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/readyz":
+			writer.WriteHeader(http.StatusOK)
+		case "/version":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		case "/-/observe":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"state":"measured","ready":true,"worker_generation":1}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{WorkerURLs: map[string]string{"green": server.URL}}).waitWorkerIdentity(context.Background(), Operation{
+		Slot:               "green",
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+		WorkerGeneration:   2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Worker generation does not match operation") {
+		t.Fatalf("waitWorkerIdentity() error = %v, want generation mismatch", err)
+	}
+}
+
 func TestCommandExecutorRejectsUntrustedSlot(t *testing.T) {
 	executor := &CommandExecutor{ComposeBinary: "docker", ComposeFile: "/srv/compose.yaml", ProjectName: "loomhelm"}
 	if err := executor.Execute(context.Background(), Operation{Kind: "stage", Slot: "green; touch /tmp/pwned"}); err == nil {
@@ -255,13 +299,16 @@ func TestCommandExecutorValidatesCaddyBeforeInstallingIt(t *testing.T) {
 func TestCommandExecutorRunsCaddyValidationBeforeWorkerAdmission(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
-		case "/readyz", "/version":
+		case "/readyz", "/version", "/-/observe":
 			writer.Header().Set("Content-Type", "application/json")
 			if request.URL.Path == "/version" {
 				_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+			} else if request.URL.Path == "/-/observe" {
+				_, _ = writer.Write([]byte(`{"state":"measured","ready":true,"worker_generation":2}`))
 				return
+			} else {
+				_, _ = writer.Write([]byte(`{"ready":true}`))
 			}
-			_, _ = writer.Write([]byte(`{"ready":true}`))
 		default:
 			writer.WriteHeader(http.StatusUnauthorized)
 		}
@@ -364,6 +411,9 @@ func TestCommandExecutorReconcileEnsuresUnpreparedRollbackServices(t *testing.T)
 		case "/version":
 			writer.Header().Set("Content-Type", "application/json")
 			_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		case "/-/observe":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"state":"measured","ready":true,"worker_generation":2}`))
 		case "/mcp", "/gateway":
 			writer.WriteHeader(http.StatusNoContent)
 		default:

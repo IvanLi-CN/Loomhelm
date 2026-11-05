@@ -31,20 +31,20 @@ function ProductionWorkbenchRoute() {
   const assembly = useOptionalProductionApi();
   const source = useOptionalProjectTaskSource();
   const api = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
-
-  if (!source || source.status === "loading") {
-    return <section className="page-section unavailable-page" aria-busy="true"><span className="eyebrow">WORKBENCH</span><h1>正在读取工作台</h1><p>正在读取项目和任务范围，随后可以创建新的 Session。</p></section>;
-  }
-  if (source.status === "error" || source.status === "permission-changed") {
-    return <section className="page-section unavailable-page"><span className="eyebrow">WORKBENCH</span><h1>工作台暂时不可用</h1><p>{source.notice ?? "项目和任务范围尚未完成核对，当前不会显示未确认的数据。"}</p><Button asChild variant="secondary" className="button button-secondary"><Link to="/tasks">前往任务列表核对</Link></Button></section>;
-  }
+  const sourceReady = source?.status === "ready";
+  const sourceStatus = !source
+    ? "项目和任务范围尚未加载；独立 Session 创建仍可用。"
+    : source.status === "loading"
+      ? "正在读取项目和任务范围；独立 Session 创建仍可用。"
+      : source.status === "ready"
+        ? "项目和任务范围已核对。"
+        : source.notice ?? "项目和任务范围暂时不可用；当前不会显示未确认的数据。";
 
   return (
     <section className="page-section grid min-w-0 gap-6">
       <div className="page-heading">
         <div><span className="eyebrow">WORKBENCH</span><h1>工作台</h1><p>从这里创建新的 Session，或进入已有的项目、任务和 Codex 对话。</p></div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="secondary" className="button button-secondary"><Link to="/conversations">查看 Codex 对话</Link></Button>
           <Button asChild variant="secondary" className="button button-secondary"><Link to="/deployment">部署控制</Link></Button>
         </div>
       </div>
@@ -54,8 +54,8 @@ function ProductionWorkbenchRoute() {
           conversationTitle="新建独立会话"
           onSessionCreated={(sessionId, initialRunId) => navigate({ params: { conversationId: sessionId }, search: initialRunId ? { runId: initialRunId } : {}, to: "/conversations/$conversationId" })}
           principalId={assembly?.auth.principalId}
-          projectCanWrite={(projectId) => source.getProjectPermissions(projectId).canWrite}
-          projectOptions={source.projects}
+          projectCanWrite={(projectId) => sourceReady && source.getProjectPermissions(projectId).canWrite}
+          projectOptions={sourceReady ? source.projects : []}
           readOnly={assembly?.permissions.isReadOnly ?? true}
         />
         <aside className="grid content-start gap-4" aria-label="工作台状态">
@@ -67,7 +67,8 @@ function ProductionWorkbenchRoute() {
           </section>
           <section className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[var(--shadow)]">
             <span className="section-kicker">当前范围</span>
-            <dl className="info-facts"><dt>项目</dt><dd>{source.projects.length}</dd><dt>任务</dt><dd>{source.tasks.length}</dd></dl>
+            <p className="text-xs leading-5 text-[var(--muted)]">{sourceStatus}</p>
+            <dl className="info-facts"><dt>项目</dt><dd>{sourceReady ? source.projects.length : "待核对"}</dd><dt>任务</dt><dd>{sourceReady ? source.tasks.length : "待核对"}</dd></dl>
             <Link to="/tasks" className="inline-link">打开任务列表</Link>
           </section>
         </aside>

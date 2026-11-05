@@ -27,8 +27,10 @@ var ErrDrainTimeout = errors.New("deployment drain timed out")
 const (
 	allowlistedComposeBinary   = "/usr/bin/docker"
 	allowlistedCaddyBinary     = "/usr/local/bin/caddy"
-	deploymentReadinessTimeout = 2 * time.Minute
+	deploymentReadinessTimeout = 10 * time.Minute
 )
+
+var errNonRetryableReadiness = errors.New("deployment readiness failure is not retryable")
 
 type DegradedError struct{ Err error }
 
@@ -622,7 +624,27 @@ func (e *CommandExecutor) waitWorkerIdentity(ctx context.Context, operation Oper
 	if err := e.waitReady(ctx, operation.Slot, true); err != nil {
 		return err
 	}
-	return e.verifyVersion(ctx, e.WorkerURLs[operation.Slot], operation, "worker")
+	if err := e.verifyVersion(ctx, e.WorkerURLs[operation.Slot], operation, "worker"); err != nil {
+		return err
+	}
+	if operation.WorkerGeneration <= 0 {
+		return nil
+	}
+	observation, err := e.fetchComponent(ctx, e.WorkerURLs[operation.Slot])
+	if err != nil {
+		return fmt.Errorf("deployment Worker observation failed: %w", err)
+	}
+	if !observation.Ready {
+		return errors.New("deployment Worker observation is not ready")
+	}
+	if observation.WorkerGeneration == nil || *observation.WorkerGeneration != operation.WorkerGeneration {
+		observed := "missing"
+		if observation.WorkerGeneration != nil {
+			observed = fmt.Sprintf("%d", *observation.WorkerGeneration)
+		}
+		return fmt.Errorf("deployment Worker generation does not match operation: observed %s, want %d", observed, operation.WorkerGeneration)
+	}
+	return nil
 }
 
 func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker bool) error {
@@ -643,12 +665,18 @@ func (e *CommandExecutor) waitReady(ctx context.Context, slot string, worker boo
 	for {
 		lastErr = e.requestStatus(readinessCtx, http.MethodGet, baseURL+"/readyz", nil, func(status int, _ []byte) error {
 			if status < http.StatusOK || status >= http.StatusMultipleChoices {
+				if status >= http.StatusBadRequest && status < http.StatusInternalServerError && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests {
+					return fmt.Errorf("%w: deployment %s readiness returned HTTP %d", errNonRetryableReadiness, component, status)
+				}
 				return fmt.Errorf("deployment %s readiness returned HTTP %d", component, status)
 			}
 			return nil
 		})
 		if lastErr == nil {
 			return nil
+		}
+		if errors.Is(lastErr, errNonRetryableReadiness) {
+			return lastErr
 		}
 		select {
 		case <-readinessCtx.Done():
