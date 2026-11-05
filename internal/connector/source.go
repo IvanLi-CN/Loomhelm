@@ -313,12 +313,13 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 		}
 	}
 	threadSnapshots := make([]protocol.CodexSourceThreadSnapshot, len(threads))
+	threadErrors := make([]error, len(threads))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
 	// Full turn/item history is fetched lazily by the conversation endpoint;
 	// the source sync deadline is reserved for a complete, responsive thread
-	// inventory. Keeping this at zero avoids blocking synchronization on very
-	// large historical rollouts.
+	// inventory. Read one representative thread during sync so capability and
+	// history wiring are exercised without blocking on large rollouts.
 	const maxDetailedThreads = 1
 	for index, thread := range threads {
 		index, thread := index, thread
@@ -349,10 +350,7 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 				} else {
 					threadSnapshot.HistoryState = protocol.CodexHistoryStateFailed
 				}
-				snapshot.SyncState = protocol.CodexSyncStatePartial
-				if snapshot.Error == "" {
-					snapshot.Error = readErr.Error()
-				}
+				threadErrors[index] = readErr
 			}
 			threadSnapshots[index] = threadSnapshot
 		}()
@@ -362,6 +360,15 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 		return protocol.CodexSourceSnapshot{}, err
 	}
 	snapshot.Threads = append(snapshot.Threads, threadSnapshots...)
+	for _, threadErr := range threadErrors {
+		if threadErr == nil {
+			continue
+		}
+		snapshot.SyncState = protocol.CodexSyncStatePartial
+		if snapshot.Error == "" {
+			snapshot.Error = threadErr.Error()
+		}
+	}
 	// History and attachment reads can discover capabilities that initialize
 	// did not advertise. Persist the post-discovery states, including explicit
 	// unsupported methods, with the same snapshot.
