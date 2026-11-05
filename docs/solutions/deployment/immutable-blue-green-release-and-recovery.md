@@ -49,6 +49,8 @@ Worker lease 的 generation 是 fencing 机制的一部分。旧 Worker drain �
 
 把候选 manifest 作为所有阶段的唯一输入，至少绑定 source SHA、candidate/artifact digest、Web tree digest、Server image digest、Worker image digest 和 state compatibility。重试复用同一候选身份，不重新构建或覆盖已发布内容。
 
+将 CI 产出的候选包与安装侧的运行时交付分层处理：候选包证明构建产物及其 manifest，安装流程还必须为 Server/Worker 生成不可变镜像引用、按 candidate ID 发布 Web tree，并生成绑定这些身份和兼容性范围的 deployment envelope。只有这组身份全部可验证后，候选才具备进入控制器注册和切换流程的条件。
+
 统一 Web 发布目录契约，例如 `<web-root>/candidates/<candidate_id>`，并在 register、preflight 和 Caddy 配置校验中使用同一 candidate ID。source SHA 可以作为版本信息，但不能替代运行时发布目录身份。
 
 在 preflight 中实际执行控制器容器内的 Docker、Compose、Caddy、Docker socket、网络和 profile 检查；同时为每个 Caddy 子命令分别生成参数，`validate` 只验证配置文件，`reload` 才连接私有 admin address。
