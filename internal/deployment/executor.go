@@ -348,14 +348,7 @@ func (e *CommandExecutor) Execute(ctx context.Context, operation Operation) erro
 			if err := e.prepareCaddy(ctx, operation, false); err != nil {
 				return err
 			}
-			if operation.ExecutionKind == "rollback" {
-				if err := e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "server-"+operation.Slot)...); err != nil {
-					return err
-				}
-			} else if err := e.ensureService(ctx, operation, "server"); err != nil {
-				return err
-			}
-			if err := e.waitServerIdentity(ctx, operation); err != nil {
+			if err := e.reconcileServer(ctx, operation); err != nil {
 				return err
 			}
 			if err := e.ensureService(ctx, operation, "worker"); err != nil {
@@ -481,6 +474,19 @@ func (e *CommandExecutor) ensureService(ctx context.Context, operation Operation
 		return &DeterministicError{Err: err}
 	}
 	return e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--no-deps", component+"-"+operation.Slot)...)
+}
+
+func (e *CommandExecutor) reconcileServer(ctx context.Context, operation Operation) error {
+	if err := e.ensureService(ctx, operation, "server"); err != nil {
+		return err
+	}
+	if err := e.probeServerIdentity(ctx, operation); err == nil {
+		return nil
+	}
+	if err := e.run(ctx, &operation, e.ComposeBinary, e.composeArguments("up", "--detach", "--force-recreate", "--no-deps", "server-"+operation.Slot)...); err != nil {
+		return err
+	}
+	return e.waitServerIdentity(ctx, operation)
 }
 
 func setEnvironment(environment []string, key, value string) []string {
@@ -644,6 +650,25 @@ func (e *CommandExecutor) waitServerIdentity(ctx context.Context, operation Oper
 		return err
 	}
 	return e.verifyVersion(ctx, e.SlotURLs[operation.Slot], operation, "server")
+}
+
+func (e *CommandExecutor) probeServerIdentity(ctx context.Context, operation Operation) error {
+	baseURL := strings.TrimRight(e.SlotURLs[operation.Slot], "/")
+	if baseURL == "" {
+		return ErrExecutorUnavailable
+	}
+	if err := validateReadinessEndpoint(baseURL); err != nil {
+		return err
+	}
+	if err := e.requestStatus(ctx, http.MethodGet, baseURL+"/readyz", nil, func(status int, _ []byte) error {
+		if status >= http.StatusOK && status < http.StatusMultipleChoices {
+			return nil
+		}
+		return fmt.Errorf("deployment Server readiness returned HTTP %d", status)
+	}); err != nil {
+		return err
+	}
+	return e.verifyVersion(ctx, baseURL, operation, "server")
 }
 
 func (e *CommandExecutor) waitWorkerIdentity(ctx context.Context, operation Operation) error {

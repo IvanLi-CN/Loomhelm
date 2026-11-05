@@ -77,10 +77,11 @@ export function getLegacySessionCreationIntentKeys(principalId: string | undefin
   return pathnames.map((pathname) => buildLegacySessionCreationIntentKey({ browserContext, conversationTitle, pathname, principalId, projectId, taskId }));
 }
 
-export function hasSessionCreationIntentConflict(intents: readonly { commandId: string; fingerprint: string }[]): boolean {
+export function hasSessionCreationIntentConflict(intents: readonly { attemptId?: string; commandId: string; fingerprint: string }[]): boolean {
   if (intents.length < 2) return false;
   const identity = `${intents[0].commandId}\u0000${intents[0].fingerprint}`;
-  return intents.some((intent) => `${intent.commandId}\u0000${intent.fingerprint}` !== identity);
+  const attemptId = intents[0].attemptId ?? intents[0].commandId;
+  return intents.some((intent) => `${intent.commandId}\u0000${intent.fingerprint}` !== identity || (intent.attemptId ?? intent.commandId) !== attemptId);
 }
 
 export function getSessionCreationIntentKey(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string | undefined {

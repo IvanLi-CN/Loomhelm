@@ -122,8 +122,10 @@ LOOMHELM_COMPOSE_PROJECT=loomhelm-quality-production
 LOOMHELM_DEPLOYMENT_OWNER_USER_IDS=quality-owner
 LOOMHELM_DOCKER_GID=0
 LOOMHELM_CONTROL_SUBNET=172.31.240.0/28
-LOOMHELM_CADDY_CONTROL_IP=172.31.240.2
 LOOMHELM_CONTROLLER_CONTROL_IP=172.31.240.3
+LOOMHELM_CADDY_ADMIN_SUBNET=172.31.241.0/28
+LOOMHELM_CADDY_ADMIN_IP=172.31.241.2
+LOOMHELM_CONTROLLER_ADMIN_IP=172.31.241.3
 LOOMHELM_HTTP_PORT=18090
 LOOMHELM_CADDY_CONFIG_DIR=$tmp_dir/caddy
 LOOMHELM_INSTALLATION_ROOT=$tmp_dir/install
@@ -183,6 +185,17 @@ for service_name in ("worker-blue", "worker-green"):
 controller_volumes = services["deployment-controller"]["volumes"]
 if not any(volume.get("target") == "/opt/loomhelm-web" for volume in controller_volumes):
     raise SystemExit("deployment-controller must mount the public Web root directly")
+def network_names(service_name):
+    return set(services[service_name].get("networks", {}))
+
+if "caddy-admin" not in network_names("caddy") or "control" in network_names("caddy"):
+    raise SystemExit("Caddy must use caddy-admin and stay off the drain control network")
+if not {"control", "caddy-admin"}.issubset(network_names("deployment-controller")):
+    raise SystemExit("deployment-controller must join both control networks")
+for service_name in ("server-blue", "server-green", "worker-blue", "worker-green"):
+    names = network_names(service_name)
+    if "control" not in names or "caddy-admin" in names:
+        raise SystemExit(f"{service_name} must use control and stay off caddy-admin")
 PY
 }
 

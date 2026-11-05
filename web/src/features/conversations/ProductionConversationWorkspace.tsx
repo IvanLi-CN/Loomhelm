@@ -54,6 +54,7 @@ const browserContextDrafts = new Map<string, string>();
 type SessionCreationPayload = Omit<CreateSessionRequest, "command_id">;
 
 interface SessionCreationIntent {
+  attemptId: string;
   commandId: string;
   fingerprint: string;
   request: SessionCreationPayload;
@@ -99,21 +100,10 @@ function readSessionCreationIntent(key: string | undefined): SessionCreationInte
     const request = parsed.request as SessionCreationPayload;
     if (request.path !== "new" && request.path !== "existing_active") return undefined;
     if ((request.active_thread_ref !== undefined && typeof request.active_thread_ref !== "string") || (request.project_id !== undefined && typeof request.project_id !== "string") || (request.prompt !== undefined && typeof request.prompt !== "string") || (request.task_id !== undefined && typeof request.task_id !== "string")) return undefined;
-    return { commandId: parsed.commandId, fingerprint: parsed.fingerprint, request, uncertain: parsed.uncertain };
+    const attemptId = typeof parsed.attemptId === "string" && parsed.attemptId.trim() ? parsed.attemptId : parsed.commandId;
+    return { attemptId, commandId: parsed.commandId, fingerprint: parsed.fingerprint, request, uncertain: parsed.uncertain };
   } catch {
     return undefined;
-  }
-}
-
-function writeSessionCreationIntent(key: string | undefined, intent: SessionCreationIntent): boolean {
-  const storage = getSessionStorage();
-  if (!key || !storage) return false;
-  try {
-    storage.setItem(key, JSON.stringify(intent));
-    return true;
-  } catch {
-    // A storage quota or privacy failure must be reported before a side effect is sent.
-    return false;
   }
 }
 
@@ -133,6 +123,10 @@ function sameSessionCreationIntent(left: SessionCreationIntent, right: SessionCr
   return left.commandId === right.commandId && left.fingerprint === right.fingerprint;
 }
 
+function sameSessionCreationAttempt(left: SessionCreationIntent, right: SessionCreationIntent): boolean {
+  return sameSessionCreationIntent(left, right) && left.attemptId === right.attemptId;
+}
+
 function clearStoredIntent(key: string | undefined): void {
   const storage = getSessionStorage();
   if (!key || !storage) return;
@@ -143,21 +137,46 @@ function clearStoredIntent(key: string | undefined): void {
   }
 }
 
-function writeSessionCreationIntents(primaryKey: string | undefined, legacyKeys: readonly string[], intent: SessionCreationIntent, options: { requireCurrent?: boolean } = {}): boolean {
-  const keys = [primaryKey, ...legacyKeys].filter((key): key is string => Boolean(key));
+function writeSessionCreationIntents(primaryKey: string | undefined, legacyKeys: readonly string[], intent: SessionCreationIntent, options: { expectedAttemptId?: string; requireCurrent?: boolean } = {}): boolean {
+  const keys = [...new Set([primaryKey, ...legacyKeys].filter((key): key is string => Boolean(key)))];
+  const storage = getSessionStorage();
+  if (!storage || !primaryKey) return false;
   const currentEntries = readSessionCreationIntentEntries(keys);
   if (options.requireCurrent && currentEntries.length === 0) return false;
   if (currentEntries.some(({ intent: current }) => !sameSessionCreationIntent(current, intent))) return false;
-  if (!writeSessionCreationIntent(primaryKey, intent)) return false;
-  for (const key of legacyKeys) {
-    if (key !== primaryKey && !writeSessionCreationIntent(key, intent)) return false;
+  if (options.expectedAttemptId && currentEntries.some(({ intent: current }) => current.attemptId !== options.expectedAttemptId)) return false;
+  const serialized = JSON.stringify(intent);
+  const previousValues = new Map<string, string | null>();
+  try {
+    for (const key of keys) previousValues.set(key, storage.getItem(key));
+  } catch {
+    return false;
   }
-  return true;
+  const writtenKeys: string[] = [];
+  try {
+    for (const key of keys) {
+      storage.setItem(key, serialized);
+      writtenKeys.push(key);
+    }
+    return true;
+  } catch {
+    for (const key of writtenKeys.reverse()) {
+      try {
+        if (storage.getItem(key) !== serialized) continue;
+        const previous = previousValues.get(key);
+        if (previous === null || previous === undefined) storage.removeItem(key);
+        else storage.setItem(key, previous);
+      } catch {
+        // Best effort only; the caller keeps the intent in local component state.
+      }
+    }
+    return false;
+  }
 }
 
 function clearSessionCreationIntentIfCurrent(primaryKey: string | undefined, legacyKeys: readonly string[], intent: SessionCreationIntent): boolean {
   const entries = readSessionCreationIntentEntries([primaryKey, ...legacyKeys].filter((key): key is string => Boolean(key)));
-  if (entries.some(({ intent: current }) => !sameSessionCreationIntent(current, intent))) return false;
+  if (entries.some(({ intent: current }) => !sameSessionCreationAttempt(current, intent))) return false;
   for (const entry of entries) clearStoredIntent(entry.key);
   return true;
 }
@@ -493,6 +512,7 @@ export function ProductionSessionCreationPanel({
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [creationUncertain, setCreationUncertain] = useState(() => storedIntent?.uncertain ?? false);
+  const [creationIntentPersistenceRecovery, setCreationIntentPersistenceRecovery] = useState(false);
   const commandRef = useRef<SessionCreationIntent | undefined>(storedIntent);
   const selectedProjectReadOnly = selectedProjectId !== NO_PROJECT && Boolean(projectCanWrite && !projectCanWrite(selectedProjectId));
 
@@ -537,14 +557,19 @@ export function ProductionSessionCreationPanel({
       setFailure("创建结果仍不确定；请先用相同请求完成对账，不能把修改后的请求当作新工作提交。");
       return;
     }
-    const commandId = commandRef.current?.fingerprint === fingerprint ? commandRef.current.commandId : createCommandId("session");
-    const intent: SessionCreationIntent = { commandId, fingerprint, request: requestWithoutCommand, uncertain: true };
-    if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, intent, { requireCurrent: Boolean(commandRef.current) })) {
+    const existingIntent = commandRef.current;
+    const commandId = existingIntent?.fingerprint === fingerprint ? existingIntent.commandId : createCommandId("session");
+    const intent: SessionCreationIntent = { attemptId: createCommandId("session-attempt"), commandId, fingerprint, request: requestWithoutCommand, uncertain: true };
+    if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, intent, { expectedAttemptId: existingIntent?.attemptId, requireCurrent: Boolean(existingIntent) && !creationIntentPersistenceRecovery })) {
+      commandRef.current = intent;
+      setCreationUncertain(true);
+      setCreationIntentPersistenceRecovery(true);
       setPending(false);
-      setFailure("当前浏览器无法持久化创建命令身份；为避免未知结果下重复创建，请先恢复存储后再试。");
+      setFailure("创建命令身份未完整写入，尚未发送请求；请恢复浏览器存储后重试同一命令，或放弃这次创建。");
       return;
     }
     commandRef.current = intent;
+    setCreationIntentPersistenceRecovery(false);
     try {
       await onCreate({
         ...requestWithoutCommand,
@@ -552,6 +577,7 @@ export function ProductionSessionCreationPanel({
       });
       commandRef.current = undefined;
       setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
       if (!clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent)) {
         setFailure("Session 已创建，但浏览器中仍有另一项创建命令待对账；未清理其恢复身份。");
       } else {
@@ -563,12 +589,13 @@ export function ProductionSessionCreationPanel({
       if (uncertain) {
         const pendingIntent = { ...intent, uncertain: true };
         commandRef.current = pendingIntent;
-        if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, pendingIntent, { requireCurrent: true })) {
+        if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, pendingIntent, { expectedAttemptId: intent.attemptId, requireCurrent: true })) {
           failureText = "创建结果不确定，但浏览器中已有另一项创建命令；未覆盖其恢复身份，请先人工对账。";
         }
         setCreationUncertain(true);
       } else {
         commandRef.current = undefined;
+        setCreationIntentPersistenceRecovery(false);
         if (!clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent)) {
           failureText = "创建请求已被服务拒绝，但浏览器中已有另一项创建命令；未清理其恢复身份。";
         } else {
@@ -586,6 +613,7 @@ export function ProductionSessionCreationPanel({
     if (storedIntentConflict) {
       commandRef.current = undefined;
       setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
       setFailure("已按人工对账确认，清理了冲突的创建意图；后续创建会使用新的 command_id。");
       clearAllSessionCreationIntents(storageKey, legacyStorageKeys);
       setIntentRevision((current) => current + 1);
@@ -594,8 +622,13 @@ export function ProductionSessionCreationPanel({
     const intent = commandRef.current ?? storedIntent;
     commandRef.current = undefined;
     setCreationUncertain(false);
-    setFailure("已放弃未确认的创建意图；修改后的表单会使用新的 command_id。");
-    if (intent && clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent)) setIntentRevision((current) => current + 1);
+    setCreationIntentPersistenceRecovery(false);
+    if (!intent || clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent)) {
+      setFailure("已放弃未确认的创建意图；修改后的表单会使用新的 command_id。");
+      setIntentRevision((current) => current + 1);
+    } else {
+      setFailure("当前创建命令已被另一项请求接管；未清理其恢复身份，请先人工对账。");
+    }
   };
 
   return (
@@ -628,7 +661,7 @@ export function ProductionSessionCreationPanel({
           </label>
         ) : null}
         {path === "existing_active" && !existingActiveSupported ? <div className="rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status">当前后端尚未支持 existing_active；入口和 thread ref 保留，但提交按钮会禁用，避免把新建会话误报为接入现有活跃对话。</div> : null}
-        {storedIntentConflict ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert"><span>检测到多个未确认的创建命令；为避免用错误的 command_id 重试，创建已暂停。请先核对服务端事实，再清理冲突意图。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>我已人工对账，清理冲突意图</Button></div> : creationUncertain ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>创建结果不确定；刷新后仍会保留同一请求身份。请先用相同请求重试或完成人工对账，不能直接改成另一项创建。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>我已对账，放弃这次创建</Button></div> : null}
+        {storedIntentConflict ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert"><span>检测到多个未确认的创建命令；为避免用错误的 command_id 重试，创建已暂停。请先核对服务端事实，再清理冲突意图。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>我已人工对账，清理冲突意图</Button></div> : creationIntentPersistenceRecovery ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>创建请求尚未发送，但浏览器没有完整保存命令身份；请恢复存储后重试同一命令，或先放弃这次创建。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>放弃未发送的创建</Button></div> : creationUncertain ? <div className="grid gap-2 rounded-[var(--radius-sm)] bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status"><span>创建结果不确定；刷新后仍会保留同一请求身份。请先用相同请求重试或完成人工对账，不能直接改成另一项创建。</span><Button type="button" variant="secondary" onClick={abandonUncertainCreation}>我已对账，放弃这次创建</Button></div> : null}
 
         {fixedProjectId ? (
           <div className="grid gap-2 text-xs">

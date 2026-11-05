@@ -59,11 +59,19 @@ Promote 按可审计顺序提交：先确认新槽位 identity、readiness 和 W
 
 发布完成后保留旧槽位、旧候选和持久化数据，回滚通过认证 API、Idempotency-Key 和 expected fingerprint 执行。禁止用直接 SQL 修改 active slot、lease generation 或 operation status 来“修复”发布结果。
 
+为控制面划分独立的内部网络：Caddy admin 只绑定管理网络地址，部署控制器同时加入管理网络和专用 drain control 网络，候选 Server/Worker 不加入管理网络。候选流量网络、控制器的排空网络和 Caddy admin 网络要使用不重叠的子网；这样候选代码即使能访问应用网络，也不能直接调用 Caddy reload 或修改稳定入口。
+
+Reconcile 必须是幂等的。先以不重建的方式确保目标 Server 存在，再用 readiness 和精确运行身份探测判断是否已经满足目标；只有缺失、未就绪或身份不匹配时才 force-recreate。Worker 的启动、generation 校验和失败清理随后执行；回滚恢复 Server 时也要先恢复并证明 Server，再恢复 Worker，避免把半恢复槽位当作可服务状态。
+
+浏览器端跨路由或跨版本共享的创建意图至少包含逻辑 `commandId`、请求 fingerprint 和本次 `attemptId`。兼容键应一次性写入，并在部分写入失败时尽力恢复原值；晚到的旧页面只能更新或清理仍匹配同一 attempt 的记录。相同逻辑命令但不同 attempt 的兼容键应按冲突处理并失败关闭，不能猜测哪个页面更新，也不能让旧版本清理新版本的恢复身份。
+
 # Guardrails / Reuse Notes
 
 候选身份必须在所有阶段保持不可变；镜像和静态资源使用 digest 或等价的内容指纹，禁止用未验证的 `latest` 覆盖已运行槽位。
 
 控制器的执行路径应有独立测试覆盖：Caddy `validate` 与 `reload` 参数、容器内 allowlist 路径、首次 readiness 失败后的重试、readiness 超时，以及 drain 超时后的状态转换。
+
+控制面网络拓扑应有静态检查，覆盖 Caddy admin 绑定地址、控制器双网络身份和候选服务不加入 admin 网络；reconcile 测试应同时覆盖已就绪目标不被重建、未就绪目标先恢复再启动 Worker，以及直接回滚的 Server-before-Worker 顺序。浏览器创建恢复测试应覆盖部分兼容键写入失败、不同 attempt 冲突和旧回调无法清理新 attempt。
 
 Worker generation 只能单调递增。旧 lease、旧 crash-loop 实例和新 Worker 接管之间的关系必须进入操作记录，不能通过清库、降级或复用 generation 绕过 fencing。
 

@@ -2,7 +2,7 @@ services:
   caddy:
     image: "${LOOMHELM_CADDY_IMAGE:?LOOMHELM_CADDY_IMAGE is required}"
     environment:
-      LOOMHELM_CADDY_CONTROL_IP: "${LOOMHELM_CADDY_CONTROL_IP:?LOOMHELM_CADDY_CONTROL_IP is required}"
+      LOOMHELM_CADDY_ADMIN_IP: "${LOOMHELM_CADDY_ADMIN_IP:?LOOMHELM_CADDY_ADMIN_IP is required}"
     ports:
       - "127.0.0.1:${LOOMHELM_HTTP_PORT:?LOOMHELM_HTTP_PORT is required}:80"
     volumes:
@@ -10,10 +10,10 @@ services:
       - "${LOOMHELM_WEB_ROOT:?LOOMHELM_WEB_ROOT is required}:/srv/web:ro"
     command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
     networks:
-      control:
+      caddy-admin:
         aliases:
           - caddy-control
-        ipv4_address: "${LOOMHELM_CADDY_CONTROL_IP:?LOOMHELM_CADDY_CONTROL_IP is required}"
+        ipv4_address: "${LOOMHELM_CADDY_ADMIN_IP:?LOOMHELM_CADDY_ADMIN_IP is required}"
       application: {}
     restart: unless-stopped
 
@@ -27,7 +27,7 @@ services:
       LOOMHELM_DEPLOYMENT_ENV_FILE: "/run/secrets/loomhelm-deployment.env"
       LOOMHELM_DEPLOYMENT_CADDY_FILE: "/etc/caddy/Caddyfile"
       LOOMHELM_DEPLOYMENT_CADDY_TEMPLATE: "/opt/loomhelm-install/deploy/production/Caddyfile.tmpl"
-      LOOMHELM_CADDY_CONTROL_IP: "${LOOMHELM_CADDY_CONTROL_IP:?LOOMHELM_CADDY_CONTROL_IP is required}"
+      LOOMHELM_CADDY_ADMIN_IP: "${LOOMHELM_CADDY_ADMIN_IP:?LOOMHELM_CADDY_ADMIN_IP is required}"
       LOOMHELM_DEPLOYMENT_CADDY_ADMIN_URL: "http://caddy-control:2019"
       LOOMHELM_DEPLOYMENT_PUBLIC_URL: "http://caddy:80"
       LOOMHELM_DEPLOYMENT_WEB_ROOT: "/opt/loomhelm-web"
@@ -54,6 +54,8 @@ services:
     networks:
       control:
         ipv4_address: "${LOOMHELM_CONTROLLER_CONTROL_IP:?LOOMHELM_CONTROLLER_CONTROL_IP is required}"
+      caddy-admin:
+        ipv4_address: "${LOOMHELM_CONTROLLER_ADMIN_IP:?LOOMHELM_CONTROLLER_ADMIN_IP is required}"
       application: {}
     expose:
       - "8090"
@@ -175,5 +177,10 @@ networks:
     ipam:
       config:
         - subnet: "${LOOMHELM_CONTROL_SUBNET:?LOOMHELM_CONTROL_SUBNET is required}"
+  caddy-admin:
+    internal: true
+    ipam:
+      config:
+        - subnet: "${LOOMHELM_CADDY_ADMIN_SUBNET:?LOOMHELM_CADDY_ADMIN_SUBNET is required}"
   application:
     internal: true

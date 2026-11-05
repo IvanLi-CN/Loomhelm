@@ -55,12 +55,16 @@ describe("session creation identity", () => {
 
   test("detects divergent command identities across compatibility keys", () => {
     expect(hasSessionCreationIntentConflict([
-      { commandId: "session-a", fingerprint: "request-a" },
-      { commandId: "session-a", fingerprint: "request-a" }
+      { attemptId: "attempt-a", commandId: "session-a", fingerprint: "request-a" },
+      { attemptId: "attempt-a", commandId: "session-a", fingerprint: "request-a" }
     ])).toBe(false);
     expect(hasSessionCreationIntentConflict([
       { commandId: "session-a", fingerprint: "request-a" },
       { commandId: "session-b", fingerprint: "request-b" }
+    ])).toBe(true);
+    expect(hasSessionCreationIntentConflict([
+      { attemptId: "attempt-a", commandId: "session-a", fingerprint: "request-a" },
+      { attemptId: "attempt-b", commandId: "session-a", fingerprint: "request-a" }
     ])).toBe(true);
   });
 });

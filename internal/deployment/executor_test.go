@@ -789,13 +789,84 @@ func TestCommandExecutorReconcileEnsuresUnpreparedRollbackServices(t *testing.T)
 	if serverIndex < 0 || workerIndex < 0 || serverIndex >= workerIndex {
 		t.Fatalf("reconcile commands = %v, want server and Worker ensured in order", commands)
 	}
-	if !strings.Contains(commands[serverIndex], "--force-recreate") {
-		t.Fatalf("reconcile rollback Server command = %q, want force recreate", commands[serverIndex])
+	if strings.Contains(commands[serverIndex], "--force-recreate") {
+		t.Fatalf("reconcile rollback unnecessarily recreated ready Server: %q", commands[serverIndex])
 	}
 	for _, command := range commands {
 		if strings.Contains(command, "--force-recreate") && strings.Contains(command, "worker-green") {
 			t.Fatalf("reconcile unexpectedly force-recreated Worker: %v", command)
 		}
+	}
+}
+
+func TestCommandExecutorReconcileRecreatesUnreadyServerBeforeWorker(t *testing.T) {
+	var commands []string
+	var recreated atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/readyz":
+			if !recreated.Load() {
+				writer.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			writer.WriteHeader(http.StatusNoContent)
+		case "/version":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		case "/-/observe":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"state":"measured","ready":true,"worker_generation":2}`))
+		case "/mcp", "/gateway":
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	executor := &CommandExecutor{
+		ComposeBinary: "docker",
+		ComposeFile:   "/srv/compose.yaml",
+		ProjectName:   "loomhelm",
+		CaddyBinary:   "caddy",
+		CaddyFile:     "/etc/caddy/Caddyfile",
+		SlotURLs:      map[string]string{"green": server.URL},
+		WorkerURLs:    map[string]string{"green": server.URL},
+		PublicURL:     server.URL,
+		Run: func(_ context.Context, binary string, args ...string) error {
+			command := binary + " " + strings.Join(args, " ")
+			commands = append(commands, command)
+			if strings.Contains(command, "server-green") && strings.Contains(command, "--force-recreate") {
+				recreated.Store(true)
+			}
+			return nil
+		},
+	}
+	operation := Operation{
+		Kind:               "reconcile",
+		ExecutionKind:      "rollback",
+		Slot:               "green",
+		CandidateID:        strings.Repeat("a", 64),
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+		ServerImage:        "ghcr.io/example/server@sha256:" + strings.Repeat("a", 64),
+		WorkerImage:        "ghcr.io/example/worker@sha256:" + strings.Repeat("b", 64),
+		WorkerGeneration:   2,
+	}
+	if err := executor.Execute(context.Background(), operation); err != nil {
+		t.Fatalf("reconcile unready rollback error = %v", err)
+	}
+	serverIndex, workerIndex := -1, -1
+	for index, command := range commands {
+		if strings.Contains(command, "server-green") && strings.Contains(command, "--force-recreate") {
+			serverIndex = index
+		}
+		if strings.Contains(command, "worker-green") {
+			workerIndex = index
+		}
+	}
+	if serverIndex < 0 || workerIndex < 0 || serverIndex >= workerIndex {
+		t.Fatalf("reconcile unready commands = %v, want forced Server recovery before Worker", commands)
 	}
 }
 
