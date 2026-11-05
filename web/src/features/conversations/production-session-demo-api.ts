@@ -126,6 +126,7 @@ export function createProductionSessionDemoApi(options: ProductionSessionDemoApi
     }),
     getSession: async () => ({ session }),
     interruptRun: async ({ body }) => acceptedAck(body.command_id),
+    listSessions: async () => ({ has_more: false, items: [session] }),
     listSessionRuns: async ({ session_id }) => ({ has_more: false, items: [{ ...run, session_id }] }),
     listRunApprovals: async () => ({ has_more: false, items: [approval] }),
     listRunEvents: async ({ after_cursor }) => ({

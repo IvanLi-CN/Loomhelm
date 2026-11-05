@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-Loomhelm runs Server, Worker and Connector as independently restartable processes, but the current 101 installation still uses one Server and one Worker slot. The repository already has immutable candidate builds, Worker lease fencing, Caddy preview switching and Connector connection-generation recovery, but those pieces are not yet one authenticated deployment contract.
+Loomhelm runs Server, Worker and Connector as independently restartable processes. The deployment design combines immutable candidate builds, Worker lease fencing, Caddy blue-green switching and Connector connection-generation recovery into one authenticated installation contract.
 
 Deployment control must not become a project-membership feature or expose Docker, Compose or shell execution to a browser. It must also distinguish an accepted command, an observed traffic switch and an unknown result after a controller or proxy failure.
 
@@ -28,7 +28,7 @@ Observations are transient runtime evidence rather than durable deployment facts
 
 ## Consequences
 
-The first single-slot-to-dual-slot migration needs a controlled maintenance window to adopt the current service as blue, enable the dedicated private Caddy admin address and add the inactive slot. PostgreSQL and artifact volumes remain shared and are never removed by the template.
+An installation must provision both slots, the dedicated private Caddy admin address, shared PostgreSQL and artifact volumes before the first promotion. PostgreSQL and artifact volumes remain shared and are never removed by the template.
 
 Blue-green protects HTTP traffic and preserves old Web assets, but it does not reverse database migrations or guarantee zero WebSocket interruption. Connector reconnect, host connection generation and durable command reconciliation remain separate observable outcomes. Production Worker services are Compose-profiled and are started only by the controller's fixed service command; the controller invokes fixed authenticated drain endpoints over the private application network and never places the drain token in a Docker argument.
 
