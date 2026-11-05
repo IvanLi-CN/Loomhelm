@@ -21,6 +21,7 @@ var (
 	ErrSourceCapabilityUnsupported = errors.New("Codex source capability is unsupported")
 	ErrSourceInvalidParams         = errors.New("Codex source request parameters are invalid")
 	ErrSourceHistoryIncomplete     = errors.New("Codex source history is incomplete")
+	ErrSourcePaginationIncomplete  = errors.New("Codex source pagination is incomplete")
 	ErrSourceNotificationOverflow  = errors.New("Codex source notification queue exceeded its memory limit")
 )
 
@@ -286,7 +287,7 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 		Threads:          make([]protocol.CodexSourceThreadSnapshot, 0),
 	}
 	projects, projectErr := c.discoverAllProjects(ctx)
-	if projectErr != nil && !errors.Is(projectErr, ErrSourceCapabilityUnsupported) {
+	if projectErr != nil && !errors.Is(projectErr, ErrSourceCapabilityUnsupported) && !errors.Is(projectErr, ErrSourcePaginationIncomplete) {
 		return protocol.CodexSourceSnapshot{}, projectErr
 	}
 	if projectErr != nil {
@@ -302,7 +303,7 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 		})
 	}
 	threads, threadErr := c.discoverAllThreads(ctx)
-	if threadErr != nil && !errors.Is(threadErr, ErrSourceCapabilityUnsupported) {
+	if threadErr != nil && !errors.Is(threadErr, ErrSourceCapabilityUnsupported) && !errors.Is(threadErr, ErrSourcePaginationIncomplete) {
 		return protocol.CodexSourceSnapshot{}, threadErr
 	}
 	if threadErr != nil {
@@ -371,11 +372,23 @@ func (c *SourceClient) Sync(ctx context.Context, operationID string) (protocol.C
 }
 
 func (c *SourceClient) discoverAllProjects(ctx context.Context) ([]SourceProject, error) {
-	current, err := c.DiscoverProjects(ctx, SourceListOptions{Limit: 100})
-	if err != nil {
-		return nil, err
+	result := make([]SourceProject, 0)
+	cursor := ""
+	for page := 0; page < 1000; page++ {
+		current, err := c.DiscoverProjects(ctx, SourceListOptions{Cursor: cursor, Limit: 100})
+		if err != nil {
+			if len(result) > 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+				return result, fmt.Errorf("%w: project/list stopped after %d page(s): %v", ErrSourcePaginationIncomplete, page, err)
+			}
+			return result, err
+		}
+		result = append(result, current.Items...)
+		if strings.TrimSpace(current.Next) == "" {
+			return result, nil
+		}
+		cursor = current.Next
 	}
-	return current.Items, nil
+	return result, fmt.Errorf("%w: project/list exceeded the pagination safety limit", ErrSourcePaginationIncomplete)
 }
 
 func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, error) {
@@ -383,11 +396,13 @@ func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, 
 	seen := make(map[string]struct{})
 	for _, archived := range []bool{false, true} {
 		cursor := ""
-		completed := false
-		for page := 0; page < 1; page++ {
+		for page := 0; page < 1000; page++ {
 			current, err := c.DiscoverThreads(ctx, SourceListOptions{Cursor: cursor, Limit: 100, Archived: boolPointer(archived)})
 			if err != nil {
-				return nil, err
+				if len(result) > 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+					return result, fmt.Errorf("%w: thread/list stopped after %d page(s): %v", ErrSourcePaginationIncomplete, page, err)
+				}
+				return result, err
 			}
 			for _, thread := range current.Items {
 				thread.Archived = archived
@@ -397,10 +412,13 @@ func (c *SourceClient) discoverAllThreads(ctx context.Context) ([]SourceThread, 
 				seen[thread.ID] = struct{}{}
 				result = append(result, thread)
 			}
-			completed = true
-		}
-		if !completed {
-			return nil, errors.New("Codex thread/list exceeded the pagination limit")
+			if strings.TrimSpace(current.Next) == "" {
+				break
+			}
+			cursor = current.Next
+			if page == 999 {
+				return result, fmt.Errorf("%w: thread/list exceeded the pagination safety limit", ErrSourcePaginationIncomplete)
+			}
 		}
 	}
 	return result, nil
