@@ -51,6 +51,32 @@ export function buildSessionCreationIntentKey({
   return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(browserContext)}:${encodeURIComponent([conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
 }
 
+export function buildLegacySessionCreationIntentKey({
+  browserContext,
+  conversationTitle,
+  pathname,
+  principalId,
+  projectId,
+  taskId
+}: {
+  browserContext: string;
+  conversationTitle: string;
+  pathname: string;
+  principalId?: string;
+  projectId?: string;
+  taskId?: string;
+}): string {
+  return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(browserContext)}:${encodeURIComponent([pathname, conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
+}
+
+export function getLegacySessionCreationIntentKeys(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string[] {
+  if (typeof window === "undefined") return [];
+  const browserContext = getBrowserContextId();
+  if (!browserContext) return [];
+  const pathnames = [...new Set([window.location.pathname, "/", "/conversations/new"])];
+  return pathnames.map((pathname) => buildLegacySessionCreationIntentKey({ browserContext, conversationTitle, pathname, principalId, projectId, taskId }));
+}
+
 export function getSessionCreationIntentKey(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string | undefined {
   if (typeof window === "undefined") return undefined;
   const browserContext = getBrowserContextId();

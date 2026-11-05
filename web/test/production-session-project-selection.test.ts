@@ -1,7 +1,7 @@
 import { ApiClientError } from "@loomhelm/api-client";
 import { describe, expect, test } from "bun:test";
 
-import { normalizeProjectSelection, shouldRetainSessionCreationIntent } from "../src/features/conversations/ProductionConversationWorkspace";
+import { normalizeProjectSelection, shouldPreserveProjectSelection, shouldRetainSessionCreationIntent } from "../src/features/conversations/ProductionConversationWorkspace";
 import { listAllSessions } from "../src/features/conversations/session-list";
 
 describe("production session project selection", () => {
@@ -19,6 +19,11 @@ describe("production session project selection", () => {
 
   test("preserves an uncertain project-scoped intent while projects reload", () => {
     expect(normalizeProjectSelection("project-a", undefined, [], true)).toBe("project-a");
+  });
+
+  test("preserves a project selection while a creation request is pending", () => {
+    expect(shouldPreserveProjectSelection(true, false)).toBe(true);
+    expect(normalizeProjectSelection("project-a", undefined, [], shouldPreserveProjectSelection(true, false))).toBe("project-a");
   });
 
   test("retains an uncertain creation intent when its original Host is no longer authorized", () => {

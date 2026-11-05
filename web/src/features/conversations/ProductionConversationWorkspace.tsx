@@ -16,7 +16,7 @@ import { createArtifactDownloader, createArtifactMetadataLoader } from "../artif
 import { ConversationComposer, ConversationMessageStream, type ConversationMessage } from "./ConversationMessageStream";
 import type { PublishedSessionApi } from "../sessions/api";
 import { DraftClientAdapter, compareModificationOrder, isModificationOrder, type DraftReadReason } from "../sessions/draft-client-adapter";
-import { getBrowserContextId, getSessionCreationIntentKey } from "./session-creation-identity";
+import { getBrowserContextId, getLegacySessionCreationIntentKeys, getSessionCreationIntentKey } from "./session-creation-identity";
 import { RunStatusCard } from "../runs/RunStatusCard";
 import { RunClientAdapter } from "../runs/run-client-adapter";
 import { SessionContextSummary } from "../sessions/SessionContextSummary";
@@ -125,6 +125,11 @@ function clearStoredIntent(key: string | undefined): void {
   } catch {
     // Best effort only; the server remains the source of truth.
   }
+}
+
+function clearSessionCreationIntents(primaryKey: string | undefined, migratedKey: string | undefined): void {
+  clearStoredIntent(primaryKey);
+  if (migratedKey && migratedKey !== primaryKey) clearStoredIntent(migratedKey);
 }
 
 function getIdentityScope(principalId: string | undefined): string {
@@ -380,6 +385,10 @@ export function normalizeProjectSelection(selectedProjectId: string, fixedProjec
   return NO_PROJECT;
 }
 
+export function shouldPreserveProjectSelection(pending: boolean, creationUncertain: boolean): boolean {
+  return pending || creationUncertain;
+}
+
 export interface ProductionSessionCreationPanelProps {
   conversationTitle?: string;
   existingActiveSupported?: boolean;
@@ -433,7 +442,16 @@ export function ProductionSessionCreationPanel({
 }: ProductionSessionCreationPanelProps) {
   const promptId = useId();
   const storageKey = getSessionCreationIntentKey(principalId, conversationTitle, taskId, fixedProjectId);
-  const storedIntent = useMemo(() => readSessionCreationIntent(storageKey), [storageKey]);
+  const legacyStorageKeys = useMemo(() => getLegacySessionCreationIntentKeys(principalId, conversationTitle, taskId, fixedProjectId), [conversationTitle, fixedProjectId, principalId, taskId]);
+  const intentStorageKeys = useMemo(() => [storageKey, ...legacyStorageKeys].filter((key): key is string => Boolean(key)), [legacyStorageKeys, storageKey]);
+  const storedIntentEntry = useMemo(() => {
+    for (const key of intentStorageKeys) {
+      const intent = readSessionCreationIntent(key);
+      if (intent) return { intent, key };
+    }
+    return undefined;
+  }, [intentStorageKeys]);
+  const storedIntent = storedIntentEntry?.intent;
   const [path, setPath] = useState<SessionPath>(() => storedIntent?.request.path ?? "new");
   const [activeThreadRef, setActiveThreadRef] = useState(() => storedIntent?.request.active_thread_ref ?? "");
   const [prompt, setPrompt] = useState(() => storedIntent?.request.prompt ?? "");
@@ -445,9 +463,15 @@ export function ProductionSessionCreationPanel({
   const selectedProjectReadOnly = selectedProjectId !== NO_PROJECT && Boolean(projectCanWrite && !projectCanWrite(selectedProjectId));
 
   useEffect(() => {
-    const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions, creationUncertain);
+    if (!storedIntentEntry || !storageKey || storedIntentEntry.key === storageKey) return;
+    if (!writeSessionCreationIntent(storageKey, storedIntentEntry.intent)) return;
+    clearStoredIntent(storedIntentEntry.key);
+  }, [storageKey, storedIntentEntry]);
+
+  useEffect(() => {
+    const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions, shouldPreserveProjectSelection(pending, creationUncertain));
     if (normalized !== selectedProjectId) setSelectedProjectId(normalized);
-  }, [creationUncertain, fixedProjectId, projectOptions, selectedProjectId]);
+  }, [creationUncertain, fixedProjectId, pending, projectOptions, selectedProjectId]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -491,7 +515,7 @@ export function ProductionSessionCreationPanel({
       });
       commandRef.current = undefined;
       setCreationUncertain(false);
-      clearStoredIntent(storageKey);
+      clearSessionCreationIntents(storageKey, storedIntentEntry?.key);
     } catch (error) {
       const uncertain = shouldRetainSessionCreationIntent(creationUncertain, error);
       setCreationUncertain(uncertain);
@@ -501,7 +525,7 @@ export function ProductionSessionCreationPanel({
         writeSessionCreationIntent(storageKey, pendingIntent);
       } else {
         commandRef.current = undefined;
-        clearStoredIntent(storageKey);
+        clearSessionCreationIntents(storageKey, storedIntentEntry?.key);
       }
       setFailure(errorMessage(error, "创建会话"));
     } finally {
@@ -513,7 +537,7 @@ export function ProductionSessionCreationPanel({
     commandRef.current = undefined;
     setCreationUncertain(false);
     setFailure("已放弃未确认的创建意图；修改后的表单会使用新的 command_id。");
-    clearStoredIntent(storageKey);
+    clearSessionCreationIntents(storageKey, storedIntentEntry?.key);
   };
 
   return (

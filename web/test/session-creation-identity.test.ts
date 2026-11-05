@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { buildSessionCreationIntentKey } from "../src/features/conversations/session-creation-identity";
+import { buildLegacySessionCreationIntentKey, buildSessionCreationIntentKey } from "../src/features/conversations/session-creation-identity";
 
 describe("session creation identity", () => {
   test("keeps identical creation requests distinct across browser contexts", () => {
@@ -38,5 +38,18 @@ describe("session creation identity", () => {
     };
 
     expect(buildSessionCreationIntentKey({ ...request, pathname: "/" })).toBe(buildSessionCreationIntentKey({ ...request, pathname: "/conversations/new" }));
+  });
+
+  test("retains the old path-scoped key shape for cross-version recovery", () => {
+    const request = {
+      browserContext: "tab-a",
+      conversationTitle: "新建独立会话",
+      principalId: "user-1",
+      projectId: "project-1",
+      taskId: "task-1"
+    };
+
+    expect(buildLegacySessionCreationIntentKey({ ...request, pathname: "/" })).not.toBe(buildLegacySessionCreationIntentKey({ ...request, pathname: "/conversations/new" }));
+    expect(buildLegacySessionCreationIntentKey({ ...request, pathname: "/conversations/new" })).not.toBe(buildSessionCreationIntentKey({ ...request, pathname: "/conversations/new" }));
   });
 });
