@@ -19,18 +19,12 @@ on:
         description: Candidate digest recorded in the candidate manifest
         required: true
         type: string
-      environment:
-        description: Release environment protected by repository approvals
-        required: true
-        default: production
-        type: environment
-
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  group: loomhelm-release-${{ inputs.environment || 'production' }}-${{ inputs.candidate_digest || 'unknown' }}
+  group: loomhelm-release-${{ inputs.candidate_digest || 'unknown' }}
   cancel-in-progress: false
 
 jobs:
@@ -49,8 +43,6 @@ jobs:
     name: Publish Candidate
     needs: validate-release-ref
     runs-on: ubuntu-24.04
-    environment:
-      name: ${{ inputs.environment }}
     steps:
       - name: Verify candidate provenance
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
