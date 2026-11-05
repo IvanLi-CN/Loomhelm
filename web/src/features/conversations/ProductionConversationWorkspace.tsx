@@ -632,14 +632,17 @@ export function ProductionSessionCreationPanel({
       return;
     }
     const existingIntent = commandRef.current;
+    const existingIntentUncertain = Boolean(existingIntent?.uncertain);
     const commandId = existingIntent?.fingerprint === fingerprint ? existingIntent.commandId : createCommandId("session");
     const intent: SessionCreationIntent = { attemptId: createCommandId("session-attempt"), commandId, fingerprint, request: requestWithoutCommand, uncertain: true };
     if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, intent, { expectedAttemptId: existingIntent?.attemptId, requireCurrent: Boolean(existingIntent) && !creationIntentPersistenceRecovery })) {
       commandRef.current = existingIntent;
-      setCreationUncertain(Boolean(existingIntent?.uncertain));
-      setCreationIntentPersistenceRecovery(true);
+      setCreationUncertain(existingIntentUncertain);
+      setCreationIntentPersistenceRecovery(!existingIntentUncertain);
       setPending(false);
-      setFailure("创建命令身份未完整写入，尚未发送请求；请恢复浏览器存储后重试此表单，或放弃这次创建。");
+      setFailure(existingIntentUncertain
+        ? "创建结果仍不确定，但浏览器无法更新同一命令身份；请恢复浏览器存储后用相同请求重试或完成人工对账。不会生成新的 command_id。"
+        : "创建命令身份未完整写入，尚未发送请求；请恢复浏览器存储后重试此表单，或放弃这次创建。");
       return;
     }
     commandRef.current = intent;

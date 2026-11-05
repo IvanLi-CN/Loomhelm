@@ -69,6 +69,10 @@ const unknownSessionCreation = fn(async (_request: CreateSessionRequest, _before
   throw new Error("session creation result is unknown in story");
 });
 
+const storageFailureSessionCreation = fn(async (_request: CreateSessionRequest, _beforeCommit?: () => boolean | Promise<boolean>) => {
+  throw new Error("session creation result is unknown in storage failure story");
+});
+
 export const UnknownResultCanRetrySameCommand: Story = {
   args: {
     onCreate: unknownSessionCreation,
@@ -87,6 +91,35 @@ export const UnknownResultCanRetrySameCommand: Story = {
     await waitFor(() => expect(args.onCreate).toHaveBeenCalledTimes(2));
     expect(unknownSessionCreation.mock.calls[1]?.[0]).toEqual(unknownSessionCreation.mock.calls[0]?.[0]);
     await expect(canvas.findByRole("button", { name: "重试同一命令" })).resolves.toBeEnabled();
+  }
+};
+
+export const UnknownResultStorageFailureKeepsReconciliationState: Story = {
+  args: {
+    onCreate: storageFailureSessionCreation,
+    principalId: "storybook-storage-failure"
+  },
+  render: (args) => (
+    <EvidenceFrame>
+      <ProductionSessionCreationPanel {...args} conversationTitle="未知结果存储失败" />
+    </EvidenceFrame>
+  ),
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByRole("button", { name: "创建会话" }));
+    const retryButton = await canvas.findByRole("button", { name: "重试同一命令" });
+    const setItemDescriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem");
+    try {
+      Object.defineProperty(Storage.prototype, "setItem", { configurable: true, value: () => { throw new Error("storage blocked"); } });
+      await userEvent.click(retryButton);
+      await expect(canvas.findByRole("status")).resolves.toHaveTextContent("创建结果不确定");
+      expect(canvas.getByRole("status")).not.toHaveTextContent("创建请求尚未发送");
+    } finally {
+      if (setItemDescriptor) Object.defineProperty(Storage.prototype, "setItem", setItemDescriptor);
+      for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+        const key = window.sessionStorage.key(index);
+        if (key?.includes("storybook-storage-failure")) window.sessionStorage.removeItem(key);
+      }
+    }
   }
 };
 
