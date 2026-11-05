@@ -61,7 +61,7 @@ Promote 按可审计顺序提交：先确认新槽位 identity、readiness 和 W
 
 为控制面划分独立的内部网络：Caddy admin 只绑定管理网络地址，部署控制器同时加入管理网络和专用 drain control 网络，候选 Server/Worker 不加入管理网络。候选流量网络、控制器的排空网络和 Caddy admin 网络要使用不重叠的子网；这样候选代码即使能访问应用网络，也不能直接调用 Caddy reload 或修改稳定入口。
 
-Reconcile 必须是幂等的。先以不重建的方式确保目标 Server 存在，再用有界 readiness 探测和精确运行身份探测判断是否已经满足目标；只有明确证明目标处于 draining 或身份不匹配时才 force-recreate。网络超时、临时 5xx 或仍在启动的状态只能返回“无法证明”，不能停止一个可能已经承接流量的 Server。Worker 的启动、generation 校验和失败清理随后执行；回滚恢复 Server 时也要先恢复并证明 Server，再恢复 Worker，避免把半恢复槽位当作可服务状态。
+Reconcile 必须是幂等的。先以不重建的方式确保目标 Server 存在，再用有界 readiness 探测和精确运行身份探测判断是否已经满足目标；只有明确证明目标处于 draining 或身份不匹配时才 force-recreate。网络超时、临时 5xx、仍在启动或身份字段不完整的状态只能返回“无法证明”，不能停止一个可能已经承接流量的 Server。Worker 的启动、generation 校验和失败清理随后执行；Worker 的观测失败、未 ready 或缺失 generation 也只能保留当前实例并返回 `unknown`，等待后续 reconcile，只有明确 generation 不匹配才清理并恢复旧 Worker。回滚恢复 Server 时也要先恢复并证明 Server，再恢复 Worker，避免把半恢复槽位当作可服务状态。
 
 浏览器端跨路由或跨版本共享的创建意图至少包含逻辑 `commandId`、请求 fingerprint 和本次 `attemptId`。兼容键应一次性写入，并在部分写入失败时尽力恢复原值；晚到的旧页面只能更新或清理仍匹配同一 attempt 的记录。相同逻辑命令但不同 attempt 的兼容键应按冲突处理并失败关闭，不能猜测哪个页面更新，也不能让旧版本清理新版本的恢复身份。
 

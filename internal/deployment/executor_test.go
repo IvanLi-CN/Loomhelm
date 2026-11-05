@@ -921,6 +921,113 @@ func TestCommandExecutorReconcileDoesNotRecreateOnTransientServerProbeFailure(t 
 	}
 }
 
+func TestCommandExecutorReconcileDoesNotRecreateOnIncompleteServerIdentity(t *testing.T) {
+	var commands []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/readyz":
+			writer.WriteHeader(http.StatusNoContent)
+		case "/version":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	executor := &CommandExecutor{
+		ComposeBinary: "docker",
+		ComposeFile:   "/srv/compose.yaml",
+		ProjectName:   "loomhelm",
+		CaddyBinary:   "caddy",
+		CaddyFile:     "/etc/caddy/Caddyfile",
+		SlotURLs:      map[string]string{"green": server.URL},
+		WorkerURLs:    map[string]string{"green": server.URL},
+		Run: func(_ context.Context, binary string, args ...string) error {
+			commands = append(commands, binary+" "+strings.Join(args, " "))
+			return nil
+		},
+	}
+	operation := Operation{
+		Kind:               "reconcile",
+		ExecutionKind:      "rollback",
+		Slot:               "green",
+		CandidateID:        strings.Repeat("a", 64),
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+		ServerImage:        "ghcr.io/example/server@sha256:" + strings.Repeat("a", 64),
+		WorkerImage:        "ghcr.io/example/worker@sha256:" + strings.Repeat("b", 64),
+		WorkerGeneration:   2,
+	}
+	err := executor.Execute(context.Background(), operation)
+	if err == nil || !errors.Is(err, errReconcileProbeUnavailable) {
+		t.Fatalf("reconcile incomplete identity error = %v, want unavailable probe error", err)
+	}
+	for _, command := range commands {
+		if strings.Contains(command, "--force-recreate") || strings.Contains(command, "worker-green") {
+			t.Fatalf("reconcile incomplete identity issued destructive command: %v", commands)
+		}
+	}
+}
+
+func TestCommandExecutorReconcilePreservesWorkerOnObservationFailure(t *testing.T) {
+	var commands []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/readyz":
+			writer.WriteHeader(http.StatusNoContent)
+		case "/version":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"candidate_source_sha":"` + strings.Repeat("a", 40) + `","artifact_digest":"sha256:` + strings.Repeat("b", 64) + `"}`))
+		case "/-/observe":
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	executor := &CommandExecutor{
+		ComposeBinary: "docker",
+		ComposeFile:   "/srv/compose.yaml",
+		ProjectName:   "loomhelm",
+		CaddyBinary:   "caddy",
+		CaddyFile:     "/etc/caddy/Caddyfile",
+		SlotURLs:      map[string]string{"green": server.URL},
+		WorkerURLs:    map[string]string{"green": server.URL},
+		Run: func(_ context.Context, binary string, args ...string) error {
+			commands = append(commands, binary+" "+strings.Join(args, " "))
+			return nil
+		},
+	}
+	operation := Operation{
+		Kind:                       "reconcile",
+		ExecutionKind:              "rollback",
+		Slot:                       "green",
+		CandidateID:                strings.Repeat("a", 64),
+		CandidateSourceSHA:         strings.Repeat("a", 40),
+		ArtifactDigest:             "sha256:" + strings.Repeat("b", 64),
+		ServerImage:                "ghcr.io/example/server@sha256:" + strings.Repeat("a", 64),
+		WorkerImage:                "ghcr.io/example/worker@sha256:" + strings.Repeat("b", 64),
+		WorkerGeneration:           2,
+		RetiringSlot:               "blue",
+		RetiringCandidateID:        strings.Repeat("c", 64),
+		RetiringWorkerImage:        "ghcr.io/example/worker@sha256:" + strings.Repeat("d", 64),
+		RetiringCandidateSourceSHA: strings.Repeat("c", 40),
+		RetiringArtifactDigest:     "sha256:" + strings.Repeat("d", 64),
+	}
+	err := executor.Execute(context.Background(), operation)
+	if err == nil || !errors.Is(err, errWorkerObservationUnavailable) {
+		t.Fatalf("reconcile observation error = %v, want unavailable observation error", err)
+	}
+	for _, command := range commands {
+		if strings.Contains(command, "rm --force") || strings.Contains(command, "--force-recreate") || strings.Contains(command, "worker-blue") {
+			t.Fatalf("reconcile observation failure destroyed or restored a Worker: %v", commands)
+		}
+	}
+}
+
 func TestCommandExecutorRollbackRestoresServerBeforeWorker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {

@@ -37,6 +37,9 @@ var errRetryablePublicProbe = errors.New("public deployment probe is retryable")
 var errReconcileNeedsRecreate = errors.New("deployment reconcile target needs recreation")
 var errReconcileProbeUnavailable = errors.New("deployment reconcile target cannot be verified")
 var errComponentIdentityMismatch = errors.New("deployment component identity mismatch")
+var errComponentIdentityUnavailable = errors.New("deployment component identity is incomplete")
+var errWorkerObservationUnavailable = errors.New("deployment Worker observation cannot be verified")
+var errWorkerGenerationMismatch = errors.New("deployment Worker generation mismatch")
 
 type DegradedError struct{ Err error }
 
@@ -446,6 +449,9 @@ func (e *CommandExecutor) cleanupStartedService(ctx context.Context, operation O
 }
 
 func (e *CommandExecutor) cleanupFailedWorker(ctx context.Context, operation Operation, cause error) error {
+	if errors.Is(cause, errComponentIdentityUnavailable) || errors.Is(cause, errWorkerObservationUnavailable) {
+		return cause
+	}
 	cleanupErr := e.cleanupStartedService(ctx, operation, "worker", cause)
 	var deterministic *DeterministicError
 	if !errors.As(cleanupErr, &deterministic) {
@@ -728,17 +734,16 @@ func (e *CommandExecutor) waitWorkerIdentity(ctx context.Context, operation Oper
 	}
 	observation, err := e.fetchComponent(ctx, e.WorkerURLs[operation.Slot])
 	if err != nil {
-		return fmt.Errorf("deployment Worker observation failed: %w", err)
+		return fmt.Errorf("%w: deployment Worker observation failed: %v", errWorkerObservationUnavailable, err)
 	}
 	if !observation.Ready {
-		return errors.New("deployment Worker observation is not ready")
+		return fmt.Errorf("%w: deployment Worker observation is not ready", errWorkerObservationUnavailable)
 	}
-	if observation.WorkerGeneration == nil || *observation.WorkerGeneration != operation.WorkerGeneration {
-		observed := "missing"
-		if observation.WorkerGeneration != nil {
-			observed = fmt.Sprintf("%d", *observation.WorkerGeneration)
-		}
-		return fmt.Errorf("deployment Worker generation does not match operation: observed %s, want %d", observed, operation.WorkerGeneration)
+	if observation.WorkerGeneration == nil {
+		return fmt.Errorf("%w: deployment Worker observation omitted generation", errWorkerObservationUnavailable)
+	}
+	if *observation.WorkerGeneration != operation.WorkerGeneration {
+		return fmt.Errorf("%w: deployment Worker generation does not match operation: observed %d, want %d", errWorkerGenerationMismatch, *observation.WorkerGeneration, operation.WorkerGeneration)
 	}
 	return nil
 }
@@ -826,6 +831,9 @@ func (e *CommandExecutor) verifyVersion(ctx context.Context, baseURL string, ope
 	})
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(version.CandidateSourceSHA) == "" || strings.TrimSpace(version.ArtifactDigest) == "" {
+		return fmt.Errorf("%w: deployment %s version omitted candidate identity", errComponentIdentityUnavailable, component)
 	}
 	if version.CandidateSourceSHA != operation.CandidateSourceSHA || version.ArtifactDigest != operation.ArtifactDigest {
 		return fmt.Errorf("%w: deployment %s identity does not match candidate", errComponentIdentityMismatch, component)
