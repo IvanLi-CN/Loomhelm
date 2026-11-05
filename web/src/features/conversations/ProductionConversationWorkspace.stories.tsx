@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fireEvent, fn, userEvent, waitFor, within } from "storybook/test";
+import type { CreateSessionRequest } from "@loomhelm/protocol";
 
 import { ProductionSessionCreationPanel } from "./ProductionConversationWorkspace";
 
@@ -60,11 +61,11 @@ export const ExplicitCreate: Story = {
     fireEvent.change(canvas.getByRole("textbox", { name: "首条提示（可选）" }), { target: { value: "先确认当前 Host 与 Session 边界。" } });
     await userEvent.click(canvas.getByRole("button", { name: "创建会话" }));
     await expect(args.onCreate).toHaveBeenCalledOnce();
-    expect(args.onCreate).toHaveBeenCalledWith(expect.objectContaining({ path: "new", prompt: "先确认当前 Host 与 Session 边界。" }));
+    expect(args.onCreate).toHaveBeenCalledWith(expect.objectContaining({ path: "new", prompt: "先确认当前 Host 与 Session 边界。" }), expect.any(Function));
   }
 };
 
-const unknownSessionCreation = fn(async () => {
+const unknownSessionCreation = fn(async (_request: CreateSessionRequest, _beforeCommit?: () => boolean | Promise<boolean>) => {
   throw new Error("session creation result is unknown in story");
 });
 
@@ -84,6 +85,7 @@ export const UnknownResultCanRetrySameCommand: Story = {
     await expect(retryButton).toBeEnabled();
     await userEvent.click(retryButton);
     await waitFor(() => expect(args.onCreate).toHaveBeenCalledTimes(2));
+    expect(unknownSessionCreation.mock.calls[1]?.[0]).toEqual(unknownSessionCreation.mock.calls[0]?.[0]);
     await expect(canvas.findByRole("button", { name: "重试同一命令" })).resolves.toBeEnabled();
   }
 };

@@ -1028,6 +1028,30 @@ func TestCommandExecutorReconcilePreservesWorkerOnObservationFailure(t *testing.
 	}
 }
 
+func TestCommandExecutorWorkerVersionFailureIsObservationUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/readyz":
+			writer.WriteHeader(http.StatusNoContent)
+		case "/version":
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	err := (&CommandExecutor{WorkerURLs: map[string]string{"green": server.URL}}).waitWorkerIdentity(context.Background(), Operation{
+		Slot:               "green",
+		CandidateSourceSHA: strings.Repeat("a", 40),
+		ArtifactDigest:     "sha256:" + strings.Repeat("b", 64),
+		WorkerGeneration:   2,
+	})
+	if err == nil || !errors.Is(err, errWorkerObservationUnavailable) {
+		t.Fatalf("waitWorkerIdentity() error = %v, want unavailable observation error", err)
+	}
+}
+
 func TestCommandExecutorRollbackRestoresServerBeforeWorker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {

@@ -727,7 +727,10 @@ func (e *CommandExecutor) waitWorkerIdentity(ctx context.Context, operation Oper
 		return err
 	}
 	if err := e.verifyVersion(ctx, e.WorkerURLs[operation.Slot], operation, "worker"); err != nil {
-		return err
+		if errors.Is(err, errComponentIdentityMismatch) {
+			return err
+		}
+		return errors.Join(errWorkerObservationUnavailable, fmt.Errorf("deployment Worker version observation failed: %w", err))
 	}
 	if operation.WorkerGeneration <= 0 {
 		return nil

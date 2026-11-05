@@ -1798,6 +1798,9 @@ export function ProductionConversationWorkspace({
     if (initialRunUncertain && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: expectedInitialCommandId, prompt: initialPrompt, uncertain: true })) {
       throw new Error("Session 已收到但首个 Run 命令身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
+    if (!mountedRef.current) {
+      throw new Error("Session 已创建但工作区已卸载；已保留同一创建命令，请重新进入后完成对账。");
+    }
     if (beforeCommit && !(await beforeCommit())) return false;
     if (!mountedRef.current) {
       throw new Error("Session 已创建但工作区已卸载；已保留同一创建命令，请重新进入后完成对账。");
