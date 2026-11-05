@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fireEvent, fn, userEvent, within } from "storybook/test";
+import { expect, fireEvent, fn, userEvent, waitFor, within } from "storybook/test";
 
 import { ProductionSessionCreationPanel } from "./ProductionConversationWorkspace";
 
@@ -61,6 +61,30 @@ export const ExplicitCreate: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "创建会话" }));
     await expect(args.onCreate).toHaveBeenCalledOnce();
     expect(args.onCreate).toHaveBeenCalledWith(expect.objectContaining({ path: "new", prompt: "先确认当前 Host 与 Session 边界。" }));
+  }
+};
+
+const unknownSessionCreation = fn(async () => {
+  throw new Error("session creation result is unknown in story");
+});
+
+export const UnknownResultCanRetrySameCommand: Story = {
+  args: {
+    onCreate: unknownSessionCreation,
+    principalId: "storybook-unknown-result"
+  },
+  render: (args) => (
+    <EvidenceFrame>
+      <ProductionSessionCreationPanel {...args} conversationTitle="未知结果重试" />
+    </EvidenceFrame>
+  ),
+  play: async ({ args, canvas }) => {
+    await userEvent.click(canvas.getByRole("button", { name: "创建会话" }));
+    const retryButton = await canvas.findByRole("button", { name: "重试同一命令" });
+    await expect(retryButton).toBeEnabled();
+    await userEvent.click(retryButton);
+    await waitFor(() => expect(args.onCreate).toHaveBeenCalledTimes(2));
+    await expect(canvas.findByRole("button", { name: "重试同一命令" })).resolves.toBeEnabled();
   }
 };
 

@@ -52,6 +52,7 @@ let browserContextDraftClientId: string | undefined;
 const browserContextDrafts = new Map<string, string>();
 
 type SessionCreationPayload = Omit<CreateSessionRequest, "command_id">;
+type SessionCreationCleanupRecovery = "created" | "abandoned";
 
 interface SessionCreationIntent {
   attemptId: string;
@@ -59,6 +60,7 @@ interface SessionCreationIntent {
   fingerprint: string;
   request: SessionCreationPayload;
   uncertain: boolean;
+  cleanup?: SessionCreationCleanupRecovery;
 }
 
 interface RunIntent {
@@ -100,8 +102,9 @@ function readSessionCreationIntent(key: string | undefined): SessionCreationInte
     const request = parsed.request as SessionCreationPayload;
     if (request.path !== "new" && request.path !== "existing_active") return undefined;
     if ((request.active_thread_ref !== undefined && typeof request.active_thread_ref !== "string") || (request.project_id !== undefined && typeof request.project_id !== "string") || (request.prompt !== undefined && typeof request.prompt !== "string") || (request.task_id !== undefined && typeof request.task_id !== "string")) return undefined;
+    if (parsed.cleanup !== undefined && parsed.cleanup !== "created" && parsed.cleanup !== "abandoned") return undefined;
     const attemptId = typeof parsed.attemptId === "string" && parsed.attemptId.trim() ? parsed.attemptId : parsed.commandId;
-    return { attemptId, commandId: parsed.commandId, fingerprint: parsed.fingerprint, request, uncertain: parsed.uncertain };
+    return { attemptId, commandId: parsed.commandId, fingerprint: parsed.fingerprint, request, uncertain: parsed.uncertain, cleanup: parsed.cleanup };
   } catch {
     return undefined;
   }
@@ -461,7 +464,7 @@ export interface ProductionSessionCreationPanelProps {
   existingActiveSupported?: boolean;
   fixedProjectId?: string;
   fixedProjectName?: string;
-  onCreate: (request: CreateSessionRequest) => void | Promise<void>;
+  onCreate: (request: CreateSessionRequest, beforeCommit?: () => boolean | Promise<boolean>) => void | boolean | Promise<void | boolean>;
   principalId?: string;
   projectCanWrite?: (projectId: string) => boolean;
   projectOptions?: readonly ProjectOption[];
@@ -513,7 +516,7 @@ export function ProductionSessionCreationPanel({
   const intentStorageKeys = useMemo(() => [storageKey, ...legacyStorageKeys].filter((key): key is string => Boolean(key)), [legacyStorageKeys, storageKey]);
   const [intentRevision, setIntentRevision] = useState(0);
   const storedIntentEntries = useMemo(() => readSessionCreationIntentEntries(intentStorageKeys), [intentRevision, intentStorageKeys]);
-  const storedIntentEntry = storedIntentEntries[0];
+  const storedIntentEntry = storedIntentEntries.find(({ intent }) => intent.cleanup) ?? storedIntentEntries[0];
   const storedIntentConflict = hasSessionCreationIntentConflict(storedIntentEntries.map(({ intent }) => intent));
   const storedIntent = storedIntentEntry?.intent;
   const [path, setPath] = useState<SessionPath>(() => storedIntent?.request.path ?? "new");
@@ -524,7 +527,7 @@ export function ProductionSessionCreationPanel({
   const [failure, setFailure] = useState<string | null>(null);
   const [creationUncertain, setCreationUncertain] = useState(() => storedIntent?.uncertain ?? false);
   const [creationIntentPersistenceRecovery, setCreationIntentPersistenceRecovery] = useState(false);
-  const [creationIntentCleanupRecovery, setCreationIntentCleanupRecovery] = useState<"created" | "abandoned" | null>(null);
+  const [creationIntentCleanupRecovery, setCreationIntentCleanupRecovery] = useState<SessionCreationCleanupRecovery | null>(() => storedIntent?.cleanup ?? null);
   const creationBlocked = creationUncertain || Boolean(creationIntentCleanupRecovery);
   const commandRef = useRef<SessionCreationIntent | undefined>(storedIntent);
   const selectedProjectReadOnly = selectedProjectId !== NO_PROJECT && Boolean(projectCanWrite && !projectCanWrite(selectedProjectId));
@@ -538,6 +541,58 @@ export function ProductionSessionCreationPanel({
     const normalized = normalizeProjectSelection(selectedProjectId, fixedProjectId, projectOptions, shouldPreserveProjectSelection(pending, creationBlocked));
     if (normalized !== selectedProjectId) setSelectedProjectId(normalized);
   }, [creationBlocked, fixedProjectId, pending, projectOptions, selectedProjectId]);
+
+  const finalizeCreationIntent = (intent: SessionCreationIntent, cleanup: SessionCreationCleanupRecovery): { durable: boolean; result: SessionCreationClearResult } => {
+    const initialResult = clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent);
+    if (initialResult === "cleared") {
+      commandRef.current = undefined;
+      setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery(null);
+      setIntentRevision((current) => current + 1);
+      return { durable: true, result: initialResult };
+    }
+    if (initialResult === "not_current") {
+      commandRef.current = undefined;
+      setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery(null);
+      setIntentRevision((current) => current + 1);
+      return { durable: true, result: initialResult };
+    }
+
+    const confirmedIntent: SessionCreationIntent = { ...intent, cleanup, uncertain: false };
+    if (!writeSessionCreationIntents(storageKey, legacyStorageKeys, confirmedIntent, { expectedAttemptId: intent.attemptId, requireCurrent: true })) {
+      commandRef.current = confirmedIntent;
+      setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery(cleanup);
+      setFailure(cleanup === "created"
+        ? "Session 已创建，但浏览器无法保存恢复清理状态；请恢复存储后重试清理，不会重复创建。"
+        : "创建请求已被服务拒绝，但浏览器无法保存恢复清理状态；请恢复存储后重试清理。"
+      );
+      return { durable: false, result: initialResult };
+    }
+
+    const confirmedResult = clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, confirmedIntent);
+    if (confirmedResult === "cleared" || confirmedResult === "not_current") {
+      commandRef.current = undefined;
+      setCreationUncertain(false);
+      setCreationIntentPersistenceRecovery(false);
+      setCreationIntentCleanupRecovery(null);
+      setIntentRevision((current) => current + 1);
+      return { durable: true, result: confirmedResult };
+    }
+    commandRef.current = confirmedIntent;
+    setCreationUncertain(false);
+    setCreationIntentPersistenceRecovery(false);
+    setCreationIntentCleanupRecovery(cleanup);
+    setFailure(cleanup === "created"
+      ? "Session 已创建，但浏览器恢复身份未完整清理；请恢复浏览器存储后重试清理，不会重复创建。"
+      : "创建请求已被服务拒绝，但浏览器恢复身份未完整清理；请恢复浏览器存储后重试清理。"
+    );
+    return { durable: true, result: confirmedResult };
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -591,23 +646,21 @@ export function ProductionSessionCreationPanel({
     setCreationIntentPersistenceRecovery(false);
     setCreationIntentCleanupRecovery(null);
     try {
-      await onCreate({
-        ...requestWithoutCommand,
-        command_id: commandId
-      });
-      commandRef.current = undefined;
-      setCreationUncertain(false);
-      setCreationIntentPersistenceRecovery(false);
-      setCreationIntentCleanupRecovery(null);
-      const clearResult = clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent);
-      if (clearResult === "not_current") {
-        setFailure("Session 已创建，但浏览器中仍有另一项创建命令待对账；未清理其恢复身份。");
-      } else if (clearResult === "storage_failed") {
-        commandRef.current = intent;
-        setCreationIntentCleanupRecovery("created");
-        setFailure("Session 已创建，但浏览器恢复身份未完整清理；请恢复浏览器存储后重试清理，不会重复创建。");
-      } else {
-        setIntentRevision((current) => current + 1);
+      let beforeCommitCalled = false;
+      const createResult = await onCreate(
+        { ...requestWithoutCommand, command_id: commandId },
+        () => {
+          beforeCommitCalled = true;
+          return finalizeCreationIntent(intent, "created").durable;
+        }
+      );
+      if (createResult === false) return;
+      if (!beforeCommitCalled) {
+        const finalizeResult = finalizeCreationIntent(intent, "created");
+        if (!finalizeResult.durable) return;
+        if (finalizeResult.result === "not_current") {
+          setFailure("Session 已创建，但浏览器中仍有另一项创建命令待对账；未清理其恢复身份。");
+        }
       }
     } catch (error) {
       const uncertain = shouldRetainSessionCreationIntent(creationUncertain, error);
@@ -623,18 +676,11 @@ export function ProductionSessionCreationPanel({
         setCreationUncertain(true);
       } else {
         setCreationIntentPersistenceRecovery(false);
-        setCreationIntentCleanupRecovery(null);
-        const clearResult = clearSessionCreationIntentIfCurrent(storageKey, legacyStorageKeys, intent);
-        if (clearResult === "not_current") {
-          commandRef.current = undefined;
+        const finalizeResult = finalizeCreationIntent(intent, "abandoned");
+        if (finalizeResult.result === "not_current") {
           failureText = "创建请求已被服务拒绝，但浏览器中已有另一项创建命令；未清理其恢复身份。";
-        } else if (clearResult === "storage_failed") {
-          commandRef.current = intent;
-          setCreationIntentCleanupRecovery("abandoned");
+        } else if (finalizeResult.result === "storage_failed") {
           failureText = "创建请求已被服务拒绝，但浏览器恢复身份未完整清理；请恢复浏览器存储后重试清理。";
-        } else {
-          commandRef.current = undefined;
-          setIntentRevision((current) => current + 1);
         }
         setCreationUncertain(false);
       }
@@ -667,7 +713,7 @@ export function ProductionSessionCreationPanel({
       setIntentRevision((current) => current + 1);
     } else {
       commandRef.current = intent;
-      setCreationIntentCleanupRecovery("abandoned");
+      setCreationIntentCleanupRecovery(intent.cleanup ?? "abandoned");
       setFailure("浏览器存储仍不可用；创建身份尚未清理，请恢复存储后重试。不会自动发送或重复创建。");
     }
   };
@@ -786,7 +832,7 @@ export function ProductionSessionCreationPanel({
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
           <span className="text-[11px] leading-5 text-[var(--muted)]">不会自动发送草稿；创建请求只提交一次 command_id。</span>
-          <Button type="submit" disabled={pending || readOnly || creationBlocked || storedIntentConflict || selectedProjectReadOnly || (path === "existing_active" && !existingActiveSupported)}>
+          <Button type="submit" disabled={pending || readOnly || Boolean(creationIntentCleanupRecovery) || storedIntentConflict || selectedProjectReadOnly || (path === "existing_active" && !existingActiveSupported)}>
             {pending ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
             {pending ? "正在创建" : creationUncertain ? "重试同一命令" : "创建会话"}
           </Button>
@@ -1730,7 +1776,7 @@ export function ProductionConversationWorkspace({
     };
   }, [activeRunId, activeSessionId, adapters, api, runIdentityVerified]);
 
-  const createSession = async (request: CreateSessionRequest) => {
+  const createSession = async (request: CreateSessionRequest, beforeCommit?: () => boolean | Promise<boolean>) => {
     if (!api || !adapters) throw new Error("当前浏览器没有可用的会话服务");
     const response = await api.createSession({ body: request });
     const initialAck = response.initial_run_ack;
@@ -1752,6 +1798,7 @@ export function ProductionConversationWorkspace({
     if (initialRunUncertain && !writeRunIntent(getRunIntentKey(principalId, response.session.id), { commandId: expectedInitialCommandId, prompt: initialPrompt, uncertain: true })) {
       throw new Error("Session 已收到但首个 Run 命令身份无法持久化；请恢复浏览器存储后用同一创建命令对账。");
     }
+    if (beforeCommit && !(await beforeCommit())) return false;
     if (!mountedRef.current) {
       throw new Error("Session 已创建但工作区已卸载；已保留同一创建命令，请重新进入后完成对账。");
     }
@@ -1837,6 +1884,7 @@ export function ProductionConversationWorkspace({
       setActivityNotice("Session 已创建；当前没有首条 Run 命令确认。");
     }
     await onSessionCreated?.(response.session.id, initialRunId);
+    return true;
   };
 
   const send = async (prompt: string) => {
