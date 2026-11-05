@@ -122,8 +122,11 @@ LOOMHELM_COMPOSE_PROJECT=loomhelm-quality-production
 LOOMHELM_DEPLOYMENT_OWNER_USER_IDS=quality-owner
 LOOMHELM_DOCKER_GID=0
 LOOMHELM_CONTROL_SUBNET=172.31.240.0/28
-LOOMHELM_CADDY_CONTROL_IP=172.31.240.2
+LOOMHELM_CONTROL_DYNAMIC_SUBNET=172.31.240.8/29
 LOOMHELM_CONTROLLER_CONTROL_IP=172.31.240.3
+LOOMHELM_CADDY_ADMIN_SUBNET=172.31.241.0/28
+LOOMHELM_CADDY_ADMIN_IP=172.31.241.2
+LOOMHELM_CONTROLLER_ADMIN_IP=172.31.241.3
 LOOMHELM_HTTP_PORT=18090
 LOOMHELM_CADDY_CONFIG_DIR=$tmp_dir/caddy
 LOOMHELM_INSTALLATION_ROOT=$tmp_dir/install
@@ -171,6 +174,7 @@ PY
 	docker compose --env-file "$tmp_dir/production.env" --project-name loomhelm-quality-production --profile deployment-controller -f deploy/production/compose.yaml config --format json >"$production_profile_config" || return 1
 	python3 - "$production_profile_config" <<'PY'
 import json
+import ipaddress
 import sys
 
 services = json.loads(open(sys.argv[1], encoding="utf-8").read())["services"]
@@ -183,6 +187,22 @@ for service_name in ("worker-blue", "worker-green"):
 controller_volumes = services["deployment-controller"]["volumes"]
 if not any(volume.get("target") == "/opt/loomhelm-web" for volume in controller_volumes):
     raise SystemExit("deployment-controller must mount the public Web root directly")
+def network_names(service_name):
+    return set(services[service_name].get("networks", {}))
+
+if "caddy-admin" not in network_names("caddy") or "control" in network_names("caddy"):
+    raise SystemExit("Caddy must use caddy-admin and stay off the drain control network")
+if not {"control", "caddy-admin"}.issubset(network_names("deployment-controller")):
+    raise SystemExit("deployment-controller must join both control networks")
+control_ipam = json.loads(open(sys.argv[1], encoding="utf-8").read())["networks"]["control"]["ipam"]["config"][0]
+dynamic_subnet = ipaddress.ip_network(control_ipam["ip_range"], strict=False)
+controller_control_ip = ipaddress.ip_address(services["deployment-controller"]["networks"]["control"]["ipv4_address"])
+if controller_control_ip in dynamic_subnet:
+    raise SystemExit("control dynamic IP range must exclude the controller control IP")
+for service_name in ("server-blue", "server-green", "worker-blue", "worker-green"):
+    names = network_names(service_name)
+    if "control" not in names or "caddy-admin" in names:
+        raise SystemExit(f"{service_name} must use control and stay off caddy-admin")
 PY
 }
 

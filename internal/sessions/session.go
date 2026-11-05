@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
@@ -30,6 +31,11 @@ type Session struct {
 	Generation     string
 	LastCursor     string
 	TerminalReason string
+}
+
+type Cursor struct {
+	UpdatedAt time.Time
+	ID        string
 }
 
 type NewInput struct {

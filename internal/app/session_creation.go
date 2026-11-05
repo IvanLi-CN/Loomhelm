@@ -38,6 +38,7 @@ func sessionUnknownOutcomeContext(parent context.Context) (context.Context, cont
 type sessionCreationRecords interface {
 	CreateIntent(context.Context, sessions.CreationIntentInput) (sessions.CreationIntent, error)
 	CreateIntentAuthorized(context.Context, sessions.CreationIntentInput, sessions.CreationIntentAuthorizer) (sessions.CreationIntent, error)
+	GetIntentByCreatorAndCommand(context.Context, string, string) (sessions.CreationIntent, error)
 	MarkIntentUnknown(context.Context, sessions.UnknownIntentInput) (sessions.CreationIntent, error)
 	MarkIntentDefiniteFailure(context.Context, sessions.DefiniteFailureIntentInput) (sessions.CreationIntent, error)
 	ActivateIntent(context.Context, sessions.ActivationInput) (sessions.Session, error)
@@ -100,12 +101,27 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 	if s.records == nil || s.hosts == nil || s.transport == nil {
 		return protocol.SessionResponse{}, runs.ErrControlServiceUnavailable
 	}
-	host, err := s.hosts.ConfiguredHostForUser(ctx, principal.UserID)
-	if err != nil {
-		return protocol.SessionResponse{}, fmt.Errorf("resolve configured execution host: %w", err)
+	existingIntent, lookupErr := s.records.GetIntentByCreatorAndCommand(ctx, principal.UserID, normalized.CommandID)
+	if lookupErr != nil && !errors.Is(lookupErr, sessions.ErrSessionNotFound) {
+		return protocol.SessionResponse{}, fmt.Errorf("resolve existing session creation intent: %w", lookupErr)
 	}
-	if strings.TrimSpace(host.ID) == "" {
-		return protocol.SessionResponse{}, fmt.Errorf("%w: configured execution host has no identity", hosts.ErrInvalid)
+	hostID := ""
+	if lookupErr == nil {
+		// A retry must address the Host that owns the durable command identity.
+		// The transaction-scoped authorizer below still rechecks current access.
+		hostID = strings.TrimSpace(existingIntent.HostID)
+		if hostID == "" {
+			return protocol.SessionResponse{}, fmt.Errorf("%w: existing session creation intent has no Host identity", hosts.ErrInvalid)
+		}
+	} else {
+		host, err := s.hosts.ConfiguredHostForUser(ctx, principal.UserID)
+		if err != nil {
+			return protocol.SessionResponse{}, fmt.Errorf("resolve configured execution host: %w", err)
+		}
+		hostID = strings.TrimSpace(host.ID)
+		if hostID == "" {
+			return protocol.SessionResponse{}, fmt.Errorf("%w: configured execution host has no identity", hosts.ErrInvalid)
+		}
 	}
 	parameters, err := json.Marshal(normalized)
 	if err != nil {
@@ -126,7 +142,7 @@ func (s *sessionCreationService) CreateSession(ctx context.Context, principal au
 		SessionID:     sessionID,
 		CommandID:     normalized.CommandID,
 		CreatorUserID: principal.UserID,
-		HostID:        host.ID,
+		HostID:        hostID,
 		Path:          normalized.Path,
 		ProjectID:     optionalRequestValue(normalized.ProjectID),
 		TaskID:        optionalRequestValue(normalized.TaskID),

@@ -760,6 +760,15 @@
         "initial_run_ack": {"$ref": "#/types/CommandAck"}
       }
     },
+    "SessionListResponse": {
+      "type": "object",
+      "required": ["items", "has_more"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/types/Session"}},
+        "next_cursor": {"type": "string"},
+        "has_more": {"type": "boolean"}
+      }
+    },
     "CommandAckResponse": {
       "type": "object",
       "required": ["ack"],
@@ -818,6 +827,13 @@
       }
     },
     "ListProjectsQuery": {
+      "type": "object",
+      "properties": {
+        "after_cursor": {"type": "string"},
+        "limit": {"type": "integer", "format": "int64"}
+      }
+    },
+    "ListSessionsQuery": {
       "type": "object",
       "properties": {
         "after_cursor": {"type": "string"},
@@ -1632,6 +1648,15 @@
         "response_type": "SessionResponse",
         "summary": "Start a new or explicitly attach an active session",
         "mcp_tool": {"name": "loomhelm.start_session", "description": "Start a new Host Gateway session or request an explicit active-session attach."}
+      },
+      {
+        "operation_id": "listSessions",
+        "method": "GET",
+        "path": "/sessions",
+        "query_type": "ListSessionsQuery",
+        "response_type": "SessionListResponse",
+        "summary": "List authorized Loomhelm Sessions for cross-project conversation discovery",
+        "mcp_tool": {"name": "loomhelm.list_sessions", "description": "List Sessions visible to the caller across authorized projects."}
       },
       {
         "operation_id": "getSession",

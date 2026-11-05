@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-router";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMemo } from "react";
+import { MessageCircle } from "lucide-react";
 
 import { useOptionalProductionApi } from "@/app/providers";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,9 @@ import { CreateConversationRoute } from "@/routes/CreateConversationRoute";
 import { CreateTaskRoute } from "@/routes/CreateTaskRoute";
 import { DeploymentRoute } from "@/routes/DeploymentRoute";
 import { ConversationsRoute } from "@/routes/ConversationsRoute";
+import { ProductionConversationsRoute } from "@/routes/ProductionConversationsRoute";
 import { DemoProductionConversationRoute } from "@/routes/DemoProductionConversationRoute";
+import { DemoProductionConversationsRoute } from "@/routes/DemoProductionConversationsRoute";
 import { DemoCodexConversationsRoute } from "@/routes/DemoCodexConversationsRoute";
 import { ProjectRoute } from "@/routes/ProjectRoute";
 import { StatusRoute } from "@/routes/StatusRoute";
@@ -22,17 +25,60 @@ import { TasksRoute } from "@/routes/TasksRoute";
 import { ConversationWorkspaceRoute, TaskWorkspaceRoute } from "@/routes/WorkspaceRoute";
 import { WorkbenchRoute } from "@/routes/WorkbenchRoute";
 import { ProductionConversationWorkspace } from "@/features/conversations/ProductionConversationWorkspace";
-import { CodexConversationsRoute } from "@/features/codex/CodexConversations";
 import { createPublishedSessionApi } from "@/features/sessions/api";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 
-function ProductionNotReadyRoute({ eyebrow, title, description, to = "/tasks", linkLabel = "查看任务" }: { eyebrow: string; title: string; description: string; to?: "/" | "/tasks"; linkLabel?: string }) {
-  return <section className="page-section unavailable-page"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p><Button asChild variant="secondary" className="button button-secondary"><Link to={to}>{linkLabel}</Link></Button></section>;
-}
-
 function ProductionWorkbenchRoute() {
+  const navigate = useNavigate();
   const assembly = useOptionalProductionApi();
-  return <ProductionNotReadyRoute eyebrow="WORKBENCH" title="工作台等待会话接入" description={assembly?.auth.message ?? "当前已接入浏览器身份与项目、任务数据；会话、审批和执行能力将在服务可用后显示。"} />;
+  const source = useOptionalProjectTaskSource();
+  const api = useMemo(() => assembly?.auth.status === "authenticated" ? createPublishedSessionApi(assembly.client) : undefined, [assembly?.auth.status, assembly?.client]);
+  const sourceReady = source?.status === "ready";
+  const sourceStatus = !source
+    ? "项目和任务范围尚未加载；独立 Session 创建仍可用。"
+    : source.status === "loading"
+      ? "正在读取项目和任务范围；独立 Session 创建仍可用。"
+      : source.status === "ready"
+        ? "项目和任务范围已核对。"
+        : source.notice ?? "项目和任务范围暂时不可用；当前不会显示未确认的数据。";
+
+  return (
+    <section className="page-section grid min-w-0 gap-6">
+      <div className="page-heading">
+        <div><span className="eyebrow">WORKBENCH</span><h1>工作台</h1><p>从这里创建新的 Session，或查看当前账户有权访问的全部对话。</p></div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="secondary" className="button button-secondary"><Link to="/conversations"><MessageCircle size={15} aria-hidden="true" />全部对话</Link></Button>
+          <Button asChild variant="secondary" className="button button-secondary"><Link to="/deployment">部署控制</Link></Button>
+        </div>
+      </div>
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
+        <ProductionConversationWorkspace
+          key={assembly?.auth.principalId ?? "anonymous"}
+          api={api}
+          conversationTitle="新建独立会话"
+          onSessionCreated={(sessionId, initialRunId) => navigate({ params: { conversationId: sessionId }, search: initialRunId ? { runId: initialRunId } : {}, to: "/conversations/$conversationId" })}
+          principalId={assembly?.auth.principalId}
+          projectCanWrite={(projectId) => sourceReady && source.getProjectPermissions(projectId).canWrite}
+          projectOptions={sourceReady ? source.projects : []}
+          readOnly={assembly?.permissions.isReadOnly ?? true}
+        />
+        <aside className="grid content-start gap-4" aria-label="工作台状态">
+          <section className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[var(--shadow)]">
+            <span className="section-kicker">执行前提</span>
+            <h2 className="text-base font-semibold text-[var(--ink)]">Connector</h2>
+            <p className="text-xs leading-5 text-[var(--muted)]">新建 Desktop 对话需要已注册的 Connector。Connector 运行在执行机器上，不属于蓝绿 Web、Server、Worker 槽位。</p>
+            <Link to="/deployment" className="inline-link">查看部署状态</Link>
+          </section>
+          <section className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[var(--shadow)]">
+            <span className="section-kicker">当前范围</span>
+            <p className="text-xs leading-5 text-[var(--muted)]">{sourceStatus}</p>
+            <dl className="info-facts"><dt>项目</dt><dd>{sourceReady ? source.projects.length : "待核对"}</dd><dt>任务</dt><dd>{sourceReady ? source.tasks.length : "待核对"}</dd></dl>
+            <Link to="/tasks" className="inline-link">打开任务列表</Link>
+          </section>
+        </aside>
+      </div>
+    </section>
+  );
 }
 
 function RootRoute() {
@@ -42,7 +88,7 @@ function RootRoute() {
 function ConversationsEntryRoute() {
   return useOptionalDemoRuntime()
     ? <ConversationsRoute />
-    : <CodexConversationsRoute />;
+    : <ProductionConversationsRoute />;
 }
 
 function CreateConversationEntryRoute() {
@@ -96,6 +142,12 @@ const demoProductionConversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/demo/production-session",
   component: DemoProductionConversationRoute
+});
+
+const demoProductionConversationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/demo/production-conversations",
+  component: DemoProductionConversationsRoute
 });
 
 const demoCodexConversationsRoute = createRoute({
@@ -154,6 +206,7 @@ const routeTree = rootRoute.addChildren([
   statusRoute,
   deploymentRoute,
   demoProductionConversationRoute,
+  demoProductionConversationsRoute,
   demoCodexConversationsRoute,
   tasksRoute,
   createTaskRoute,

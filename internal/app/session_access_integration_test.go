@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -45,11 +47,11 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := sessions.NewStore(db.Pool())
-	seed := func(id, projectID string, confirmed bool) {
+	seedWithHost := func(id, projectID, hostID string, confirmed bool) {
 		t.Helper()
 		_, err := store.CreateIntent(ctx, sessions.CreationIntentInput{
 			SessionID: id, CommandID: "create-" + id, CreatorUserID: aliceIdentity.UserID,
-			HostID: registration.Host.ID, Path: protocol.SessionPathNew, ProjectID: projectID,
+			HostID: hostID, Path: protocol.SessionPathNew, ProjectID: projectID,
 			Parameters: []byte(`{"fixture":true}`),
 		})
 		if err != nil {
@@ -62,6 +64,9 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 			}
 		}
 	}
+	seed := func(id, projectID string, confirmed bool) {
+		seedWithHost(id, projectID, registration.Host.ID, confirmed)
+	}
 	read := func(client *http.Client, id string, headers map[string]string, status int) *http.Response {
 		t.Helper()
 		response := applicationRequest(t, client, http.MethodGet, baseURL+"/api/v1/sessions/"+id, nil, headers, status)
@@ -71,6 +76,36 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 		}
 		return response
 	}
+	list := func(client *http.Client, headers map[string]string, status int) protocol.SessionListResponse {
+		t.Helper()
+		response := applicationRequest(t, client, http.MethodGet, baseURL+"/api/v1/sessions?limit=50", nil, headers, status)
+		defer response.Body.Close()
+		if response.Header.Get("Cache-Control") != "no-store" {
+			t.Fatal("session list response can be cached")
+		}
+		var result protocol.SessionListResponse
+		if status == http.StatusOK {
+			decodeApplicationResponse(t, response, &result)
+		}
+		return result
+	}
+	listPage := func(client *http.Client, headers map[string]string, limit int, afterCursor string, status int) protocol.SessionListResponse {
+		t.Helper()
+		path := baseURL + "/api/v1/sessions?limit=" + strconv.Itoa(limit)
+		if afterCursor != "" {
+			path += "&after_cursor=" + url.QueryEscape(afterCursor)
+		}
+		response := applicationRequest(t, client, http.MethodGet, path, nil, headers, status)
+		defer response.Body.Close()
+		if response.Header.Get("Cache-Control") != "no-store" {
+			t.Fatal("session page response can be cached")
+		}
+		var result protocol.SessionListResponse
+		if status == http.StatusOK {
+			decodeApplicationResponse(t, response, &result)
+		}
+		return result
+	}
 	seed("private", "", true)
 	var private protocol.SessionResponse
 	decodeApplicationResponse(t, read(alice, "private", nil, http.StatusOK), &private)
@@ -78,6 +113,12 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 		t.Fatalf("wrong persisted session: %+v", private.Session)
 	}
 	read(bob, "private", nil, http.StatusNotFound).Body.Close()
+	if listed := list(alice, nil, http.StatusOK); len(listed.Items) != 1 || listed.Items[0].ID != "private" {
+		t.Fatalf("alice session list = %+v, want only private session", listed.Items)
+	}
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 0 {
+		t.Fatalf("bob session list exposed private session: %+v", listed.Items)
+	}
 	read(applicationBrowser(t), "private", nil, http.StatusUnauthorized).Body.Close()
 	seed("unknown", "", false)
 	var unknown protocol.ApiError
@@ -92,16 +133,62 @@ func TestServerSessionAccessWithPersistentIdentity(t *testing.T) {
 		} `json:"project"`
 	}
 	decodeApplicationResponse(t, applicationRequest(t, alice, http.MethodPost, baseURL+"/api/v1/projects", map[string]string{"name": "Session access"}, nil, http.StatusCreated), &project)
+	otherRegistration, err := hosts.NewService(db.Pool()).RegisterForUser(ctx, aliceIdentity.UserID, hosts.RegisterRequest{Name: "isolated second host", CredentialName: "second-test-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	seed("shared", project.Project.ID, true)
+	seed("visible-a", project.Project.ID, true)
+	seed("visible-b", project.Project.ID, true)
+	seedWithHost("hidden-newer", project.Project.ID, otherRegistration.Host.ID, true)
+	seedWithHost("hidden-older", project.Project.ID, otherRegistration.Host.ID, true)
+	for _, item := range []struct {
+		id        string
+		updatedAt string
+	}{
+		{id: "hidden-newer", updatedAt: "2099-01-04T00:00:00Z"},
+		{id: "visible-a", updatedAt: "2099-01-03T00:00:00Z"},
+		{id: "visible-b", updatedAt: "2099-01-03T00:00:00Z"},
+		{id: "shared", updatedAt: "2099-01-02T00:00:00Z"},
+		{id: "hidden-older", updatedAt: "2099-01-01T00:00:00Z"},
+	} {
+		if _, err := db.Pool().Exec(ctx, `UPDATE execution_sessions SET updated_at = $2::timestamptz WHERE id = $1`, item.id, item.updatedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 0 {
+		t.Fatalf("bob session list exposed unshared Host session: %+v", listed.Items)
+	}
 	memberURL := baseURL + "/api/v1/projects/" + project.Project.ID + "/members/" + bobIdentity.UserID
 	applicationRequest(t, alice, http.MethodPut, memberURL, map[string]string{"role": "viewer"}, nil, http.StatusOK).Body.Close()
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 0 {
+		t.Fatalf("bob session list exposed session before Host share: %+v", listed.Items)
+	}
 	hostShareURL := baseURL + "/api/v1/hosts/" + registration.Host.ID + "/shares/" + bobIdentity.UserID
 	applicationRequest(t, alice, http.MethodPut, hostShareURL, nil, nil, http.StatusOK).Body.Close()
 	read(bob, "shared", nil, http.StatusOK).Body.Close()
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 3 {
+		t.Fatalf("bob session list = %+v, want shared session", listed.Items)
+	}
+	pageOne := listPage(bob, nil, 1, "", http.StatusOK)
+	if len(pageOne.Items) != 1 || pageOne.Items[0].ID != "visible-b" || !pageOne.HasMore || pageOne.NextCursor == nil {
+		t.Fatalf("first paged session response = %+v, want visible-b with a next cursor", pageOne)
+	}
+	pageTwo := listPage(bob, nil, 1, *pageOne.NextCursor, http.StatusOK)
+	if len(pageTwo.Items) != 1 || pageTwo.Items[0].ID != "visible-a" || !pageTwo.HasMore || pageTwo.NextCursor == nil {
+		t.Fatalf("second paged session response = %+v, want visible-a with a next cursor", pageTwo)
+	}
+	pageThree := listPage(bob, nil, 1, *pageTwo.NextCursor, http.StatusOK)
+	if len(pageThree.Items) != 1 || pageThree.Items[0].ID != "shared" || pageThree.HasMore || pageThree.NextCursor != nil {
+		t.Fatalf("third paged session response = %+v, want shared as the final page", pageThree)
+	}
 	applicationRequest(t, alice, http.MethodDelete, memberURL, nil, nil, http.StatusNoContent).Body.Close()
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
+	if listed := list(bob, nil, http.StatusOK); len(listed.Items) != 0 {
+		t.Fatalf("bob session list retained revoked project session: %+v", listed.Items)
+	}
 	applicationRequest(t, alice, http.MethodDelete, hostShareURL, nil, nil, http.StatusNoContent).Body.Close()
 	read(bob, "shared", nil, http.StatusNotFound).Body.Close()
 	var credential struct {

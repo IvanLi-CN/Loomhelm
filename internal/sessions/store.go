@@ -101,6 +101,62 @@ func (s *Store) Get(ctx context.Context, sessionID string) (Session, error) {
 	return stored, err
 }
 
+func (s *Store) List(ctx context.Context, creatorUserID string, projectIDs, hostIDs []string, after Cursor, limit int) ([]Session, *Cursor, error) {
+	if err := s.ready(ctx); err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(creatorUserID) == "" {
+		return nil, nil, fmt.Errorf("%w: creator user id is required", ErrInvalidSession)
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	args := []any{creatorUserID, projectIDs, hostIDs}
+	query := sessionQuery + `
+		WHERE session.external_thread_ref IS NOT NULL
+		  AND session.generation IS NOT NULL
+		  AND session.creation_state = 'confirmed'
+		  AND session.host_id = ANY($3::text[])
+		  AND (session.creator_user_id = $1 OR session.project_id = ANY($2::text[]))`
+	if after.ID != "" {
+		args = append(args, after.UpdatedAt, after.ID)
+		query += fmt.Sprintf(" AND (session.updated_at, session.id) < ($%d, $%d)", len(args)-1, len(args))
+	}
+	args = append(args, limit+1)
+	query += fmt.Sprintf(" ORDER BY session.updated_at DESC, session.id DESC LIMIT $%d", len(args))
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+	items := make([]Session, 0, limit)
+	var next *Cursor
+	var last Cursor
+	for rows.Next() {
+		item, err := scanSession(rows)
+		if err != nil {
+			return nil, nil, fmt.Errorf("scan session list: %w", err)
+		}
+		updatedAt, err := time.Parse(time.RFC3339Nano, item.UpdatedAt)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse listed session timestamp: %w", err)
+		}
+		if len(items) == limit {
+			next = &last
+			break
+		}
+		items = append(items, item)
+		last = Cursor{UpdatedAt: updatedAt, ID: item.ID}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read session list: %w", err)
+	}
+	return items, next, nil
+}
+
 // CreationIntentAuthorizer runs inside the creation-intent transaction before
 // a new intent is inserted. It must perform only durable checks and mutations;
 // external side effects belong after the transaction commits.
@@ -260,16 +316,18 @@ func (s *Store) GetIntent(ctx context.Context, sessionID string) (CreationIntent
 	return record.Intent, nil
 }
 
-// GetIntentByCommand resolves the existing session-creation identity without
-// inventing a platform execution command row for a still-unconfirmed session.
-func (s *Store) GetIntentByCommand(ctx context.Context, commandID string) (CreationIntent, error) {
+// GetIntentByCreatorAndCommand resolves a caller-scoped session-creation
+// identity without inventing a platform execution command row for a
+// still-unconfirmed session.
+func (s *Store) GetIntentByCreatorAndCommand(ctx context.Context, creatorUserID, commandID string) (CreationIntent, error) {
 	if err := s.ready(ctx); err != nil {
 		return CreationIntent{}, err
 	}
-	if strings.TrimSpace(commandID) == "" {
-		return CreationIntent{}, fmt.Errorf("%w: command id is required", ErrInvalidSession)
+	creatorUserID, commandID = strings.TrimSpace(creatorUserID), strings.TrimSpace(commandID)
+	if creatorUserID == "" || commandID == "" {
+		return CreationIntent{}, fmt.Errorf("%w: creator user id and command id are required", ErrInvalidSession)
 	}
-	record, err := scanIntent(s.pool.QueryRow(ctx, intentQuery+` WHERE session.creation_command_id = $1`, commandID))
+	record, err := scanIntent(s.pool.QueryRow(ctx, intentQuery+` WHERE session.creator_user_id = $1 AND session.creation_command_id = $2`, creatorUserID, commandID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CreationIntent{}, ErrSessionNotFound
 	}
@@ -991,7 +1049,7 @@ const intentQuery = "SELECT session.id, session.external_thread_ref, session.pat
 	"FROM execution_sessions AS session " +
 	"LEFT JOIN tasks AS task ON task.session_id = session.id "
 
-func scanSession(row pgx.Row) (Session, error) {
+func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var session Session
 	var externalThreadRef, generation *string
 	var projectID, taskID *string

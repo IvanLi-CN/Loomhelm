@@ -46,7 +46,42 @@ export function buildSessionCreationIntentKey({
   projectId?: string;
   taskId?: string;
 }): string {
+  // The workbench and /conversations/new are two entry points for one durable creation intent.
+  void pathname;
+  return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(browserContext)}:${encodeURIComponent([conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
+}
+
+export function buildLegacySessionCreationIntentKey({
+  browserContext,
+  conversationTitle,
+  pathname,
+  principalId,
+  projectId,
+  taskId
+}: {
+  browserContext: string;
+  conversationTitle: string;
+  pathname: string;
+  principalId?: string;
+  projectId?: string;
+  taskId?: string;
+}): string {
   return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(browserContext)}:${encodeURIComponent([pathname, conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
+}
+
+export function getLegacySessionCreationIntentKeys(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string[] {
+  if (typeof window === "undefined") return [];
+  const browserContext = getBrowserContextId();
+  if (!browserContext) return [];
+  const pathnames = [...new Set([window.location.pathname, "/", "/conversations/new"])];
+  return pathnames.map((pathname) => buildLegacySessionCreationIntentKey({ browserContext, conversationTitle, pathname, principalId, projectId, taskId }));
+}
+
+export function hasSessionCreationIntentConflict(intents: readonly { attemptId?: string; commandId: string; fingerprint: string }[]): boolean {
+  if (intents.length < 2) return false;
+  const identity = `${intents[0].commandId}\u0000${intents[0].fingerprint}`;
+  const attemptId = intents[0].attemptId ?? intents[0].commandId;
+  return intents.some((intent) => `${intent.commandId}\u0000${intent.fingerprint}` !== identity || (intent.attemptId ?? intent.commandId) !== attemptId);
 }
 
 export function getSessionCreationIntentKey(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string | undefined {

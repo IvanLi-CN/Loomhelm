@@ -1,8 +1,8 @@
 # Example Compose deployment
 
-This directory provides a generic single-slot bootstrap Compose reference plus an env template for the existing candidate-bound blue-green controller. It contains no 101 hostnames, credentials, Traefik object names or identity-provider secrets; copy the relevant example env file to a private deployment-host file and supply those values there.
+This directory provides a generic single-slot bootstrap Compose reference plus an env template for the candidate-bound blue-green controller. It contains no hostnames, credentials, Traefik object names or identity-provider secrets; copy the relevant example env file to a private deployment-host file and supply those values there.
 
-The single-slot example builds a Web image containing Caddy and the production Web bundle, plus separate Server and Worker images from `build/Dockerfile`. PostgreSQL is the only stateful service in that Compose file. Connector is intentionally outside this platform stack because it owns Codex credentials and the local app-server process on the configured execution machine. The single-slot file is a bootstrap and smoke-test surface, not the 101 final deployment path; final service promotion uses `deploy/preview/compose.yaml` and `scripts/preview`.
+The single-slot example builds a Web image containing Caddy and the production Web bundle, plus separate Server and Worker images from `build/Dockerfile`. PostgreSQL is the only stateful service in that Compose file. Connector is intentionally outside this platform stack because it owns Codex credentials and the local app-server process on the configured execution machine. The single-slot file is only a bootstrap and smoke-test surface; the blue-green deployment path uses `deploy/preview/compose.yaml` or the installation template under `deploy/production/`.
 
 ## Components
 
@@ -47,7 +47,7 @@ The bootstrap file keeps `LOOMHELM_DATABASE_NETWORK_EXTERNAL=false`, so this Com
 
 Set `LOOMHELM_OIDC_ISSUER_URL`, `LOOMHELM_OIDC_CLIENT_ID` and `LOOMHELM_OIDC_REDIRECT_URL` together to enable browser login. If the issuer requires a confidential client, also set `LOOMHELM_OIDC_CLIENT_SECRET`; the application only passes these identity-provider values to Server. The redirect must be the public HTTPS origin followed by `/api/v1/auth/oidc/callback`, and `LOOMHELM_SESSION_COOKIE_SECURE` must remain `true` behind Traefik TLS. Leaving the OIDC values empty deliberately keeps login unavailable and does not enable anonymous access.
 
-For the 101 deployment card, the private values are the public host, the existing Traefik network name and middleware name, the OIDC client registration at the configured issuer, a database/drain secret set, the stable state volume names, the four preview port leases and the immutable Server/Worker/Web image references. The repository examples must remain parameterized; do not copy those private values back into Git.
+For a deployment card, record the public host, the existing Traefik network name and middleware name, the OIDC client registration at the configured issuer, a database/drain secret set, the stable state volume names, the four preview port leases and the immutable Server/Worker/Web image references. The repository examples must remain parameterized; do not copy private values back into Git.
 
 ## Persistence and backup
 
@@ -78,7 +78,7 @@ Startup applies pending Goose and River migrations under the application's cross
 
 ## Blue-green releases
 
-The 101 final path is `Traefik -> Caddy stable entry -> active Server/Worker slot`. The Caddy service is the only Compose service attached to the parameterized proxy network; its generated config points at `server-blue` or `server-green`, serves the active Web tree and retains compatible old Web trees. Server and Worker slots remain private on the Compose `preview` network and join the stable `database` network at `postgres:5432`; PostgreSQL and the artifact volume remain outside the retiring application slots.
+The blue-green path is `Traefik -> Caddy stable entry -> active Server/Worker slot`. The Caddy service is the only Compose service attached to the parameterized proxy network; its generated config points at `server-blue` or `server-green`, serves the active Web tree and retains compatible old Web trees. Server and Worker slots remain private on the Compose `preview` network and join the stable `database` network at `postgres:5432`; PostgreSQL and the artifact volume remain outside the retiring application slots.
 
 The existing `deploy/preview` Compose and `scripts/preview` controller are the executable blue-green path: they keep two immutable Server/Worker slots, retain compatible Web trees, gate promotion on candidate identity and readiness, drain the retiring slot and fence old Worker generations. `deploy/preview/compose.yaml` accepts the parameterized database network and Traefik network without creating or modifying Traefik; only Server/Worker slots join the database network, while only Caddy joins the proxy network. Use the exact candidate manifest and durable PostgreSQL/artifact state for that path; do not turn the single-slot file into a second blue-green implementation.
 
@@ -103,7 +103,7 @@ Worker fencing is database-backed: each promotion admits a higher Worker generat
 
 ## Deployment card
 
-Fill this card from the private deployment environment and the immutable candidate manifest before starting or promoting the 101 stack:
+Fill this card from the private deployment environment and the immutable candidate manifest before starting or promoting the stack:
 
 - [ ] Candidate source SHA, artifact digest, state compatibility range and release handoff digest recorded.
 - [ ] Caddy image reference and digest recorded for the stable entry.

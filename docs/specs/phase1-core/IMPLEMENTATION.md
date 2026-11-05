@@ -4,7 +4,7 @@
 
 The repository contains the Go lifecycle/persistence foundations, versioned public protocol/codegen, branch-preview blue-green runtime, Bun/React/PWA foundation, the approved product UI framework and login-free Demo, and the P01 identity/project/task services. Server and Worker require PostgreSQL and apply application and River migrations before completing startup. Server mounts the identity and business handlers under `/api/v1`, discovers a configured OIDC issuer before becoming ready, and applies cookie-session and standard-library same-origin protection to application requests. An unconfigured issuer disables browser login without permitting anonymous business access. Connector remains database-independent. Server still requires its drain token and checks persistence for readiness independently of liveness; Worker readiness remains tied to its durable generation lease and queue runner. The E01 approval-history read slice is implemented in the shared contract, durable store and authenticated Run-control HTTP boundary, while full real-platform acceptance and MCP transport remain separate gates.
 
-The deployment-control slice adds migration 00021 after the Connector migrations 00018 through 00020, immutable schema 2 deployment envelopes, the stable `deployment-controller`, installation roles, durable operations and audit events, authenticated REST operations and read-only MCP queries, plus the approved installation Deployment page. The implementation and branch-preview scope are documented in [Deployment Control](../../deployment.md) and [ADR 0014](../../adr/0014-deployment-control-plane-and-blue-green.md); 101 migration and production switching remain owner-authorized follow-up gates.
+The deployment-control slice adds migration 00021 after the Connector migrations 00018 through 00020, immutable schema 2 deployment envelopes, the stable `deployment-controller`, installation roles, durable operations and audit events, authenticated REST operations and read-only MCP queries, plus the approved installation Deployment page. The implementation and branch-preview scope are documented in [Deployment Control](../../deployment.md) and [ADR 0014](../../adr/0014-deployment-control-plane-and-blue-green.md); production switching remains an owner-authorized follow-up gate.
 
 The Codex source synchronization slice adds migrations 00022 and 00023, a Host-scoped app-server adapter, durable source/project/thread snapshots and source-event acknowledgements, complete history and supported-file retention, binding and title-write state, generated REST/MCP operations and the Chinese-first Codex conversation workspace. The real Host-local smoke records the installed `codex-cli 0.166.0` build and capability negotiation; focused tests cover replay, permissions, title conflict/retry and legacy null-Host compatibility, while PostgreSQL/Compose integration remains an Agent VM gate.
 
@@ -180,6 +180,14 @@ The U03 candidate uses the login-free, mock-only `ui_demo` route `/demo/producti
 ![U03 production conversation on the desktop viewport](assets/u03-production-session-page-desktop-1440x1000.png)
 
 ![U03 production conversation on a 393x852 mobile viewport](assets/u03-production-session-page-mobile-393x852.png)
+
+### U05 authorized conversation index
+
+The U05 candidate uses the login-free, mock-only `ui_demo` route `/demo/production-conversations`; the page reads the same typed Session-list contract as the authenticated production route, retains project and task context, and provides refresh, search and new-session entry points. The owner-confirmed desktop `1440x1000` and narrow `393x852` captures show the page without horizontal overflow; these images establish the navigation and presentation evidence only and do not by themselves establish authenticated backend behavior, persistence or production deployment.
+
+![U05 authorized conversation index on the desktop viewport](assets/u05-production-sessions-page-desktop-1440x1000.png)
+
+![U05 authorized conversation index on a 393x852 mobile viewport](assets/u05-production-sessions-page-mobile-393x852.png)
 
 ## Rollout and Compatibility
 
