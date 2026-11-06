@@ -96,6 +96,59 @@ func (s *Service) CanReadProject(ctx context.Context, principal auth.Principal, 
 	return s.hasRole(ctx, principal.UserID, projectID, RoleViewer, RoleOperator, RoleOwner)
 }
 
+// CanReadProjects evaluates the requested project memberships in one query.
+// Project scope is checked before the query so a credential cannot authorize a
+// project outside its declared scope. The result is request-scoped; callers do
+// not retain authorization state across requests.
+func (s *Service) CanReadProjects(ctx context.Context, principal auth.Principal, projectIDs []string) (map[string]bool, error) {
+	allowed := make(map[string]bool, len(projectIDs))
+	if len(projectIDs) == 0 || s == nil || s.pool == nil || principal.UserID == "" {
+		return allowed, nil
+	}
+
+	candidates := make([]string, 0, len(projectIDs))
+	seen := make(map[string]struct{}, len(projectIDs))
+	for _, projectID := range projectIDs {
+		if _, ok := allowed[projectID]; !ok {
+			allowed[projectID] = false
+		}
+		if !principal.HasProjectScope(projectID) {
+			continue
+		}
+		if _, ok := seen[projectID]; ok {
+			continue
+		}
+		seen[projectID] = struct{}{}
+		candidates = append(candidates, projectID)
+	}
+	if len(candidates) == 0 {
+		return allowed, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id
+		FROM project_members
+		WHERE user_id = $1
+		  AND project_id = ANY($2::text[])
+		  AND role = ANY($3::text[])
+	`, principal.UserID, candidates, []string{string(RoleViewer), string(RoleOperator), string(RoleOwner)})
+	if err != nil {
+		return nil, fmt.Errorf("read project read memberships: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var projectID string
+		if err := rows.Scan(&projectID); err != nil {
+			return nil, fmt.Errorf("scan project read membership: %w", err)
+		}
+		allowed[projectID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read project read memberships: %w", err)
+	}
+	return allowed, nil
+}
+
 func (s *Service) CanWriteProject(ctx context.Context, principal auth.Principal, projectID string) (bool, error) {
 	if s == nil || s.pool == nil || principal.UserID == "" || !principal.HasProjectScope(projectID) {
 		return false, nil

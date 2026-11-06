@@ -184,6 +184,34 @@ func (s *Service) authorizedPair(ctx context.Context, principal auth.Principal, 
 	return nil
 }
 
+type projectReadBatchAuthorizer interface {
+	CanReadProjects(context.Context, auth.Principal, []string) (map[string]bool, error)
+}
+
+func (s *Service) authorizedProjects(ctx context.Context, principal auth.Principal, projectIDs []string) (map[string]bool, error) {
+	if batch, ok := s.authorize.(projectReadBatchAuthorizer); ok {
+		return batch.CanReadProjects(ctx, principal, projectIDs)
+	}
+
+	allowed := make(map[string]bool, len(projectIDs))
+	for _, projectID := range projectIDs {
+		if _, checked := allowed[projectID]; checked {
+			continue
+		}
+		projectAllowed, err := s.authorize.CanReadProject(ctx, principal, projectID)
+		if err != nil {
+			return nil, err
+		}
+		allowed[projectID] = projectAllowed
+	}
+	return allowed, nil
+}
+
+type relationshipWithProject struct {
+	relationship     Relationship
+	relatedProjectID string
+}
+
 func (s *Service) Relationships(ctx context.Context, principal auth.Principal, taskID string) (RelationshipPage, error) {
 	if s == nil || s.pool == nil || s.authorize == nil {
 		return RelationshipPage{}, fmt.Errorf("relationship service dependencies are not configured")
@@ -192,11 +220,11 @@ func (s *Service) Relationships(ctx context.Context, principal auth.Principal, t
 	if err != nil {
 		return RelationshipPage{}, err
 	}
-	allowed, err := s.authorize.CanReadProject(ctx, principal, task.ProjectID)
+	readableProjects, err := s.authorizedProjects(ctx, principal, []string{task.ProjectID})
 	if err != nil {
 		return RelationshipPage{}, fmt.Errorf("authorize relationship read: %w", err)
 	}
-	if !allowed {
+	if !readableProjects[task.ProjectID] {
 		return RelationshipPage{}, auth.ErrNotFound
 	}
 	page := RelationshipPage{
@@ -205,6 +233,7 @@ func (s *Service) Relationships(ctx context.Context, principal auth.Principal, t
 		Prerequisites: make([]Relationship, 0),
 		Dependents:    make([]Relationship, 0),
 	}
+	parentRelationships := make([]relationshipWithProject, 0)
 	rows, err := s.pool.Query(ctx, `
 		SELECT links.parent_task_id, links.child_task_id, links.created_at,
 		       CASE WHEN links.parent_task_id = $1 THEN child.project_id ELSE parent.project_id END
@@ -225,26 +254,18 @@ func (s *Service) Relationships(ctx context.Context, principal auth.Principal, t
 			rows.Close()
 			return RelationshipPage{}, fmt.Errorf("scan parent relationship: %w", err)
 		}
-		related, err := s.authorize.CanReadProject(ctx, principal, relatedProjectID)
-		if err != nil {
-			rows.Close()
-			return RelationshipPage{}, fmt.Errorf("authorize related parent task: %w", err)
-		}
-		if !related {
-			continue
-		}
 		relationship.CreatedAt = formatTime(createdAt)
 		relationship.Kind = "parent_child"
-		if relationship.ParentTaskID == taskID {
-			page.Children = append(page.Children, relationship)
-		} else {
-			page.Parents = append(page.Parents, relationship)
-		}
+		parentRelationships = append(parentRelationships, relationshipWithProject{
+			relationship:     relationship,
+			relatedProjectID: relatedProjectID,
+		})
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return RelationshipPage{}, fmt.Errorf("read parent relationships: %w", err)
 	}
+	dependencyRelationships := make([]relationshipWithProject, 0)
 	rows, err = s.pool.Query(ctx, `
 		SELECT links.prerequisite_task_id, links.dependent_task_id, links.created_at,
 		       CASE WHEN links.prerequisite_task_id = $1 THEN dependent.project_id ELSE prerequisite.project_id END
@@ -265,25 +286,58 @@ func (s *Service) Relationships(ctx context.Context, principal auth.Principal, t
 			rows.Close()
 			return RelationshipPage{}, fmt.Errorf("scan dependency relationship: %w", err)
 		}
-		related, err := s.authorize.CanReadProject(ctx, principal, relatedProjectID)
-		if err != nil {
-			rows.Close()
-			return RelationshipPage{}, fmt.Errorf("authorize related dependency task: %w", err)
-		}
-		if !related {
-			continue
-		}
 		relationship.CreatedAt = formatTime(createdAt)
 		relationship.Kind = "prerequisite"
-		if relationship.PrerequisiteID == taskID {
-			page.Dependents = append(page.Dependents, relationship)
-		} else {
-			page.Prerequisites = append(page.Prerequisites, relationship)
-		}
+		dependencyRelationships = append(dependencyRelationships, relationshipWithProject{
+			relationship:     relationship,
+			relatedProjectID: relatedProjectID,
+		})
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return RelationshipPage{}, fmt.Errorf("read dependency relationships: %w", err)
+	}
+
+	relatedProjectIDs := make([]string, 0, len(parentRelationships)+len(dependencyRelationships))
+	seenRelatedProjects := make(map[string]struct{}, len(parentRelationships)+len(dependencyRelationships))
+	for _, item := range append(parentRelationships, dependencyRelationships...) {
+		if item.relatedProjectID == task.ProjectID {
+			continue
+		}
+		if _, ok := seenRelatedProjects[item.relatedProjectID]; ok {
+			continue
+		}
+		seenRelatedProjects[item.relatedProjectID] = struct{}{}
+		relatedProjectIDs = append(relatedProjectIDs, item.relatedProjectID)
+	}
+	if len(relatedProjectIDs) > 0 {
+		relatedReadableProjects, err := s.authorizedProjects(ctx, principal, relatedProjectIDs)
+		if err != nil {
+			return RelationshipPage{}, fmt.Errorf("authorize related relationship tasks: %w", err)
+		}
+		for projectID, allowed := range relatedReadableProjects {
+			readableProjects[projectID] = allowed
+		}
+	}
+	for _, item := range parentRelationships {
+		if !readableProjects[item.relatedProjectID] {
+			continue
+		}
+		if item.relationship.ParentTaskID == taskID {
+			page.Children = append(page.Children, item.relationship)
+		} else {
+			page.Parents = append(page.Parents, item.relationship)
+		}
+	}
+	for _, item := range dependencyRelationships {
+		if !readableProjects[item.relatedProjectID] {
+			continue
+		}
+		if item.relationship.PrerequisiteID == taskID {
+			page.Dependents = append(page.Dependents, item.relationship)
+		} else {
+			page.Prerequisites = append(page.Prerequisites, item.relationship)
+		}
 	}
 	return page, nil
 }
