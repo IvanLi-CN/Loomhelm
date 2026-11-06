@@ -2863,7 +2863,7 @@
       "path": "bin/tests/plan/launcher.test.ts",
       "sourceBlob": "26b23a01e5de2322ea44db2b1d05ddde718b3752",
       "sourceSha256": "5f5bd5f18ad0160a80c9d8e9c9dce8e52d18fff507da2593d08933aab3fd5522",
-      "installedSha256": "110d008ce35efb94167d0fd4ab7173934c398485c5aaec0cc00fbbffe9678b71",
+      "installedSha256": "a94ee41e64df8a794eaddedad31857c1f1c01aac1889e843984b3af65d4c97cf",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -2871,7 +2871,7 @@
       "path": "bin/tests/plan/launcher_race.test.ts",
       "sourceBlob": "07c8ec67b8543b6128d6ac77824665dc68ceffe2",
       "sourceSha256": "9bcc371b5f8e3fc29ad5479b3e22ca7a7e59e5e53a7dcb791a4a77202a56a71e",
-      "installedSha256": "e4151c1a2e2dc8e06de6e6a13e8635e151eddff01b5694ddd597fc1f0019f24f",
+      "installedSha256": "31a5445403e075b4b75ca980722c151651fdd91a972e98673553ab07c7d50c24",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14551,7 +14551,7 @@
       "path": "skills/multi-task-flow/scripts/codex-agent-api.ts",
       "sourceBlob": "9da71593a7cb28f66f3f360fb0b0ef315d0dd741",
       "sourceSha256": "075920b9d61a0125830c8fc6383037b153a62f579b76d210486b464e9d3dd4ee",
-      "installedSha256": "6e79c7cf141f1b60b5efd8fd8bd3458cdb31dba71711059a4b40232983b02784",
+      "installedSha256": "31799e0a63af3930be74d90ab33484c608fa422d10d747fabffdf1a58c268a8d",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {

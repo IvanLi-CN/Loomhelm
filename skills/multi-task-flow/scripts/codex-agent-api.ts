@@ -1,12 +1,15 @@
 import type { ProfileCapabilities } from "./execution-profile";
 import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
+import { websocketFrame as controlFrame } from "./codex-socket";
 import {
   record,
   socketPath,
   connectSocket,
   rpc,
   startTurnAndWait,
+  framePayload,
+  parseRpc,
 } from "./codex-rpc";
 export type CodexDeliveryOutcome = "sent" | "failed" | "unknown";
 export type CodexDeliveryResult = {
@@ -44,6 +47,7 @@ export async function sendCodexMessage(input: {
       error: "Codex app-server control socket is unavailable",
     };
   let socket: Socket | undefined;
+  let retained = false;
   try {
     const connected = await connectSocket(path);
     socket = connected.socket;
@@ -69,14 +73,11 @@ export async function sendCodexMessage(input: {
     });
     if (resumed.error)
       throw new Error(String(record(resumed.error)?.message ?? "Codex app-server rejected thread/resume"));
-    // Keep the connection until the receiving turn persists its terminal event.
-    // Closing the last subscriber immediately after acceptance unloads the
-    // thread and can interrupt the very notification we just delivered.
-    const started = await startTurnAndWait(socket, buffer, {
+    const started = await rpc(socket, buffer, 3, "turn/start", {
       threadId: input.recipient_thread_id,
       input: [{ type: "text", text: input.prompt }],
       clientUserMessageId: callId,
-    }, input.recipient_thread_id);
+    });
     if (started.error)
       throw new Error(
         String(
@@ -85,6 +86,13 @@ export async function sendCodexMessage(input: {
         ),
       );
     const turn = record(record(started.result)?.turn);
+    if (typeof turn?.id !== "string") throw new Error("Codex app-server omitted accepted turn identity");
+    // Publish acceptance promptly so the recipient can acknowledge the ledger
+    // notification during its turn. Keep this host-owned process subscribed
+    // until the exact turn terminates: disconnecting on acceptance interrupts
+    // receivers that have no other subscriber. No detached process is created.
+    retained = true;
+    retainAcceptedTurn(socket, buffer, input.recipient_thread_id, turn.id);
     return {
       outcome: "sent",
       provider_receipt: {
@@ -104,8 +112,31 @@ export async function sendCodexMessage(input: {
       error: message.slice(0, 500),
     };
   } finally {
-    socket?.destroy();
+    if (!retained) socket?.destroy();
   }
+}
+
+function retainAcceptedTurn(socket: Socket, buffer: { value: Buffer }, threadId: string, turnId: string): void {
+  const close = () => { socket.off("data", consume); socket.off("error", close); socket.off("close", close); socket.destroy(); };
+  const consume = (chunk: Buffer) => {
+    try {
+      buffer.value = Buffer.concat([buffer.value, chunk]);
+      while (true) {
+        const frame = framePayload(buffer.value);
+        if (!frame) return;
+        buffer.value = buffer.value.subarray(frame.consumed);
+        if (frame.opcode === 8) { close(); return; }
+        if (frame.opcode === 9) { socket.write(controlFrame(frame.payload, 10)); continue; }
+        const message = parseRpc(frame.payload);
+        const params = record(message?.params);
+        if (message?.method === "turn/completed" && params?.threadId === threadId && record(params.turn)?.id === turnId) { close(); return; }
+      }
+    } catch { close(); }
+  };
+  socket.on("data", consume);
+  socket.once("error", close);
+  socket.once("close", close);
+  consume(Buffer.alloc(0));
 }
 
 export async function createCodexThread(input: {

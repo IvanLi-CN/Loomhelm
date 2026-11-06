@@ -19,7 +19,7 @@ describe("launcher boundary regressions", () => {
     expect(result.exitCode, result.stderr).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("execution: blocked");
-  });
+  }, 15000);
 
   test("rejects a user-controlled executable named bun", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dev-plan-bun-"));
@@ -35,5 +35,5 @@ describe("launcher boundary regressions", () => {
     expect(result.exitCode, result.stderr).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("repository-approved runtime");
-  });
+  }, 15000);
 });

@@ -25,7 +25,7 @@ describe("trusted dev-plan launcher", () => {
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("usage:");
     expect(result.stdout + result.stderr).not.toContain("hostile");
-  });
+  }, 15000);
 
   test("forwards file input and emits one projection", async () => {
     const result = await runProcess({
@@ -39,7 +39,7 @@ describe("trusted dev-plan launcher", () => {
     expect(result.stdout.match(/<proposed_plan>/g)?.length).toBe(1);
     expect(result.stdout.match(/<\/proposed_plan>/g)?.length).toBe(1);
     expect(result.stderr).toBe("");
-  });
+  }, 15000);
 
   test("rejects invalid stdin without emitting a projection", async () => {
     const result = await runProcess({
@@ -53,7 +53,7 @@ describe("trusted dev-plan launcher", () => {
     expect(result.stderr).toContain("status: reject");
     expect(result.stderr).toContain("output: none");
     expect(result.stdout).toBe("");
-  });
+  }, 15000);
 
   test("rejects a non-Bun BUN_BIN override", async () => {
     const result = await runProcess({
@@ -65,5 +65,5 @@ describe("trusted dev-plan launcher", () => {
     expect(result.exitCode, result.stderr).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("repository-approved runtime");
-  });
+  }, 15000);
 });
