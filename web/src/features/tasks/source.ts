@@ -1,4 +1,4 @@
-import { createContext, createElement, useContext, useEffect, useState, type PropsWithChildren } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type PropsWithChildren } from "react";
 
 import { useOptionalProductionApi } from "@/app/providers";
 import { useOptionalDemoRuntime } from "@/demo/context";
@@ -41,11 +41,22 @@ function useUnsharedProjectTaskSource(allowFallback: boolean): ProjectTaskSource
   const workspaceKey = assembly?.auth.workspaceId ?? "default";
   const storageKey = `loomhelm.task-views.v1.${workspaceKey}.${principalKey}`;
   const [taskViews, setTaskViews] = useState<Record<string, TaskView>>(() => readTaskViews(storageKey));
+  const taskViewsRef = useRef(taskViews);
   const authenticated = assembly?.auth.status === "authenticated";
 
   useEffect(() => {
     if (!allowFallback) return;
-    setTaskViews(readTaskViews(storageKey));
+    const next = readTaskViews(storageKey);
+    taskViewsRef.current = next;
+    setTaskViews(next);
+  }, [allowFallback, storageKey]);
+
+  const setTaskView = useCallback((scope: string, view: TaskView) => {
+    if (!allowFallback) return;
+    const next = { ...taskViewsRef.current, [scope]: view };
+    taskViewsRef.current = next;
+    writeTaskViews(storageKey, next);
+    setTaskViews(next);
   }, [allowFallback, storageKey]);
 
   const productionSource = usePublishedProjectTaskSource({
@@ -55,13 +66,7 @@ function useUnsharedProjectTaskSource(allowFallback: boolean): ProjectTaskSource
     principalId: assembly?.auth.principalId,
     sessionGeneration: assembly?.auth.sessionGeneration,
     taskViews,
-    setTaskView: (scope, view) => {
-      setTaskViews((current) => {
-        const next = { ...current, [scope]: view };
-        writeTaskViews(storageKey, next);
-        return next;
-      });
-    }
+    setTaskView
   });
 
   if (!allowFallback) return null;

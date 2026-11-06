@@ -1279,11 +1279,14 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     retry: false
   });
   const membershipsDataAvailable = queryHasUsableData(membershipsQuery);
-  const deniedProjectIds = membershipsDataAvailable ? membershipsQuery.data?.deniedProjectIds ?? [] : [];
-  const deniedTaskIds = [...new Set([
+  const deniedProjectIds = useMemo(
+    () => membershipsDataAvailable ? membershipsQuery.data?.deniedProjectIds ?? [] : [],
+    [membershipsDataAvailable, membershipsQuery.data]
+  );
+  const deniedTaskIds = useMemo(() => [...new Set([
     ...taskData.deniedTaskIds,
     ...(relationshipsQuery.data?.deniedTaskIds ?? [])
-  ])];
+  ])], [relationshipsQuery.data?.deniedTaskIds, taskData.deniedTaskIds]);
   const deniedProjectKey = deniedProjectIds.join("\u0000");
   const deniedTaskKey = deniedTaskIds.join("\u0000");
   const lastDeniedProjectKey = useRef("");
@@ -1602,15 +1605,16 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       }) : [];
   }, [deniedProjectIds, projectsDataAvailable, projectsQuery.data, reconciliationNoticeByProjectId]);
   const visibleProjectIds = useMemo(() => new Set(projects.map((project) => project.id)), [projects]);
-  const effectiveTaskData = taskReadScope.mode === "graph"
+  const effectiveTaskData = useMemo(() => taskReadScope.mode === "graph"
     ? relationshipsQuery.data ?? (tasksDataAvailable ? taskData : undefined)
-    : tasksDataAvailable ? taskData : undefined;
+    : tasksDataAvailable ? taskData : undefined, [relationshipsQuery.data, taskData, taskReadScope.mode, tasksDataAvailable]);
   const visibleTaskItems = useMemo(() => {
     if (!effectiveTaskData) return [];
     const denied = new Set(deniedTaskIds);
     const visible = filterTasksToVisibleProjects(effectiveTaskData.items, visibleProjectIds, denied);
+    const visibleIds = new Set(visible.map((task) => task.id));
     const externalIds = new Set(effectiveTaskData.externalTaskIds ?? []);
-    return [...visible, ...effectiveTaskData.items.filter((task) => externalIds.has(task.id) && !denied.has(task.id) && !visible.some((item) => item.id === task.id))];
+    return [...visible, ...effectiveTaskData.items.filter((task) => externalIds.has(task.id) && !denied.has(task.id) && !visibleIds.has(task.id))];
   }, [deniedTaskIds, effectiveTaskData, visibleProjectIds]);
   const visibleTaskIds = useMemo(() => new Set(visibleTaskItems.map((task) => task.id)), [visibleTaskItems]);
   const relationshipsByTaskId = useMemo(() => {

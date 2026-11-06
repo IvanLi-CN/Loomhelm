@@ -263,7 +263,7 @@ function TaskExplorerContent({ scope = "global", projectId, source, renderTaskLi
     if (!source || !isProductionSource(source)) return;
     source.setTaskReadScope({ projectId, mode: view === "graph" ? "graph" : "list" });
   }, [projectId, source, view]);
-  const sourceTasks = source?.getTasksForScope(projectId) ?? [];
+  const sourceTasks = useMemo(() => source?.getTasksForScope(projectId) ?? [], [projectId, source]);
   const tasks = useMemo(() => sourceTasks.filter((task) => { const matchesSearch = !search || `${task.id} ${task.title} ${task.goal}`.toLowerCase().includes(search.toLowerCase()); return matchesSearch && (filter === "all" || task.state === filter); }), [filter, search, sourceTasks]);
 
   if (!source) return <div className="error-state"><span className="empty-icon empty-icon-danger" aria-hidden="true">!</span><h2>任务暂不可用</h2><p>当前无法读取任务，请稍后再试。</p></div>;
