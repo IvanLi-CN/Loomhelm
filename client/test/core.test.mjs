@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Ledger, StateLock, runProcess, GitAdapter, loadConfig } from '../dist/index.js';
+import { Ledger, StateLock, runProcess, GitAdapter, loadConfig, LocalClient } from '../dist/index.js';
 
 async function temporary(fn) { const dir = await mkdtemp(join(tmpdir(), 'loomhelm-')); try { await fn(dir); } finally { await rm(dir, { recursive: true, force: true }); } }
 const task = (id, dependencies = []) => ({ type: 'task.create', task: { id, goal: 'Implement core', scope: 'Client only', acceptance: 'Tests pass', dependencies } });
@@ -63,9 +63,34 @@ test('config is explicit, versioned and resolves relative state paths', () => te
   const path = join(dir, 'config.json');
   await writeFile(path, JSON.stringify({ schemaVersion: 1, stateDir: 'state' }));
   assert.equal((await loadConfig(path)).stateDir, join(dir, 'state'));
-  for (const value of [{ schemaVersion: 2 }, { mode: 'connected' }, { processTimeoutMs: 0 }, { secret: 'bad' }, null]) {
+  assert.equal((await loadConfig(path)).maxOutputBytes, 1024 * 1024);
+  for (const value of [{ schemaVersion: 2 }, { mode: 'connected' }, { processTimeoutMs: 0 }, { maxOutputBytes: 0 }, { maxOutputBytes: 64 * 1024 * 1024 + 1 }, { secret: 'bad' }, null]) {
     await writeFile(path, JSON.stringify(value)); await assert.rejects(loadConfig(path));
   }
+}));
+
+test('LocalClient owns task process lifecycle and stops active work on close', () => temporary(async dir => {
+  const config = join(dir, 'config.json'); await writeFile(config, JSON.stringify({ stateDir: 'state', processTimeoutMs: 5000 }));
+  const client = await LocalClient.open(config);
+  await client.ledger.execute('create', task('runtime'));
+  const pending = client.runTask('runtime-op', 'runtime', [process.execPath, '-e', 'setInterval(()=>{},1000)']);
+  await client.close();
+  const receipt = await pending;
+  assert.equal(receipt.operation.type, 'run.finish');
+  assert.equal(receipt.operation.status, 'interrupted');
+}));
+
+test('LocalClient replays a completed operation without rerunning the process', () => temporary(async dir => {
+  const config = join(dir, 'config.json'); await writeFile(config, JSON.stringify({ stateDir: 'state' }));
+  const client = await LocalClient.open(config);
+  try {
+    await client.ledger.execute('create', task('runtime'));
+    const command = [process.execPath, '-e', 'process.stdout.write("ok")'];
+    const first = await client.runTask('runtime-op', 'runtime', command);
+    const second = await client.runTask('runtime-op', 'runtime', command);
+    assert.deepEqual(second, first);
+    assert.equal(client.ledger.history().filter(receipt => receipt.operation.type === 'run.finish').length, 1);
+  } finally { await client.close(); }
 }));
 
 test('process timeout, cancellation, output bounds, spawn error and nonzero result', async () => {

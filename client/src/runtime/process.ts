@@ -6,17 +6,25 @@ export interface ProcessOptions { cwd?: string; timeoutMs?: number; maxOutputByt
 export function runProcess(command: string, args: readonly string[], options: ProcessOptions = {}): Promise<ProcessResult> {
   const timeout = options.timeoutMs ?? 30_000;
   const limit = options.maxOutputBytes ?? 1024 * 1024;
+  if (typeof command !== 'string' || !command.trim() || !Array.isArray(args) || args.some(arg => typeof arg !== 'string')) return Promise.reject(new Error('Invalid process command'));
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 2_147_483_647 || !Number.isSafeInteger(limit) || limit < 1) return Promise.reject(new Error('Invalid process limits'));
   if (options.signal?.aborted) return Promise.reject(new Error('Process aborted'));
   return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], { cwd: options.cwd, env: options.env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, [...args], { cwd: options.cwd, env: options.env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      reject(error);
+      return;
+    }
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
     let bytes = 0, failure: Error | undefined, escalation: ReturnType<typeof setTimeout> | undefined;
     const stop = (reason: Error) => {
       if (failure) return;
       failure = reason;
       child.kill('SIGTERM');
-      child.stdout.destroy(); child.stderr.destroy();
+      // Keep the streams alive until close so callers get a deterministic
+      // completion point even when a child exits while it is being stopped.
       escalation = setTimeout(() => child.kill('SIGKILL'), 250);
     };
     const collect = (chunks: Buffer[]) => (chunk: Buffer) => {
@@ -24,7 +32,7 @@ export function runProcess(command: string, args: readonly string[], options: Pr
       if (bytes > limit) stop(new Error('Process output limit exceeded'));
       else chunks.push(chunk);
     };
-    child.stdout.on('data', collect(stdout)); child.stderr.on('data', collect(stderr));
+    child.stdout!.on('data', collect(stdout)); child.stderr!.on('data', collect(stderr));
     const abort = () => stop(new Error('Process aborted'));
     options.signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => stop(new Error('Process timed out')), timeout);
