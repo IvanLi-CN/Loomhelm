@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 import { apply } from "../scripts/engine";
 import { LedgerStore } from "../scripts/store";
-import { deliverClaimedNotification } from "../scripts/notification-delivery";
+import { deliverClaimedNotification, reconcileNotification } from "../scripts/notification-delivery";
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-delivery-")));
@@ -75,6 +75,9 @@ test("SIGKILL after the provider boundary preserves the claim across restart", a
     let calls = 0;
     await deliverClaimedNotification(recovered, f.parsed, f.id, "Notice", async () => { calls++; return sent; });
     expect(calls).toBe(0);
+    reconcileNotification(recovered, { ...f.parsed, request_id: "post-crash-query", expected_revision: recovered.read().revision, payload: { notification_id: f.id, reconciliation_id: "post-crash-query", outcome: "failed", provider_receipt: { provider: "test-provider", evidence_ref: "test-query:no-delivery" } } });
+    await deliverClaimedNotification(recovered, { ...f.parsed, request_id: "post-crash-retry", expected_revision: recovered.read().revision }, f.id, "Notice", async () => { calls++; return sent; });
+    expect(calls).toBe(1);
   } finally { f.cleanup(); }
 });
 
@@ -92,24 +95,56 @@ test("definite pre-delivery failure permits a new attempt without schema convers
   try {
     await deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => ({ outcome: "failed", provider_receipt: { provider: "codex-app-server", evidence_ref: "test-provider:unavailable" }, error: "No connection" }));
     expect(f.store.read().notifications[0].delivery_status).toBe("failed");
-    await deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => sent);
+    await deliverClaimedNotification(f.store, { ...f.parsed, request_id: "retry-notice", expected_revision: f.store.read().revision }, f.id, "Notice", async () => sent);
     const ledger = f.store.read();
     expect(ledger.notifications[0].attempts).toBe(2);
     expect(ledger.schema_version).toBe(2); expect(ledger.contract_version).toBe(2);
   } finally { f.cleanup(); }
 });
 
-test("a late receipt cannot overwrite explicit reconciliation or a newer attempt", async () => {
+test("active sender excludes reconciliation and a second provider call", async () => {
   const f = fixture();
   try {
-    let resolveSend!: (value: typeof sent) => void;
-    const first = deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => new Promise(resolve => { resolveSend = resolve; }));
-    // The original contract permits an explicit, evidence-bearing resolution.
-    f.store.update(raw => apply(raw, "notification-reconcile", { ...f.parsed, request_id: "explicit-resolution", expected_revision: raw.revision, payload: { notification_id: f.id, reconciliation_id: "explicit-resolution", outcome: "failed", provider_receipt: { provider: "test-provider", evidence_ref: "test-query:no-delivery" } } }));
-    await deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => sent);
-    const before = JSON.stringify(f.store.read());
-    resolveSend(sent);
-    await expect(first).rejects.toThrow("cannot overwrite");
-    expect(JSON.stringify(f.store.read())).toBe(before);
+    let resolveSend!: (value: typeof sent) => void, calls = 0;
+    const first = deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => { calls++; return new Promise(resolve => { resolveSend = resolve; }); });
+    const reconciliation = { ...f.parsed, request_id: "explicit-resolution", expected_revision: f.store.read().revision, payload: { notification_id: f.id, reconciliation_id: "explicit-resolution", outcome: "failed", provider_receipt: { provider: "test-provider", evidence_ref: "test-query:no-delivery" } } };
+    expect(() => reconcileNotification(new LedgerStore(f.root, f.parsed.run_id), reconciliation)).toThrow("active sender");
+    await expect(deliverClaimedNotification(f.store, { ...f.parsed, request_id: "second-send", expected_revision: f.store.read().revision }, f.id, "Notice", async () => { calls++; return sent; })).rejects.toThrow("active sender");
+    // The public command must use the same guard, including across processes.
+    const child = Bun.spawn([process.execPath, resolve(import.meta.dir, "../scripts/orchestrate.ts"), "notification-reconcile", "--input", "-"], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: f.root } });
+    child.stdin.write(JSON.stringify(reconciliation)); child.stdin.end();
+    const output = await new Response(child.stdout).text();
+    expect(await child.exited).not.toBe(0); expect(output).toContain("NOTIFICATION_IN_FLIGHT");
+    resolveSend(sent); await first;
+    expect(calls).toBe(1); expect(f.store.read().notifications[0].attempts).toBe(1);
+  } finally { f.cleanup(); }
+});
+
+test("failed request replays its immutable result with original or fresh revision after a later successful retry", async () => {
+  const f = fixture();
+  try {
+    let calls = 0;
+    const failure = await deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => { calls++; return { outcome: "failed", provider_receipt: { provider: "codex-app-server", evidence_ref: "test-provider:unavailable" }, error: "No connection" }; });
+    for (const expected_revision of [f.parsed.expected_revision, f.store.read().revision]) {
+      const replay: any = await deliverClaimedNotification(f.store, { ...f.parsed, expected_revision }, f.id, "Notice", async () => { calls++; return sent; });
+      expect(replay).toEqual({ ...(failure as any), replayed: true });
+    }
+    await deliverClaimedNotification(f.store, { ...f.parsed, request_id: "retry", expected_revision: f.store.read().revision }, f.id, "Notice", async () => { calls++; return sent; });
+    const replay: any = await deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => { calls++; return sent; });
+    expect(replay).toEqual({ ...(failure as any), replayed: true });
+    expect(calls).toBe(2); expect(f.store.read().notifications[0].attempts).toBe(2);
+    await expect(deliverClaimedNotification(f.store, f.parsed, "different-notice", "Notice", async () => { calls++; return sent; })).rejects.toThrow("different content");
+    expect(calls).toBe(2);
+  } finally { f.cleanup(); }
+});
+
+test("atomic claim rejects an intervening write after the caller's read", async () => {
+  const f = fixture();
+  try {
+    const callerSnapshot = f.store.read();
+    f.store.update(raw => apply(raw, "task-update", { ...f.parsed, request_id: "unrelated-write", expected_revision: raw.revision, payload: { task_id: "deploy", state: "running", detail: "Concurrent update" } }));
+    const before = JSON.stringify(f.store.read()); let calls = 0;
+    await expect(deliverClaimedNotification(f.store, { ...f.parsed, expected_revision: callerSnapshot.revision }, f.id, "Notice", async () => { calls++; return sent; })).rejects.toThrow("version changed");
+    expect(calls).toBe(0); expect(JSON.stringify(f.store.read())).toBe(before);
   } finally { f.cleanup(); }
 });

@@ -14223,7 +14223,7 @@
       "path": "skills/global-port-manager/SKILL.md",
       "sourceBlob": "8bfce0d430b6cbeacf75a45db04f4b034bd48ba8",
       "sourceSha256": "c975d65c4cdf76dd00b7d13b7df79cab58533ce30c96c5d45262b71c44f55ebd",
-      "installedSha256": "abb59443cf11865ba84e6f69b9a52866f0b82f4ad01b8e6e3904d4f6aa862cac",
+      "installedSha256": "bcf21f03b61b55fc7e29f0aae1cb5a7fa87d1a1f578e47b5ace2918d197aa90a",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14343,7 +14343,7 @@
       "path": "skills/multi-task-flow/SKILL.md",
       "sourceBlob": "708e77c1572d4c7271e294984151eae1e11c0894",
       "sourceSha256": "e3ec7fceef4c5cbd8650e17603ed261e59fc06dafa9d18c85a0e2966b0d9a298",
-      "installedSha256": "f4f50095664036bbe8632181825bcf950eef9501ba0692acbe3e616a5227ca9a",
+      "installedSha256": "6bbef2607878201c50571a551dbcaa6747dd1ed02c059af1af5b4b230e94033a",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14695,7 +14695,7 @@
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourceBlob": "81c6ce8ba1c8183231b632b141b63fc4f95c9a42",
       "sourceSha256": "fd5e4c54b33a6e7e1bdff96d4eb01cdbed02484dabde36fc52abb91c05b6a6e7",
-      "installedSha256": "f854996fa81a51eba95a102c16fafe1ab7f7bddc1c7696cb6b91cc3181e2a4f4",
+      "installedSha256": "218c2ce523a227e9d208b3adcc706c4e090468072ff72e40936f9e396b47aed2",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -16122,11 +16122,11 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/notification-delivery.ts",
-      "installedSha256": "5ecac6c5a10c27e00cd0d74f5a2813c448f820b98051c5ac9420abbf3e5e9032"
+      "installedSha256": "438af664217a7c7bf012b95ce6ad881981f254b24cebaa29040674e851bdfc18"
     },
     {
       "path": "skills/multi-task-flow/tests/notification-delivery.test.ts",
-      "installedSha256": "671bc9608e87230b8d8d0db706a2e81fd76a286da1d60831d95031389846969d"
+      "installedSha256": "eff02e795e52125716326e84dbf3027982f11fdf4c62c27e67761a18e9d0d11a"
     }
   ]
 }

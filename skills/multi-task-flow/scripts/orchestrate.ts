@@ -28,7 +28,7 @@ import {
   DEFAULT_EXECUTION_PROFILE,
 } from "./schema";
 import { defaultRoot, LedgerStore } from "./store";
-import { deliverClaimedNotification } from "./notification-delivery";
+import { deliverClaimedNotification, reconcileNotification } from "./notification-delivery";
 import { migrationCanonicalInput } from "./store-migration";
 import { buildView } from "./view";
 import { checkViewerCompatibility, renewViewerUsage } from "./service-usage";
@@ -122,6 +122,7 @@ async function deliverNotification(
   parsed: z.infer<typeof requestSchema>,
   input: JsonRecord,
   request: JsonRecord,
+  direct = false,
 ): Promise<unknown> {
   const ledger = validateLedger(store.read());
   const notificationId = String(request.notification_id);
@@ -129,20 +130,6 @@ async function deliverNotification(
     (item) => item.id === notificationId,
   );
   if (!notice) throw new ContractError("NOT_FOUND", "Notification not found");
-  if (notice.delivery_status === "unknown")
-    return {
-      notification_id: notice.id,
-      delivery_status: "unknown",
-      next_action: "notification-reconcile",
-    };
-  if (["sent", "acknowledged"].includes(notice.status))
-    return {
-      notification_id: notice.id,
-      delivery_status: notice.delivery_status,
-      ack_status: notice.ack_status,
-      replayed: true,
-    };
-
   const prompt = notificationPrompt(
     parsed.run_id,
     notice.id,
@@ -150,7 +137,7 @@ async function deliverNotification(
     ledger,
     input,
   );
-  return deliverClaimedNotification(store, parsed, notice.id, prompt);
+  return deliverClaimedNotification(store, parsed, notice.id, prompt, undefined, direct);
 }
 
 try {
@@ -352,51 +339,11 @@ try {
       .strict()
       .parse(parsed.payload);
     const store = new LedgerStore(root, parsed.run_id);
-    const ledger = validateLedger(store.read());
-    const notice = ledger.notifications.find(
-      (item) => item.id === payload.notification_id,
-    );
-    if (!notice) throw new ContractError("NOT_FOUND", "Notification not found");
-    if (notice.delivery_status === "unknown") {
-      console.log(
-        JSON.stringify({
-          ok: true,
-          code: "RECONCILIATION_REQUIRED",
-          revision: ledger.revision,
-          result: {
-            notification_id: notice.id,
-            delivery_status: notice.delivery_status,
-            next_action: "notification-reconcile",
-          },
-        }),
-      );
-    } else if (["sent", "acknowledged"].includes(notice.status)) {
-      console.log(
-        JSON.stringify({
-          ok: true,
-          code: "REPLAYED",
-          revision: ledger.revision,
-          result: {
-            notification_id: notice.id,
-            delivery_status: notice.delivery_status,
-            ack_status: notice.ack_status,
-          },
-        }),
-      );
-    } else {
-      if (parsed.expected_revision !== ledger.revision)
-        throw new ContractError("REVISION_CONFLICT", "Notification send revision is stale", 4);
-      const delivery = await deliverNotification(store, parsed, input, payload);
-      const updated = store.read();
-      console.log(
-        JSON.stringify({
-          ok: true,
-          code: "APPLIED",
-          revision: updated.revision,
-          result: delivery,
-        }),
-      );
-    }
+    const delivery = record(await deliverNotification(store, parsed, input, payload, true));
+    console.log(JSON.stringify({
+      ok: true, code: delivery?.replayed ? "REPLAYED" : "APPLIED",
+      revision: delivery?.revision, result: delivery,
+    }));
   } else if (command === "conversation-create") {
     const parsed = requestSchema.parse(input);
     const payload = z
@@ -574,7 +521,9 @@ try {
   } else {
     const parsed = requestSchema.parse(input);
     const store = new LedgerStore(root, parsed.run_id);
-    const result = record(store.update((raw) => apply(raw, command, parsed)));
+    const result = record(command === "notification-reconcile"
+      ? reconcileNotification(store, parsed)
+      : store.update((raw) => apply(raw, command, parsed)));
     if (!result)
       throw new ContractError("INVALID_RESULT", "Invalid command result");
     const request = notificationRequestOf(result);

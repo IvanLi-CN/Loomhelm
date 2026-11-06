@@ -65,7 +65,7 @@ native request ID 一旦绑定，配置即冻结；明确失败且已对账的�
 
 通知创建与平台发送是两个阶段，但由同一个 CLI 命令完成闭环。记账命令先提交账本中的 `ledger_status: "committed"` 和 `delivery_status: "pending"`，随后 CLI 通过当前 Codex Agent API 的 `send_message_to_thread` 能力发送到 `recipient_thread_id`，再以 `notification-deliver` 写入真实的 `sent`、`failed` 或 `unknown` 结果。不得把写入 `pending` 报告为已通知，也不得把 `sent` 报告为收件人已读或已处理。
 
-每次发送使用独立的 `delivery_attempt_id` 和平台证据。`request_id` 重放只返回原结果，不创建第二条通知或第二次尝试；明确 `failed` 可以在有界策略内重试。`unknown` 表示平台结果无法确定，必须先由 Agent 查询平台并以 `notification-reconcile` 写入 `reconciliation_id` 和查询证据，恢复器不得直接重复发送。只有 `recipient_thread_id` 对应的会话可以调用 `notification-ack`，发送方、`main` 或其他会话不得代为确认。
+每次发送使用独立的 `delivery_attempt_id` 和平台证据。`request_id` 重放只返回原结果，不创建第二条通知或第二次尝试；明确 `failed` 可以在有界策略内以新的 `request_id` 重试。`unknown` 表示平台结果无法确定，必须先由 Agent 查询平台并以 `notification-reconcile` 写入 `reconciliation_id` 和查询证据，恢复器不得直接重复发送。在途发送持有通知专属文件锁，对账写入遇到 `NOTIFICATION_IN_FLIGHT` 必须等待该发送结束，不能将其改记 failed 以解锁第二次投递；进程终止后锁由操作系统释放，仍先查询平台再对账。只有 `recipient_thread_id` 对应的会话可以调用 `notification-ack`，发送方、`main` 或其他会话不得代为确认。
 
 恢复时使用 `notification-reconcile --input -` 的无 `request_id` 形式查询 `pending`、`failed`、`unknown` 和长期未确认的 `sent` 通知；对 `pending` 或明确 `failed` 的通知使用 `notification-send --input -` 进行一次新的有界投递尝试；`unknown` 必须先对账，不能直接发送。CLI 通过 `CODEX_APP_SERVER_SOCKET`（默认检查 `$CODEX_HOME/app-server-control/app-server-control.sock`）连接 Codex app-server 的官方 Unix WebSocket 控制面，不伪造平台回执；若控制面不可用，则保留账本事实并记录 `failed`。
 
