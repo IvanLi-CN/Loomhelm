@@ -834,8 +834,8 @@ func (s *Service) prepareOperation(ctx context.Context, operation Operation) (Op
 		if err := tx.QueryRow(ctx, `SELECT state FROM deployment_slots WHERE slot = $1 FOR UPDATE`, operation.Slot).Scan(&slotState); err != nil {
 			return Operation{}, err
 		}
-		if slotState != "active" && slotState != "draining" {
-			return Operation{}, fmt.Errorf("%w: slot %s is not active or already draining", auth.ErrConflict, operation.Slot)
+		if slotState != "active" && slotState != "draining" && slotState != "retained" {
+			return Operation{}, fmt.Errorf("%w: slot %s is not active, draining, or retained", auth.ErrConflict, operation.Slot)
 		}
 	}
 	if operation.Slot != "" {

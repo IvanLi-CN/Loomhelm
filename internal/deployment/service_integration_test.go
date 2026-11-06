@@ -120,6 +120,27 @@ func TestDeploymentOperationsPersistIdempotencyAndUnknownRecovery(t *testing.T) 
 	if err != nil || status.ActiveSlot != "blue" || status.ActiveCandidateID != first.ID {
 		t.Fatalf("rollback status = %+v, err=%v", status, err)
 	}
+	executor.mu.Lock()
+	executor.err = nil
+	executor.mu.Unlock()
+	retainedDrain, _, err := service.StartOperation(ctx, principal, "drain", OperationRequest{
+		Slot:                "green",
+		ExpectedFingerprint: status.ActiveFingerprint,
+		Confirm:             true,
+	}, "drain-retained")
+	if err != nil {
+		t.Fatalf("start retained-slot drain: %v", err)
+	}
+	waitDeploymentOperation(t, ctx, service, retainedDrain.ID, "succeeded")
+	status, err = service.Status(ctx, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, slot := range status.Slots {
+		if slot.Name == "green" && slot.State != "draining" {
+			t.Fatalf("retained slot state = %q, want draining", slot.State)
+		}
+	}
 
 	executor.mu.Lock()
 	executor.err = context.DeadlineExceeded
