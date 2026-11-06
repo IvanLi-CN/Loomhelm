@@ -129,6 +129,66 @@ func TestCommandExecutorObservesTrafficShareRouteAndLoad(t *testing.T) {
 	}
 }
 
+func TestCommandExecutorDoesNotDegradeForUnavailableDrainingSlot(t *testing.T) {
+	activeSource, activeArtifact := "active-source", "active-artifact"
+	active := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/-/observe" {
+			http.NotFound(writer, request)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(ComponentObservation{
+			State:              ObservationMeasured,
+			LoadState:          ObservationMeasured,
+			ObservedAt:         time.Now().UTC(),
+			Live:               true,
+			Ready:              true,
+			CandidateSourceSHA: activeSource,
+			ArtifactDigest:     activeArtifact,
+			WorkerGeneration:   int64Value(7),
+			WorkerCapacity:     int64Value(1),
+		})
+	}))
+	defer active.Close()
+	retired := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.NotFound(writer, request)
+	}))
+	retired.Close()
+	public := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/version" {
+			http.NotFound(writer, request)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(routeIdentity{CandidateSourceSHA: activeSource, ArtifactDigest: activeArtifact})
+	}))
+	defer public.Close()
+
+	executor := &CommandExecutor{
+		SlotURLs:   map[string]string{"blue": active.URL, "green": retired.URL},
+		WorkerURLs: map[string]string{"blue": active.URL, "green": retired.URL},
+		PublicURL:  public.URL,
+		HTTPClient: &http.Client{Timeout: time.Second},
+	}
+	generation := int64(7)
+	status := Status{
+		ActiveSlot: "blue",
+		Slots: []Slot{
+			{Name: "blue", State: "active", CandidateID: "active-candidate", WorkerGeneration: &generation},
+			{Name: "green", State: "draining", CandidateID: "retired-candidate"},
+		},
+	}
+
+	if _, err := executor.Observe(context.Background(), status); err != nil {
+		t.Fatalf("first Observe() error = %v", err)
+	}
+	measured, err := executor.Observe(context.Background(), status)
+	if err != nil {
+		t.Fatalf("second Observe() error = %v", err)
+	}
+	if measured.State != ObservationMeasured || measured.MigrationState != "draining" {
+		t.Fatalf("observation = %+v, want measured draining state", measured)
+	}
+}
+
 func TestCommandExecutorReturnsStaleThenUnavailableObservation(t *testing.T) {
 	component := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/-/observe" {

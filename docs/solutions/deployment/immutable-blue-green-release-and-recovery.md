@@ -65,9 +65,11 @@ Drain 应按“Server 先、Worker 后”的顺序执行。Server 已接受 drai
 
 发布完成后保留旧槽位、旧候选和持久化数据，回滚通过认证 API、Idempotency-Key 和 expected fingerprint 执行。禁止用直接 SQL 修改 active slot、lease generation 或 operation status 来“修复”发布结果。
 
-为控制面划分独立的内部网络：Caddy admin 只绑定管理网络地址，部署控制器同时加入管理网络和专用 drain control 网络，候选 Server/Worker 不加入管理网络。候选流量网络、控制器的排空网络和 Caddy admin 网络要使用不重叠的子网；这样候选代码即使能访问应用网络，也不能直接调用 Caddy reload 或修改稳定入口。
+为控制面划分独立的内部网络：Caddy admin 只绑定管理网络地址，部署控制器同时加入管理网络和专用 drain control 网络，候选 Server/Worker 不加入管理网络。候选流量网络、控制器的排空网络和 Caddy admin 网络要使用不重叠的子网；这样候选代码即使能访问应用网络，也不能直接调用 Caddy reload 或修改稳定入口。控制器访问槽位时使用带末尾点的绝对内部 DNS 名称，例如 `server-green.`，避免已停止的 Compose 服务因宿主机 DNS search domain 被解析到公网同名主机。
 
 Reconcile 必须是幂等的。先以不重建的方式确保目标 Server 存在，再用有界 readiness 探测和精确运行身份探测判断是否已经满足目标；只有明确证明目标处于 draining 或身份不匹配时才 force-recreate。网络超时、临时 5xx、仍在启动或身份字段不完整的状态只能返回“无法证明”，不能停止一个可能已经承接流量的 Server。Worker 的启动、generation 校验和失败清理随后执行；Worker 的观测失败、未 ready 或缺失 generation 也只能保留当前实例并返回 `unknown`，等待后续 reconcile，只有明确 generation 不匹配才清理并恢复旧 Worker。回滚恢复 Server 时也要先恢复并证明 Server，再恢复 Worker，避免把半恢复槽位当作可服务状态。
+
+观测健康度应以当前 active 槽为硬门槛。旧槽完成排空后进入 `draining` 或 `retained` 状态并停止容器是正常清理结果；旧槽的 `/-/observe` 不可达时，可以保留该槽的不可观测明细，但不能仅因此把整套安装标记为 degraded。公网 `/version` 必须仍与 active 槽身份匹配，active Server/Worker 的 readiness、generation 和错误率仍必须持续核对。
 
 浏览器端跨路由或跨版本共享的创建意图至少包含逻辑 `commandId`、请求 fingerprint 和本次 `attemptId`。兼容键应一次性写入，并在部分写入失败时尽力恢复原值；晚到的旧页面只能更新或清理仍匹配同一 attempt 的记录。相同逻辑命令但不同 attempt 的兼容键应按冲突处理并失败关闭，不能猜测哪个页面更新，也不能让旧版本清理新版本的恢复身份。
 
