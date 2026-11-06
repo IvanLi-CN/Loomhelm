@@ -59,7 +59,17 @@ export async function sendCodexMessage(input: {
             "Codex app-server initialization failed",
         ),
       );
-    const started = await rpc(socket, buffer, 2, "turn/start", {
+    // Subscriptions are connection-local. A completed bootstrap may already
+    // have been unloaded when its next notification opens a new connection.
+    // Resume the exact known identity without configuration or history overrides;
+    // never create a replacement thread when this fails.
+    const resumed = await rpc(socket, buffer, 2, "thread/resume", {
+      threadId: input.recipient_thread_id,
+      excludeTurns: true,
+    });
+    if (resumed.error)
+      throw new Error(String(record(resumed.error)?.message ?? "Codex app-server rejected thread/resume"));
+    const started = await rpc(socket, buffer, 3, "turn/start", {
       threadId: input.recipient_thread_id,
       input: [{ type: "text", text: input.prompt }],
       clientUserMessageId: callId,

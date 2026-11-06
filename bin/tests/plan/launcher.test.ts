@@ -22,7 +22,7 @@ describe("trusted dev-plan launcher", () => {
         BUN_CONFIG: "/tmp/hostile-bunfig.toml",
       },
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("usage:");
     expect(result.stdout + result.stderr).not.toContain("hostile");
   });
@@ -34,7 +34,7 @@ describe("trusted dev-plan launcher", () => {
       cwd: ROOT,
       env: { ...process.env },
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("## 1. 决策卡");
     expect(result.stdout.match(/<proposed_plan>/g)?.length).toBe(1);
     expect(result.stdout.match(/<\/proposed_plan>/g)?.length).toBe(1);
@@ -49,7 +49,7 @@ describe("trusted dev-plan launcher", () => {
       stdin: "## Summary\n- invalid\n",
       env: { ...process.env },
     });
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode, result.stderr).toBe(1);
     expect(result.stderr).toContain("status: reject");
     expect(result.stderr).toContain("output: none");
     expect(result.stdout).toBe("");
@@ -62,7 +62,7 @@ describe("trusted dev-plan launcher", () => {
       cwd: ROOT,
       env: { ...process.env, BUN_BIN: "/bin/echo" },
     });
-    expect(result.exitCode).toBe(2);
+    expect(result.exitCode, result.stderr).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("repository-approved runtime");
   });

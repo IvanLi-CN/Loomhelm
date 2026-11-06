@@ -16,7 +16,7 @@ describe("launcher boundary regressions", () => {
       stdin: "# malformed\n",
       env: { ...process.env },
     });
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode, result.stderr).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("execution: blocked");
   });
@@ -32,7 +32,7 @@ describe("launcher boundary regressions", () => {
       cwd: ROOT,
       env: { ...process.env, BUN_BIN: fake },
     });
-    expect(result.exitCode).toBe(2);
+    expect(result.exitCode, result.stderr).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("repository-approved runtime");
   });

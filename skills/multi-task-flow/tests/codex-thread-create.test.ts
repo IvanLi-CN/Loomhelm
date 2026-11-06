@@ -4,9 +4,9 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCodexThread } from "../scripts/codex-agent-api";
+import { createCodexThread, sendCodexMessage } from "../scripts/codex-agent-api";
 
-async function withControlServer(scenario: "success" | "mismatch" | "reject" | "timeout" | "missing-id", verify: (calls: any[], result: Awaited<ReturnType<typeof createCodexThread>>, completed: boolean) => void) {
+async function withControlServer(scenario: "success" | "mismatch" | "reject" | "timeout" | "missing-id" | "send" | "resume-reject", verify: (calls: any[], result: Awaited<ReturnType<typeof createCodexThread>> | Awaited<ReturnType<typeof sendCodexMessage>>, completed: boolean) => void) {
   const dir = mkdtempSync(join(tmpdir(), "mtf-rpc-"));
   const path = join(dir, "rpc.sock");
   const calls: any[] = [];
@@ -42,7 +42,7 @@ async function withControlServer(scenario: "success" | "mismatch" | "reject" | "
         const call = JSON.parse(bytes.toString()); calls.push(call);
         const result = call.method === "thread/start" ? { thread: scenario === "missing-id" ? {} : { id: "test-thread" }, model: scenario === "mismatch" ? "other-model" : "gpt-6.1-sol", reasoningEffort: "medium" } : call.method === "turn/start" ? { turn: { id: "test-turn" } } : {};
         if (call.method === "thread/start" && scenario === "timeout") continue;
-        send(call.method === "thread/start" && scenario === "reject" ? { id: call.id, error: { message: "unsupported profile" } } : { id: call.id, result });
+        send((call.method === "thread/start" && scenario === "reject") || (call.method === "thread/resume" && scenario === "resume-reject") ? { id: call.id, error: { message: "unsupported profile" } } : { id: call.id, result });
         if (call.method === "turn/start") setTimeout(() => {
           completed = true;
           send({ method: "turn/completed", params: { threadId: "test-thread", turn: { id: "test-turn", status: "completed" } } });
@@ -56,7 +56,9 @@ async function withControlServer(scenario: "success" | "mismatch" | "reject" | "
   process.env.MULTI_TASK_FLOW_CODEX_AGENT_TIMEOUT_MS = "1000";
   process.env.CODEX_APP_SERVER_SOCKET = path;
   try {
-    const result = await createCodexThread({ title: "Test", prompt: "Reply OK", model: "gpt-6.1-sol", thinking: "medium" });
+    const result = scenario === "send" || scenario === "resume-reject"
+      ? await sendCodexMessage({recipient_thread_id:"test-thread",prompt:"Continue"})
+      : await createCodexThread({ title: "Test", prompt: "Reply OK", model: "gpt-6.1-sol", thinking: "medium" });
     verify(calls, result, completed);
   } finally {
     if (previousTimeout === undefined) delete process.env.MULTI_TASK_FLOW_CODEX_AGENT_TIMEOUT_MS;
@@ -91,3 +93,18 @@ for (const scenario of ["mismatch", "reject", "timeout", "missing-id"] as const)
     });
   });
 }
+
+test("notification rejoins the exact thread on its new connection before starting a turn", async () => {
+  await withControlServer("send", (calls, result) => {
+    expect(result.outcome).toBe("sent");
+    expect(calls.map(c=>c.method)).toEqual(["initialize","thread/resume","turn/start"]);
+    expect(calls[1].params).toEqual({threadId:"test-thread",excludeTurns:true});
+    expect(calls[2].params.threadId).toBe("test-thread");
+  });
+});
+test("a rejected resume does not start a turn or create a replacement", async () => {
+  await withControlServer("resume-reject", (calls, result) => {
+    expect(result.outcome).toBe("failed");
+    expect(calls.map(c=>c.method)).toEqual(["initialize","thread/resume"]);
+  });
+});

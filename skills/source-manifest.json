@@ -2863,7 +2863,7 @@
       "path": "bin/tests/plan/launcher.test.ts",
       "sourceBlob": "26b23a01e5de2322ea44db2b1d05ddde718b3752",
       "sourceSha256": "5f5bd5f18ad0160a80c9d8e9c9dce8e52d18fff507da2593d08933aab3fd5522",
-      "installedSha256": "5c27761891b80e9d10509c22c6807192014d65233a7bfaf9b8258d460a408a23",
+      "installedSha256": "110d008ce35efb94167d0fd4ab7173934c398485c5aaec0cc00fbbffe9678b71",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -2871,7 +2871,7 @@
       "path": "bin/tests/plan/launcher_race.test.ts",
       "sourceBlob": "07c8ec67b8543b6128d6ac77824665dc68ceffe2",
       "sourceSha256": "9bcc371b5f8e3fc29ad5479b3e22ca7a7e59e5e53a7dcb791a4a77202a56a71e",
-      "installedSha256": "d87199add58735bf6d3efa49063805d6093adcd7de5d933fdf8f166215a9adca",
+      "installedSha256": "e4151c1a2e2dc8e06de6e6a13e8635e151eddff01b5694ddd597fc1f0019f24f",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14551,8 +14551,8 @@
       "path": "skills/multi-task-flow/scripts/codex-agent-api.ts",
       "sourceBlob": "9da71593a7cb28f66f3f360fb0b0ef315d0dd741",
       "sourceSha256": "075920b9d61a0125830c8fc6383037b153a62f579b76d210486b464e9d3dd4ee",
-      "installedSha256": "075920b9d61a0125830c8fc6383037b153a62f579b76d210486b464e9d3dd4ee",
-      "adaptation": "unchanged"
+      "installedSha256": "7cb0693d6bac6cefbad0752dc3319dfafae02a83d6182aef5e0c83c639ebf994",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/scripts/codex-desktop-follower.ts",
@@ -15039,8 +15039,8 @@
       "path": "skills/multi-task-flow/tests/codex-thread-create.test.ts",
       "sourceBlob": "f52ecd6a4edd45ebe4afde6596466dc3a7c17151",
       "sourceSha256": "fd3b706a43f7a6c13539199b43157d19d47fa0508e6a84a852a403f7222bda6b",
-      "installedSha256": "fd3b706a43f7a6c13539199b43157d19d47fa0508e6a84a852a403f7222bda6b",
-      "adaptation": "unchanged"
+      "installedSha256": "90658d20fb3ab02270f23a7162ace759be5782fa2e649968680ad75167fad236",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/tests/conversation-output.test.ts",
