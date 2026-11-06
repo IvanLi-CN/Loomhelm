@@ -24,6 +24,11 @@ import {
   mutationNoticeScopes,
   mutationNoticeRemovalScopes,
   mutationWriteAdmission,
+  listAllTasks,
+  membershipScopeProjectIds,
+  readGraphTaskData,
+  readTaskPage,
+  resourceReadState,
   projectTaskQueryKeys,
   readProjectMemberships,
   readTaskRelationships,
@@ -140,7 +145,131 @@ describe("project/task write contracts", () => {
   test("separates cache generations after session invalidation", () => {
     expect(projectTaskQueryKeys.projects("user-1", 1)).not.toEqual(projectTaskQueryKeys.projects("user-1", 2));
     expect(projectTaskQueryKeys.tasks("user-1", 1)).not.toEqual(projectTaskQueryKeys.tasks("user-1", 2));
+    expect(projectTaskQueryKeys.taskList("user-1", { projectId: "project-1" }, 1)).not.toEqual(projectTaskQueryKeys.taskList("user-1", { projectId: "project-1" }, 2));
+    expect(projectTaskQueryKeys.taskList("user-1", { projectId: "project-1" }, 1)).not.toEqual(projectTaskQueryKeys.taskList("user-1", { projectId: "project-2" }, 1));
+    expect(projectTaskQueryKeys.taskRelationshipsScope("user-1", { projectId: "project-1" }, ["task-1"], 1).slice(0, 3)).toEqual(["loomhelm", "user-1", 1]);
     expect(projectTaskQueryKeys.mutationNotice("user-1")).toEqual(["loomhelm", "user-1", "mutation-notice"]);
+  });
+
+  test("keeps scoped task pagination on the existing REST list contract", async () => {
+    const pageCalls: Array<Record<string, unknown>> = [];
+    const listCalls: Array<Record<string, unknown>> = [];
+    const page = protocolTask("task-1");
+    const pageApi = {
+      listTasks: async (request: Record<string, unknown>) => {
+        pageCalls.push(request);
+        return { items: [page], has_more: true, next_cursor: "cursor-1" };
+      }
+    };
+    const listApi = {
+      listTasks: async (request: Record<string, unknown>) => {
+        listCalls.push(request);
+        return listCalls.length === 1
+          ? { items: [page], has_more: true, next_cursor: "cursor-1" }
+          : { items: [protocolTask("task-2")], has_more: false };
+      }
+    };
+
+    await expect(readTaskPage(pageApi, "project-1", undefined, 50)).resolves.toMatchObject({ has_more: true, next_cursor: "cursor-1" });
+    await expect(listAllTasks(listApi, "project-1")).resolves.toEqual([page, protocolTask("task-2")]);
+    expect(pageCalls).toEqual([{ project_id: "project-1", limit: 50 }]);
+    expect(listCalls).toEqual([
+      { project_id: "project-1", limit: 200 },
+      { project_id: "project-1", after_cursor: "cursor-1", limit: 200 }
+    ]);
+  });
+
+  test("limits membership reads to the active project or loaded task projects", () => {
+    const tasks = [
+      protocolTask("task-1"),
+      { ...protocolTask("task-2"), project_id: "project-2" },
+      { ...protocolTask("task-3"), project_id: "project-1" }
+    ];
+    expect(membershipScopeProjectIds({}, tasks)).toEqual(["project-1", "project-2"]);
+    expect(membershipScopeProjectIds({ projectId: "project-2", mode: "list" }, tasks)).toEqual(["project-2"]);
+  });
+
+  test("loads graph external tasks without turning ordinary task reads into relation reads", async () => {
+    const local = protocolTask("task-local");
+    const external = { ...protocolTask("task-external"), project_id: "project-2" };
+    const page = {
+      parents: [{ parent_task_id: external.id, child_task_id: local.id, kind: "parent_child", created_at: "now" }],
+      children: [],
+      prerequisites: [],
+      dependents: []
+    };
+    const relationCalls: string[] = [];
+    const detailCalls: string[] = [];
+    const api = {
+      listTasks: async () => ({ items: [local], has_more: false }),
+      getTaskRelationships: async ({ task_id }: { task_id: string }) => {
+        relationCalls.push(task_id);
+        return page;
+      },
+      getTask: async ({ task_id }: { task_id: string }) => {
+        detailCalls.push(task_id);
+        return { task: external };
+      }
+    };
+
+    await expect(listAllTasks(api)).resolves.toEqual([local]);
+    expect(relationCalls).toEqual([]);
+    const graph = await readGraphTaskData(api, [local]);
+    expect(relationCalls).toEqual([local.id]);
+    expect(detailCalls).toEqual([external.id]);
+    expect(graph.externalTaskIds).toEqual([external.id]);
+    expect(graph.items.map((task) => task.id)).toEqual([local.id, external.id]);
+    expect(graph.relationships[local.id]?.parents[0]?.parent_task_id).toBe(external.id);
+  });
+
+  test("retains an unauthorized graph endpoint as an explicit protected node", async () => {
+    const local = protocolTask("task-local");
+    const deniedId = "task-denied";
+    const page = {
+      parents: [{ parent_task_id: deniedId, child_task_id: local.id, kind: "parent_child", created_at: "now" }],
+      children: [],
+      prerequisites: [],
+      dependents: []
+    };
+    const graph = await readGraphTaskData({
+      getTaskRelationships: async () => page,
+      getTask: async () => { throw new ApiClientError(403, { code: "forbidden" }); }
+    }, [local]);
+
+    expect(graph.externalDeniedTaskIds).toEqual([deniedId]);
+    expect(graph.items.find((task) => task.id === deniedId)).toMatchObject({ id: deniedId, title: "当前无权查看", project_id: "__loomhelm_unauthorized__" });
+    expect(graph.relationships[local.id]?.parents[0]?.parent_task_id).toBe(deniedId);
+  });
+
+  test("retains a graph edge when an external detail read is temporarily unavailable", async () => {
+    const local = protocolTask("task-local");
+    const unavailableId = "task-unavailable";
+    const graph = await readGraphTaskData({
+      getTaskRelationships: async () => ({
+        parents: [{ parent_task_id: unavailableId, child_task_id: local.id, kind: "parent_child", created_at: "now" }],
+        children: [],
+        prerequisites: [],
+        dependents: []
+      }),
+      getTask: async () => { throw new ApiClientError(503, { code: "server_error" }); }
+    }, [local]);
+
+    expect(graph.externalUnavailableTaskIds).toEqual([unavailableId]);
+    expect(graph.items.find((task) => task.id === unavailableId)).toMatchObject({ id: unavailableId, title: "关系任务暂不可用", project_id: "__loomhelm_unavailable__" });
+    expect(graph.relationships[local.id]?.parents[0]?.parent_task_id).toBe(unavailableId);
+    expect(graph.failures).toHaveLength(1);
+  });
+
+  test("distinguishes cached stale data from an initial loading or failed resource", () => {
+    const stale = resourceReadState({ status: "success", data: ["cached"], error: null, isFetching: true });
+    expect(stale).toMatchObject({ status: "success", data: ["cached"], isFetching: true, isStale: true });
+
+    const failed = resourceReadState({ status: "error", data: ["cached"], error: new Error("offline"), isFetching: false });
+    expect(failed).toMatchObject({ status: "error", data: ["cached"], isFetching: false, isStale: false });
+
+    expect(resourceReadState({ status: "pending", data: undefined, error: null, isFetching: true })).toMatchObject({ status: "loading", isStale: false });
+    expect(resourceReadState({ status: "pending", data: undefined, error: null, isFetching: false })).toMatchObject({ status: "idle", isStale: false });
+    expect(resourceReadState({ status: "error", data: ["revoked"], error: new ApiClientError(403, { code: "forbidden" }), isFetching: false })).toMatchObject({ status: "error", isStale: false });
   });
 
   test("hides cached tasks whose projects are no longer visible", () => {

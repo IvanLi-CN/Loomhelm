@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { createContext, createElement, useContext, useEffect, useState, type PropsWithChildren } from "react";
 
 import { useOptionalProductionApi } from "@/app/providers";
 import { useOptionalDemoRuntime } from "@/demo/context";
@@ -7,6 +7,8 @@ import { usePublishedProjectTaskSource } from "@/features/projects/production-so
 
 import { useOptionalDemoProjectTaskSource } from "./demo-store";
 import type { ProjectTaskSource } from "./types";
+
+const projectTaskSourceContext = createContext<ProjectTaskSource | null | undefined>(undefined);
 
 function readTaskViews(storageKey: string): Record<string, TaskView> {
   if (typeof window === "undefined") return {};
@@ -31,7 +33,7 @@ function writeTaskViews(storageKey: string, views: Record<string, TaskView>): vo
   }
 }
 
-export function useOptionalProjectTaskSource(): ProjectTaskSource | null {
+function useUnsharedProjectTaskSource(): ProjectTaskSource | null {
   const demoRuntime = useOptionalDemoRuntime();
   const demoSource = useOptionalDemoProjectTaskSource();
   const assembly = useOptionalProductionApi();
@@ -64,4 +66,27 @@ export function useOptionalProjectTaskSource(): ProjectTaskSource | null {
   if (demoSource) return demoSource;
   if (!assembly || !authenticated) return null;
   return productionSource;
+}
+
+function ProjectTaskSourceContextProvider({ source, children }: { source: ProjectTaskSource | null } & PropsWithChildren) {
+  return createElement(projectTaskSourceContext.Provider, { value: source }, children);
+}
+
+function ProductionProjectTaskSourceProvider({ children }: PropsWithChildren) {
+  const source = useUnsharedProjectTaskSource();
+  return createElement(projectTaskSourceContext.Provider, { value: source }, children);
+}
+
+export function ProjectTaskSourceProvider({ source, children }: { source?: ProjectTaskSource | null } & PropsWithChildren) {
+  return source === undefined
+    ? createElement(ProductionProjectTaskSourceProvider, null, children)
+    : createElement(ProjectTaskSourceContextProvider, { source }, children);
+}
+
+export function useProjectTaskSourceContext(): ProjectTaskSource | null | undefined {
+  return useContext(projectTaskSourceContext);
+}
+
+export function useOptionalProjectTaskSource(): ProjectTaskSource | null {
+  return useUnsharedProjectTaskSource();
 }

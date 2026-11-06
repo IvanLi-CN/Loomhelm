@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import { ApiClientConfigurationError, ApiClientError, type GeneratedApiClient } from "@loomhelm/api-client";
 import type { Project, ProjectMember, Task, TaskRelationshipPage, TaskStatus, UpdateProjectRequest, UpdateTaskRequest } from "@loomhelm/protocol";
@@ -33,6 +33,35 @@ export interface ProductionSourceOptions {
   setTaskView?: (scope: string, view: TaskView) => void;
 }
 
+export type ResourceReadStatus = "idle" | "loading" | "success" | "error";
+
+export interface ResourceReadState<T> {
+  status: ResourceReadStatus;
+  data?: T;
+  error?: unknown;
+  isFetching: boolean;
+  isStale: boolean;
+}
+
+export interface TaskReadScope {
+  projectId?: string;
+  mode?: "list" | "graph";
+}
+
+export interface ProductionProjectTaskSource extends ProjectTaskSource {
+  resourceStates: {
+    projects: ResourceReadState<readonly Project[]>;
+    memberships: ResourceReadState<MembershipQueryData>;
+    tasks: ResourceReadState<TaskQueryData>;
+    relationships: ResourceReadState<TaskQueryData>;
+  };
+  taskReadScope: TaskReadScope;
+  setTaskReadScope: (scope: TaskReadScope) => void;
+  hasMoreTasks: boolean;
+  isLoadingMoreTasks: boolean;
+  loadMoreTasks: () => Promise<void>;
+}
+
 export interface MembershipQueryData {
   items: Readonly<Record<string, readonly ProjectMember[]>>;
   deniedProjectIds: readonly string[];
@@ -44,6 +73,17 @@ export interface TaskQueryData {
   relationships: Readonly<Record<string, TaskRelationshipPage>>;
   deniedTaskIds: readonly string[];
   failures: readonly string[];
+  hasMore?: boolean;
+  nextCursor?: string;
+  externalTaskIds?: readonly string[];
+  externalDeniedTaskIds?: readonly string[];
+  externalUnavailableTaskIds?: readonly string[];
+}
+
+export interface GraphTaskQueryData extends TaskQueryData {
+  externalTaskIds: readonly string[];
+  externalDeniedTaskIds: readonly string[];
+  externalUnavailableTaskIds: readonly string[];
 }
 
 export interface MutationNotice {
@@ -612,6 +652,8 @@ interface CursorPage<Item> {
   next_cursor?: string;
 }
 
+export interface TaskListPage extends CursorPage<Task> {}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -711,12 +753,32 @@ export async function readAllCursorPages<Item>(
   }
 }
 
+export async function readTaskPage(
+  api: Pick<PublishedProjectTaskApi, "listTasks">,
+  projectId?: string,
+  afterCursor?: string,
+  limit = TASK_PAGE_LIMIT
+): Promise<TaskListPage> {
+  const response = await api.listTasks({
+    ...(projectId ? { project_id: projectId } : {}),
+    ...(afterCursor ? { after_cursor: afterCursor } : {}),
+    limit
+  });
+  if (!isCursorPage<Task>(response, isTask)) throw new Error("任务列表响应不完整。");
+  return response;
+}
+
+export function membershipScopeProjectIds(scope: TaskReadScope, tasks: readonly Task[]): readonly string[] {
+  if (scope.projectId) return [scope.projectId];
+  return [...new Set(tasks.map((task) => task.project_id))].sort();
+}
+
 export function listAllProjects(api: Pick<PublishedProjectTaskApi, "listProjects">): Promise<readonly Project[]> {
   return readAllCursorPages("projects", (after_cursor) => api.listProjects({ after_cursor, limit: PROJECT_PAGE_LIMIT }), PROJECT_PAGE_LIMIT, isProject);
 }
 
-export function listAllTasks(api: Pick<PublishedProjectTaskApi, "listTasks">): Promise<readonly Task[]> {
-  return readAllCursorPages("tasks", (after_cursor) => api.listTasks({ after_cursor, limit: TASK_PAGE_LIMIT }), TASK_PAGE_LIMIT, isTask);
+export function listAllTasks(api: Pick<PublishedProjectTaskApi, "listTasks">, projectId?: string): Promise<readonly Task[]> {
+  return readAllCursorPages("tasks", (after_cursor) => api.listTasks({ ...(projectId ? { project_id: projectId } : {}), after_cursor, limit: TASK_PAGE_LIMIT }), TASK_PAGE_LIMIT, isTask);
 }
 
 export async function readProjectMemberships(
@@ -767,6 +829,78 @@ export async function readTaskRelationships(
   return { items: tasks, relationships, deniedTaskIds: deniedTaskIds.filter(Boolean), failures };
 }
 
+function relationshipTargetIds(page: TaskRelationshipPage): readonly string[] {
+  return [...new Set([
+    ...page.parents.map((relationship) => relationship.parent_task_id),
+    ...page.children.map((relationship) => relationship.child_task_id),
+    ...page.prerequisites.map((relationship) => relationship.prerequisite_task_id),
+    ...page.dependents.map((relationship) => relationship.dependent_task_id)
+  ])];
+}
+
+function unauthorizedGraphTask(taskId: string): Task {
+  return {
+    created_at: "",
+    goal: "当前无权查看此任务内容。",
+    id: taskId,
+    project_id: "__loomhelm_unauthorized__",
+    status: "blocked",
+    title: "当前无权查看",
+    updated_at: ""
+  };
+}
+
+function unavailableGraphTask(taskId: string): Task {
+  return {
+    created_at: "",
+    goal: "任务详情读取失败，关系边暂保留；请稍后重试。",
+    id: taskId,
+    project_id: "__loomhelm_unavailable__",
+    status: "blocked",
+    title: "关系任务暂不可用",
+    updated_at: ""
+  };
+}
+
+export async function readGraphTaskData(
+  api: Pick<PublishedProjectTaskApi, "getTaskRelationships" | "getTask">,
+  tasks: readonly Task[]
+): Promise<GraphTaskQueryData> {
+  const relationRead = await readTaskRelationships(api, tasks);
+  const knownTaskIds = new Set(tasks.map((task) => task.id));
+  const externalIds = [...new Set(Object.values(relationRead.relationships).flatMap(relationshipTargetIds))].filter((taskId) => !knownTaskIds.has(taskId));
+  const externalResults = await Promise.allSettled(externalIds.map(async (taskId) => {
+    const response = await api.getTask({ task_id: taskId });
+    if (!response || typeof response !== "object" || !isTask((response as { task?: unknown }).task)) throw new Error("外部任务响应不完整。");
+    return (response as { task: Task }).task;
+  }));
+  const externalTasks: Task[] = [];
+  const externalDeniedTaskIds: string[] = [];
+  const externalUnavailableTaskIds: string[] = [];
+  const failures = [...relationRead.failures];
+  externalResults.forEach((result, index) => {
+    const taskId = externalIds[index];
+    if (!taskId) return;
+    if (result.status === "fulfilled") externalTasks.push(result.value);
+    else if (isPermissionError(result.reason)) externalDeniedTaskIds.push(taskId);
+    else {
+      externalUnavailableTaskIds.push(taskId);
+      failures.push(failureMessage(`读取关系任务 ${taskId}`, result.reason));
+    }
+  });
+  const deniedPlaceholders = externalDeniedTaskIds.map(unauthorizedGraphTask);
+  const unavailablePlaceholders = externalUnavailableTaskIds.map(unavailableGraphTask);
+  return {
+    items: [...tasks, ...externalTasks, ...deniedPlaceholders, ...unavailablePlaceholders],
+    relationships: relationRead.relationships,
+    deniedTaskIds: relationRead.deniedTaskIds,
+    failures,
+    externalTaskIds: [...externalTasks.map((task) => task.id), ...externalDeniedTaskIds, ...externalUnavailableTaskIds],
+    externalDeniedTaskIds,
+    externalUnavailableTaskIds
+  };
+}
+
 export function filterTaskRelationships(page: TaskRelationshipPage, visibleTaskIds: ReadonlySet<string>): TaskRelationshipPage {
   return {
     ...page,
@@ -784,8 +918,25 @@ export function filterTasksToVisibleProjects(items: readonly Task[], visibleProj
 export const projectTaskQueryKeys = {
   projects: (principalId: string, sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "projects"] as const,
   memberships: (principalId: string, projectIds: readonly string[], sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "memberships", [...projectIds].sort()] as const,
-  tasks: (principalId: string, sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "tasks", "all"] as const,
+  tasks: (principalId: string, sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "tasks"] as const,
+  taskList: (principalId: string, scope: TaskReadScope = {}, sessionGeneration = 0) => [
+    "loomhelm",
+    principalId,
+    sessionGeneration,
+    "tasks",
+    "list",
+    scope.projectId ?? null
+  ] as const,
   taskRelationships: (principalId: string, taskId: string, sessionGeneration = 0) => ["loomhelm", principalId, sessionGeneration, "tasks", "relationships", taskId] as const,
+  taskRelationshipsScope: (principalId: string, scope: TaskReadScope, taskIds: readonly string[], sessionGeneration = 0) => [
+    "loomhelm",
+    principalId,
+    sessionGeneration,
+    "tasks",
+    "relationships",
+    scope.projectId ?? null,
+    [...taskIds].sort()
+  ] as const,
   mutationNotice: (principalId: string) => ["loomhelm", principalId, "mutation-notice"] as const
 };
 
@@ -838,6 +989,27 @@ export function isCompleteProjectTaskQuery(query: ProjectTaskRefreshQuerySnapsho
     && query.state.fetchStatus === "idle"
     && query.state.data !== undefined
     && complete);
+}
+
+export function resourceReadState<T>(query: {
+  status: string;
+  data?: T;
+  error: unknown;
+  isFetching: boolean;
+}): ResourceReadState<T> {
+  const permissionDenied = query.status === "error" && isPermissionError(query.error);
+  const hasData = query.data !== undefined && !permissionDenied;
+  return {
+    status: query.status === "pending" ? query.isFetching ? "loading" : "idle" : query.status === "error" ? "error" : hasData ? "success" : "idle",
+    ...(hasData ? { data: query.data } : {}),
+    ...(query.error !== null && query.error !== undefined ? { error: query.error } : {}),
+    isFetching: query.isFetching,
+    isStale: hasData && query.isFetching
+  };
+}
+
+function queryHasUsableData(query: { data?: unknown; isError: boolean; error: unknown }): boolean {
+  return query.data !== undefined && !(query.isError && isPermissionError(query.error));
 }
 
 const emptyProjectPermissions: ProjectPermissionSnapshot = {
@@ -1036,10 +1208,18 @@ export async function syncTaskRelations(
 
 const PROJECT_TASK_REFRESH_INTERVAL_MS = 30_000;
 
-export function usePublishedProjectTaskSource({ client, enabled = true, canCreateProjects, principalId, sessionGeneration = 0, taskViews = {}, setTaskView }: ProductionSourceOptions): ProjectTaskSource {
+export function usePublishedProjectTaskSource({ client, enabled = true, canCreateProjects, principalId, sessionGeneration = 0, taskViews = {}, setTaskView }: ProductionSourceOptions): ProductionProjectTaskSource {
   const api = useMemo(() => createPublishedProjectTaskApi(client), [client]);
   const queryClient = useQueryClient();
   const subjectId = principalId ?? "anonymous";
+  const [taskReadScope, setTaskReadScopeState] = useState<TaskReadScope>({ mode: "list" });
+  const setTaskReadScope = useCallback((scope: TaskReadScope) => {
+    const next: TaskReadScope = {
+      ...(scope.projectId ? { projectId: scope.projectId } : {}),
+      mode: scope.mode === "graph" ? "graph" : "list"
+    };
+    setTaskReadScopeState((current) => current.projectId === next.projectId && current.mode === next.mode ? current : next);
+  }, []);
   const sessionIdentityRef = useRef({ principalId: subjectId, sessionGeneration });
   const completeReadRef = useRef<CompleteProjectTaskRead | undefined>(undefined);
   useLayoutEffect(() => {
@@ -1054,34 +1234,56 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     enabled: queryEnabled,
     refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
-  const projectIds = useMemo(() => [...new Set(projectsQuery.isSuccess ? projectsQuery.data.map((project) => project.id) : [])].sort(), [projectsQuery.data, projectsQuery.isSuccess]);
+  const taskListKey = projectTaskQueryKeys.taskList(subjectId, taskReadScope, sessionGeneration);
+  const tasksQuery = useInfiniteQuery({
+    queryKey: taskListKey,
+    queryFn: ({ pageParam }) => readTaskPage(api, taskReadScope.projectId, pageParam, TASK_PAGE_LIMIT),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.next_cursor : undefined,
+    enabled: queryEnabled && projectsQuery.isSuccess,
+    refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
+  });
+  const taskData = useMemo<TaskQueryData>(() => {
+    const pages = tasksQuery.data?.pages ?? [];
+    const items = [...new Map(pages.flatMap((page) => page.items).map((task) => [task.id, task] as const)).values()];
+    const lastPage = pages[pages.length - 1];
+    return {
+      items,
+      relationships: {},
+      deniedTaskIds: [],
+      failures: [],
+      hasMore: tasksQuery.hasNextPage,
+      ...(lastPage?.next_cursor ? { nextCursor: lastPage.next_cursor } : {})
+    };
+  }, [tasksQuery.data, tasksQuery.hasNextPage]);
+  const membershipProjectIds = useMemo(() => membershipScopeProjectIds(taskReadScope, taskData.items), [taskData.items, taskReadScope]);
+  const membershipsQuery = useQuery<MembershipQueryData>({
+    queryKey: projectTaskQueryKeys.memberships(subjectId, membershipProjectIds, sessionGeneration),
+    queryFn: () => readProjectMemberships(api, membershipProjectIds),
+    enabled: queryEnabled && projectsQuery.isSuccess && membershipProjectIds.length > 0,
+    refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
+  });
   const invalidatePermissionScope = useCallback(async (includeProjects: boolean) => {
     const invalidations = [
-      queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.memberships(subjectId, projectIds, sessionGeneration) }),
+      queryClient.invalidateQueries({ queryKey: ["loomhelm", subjectId, sessionGeneration, "memberships"] }),
       queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) })
     ];
     if (includeProjects) invalidations.push(queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.projects(subjectId, sessionGeneration) }));
     await Promise.all(invalidations);
-  }, [projectIds, queryClient, sessionGeneration, subjectId]);
-  const membershipsQuery = useQuery<MembershipQueryData>({
-    queryKey: projectTaskQueryKeys.memberships(subjectId, projectIds, sessionGeneration),
-    queryFn: () => readProjectMemberships(api, projectIds),
-    enabled: queryEnabled && projectsQuery.isSuccess,
-    refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
+  }, [queryClient, sessionGeneration, subjectId]);
+  const relationTaskIds = useMemo(() => taskData.items.map((task) => task.id), [taskData.items]);
+  const relationshipsQuery = useQuery<GraphTaskQueryData>({
+    queryKey: projectTaskQueryKeys.taskRelationshipsScope(subjectId, taskReadScope, relationTaskIds, sessionGeneration),
+    queryFn: () => readGraphTaskData(api, taskData.items),
+    enabled: queryEnabled && taskReadScope.mode === "graph" && tasksQuery.isSuccess && relationTaskIds.length > 0,
+    retry: false
   });
-  const tasksQuery = useQuery<TaskQueryData>({
-    queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration),
-    queryFn: async () => {
-      // Fetch the authorized global set so project views can retain visible cross-project relation nodes.
-      const items = await listAllTasks(api);
-      return readTaskRelationships(api, items);
-    },
-    enabled: queryEnabled && projectsQuery.isSuccess && membershipsQuery.isSuccess,
-    refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
-  });
-
-  const deniedProjectIds = membershipsQuery.isSuccess ? membershipsQuery.data.deniedProjectIds : [];
-  const deniedTaskIds = tasksQuery.isSuccess ? tasksQuery.data.deniedTaskIds : [];
+  const membershipsDataAvailable = queryHasUsableData(membershipsQuery);
+  const deniedProjectIds = membershipsDataAvailable ? membershipsQuery.data?.deniedProjectIds ?? [] : [];
+  const deniedTaskIds = [...new Set([
+    ...taskData.deniedTaskIds,
+    ...(relationshipsQuery.data?.deniedTaskIds ?? [])
+  ])];
   const deniedProjectKey = deniedProjectIds.join("\u0000");
   const deniedTaskKey = deniedTaskIds.join("\u0000");
   const lastDeniedProjectKey = useRef("");
@@ -1168,8 +1370,16 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       projectIds: new Set(refreshedProjects.map((project) => project.id)),
       taskIds: new Set(refreshedTasks.items.map((task) => task.id))
     };
+    const scopedTasks = taskReadScope.projectId
+      ? refreshedTasks.items.filter((task) => task.project_id === taskReadScope.projectId)
+      : refreshedTasks.items;
+    queryClient.setQueryData<TaskQueryData>(taskListKey, {
+      ...refreshedTasks,
+      items: scopedTasks,
+      relationships: Object.fromEntries(scopedTasks.map((task) => [task.id, refreshedTasks.relationships[task.id]]).filter((entry): entry is [string, TaskRelationshipPage] => entry[1] !== undefined))
+    });
     return { projects: refreshedProjects, memberships: refreshedMemberships, tasks: refreshedTasks };
-  }, [api, isCurrentSession, queryClient, sessionGeneration, subjectId]);
+  }, [api, isCurrentSession, queryClient, sessionGeneration, subjectId, taskListKey, taskReadScope]);
   useEffect(() => {
     if (!queryEnabled || typeof window === "undefined") return;
     const apply = (state: MutationNoticeStorageRead, preserveVolatile = false) => {
@@ -1379,41 +1589,53 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     onSuccess: () => queryClient.invalidateQueries({ queryKey: projectTaskQueryKeys.tasks(subjectId, sessionGeneration) })
   });
 
+  const projectsDataAvailable = queryHasUsableData(projectsQuery);
+  const tasksDataAvailable = queryHasUsableData(tasksQuery);
   const projects = useMemo(() => {
     const denied = new Set(deniedProjectIds);
-    return projectsQuery.isSuccess ? projectsQuery.data
+    return projectsDataAvailable ? (projectsQuery.data ?? [])
       .filter((project) => !denied.has(project.id))
       .map((project) => {
         const mapped = mapProject(project);
         const reconciliationNotice = reconciliationNoticeByProjectId.get(project.id);
         return reconciliationNotice ? { ...mapped, reconciliationNotice } : mapped;
       }) : [];
-  }, [deniedProjectIds, projectsQuery.data, projectsQuery.isSuccess, reconciliationNoticeByProjectId]);
+  }, [deniedProjectIds, projectsDataAvailable, projectsQuery.data, reconciliationNoticeByProjectId]);
   const visibleProjectIds = useMemo(() => new Set(projects.map((project) => project.id)), [projects]);
-  const visibleTaskItems = useMemo(() => tasksQuery.isSuccess
-    ? filterTasksToVisibleProjects(tasksQuery.data.items, visibleProjectIds, new Set(deniedTaskIds))
-    : [], [deniedTaskIds, tasksQuery.data, tasksQuery.isSuccess, visibleProjectIds]);
+  const effectiveTaskData = taskReadScope.mode === "graph"
+    ? relationshipsQuery.data ?? (tasksDataAvailable ? taskData : undefined)
+    : tasksDataAvailable ? taskData : undefined;
+  const visibleTaskItems = useMemo(() => {
+    if (!effectiveTaskData) return [];
+    const denied = new Set(deniedTaskIds);
+    const visible = filterTasksToVisibleProjects(effectiveTaskData.items, visibleProjectIds, denied);
+    const externalIds = new Set(effectiveTaskData.externalTaskIds ?? []);
+    return [...visible, ...effectiveTaskData.items.filter((task) => externalIds.has(task.id) && !denied.has(task.id) && !visible.some((item) => item.id === task.id))];
+  }, [deniedTaskIds, effectiveTaskData, visibleProjectIds]);
   const visibleTaskIds = useMemo(() => new Set(visibleTaskItems.map((task) => task.id)), [visibleTaskItems]);
   const relationshipsByTaskId = useMemo(() => {
-    if (!tasksQuery.isSuccess) return {};
-    return Object.fromEntries(Object.entries(tasksQuery.data.relationships)
+    if (!effectiveTaskData) return {};
+    return Object.fromEntries(Object.entries(effectiveTaskData.relationships)
       .filter(([taskId]) => visibleTaskIds.has(taskId))
       .map(([taskId, relationships]) => [taskId, filterTaskRelationships(relationships, visibleTaskIds)]));
-  }, [tasksQuery.data, tasksQuery.isSuccess, visibleTaskIds]);
+  }, [effectiveTaskData, visibleTaskIds]);
   const tasks = useMemo(() => {
     return visibleTaskItems.map((task) => {
-        const mapped = mapTask(task, relationshipsByTaskId[task.id]);
+        const relationships = relationshipsByTaskId[task.id];
+        const mapped = mapTask(task, relationships);
+        const isUnauthorizedExternal = effectiveTaskData?.externalDeniedTaskIds?.includes(task.id) === true;
+        const readable = relationships ? mapped : { ...mapped, relationshipsConfirmed: isUnauthorizedExternal ? false : undefined };
         const reconciliationNotice = reconciliationNoticeByTaskId.get(task.id);
-        return reconciliationNotice ? { ...mapped, relationshipsConfirmed: false, reconciliationNotice } : mapped;
+        return reconciliationNotice ? { ...readable, relationshipsConfirmed: false, reconciliationNotice } : readable;
       });
-  }, [reconciliationNoticeByTaskId, relationshipsByTaskId, visibleTaskItems]);
+  }, [effectiveTaskData?.externalDeniedTaskIds, reconciliationNoticeByTaskId, relationshipsByTaskId, visibleTaskItems]);
   const getProject = useMemo(() => (id: string | undefined) => projects.find((project) => project.id === id), [projects]);
   const getTask = useMemo(() => (id: string | undefined) => tasks.find((task) => task.id === id), [tasks]);
   const getProjectPermissions = useMemo(() => (projectId: string | undefined): ProjectMemberPermissions => {
-    if (!projectId || !membershipsQuery.isSuccess) return emptyProjectPermissions;
+    if (!projectId || !membershipsDataAvailable) return emptyProjectPermissions;
     if (deniedProjectIds.includes(projectId)) return emptyProjectPermissions;
-    return permissionsForProjectMember(membershipsQuery.data.items[projectId] ?? [], principalId);
-  }, [deniedProjectIds, membershipsQuery.data, membershipsQuery.isSuccess, principalId]);
+    return permissionsForProjectMember(membershipsQuery.data?.items[projectId] ?? [], principalId);
+  }, [deniedProjectIds, membershipsDataAvailable, membershipsQuery.data, principalId]);
   const relationMutationsInFlight = useRef(new Set<string>());
   const [relationMutationsPending, setRelationMutationsPending] = useState<ReadonlySet<string>>(() => new Set());
   const setRelationMutationPending = useCallback((taskId: string, pending: boolean) => {
@@ -1426,26 +1648,37 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
   }, []);
   const permissionChanged = deniedProjectIds.length > 0 || deniedTaskIds.length > 0;
   const queryPending = projectsQuery.isPending
-    || (projectsQuery.isSuccess && membershipsQuery.isPending)
-    || (membershipsQuery.isSuccess && tasksQuery.isPending);
-  const queryError = projectsQuery.isError || membershipsQuery.isError || tasksQuery.isError;
-  const projectWriteReady = projectsQuery.isSuccess && membershipsQuery.isSuccess && !projectsQuery.isError && !membershipsQuery.isError;
+    || (membershipProjectIds.length > 0 && membershipsQuery.isPending && !membershipsDataAvailable)
+    || (tasksQuery.isPending && !tasksDataAvailable);
+  const queryError = (projectsQuery.isError && !projectsDataAvailable) || (membershipsQuery.isError && !membershipsDataAvailable) || (tasksQuery.isError && !tasksDataAvailable);
+  const projectWriteReady = projectsQuery.isSuccess && (!membershipProjectIds.length || membershipsQuery.isSuccess) && !projectsQuery.isError && !membershipsQuery.isError;
   const partialReadFailures = useMemo(() => [
-    ...(membershipsQuery.isSuccess ? membershipsQuery.data.failures : []),
-    ...(tasksQuery.isSuccess ? tasksQuery.data.failures : [])
-  ], [membershipsQuery.data, membershipsQuery.isSuccess, tasksQuery.data, tasksQuery.isSuccess]);
+    ...(membershipsQuery.data?.failures ?? []),
+    ...taskData.failures,
+    ...(relationshipsQuery.data?.failures ?? [])
+  ], [membershipsQuery.data, relationshipsQuery.data, taskData.failures]);
   const readNotice = !enabled || !principalId
     ? "当前认证装配尚未就绪，页面不会请求受保护数据。"
     : queryError
       ? "部分项目、成员、任务或关系读取失败；未确认的数据已隐藏，未受影响的项目范围仍按权限工作。"
+      : taskReadScope.mode === "graph" && relationshipsQuery.isError && !relationshipsQuery.data
+        ? "当前图谱关系读取失败；最近成功的任务数据仍然保留，请重试当前图谱。"
       : partialReadFailures.length
         ? `部分项目成员或任务关系读取失败；未受影响的范围仍可继续使用：${partialReadFailures.join("；")}`
         : deniedProjectIds.length || deniedTaskIds.length
           ? `部分项目或任务权限已收紧；受影响的资源和关系已隐藏，未受影响的范围仍可继续使用。`
         : undefined;
+  const hasMoreTasks = Boolean(tasksQuery.hasNextPage);
+  const isLoadingMoreTasks = tasksQuery.isFetchingNextPage;
+  const loadMoreTasks = useCallback(async () => {
+    if (!tasksQuery.hasNextPage || tasksQuery.isFetchingNextPage) return;
+    await tasksQuery.fetchNextPage();
+  }, [tasksQuery.fetchNextPage, tasksQuery.hasNextPage, tasksQuery.isFetchingNextPage]);
 
   return useMemo(() => {
     const getTasksForScope = (targetProjectId?: string) => {
+      if (targetProjectId && taskReadScope.projectId !== targetProjectId) return [];
+      if (!targetProjectId && taskReadScope.projectId) return [];
       if (!targetProjectId) return tasks;
       const local = tasks.filter((task) => task.projectId === targetProjectId);
       const related = new Set(local.flatMap((task) => {
@@ -1968,6 +2201,19 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       projects,
       tasks,
       status: !enabled || !principalId ? "unauthenticated" : queryPending ? "loading" : queryError ? "error" : "ready",
+      resourceStates: {
+        projects: resourceReadState(projectsQuery),
+        memberships: resourceReadState(membershipsQuery),
+        tasks: resourceReadState({ status: tasksQuery.status, data: taskData, error: tasksQuery.error, isFetching: tasksQuery.isFetching }),
+        relationships: taskReadScope.mode === "graph"
+          ? resourceReadState(relationshipsQuery)
+          : { status: "idle" as const, isFetching: false, isStale: false }
+      },
+      taskReadScope,
+      setTaskReadScope,
+      hasMoreTasks,
+      isLoadingMoreTasks,
+      loadMoreTasks,
       pendingProjectCreation,
       pendingTaskCreation,
       pendingProjectCreationResourceId,
@@ -2001,6 +2247,6 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       changeTaskRelations,
       refresh,
       notice: [readNotice, ...mutationNoticeQuery.data.map((notice) => notice.message)].filter(Boolean).join(" ") || undefined
-    } satisfies ProjectTaskSource;
-  }, [api, canCreateProjects, clearMutationNotice, clearProjectMutationNotices, clearTaskMutationNotices, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, invalidatePermissionScope, isCurrentSession, mutationNoticeKey, mutationNoticeQuery.data, pendingProjectCreation, pendingProjectCreationNoticeId, pendingProjectCreationResourceId, pendingTaskCreation, pendingTaskCreationNoticeId, pendingTaskCreationResourceId, permissionChanged, principalId, projectWriteReady, projects, queryError, queryPending, queryClient, readNotice, recordMutationNotice, recordMutationNoticeWithFallback, refreshProjectTaskQueries, relationshipsByTaskId, relationMutationsPending, remoteRefreshScopeState, sessionGeneration, setRelationMutationPending, setTaskView, subjectId, taskViews, tasks, updateMutationNotices, updateProjectMutation, updateTaskMutation]);
+    } satisfies ProductionProjectTaskSource;
+  }, [api, canCreateProjects, clearMutationNotice, clearProjectMutationNotices, clearTaskMutationNotices, createProjectMutation, createTaskMutation, deleteProjectMutation, deleteTaskMutation, enabled, getProject, getProjectPermissions, getTask, handleFailure, hasMoreTasks, invalidatePermissionScope, isCurrentSession, isLoadingMoreTasks, loadMoreTasks, membershipProjectIds, membershipsDataAvailable, membershipsQuery, mutationNoticeKey, mutationNoticeQuery.data, pendingProjectCreation, pendingProjectCreationNoticeId, pendingProjectCreationResourceId, pendingTaskCreation, pendingTaskCreationNoticeId, pendingTaskCreationResourceId, permissionChanged, principalId, projectWriteReady, projects, projectsDataAvailable, projectsQuery, queryError, queryPending, queryClient, readNotice, recordMutationNotice, recordMutationNoticeWithFallback, refreshProjectTaskQueries, relationshipsByTaskId, relationshipsQuery, relationMutationsPending, remoteRefreshScopeState, sessionGeneration, setRelationMutationPending, setTaskReadScope, setTaskView, subjectId, taskData, taskReadScope, taskViews, tasks, tasksDataAvailable, tasksQuery, updateMutationNotices, updateProjectMutation, updateTaskMutation]);
 }
