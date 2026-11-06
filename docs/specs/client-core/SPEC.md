@@ -6,7 +6,9 @@
 
 ## Terms and Interfaces
 
-Task 表示工作目标；Run 表示执行尝试；Receipt 表示账本中的重要执行事实。公共入口为 `client/src/index.ts` 与本地 CLI，持久化格式以 `schemaVersion` 标识。
+本主题使用与 [术语表](../../../GLOSSARY.md) 一致的对象定义：Task 是具有稳定身份、目标、范围、验收条件和依赖的工作单元；Run 是一次 Task 执行尝试；Receipt 是账本中的可验证重要执行事实；Ledger 是按顺序保存 Receipt、摘要链和恢复信息的本地账本；operation identity 是识别一次请求的稳定键；`schemaVersion` 是持久化格式版本键。Codex thread、turn 和 Dispatch 属于客户端总体设计，但不属于本核心 SPEC 的接口。
+
+公共源码入口为 `client/src/index.ts`，构建后的本地 CLI 为 `client/dist/cli.js`；两者共享同一核心合同。
 
 ## Requirements
 
@@ -16,7 +18,7 @@ Task 表示工作目标；Run 表示执行尝试；Receipt 表示账本中的重
 
 ### REQ-CORE-002
 
-任务 MUST 具备目标、范围、验收条件、依赖和稳定身份。开始运行 MUST 检查依赖成功，失败、阻塞和中断允许显式重试；成功、取消和跳过保持终态。每次尝试 MUST 具有独立 Run 身份。
+Task MUST 具备目标、范围、验收条件、依赖和稳定身份。相同 operation identity 的请求 MUST 表示同一事实；不同请求不得复用该身份。开始运行 MUST 检查依赖成功，失败、阻塞和中断允许显式重试；成功、取消和跳过保持终态。每次尝试 MUST 具有独立 Run 身份。
 
 ### REQ-CORE-003
 
