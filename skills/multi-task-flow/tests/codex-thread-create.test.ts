@@ -66,6 +66,7 @@ async function withControlServer(scenario: "success" | "mismatch" | "reject" | "
     if (previous === undefined) delete process.env.CODEX_APP_SERVER_SOCKET;
     else process.env.CODEX_APP_SERVER_SOCKET = previous;
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (scenario === "send") expect(completed).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -95,8 +96,9 @@ for (const scenario of ["mismatch", "reject", "timeout", "missing-id"] as const)
 }
 
 test("notification rejoins the exact thread on its new connection before starting a turn", async () => {
-  await withControlServer("send", (calls, result) => {
+  await withControlServer("send", (calls, result, completed) => {
     expect(result.outcome).toBe("sent");
+    expect(completed).toBe(false);
     expect(calls.map(c=>c.method)).toEqual(["initialize","thread/resume","turn/start"]);
     expect(calls[1].params).toEqual({threadId:"test-thread",excludeTurns:true});
     expect(calls[2].params.threadId).toBe("test-thread");

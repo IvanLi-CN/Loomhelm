@@ -15039,7 +15039,7 @@
       "path": "skills/multi-task-flow/tests/codex-thread-create.test.ts",
       "sourceBlob": "f52ecd6a4edd45ebe4afde6596466dc3a7c17151",
       "sourceSha256": "fd3b706a43f7a6c13539199b43157d19d47fa0508e6a84a852a403f7222bda6b",
-      "installedSha256": "f3b6966f42a02a1975b87e86e14fc8783dd15b91e5a1d3cf652b44abc96550df",
+      "installedSha256": "d0e2f33a5d32871ff2fc584b85a505d850bc34334b6a856496b0c5a0eda69acd",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {

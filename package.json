@@ -16,7 +16,7 @@
     "check:client": "scripts/checks client",
     "skills:build": "node scripts/build-skills-native.mjs && bun scripts/build-client-skills.mjs && bun run --cwd skills/multi-task-flow build",
     "skills:package": "npm run build --prefix clients/typescript",
-    "skills:test": "bun test ./bin/tests && bun run --cwd skills/multi-task-flow test:all",
+    "skills:test": "bun test ./bin/tests ./bin/native-tests && bun run --cwd skills/multi-task-flow test:all",
     "test:core": "bun test ./bin/tests/core",
     "test:hosting": "bun test ./bin/tests/hosting",
     "test:flow": "bun test ./bin/tests/flow",
