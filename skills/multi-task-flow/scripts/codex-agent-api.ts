@@ -69,11 +69,14 @@ export async function sendCodexMessage(input: {
     });
     if (resumed.error)
       throw new Error(String(record(resumed.error)?.message ?? "Codex app-server rejected thread/resume"));
-    const started = await rpc(socket, buffer, 3, "turn/start", {
+    // Keep the connection until the receiving turn persists its terminal event.
+    // Closing the last subscriber immediately after acceptance unloads the
+    // thread and can interrupt the very notification we just delivered.
+    const started = await startTurnAndWait(socket, buffer, {
       threadId: input.recipient_thread_id,
       input: [{ type: "text", text: input.prompt }],
       clientUserMessageId: callId,
-    });
+    }, input.recipient_thread_id);
     if (started.error)
       throw new Error(
         String(
@@ -93,7 +96,7 @@ export async function sendCodexMessage(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      outcome: message.includes("timed out") ? "unknown" : "failed",
+      outcome: message.includes("timed out") || message.includes("turn ended with status") || message.includes("closed the WebSocket") ? "unknown" : "failed",
       provider_receipt: {
         provider: "codex-app-server",
         evidence_ref: `codex-app-server:${callId}:error`,

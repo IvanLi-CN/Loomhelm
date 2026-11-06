@@ -14551,7 +14551,7 @@
       "path": "skills/multi-task-flow/scripts/codex-agent-api.ts",
       "sourceBlob": "9da71593a7cb28f66f3f360fb0b0ef315d0dd741",
       "sourceSha256": "075920b9d61a0125830c8fc6383037b153a62f579b76d210486b464e9d3dd4ee",
-      "installedSha256": "7cb0693d6bac6cefbad0752dc3319dfafae02a83d6182aef5e0c83c639ebf994",
+      "installedSha256": "6e79c7cf141f1b60b5efd8fd8bd3458cdb31dba71711059a4b40232983b02784",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
