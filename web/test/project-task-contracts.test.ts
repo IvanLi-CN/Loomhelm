@@ -34,6 +34,7 @@ import {
   readTaskRelationships,
   relationWriteBlockReason,
   releaseMutationRefreshScopes,
+  selectEffectiveTaskData,
   stableBlockedWriteMessage,
   syncTaskRelations,
   toProjectUpdateRequest,
@@ -270,6 +271,26 @@ describe("project/task write contracts", () => {
     expect(graph.items.find((task) => task.id === unavailableId)).toMatchObject({ id: unavailableId, title: "关系任务暂不可用", project_id: "__loomhelm_unavailable__" });
     expect(graph.relationships[local.id]?.parents[0]?.parent_task_id).toBe(unavailableId);
     expect(graph.failures).toHaveLength(1);
+  });
+
+  test("fails closed when the current graph task projection loses permission", () => {
+    const taskData = {
+      items: [protocolTask("task-local")],
+      relationships: {},
+      deniedTaskIds: [],
+      failures: []
+    };
+    const graphData = {
+      ...taskData,
+      externalTaskIds: ["task-external"],
+      externalDeniedTaskIds: [],
+      externalUnavailableTaskIds: []
+    };
+
+    expect(selectEffectiveTaskData("graph", taskData, false, graphData, true)).toBeUndefined();
+    expect(selectEffectiveTaskData("graph", taskData, true, graphData, true)).toBe(graphData);
+    expect(selectEffectiveTaskData("graph", taskData, true, graphData, false)).toBe(taskData);
+    expect(selectEffectiveTaskData("list", taskData, false, graphData, true)).toBeUndefined();
   });
 
   test("distinguishes cached stale data from an initial loading or failed resource", () => {
