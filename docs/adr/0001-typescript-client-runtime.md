@@ -28,7 +28,7 @@ Loomhelm 客户端必须能够独立运行，主要承担两组能力：
 
 ## 与核心 SPEC 的关系
 
-本 ADR 约束整个 Loomhelm 客户端的语言、运行时和本地优先边界；`docs/specs/client-core/SPEC.md` 只定义第一阶段可独立交付的核心子集。核心 SPEC 排除 Codex app-server 协议、Skills 迁移、Dispatch、Multi-task Flow、Connected mode、Web App 和服务端，不代表这些能力不属于客户端总体设计，而是将它们留给后续主题 SPEC。
+本 ADR 约束整个 Loomhelm 客户端的语言、运行时和本地优先边界；`docs/specs/client-core/SPEC.md` 只定义第一阶段可独立交付的核心子集。核心 SPEC 只交付基础子集；Codex app-server、Skills、Dispatch、Multi-task Flow、Connected mode 属于客户端的其他主题能力；Web App 与服务端始终是独立产品端，不属于客户端能力范围。
 
 客户端合同统一使用以下对象含义：Task 是具有稳定身份、目标、范围、验收条件和依赖的工作单元；Run 是一次 Task 执行尝试；Receipt 是重要执行事实；本地账本保存这些事实及其恢复所需的摘要链。术语表是跨文档名称的索引，核心 SPEC 中的 MUST 要求仍是核心子集的规范来源。
 
