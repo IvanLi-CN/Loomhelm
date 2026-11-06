@@ -173,14 +173,17 @@ func (e *CommandExecutor) Observe(ctx context.Context, status Status) (Observati
 		result.SharedWorkerLoadReason = "no ready Worker generation supplied a load sample"
 	}
 
-	allServersMeasured := len(result.Slots) > 0
+	allServersMeasured := false
 	measuredServers := 0
 	for index := range result.Slots {
-		if result.Slots[index].Server.State == ObservationMeasured {
-			measuredServers++
-		} else {
-			allServersMeasured = false
+		if result.Slots[index].Slot != status.ActiveSlot {
+			continue
 		}
+		allServersMeasured = result.Slots[index].Server.State == ObservationMeasured
+		if allServersMeasured {
+			measuredServers++
+		}
+		break
 	}
 	if measuredServers == 0 {
 		if e.lastObservation != nil {
