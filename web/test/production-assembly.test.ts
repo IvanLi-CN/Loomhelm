@@ -220,6 +220,35 @@ test("invalidates the previous bound principal when background validation change
   expect(projectRequests).toBe(0);
 });
 
+test("invalidates the old binding for session endpoint 401 and 403 responses", async () => {
+  for (const status of [401, 403]) {
+    const session = { user_id: "user/browser", csrf_protection: "same_origin" };
+    let sessionRequests = 0;
+    let projectRequests = 0;
+    const authenticatedClient = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url) => {
+        if (url.pathname.endsWith("/auth/session")) {
+          sessionRequests += 1;
+          return sessionRequests === 1
+            ? Response.json(session)
+            : Response.json({ code: status === 401 ? "unauthorized" : "forbidden" }, { status });
+        }
+        projectRequests += 1;
+        return Response.json({ items: [] });
+      }
+    });
+
+    await authenticatedClient.bootstrapBrowserSession();
+    const boundClient = authenticatedClient.bindBrowserSession({ principalId: session.user_id, epoch: 0 });
+    await expect(authenticatedClient.revalidateBrowserSession()).rejects.toMatchObject({ status });
+    await expect(boundClient.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(sessionRequests).toBe(2);
+    expect(projectRequests).toBe(0);
+  }
+});
+
 test("keeps the authenticated identity and client while surfacing a recoverable validation message", () => {
   const assembly = createAuthenticatedProductionAssembly(client, { user_id: "user/browser", csrf_protection: "same_origin" }, 3);
   const warned = withProductionAuthMessage(assembly, "后台验证浏览器会话失败，请稍后重试。");

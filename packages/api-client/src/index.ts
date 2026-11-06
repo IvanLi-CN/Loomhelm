@@ -154,6 +154,7 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
       headers
     });
     await notifyUnauthorized(response, false);
+    if (response.status === 403) invalidateBrowserSession();
     return response;
   };
 
