@@ -1012,6 +1012,18 @@ function queryHasUsableData(query: { data?: unknown; isError: boolean; error: un
   return query.data !== undefined && !(query.isError && isPermissionError(query.error));
 }
 
+export function selectEffectiveTaskData(
+  mode: TaskReadScope["mode"],
+  taskData: TaskQueryData,
+  tasksDataAvailable: boolean,
+  relationshipsData: GraphTaskQueryData | undefined,
+  relationshipsDataAvailable: boolean
+): TaskQueryData | undefined {
+  if (!tasksDataAvailable) return undefined;
+  if (mode !== "graph" || !relationshipsDataAvailable) return taskData;
+  return relationshipsData ?? taskData;
+}
+
 const emptyProjectPermissions: ProjectPermissionSnapshot = {
   role: null,
   canWrite: false,
@@ -1597,6 +1609,7 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
 
   const projectsDataAvailable = queryHasUsableData(projectsQuery);
   const tasksDataAvailable = queryHasUsableData(tasksQuery);
+  const relationshipsDataAvailable = queryHasUsableData(relationshipsQuery);
   const projects = useMemo(() => {
     const denied = new Set(deniedProjectIds);
     return projectsDataAvailable ? (projectsQuery.data ?? [])
@@ -1608,9 +1621,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
       }) : [];
   }, [deniedProjectIds, projectsDataAvailable, projectsQuery.data, reconciliationNoticeByProjectId]);
   const visibleProjectIds = useMemo(() => new Set(projects.map((project) => project.id)), [projects]);
-  const effectiveTaskData = useMemo(() => taskReadScope.mode === "graph"
-    ? relationshipsQuery.data ?? (tasksDataAvailable ? taskData : undefined)
-    : tasksDataAvailable ? taskData : undefined, [relationshipsQuery.data, taskData, taskReadScope.mode, tasksDataAvailable]);
+  const effectiveTaskData = useMemo(
+    () => selectEffectiveTaskData(taskReadScope.mode, taskData, tasksDataAvailable, relationshipsQuery.data, relationshipsDataAvailable),
+    [relationshipsDataAvailable, relationshipsQuery.data, taskData, taskReadScope.mode, tasksDataAvailable]
+  );
   const visibleTaskItems = useMemo(() => {
     if (!effectiveTaskData) return [];
     const denied = new Set(deniedTaskIds);
