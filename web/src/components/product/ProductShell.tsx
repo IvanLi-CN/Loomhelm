@@ -21,13 +21,17 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { useDemoRuntime, useOptionalDemoRuntime } from "@/demo/context";
 import type { ThemeMode } from "@/demo/types";
 import { useOptionalDemoProjectTaskSource } from "@/features/tasks/demo-store";
-import { useOptionalProjectTaskSource } from "@/features/tasks/source";
+import { ProjectTaskSourceProvider, useProjectTaskSourceContext } from "@/features/tasks/source";
 import type { ProjectTaskSource } from "@/features/tasks/types";
 
 import { DemoInspector, DemoNotice, DemoSceneBanner } from "./DemoInspector";
 import { useRouteContentFocus } from "./route-focus";
 
 type MobileCloseReason = "dismiss" | "navigate";
+
+export function productionShellMountIdentity(principalId?: string): string {
+  return principalId ?? "unauthenticated";
+}
 
 export function MobileNavigationBackdrop({ onDismiss }: { onDismiss: () => void }) {
   return <button type="button" className="mobile-backdrop" aria-label="关闭导航" onClick={onDismiss} />;
@@ -320,9 +324,9 @@ function ProductionAuthGate() {
   );
 }
 
-function ProductionShell() {
+function ProductionShellContent() {
   const assembly = useOptionalProductionApi();
-  const source = useOptionalProjectTaskSource();
+  const source = useProjectTaskSourceContext() ?? null;
   const { login, logout, logoutPending } = useProductionAuthActions();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const contentRef = useRouteContentFocus(pathname);
@@ -365,7 +369,7 @@ function ProductionShell() {
   };
 
   return (
-    <div className="product-shell" data-runtime="production">
+    <div className="product-shell" data-runtime="production" data-mount-identity={productionShellMountIdentity(assembly?.auth.principalId)}>
       <aside ref={drawerRef} id="production-mobile-navigation" className={`product-sidebar ${mobileOpen ? "product-sidebar-open" : ""}`} role={active ? "dialog" : undefined} aria-modal={active ? true : undefined} aria-label={active ? "移动端主导航" : undefined} aria-hidden={isMobile && !active ? true : undefined}>
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true"><FlaskConical size={21} strokeWidth={1.8} /></span>
@@ -417,6 +421,16 @@ function ProductionShell() {
         </main>
       </div>
     </div>
+  );
+}
+
+function ProductionShell() {
+  const assembly = useOptionalProductionApi();
+  const mountIdentity = productionShellMountIdentity(assembly?.auth.principalId);
+  return (
+    <ProjectTaskSourceProvider>
+      <ProductionShellContent key={mountIdentity} />
+    </ProjectTaskSourceProvider>
   );
 }
 
