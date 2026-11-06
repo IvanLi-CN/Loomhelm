@@ -10,7 +10,9 @@ npm run test:bun
 node dist/cli.js --config config.example.json status
 ```
 
-配置路径显式传入；相对 `stateDir` 相对于配置文件所在目录解析。未传配置时使用 `~/.loomhelm`。配置拒绝未知字段、未知版本及尚未实现的 Connected mode。示例配置将本地证据保存在忽略提交的 `clients/typescript/.loomhelm/`。
+配置路径显式传入；相对 `stateDir` 相对于配置文件所在目录解析。未传配置时使用 `~/.loomhelm`。配置拒绝未知字段、未知版本及尚未实现的 Connected mode。源码从 `client/` 移入本目录后，示例配置使用 `../../client/.loomhelm`，继续读取仓库中原来的 `client/.loomhelm/`，该目录仍被根 Git 忽略规则排除。此兼容目录只保存状态，不放置客户端源码。
+
+目录迁移不改变状态格式，不自动复制、合并或删除状态；任务、回执、Dispatch 身份和锁保持原路径。升级前停止正在使用该状态目录的客户端并备份该目录，再使用本目录的示例配置核对已有任务和回执；重复启动仍使用同一路径，旧版程序也能读取原状态。自定义配置保持原文件位置和 `stateDir`；若手动搬动配置，应把 `stateDir` 改为原状态目录的绝对路径。不要通过创建空状态目录代替恢复历史身份；需要回退时使用备份单独恢复，不自动逆转状态。
 
 ## 本地任务闭环
 

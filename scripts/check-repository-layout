@@ -23,8 +23,9 @@ errors = [f"missing component: {path}" for path in required if not (root / path)
 package = json.loads((root / "package.json").read_text(encoding="utf-8"))
 if package.get("workspaces") != ["web", "packages/*"]:
     errors.append("root workspaces must preserve the Web/shared-package dependency boundary")
-if (root / "client").exists():
-    errors.append("obsolete client/ directory remains; TypeScript client belongs in clients/typescript/")
+legacy = root / "client"
+if legacy.exists() and (not legacy.is_dir() or any(path.name != ".loomhelm" for path in legacy.iterdir())):
+    errors.append("obsolete client/ source remains; only retained .loomhelm state is allowed there")
 if errors:
     raise SystemExit("\n".join(errors))
 print("repository layout: server, Go client, Web App and independent TypeScript client present")

@@ -69,6 +69,35 @@ test('config is explicit, versioned and resolves relative state paths', () => te
   }
 }));
 
+test('relocated sample config reopens legacy receipts and operation identities', () => temporary(async dir => {
+  const oldPackage = join(dir, 'client');
+  const newPackage = join(dir, 'clients', 'typescript');
+  await mkdir(oldPackage, { recursive: true });
+  await mkdir(newPackage, { recursive: true });
+  const oldConfig = join(oldPackage, 'config.example.json');
+  const newConfig = join(newPackage, 'config.example.json');
+  await writeFile(oldConfig, JSON.stringify({ schemaVersion: 1, mode: 'local', stateDir: '.loomhelm' }));
+  await writeFile(newConfig, await readFile(new URL('../config.example.json', import.meta.url)));
+  const operation = task('retained');
+  const before = await LocalClient.open(oldConfig);
+  let receipt;
+  try { receipt = await before.ledger.execute('retained-request', operation); }
+  finally { await before.close(); }
+  const statePath = (await loadConfig(oldConfig)).stateDir;
+  const ledgerBefore = await readFile(join(statePath, 'ledger.json'), 'utf8');
+  assert.equal((await loadConfig(newConfig)).stateDir, statePath);
+  // Re-entry must retain request identity, rather than create a second ledger.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const after = await LocalClient.open(newConfig);
+    try {
+      assert.equal(after.ledger.snapshot().tasks.retained.id, 'retained');
+      assert.deepEqual(await after.ledger.execute('retained-request', operation), receipt);
+      await assert.rejects(after.ledger.execute('retained-request', task('different')), /conflict/);
+    } finally { await after.close(); }
+  }
+  assert.equal(await readFile(join(statePath, 'ledger.json'), 'utf8'), ledgerBefore);
+}));
+
 test('LocalClient owns task process lifecycle and stops active work on close', () => temporary(async dir => {
   const config = join(dir, 'config.json'); await writeFile(config, JSON.stringify({ stateDir: 'state', processTimeoutMs: 5000 }));
   const client = await LocalClient.open(config);

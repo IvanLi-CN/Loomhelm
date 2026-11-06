@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "mode": "local",
-  "stateDir": ".loomhelm",
+  "stateDir": "../../client/.loomhelm",
   "processTimeoutMs": 30000
 }
