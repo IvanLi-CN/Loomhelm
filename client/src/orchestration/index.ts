@@ -1,4 +1,8 @@
 import type { Ledger } from '../tasks/ledger.js';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { atomicWrite } from '../runtime/files.js';
+import { StateLock } from '../runtime/lock.js';
 
 export type FlowTaskKind = 'contribution' | 'acceptance' | 'verification' | 'coordination';
 export type FlowTaskState = 'pending' | 'running' | 'succeeded' | 'failed' | 'blocked' | 'interrupted' | 'superseded';
@@ -36,7 +40,11 @@ export interface OrchestratorOptions {
   maxRunning?: number;
   /** Optional core Ledger used for durable run.start/run.finish facts. */
   ledger?: Ledger;
+  /** Directory for durable orchestration state and restart recovery. */
+  stateDir?: string;
 }
+
+interface OrchestrationJournal { schemaVersion: 1; tasks: FlowTask[] }
 
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
 function taskTerminal(kind: FlowTaskKind, terminal: FlowTerminal): boolean {
@@ -81,12 +89,80 @@ export class TaskOrchestrator {
   readonly graph: TaskGraph;
   readonly maxRunning: number;
   private readonly ledger: Ledger | undefined;
+  private readonly stateDir: string | undefined;
 
   constructor(tasks: readonly FlowTaskInput[] | TaskGraph, options: OrchestratorOptions = {}) {
     this.graph = tasks instanceof TaskGraph ? tasks : new TaskGraph(tasks);
     this.maxRunning = options.maxRunning ?? 3;
     if (!Number.isSafeInteger(this.maxRunning) || this.maxRunning < 1) throw new Error('maxRunning must be a positive integer');
     this.ledger = options.ledger;
+    this.stateDir = options.stateDir;
+  }
+
+  /** Open a scheduler and restore its task facts from the durable journal. */
+  static async open(tasks: readonly FlowTaskInput[] | TaskGraph, options: OrchestratorOptions = {}): Promise<TaskOrchestrator> {
+    const scheduler = new TaskOrchestrator(tasks, options);
+    if (!scheduler.stateDir) return scheduler;
+    await scheduler.withJournal(records => {
+      if (records.length === 0) return scheduler.snapshot();
+      const byId = new Map(records.map(task => [task.id, task]));
+      for (const task of scheduler.graph.tasks.values()) {
+        const saved = byId.get(task.id);
+        if (!saved) continue;
+        task.state = saved.state; task.attempts = saved.attempts;
+        if (saved.terminal) task.terminal = saved.terminal; else delete task.terminal;
+        if (saved.detail) task.detail = saved.detail; else delete task.detail;
+      }
+      return scheduler.snapshot();
+    }, true);
+    return scheduler;
+  }
+
+  private journalPath(): string | undefined { return this.stateDir ? join(this.stateDir, 'orchestration.json') : undefined; }
+
+  private async readJournal(): Promise<FlowTask[]> {
+    const path = this.journalPath();
+    if (!path) return this.snapshot();
+    try {
+      const value = JSON.parse(await readFile(path, 'utf8')) as OrchestrationJournal;
+      if (value.schemaVersion !== 1 || !Array.isArray(value.tasks)) throw new Error('Invalid orchestration journal');
+      return value.tasks;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  private async withJournal<T>(mutate: (records: FlowTask[]) => T | Promise<T>, initialize = false): Promise<T> {
+    const path = this.journalPath();
+    if (!path) return mutate(this.snapshot());
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      let lock: StateLock | undefined;
+      try {
+        lock = await StateLock.acquire(this.stateDir!);
+        const records = await this.readJournal();
+        const source = records.length === 0 && initialize ? this.snapshot() : records;
+        const value = await mutate(source);
+        await atomicWrite(path, { schemaVersion: 1, tasks: source });
+        return value;
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof Error) || !error.message.startsWith('State directory locked:')) throw error;
+        await new Promise(resolve => setTimeout(resolve, 5));
+      } finally {
+        if (lock) await lock.release();
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Unable to acquire orchestration state lock');
+  }
+
+  private syncTask(saved: FlowTask): void {
+    const local = this.graph.tasks.get(saved.id);
+    if (!local) return;
+    local.state = saved.state; local.attempts = saved.attempts;
+    if (saved.terminal) local.terminal = saved.terminal; else delete local.terminal;
+    if (saved.detail) local.detail = saved.detail; else delete local.detail;
   }
 
   snapshot(): FlowTask[] { return this.graph.snapshot(); }
@@ -120,7 +196,19 @@ export class TaskOrchestrator {
     if (!task) throw new Error('Flow task not found');
     if (task.state !== 'pending' || task.superseded || !this.dependenciesSucceeded(task)) throw new Error(`Flow task ${id} is not ready`);
     if (this.running().length >= this.maxRunning) throw new Error('Execution capacity exhausted');
+    if (this.stateDir) {
+      const saved = await this.withJournal(records => {
+        const current = records.find(item => item.id === id) ?? task;
+        const running = records.filter(item => item.state === 'running').length;
+        if (current.state !== 'pending' || running >= this.maxRunning || !current.dependencies.every(dep => ['succeeded', 'superseded'].includes(records.find(item => item.id === dep)?.state ?? this.graph.tasks.get(dep)!.state))) throw new Error(`Flow task ${id} is not ready`);
+        current.state = 'running'; current.attempts += 1; delete current.detail;
+        const index = records.findIndex(item => item.id === id); if (index < 0) records.push(current);
+        return structuredClone(current);
+      }, true);
+      this.syncTask(saved);
+    }
     task.state = 'running'; task.attempts += 1; delete task.detail;
+    if (this.stateDir) { task.attempts -= 1; }
     try {
       if (this.ledger) {
         const core = this.ledger.snapshot().tasks[id];
@@ -138,6 +226,17 @@ export class TaskOrchestrator {
     if (!task) throw new Error('Flow task not found');
     if (task.state !== 'running') throw new Error(`Flow task ${id} is not running`);
     if (!taskTerminal(task.kind, terminal)) throw new Error(`Terminal ${terminal} does not satisfy ${task.kind}`);
+    if (this.stateDir) {
+      const saved = await this.withJournal(records => {
+        const current = records.find(item => item.id === id) ?? task;
+        if (current.state !== 'running') throw new Error(`Flow task ${id} is not running`);
+        current.state = terminal === 'merged' || terminal === 'passed' || terminal === 'completed' ? 'succeeded' : terminal;
+        current.terminal = terminal; if (detail) current.detail = detail; else delete current.detail;
+        const index = records.findIndex(item => item.id === id); if (index < 0) records.push(current);
+        return structuredClone(current);
+      }, true);
+      this.syncTask(saved);
+    }
     const previous = { state: task.state, terminal: task.terminal, detail: task.detail };
     task.state = terminal === 'merged' || terminal === 'passed' || terminal === 'completed' ? 'succeeded' : terminal;
     task.terminal = terminal; if (detail) task.detail = detail; else delete task.detail;
@@ -162,6 +261,20 @@ export class TaskOrchestrator {
       task.state = 'pending'; task.detail = 'Recovered after interrupted scheduler'; recovered.push(task.id);
     }
     return recovered;
+  }
+
+  /** Persist recovery after a restart; unlike recover(), this waits for the lock and write. */
+  async recoverPersisted(): Promise<string[]> {
+    if (!this.stateDir) return this.recover();
+    const recovered = await this.withJournal(records => {
+      const ids: string[] = [];
+      for (const task of records) if (task.state === 'running' || task.state === 'interrupted') {
+        task.state = 'pending'; delete task.detail; ids.push(task.id);
+      }
+      return { ids, records: structuredClone(records) };
+    }, true);
+    for (const task of recovered.records) this.syncTask(task);
+    return recovered.ids;
   }
 
   result(): FlowResult {

@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { atomicWrite } from '../runtime/files.js';
+import { StateLock } from '../runtime/lock.js';
 
 export interface StartThreadRequest {
   requestId: string;
@@ -65,6 +69,16 @@ export interface DispatchRecord extends DispatchInput {
   updatedAt: string;
 }
 
+export interface DispatchOptions {
+  /** Directory for the dispatch journal. Omit for process-local use in isolated tests. */
+  stateDir?: string;
+}
+
+interface DispatchJournal {
+  schemaVersion: 1;
+  records: DispatchRecord[];
+}
+
 export class DispatchUncertainError extends Error {
   readonly uncertain = true;
   constructor(message = 'Dispatch result is uncertain') {
@@ -94,10 +108,75 @@ export class ThreadDispatcher {
   private readonly identities = new Map<string, string>();
   private readonly requests = new Map<string, { key: string; id: string }>();
 
-  constructor(private readonly adapter: DispatchAdapter) {}
+  constructor(private readonly adapter: DispatchAdapter, private readonly options: DispatchOptions = {}) {}
+
+  private journalPath(): string | undefined {
+    return this.options.stateDir ? join(this.options.stateDir, 'dispatch.json') : undefined;
+  }
+
+  private async readPersistent(): Promise<DispatchRecord[]> {
+    const path = this.journalPath();
+    if (!path) return [...this.records.values()];
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as DispatchJournal;
+      if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.records)) throw new Error('Invalid dispatch journal');
+      return parsed.records.map(record => structuredClone(record));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  private cache(records: readonly DispatchRecord[]): void {
+    this.records.clear(); this.identities.clear(); this.requests.clear();
+    for (const record of records) {
+      this.records.set(record.id, structuredClone(record));
+      const key = inputKey(record);
+      this.identities.set(key, record.id);
+      this.requests.set(record.requestId, { key, id: record.id });
+    }
+  }
+
+  private async withState<T>(mutator: (records: DispatchRecord[]) => T | Promise<T>): Promise<T> {
+    const path = this.journalPath();
+    if (!path) {
+      const records = [...this.records.values()];
+      const result = await mutator(records);
+      this.cache(records);
+      return result;
+    }
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      let lock: StateLock | undefined;
+      try {
+        lock = await StateLock.acquire(this.options.stateDir!);
+        const records = await this.readPersistent();
+        const result = await mutator(records);
+        await atomicWrite(path, { schemaVersion: 1, records });
+        this.cache(records);
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof Error) || !error.message.startsWith('State directory locked:')) throw error;
+        await new Promise(resolve => setTimeout(resolve, 5));
+      } finally {
+        if (lock) await lock.release();
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Unable to acquire dispatch state lock');
+  }
+
+  private async load(): Promise<void> {
+    if (this.journalPath()) this.cache(await this.readPersistent());
+  }
 
   snapshot(): DispatchRecord[] {
     return structuredClone([...this.records.values()]);
+  }
+
+  async snapshotAsync(): Promise<DispatchRecord[]> {
+    await this.load();
+    return this.snapshot();
   }
 
   get(id: string): DispatchRecord | undefined {
@@ -108,51 +187,57 @@ export class ThreadDispatcher {
   async dispatch(input: DispatchInput): Promise<DispatchRecord> {
     if (!nonempty(input.requestId) || !nonempty(input.title) || !nonempty(input.prompt)) throw new Error('Dispatch request requires requestId, title and prompt');
     const key = inputKey(input);
-    const priorRequest = this.requests.get(input.requestId);
-    if (priorRequest) {
-      if (priorRequest.key !== key) throw new Error('Dispatch operation identity conflict');
-      return this.get(priorRequest.id)!;
-    }
-    const existingId = this.identities.get(key);
-    if (existingId) return this.get(existingId)!;
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const record: DispatchRecord = { ...input, id, state: 'created', attempts: 1, createdAt: now, updatedAt: now };
-    this.records.set(id, record);
-    this.identities.set(key, id);
-    this.requests.set(input.requestId, { key, id });
-    await this.perform(record);
-    return structuredClone(record);
+    const reservation = await this.withState(records => {
+      const priorRequest = records.find(record => record.requestId === input.requestId);
+      if (priorRequest) {
+        if (inputKey(priorRequest) !== key) throw new Error('Dispatch operation identity conflict');
+        return { record: structuredClone(priorRequest), created: false };
+      }
+      const existing = records.find(record => inputKey(record) === key);
+      if (existing) return { record: structuredClone(existing), created: false };
+      const now = new Date().toISOString();
+      const record: DispatchRecord = { ...input, id: randomUUID(), state: 'created', attempts: 1, createdAt: now, updatedAt: now };
+      records.push(record);
+      return { record: structuredClone(record), created: true };
+    });
+    if (!reservation.created) return reservation.record;
+    await this.perform(reservation.record.id);
+    return this.get(reservation.record.id)!;
   }
 
-  private async perform(record: DispatchRecord): Promise<void> {
+  private async update(id: string, mutate: (record: DispatchRecord) => void): Promise<DispatchRecord> {
+    return this.withState(records => {
+      const record = records.find(item => item.id === id);
+      if (!record) throw new Error('Dispatch request not found');
+      mutate(record);
+      record.updatedAt = new Date().toISOString();
+      return structuredClone(record);
+    });
+  }
+
+  private async perform(id: string): Promise<void> {
+    const record = this.get(id);
+    if (!record) throw new Error('Dispatch request not found');
     try {
       const identity = await this.adapter.startThread({ requestId: record.requestId, title: record.title, ...(record.cwd ? { cwd: record.cwd } : {}) });
       if (!identity || !nonempty(identity.threadId)) throw new DispatchUncertainError('Adapter did not return a thread identity');
-      record.threadId = identity.threadId;
-      record.state = 'started';
-      record.updatedAt = new Date().toISOString();
+      await this.update(id, current => { current.threadId = identity.threadId; current.state = 'started'; });
       await this.adapter.setThreadName(identity.threadId, record.title);
       const turn = await this.adapter.startTurn({ requestId: record.requestId, threadId: identity.threadId, prompt: record.prompt });
       if (turn.outcome === 'unknown') throw new DispatchUncertainError(turn.detail ?? 'Initialization turn result is unknown');
       if (turn.outcome === 'failed') {
-        record.state = 'failed';
-        record.detail = turn.detail ?? 'Initialization turn failed';
-        record.updatedAt = new Date().toISOString();
+        await this.update(id, current => { current.state = 'failed'; current.detail = turn.detail ?? 'Initialization turn failed'; });
         return;
       }
-      if (turn.turnId) record.turnId = turn.turnId;
-      record.state = 'initialized';
-      record.updatedAt = new Date().toISOString();
+      await this.update(id, current => { if (turn.turnId) current.turnId = turn.turnId; current.state = 'initialized'; });
     } catch (error) {
-      record.state = uncertain(error) ? 'unknown' : 'failed';
-      record.detail = error instanceof Error ? error.message : String(error);
-      record.updatedAt = new Date().toISOString();
+      await this.update(id, current => { current.state = uncertain(error) ? 'unknown' : 'failed'; current.detail = error instanceof Error ? error.message : String(error); });
     }
   }
 
   /** Query the adapter after an unknown result; this never starts a second thread. */
   async reconcile(id: string): Promise<DispatchRecord> {
+    await this.load();
     const record = this.records.get(id);
     if (!record) throw new Error('Dispatch request not found');
     if (record.state !== 'unknown') return structuredClone(record);
@@ -160,54 +245,43 @@ export class ThreadDispatcher {
     try {
       const result = await this.adapter.readThread(record.threadId);
       if (result.exists) {
-        record.state = result.initialized === true ? 'initialized' : 'started';
-        if (result.detail) record.detail = result.detail;
+        await this.update(id, current => { current.state = result.initialized === true ? 'initialized' : 'started'; if (result.detail) current.detail = result.detail; });
       }
-      record.updatedAt = new Date().toISOString();
-      return structuredClone(record);
+      return this.get(id)!;
     } catch (error) {
-      record.detail = error instanceof Error ? error.message : String(error);
-      record.updatedAt = new Date().toISOString();
-      return structuredClone(record);
+      return this.update(id, current => { current.detail = error instanceof Error ? error.message : String(error); });
     }
   }
 
   /** Explicit human approval is required before replaying an uncertain dispatch. */
-  approve(id: string): DispatchRecord {
+  async approve(id: string): Promise<DispatchRecord> {
+    await this.load();
     const record = this.records.get(id);
     if (!record) throw new Error('Dispatch request not found');
     if (record.state !== 'unknown' && record.state !== 'reconciled' && record.state !== 'started' && record.state !== 'failed') throw new Error('Dispatch is not awaiting approval');
-    record.state = 'approved';
-    record.updatedAt = new Date().toISOString();
-    return structuredClone(record);
+    return this.update(id, current => { current.state = 'approved'; });
   }
 
   async retry(id: string): Promise<DispatchRecord> {
+    await this.load();
     const record = this.records.get(id);
     if (!record) throw new Error('Dispatch request not found');
     if (record.state !== 'approved') throw new Error('Dispatch retry requires explicit approval');
-    record.attempts += 1;
-    record.state = record.threadId ? 'started' : 'created';
-    delete record.detail;
-    record.updatedAt = new Date().toISOString();
+    await this.update(id, current => { current.attempts += 1; current.state = current.threadId ? 'started' : 'created'; delete current.detail; });
     if (record.threadId) {
       try {
         const turn = await this.adapter.startTurn({ requestId: record.requestId, threadId: record.threadId, prompt: record.prompt });
         if (turn.outcome === 'unknown') throw new DispatchUncertainError(turn.detail ?? 'Initialization turn result is unknown');
         if (turn.outcome === 'failed') {
-          record.state = 'failed';
-          record.detail = turn.detail ?? 'Initialization turn failed';
+          await this.update(id, current => { current.state = 'failed'; current.detail = turn.detail ?? 'Initialization turn failed'; });
         } else {
-          if (turn.turnId) record.turnId = turn.turnId;
-          record.state = 'initialized';
+          await this.update(id, current => { if (turn.turnId) current.turnId = turn.turnId; current.state = 'initialized'; });
         }
       } catch (error) {
-        record.state = uncertain(error) ? 'unknown' : 'failed';
-        record.detail = error instanceof Error ? error.message : String(error);
+        await this.update(id, current => { current.state = uncertain(error) ? 'unknown' : 'failed'; current.detail = error instanceof Error ? error.message : String(error); });
       }
-      record.updatedAt = new Date().toISOString();
-    } else await this.perform(record);
-    return structuredClone(record);
+    } else await this.perform(id);
+    return this.get(id)!;
   }
 }
 

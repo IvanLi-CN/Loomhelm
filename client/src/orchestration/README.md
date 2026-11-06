@@ -1,5 +1,5 @@
 # Orchestration
 
-`TaskGraph` validates a dependency graph and marks historical superseded tasks outside the active schedule. `TaskOrchestrator` applies a bounded running capacity, blocks only successors of failed work, and keeps independent tasks runnable. Contribution tasks reach success through `merged`, acceptance and verification tasks through `passed`, and coordination tasks through `completed`.
+`TaskGraph` 校验依赖图，并把历史 superseded 任务排除在活动调度之外。`TaskOrchestrator` 限制并发运行容量，只阻塞失败任务的后继节点，同时保持无关任务继续运行。贡献任务以 `merged` 进入成功终态，验收和验证任务以 `passed` 进入成功终态，协调任务以 `completed` 进入成功终态。
 
-The scheduler can optionally receive the existing core `Ledger`; when a matching core task exists it records `run.start` and `run.finish` facts using the core lock and atomic receipt chain. `recover()` returns interrupted in-memory work to `pending` so the caller can make a bounded retry decision.
+传入 `stateDir` 并通过 `TaskOrchestrator.open()` 打开时，任务状态、尝试次数和终态会写入 `orchestration.json`，新实例会恢复已完成与运行中的事实；核心 `StateLock` 和 `atomicWrite` 防止并发启动重复占用容量。传入已有核心 `Ledger` 后，匹配的核心任务还会记录 `run.start` 与 `run.finish` 收据。`recoverPersisted()` 会把重启时遗留的运行任务恢复为 `pending`，由调用方决定有界重试。
