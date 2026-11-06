@@ -203,3 +203,37 @@ test('Node/Bun standalone CLI checks Skills then validates offline with JSON out
   result = await runProcess(process.execPath, [cliPath, 'skills', skillsRoot]);
   assert.equal(result.code, 0); assert.equal(JSON.parse(result.stdout).skills[0].name, 'engineering');
 }));
+
+test('verify rejects Skill diagnostics before requirements or validation commands', () => temporary(async dir => {
+  const { repo, base } = await fixture(dir);
+  for (const problem of ['malformed', 'inapplicable']) {
+    const skillsRoot = join(dir, problem);
+    await skill(skillsRoot, 'engineering', compatible());
+    const broken = await skill(skillsRoot, 'broken', compatible('1.0.0', ['user']));
+    if (problem === 'malformed') await writeFile(join(broken, 'loomhelm.json'), '{');
+    // Empty/valid requirements prove unrelated diagnostics prevent execution;
+    // missing requirements prove diagnostics are checked before requireSkill.
+    for (const requirements of [[], [{ name: 'engineering' }], [{ name: 'missing' }]]) {
+      const marker = join(dir, `${problem}-${requirements[0]?.name ?? 'empty'}-executed`);
+      const manifest = {
+        schemaVersion: 1, repository: repo, base,
+        skills: { project: skillsRoot, requirements },
+        contracts: decisions, implementation: 'Fixture implementation',
+        validations: [command('marker', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`)],
+      };
+      const path = join(dir, 'diagnostics.json'); await writeFile(path, JSON.stringify(manifest));
+      const result = await runProcess(process.execPath, [cliPath, 'verify', path]);
+      assert.equal(result.code, 1, `${problem} diagnostics must fail verification`);
+      assert.equal(result.stdout, '', 'No successful verification result may be emitted');
+      const output = JSON.parse(result.stderr);
+      assert.equal(output.error, 'Skill catalog contains diagnostics');
+      assert.equal(output.diagnostics.length, 1);
+      assert.equal(output.diagnostics[0].name, 'broken');
+      assert.equal(output.diagnostics[0].scope, 'project');
+      assert.equal(typeof output.diagnostics[0].message, 'string');
+      assert.ok(output.diagnostics[0].message.length > 0);
+      if (problem === 'inapplicable') assert.match(output.diagnostics[0].message, /not applicable/);
+      await assert.rejects(readFile(marker), error => error.code === 'ENOENT');
+    }
+  }
+}));

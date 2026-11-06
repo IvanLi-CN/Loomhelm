@@ -27,6 +27,11 @@ async function main(): Promise<void> {
     const value = manifest.skills as { project: string; user?: string; requirements: { name: string; range?: string; scopes?: SkillScope[] }[] };
     if (!value || typeof value.project !== 'string' || (value.user !== undefined && typeof value.user !== 'string') || !Array.isArray(value.requirements)) throw new Error('Invalid skill requirements');
     const catalog = await loadSkills({ project: resolve(repository, value.project), ...(value.user ? { user: resolve(repository, value.user) } : {}) });
+    if (catalog.diagnostics.length) {
+      console.error(JSON.stringify({ error: 'Skill catalog contains diagnostics', diagnostics: catalog.diagnostics }));
+      process.exitCode = 1;
+      return;
+    }
     selectedSkills = value.requirements.map(requirement => {
       if (!requirement || typeof requirement.name !== 'string') throw new Error('Invalid skill requirement');
       return requireSkill(catalog, requirement.name, requirement);
