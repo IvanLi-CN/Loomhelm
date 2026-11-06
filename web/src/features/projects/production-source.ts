@@ -1234,7 +1234,10 @@ export function usePublishedProjectTaskSource({ client, enabled = true, canCreat
     enabled: queryEnabled,
     refetchInterval: PROJECT_TASK_REFRESH_INTERVAL_MS
   });
-  const taskListKey = projectTaskQueryKeys.taskList(subjectId, taskReadScope, sessionGeneration);
+  const taskListKey = useMemo(
+    () => projectTaskQueryKeys.taskList(subjectId, taskReadScope, sessionGeneration),
+    [sessionGeneration, subjectId, taskReadScope]
+  );
   const tasksQuery = useInfiniteQuery({
     queryKey: taskListKey,
     queryFn: ({ pageParam }) => readTaskPage(api, taskReadScope.projectId, pageParam, TASK_PAGE_LIMIT),
