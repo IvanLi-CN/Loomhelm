@@ -94,6 +94,14 @@ python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")
 
 候选目录发布后应视为不可变对象：同一候选可重试安装和切换，但不能覆盖 manifest、压缩包、Web 文件或二进制。需要新版本时发布新的 `<source-sha>` 目录，并让控制器依据 manifest 和 deployment envelope 选择候选；清理旧目录必须遵守保留窗口、回滚兼容性和备份策略。
 
+## 发布完成验收
+
+一次蓝绿发布只有在“流量已切换”和“旧槽位已收口”两部分证据都成立后才算完成。至少应保存以下通用事实：控制器状态中的 active slot、active candidate 和最新 operation；公网 `/version` 与 `/readyz` 返回的候选身份和 readiness；active Server/Worker 的健康状态与匹配的 Worker generation；以及旧非 active 槽位的排空结果。旧槽位在成功排空后处于 `draining` 或 `retained`，并且容器已退出，是正常保留状态，不需要强杀或直接删除。
+
+控制器观测应同时满足：公网入口身份与 active slot 一致，active 槽位的 Server/Worker 可观测，安装级观测状态为 `measured` 或明确的启动预热状态。停止的 `draining`/`retained` 槽位可以保留为 `unavailable` 明细，但不能仅因为它不再提供 `/-/observe` 就把整套安装误报为 degraded。历史 audit 中的 `degraded` 或 `unknown` 事件是不可变事实；后续 reconcile 成功应新增收口事件，而不是删除或改写历史记录。
+
+发布前后还应验证 Compose 配置可解析、受保护环境文件权限符合安装策略、安装根目录没有遗留的 staging 或临时文件，并确认旧 candidate、Web 树和持久化数据仍在保留窗口内。任何无法证明 active 路由、候选身份或 Worker generation 的结果，都必须停在 `unknown` 并通过认证 reconcile 处理，不能用直接 SQL 或手工改文件伪造 succeeded。
+
 ## 相关文档
 
 | 文档 | 内容 |
