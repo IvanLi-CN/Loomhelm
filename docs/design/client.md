@@ -1,8 +1,8 @@
-# Loomhelm 客户端设计
+# Loomhelm TypeScript 客户端设计
 
 ## 目标
 
-客户端是一个可以脱离服务端独立工作的本地 TypeScript 程序。它的主价值是驱动 Codex 完成工程工作，并提供可恢复、可追踪的开发任务辅助能力。
+本设计只约束新增的 TypeScript 客户端实现，源码位于 `clients/typescript/`。现有 Go 客户端的 `cmd/connector/`、`internal/connector/`、协议和发行方式保持不变。TS 实现是一个可以脱离服务端独立工作的本地程序。它的主价值是驱动 Codex 完成工程工作，并提供可恢复、可追踪的开发任务辅助能力。
 
 ## 功能范围
 

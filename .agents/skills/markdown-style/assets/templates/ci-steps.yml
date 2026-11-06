@@ -1,0 +1,7 @@
+# Merge these steps into the target's existing validation job.
+# Install Python 3 and Git using the target's normal runtime setup.
+- name: Prepare pinned Markdown tools
+  run: python3 tools/markdown.py setup
+- name: Check Markdown style
+  run: python3 tools/markdown.py check
+# In this repository the focused Git/formatter tests run with Python tests.

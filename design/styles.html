@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loomhelm · UI 风格板</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: #222429; background: #f5f5f4; font-synthesis: none; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; }
+    :focus-visible { outline: 3px solid #3f59cf; outline-offset: 4px; }
+    a { color: inherit; text-underline-offset: 4px; }
+    [hidden] { display: none !important; }
+    .page { max-width: 1480px; margin: auto; padding: 48px 48px 36px; }
+    .intro { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 36px; }
+    h1 { font-size: 32px; letter-spacing: -.025em; margin: 0 0 12px; font-weight: 650; }
+    .intro p { color: #62646a; font-size: 14px; line-height: 1.8; margin: 0; }
+    .intro a { flex: 0 0 auto; font-size: 13px; min-height: 44px; display: inline-flex; align-items: center; }
+    .gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 32px; }
+    .study { min-width: 0; scroll-margin-top: 24px; }
+    .study-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 14px; }
+    .study-heading h2 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -.025em; }
+    .study-heading a { font-size: 12px; color: #62646a; min-height: 32px; display: inline-flex; align-items: center; }
+    .study-note { margin: 16px 0 0; font-size: 13px; color: #54565d; line-height: 1.8; }
+    .study-note b { color: #222429; font-weight: 600; }
+    .specimen { --ground: #fff; --ink: #202126; --muted: #64666e; --line: #dedee3; --accent: #25262b; --accent-ink: #fff; --selection: #f0f0f3; --success: #23654a; --warning: #925600; --danger: #b42638; position: relative; isolation: isolate; overflow: hidden; background: var(--ground); color: var(--ink); min-height: 592px; }
+    .specimen ::selection { background: var(--accent); color: var(--accent-ink); }
+    .specimen :focus-visible { outline-color: var(--accent); }
+    .specimen svg { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .sample-top { padding: 22px 26px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .wordmark { font-size: 17px; font-weight: 650; letter-spacing: -.035em; }
+    .palette { display: flex; gap: 6px; align-items: center; }
+    .palette span { width: 15px; height: 15px; border-radius: 50%; background: var(--swatch); border: 1px solid #0002; }
+    .sample-body { padding: 0 26px 22px; position: relative; }
+    .type-sample { display: flex; justify-content: space-between; gap: 20px; align-items: end; padding: 10px 0 24px; }
+    .type-sample h3 { font-size: 26px; font-weight: 600; line-height: 1.25; letter-spacing: -.03em; margin: 0 0 9px; }
+    .type-sample p { font-size: 13px; color: var(--muted); line-height: 1.6; margin: 0; }
+    .type-glyph { font-size: 38px; line-height: 1; letter-spacing: -.04em; }
+    .spec-tabs { display: flex; gap: 20px; margin: 0 0 18px; border-bottom: 1px solid var(--line); }
+    .spec-tabs button { color: var(--muted); border: 0; background: transparent; padding: 0 0 12px; min-height: 40px; font-size: 13px; }
+    .spec-tabs button[aria-pressed="true"] { color: var(--ink); box-shadow: 0 1px 0 currentColor; }
+    .list { margin-bottom: 18px; }
+    .sample-row { display: flex; align-items: center; gap: 10px; padding: 13px 0; border-bottom: 1px solid var(--line); min-height: 57px; }
+    .sample-row .row-copy { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.6; }
+    .sample-row small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+    .sample-check { height: 17px; width: 17px; border: 1px solid var(--muted); border-radius: 4px; display: grid; place-items: center; }
+    .sample-check svg { width: 11px; height: 11px; }
+    .sample-check.done { color: var(--accent-ink); border-color: var(--accent); background: var(--accent); }
+    .badge { white-space: nowrap; font-size: 11px; font-weight: 500; color: var(--warning); display: inline-flex; align-items: center; gap: 6px; }
+    .badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    .badge.success { color: var(--success); }
+    .form-sample label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 7px; }
+    .input-wrap { position: relative; }
+    .input-wrap svg { position: absolute; left: 12px; top: 13px; color: var(--muted); }
+    .input-wrap input { width: 100%; min-width: 0; height: 42px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 0 12px 0 38px; font-size: 13px; color: var(--ink); caret-color: var(--accent); }
+    .input-wrap input::placeholder { color: var(--muted); }
+    .sample-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    .sample-actions button { border: 1px solid var(--line); color: var(--ink); background: transparent; border-radius: 5px; min-height: 38px; padding: 8px 15px; font-size: 12px; font-weight: 550; display: inline-flex; align-items: center; justify-content: center; gap: 7px; transition: background-color 160ms ease-out, box-shadow 160ms ease-out, filter 160ms ease-out; }
+    .sample-actions .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+    .sample-actions button:not(:disabled):hover { filter: brightness(.92); }
+    .sample-actions button:not(:disabled):active { filter: brightness(.8); }
+    .sample-actions button:disabled { color: var(--muted); background: var(--selection); border-color: transparent; }
+    .feedback { display: flex; gap: 8px; align-items: center; font-size: 11px; line-height: 1.5; min-height: 18px; margin: 17px 0 0; color: var(--muted); }
+    .feedback svg { width: 13px; height: 13px; }
+    .flat { border: 1px solid var(--line); }
+    .flat .sample-top { border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+    .flat .type-glyph { font-family: "Helvetica Neue", Arial, sans-serif; font-weight: 400; }
+    .flat .sample-row:last-child { border-bottom: 0; }
+    .flat .spec-tabs button[aria-pressed="true"] { font-weight: 650; }
+    .soft { --ground: #e9edf4; --ink: #25324d; --muted: #57647c; --line: #c4cddd; --accent: #3d58be; --selection: #dce2ed; --success: #27604a; --warning: #85521b; border-radius: 18px; box-shadow: 0 8px 22px #25385814; font-family: "Avenir Next", -apple-system, "PingFang SC", sans-serif; }
+    .soft .sample-top { padding-bottom: 12px; }
+    .soft .type-sample h3 { font-weight: 650; letter-spacing: -.015em; }
+    .soft .type-glyph { font-weight: 600; color: #3d58be; }
+    .soft .spec-tabs { gap: 5px; padding: 4px; background: #dde3ef; border: 0; border-radius: 12px; box-shadow: inset 1px 2px 4px #25385814; }
+    .soft .spec-tabs button { padding: 9px 19px; min-height: 37px; flex: 1; border-radius: 9px; }
+    .soft .spec-tabs button[aria-pressed="true"] { background: #fcfdff; box-shadow: 0 3px 7px #2538581c; color: var(--accent); font-weight: 600; }
+    .soft .list { background: #f7f9fc; padding: 0 14px; border-radius: 12px; box-shadow: 0 4px 10px #2538580c; }
+    .soft .sample-row { padding-top: 12px; padding-bottom: 12px; }
+    .soft .sample-row:last-child { border-bottom: 0; }
+    .soft .sample-check { border-radius: 6px; background: #e9edf4; box-shadow: inset 1px 2px 3px #25385818; }
+    .soft .sample-check.done { background: var(--accent); box-shadow: none; }
+    .soft .badge { padding: 4px 8px; border-radius: 6px; background: #f3e8d5; }
+    .soft .badge.success { background: #e2eee7; }
+    .soft .input-wrap input { border: 0; background: #e1e7f0; border-radius: 10px; box-shadow: inset 2px 3px 5px #25385818, inset -2px -2px 4px #ffffffb3; }
+    .soft .sample-actions button { background: #f9fbff; border: 0; border-radius: 10px; box-shadow: 0 3px 7px #25385824, inset 0 1px 0 #fff; }
+    .soft .sample-actions button.primary { background: var(--accent); box-shadow: 0 3px 7px #25385833, inset 0 1px 0 #ffffff40; }
+    .soft .sample-actions button:active:not(:disabled) { box-shadow: inset 1px 2px 5px #25385838; }
+    .soft .sample-actions button:disabled { background: #e1e6ee; box-shadow: none; }
+    .bold { --ground: #f8f5e9; --ink: #202020; --muted: #585549; --line: #202020; --accent: #2445cf; --selection: #e6e2d4; --success: #255542; --warning: #603e00; border: 2px solid var(--ink); box-shadow: 5px 5px 0 var(--ink); }
+    .bold .sample-top { background: #efdc66; border-bottom: 2px solid var(--ink); padding-top: 19px; padding-bottom: 19px; margin-bottom: 10px; }
+    .bold .wordmark { font-weight: 800; letter-spacing: -.04em; }
+    .bold .palette span { border: 1px solid var(--ink); border-radius: 0; }
+    .bold .type-sample h3 { font-size: 28px; font-weight: 800; letter-spacing: -.025em; }
+    .bold .type-glyph { font-weight: 850; }
+    .bold .spec-tabs { border: 2px solid var(--ink); gap: 0; }
+    .bold .spec-tabs button { padding: 10px 0; flex: 1; font-weight: 650; border-right: 2px solid var(--ink); }
+    .bold .spec-tabs button:last-child { border-right: 0; }
+    .bold .spec-tabs button[aria-pressed="true"] { background: var(--ink); color: #fff; box-shadow: none; }
+    .bold .sample-row { border-bottom-width: 1px; }
+    .bold .sample-row .row-copy { font-weight: 650; }
+    .bold .sample-check { border: 1.5px solid var(--ink); border-radius: 0; }
+    .bold .badge { border: 1px solid var(--ink); background: #efdc66; padding: 3px 7px; font-weight: 700; }
+    .bold .badge::before { display: none; }
+    .bold .badge.success { background: #c8e2c6; }
+    .bold .input-wrap input { border: 1.5px solid var(--ink); border-radius: 0; background: #fffef9; }
+    .bold .sample-actions button { border: 1.5px solid var(--ink); border-radius: 0; background: #fffef9; box-shadow: 3px 3px 0 var(--ink); font-weight: 700; }
+    .bold .sample-actions button.primary { background: var(--accent); color: #fff; }
+    .bold .sample-actions button:active:not(:disabled) { box-shadow: 1px 1px 0 var(--ink); }
+    .bold .sample-actions button:disabled { border-color: #b4b0a2; background: var(--selection); box-shadow: none; }
+    .glass { --ground: #2c3656; --ink: #f5f7ff; --muted: #c3cce5; --line: #ffffff30; --accent: #d1e2ff; --accent-ink: #182746; --selection: #ffffff16; --success: #b9e7d3; --warning: #f6d89d; border-radius: 18px; color-scheme: dark; }
+    .glass::before { content: ""; z-index: -1; position: absolute; background: #7299bf; width: 280px; height: 280px; border-radius: 52px; right: -75px; top: -80px; transform: rotate(-22deg); }
+    .glass::after { content: ""; z-index: -1; position: absolute; background: #636f9d; width: 270px; height: 270px; border-radius: 50%; left: -170px; top: 155px; }
+    .glass .sample-top { background: #1724404d; backdrop-filter: blur(18px); border-bottom: 1px solid #ffffff30; }
+    .glass .sample-body { margin: 16px; padding: 6px 18px 18px; background: #19243ed9; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid #ffffff2e; border-radius: 13px; box-shadow: 0 10px 24px #0e1c352b; }
+    .glass .type-glyph { font-weight: 300; }
+    .glass .type-sample h3 { font-weight: 550; }
+    .glass .spec-tabs { gap: 5px; background: #ffffff0d; padding: 4px; border: 1px solid #ffffff1c; border-radius: 9px; }
+    .glass .spec-tabs button { padding: 8px 12px; flex: 1; border-radius: 6px; }
+    .glass .spec-tabs button[aria-pressed="true"] { color: #fff; background: #ffffff21; box-shadow: inset 0 1px 0 #ffffff26, 0 2px 4px #0002; }
+    .glass .badge { padding: 3px 8px; border-radius: 5px; background: #3b3834; }
+    .glass .badge.success { background: #253d3c; }
+    .glass .input-wrap input { background: #0f1b3370; border: 1px solid #9aaed152; border-radius: 8px; }
+    .glass .sample-actions button { border-color: #a0b3db45; background: #ffffff10; border-radius: 8px; }
+    .glass .sample-actions button.primary { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+    .glass .sample-actions button:disabled { background: #ffffff0a; color: #b6bfd6; }
+    .glass .sample-check { border-color: #a0b3db; background: #13213b33; }
+    .glass .sample-check.done { background: var(--accent); }
+    .page-footer { margin-top: 36px; padding-top: 22px; border-top: 1px solid #d9d9d7; display: flex; justify-content: space-between; gap: 20px; font-size: 13px; line-height: 1.8; color: #62646a; }
+    .page-footer p { margin: 0; max-width: 70ch; }
+    .page-footer a { white-space: nowrap; }
+    body[data-single] .page { max-width: 780px; padding: 28px; }
+    body[data-single] .intro h1 { font-size: 23px; }
+    body[data-single] .intro { margin-bottom: 24px; }
+    body[data-single] .intro a { display: none; }
+    body[data-single] .gallery { display: block; }
+    body[data-single] .study-heading a { display: none; }
+    body { --review-ground: #f5f5f4; --review-ink: #222429; --review-muted: #62646a; --review-line: #d9d9d7; background: var(--review-ground); color: var(--review-ink); min-height: 100dvh; }
+    body[data-theme="dark"] { color-scheme: dark; --review-ground: #151923; --review-ink: #f1f3f8; --review-muted: #b0b8c9; --review-line: #3c4353; }
+    .intro p, .intro a, .study-heading a, .study-note, .page-footer { color: var(--review-muted); }
+    .study-note b { color: var(--review-ink); }
+    .page-footer { border-color: var(--review-line); }
+    .theme-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin: 0 0 24px; }
+    .theme-buttons { display: inline-flex; padding: 4px; gap: 4px; border: 1px solid var(--review-line); border-radius: 10px; }
+    .theme-buttons button { border: 0; background: transparent; color: var(--review-muted); padding: 10px 14px; min-height: 44px; border-radius: 6px; font-size: 13px; }
+    body[data-theme="dark"] .theme-buttons button:focus-visible { outline-color: #d1e2ff; }
+    .theme-buttons button[aria-pressed="true"] { background: var(--review-ink); color: var(--review-ground); }
+    .theme-buttons button:hover:not([aria-pressed="true"]) { background: var(--review-line); color: var(--review-ink); }
+    .theme-status { color: var(--review-muted); font-size: 12px; }
+    body[data-theme="light"] .glass { color-scheme: light; --ground: #c9d6e6; --ink: #20314b; --muted: #52637a; --line: #7e8fa747; --accent: #305ac7; --accent-ink: #fff; --selection: #cad6e5; --success: #285f4c; --warning: #895211; }
+    body[data-theme="light"] .glass::before { background: #9db3cf; }
+    body[data-theme="light"] .glass::after { background: #aabace; }
+    body[data-theme="light"] .glass .sample-top { background: #ffffff45; border-color: #ffffff70; }
+    body[data-theme="light"] .glass .sample-body { background: #f6f9ffdb; border-color: #ffffffa6; box-shadow: 0 10px 24px #344e7321; }
+    body[data-theme="light"] .glass .spec-tabs { background: #d9e2ef8c; border-color: #b1bfd14a; }
+    body[data-theme="light"] .glass .spec-tabs button[aria-pressed="true"] { color: #243c60; background: #ffffffb3; box-shadow: inset 0 1px 0 #fff, 0 2px 4px #344e7314; }
+    body[data-theme="light"] .glass .badge { background: #f7ead5; }
+    body[data-theme="light"] .glass .badge.success { background: #ddede7; }
+    body[data-theme="light"] .glass .input-wrap input { background: #edf2f97a; border-color: #9aa8bd; }
+    body[data-theme="light"] .glass .sample-actions button { background: #ffffff80; border-color: #9aa8bd; }
+    body[data-theme="light"] .glass .sample-actions button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+    body[data-theme="light"] .glass .sample-actions button:disabled { color: #5d6f86; background: #dce4ef8f; border-color: transparent; }
+    body[data-theme="light"] .glass .sample-check { border-color: #7184a1; background: #ffffff4d; }
+    body[data-theme="light"] .glass .sample-check.done { background: var(--accent); border-color: var(--accent); }
+    @media (max-width: 800px) { .page { padding: 28px 20px; } .gallery { grid-template-columns: minmax(0, 1fr); gap: 32px; } h1 { font-size: 28px; } .intro { display: block; margin-bottom: 24px; } .intro a { margin-top: 10px; } .page-footer { display: block; } .page-footer a { display: inline-flex; margin-top: 12px; } }
+    @media (max-width: 440px) { .page, body[data-single] .page { padding: 24px 16px; } .sample-top { padding: 20px; } .sample-body { padding: 0 20px 20px; } .type-sample h3 { font-size: 24px; } .type-glyph { font-size: 32px; } .sample-row { gap: 8px; } .sample-row .row-copy { font-size: 12px; } .sample-actions { gap: 8px; } .sample-actions button { min-height: 44px; padding: 10px 12px; } .input-wrap input { font-size: 16px; height: 44px; } .badge { font-size: 10px; } .glass .sample-body { margin: 12px; padding: 4px 12px 18px; } .study-heading h2 { font-size: 18px; } .specimen { min-height: 600px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <div><h1 id="pageTitle">半透明材质</h1><p id="pageDescription">已选定 D。切换亮色和暗色，或跟随系统。</p></div>
+      <a href="index.html?canvas=1">查看结构原型</a>
+    </header>
+    <div class="theme-bar" id="themeBar"><div class="theme-buttons" role="group" aria-label="主题预览"><button type="button" data-theme-choice="system" aria-pressed="true">跟随系统</button><button type="button" data-theme-choice="light" aria-pressed="false">亮色</button><button type="button" data-theme-choice="dark" aria-pressed="false">暗色</button></div><span class="theme-status" id="themeStatus" role="status"></span></div>
+    <div id="gallery" class="gallery" aria-label="四种 UI 视觉风格"></div>
+    <footer class="page-footer"><p>示例文字与按钮仅用于展示样式。亮色和暗色共用同一套控件、信息层级与状态表达；主题选择会在此浏览器记住。</p><a id="comparisonLink" href="styles.html?compare=1">比较其他风格</a></footer>
+  </main>
+  <script>
+    const icons = {
+      check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',
+      plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+      search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>',
+      info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></svg>'
+    };
+    const studies = [
+      { id: "flat", name: "A · 极简平面", subtitle: "Minimal / Flat", colors: ["#202126", "#ffffff", "#dedee3", "#23654a"], note: "<b>文字与对齐建立秩序。</b>细分隔线、小圆角、无阴影，选中项用明确的线与字重区分。克制、直接，适合密集工作；个性较弱。" },
+      { id: "soft", name: "B · 柔和层次", subtitle: "Soft / Tactile", colors: ["#3d58be", "#e9edf4", "#f7f9fc", "#25324d"], note: "<b>用轻微的凸起与凹陷区分层级。</b>柔和底色、圆角、内嵌输入框、浮起按钮。亲和、有触感；高密度场景需要节制阴影。" },
+      { id: "bold", name: "C · 硬边几何", subtitle: "Neo-brutalist", colors: ["#2445cf", "#efdc66", "#f8f5e9", "#202020"], note: "<b>边界和操作一眼可见。</b>粗字重、直角、实色块、硬边投影，状态也带清晰轮廓。辨识度强；长时间使用的视觉存在感较高。" },
+      { id: "glass", name: "D · 半透明材质", subtitle: "Glass / Layered", colors: ["#d1e2ff", "#2c3656", "#7299bf", "#f5f7ff"], note: "<b>用半透明面板表达前后关系。</b>磨砂分层、细高光、轻量字重、明亮操作按钮。材质感强；信息区需要足够不透明度保证阅读。" }
+    ];
+    const parameters = new URLSearchParams(location.search);
+    const single = parameters.has("compare") ? null : (studies.some(study => study.id === parameters.get("style")) ? parameters.get("style") : "glass");
+    if (studies.some(study => study.id === single)) document.body.dataset.single = single;
+    if (single !== "glass") {
+      document.getElementById("pageTitle").textContent = "UI 风格对照";
+      document.getElementById("pageDescription").textContent = "已选定 D · 半透明材质。其他视觉语言保留供比较。";
+      document.getElementById("themeBar").hidden = true;
+      document.getElementById("comparisonLink").href = "styles.html";
+      document.getElementById("comparisonLink").textContent = "返回已选风格";
+    }
+    const themeKey = "loomhelm.design.styles.theme";
+    const systemTheme = matchMedia("(prefers-color-scheme: dark)");
+    const themeNames = {system: "跟随系统", light: "亮色", dark: "暗色"};
+    const glassPalettes = {light: ["#305ac7", "#c9d6e6", "#f6f9ff", "#20314b"], dark: ["#d1e2ff", "#2c3656", "#7299bf", "#f5f7ff"]};
+    let savedTheme = "system";
+    try { savedTheme = localStorage.getItem(themeKey) || "system"; } catch {}
+    let themeChoice = parameters.get("theme") || savedTheme;
+    if (!Object.hasOwn(themeNames, themeChoice)) themeChoice = "system";
+    const applyTheme = () => {
+      const actualTheme = themeChoice === "system" ? (systemTheme.matches ? "dark" : "light") : themeChoice;
+      document.body.dataset.theme = actualTheme;
+      document.getElementById("themeStatus").textContent = themeChoice === "system" ? `跟随系统 · 当前${themeNames[actualTheme]}` : `当前${themeNames[actualTheme]}`;
+      document.querySelectorAll("[data-theme-choice]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.themeChoice === themeChoice)));
+      document.querySelectorAll(".glass .palette span").forEach((swatch, index) => { swatch.style.setProperty("--swatch", glassPalettes[actualTheme][index]); swatch.title = glassPalettes[actualTheme][index]; });
+    };
+    document.querySelectorAll("[data-theme-choice]").forEach(button => button.addEventListener("click", () => {
+      themeChoice = button.dataset.themeChoice;
+      try { localStorage.setItem(themeKey, themeChoice); } catch {}
+      applyTheme();
+    }));
+    systemTheme.addEventListener("change", () => { if (themeChoice === "system") applyTheme(); });
+    applyTheme();
+    const specimen = (study) => `<section class="specimen ${study.id}" aria-label="${study.name}组件样式">
+      <div class="sample-top"><span class="wordmark">Loomhelm</span><div class="palette" aria-label="风格配色">${study.colors.map(color => `<span style="--swatch:${color}" title="${color}"></span>`).join("")}</div></div>
+      <div class="sample-body">
+        <div class="type-sample"><div><h3>让工作清晰有序</h3><p>目标明确，下一步也清楚。</p></div><span class="type-glyph" aria-hidden="true">Aa</span></div>
+        <div class="spec-tabs" role="group" aria-label="选中状态样式"><button type="button" aria-pressed="true">全部</button><button type="button" aria-pressed="false">进行中</button><button type="button" aria-pressed="false">已完成</button></div>
+        <div class="list" aria-label="列表与状态样式">
+          <div class="sample-row"><span class="sample-check" aria-hidden="true"></span><span class="row-copy">核对本次变更<small>设计检查 · 刚刚更新</small></span><span class="badge">待处理</span></div>
+          <div class="sample-row"><span class="sample-check done" aria-hidden="true">${icons.check}</span><span class="row-copy">整理工作上下文<small>设计检查 · 今天</small></span><span class="badge success">已完成</span></div>
+        </div>
+        <div class="form-sample"><label for="search-${study.id}">输入框</label><div class="input-wrap">${icons.search}<input id="search-${study.id}" type="text" placeholder="搜索名称或关键词" autocomplete="off"></div></div>
+        <div class="sample-actions"><button type="button" class="primary">${icons.plus}主按钮</button><button type="button">次按钮</button><button type="button" disabled>不可用</button></div>
+        <p class="feedback" role="status">${icons.info}<span>可以点击或聚焦，比较控件反馈。</span></p>
+      </div>
+    </section>`;
+    document.getElementById("gallery").innerHTML = studies.filter(study => !document.body.dataset.single || study.id === single).map(study => `<article class="study" id="${study.id}"><header class="study-heading"><h2>${study.name}</h2><a href="?style=${study.id}">放大查看</a></header>${specimen(study)}<p class="study-note">${study.note}</p></article>`).join("");
+    document.getElementById("gallery").setAttribute("aria-label", single === "glass" ? "半透明材质组件预览" : "UI 视觉风格对照");
+    applyTheme();
+    document.querySelectorAll(".spec-tabs button").forEach(button => button.addEventListener("click", () => {
+      button.closest(".spec-tabs").querySelectorAll("button").forEach(tab => tab.setAttribute("aria-pressed", String(tab === button)));
+    }));
+    document.querySelectorAll(".sample-actions button:not(:disabled)").forEach(button => button.addEventListener("click", () => {
+      button.closest(".sample-body").querySelector(".feedback span").textContent = "已展示按下反馈，仅样式演示。";
+    }));
+  </script>
+</body>
+</html>

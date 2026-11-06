@@ -1,0 +1,869 @@
+package connector
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+)
+
+func TestJournalPersistsExactSessionAndRunIdentityBeforeMaterializingEvents(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "identity.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-1",
+		AdapterSessionID:  "adapter-session-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		CommandID:         "create-command-1",
+	}
+	if err := first.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+
+	event := protocol.Event{
+		EventID:   "event-before-binding",
+		Cursor:    "adapter-session-1:1",
+		Sequence:  1,
+		SessionID: "adapter-session-1",
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeMessageDelta,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"delta":"raw"}}`),
+	}
+	observation := EventObservation{
+		AdapterSessionID:  "adapter-session-1",
+		ExternalThreadRef: "thread-1",
+		Generation:        "generation-1",
+		NativeTurnID:      "native-turn-1",
+		NativeOperationID: "native-operation-1",
+	}
+	if mapped, delivered, err := first.AppendObservedEvent(event, observation); err != nil || delivered || mapped.EventID != "" {
+		t.Fatalf("unbound event = %+v, delivered = %v, error = %v", mapped, delivered, err)
+	}
+	if page, err := first.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID}); err != nil || len(page.Events) != 0 {
+		t.Fatalf("unbound mapped events = %+v, error = %v", page.Events, err)
+	}
+	if raw, err := first.ReadEvents(protocol.EventQuery{SessionID: alias.AdapterSessionID}); err != nil || len(raw.Events) != 1 || string(raw.Events[0].Payload) != string(event.Payload) || raw.Events[0].RunID != nil {
+		t.Fatalf("raw observed event = %+v, error = %v", raw.Events, err)
+	}
+
+	pending := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-1",
+		CommandID:         "run-command-1",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeOperationID: observation.NativeOperationID,
+		State:             IdentityStatePending,
+	}
+	if err := first.RecordRunBinding(pending); err != nil {
+		t.Fatal(err)
+	}
+	if mapped, delivered := first.MappedEvent(event.EventID); delivered || mapped.EventID != "" {
+		t.Fatalf("pending run unexpectedly materialized event = %+v, delivered = %v", mapped, delivered)
+	}
+
+	bound := pending
+	bound.NativeTurnID = observation.NativeTurnID
+	bound.State = IdentityStateBound
+	if err := first.RecordRunBinding(bound); err != nil {
+		t.Fatal(err)
+	}
+	page, err := first.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, RunID: bound.PlatformRunID})
+	if err != nil || len(page.Events) != 1 {
+		t.Fatalf("bound mapped events = %+v, error = %v", page.Events, err)
+	}
+	if page.Events[0].SessionID != alias.PlatformSessionID || page.Events[0].RunID == nil || *page.Events[0].RunID != bound.PlatformRunID || string(page.Events[0].Payload) != string(event.Payload) {
+		t.Fatalf("materialized event = %+v", page.Events[0])
+	}
+	if mapped, delivered := first.MappedEvent(event.EventID); !delivered || mapped.RunID == nil || *mapped.RunID != bound.PlatformRunID {
+		t.Fatalf("direct materialization = %+v, delivered = %v", mapped, delivered)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	recoveredAlias, found := second.SessionAlias(alias.PlatformSessionID)
+	if !found || !sameSessionAlias(recoveredAlias, alias) {
+		t.Fatalf("recovered session alias = %+v, found = %v", recoveredAlias, found)
+	}
+	recoveredBinding, found := second.RunBinding(bound.PlatformSessionID, bound.PlatformRunID)
+	if !found || recoveredBinding.NativeTurnID != bound.NativeTurnID || recoveredBinding.State != IdentityStateBound {
+		t.Fatalf("recovered run binding = %+v, found = %v", recoveredBinding, found)
+	}
+	page, err = second.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID})
+	if err != nil || len(page.Events) != 1 || page.Events[0].RunID == nil || *page.Events[0].RunID != bound.PlatformRunID {
+		t.Fatalf("recovered mapped events = %+v, error = %v", page.Events, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"type":"session_alias"`)) || !bytes.Contains(data, []byte(`"type":"run_binding"`)) || !bytes.Contains(data, []byte(`"type":"observed_event"`)) {
+		t.Fatalf("identity records missing from journal: %s", data)
+	}
+}
+
+func TestJournalPersistsObservedPayloadBytesLosslessly(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "raw-payload.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := SessionAlias{
+		PlatformSessionID: "platform-raw-payload",
+		AdapterSessionID:  "adapter-raw-payload",
+		ExternalThreadRef: "thread-raw-payload",
+		Generation:        "generation-raw-payload",
+		CommandID:         "create-raw-payload",
+	}
+	if err := first.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		payload json.RawMessage
+	}{
+		{name: "nil", payload: nil},
+		{name: "empty", payload: json.RawMessage{}},
+		{name: "whitespace", payload: json.RawMessage(" \n\t ")},
+		{name: "escaping-and-html", payload: json.RawMessage(" \n{\"html\":\"\\u003csection\\u003e<script>&\"} \t")},
+	}
+	for index, testCase := range cases {
+		event := protocol.Event{
+			EventID:   "raw-payload-" + testCase.name,
+			Cursor:    fmt.Sprintf("%s:%d", alias.AdapterSessionID, index+1),
+			Sequence:  int64(index + 1),
+			SessionID: alias.AdapterSessionID,
+			Source:    protocol.EventSourceAppServer,
+			Type:      protocol.EventTypeSessionCreated,
+			Payload:   testCase.payload,
+		}
+		observation := EventObservation{
+			AdapterSessionID:  alias.AdapterSessionID,
+			ExternalThreadRef: alias.ExternalThreadRef,
+			Generation:        alias.Generation,
+		}
+		mapped, delivered, err := first.AppendObservedEvent(event, observation)
+		if err != nil {
+			t.Fatalf("append %s payload: %v", testCase.name, err)
+		}
+		if !delivered || !bytes.Equal(mapped.Payload, testCase.payload) {
+			t.Fatalf("immediate mapped %s payload = %q, want %q; delivered = %v", testCase.name, mapped.Payload, testCase.payload, delivered)
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	beforeRestart, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	afterRestartOpen, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterRestartOpen, beforeRestart) {
+		t.Fatal("journal history changed while reopening observed payloads")
+	}
+	rawPage, err := second.ReadEvents(protocol.EventQuery{SessionID: alias.AdapterSessionID, Limit: int64(len(cases))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappedPage, err := second.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, Limit: int64(len(cases))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rawPage.Events) != len(cases) || len(mappedPage.Events) != len(cases) {
+		t.Fatalf("recovered event counts = raw %d, mapped %d, want %d", len(rawPage.Events), len(mappedPage.Events), len(cases))
+	}
+	for index, testCase := range cases {
+		if !bytes.Equal(rawPage.Events[index].Payload, testCase.payload) {
+			t.Fatalf("recovered raw %s payload = %q, want %q", testCase.name, rawPage.Events[index].Payload, testCase.payload)
+		}
+		if !bytes.Equal(mappedPage.Events[index].Payload, testCase.payload) {
+			t.Fatalf("recovered mapped %s payload = %q, want %q", testCase.name, mappedPage.Events[index].Payload, testCase.payload)
+		}
+	}
+}
+
+func TestJournalMapsControlOperationByNativeTurn(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-control",
+		AdapterSessionID:  "adapter-session-control",
+		ExternalThreadRef: "thread-control",
+		Generation:        "generation-control",
+		CommandID:         "create-control",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-control",
+		CommandID:         "run-control",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-turn-control",
+		NativeOperationID: "native-start-operation",
+		State:             IdentityStateBound,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	event := protocol.Event{
+		EventID:   "control-operation-event",
+		Cursor:    alias.AdapterSessionID + ":1",
+		Sequence:  1,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceHostObservation,
+		Type:      protocol.EventTypeUnknown,
+		Payload:   []byte(`{"method":"rpc/response","operation_id":"native-control-operation"}`),
+	}
+	if _, _, err := journal.AppendObservedEvent(event, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      binding.NativeTurnID,
+		NativeOperationID: "native-control-operation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mapped, delivered := journal.MappedEvent(event.EventID)
+	if !delivered || mapped.RunID == nil || *mapped.RunID != binding.PlatformRunID {
+		t.Fatalf("control operation mapping = %+v, delivered = %v", mapped, delivered)
+	}
+}
+
+func TestJournalIdentityBindingsAreIdempotentAndRejectConflicts(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-idempotent",
+		AdapterSessionID:  "adapter-session-idempotent",
+		ExternalThreadRef: "thread-idempotent",
+		Generation:        "generation-idempotent",
+		CommandID:         "create-idempotent",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatalf("same session alias was not idempotent: %v", err)
+	}
+	conflictingAlias := alias
+	conflictingAlias.CommandID = "create-other"
+	if !errors.Is(journal.RecordSessionAlias(conflictingAlias), ErrIdentityConflict) {
+		t.Fatal("changed session alias was accepted")
+	}
+	conflictingAdapter := alias
+	conflictingAdapter.PlatformSessionID = "platform-session-other"
+	if !errors.Is(journal.RecordSessionAlias(conflictingAdapter), ErrIdentityConflict) {
+		t.Fatal("adapter session was mapped to two platform sessions")
+	}
+
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-idempotent",
+		CommandID:         "run-idempotent",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-turn-idempotent",
+		NativeOperationID: "native-operation-idempotent",
+		State:             IdentityStateBound,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatalf("same run binding was not idempotent: %v", err)
+	}
+	conflictingTurn := binding
+	conflictingTurn.NativeTurnID = "native-turn-other"
+	if !errors.Is(journal.RecordRunBinding(conflictingTurn), ErrIdentityConflict) {
+		t.Fatal("changed native turn was accepted")
+	}
+	conflictingCommand := binding
+	conflictingCommand.PlatformRunID = "platform-run-other"
+	if !errors.Is(journal.RecordRunBinding(conflictingCommand), ErrIdentityConflict) {
+		t.Fatal("command identity was mapped to two platform runs")
+	}
+	if got, found := journal.RunBindingForCommand(binding.CommandID); !found || got.PlatformRunID != binding.PlatformRunID {
+		t.Fatalf("command reverse index = %+v, found = %v", got, found)
+	}
+	if got, found := journal.RunBindingForNativeTurn(alias.AdapterSessionID, alias.ExternalThreadRef, alias.Generation, binding.NativeTurnID); !found || got.PlatformRunID != binding.PlatformRunID {
+		t.Fatalf("native turn reverse index = %+v, found = %v", got, found)
+	}
+	if got, found := journal.RunBindingForNativeOperation(alias.AdapterSessionID, alias.ExternalThreadRef, alias.Generation, binding.NativeOperationID); !found || got.PlatformRunID != binding.PlatformRunID {
+		t.Fatalf("native operation reverse index = %+v, found = %v", got, found)
+	}
+}
+
+func TestJournalUnknownBindingDoesNotMaterializeUntilExactEvidence(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-unknown",
+		AdapterSessionID:  "adapter-session-unknown",
+		ExternalThreadRef: "thread-unknown",
+		Generation:        "generation-unknown",
+		CommandID:         "create-unknown",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-unknown",
+		CommandID:         "run-unknown",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		State:             IdentityStateUnknown,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if _, delivered, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "event-without-native-identity",
+		Cursor:    "adapter-session-unknown:1",
+		Sequence:  1,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeRunStarted,
+		Payload:   []byte(`{"turn":"missing"}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+	}); err != nil || delivered {
+		t.Fatalf("run event without native identity delivered = %v, error = %v", delivered, err)
+	}
+	event := protocol.Event{
+		EventID:   "event-unknown",
+		Cursor:    "adapter-session-unknown:2",
+		Sequence:  2,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeRunStarted,
+		Payload:   []byte(`{"turn":"unknown"}`),
+	}
+	if _, delivered, err := journal.AppendObservedEvent(event, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-turn-unknown",
+	}); err != nil || delivered {
+		t.Fatalf("unknown event delivered = %v, error = %v", delivered, err)
+	}
+	page, err := journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID})
+	if err != nil || len(page.Events) != 0 {
+		t.Fatalf("unknown mapped events = %+v, error = %v", page.Events, err)
+	}
+	bound := binding
+	bound.NativeTurnID = "native-turn-unknown"
+	bound.State = IdentityStateBound
+	if err := journal.RecordRunBinding(bound); err != nil {
+		t.Fatal(err)
+	}
+	page, err = journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, RunID: bound.PlatformRunID})
+	if err != nil || len(page.Events) != 1 {
+		t.Fatalf("exactly bound mapped events = %+v, error = %v", page.Events, err)
+	}
+}
+
+func TestJournalSessionReplayDoesNotSkipPendingObservation(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-order",
+		AdapterSessionID:  "adapter-session-order",
+		ExternalThreadRef: "thread-order",
+		Generation:        "generation-order",
+		CommandID:         "create-order",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-order",
+		CommandID:         "run-order",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		State:             IdentityStateUnknown,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		id       string
+		cursor   string
+		turnID   string
+		sequence int64
+	}{
+		{id: "pending-order", cursor: "adapter-session-order:1", sequence: 1},
+		{id: "mapped-order", cursor: "adapter-session-order:2", turnID: "native-order", sequence: 2},
+	} {
+		if _, delivered, err := journal.AppendObservedEvent(protocol.Event{
+			EventID:   event.id,
+			Cursor:    event.cursor,
+			Sequence:  event.sequence,
+			SessionID: alias.AdapterSessionID,
+			Source:    protocol.EventSourceAppServer,
+			Type:      protocol.EventTypeMessageDelta,
+			Payload:   []byte(`{"event":"order"}`),
+		}, EventObservation{
+			AdapterSessionID:  alias.AdapterSessionID,
+			ExternalThreadRef: alias.ExternalThreadRef,
+			Generation:        alias.Generation,
+			NativeTurnID:      event.turnID,
+		}); err != nil || delivered {
+			t.Fatalf("append event %q delivered = %v, error = %v", event.id, delivered, err)
+		}
+	}
+	bound := binding
+	bound.NativeTurnID = "native-order"
+	bound.State = IdentityStateBound
+	if err := journal.RecordRunBinding(bound); err != nil {
+		t.Fatal(err)
+	}
+	page, err := journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 0 || page.HasMore || page.NextCursor != nil {
+		t.Fatalf("session replay skipped pending observation: %+v", page)
+	}
+	page, err = journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, RunID: bound.PlatformRunID})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "mapped-order" {
+		t.Fatalf("run replay = %+v, error = %v", page.Events, err)
+	}
+}
+
+func TestJournalMappedReplaySkipsUnboundSessionTelemetry(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-telemetry",
+		AdapterSessionID:  "adapter-session-telemetry",
+		ExternalThreadRef: "thread-telemetry",
+		Generation:        "generation-telemetry",
+		CommandID:         "create-telemetry",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-telemetry",
+		CommandID:         "run-telemetry",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-telemetry-turn",
+		State:             IdentityStateBound,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "telemetry-event",
+		Cursor:    alias.AdapterSessionID + ":1",
+		Sequence:  1,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeUnknown,
+		Payload:   []byte(`{"method":"mcpServer/startupStatus/updated"}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "run-event-after-telemetry",
+		Cursor:    alias.AdapterSessionID + ":2",
+		Sequence:  2,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeRunStarted,
+		Payload:   []byte(`{"method":"turn/started"}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      binding.NativeTurnID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID})
+	if err != nil || len(page.Events) != 0 || !page.HasMore || page.NextCursor == nil || *page.NextCursor != alias.AdapterSessionID+":1" {
+		t.Fatalf("mapped replay before telemetry checkpoint = %+v, error = %v", page, err)
+	}
+	page, err = journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, AfterCursor: alias.AdapterSessionID + ":1"})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "run-event-after-telemetry" || page.Events[0].Sequence != 1 {
+		t.Fatalf("mapped replay after telemetry checkpoint = %+v, error = %v", page.Events, err)
+	}
+}
+
+func TestJournalMappedReplaySkipsStaleNativeTokenTelemetry(t *testing.T) {
+	journal := openTestJournal(t)
+	alias := SessionAlias{
+		PlatformSessionID: "platform-session-token-telemetry",
+		AdapterSessionID:  "adapter-session-token-telemetry",
+		ExternalThreadRef: "thread-token-telemetry",
+		Generation:        "generation-token-telemetry",
+		CommandID:         "create-token-telemetry",
+	}
+	if err := journal.RecordSessionAlias(alias); err != nil {
+		t.Fatal(err)
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "platform-run-token-telemetry",
+		CommandID:         "run-token-telemetry",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-current-turn",
+		State:             IdentityStateBound,
+	}
+	if err := journal.RecordRunBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "stale-token-telemetry",
+		Cursor:    alias.AdapterSessionID + ":1",
+		Sequence:  1,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeUnknown,
+		Payload:   []byte(`{"method":"thread/tokenUsage/updated","params":{"turnId":"native-stale-turn"}}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "native-stale-turn",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := journal.AppendObservedEvent(protocol.Event{
+		EventID:   "current-run-event-after-telemetry",
+		Cursor:    alias.AdapterSessionID + ":2",
+		Sequence:  2,
+		SessionID: alias.AdapterSessionID,
+		Source:    protocol.EventSourceAppServer,
+		Type:      protocol.EventTypeRunStarted,
+		Payload:   []byte(`{"method":"turn/started","params":{"turnId":"native-current-turn"}}`),
+	}, EventObservation{
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      binding.NativeTurnID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID})
+	if err != nil || len(page.Events) != 0 || !page.HasMore || page.NextCursor == nil || *page.NextCursor != alias.AdapterSessionID+":1" {
+		t.Fatalf("mapped replay before stale token telemetry checkpoint = %+v, error = %v", page, err)
+	}
+	page, err = journal.ReadMappedEvents(protocol.EventQuery{SessionID: alias.PlatformSessionID, AfterCursor: alias.AdapterSessionID + ":1"})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "current-run-event-after-telemetry" || page.Events[0].Sequence != 1 {
+		t.Fatalf("mapped replay after stale token telemetry checkpoint = %+v, error = %v", page.Events, err)
+	}
+}
+
+func TestJournalReadsV2AndAppendsV4WithoutRewritingHistory(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "v2-journal.jsonl")
+	v2Request := protocol.NewSessionRequest{CommandID: "create-v2", ProjectID: "project-v2", TaskID: "task-v2", Prompt: "v2 prompt"}
+	v2Digest, err := sessionStartPayloadDigest(v2Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Intent := sessionStartIntent{
+		IntentID:          "generation-v2-intent",
+		GatewayHandle:     "gateway-v2-intent",
+		Generation:        "generation-v2-intent",
+		CommandID:         v2Request.CommandID,
+		RequestDigest:     v2Digest,
+		State:             "resolved",
+		ExternalThreadRef: "thread-v2-intent",
+		UpdatedAt:         "2026-10-21T00:00:00Z",
+	}
+	v2Session := journalSession{
+		SessionID:         "adapter-v2",
+		ExternalThreadRef: v2Intent.ExternalThreadRef,
+		Generation:        v2Intent.Generation,
+		UpdatedAt:         v2Intent.UpdatedAt,
+	}
+	records := []journalRecord{
+		{FormatVersion: previousJournalFormatVersion, Type: "session", At: v2Intent.UpdatedAt, Session: &v2Session, SessionStart: &v2Intent},
+	}
+	encoded, err := json.Marshal(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	if facts := journal.LegacySessionFacts(); len(facts) != 1 || facts[0].PlatformSessionID != "" || facts[0].CommandID != "" || facts[0].AdapterSessionID != v2Session.SessionID {
+		t.Fatalf("legacy session facts = %+v", facts)
+	}
+	if resolved, ok, err := journal.ResolvedSessionStart(v2Request); err != nil || !ok || resolved.ExternalThreadRef != v2Intent.ExternalThreadRef {
+		t.Fatalf("v2 session-start intent = %+v, found = %v, error = %v", resolved, ok, err)
+	}
+	if intentID, err := journal.BeginSessionStart(protocol.GatewaySession{Handle: "gateway-v2-retry", Generation: "generation-v2-retry"}, v2Request); err != nil || intentID != v2Intent.IntentID {
+		t.Fatalf("v2 resolved session-start retry = %q, error = %v", intentID, err)
+	}
+	if err := journal.RecordSessionAlias(SessionAlias{
+		PlatformSessionID: "platform-v3",
+		AdapterSessionID:  "adapter-v2",
+		ExternalThreadRef: "thread-v2",
+		Generation:        "generation-v2",
+		CommandID:         "create-v3",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(data, []byte(`{"format_version":2`)) || !bytes.Contains(data, []byte(`{"format_version":4`)) || !bytes.Contains(data, []byte(`"type":"journal_header"`)) {
+		t.Fatalf("v2 history was rewritten or v4 record missing: %s", data)
+	}
+}
+
+func TestJournalRejectsRunBindingWithoutExactSessionAliasOnRecovery(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "orphan-binding.jsonl")
+	binding := RunBinding{
+		PlatformSessionID: "missing-platform-session",
+		PlatformRunID:     "orphan-run",
+		CommandID:         "orphan-command",
+		AdapterSessionID:  "adapter-orphan",
+		ExternalThreadRef: "thread-orphan",
+		Generation:        "generation-orphan",
+		NativeTurnID:      "native-orphan",
+		State:             IdentityStateBound,
+	}
+	record := journalRecord{FormatVersion: journalFormatVersion, Type: "run_binding", At: "2026-10-21T00:00:00Z", RunBinding: &binding}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenJournal(path); !errors.Is(err, ErrJournalCorrupt) {
+		t.Fatalf("orphan run binding recovery error = %v, want %v", err, ErrJournalCorrupt)
+	}
+}
+
+func TestJournalReplaysEqualIdentityRecordsAndRejectsConflictingReplay(t *testing.T) {
+	alias := SessionAlias{
+		PlatformSessionID: "platform-replay",
+		AdapterSessionID:  "adapter-replay",
+		ExternalThreadRef: "thread-replay",
+		Generation:        "generation-replay",
+		CommandID:         "create-replay",
+		UpdatedAt:         "2026-10-21T00:00:00Z",
+	}
+	binding := RunBinding{
+		PlatformSessionID: alias.PlatformSessionID,
+		PlatformRunID:     "run-replay",
+		CommandID:         "run-replay-command",
+		AdapterSessionID:  alias.AdapterSessionID,
+		ExternalThreadRef: alias.ExternalThreadRef,
+		Generation:        alias.Generation,
+		NativeTurnID:      "turn-replay",
+		State:             IdentityStateBound,
+		UpdatedAt:         "2026-10-21T00:00:01Z",
+	}
+	path := filepath.Join(privateTestDir(t), "duplicate-identities.jsonl")
+	records := []journalRecord{
+		{FormatVersion: journalFormatVersion, Type: "session_alias", At: alias.UpdatedAt, SessionAlias: &alias},
+		{FormatVersion: journalFormatVersion, Type: "session_alias", At: alias.UpdatedAt, SessionAlias: &alias},
+		{FormatVersion: journalFormatVersion, Type: "run_binding", At: binding.UpdatedAt, RunBinding: &binding},
+		{FormatVersion: journalFormatVersion, Type: "run_binding", At: binding.UpdatedAt, RunBinding: &binding},
+	}
+	writeJournalRecords(t, path, records)
+	journal, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aliases := journal.SessionAliases(); len(aliases) != 1 {
+		_ = journal.Close()
+		t.Fatalf("replayed session aliases = %+v", aliases)
+	}
+	if bindings := journal.RunBindings(); len(bindings) != 1 {
+		_ = journal.Close()
+		t.Fatalf("replayed run bindings = %+v", bindings)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	conflictPath := filepath.Join(privateTestDir(t), "conflicting-identities.jsonl")
+	conflictingAlias := alias
+	conflictingAlias.CommandID = "create-conflict"
+	writeJournalRecords(t, conflictPath, []journalRecord{
+		{FormatVersion: journalFormatVersion, Type: "session_alias", At: alias.UpdatedAt, SessionAlias: &alias},
+		{FormatVersion: journalFormatVersion, Type: "session_alias", At: conflictingAlias.UpdatedAt, SessionAlias: &conflictingAlias},
+	})
+	if _, err := OpenJournal(conflictPath); !errors.Is(err, ErrJournalCorrupt) {
+		t.Fatalf("conflicting identity replay error = %v, want %v", err, ErrJournalCorrupt)
+	}
+}
+
+func TestJournalSessionAliasRotationPreservesHistoricalBindings(t *testing.T) {
+	path := filepath.Join(privateTestDir(t), "rotation.jsonl")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAlias := SessionAlias{
+		PlatformSessionID: "platform-rotation",
+		AdapterSessionID:  "adapter-rotation",
+		ExternalThreadRef: "thread-rotation",
+		Generation:        "generation-old",
+		CommandID:         "create-rotation",
+	}
+	if err := first.RecordSessionAlias(oldAlias); err != nil {
+		t.Fatal(err)
+	}
+	oldBinding := RunBinding{
+		PlatformSessionID: oldAlias.PlatformSessionID,
+		PlatformRunID:     "platform-run-old",
+		CommandID:         "run-old",
+		AdapterSessionID:  oldAlias.AdapterSessionID,
+		ExternalThreadRef: oldAlias.ExternalThreadRef,
+		Generation:        oldAlias.Generation,
+		NativeTurnID:      "native-turn-old",
+		State:             IdentityStateBound,
+	}
+	if err := first.RecordRunBinding(oldBinding); err != nil {
+		t.Fatal(err)
+	}
+	oldEvent := protocol.Event{EventID: "rotation-old-event", Cursor: "adapter-rotation:1", Sequence: 1, SessionID: oldAlias.AdapterSessionID, Type: protocol.EventTypeMessageDelta, Source: protocol.EventSourceAppServer, Payload: json.RawMessage(`{"delta":"old"}`)}
+	if mapped, delivered, err := first.AppendObservedEvent(oldEvent, EventObservation{AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: oldAlias.Generation, NativeTurnID: oldBinding.NativeTurnID}); err != nil || !delivered || mapped.SessionID != oldAlias.PlatformSessionID || valueOrEmpty(mapped.RunID) != oldBinding.PlatformRunID {
+		t.Fatalf("old generation mapping = %+v, delivered = %v, error = %v", mapped, delivered, err)
+	}
+
+	rotatedAlias := SessionAlias{PlatformSessionID: oldAlias.PlatformSessionID, AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: "generation-new", CommandID: oldAlias.CommandID}
+	var rotationGroup sync.WaitGroup
+	rotationErrors := make(chan error, 8)
+	for index := 0; index < 8; index++ {
+		rotationGroup.Add(1)
+		go func() {
+			defer rotationGroup.Done()
+			rotationErrors <- first.RotateSessionAlias(rotatedAlias)
+		}()
+	}
+	rotationGroup.Wait()
+	close(rotationErrors)
+	for rotationErr := range rotationErrors {
+		if rotationErr != nil {
+			t.Fatalf("concurrent generation rotation was not idempotent: %v", rotationErr)
+		}
+	}
+	rotated, ok := first.SessionAlias(oldAlias.PlatformSessionID)
+	if !ok || rotated.Generation != "generation-new" || rotated.Revision != 2 {
+		t.Fatalf("current rotated alias = %+v, found = %v", rotated, ok)
+	}
+	newBinding := RunBinding{
+		PlatformSessionID: oldAlias.PlatformSessionID,
+		PlatformRunID:     "platform-run-new",
+		CommandID:         "run-new",
+		AdapterSessionID:  oldAlias.AdapterSessionID,
+		ExternalThreadRef: oldAlias.ExternalThreadRef,
+		Generation:        "generation-new",
+		NativeTurnID:      "native-turn-new",
+		State:             IdentityStateBound,
+	}
+	if err := first.RecordRunBinding(newBinding); err != nil {
+		t.Fatal(err)
+	}
+	newEvent := protocol.Event{EventID: "rotation-new-event", Cursor: "adapter-rotation:2", Sequence: 2, SessionID: oldAlias.AdapterSessionID, Type: protocol.EventTypeMessageDelta, Source: protocol.EventSourceAppServer, Payload: json.RawMessage(`{"delta":"new"}`)}
+	if mapped, delivered, err := first.AppendObservedEvent(newEvent, EventObservation{AdapterSessionID: oldAlias.AdapterSessionID, ExternalThreadRef: oldAlias.ExternalThreadRef, Generation: "generation-new", NativeTurnID: newBinding.NativeTurnID}); err != nil || !delivered || mapped.SessionID != oldAlias.PlatformSessionID || valueOrEmpty(mapped.RunID) != newBinding.PlatformRunID {
+		t.Fatalf("new generation mapping = %+v, delivered = %v, error = %v", mapped, delivered, err)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	oldRecovered, ok := second.SessionAliasForAdapter(oldAlias.AdapterSessionID, oldAlias.ExternalThreadRef, oldAlias.Generation)
+	if !ok || oldRecovered.Generation != oldAlias.Generation || oldRecovered.Revision != 1 {
+		t.Fatalf("historical alias = %+v, found = %v", oldRecovered, ok)
+	}
+	newRecovered, ok := second.SessionAliasForAdapter(oldAlias.AdapterSessionID, oldAlias.ExternalThreadRef, "generation-new")
+	if !ok || newRecovered.Generation != "generation-new" || newRecovered.Revision != 2 {
+		t.Fatalf("current alias tuple = %+v, found = %v", newRecovered, ok)
+	}
+	if binding, ok := second.RunBinding(oldAlias.PlatformSessionID, oldBinding.PlatformRunID); !ok || binding.Generation != oldAlias.Generation {
+		t.Fatalf("historical run binding = %+v, found = %v", binding, ok)
+	}
+	page, err := second.ReadMappedEvents(protocol.EventQuery{SessionID: oldAlias.PlatformSessionID})
+	if err != nil || len(page.Events) != 2 || valueOrEmpty(page.Events[0].RunID) != oldBinding.PlatformRunID || valueOrEmpty(page.Events[1].RunID) != newBinding.PlatformRunID {
+		t.Fatalf("rotated mapped events = %+v, error = %v", page.Events, err)
+	}
+}
+
+func writeJournalRecords(t *testing.T, path string, records []journalRecord) {
+	t.Helper()
+	var data []byte
+	for _, record := range records {
+		if record.FormatVersion == journalFormatVersion {
+			header, err := json.Marshal(journalRecord{FormatVersion: journalFormatVersion, Type: "journal_header", At: "2026-10-21T00:00:00Z"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = append(data, header...)
+			data = append(data, '\n')
+			break
+		}
+	}
+	for _, record := range records {
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, encoded...)
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

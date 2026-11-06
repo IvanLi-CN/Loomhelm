@@ -1,0 +1,187 @@
+#!/bin/sh
+set -u
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "setup: cannot resolve repository root" >&2
+	exit 1
+}
+cd "$repo_root" || exit 1
+
+failures=0
+
+fail() {
+	printf 'setup: %s\n' "$*" >&2
+	failures=$((failures + 1))
+}
+
+version_from_env() {
+	key=$1
+	awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' tools/versions.env
+}
+
+expected_go=$(version_from_env GO_VERSION)
+expected_bun=$(version_from_env BUN_VERSION)
+expected_sqlc=$(version_from_env SQLC_VERSION)
+
+if [ -z "$expected_go" ] || [ -z "$expected_bun" ] || [ -z "$expected_sqlc" ]; then
+	fail "tools/versions.env is missing GO_VERSION, BUN_VERSION, or SQLC_VERSION"
+fi
+
+if ! command -v git >/dev/null 2>&1; then
+	fail "required Git is missing; install Git and rerun scripts/setup"
+elif ! git -C "$repo_root" rev-parse --show-toplevel >/dev/null 2>&1; then
+	fail "repository Git metadata is unavailable; use a real checkout or linked worktree"
+fi
+
+go_ready=0
+if command -v go >/dev/null 2>&1; then
+	actual_go=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
+	if [ "$actual_go" = "$expected_go" ]; then
+		go_ready=1
+	else
+		fail "Go $expected_go is required; found ${actual_go:-unreadable}. Install or select the pinned Go toolchain"
+	fi
+else
+	fail "required Go $expected_go is missing; install the pinned Go toolchain and rerun scripts/setup"
+fi
+
+bun_ready=0
+if command -v bun >/dev/null 2>&1; then
+	actual_bun=$(bun --version 2>/dev/null)
+	if [ "$actual_bun" = "$expected_bun" ]; then
+		bun_ready=1
+	else
+		fail "Bun $expected_bun is required; found ${actual_bun:-unreadable}. Install or select the pinned Bun toolchain"
+	fi
+else
+	fail "required Bun $expected_bun is missing; install the pinned Bun toolchain and rerun scripts/setup"
+fi
+
+python_ready=0
+if command -v python3 >/dev/null 2>&1; then
+	if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+		python_ready=1
+	else
+		fail "Python 3.9 or newer is required for the repository tooling; install Python 3 and rerun scripts/setup"
+	fi
+else
+	fail "required Python 3 is missing; install Python 3.9 or newer and rerun scripts/setup"
+fi
+
+platform_key=""
+case "$(uname -s 2>/dev/null):$(uname -m 2>/dev/null)" in
+	Darwin:arm64)
+		platform_key=darwin-arm64
+		;;
+	Darwin:x86_64)
+		platform_key=darwin-x86_64
+		;;
+	Linux:aarch64 | Linux:arm64)
+		platform_key=linux-arm64
+		;;
+	Linux:x86_64 | Linux:amd64)
+		platform_key=linux-x86_64
+		;;
+	*)
+		fail "unsupported sqlc platform $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null); inspect tools/database-toolchain.json"
+		;;
+esac
+
+if [ "$python_ready" -eq 1 ] && [ -f tools/database-toolchain.json ] && [ -n "$platform_key" ]; then
+	manifest_error=$(python3 - "$expected_sqlc" "$platform_key" <<'PY'
+import json
+import sys
+
+expected_version, platform = sys.argv[1:]
+with open("tools/database-toolchain.json", encoding="utf-8") as stream:
+    manifest = json.load(stream)
+entry = manifest.get("sqlc", {}).get("platforms", {}).get(platform)
+if manifest.get("sqlc", {}).get("version") != expected_version:
+    raise SystemExit("sqlc manifest version does not match tools/versions.env")
+if not entry or not entry.get("url") or not entry.get("sha256"):
+    raise SystemExit(f"sqlc manifest has no complete {platform} entry")
+PY
+)
+	if [ "$?" -ne 0 ]; then
+		fail "sqlc toolchain manifest is invalid: $manifest_error"
+	fi
+elif [ ! -f tools/database-toolchain.json ]; then
+	fail "tools/database-toolchain.json is missing; restore the pinned sqlc toolchain manifest"
+fi
+
+sqlc_ready=0
+sqlc_command=${SQLC_BIN:-sqlc}
+if [ -x "$sqlc_command" ]; then
+	sqlc_executable=$sqlc_command
+elif command -v "$sqlc_command" >/dev/null 2>&1; then
+	sqlc_executable=$(command -v "$sqlc_command")
+else
+	sqlc_executable=""
+fi
+if [ -n "$sqlc_executable" ]; then
+	actual_sqlc=$($sqlc_executable version 2>/dev/null | awk 'NR == 1 { print $1 }' | sed 's/^v//')
+	if [ "$actual_sqlc" = "$expected_sqlc" ]; then
+		sqlc_ready=1
+	else
+		fail "sqlc $expected_sqlc is required; found ${actual_sqlc:-unreadable}. Use SQLC_BIN with the verified binary from tools/database-toolchain.json"
+	fi
+else
+	fail "required sqlc $expected_sqlc is missing; download the platform entry from tools/database-toolchain.json, verify its SHA256, and rerun with SQLC_BIN=/path/to/sqlc"
+fi
+
+if [ ! -f .env.example ]; then
+	fail ".env.example is missing; restore the repository development environment template"
+elif [ -L .env.local ]; then
+	if [ ! -e .env.local ]; then
+		fail ".env.local is a dangling symlink; remove or repair it before rerunning scripts/setup (no external target was touched)"
+	elif [ ! -f .env.local ]; then
+		fail ".env.local is a symlink to a non-file; refusing to follow or replace it"
+	else
+		echo "keeping existing .env.local symlink without following or replacing it"
+	fi
+elif [ -e .env.local ]; then
+	if [ ! -f .env.local ]; then
+		fail ".env.local exists but is not a regular file; refusing to replace it"
+	else
+		echo "keeping existing .env.local"
+	fi
+else
+	if cp .env.example .env.local; then
+		echo "created .env.local from .env.example"
+	else
+		fail "could not create .env.local from .env.example"
+	fi
+fi
+
+if [ "$python_ready" -eq 1 ]; then
+	if python3 tools/markdown.py setup; then
+		echo "pinned Markdown tools are ready"
+	else
+		fail "Markdown tool setup failed; rerun python3 tools/markdown.py setup after fixing its reported download or permission issue"
+	fi
+fi
+
+if [ "$bun_ready" -eq 1 ]; then
+	if bun install --frozen-lockfile; then
+		echo "frontend dependencies are ready"
+	else
+		fail "Bun dependency installation failed; fix the reported lockfile or network issue and rerun scripts/setup"
+	fi
+fi
+
+if command -v docker >/dev/null 2>&1; then
+	if docker compose version >/dev/null 2>&1; then
+		echo "optional Docker Compose is available; scripts/dev will still verify its daemon when used"
+	else
+		echo "optional Docker Compose is unavailable; scripts/dev requires Docker Compose for PostgreSQL" >&2
+	fi
+else
+	echo "optional Docker is unavailable; scripts/dev requires Docker for PostgreSQL" >&2
+fi
+
+if [ "$failures" -ne 0 ]; then
+	printf 'setup: readiness failed with %s issue(s); fix the messages above and rerun scripts/setup\n' "$failures" >&2
+	exit 1
+fi
+
+echo "worktree setup ready; hooks are unchanged and no global PATH, proxy, or authentication settings were modified"

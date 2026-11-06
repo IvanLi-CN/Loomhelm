@@ -1,0 +1,16 @@
+min_version: 2.1.16
+lefthook: sh tools/lefthook.sh
+assert_lefthook_installed: true
+no_auto_install: true
+glob_matcher: doublestar
+
+pre-commit:
+  parallel: false
+  commands:
+    markdown:
+      files: git diff --cached --name-only --diff-filter=ACMRT
+      glob: "**/*.md"
+      run: python3 tools/markdown.py staged -- {files}
+      stage_fixed: true
+    react-doctor:
+      run: scripts/check-react-doctor --staged

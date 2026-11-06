@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Full source SHA to build from feat/phase1
+        description: Full source SHA to build from main
         required: true
         type: string
       tag:
@@ -26,8 +26,8 @@ jobs:
     steps:
       - name: Require the protected parent branch
         run: |
-          test "$GITHUB_REF" = refs/heads/feat/phase1 || {
-            echo "Connector Release must run from feat/phase1" >&2
+          test "$GITHUB_REF" = refs/heads/main || {
+            echo "Connector Release must run from main" >&2
             exit 1
           }
       - name: Validate release tag
@@ -57,9 +57,9 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          git fetch --no-tags origin feat/phase1
-          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/feat/phase1 || {
-            echo "source SHA is not in feat/phase1 history: $SOURCE_SHA" >&2
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main || {
+            echo "source SHA is not in main history: $SOURCE_SHA" >&2
             exit 1
           }
       - name: Set up Go

@@ -8,7 +8,7 @@
 
 本主题使用与 [术语表](../../../GLOSSARY.md) 一致的对象定义：Task 是具有稳定身份、目标、范围、验收条件和依赖的工作单元；Run 是一次 Task 执行尝试；Receipt 是账本中的可验证重要执行事实；Ledger 是按顺序保存 Receipt、摘要链和恢复信息的本地账本；operation identity 是识别一次请求的稳定键；`schemaVersion` 是持久化格式版本键。Codex thread、turn 和 Dispatch 属于客户端总体设计，但不属于本核心 SPEC 的接口。
 
-公共源码入口为 `client/src/index.ts`，构建后的本地 CLI 为 `client/dist/cli.js`；两者共享同一核心合同。
+公共源码入口为 `clients/typescript/src/index.ts`，构建后的本地 CLI 为 `clients/typescript/dist/cli.js`；两者共享同一核心合同。
 
 ## Requirements
 
@@ -50,7 +50,7 @@ Task MUST 具备目标、范围、验收条件、依赖和稳定身份。相同 
 
 ## Related ADRs
 
-- [ADR 0001](../../adr/0001-typescript-client-runtime.md)
+- [ADR 0017](../../adr/0017-typescript-client-runtime.md)
 
 ## References
 

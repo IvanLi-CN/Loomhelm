@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Loomhelm · 布局与体验</title>
+  <link rel="stylesheet" href="layouts.css">
+  <link rel="stylesheet" href="layouts-tasks.css">
+</head>
+<body>
+  <header class="review-bar">
+    <a href="index.html" class="review-title" aria-current="page">Loomhelm · 布局与体验</a>
+    <span class="review-note">演示数据</span>
+    <nav aria-label="设计资料"><a href="ui-language.html">设计语言</a><a href="styles.html">风格依据</a></nav>
+    <div class="review-controls"><div class="segmented theme-switch" aria-label="主题"><button data-theme-mode="system">系统</button><button data-theme-mode="light">亮色</button><button data-theme-mode="dark">暗色</button></div><button class="button" id="scenario-trigger" aria-haspopup="menu" aria-expanded="false">正常场景</button></div>
+  </header>
+  <div class="app-shell">
+    <aside class="sidebar desktop-nav" aria-label="主导航"></aside>
+    <main id="main" tabindex="-1"></main>
+  </div>
+  <dialog class="nav-dialog" id="navigation" aria-label="导航"><div class="drawer-top"><strong>导航</strong><button class="button icon-only" data-close-nav aria-label="关闭导航"></button></div><aside class="sidebar"></aside></dialog>
+  <dialog class="focus-dialog" id="creation" aria-labelledby="creation-title"></dialog>
+  <div id="popup" class="popup" hidden></div>
+  <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+  <script type="module" src="layouts.js"></script>
+</body>
+</html>

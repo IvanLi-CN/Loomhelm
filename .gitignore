@@ -10,4 +10,7 @@ node_modules/
 /coverage/
 /web/dist/
 /web/storybook-static/
+/build/candidates/
+/.loomhelm-preview/
+/client/.loomhelm/
 *.log
