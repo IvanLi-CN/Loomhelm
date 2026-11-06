@@ -34,8 +34,9 @@ export type CodexThreadCreateResult = {
 export async function sendCodexMessage(input: {
   recipient_thread_id: string;
   prompt: string;
+  request_id?: string;
 }): Promise<CodexDeliveryResult> {
-  const callId = randomUUID();
+  const callId = input.request_id ?? randomUUID();
   const path = socketPath();
   if (!path)
     return {
@@ -108,7 +109,7 @@ export async function sendCodexMessage(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      outcome: mayHaveDelivered || message.includes("timed out") || message.includes("closed the WebSocket") ? "unknown" : "failed",
+      outcome: mayHaveDelivered ? "unknown" : "failed",
       provider_receipt: {
         provider: "codex-app-server",
         evidence_ref: `codex-app-server:${callId}:error`,

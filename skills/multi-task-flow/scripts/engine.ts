@@ -4056,6 +4056,12 @@ export function execute(
         "Delivery attempt identity already exists",
         3,
       );
+      requireCondition(
+        notice.delivery_status !== "sent",
+        "NOTIFICATION_ALREADY_SENT",
+        "Sent delivery cannot be attempted again",
+        5,
+      );
       const receipt = z
         .object({
           provider: z.string().min(1),

@@ -12,8 +12,6 @@ import { apply, actorSchema, requestSchema } from "./engine";
 import {
   createCodexThread,
   readCodexCapabilities,
-  sendCodexMessage,
-  type CodexDeliveryResult,
 } from "./codex-agent-api";
 import {
   group,
@@ -30,6 +28,7 @@ import {
   DEFAULT_EXECUTION_PROFILE,
 } from "./schema";
 import { defaultRoot, LedgerStore } from "./store";
+import { deliverClaimedNotification } from "./notification-delivery";
 import { migrationCanonicalInput } from "./store-migration";
 import { buildView } from "./view";
 import { checkViewerCompatibility, renewViewerUsage } from "./service-usage";
@@ -118,27 +117,6 @@ function notificationPrompt(
   return lines.join("\n");
 }
 
-function deliveryRequest(
-  parsed: z.infer<typeof requestSchema>,
-  notificationId: string,
-  attemptId: string,
-  delivery: CodexDeliveryResult,
-): z.infer<typeof requestSchema> {
-  return {
-    run_id: parsed.run_id,
-    actor: parsed.actor,
-    request_id: `notification-delivery-${attemptId}`,
-    expected_revision: 0,
-    payload: {
-      notification_id: notificationId,
-      delivery_attempt_id: attemptId,
-      outcome: delivery.outcome,
-      provider_receipt: delivery.provider_receipt,
-      ...(delivery.error ? { error: delivery.error } : {}),
-    },
-  };
-}
-
 async function deliverNotification(
   store: LedgerStore,
   parsed: z.infer<typeof requestSchema>,
@@ -172,21 +150,7 @@ async function deliverNotification(
     ledger,
     input,
   );
-  const delivery = await sendCodexMessage({
-    recipient_thread_id: notice.recipient_thread_id,
-    prompt,
-  });
-  const current = store.read();
-  const resolvedRequest = deliveryRequest(
-    parsed,
-    notice.id,
-    randomUUID(),
-    delivery,
-  );
-  resolvedRequest.expected_revision = current.revision;
-  return store.update((raw) =>
-    apply(raw, "notification-deliver", resolvedRequest),
-  );
+  return deliverClaimedNotification(store, parsed, notice.id, prompt);
 }
 
 try {
@@ -420,6 +384,8 @@ try {
         }),
       );
     } else {
+      if (parsed.expected_revision !== ledger.revision)
+        throw new ContractError("REVISION_CONFLICT", "Notification send revision is stale", 4);
       const delivery = await deliverNotification(store, parsed, input, payload);
       const updated = store.read();
       console.log(

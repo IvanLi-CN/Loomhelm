@@ -4,8 +4,31 @@ import { mkdtemp, readFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SkillsRuntime } from '../dist/index.js';
+import { spawnSync } from 'node:child_process';
 
 const runtime = new SkillsRuntime();
+test('missing external commands block readiness and CLI without executing or installing tools', async () => {
+  const previous = process.env.PATH;
+  try {
+    process.env.PATH = '';
+    const report = await runtime.check('git-cleanup', []);
+    assert.equal(report.ready, false);
+    assert.equal(report.readinessScope, 'all-declared-scenarios');
+    assert.ok(report.dependencies.some(dep => dep.kind === 'command' && dep.skill === 'gh' && !dep.available && dep.code === 'HOST_COMMAND_UNAVAILABLE'));
+    const result = spawnSync(process.execPath, [new URL('../dist/cli.js', import.meta.url).pathname, 'skills', 'check', 'git-cleanup'], { env: { ...process.env, PATH: '' }, encoding: 'utf8' });
+    assert.equal(result.status, 3, result.stderr);
+    assert.equal(JSON.parse(result.stdout).ready, false);
+  } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+});
+
+test('native host tools require an explicit host advertisement, not just installed resources', async () => {
+  const unknown = await runtime.check('fresh-thread-dispatch', []);
+  assert.equal(unknown.ready, false);
+  assert.ok(unknown.dependencies.some(dep => dep.skill === 'mcp__codex_app__create_thread' && dep.code === 'HOST_CAPABILITY_UNVERIFIED'));
+  const advertised = await runtime.check('fresh-thread-dispatch', [], ['mcp__codex_app__create_thread']);
+  assert.equal(advertised.ready, advertised.nativeSupported);
+  assert.equal(advertised.dependencies.find(dep => dep.kind === 'host').code, 'HOST_ADVERTISED');
+});
 test('packaged catalog contains all approved Skills and rejects path escape', async () => {
   const skills = await runtime.list();
   assert.equal(skills.length, 29);

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCodexThread, sendCodexMessage } from "../scripts/codex-agent-api";
 
-async function withControlServer(scenario: "success" | "mismatch" | "reject" | "timeout" | "missing-id" | "send" | "resume-reject" | "send-missing-id", verify: (calls: any[], result: Awaited<ReturnType<typeof createCodexThread>> | Awaited<ReturnType<typeof sendCodexMessage>>, completed: boolean) => void) {
+async function withControlServer(scenario: "success" | "mismatch" | "reject" | "timeout" | "missing-id" | "send" | "resume-reject" | "send-missing-id" | "send-resume-timeout", verify: (calls: any[], result: Awaited<ReturnType<typeof createCodexThread>> | Awaited<ReturnType<typeof sendCodexMessage>>, completed: boolean) => void) {
   const dir = mkdtempSync(join(tmpdir(), "mtf-rpc-"));
   const path = join(dir, "rpc.sock");
   const calls: any[] = [];
@@ -41,7 +41,7 @@ async function withControlServer(scenario: "success" | "mismatch" | "reject" | "
         for (let i = 0; i < bytes.length; i++) bytes[i] = bytes[i]! ^ mask[i % 4]!;
         const call = JSON.parse(bytes.toString()); calls.push(call);
         const result = call.method === "thread/start" ? { thread: scenario === "missing-id" ? {} : { id: "test-thread" }, model: scenario === "mismatch" ? "other-model" : "gpt-6.1-sol", reasoningEffort: "medium" } : call.method === "turn/start" ? { turn: scenario === "send-missing-id" ? {} : { id: "test-turn" } } : {};
-        if (call.method === "thread/start" && scenario === "timeout") continue;
+        if ((call.method === "thread/start" && scenario === "timeout") || (call.method === "thread/resume" && scenario === "send-resume-timeout")) continue;
         send((call.method === "thread/start" && scenario === "reject") || (call.method === "thread/resume" && scenario === "resume-reject") ? { id: call.id, error: { message: "unsupported profile" } } : { id: call.id, result });
         if (call.method === "turn/start") setTimeout(() => {
           completed = true;
@@ -56,7 +56,7 @@ async function withControlServer(scenario: "success" | "mismatch" | "reject" | "
   process.env.MULTI_TASK_FLOW_CODEX_AGENT_TIMEOUT_MS = "1000";
   process.env.CODEX_APP_SERVER_SOCKET = path;
   try {
-    const result = scenario === "send" || scenario === "resume-reject" || scenario === "send-missing-id"
+    const result = scenario === "send" || scenario === "resume-reject" || scenario === "send-missing-id" || scenario === "send-resume-timeout"
       ? await sendCodexMessage({recipient_thread_id:"test-thread",prompt:"Continue"})
       : await createCodexThread({ title: "Test", prompt: "Reply OK", model: "gpt-6.1-sol", thinking: "medium" });
     verify(calls, result, completed);
@@ -116,5 +116,12 @@ test("accepted input without a turn identity remains unknown, never safe to retr
     expect(result.outcome).toBe("unknown");
     expect(calls.filter(c=>c.method==="turn/start")).toHaveLength(1);
     expect(calls.some(c=>c.method==="thread/start")).toBe(false);
+  });
+});
+
+test("a timeout before notification input is submitted is a definite failure", async () => {
+  await withControlServer("send-resume-timeout", (calls, result) => {
+    expect(result.outcome).toBe("failed");
+    expect(calls.map(c => c.method)).toEqual(["initialize", "thread/resume"]);
   });
 });

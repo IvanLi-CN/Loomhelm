@@ -14,6 +14,14 @@
           "condition": "browser operations and controlled visual evidence"
         }
       ],
+      "externalCommands": [
+        {
+          "command": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations after reading the external ego-browser Skill"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -29,6 +37,8 @@
         "topic-spec"
       ],
       "externalSkills": [],
+      "externalCommands": [],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/dev-plan/scripts/test_migrate_task_orchestration.ts"
@@ -43,6 +53,14 @@
         "spec-sync"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/docs-migrate/scripts/gen_legacy_spec_id.ts",
@@ -59,6 +77,14 @@
         "dev-plan"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/dot-codex-development/scripts/context.ts",
@@ -75,6 +101,24 @@
         "project-engineering-workflow"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "gh",
+          "strength": "required-when-applicable",
+          "condition": "GitHub backend PR, check or release operations only"
+        },
+        {
+          "command": "tea",
+          "strength": "required-when-applicable",
+          "condition": "Gitea backend operations only"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -84,6 +128,24 @@
       "files": 4,
       "internalSkills": [],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "gh",
+          "strength": "required-when-applicable",
+          "condition": "GitHub backend PR, check or release operations only"
+        },
+        {
+          "command": "tea",
+          "strength": "required-when-applicable",
+          "condition": "Gitea backend operations only"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/find-next-plan/scripts/find_next_plan.ts",
@@ -110,6 +172,24 @@
           "condition": "unresolved design decisions; must return to design rather than execute"
         }
       ],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "gh",
+          "strength": "required-when-applicable",
+          "condition": "GitHub backend PR, check or release operations only"
+        },
+        {
+          "command": "tea",
+          "strength": "required-when-applicable",
+          "condition": "Gitea backend operations only"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -121,6 +201,14 @@
         "fast-flow"
       ],
       "externalSkills": [],
+      "externalCommands": [],
+      "hostCapabilities": [
+        {
+          "capability": "mcp__codex_app__create_thread",
+          "condition": "ordinary fresh user-owned task dispatch; active Multi-task Flow uses its separate conversation-create contract",
+          "strength": "required-when-applicable"
+        }
+      ],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -139,6 +227,14 @@
           "condition": "topic branch synchronization or detached-HEAD alignment"
         }
       ],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -153,6 +249,30 @@
         "local-merge-flow"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "gh",
+          "strength": "required-when-applicable",
+          "condition": "GitHub backend PR, check or release operations only"
+        },
+        {
+          "command": "tea",
+          "strength": "required-when-applicable",
+          "condition": "Gitea backend operations only"
+        }
+      ],
+      "hostCapabilities": [
+        {
+          "capability": "mcp__codex_app__archive_worktree",
+          "condition": "cleanup of a Codex-managed worktree only",
+          "strength": "required-when-applicable"
+        }
+      ],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/git-cleanup/scripts/closeout_context.ts",
@@ -175,6 +295,20 @@
         "global-port-manager"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        }
+      ],
+      "hostCapabilities": [
+        {
+          "capability": "mcp__codex_app__create_worktree",
+          "condition": "Codex-managed task worktrees only",
+          "strength": "required-when-applicable"
+        }
+      ],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -184,6 +318,8 @@
       "files": 3,
       "internalSkills": [],
       "externalSkills": [],
+      "externalCommands": [],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/global-port-manager/scripts/port_registry.ts",
@@ -202,6 +338,20 @@
           "condition": "browser operations and controlled visual evidence"
         }
       ],
+      "externalCommands": [
+        {
+          "command": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations after reading the external ego-browser Skill"
+        }
+      ],
+      "hostCapabilities": [
+        {
+          "capability": "computer_use",
+          "condition": "explicitly authorized escalation only, never an automatic fallback",
+          "strength": "required-when-applicable"
+        }
+      ],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -211,6 +361,14 @@
       "files": 4,
       "internalSkills": [],
       "externalSkills": [],
+      "externalCommands": [],
+      "hostCapabilities": [
+        {
+          "capability": "mcp__mineru__parse_documents",
+          "condition": "PDF conversion through the original MinerU tool",
+          "strength": "required-when-applicable"
+        }
+      ],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts",
@@ -225,6 +383,8 @@
         "dev-plan"
       ],
       "externalSkills": [],
+      "externalCommands": [],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -240,6 +400,14 @@
           "condition": "browser operations and controlled visual evidence"
         }
       ],
+      "externalCommands": [
+        {
+          "command": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations after reading the external ego-browser Skill"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -252,6 +420,24 @@
         "project-engineering-workflow"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "gh",
+          "strength": "required-when-applicable",
+          "condition": "GitHub backend PR, check or release operations only"
+        },
+        {
+          "command": "tea",
+          "strength": "required-when-applicable",
+          "condition": "Gitea backend operations only"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -264,6 +450,20 @@
         "fast-flow"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "launchctl",
+          "strength": "required-when-applicable",
+          "condition": "macOS installed viewer only; not required by the POSIX ledger or foreground HTTP"
+        }
+      ],
+      "hostCapabilities": [
+        {
+          "capability": "codex.app_server_control",
+          "condition": "real thread creation, observation and notification through the selected Codex control socket",
+          "strength": "required-when-applicable"
+        }
+      ],
       "platform": "macOS launchd for installed viewer; POSIX ledger/HTTP on macOS/Linux",
       "scripts": [
         "skills/multi-task-flow/scripts/build-service.ts",
@@ -334,6 +534,24 @@
         "project-engineering-workflow"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "gh",
+          "strength": "required-when-applicable",
+          "condition": "GitHub backend PR, check or release operations only"
+        },
+        {
+          "command": "tea",
+          "strength": "required-when-applicable",
+          "condition": "Gitea backend operations only"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -345,6 +563,14 @@
         "docs-migrate"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -380,6 +606,24 @@
           "condition": "unresolved design decisions; must return to design rather than execute"
         }
       ],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "gh",
+          "strength": "required-when-applicable",
+          "condition": "GitHub backend PR, check or release operations only"
+        },
+        {
+          "command": "tea",
+          "strength": "required-when-applicable",
+          "condition": "Gitea backend operations only"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/project-engineering-workflow/scripts/base_alignment_helper.ts",
@@ -394,6 +638,29 @@
       "files": 5,
       "internalSkills": [],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "gh",
+          "strength": "required-when-applicable",
+          "condition": "GitHub backend PR, check or release operations only"
+        },
+        {
+          "command": "cargo",
+          "strength": "required-when-applicable",
+          "condition": "crate validation or publication"
+        },
+        {
+          "command": "rustup",
+          "strength": "required-when-applicable",
+          "condition": "toolchain inspection or explicitly authorized changes"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -406,6 +673,14 @@
         "project-doc-promote"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -415,6 +690,14 @@
       "files": 5,
       "internalSkills": [],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/spec-sync/scripts/spec_drift_check.sh",
@@ -428,6 +711,19 @@
       "files": 2,
       "internalSkills": [],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        },
+        {
+          "command": "ssh",
+          "strength": "required-when-applicable",
+          "condition": "authorized remote machine inspection"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/srv-101-ops/scripts/resolve-target"
@@ -442,6 +738,19 @@
         "ui-visual-evidence"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "bun",
+          "strength": "required-when-applicable",
+          "condition": "original Storybook project build scripts when the selected project uses Bun"
+        },
+        {
+          "command": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations after reading the external ego-browser Skill"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -461,6 +770,14 @@
           "condition": "browser operations and controlled visual evidence"
         }
       ],
+      "externalCommands": [
+        {
+          "command": "bun",
+          "strength": "required-when-applicable",
+          "condition": "original Storybook project build scripts when the selected project uses Bun"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -474,6 +791,14 @@
         "project-doc-promote"
       ],
       "externalSkills": [],
+      "externalCommands": [
+        {
+          "command": "git",
+          "strength": "required-when-applicable",
+          "condition": "repository inspection or Git operations"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
     },
@@ -497,6 +822,14 @@
           "condition": "firmware display visual scenarios only"
         }
       ],
+      "externalCommands": [
+        {
+          "command": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations after reading the external ego-browser Skill"
+        }
+      ],
+      "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
         "skills/ui-visual-evidence/scripts/compare_visual_evidence.ts",
