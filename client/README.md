@@ -42,8 +42,39 @@ node dist/cli.js worktree /absolute/repository /absolute/new-worktree feat/local
 
 适配器检查干净源目录、有效分支、新目标和已解析的提交 SHA，使用 `git worktree add -b` 创建新分支与 worktree。它不清理已有路径、不强制覆盖、不更改 remote/upstream、不提交、不推送。失败时保留 Git 返回的信息与可能产生的资源，交由调用者核对；不自动执行破坏性回滚。创建资源后源目录的并发外部变化属于调用者协调边界。
 
+## Codex 派发
+
+顶层 CLI 通过自有的 Codex app-server 子进程接入 `ThreadDispatcher`；dispatch 日志和请求配置保存在 `stateDir` 下的独立目录。线程参数使用 `thread/start.model`、`thread/start.config.model_reasoning_effort`；turn 参数使用 `turn/start.input` 和 `turn/start.effort`。CLI 会等待匹配线程与 turn 的 `turn/completed` 事件，不会把 `turn/start` 响应当作任务成功。
+
+```sh
+node dist/cli.js --config config.example.json codex dispatch REQUEST_ID '{"title":"Local worker","prompt":"Inspect the task","cwd":"/absolute/repo","model":"gpt-6.1-sol","effort":"high"}'
+node dist/cli.js --config config.example.json codex list
+node dist/cli.js --config config.example.json codex reconcile DISPATCH_ID
+node dist/cli.js --config config.example.json codex approve DISPATCH_ID
+node dist/cli.js --config config.example.json codex retry DISPATCH_ID accept
+```
+
+未显式提供决定时，CLI 会向 Codex 明确拒绝审批请求。可在派发 JSON 中传入 `approvalDecision`：`accept`、`decline` 或 `cancel`。重试失败或结果未知的派发前，必须先单独调用 `approve`；重试命令中的审批决定只用于处理该次重试期间出现的审批请求。RPC 明确拒绝会记为失败；响应丢失和完成等待超时会记为未知。重复使用 request ID 会读取既有日志，不会创建第二个线程。若进程在预留任务后、保存 thread ID 前退出，日志会留下未决的 `created` 记录，并对外报告为未知；由于无法证明 Codex 是否已创建线程，CLI 会禁止在缺少 thread ID 时批准或重试。
+
+## 持久任务流
+
+`flow` 命令将任务图和执行日志保存在 `stateDir/task-flow/`。每次 CLI 调用都是独立进程；`recover` 会明确地把中断时仍在运行的任务恢复到待处理队列。`schedule` 和 `status` 会根据已持久化的失败任务重新推导被依赖阻塞的任务；它们只更新本进程的状态视图，不会启动外部工作。无关的可执行任务仍会列出。
+
+```sh
+node dist/cli.js --config config.example.json flow init '[{"id":"build","kind":"contribution","goal":"Build the client"},{"id":"verify","kind":"verification","goal":"Verify the build","dependencies":["build"]}]'
+node dist/cli.js --config config.example.json flow status
+node dist/cli.js --config config.example.json flow schedule
+node dist/cli.js --config config.example.json flow start build
+node dist/cli.js --config config.example.json flow finish build merged
+node dist/cli.js --config config.example.json flow recover
+```
+
+使用 `node dist/cli.js workflow skills PROJECT_SKILLS_DIR [USER_SKILLS_DIR]` 检查 Skills，或用 `node dist/cli.js workflow verify MANIFEST_JSON_PATH` 执行独立的本地工程工作流。清单格式、验证命令和阶段规则见 [workflow/README.md](src/workflow/README.md)。也可直接调用 `node dist/workflow/cli.js`。
+
+命令成功时会向 stdout 输出一份 JSON 结果。参数或配置错误会向 stderr 输出 `{"code":"CLI_ERROR","error":"..."}` 并以非零状态退出。派发结果为 `failed` 时退出码是 1；未解决的 `unknown` 状态退出码是 2。CLI 不会根据错误或缺失输入推断审批决定。
+
 ## 集成边界
 
 公共类型从 `src/index.ts` 导出；构建产物提供 ESM 与类型声明。`runtime` 集中进程、文件和锁适配；`tasks` 负责纯状态规则、事实持久化和收据；`git` 独立于服务端调用本机 Git。Core 不引入 Bun 专属 API。
 
-本包只交付 [客户端设计](../docs/design/client.md) 的独立核心基础。Codex app-server 协议、Skills/工程工作流迁移、Fresh Thread Dispatch、Multi-task Flow 调度和 Connected mode 仍由后续模块实现，不能将本包测试通过解释为整个第一阶段验收通过。
+本包提供 [客户端设计](../docs/design/client.md) 所定义的独立核心、Codex app-server 接线、Skills/工程工作流入口、dispatch 和持久任务编排。Connected mode 仍未实现；不能将本包测试通过解释为整个产品范围均已验收。
