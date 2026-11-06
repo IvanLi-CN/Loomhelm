@@ -4,7 +4,7 @@ Loomhelm deployment control manages one preconfigured execution environment with
 
 ## Current state
 
-The deployment contract assumes that an installation is provisioned with the dual-slot Compose topology from the beginning. The production template in `deploy/production/` is a validation-safe shape; it does not apply changes to an installation and does not contain secrets.
+The deployment contract assumes that an installation is provisioned with the dual-slot Compose topology from the beginning. The production template in `deploy/production/` is a validation-safe shape; it does not apply changes to an installation and does not contain secrets. The repository and installation directory contract is documented in [Deployment Layout](deployment-layout.md), including the evidence required to close a blue-green release.
 
 The candidate builder emits schema 2. The deployment envelope binds the candidate digest, source SHA, component artifact digests, immutable Server/Worker image references, Web tree digest, state compatibility range and migration mode. A candidate is immutable after publication and must be promoted without rebuilding.
 
