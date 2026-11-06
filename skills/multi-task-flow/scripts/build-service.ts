@@ -57,8 +57,9 @@ const compile = await Bun.build({
   naming: "viewer.mjs",
   target: "node",
   format: "esm",
-  define: { "import.meta.main": "true" },
+  define: { "import.meta.main": "false" },
   plugins: [{ name: "viewer-native-binding", setup(build) {
+    build.onLoad({ filter: /\/scripts\/service\.ts$/ }, ({ path }) => ({ contents: readFileSync(path, "utf8").replaceAll("import.meta.main", "true"), loader: "ts" }));
     build.onLoad({ filter: /\/modules\/core\/posix\.ts$/ }, async ({ path }) => ({
       contents: readFileSync(path, "utf8").replace("const expectedBindingDigest: string | undefined = undefined;", `const expectedBindingDigest = "${digest(readFileSync(join(toolkitRoot, "bin/native/posix.node")))}";`).replace(/const source =[^;]+;/, 'const source = new URL("./modules/core/posix.js", import.meta.url);').replace("../../native/posix.node", "../../posix.node"),
       loader: "ts",
