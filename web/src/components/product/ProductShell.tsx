@@ -417,6 +417,7 @@ function ProductionShellContent() {
         </header>
         <main ref={contentRef} className="product-content" tabIndex={-1} aria-label="主要内容">
           {logoutMessage && <div className="inline-state inline-state-warning" role="alert"><span aria-hidden="true">!</span>{logoutMessage}</div>}
+          {authenticated && assembly?.auth.message && <div className="inline-state inline-state-warning" data-testid="production-auth-message" role="status"><span aria-hidden="true">!</span>{assembly.auth.message}</div>}
           {authenticated ? <Outlet /> : <ProductionAuthGate />}
         </main>
       </div>
