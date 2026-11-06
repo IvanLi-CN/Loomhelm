@@ -45,7 +45,7 @@ Promote 已经完成 active route、slot 和新 Worker lease 的提交，但旧 
 
 Worker lease 的 generation 是 fencing 机制的一部分。旧 Worker drain 失败不能通过降低 generation、清空 lease 或复用旧 generation 修复；必须让新 Worker 使用严格递增的 generation，并把旧实例的退出结果单独记录。
 
-旧 Worker 可能在收到 drain 请求前就因 generation fencing 退出。此时控制器若把 Worker 的连接拒绝、连接重置、EOF 或内部 DNS 不存在当成普通 drain 失败，就会把已经停止的旧槽位长期留在 degraded 状态。
+旧 Worker 可能在收到 drain 请求前就因 generation fencing 退出。此时控制器若把 Worker 的连接拒绝、连接重置、EOF 或内部 DNS 解析失败当成普通 drain 失败，就会把已经停止的旧槽位长期留在 degraded 状态。
 
 # Resolution
 
@@ -61,7 +61,7 @@ Worker lease 的 generation 是 fencing 机制的一部分。旧 Worker drain �
 
 Promote 按可审计顺序提交：先确认新槽位 identity、readiness 和 Worker generation，再更新 active route 和 durable lease，随后执行旧槽位 drain。traffic share、Worker capacity 和公网探测属于独立的运行时观测与切换后验证；首次接入安装前必须在运行时演练中证明这些观测，而不能把单次采样当作同步 promote 前门禁。旧槽位 drain 超时但新 active 状态已经被控制器证明时，结果应为 `degraded`；若 active 状态或外部副作用无法证明，则保持 `unknown` 并先 reconcile。
 
-Drain 应按“Server 先、Worker 后”的顺序执行。Server 已接受 drain 后，若 Worker 端点明确返回连接关闭、连接拒绝、连接重置、EOF 或内部 DNS 不存在，说明 Worker 已经不再监听，控制器应将其视为幂等完成并继续等待 Server 进入非就绪状态；HTTP 错误、超时和其他无法证明 Worker 已停止的错误仍必须失败，不能一概吞掉。控制面允许对已经记录为 `retained` 的非活动槽位再次发起 drain，用于清理上次 promote 的降级收尾，但不允许借此绕过 active slot 的切换或恢复校验。
+Drain 应按“Server 先、Worker 后”的顺序执行。Server 已接受 drain 后，若 Worker 端点明确返回连接关闭、连接拒绝、连接重置、EOF 或内部 DNS 解析失败，说明 Worker 已经不再监听，控制器应将其视为幂等完成并继续等待 Server 进入非就绪状态；HTTP 错误、超时和其他无法证明 Worker 已停止的错误仍必须失败，不能一概吞掉。控制面允许对已经记录为 `retained` 的非活动槽位再次发起 drain，用于清理上次 promote 的降级收尾，但不允许借此绕过 active slot 的切换或恢复校验。
 
 发布完成后保留旧槽位、旧候选和持久化数据，回滚通过认证 API、Idempotency-Key 和 expected fingerprint 执行。禁止用直接 SQL 修改 active slot、lease generation 或 operation status 来“修复”发布结果。
 
