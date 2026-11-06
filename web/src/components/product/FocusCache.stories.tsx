@@ -170,6 +170,27 @@ const productionStoryProjects: readonly Project[] = [
 
 const emptyProductionRelationships: TaskRelationshipPage = { parents: [], children: [], prerequisites: [], dependents: [] };
 
+const productionStoryRelationships: Readonly<Record<string, TaskRelationshipPage>> = {
+  "FOCUS-1": {
+    parents: [],
+    children: [{ child_task_id: "FOCUS-2", created_at: "2026-11-07T00:00:00Z", kind: "parent_child", parent_task_id: "FOCUS-1" }],
+    prerequisites: [],
+    dependents: []
+  },
+  "FOCUS-2": {
+    parents: [{ child_task_id: "FOCUS-2", created_at: "2026-11-07T00:00:00Z", kind: "parent_child", parent_task_id: "FOCUS-1" }],
+    children: [],
+    prerequisites: [],
+    dependents: []
+  },
+  "FOCUS-BETA": {
+    parents: [],
+    children: [],
+    prerequisites: [{ created_at: "2026-11-07T00:00:00Z", dependent_task_id: "FOCUS-BETA", kind: "prerequisite", prerequisite_task_id: "FOCUS-1" }],
+    dependents: []
+  }
+};
+
 function createProductionStoryTasks(principalId: string): readonly Task[] {
   return Array.from({ length: 48 }, (_, index) => ({
     id: index === 47 ? "FOCUS-BETA" : `FOCUS-${index + 1}`,
@@ -187,6 +208,7 @@ interface ProductionStoryState {
   offline: boolean;
   invalid: boolean;
   taskForbidden: boolean;
+  relationshipsForbidden: boolean;
   revokedProjectIds: string[];
   bootstrapCalls: number;
   revalidateCalls: number;
@@ -203,7 +225,7 @@ interface ProductionStoryMock {
   state: ProductionStoryState;
   client: AuthenticatedApiClient;
   subscribe: (listener: () => void) => () => void;
-  update: (patch: Partial<Pick<ProductionStoryState, "principalId" | "offline" | "invalid" | "taskForbidden" | "revokedProjectIds">>) => void;
+  update: (patch: Partial<Pick<ProductionStoryState, "principalId" | "offline" | "invalid" | "taskForbidden" | "relationshipsForbidden" | "revokedProjectIds">>) => void;
   revokeProject: (projectId: string) => void;
 }
 
@@ -213,6 +235,7 @@ function createProductionStoryMock(): ProductionStoryMock {
     offline: false,
     invalid: false,
     taskForbidden: false,
+    relationshipsForbidden: false,
     revokedProjectIds: [],
     bootstrapCalls: 0,
     revalidateCalls: 0,
@@ -237,7 +260,7 @@ function createProductionStoryMock(): ProductionStoryMock {
     state.listeners.add(listener);
     return () => state.listeners.delete(listener);
   };
-  const update = (patch: Partial<Pick<ProductionStoryState, "principalId" | "offline" | "invalid" | "taskForbidden" | "revokedProjectIds">>) => {
+  const update = (patch: Partial<Pick<ProductionStoryState, "principalId" | "offline" | "invalid" | "taskForbidden" | "relationshipsForbidden" | "revokedProjectIds">>) => {
     Object.assign(state, patch);
     notify();
   };
@@ -283,7 +306,8 @@ function createProductionStoryMock(): ProductionStoryMock {
         state.relationshipRequests.push(`${principalId}:${task_id}`);
         notify();
         assertOnline();
-        return emptyProductionRelationships;
+        if (state.relationshipsForbidden && task_id === "FOCUS-BETA") throw new ApiClientError(403, { code: "forbidden" });
+        return productionStoryRelationships[task_id] ?? emptyProductionRelationships;
       }
     } as unknown as GeneratedApiClient;
   };
@@ -421,8 +445,12 @@ function ProductionStoryControls({ mock, storyRouter }: { mock: ProductionStoryM
     mock.update({ offline: false, invalid: false, taskForbidden: true });
     void queryClient.invalidateQueries({ queryKey: ["loomhelm", mock.state.principalId] });
   };
+  const simulateRelationshipsForbiddenAndRefresh = () => {
+    mock.update({ offline: false, invalid: false, taskForbidden: false, relationshipsForbidden: true });
+    void queryClient.invalidateQueries({ queryKey: ["loomhelm", mock.state.principalId] });
+  };
   const restoreMockOnline = () => {
-    mock.update({ offline: false, invalid: false, taskForbidden: false });
+    mock.update({ offline: false, invalid: false, taskForbidden: false, relationshipsForbidden: false });
     void queryClient.invalidateQueries({ queryKey: ["loomhelm", mock.state.principalId] });
   };
   return (
@@ -440,6 +468,7 @@ function ProductionStoryControls({ mock, storyRouter }: { mock: ProductionStoryM
           <button type="button" className="button button-secondary" onClick={invalidateAndResume}>模拟会话失效</button>
           <button type="button" className="button button-secondary" onClick={() => { void revokeBetaAndRefresh(); }}>撤销 Beta 项目并刷新</button>
           <button type="button" className="button button-secondary" onClick={simulateTaskForbiddenAndRefresh}>模拟任务权限收紧并刷新</button>
+          <button type="button" className="button button-secondary" onClick={simulateRelationshipsForbiddenAndRefresh}>模拟关系权限收紧并刷新</button>
           <button type="button" className="button button-secondary" onClick={() => { void storyRouter.navigate({ to: "/tasks" }); }}>打开全局任务范围</button>
           <button type="button" className="button button-primary" onClick={restoreMockOnline}>恢复 mock 在线</button>
         </div>
@@ -447,6 +476,7 @@ function ProductionStoryControls({ mock, storyRouter }: { mock: ProductionStoryM
           <dt>mock principal</dt><dd data-testid="production-principal">{mock.state.principalId}</dd>
           <dt>mock session state</dt><dd data-testid="production-session-state">{mock.state.invalid ? "invalid" : mock.state.offline ? "offline" : "online"}</dd>
           <dt>task read state</dt><dd data-testid="production-task-read-state">{mock.state.taskForbidden ? "forbidden" : "available"}</dd>
+          <dt>relationship read state</dt><dd data-testid="production-relationship-read-state">{mock.state.relationshipsForbidden ? "beta-forbidden" : "available"}</dd>
           <dt>session calls</dt><dd data-testid="production-session-calls">{mock.state.bootstrapCalls + mock.state.revalidateCalls}</dd>
           <dt>revalidate calls</dt><dd data-testid="production-revalidate-calls">{mock.state.revalidateCalls}</dd>
           <dt>project requests</dt><dd data-testid="production-project-calls">{mock.state.projectRequests.length}</dd>
@@ -681,6 +711,19 @@ export const ProductionBoundary: Story = {
     const graphRecoveryBefore = readRequests();
     await userEvent.click(canvas.getByRole("button", { name: "恢复 mock 在线" }));
     await waitFor(() => expect(readCounter("production-task-calls")).toBeGreaterThan(graphRecoveryBefore.tasks));
+    await waitFor(() => expect(canvas.queryAllByText("Beta 私有任务", { exact: true }).length).toBeGreaterThan(0));
+
+    const relationshipForbiddenBefore = readRequests();
+    await userEvent.click(canvas.getByRole("button", { name: "模拟关系权限收紧并刷新" }));
+    await waitFor(() => expect(canvas.getByTestId("production-relationship-read-state")).toHaveTextContent("beta-forbidden"));
+    await waitFor(() => expect(readCounter("production-relationship-calls")).toBeGreaterThan(relationshipForbiddenBefore.relationships));
+    await waitFor(() => expect(canvas.queryAllByText("Beta 私有任务", { exact: true })).toHaveLength(0));
+    expect(canvas.getByTestId("production-task-read-state")).toHaveTextContent("available");
+    expect(canvas.queryAllByText("焦点缓存任务", { exact: true }).length).toBeGreaterThan(0);
+    expect(canvas.queryAllByText("焦点缓存任务 2", { exact: true }).length).toBeGreaterThan(0);
+    expect(canvas.queryAllByText(/已授权关系：子任务：FOCUS-2 焦点缓存任务 2/).length).toBeGreaterThan(0);
+
+    await userEvent.click(canvas.getByRole("button", { name: "恢复 mock 在线" }));
     await waitFor(() => expect(canvas.queryAllByText("Beta 私有任务", { exact: true }).length).toBeGreaterThan(0));
 
     const forbiddenBefore = readRequests();
