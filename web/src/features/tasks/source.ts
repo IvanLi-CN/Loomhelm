@@ -33,7 +33,7 @@ function writeTaskViews(storageKey: string, views: Record<string, TaskView>): vo
   }
 }
 
-function useUnsharedProjectTaskSource(): ProjectTaskSource | null {
+function useUnsharedProjectTaskSource(allowFallback: boolean): ProjectTaskSource | null {
   const demoRuntime = useOptionalDemoRuntime();
   const demoSource = useOptionalDemoProjectTaskSource();
   const assembly = useOptionalProductionApi();
@@ -44,12 +44,13 @@ function useUnsharedProjectTaskSource(): ProjectTaskSource | null {
   const authenticated = assembly?.auth.status === "authenticated";
 
   useEffect(() => {
+    if (!allowFallback) return;
     setTaskViews(readTaskViews(storageKey));
-  }, [storageKey]);
+  }, [allowFallback, storageKey]);
 
   const productionSource = usePublishedProjectTaskSource({
     client: assembly?.client,
-    enabled: !demoRuntime && authenticated,
+    enabled: allowFallback && !demoRuntime && authenticated,
     canCreateProjects: assembly?.permissions.canManageProjects ?? false,
     principalId: assembly?.auth.principalId,
     sessionGeneration: assembly?.auth.sessionGeneration,
@@ -63,30 +64,38 @@ function useUnsharedProjectTaskSource(): ProjectTaskSource | null {
     }
   });
 
+  if (!allowFallback) return null;
   if (demoSource) return demoSource;
   if (!assembly || !authenticated) return null;
   return productionSource;
 }
 
-function ProjectTaskSourceContextProvider({ source, children }: { source: ProjectTaskSource | null } & PropsWithChildren) {
-  return createElement(projectTaskSourceContext.Provider, { value: source }, children);
+export function resolveProjectTaskSourceProviderValue(
+  explicitSource: ProjectTaskSource | null | undefined,
+  inheritedSource: ProjectTaskSource | null | undefined,
+  fallbackSource: ProjectTaskSource | null
+): ProjectTaskSource | null {
+  if (explicitSource !== undefined) return explicitSource;
+  if (inheritedSource !== undefined) return inheritedSource;
+  return fallbackSource;
 }
 
-function ProductionProjectTaskSourceProvider({ children }: PropsWithChildren) {
-  const source = useUnsharedProjectTaskSource();
-  return createElement(projectTaskSourceContext.Provider, { value: source }, children);
-}
-
+/** Resolves an explicit source first, then the nearest root source, and only then the local fallback. */
 export function ProjectTaskSourceProvider({ source, children }: { source?: ProjectTaskSource | null } & PropsWithChildren) {
-  return source === undefined
-    ? createElement(ProductionProjectTaskSourceProvider, null, children)
-    : createElement(ProjectTaskSourceContextProvider, { source }, children);
+  const inheritedSource = useContext(projectTaskSourceContext);
+  const fallbackSource = useUnsharedProjectTaskSource(source === undefined && inheritedSource === undefined);
+  const resolvedSource = resolveProjectTaskSourceProviderValue(source, inheritedSource, fallbackSource);
+  return createElement(projectTaskSourceContext.Provider, { value: resolvedSource }, children);
 }
 
+/** Reads the nearest source provider; undefined means no provider exists, while null is an intentional unavailable source. */
 export function useProjectTaskSourceContext(): ProjectTaskSource | null | undefined {
   return useContext(projectTaskSourceContext);
 }
 
+/** Reads a shared source when present and creates an unshared fallback only outside a provider tree. */
 export function useOptionalProjectTaskSource(): ProjectTaskSource | null {
-  return useUnsharedProjectTaskSource();
+  const sharedSource = useProjectTaskSourceContext();
+  const fallbackSource = useUnsharedProjectTaskSource(sharedSource === undefined);
+  return sharedSource === undefined ? fallbackSource : sharedSource;
 }

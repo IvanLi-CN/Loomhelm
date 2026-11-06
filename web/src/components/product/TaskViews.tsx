@@ -291,5 +291,6 @@ function TaskExplorerContent({ scope = "global", projectId, source, renderTaskLi
 }
 
 export function TaskExplorer(props: TaskExplorerProps) {
+  // An explicit source is authoritative; context and fallback hooks are only for the source-less demo/route path.
   return props.source ? <TaskExplorerContent {...props} source={props.source} /> : <TaskExplorerWithSource {...props} />;
 }

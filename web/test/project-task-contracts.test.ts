@@ -40,6 +40,7 @@ import {
   toTaskUpdateRequest
 } from "../src/features/projects/production-source";
 import { editableProjectSummary } from "../src/features/projects/ProjectForm";
+import { resolveProjectTaskSourceProviderValue } from "../src/features/tasks/source";
 import { reconcileTaskFormState } from "../src/features/tasks/TaskForm";
 import { wouldCreateDependencyCycle } from "../src/features/tasks/demo-store";
 import { calculateTaskRelationChanges, taskWriteBlockReason, type TaskRecord } from "../src/features/tasks/types";
@@ -149,6 +150,17 @@ describe("project/task write contracts", () => {
     expect(projectTaskQueryKeys.taskList("user-1", { projectId: "project-1" }, 1)).not.toEqual(projectTaskQueryKeys.taskList("user-1", { projectId: "project-2" }, 1));
     expect(projectTaskQueryKeys.taskRelationshipsScope("user-1", { projectId: "project-1" }, ["task-1"], 1).slice(0, 3)).toEqual(["loomhelm", "user-1", 1]);
     expect(projectTaskQueryKeys.mutationNotice("user-1")).toEqual(["loomhelm", "user-1", "mutation-notice"]);
+  });
+
+  test("inherits an existing task source unless the provider receives an explicit source", () => {
+    const inherited = { id: "inherited" } as unknown as Parameters<typeof resolveProjectTaskSourceProviderValue>[1];
+    const explicit = { id: "explicit" } as unknown as Parameters<typeof resolveProjectTaskSourceProviderValue>[0];
+    const fallback = { id: "fallback" } as unknown as Parameters<typeof resolveProjectTaskSourceProviderValue>[2];
+
+    expect(resolveProjectTaskSourceProviderValue(undefined, inherited, fallback)).toBe(inherited);
+    expect(resolveProjectTaskSourceProviderValue(explicit, inherited, fallback)).toBe(explicit);
+    expect(resolveProjectTaskSourceProviderValue(null, inherited, fallback)).toBeNull();
+    expect(resolveProjectTaskSourceProviderValue(undefined, undefined, fallback)).toBe(fallback);
   });
 
   test("keeps scoped task pagination on the existing REST list contract", async () => {
