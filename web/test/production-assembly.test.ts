@@ -10,6 +10,7 @@ import {
   createProductionAuthFailureAssembly,
   createUnauthenticatedProductionAssembly
 } from "../src/app/providers";
+import { withProductionAuthMessage } from "../src/lib/api/client";
 import { isAmbiguousWriteError, isPermissionError, readAllCursorPages } from "../src/features/projects/production-source";
 import { mapTask } from "../src/features/projects/api";
 
@@ -125,6 +126,137 @@ describe("production browser assembly", () => {
     releaseCleanup();
     await cleanup;
   });
+});
+
+test("coalesces same-principal background validation and keeps the bound client usable", async () => {
+  const session = { user_id: "user/browser", csrf_protection: "same_origin" };
+  const calls: Array<{ path: string; expectedPrincipal: string | null }> = [];
+  let sessionRequests = 0;
+  let releaseRevalidation!: (response: Response) => void;
+  const revalidationResponse = new Promise<Response>((resolve) => {
+    releaseRevalidation = resolve;
+  });
+  const authenticatedClient = createAuthenticatedApiClient({
+    baseUrl: "https://loomhelm.example",
+    browserProtection: "same_origin",
+    fetch: async (url, init) => {
+      const path = url.pathname;
+      if (path.endsWith("/auth/session")) {
+        sessionRequests += 1;
+        return sessionRequests === 1 ? Response.json(session) : revalidationResponse;
+      }
+      calls.push({ path, expectedPrincipal: new Headers(init.headers).get("X-Loomhelm-Expected-Principal") });
+      return Response.json({ items: [] });
+    }
+  });
+
+  await authenticatedClient.bootstrapBrowserSession();
+  const boundClient = authenticatedClient.bindBrowserSession({ principalId: session.user_id, epoch: 0 });
+  const firstValidation = authenticatedClient.revalidateBrowserSession();
+  const secondValidation = authenticatedClient.revalidateBrowserSession();
+  expect(sessionRequests).toBe(2);
+
+  releaseRevalidation(Response.json(session));
+  await expect(firstValidation).resolves.toEqual(session);
+  await expect(secondValidation).resolves.toEqual(session);
+  await boundClient.listProjects();
+
+  expect(calls).toEqual([{ path: "/api/v1/projects", expectedPrincipal: session.user_id }]);
+});
+
+test("rejects a late background validation after invalidation without replaying the bound request", async () => {
+  const session = { user_id: "user/browser", csrf_protection: "same_origin" };
+  let sessionRequests = 0;
+  let releaseRevalidation!: (response: Response) => void;
+  const revalidationResponse = new Promise<Response>((resolve) => {
+    releaseRevalidation = resolve;
+  });
+  const authenticatedClient = createAuthenticatedApiClient({
+    baseUrl: "https://loomhelm.example",
+    browserProtection: "same_origin",
+    fetch: async (url) => {
+      if (url.pathname.endsWith("/auth/session")) {
+        sessionRequests += 1;
+        return sessionRequests === 1 ? Response.json(session) : revalidationResponse;
+      }
+      throw new Error("the invalidated bound request must not be replayed");
+    }
+  });
+
+  await authenticatedClient.bootstrapBrowserSession();
+  const boundClient = authenticatedClient.bindBrowserSession({ principalId: session.user_id, epoch: 0 });
+  const pendingValidation = authenticatedClient.revalidateBrowserSession();
+  authenticatedClient.invalidateBrowserSession();
+  releaseRevalidation(Response.json({ user_id: "user/replacement", csrf_protection: "same_origin" }));
+
+  await expect(pendingValidation).rejects.toBeInstanceOf(ApiClientConfigurationError);
+  await expect(boundClient.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+  expect(sessionRequests).toBe(2);
+});
+
+test("invalidates the previous bound principal when background validation changes identity", async () => {
+  const initialSession = { user_id: "user/browser", csrf_protection: "same_origin" };
+  const replacementSession = { user_id: "user/replacement", csrf_protection: "same_origin" };
+  let sessionRequests = 0;
+  let projectRequests = 0;
+  const authenticatedClient = createAuthenticatedApiClient({
+    baseUrl: "https://loomhelm.example",
+    browserProtection: "same_origin",
+    fetch: async (url) => {
+      if (url.pathname.endsWith("/auth/session")) {
+        sessionRequests += 1;
+        return Response.json(sessionRequests === 1 ? initialSession : replacementSession);
+      }
+      projectRequests += 1;
+      return Response.json({ items: [] });
+    }
+  });
+
+  await authenticatedClient.bootstrapBrowserSession();
+  const boundClient = authenticatedClient.bindBrowserSession({ principalId: initialSession.user_id, epoch: 0 });
+  await expect(authenticatedClient.revalidateBrowserSession()).resolves.toEqual(replacementSession);
+
+  await expect(boundClient.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+  expect(projectRequests).toBe(0);
+});
+
+test("invalidates the old binding for session endpoint 401 and 403 responses", async () => {
+  for (const status of [401, 403]) {
+    const session = { user_id: "user/browser", csrf_protection: "same_origin" };
+    let sessionRequests = 0;
+    let projectRequests = 0;
+    const authenticatedClient = createAuthenticatedApiClient({
+      baseUrl: "https://loomhelm.example",
+      browserProtection: "same_origin",
+      fetch: async (url) => {
+        if (url.pathname.endsWith("/auth/session")) {
+          sessionRequests += 1;
+          return sessionRequests === 1
+            ? Response.json(session)
+            : Response.json({ code: status === 401 ? "unauthorized" : "forbidden" }, { status });
+        }
+        projectRequests += 1;
+        return Response.json({ items: [] });
+      }
+    });
+
+    await authenticatedClient.bootstrapBrowserSession();
+    const boundClient = authenticatedClient.bindBrowserSession({ principalId: session.user_id, epoch: 0 });
+    await expect(authenticatedClient.revalidateBrowserSession()).rejects.toMatchObject({ status });
+    await expect(boundClient.listProjects()).rejects.toBeInstanceOf(ApiClientConfigurationError);
+    expect(sessionRequests).toBe(2);
+    expect(projectRequests).toBe(0);
+  }
+});
+
+test("keeps the authenticated identity and client while surfacing a recoverable validation message", () => {
+  const assembly = createAuthenticatedProductionAssembly(client, { user_id: "user/browser", csrf_protection: "same_origin" }, 3);
+  const warned = withProductionAuthMessage(assembly, "后台验证浏览器会话失败，请稍后重试。");
+
+  expect(warned.client).toBe(assembly.client);
+  expect(warned.permissions).toBe(assembly.permissions);
+  expect(warned.auth).toEqual({ status: "authenticated", principalId: "user/browser", workspaceId: "default", sessionGeneration: 3, message: "后台验证浏览器会话失败，请稍后重试。" });
+  expect(withProductionAuthMessage(warned).auth).toEqual({ status: "authenticated", principalId: "user/browser", workspaceId: "default", sessionGeneration: 3 });
 });
 
 describe("cursor pagination", () => {
