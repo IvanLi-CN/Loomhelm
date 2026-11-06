@@ -45,6 +45,8 @@ Promote 已经完成 active route、slot 和新 Worker lease 的提交，但旧 
 
 Worker lease 的 generation 是 fencing 机制的一部分。旧 Worker drain 失败不能通过降低 generation、清空 lease 或复用旧 generation 修复；必须让新 Worker 使用严格递增的 generation，并把旧实例的退出结果单独记录。
 
+旧 Worker 可能在收到 drain 请求前就因 generation fencing 退出。此时控制器若把 Worker 的连接拒绝当成普通 drain 失败，就会把已经停止的旧槽位长期留在 degraded 状态。
+
 # Resolution
 
 把候选 manifest 作为所有阶段的唯一输入，至少绑定 source SHA、candidate/artifact digest、Web tree digest、Server image digest、Worker image digest 和 state compatibility。重试复用同一候选身份，不重新构建或覆盖已发布内容。
@@ -59,6 +61,8 @@ Worker lease 的 generation 是 fencing 机制的一部分。旧 Worker drain �
 
 Promote 按可审计顺序提交：先确认新槽位 identity、readiness 和 Worker generation，再更新 active route 和 durable lease，随后执行旧槽位 drain。traffic share、Worker capacity 和公网探测属于独立的运行时观测与切换后验证；首次接入安装前必须在运行时演练中证明这些观测，而不能把单次采样当作同步 promote 前门禁。旧槽位 drain 超时但新 active 状态已经被控制器证明时，结果应为 `degraded`；若 active 状态或外部副作用无法证明，则保持 `unknown` 并先 reconcile。
 
+Drain 应按“Server 先、Worker 后”的顺序执行。Server 已接受 drain 后，若 Worker 端点明确返回连接关闭或连接拒绝，说明 Worker 已经不再监听，控制器应将其视为幂等完成并继续等待 Server 进入非就绪状态；HTTP 错误、超时和其他无法证明 Worker 已停止的错误仍必须失败，不能一概吞掉。
+
 发布完成后保留旧槽位、旧候选和持久化数据，回滚通过认证 API、Idempotency-Key 和 expected fingerprint 执行。禁止用直接 SQL 修改 active slot、lease generation 或 operation status 来“修复”发布结果。
 
 为控制面划分独立的内部网络：Caddy admin 只绑定管理网络地址，部署控制器同时加入管理网络和专用 drain control 网络，候选 Server/Worker 不加入管理网络。候选流量网络、控制器的排空网络和 Caddy admin 网络要使用不重叠的子网；这样候选代码即使能访问应用网络，也不能直接调用 Caddy reload 或修改稳定入口。
@@ -72,6 +76,8 @@ Reconcile 必须是幂等的。先以不重建的方式确保目标 Server 存�
 候选身份必须在所有阶段保持不可变；镜像和静态资源使用 digest 或等价的内容指纹，禁止用未验证的 `latest` 覆盖已运行槽位。
 
 控制器的执行路径应有独立测试覆盖：Caddy `validate` 与 `reload` 参数、容器内 allowlist 路径、首次 readiness 失败后的重试、readiness 超时，以及 drain 超时后的状态转换。
+
+Drain 测试还必须覆盖 Worker 已因 fencing 退出后端口关闭的重试场景，并确认 Server readiness 仍是完成条件；不能只测试 Server 和 Worker 同时在线的理想路径。
 
 控制面网络拓扑应有静态检查，覆盖 Caddy admin 绑定地址、控制器双网络身份、控制器固定 drain 来源地址、动态 IP 池排除固定地址和候选服务不加入 admin 网络；reconcile 测试应同时覆盖已就绪目标不被重建、明确 draining 目标先恢复、瞬时探测失败不重建，以及直接回滚的 Server-before-Worker 顺序。浏览器创建恢复测试应覆盖部分兼容键写入失败、不同 attempt 冲突、旧回调无法清理新 attempt，以及兼容键删除失败时仍保留恢复状态。
 

@@ -963,6 +963,9 @@ func (e *CommandExecutor) drain(ctx context.Context, slot string) error {
 			}
 			return nil
 		}); err != nil {
+			if target.component == "Worker" && isClosedDrainEndpoint(err) {
+				continue
+			}
 			return err
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -189,6 +190,45 @@ func TestCommandExecutorUsesPrivateDrainURLs(t *testing.T) {
 	}
 	if controlDrainRequests.Load() != 2 || applicationDrainRequests.Load() != 0 {
 		t.Fatalf("drain requests = control %d, application %d; want control-only POSTs", controlDrainRequests.Load(), applicationDrainRequests.Load())
+	}
+}
+
+func TestCommandExecutorTreatsClosedWorkerAsAlreadyDrained(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/-/drain":
+			if request.Header.Get("Authorization") != "Bearer drain-secret" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			writer.WriteHeader(http.StatusAccepted)
+		case "/readyz":
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedWorkerURL := "http://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &CommandExecutor{
+		SlotURLs:        map[string]string{"green": server.URL},
+		WorkerURLs:      map[string]string{"green": closedWorkerURL},
+		DrainSlotURLs:   map[string]string{"green": server.URL},
+		DrainWorkerURLs: map[string]string{"green": closedWorkerURL},
+		DrainToken:      "drain-secret",
+		DrainTimeout:    time.Second,
+	}
+	if err := executor.Execute(context.Background(), Operation{Kind: "drain", Slot: "green"}); err != nil {
+		t.Fatalf("drain error = %v", err)
 	}
 }
 
