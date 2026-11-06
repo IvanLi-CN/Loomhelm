@@ -197,6 +197,8 @@ RD02 adds migration `00002_worker_leases` for a monotonic durable Worker lease k
 
 ## Remaining Gaps
 
+浏览器恢复与分层缓存的行为边界由 ADR 0019 和 REQ-LH-011 定义。当前实现仍在普通焦点恢复时调用完整 invalidateAndRevalidate，并提前读取成员与任务关系；尚未证明同主体页面稳定、按需请求量或后端查询放大已得到整改。实现与验证须分别覆盖 Provider/API client 的真实失效隔离、查询 source 的按需资源读取、后端权限兼容、UI 状态保留和完整 reconciliation 屏障，不能将编排初始化作为实现证据。
+
 All product requirements still require the implementation and observations described by their VER entries. In particular, business-state persistence, authenticated business APIs, production deployment and final release policy remain incomplete; existing active desktop-session control has not been proven, and D01's approved design package does not by itself establish production UI or business acceptance. Platform short-job infrastructure and branch-preview evidence are not evidence of those business capabilities.
 
 The approved product boundaries require authorized Host routing without a browser Host-management surface, top-level Workbench/Tasks entries, a projectless Conversations group and project/conversation tree, conversation-context files, shared drafts and task relationships. All Conversations remains accessible from Workbench. Their presence in the specification is not evidence of backend support. Structural prototype checks do not establish real Codex, persistence, cross-client synchronization or PWA acceptance.
