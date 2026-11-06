@@ -1,0 +1,1251 @@
+package artifacts
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/semaphore"
+)
+
+func TestDownloadHTTPHandlerStreamsVerifiedBytesWithSafeHeaders(t *testing.T) {
+	content := []byte("downloaded original bytes")
+	reader := writeArtifactReader(t, content)
+	artifact := protocol.Artifact{
+		ID:          "artifact-download",
+		SessionID:   "session-download",
+		Name:        `../report/季度 "final".txt`,
+		Kind:        protocol.ArtifactKindFile,
+		Size:        int64(len(content)),
+		ContentType: "text/plain; charset=utf-8",
+		Sha256:      "f7c4f0144c4eb6171ca91601084ba2ba1f0ffb8cc4168c972927006b3a490c05",
+		CreatedAt:   "2026-10-30T01:02:03Z",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: reader}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/download", handler.ServeHTTP)
+
+	request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID+"/download", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+	if response.Body.String() != string(content) {
+		t.Fatalf("body = %q, want %q", response.Body.String(), content)
+	}
+	if response.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("content type = %q", response.Header().Get("Content-Type"))
+	}
+	if disposition := response.Header().Get("Content-Disposition"); !strings.HasPrefix(disposition, `attachment; filename="`) || !strings.Contains(disposition, "filename*=UTF-8''") || strings.ContainsAny(disposition, "\r\n/\\") {
+		t.Fatalf("content disposition = %q", disposition)
+	}
+	if response.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("content type options = %q", response.Header().Get("X-Content-Type-Options"))
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("cache control = %q", response.Header().Get("Cache-Control"))
+	}
+	if response.Header().Get("ETag") != `"f7c4f0144c4eb6171ca91601084ba2ba1f0ffb8cc4168c972927006b3a490c05"` {
+		t.Fatalf("etag = %q", response.Header().Get("ETag"))
+	}
+}
+
+func TestContentResponseSanitizesLegacyArtifactNames(t *testing.T) {
+	content := []byte("legacy content")
+	store := &contentHTTPArtifactStoreStub{
+		httpArtifactStoreStub: httpArtifactStoreStub{
+			artifact: protocol.Artifact{ID: "artifact-legacy-name", Name: "../report\u202Etxt.txt", Size: int64(len(content))},
+			reader:   writeArtifactReader(t, content),
+		},
+	}
+	handler, err := NewDownloadHTTPHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-legacy-name/content", nil))
+	var payload protocol.ArtifactContentResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(payload.Artifact.Name, "/\\") || strings.ContainsRune(payload.Artifact.Name, '\u202E') {
+		t.Fatalf("content response retained unsafe legacy name: %q", payload.Artifact.Name)
+	}
+}
+
+func TestContentDispositionRemovesBidiControls(t *testing.T) {
+	disposition := contentDisposition("report\u202Etxt.txt")
+	if strings.ContainsRune(disposition, '\u202E') || strings.Contains(disposition, "%E2%80%AE") {
+		t.Fatalf("content disposition retained a bidi control: %q", disposition)
+	}
+}
+
+func TestDownloadHTTPHandlerSupportsHeadWithoutBody(t *testing.T) {
+	content := []byte("head body is suppressed")
+	artifact := protocol.Artifact{
+		ID:          "artifact-head",
+		Name:        "head.txt",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	router.Head("/artifacts/{artifact_id}", handler.ServeHTTP)
+	request := httptest.NewRequest(http.MethodHead, "/artifacts/"+artifact.ID, nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.Len() != 0 {
+		t.Fatalf("HEAD response = status %d/body %q", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Content-Length") != "23" {
+		t.Fatalf("HEAD content length = %q", response.Header().Get("Content-Length"))
+	}
+}
+
+func TestDownloadHTTPHandlerSupportsRangeRequests(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{
+		ID:          "artifact-range",
+		Name:        "range.txt",
+		Size:        int64(len(content)),
+		ContentType: "text/plain",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+	request.Header.Set("Range", "bytes=2-6")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusPartialContent, response.Body.String())
+	}
+	if response.Header().Get("Content-Range") != "bytes 2-6/19" {
+		t.Fatalf("content range = %q, want %q", response.Header().Get("Content-Range"), "bytes 2-6/19")
+	}
+	if response.Body.String() != string(content[2:7]) {
+		t.Fatalf("body = %q, want %q", response.Body.String(), content[2:7])
+	}
+}
+
+func TestDownloadHTTPHandlerNormalizesByteRangeVariants(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{ID: "artifact-range-normalization", Name: "range.txt", Size: int64(len(content))}
+	for _, test := range []struct {
+		name       string
+		rangeValue string
+		wantRange  string
+		wantBody   []byte
+	}{
+		{name: "case insensitive unit", rangeValue: "Bytes=2-6", wantRange: "bytes 2-6/19", wantBody: content[2:7]},
+		{name: "oversized end", rangeValue: "bytes=2-99999999999999999999", wantRange: "bytes 2-18/19", wantBody: content[2:]},
+		{name: "oversized suffix", rangeValue: "bytes=-99999999999999999999", wantRange: "bytes 0-18/19", wantBody: content},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+			request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+			request.Header.Set("Range", test.rangeValue)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusPartialContent {
+				t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusPartialContent, response.Body.String())
+			}
+			if response.Header().Get("Content-Range") != test.wantRange || !bytes.Equal(response.Body.Bytes(), test.wantBody) {
+				t.Fatalf("range response = %q/%q, want %q/%q", response.Header().Get("Content-Range"), response.Body.Bytes(), test.wantRange, test.wantBody)
+			}
+		})
+	}
+}
+
+func TestDownloadHTTPHandlerIgnoresRangeForHead(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{ID: "artifact-head-range", Name: "range.txt", Size: int64(len(content))}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Handle("/artifacts/{artifact_id}", handler)
+	request := httptest.NewRequest(http.MethodHead, "/artifacts/"+artifact.ID, nil)
+	request.Header.Set("Range", "bytes=99-100")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+	if response.Body.Len() != 0 {
+		t.Fatalf("HEAD body length = %d, want 0", response.Body.Len())
+	}
+	if response.Header().Get("Content-Length") != "19" {
+		t.Fatalf("content length = %q, want %q", response.Header().Get("Content-Length"), "19")
+	}
+}
+
+func TestDownloadHTTPHandlerRejectsUnsupportedOrUnsatisfiableRanges(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		rangeValue string
+	}{
+		{name: "signed start", rangeValue: "bytes=+2-6"},
+		{name: "malformed", rangeValue: "bytes=two-six"},
+		{name: "past end", rangeValue: "bytes=99-100"},
+		{name: "reversed", rangeValue: "bytes=6-2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := []byte("range response body")
+			artifact := protocol.Artifact{ID: "artifact-invalid-range", Name: "range.txt", Size: int64(len(content))}
+			handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+			request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+			request.Header.Set("Range", test.rangeValue)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusRequestedRangeNotSatisfiable {
+				t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusRequestedRangeNotSatisfiable, response.Body.String())
+			}
+			if response.Header().Get("Content-Range") != "bytes */19" {
+				t.Fatalf("content range = %q, want %q", response.Header().Get("Content-Range"), "bytes */19")
+			}
+			if response.Body.String() == string(content) {
+				t.Fatal("invalid range returned artifact bytes")
+			}
+		})
+	}
+}
+
+func TestDownloadHTTPHandlerDelegatesUnknownAndMultipleRangesToNetHTTP(t *testing.T) {
+	content := []byte("range response body")
+	for _, test := range []struct {
+		name       string
+		rangeValue string
+		status     int
+	}{
+		{name: "unknown unit", rangeValue: "items=2-6", status: http.StatusOK},
+		{name: "multiple byte ranges", rangeValue: "bytes=2-6,8-10", status: http.StatusPartialContent},
+		{name: "mixed overlapping and past end ranges", rangeValue: "bytes=2-6,99-100", status: http.StatusPartialContent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			artifact := protocol.Artifact{ID: "artifact-range-delegated", Name: "range.txt", Size: int64(len(content))}
+			handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+			request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+			request.Header.Set("Range", test.rangeValue)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d; headers=%v; body=%q", response.Code, test.status, response.Header(), response.Body.String())
+			}
+		})
+	}
+}
+
+func TestDownloadHTTPHandlerIgnoresStaleIfRangeBeforeRangeValidation(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{
+		ID:     "artifact-stale-if-range",
+		Name:   "range.txt",
+		Size:   int64(len(content)),
+		Sha256: "445fcfa7807064c0c66e933b2be15b70ace20c745d07564cb76cbaa421d1cdd5",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+	request.Header.Set("Range", "bytes=99-100")
+	request.Header.Set("If-Range", `"stale-etag"`)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+	if response.Body.String() != string(content) {
+		t.Fatalf("body = %q, want %q", response.Body.String(), content)
+	}
+}
+
+func TestDownloadHTTPHandlerHonorsMatchingIfRange(t *testing.T) {
+	content := []byte("range response body")
+	artifact := protocol.Artifact{
+		ID:     "artifact-matching-if-range",
+		Name:   "range.txt",
+		Size:   int64(len(content)),
+		Sha256: "445fcfa7807064c0c66e933b2be15b70ace20c745d07564cb76cbaa421d1cdd5",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	request := httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil)
+	request.Header.Set("Range", "bytes=2-6")
+	request.Header.Set("If-Range", `"445fcfa7807064c0c66e933b2be15b70ace20c745d07564cb76cbaa421d1cdd5"`)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusPartialContent, response.Body.String())
+	}
+	if response.Header().Get("Content-Range") != "bytes 2-6/19" || response.Body.String() != string(content[2:7]) {
+		t.Fatalf("matching If-Range response = status %d, range %q, body %q", response.Code, response.Header().Get("Content-Range"), response.Body.String())
+	}
+}
+
+func TestDownloadHTTPHandlerReturnsCompleteContentChunkAsBase64JSON(t *testing.T) {
+	content := []byte{0, 1, 2, 255}
+	artifact := protocol.Artifact{
+		ID:          "artifact-content",
+		Name:        "content.bin",
+		Kind:        protocol.ArtifactKindFile,
+		Size:        int64(len(content)),
+		ContentType: "application/octet-stream",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID+"/content?limit=4", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+	var payload protocol.ArtifactContentResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != string(content) || payload.Offset != 0 || payload.NextOffset != int64(len(content)) || payload.TotalSize != int64(len(content)) || !payload.Complete {
+		t.Fatalf("content response = %#v, decoded=%v", payload, decoded)
+	}
+	if response.Header().Get("Content-Type") != "application/json" || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("content response headers = %#v", response.Header())
+	}
+}
+
+func TestDownloadHTTPHandlerVerifiesFirstContentChunkBeforeReadingBytes(t *testing.T) {
+	content := []byte("same-size corrupt bytes")
+	reader := &contentVerificationReaderStub{
+		Reader:    bytes.NewReader(content),
+		version:   "v1-test",
+		verifyErr: ErrHashMismatch,
+	}
+	store := &contentHTTPArtifactStoreStub{
+		httpArtifactStoreStub: httpArtifactStoreStub{
+			artifact: protocol.Artifact{ID: "artifact-corrupt", Name: "content.bin", Size: int64(len(content))},
+		},
+		contentReader: reader,
+	}
+	handler, err := NewDownloadHTTPHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-corrupt/content?limit=4", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusNotFound, response.Body.String())
+	}
+	if reader.verifyCalls != 1 {
+		t.Fatalf("verify calls = %d, want 1", reader.verifyCalls)
+	}
+	if reader.readBeforeVerify {
+		t.Fatal("content bytes were read before the first full verification")
+	}
+	if strings.Contains(response.Body.String(), base64.StdEncoding.EncodeToString(content)) {
+		t.Fatal("response exposed corrupt content bytes")
+	}
+}
+
+func TestDownloadHTTPHandlerRejectsMutationAfterChunkReadBeforeResponse(t *testing.T) {
+	content := []byte("same-size content")
+	reader := &contentVerificationReaderStub{
+		Reader:           bytes.NewReader(content),
+		version:          "v1-test",
+		verifyVersionErr: ErrContentChanged,
+	}
+	store := &contentHTTPArtifactStoreStub{
+		httpArtifactStoreStub: httpArtifactStoreStub{
+			artifact: protocol.Artifact{ID: "artifact-mutated-after-read", Name: "content.bin", Size: int64(len(content))},
+		},
+		contentReader: reader,
+	}
+	handler, err := NewDownloadHTTPHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-mutated-after-read/content?limit=4", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusConflict, response.Body.String())
+	}
+	if reader.verifyCalls != 1 {
+		t.Fatalf("verify calls = %d, want 1", reader.verifyCalls)
+	}
+	if reader.verifyVersionCalls != 1 {
+		t.Fatalf("verify version calls = %d, want 1", reader.verifyVersionCalls)
+	}
+	if strings.Contains(response.Body.String(), base64.StdEncoding.EncodeToString(content)) {
+		t.Fatal("response exposed bytes after the content mutation")
+	}
+}
+
+func TestDownloadHTTPHandlerMapsMissingUnauthorizedAndInvalidAccess(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		status     int
+		retryAfter string
+	}{
+		{name: "missing", err: ErrNotFound, status: http.StatusNotFound},
+		{name: "unauthorized", err: ErrUnauthorized, status: http.StatusNotFound},
+		{name: "recovery pending", err: ErrRecoveryPending, status: http.StatusServiceUnavailable, retryAfter: "60"},
+		{name: "content changed", err: ErrContentChanged, status: http.StatusConflict},
+		{name: "invalid path", err: ErrInvalid, status: http.StatusBadRequest},
+		{name: "store unavailable", err: ErrStoreUnavailable, status: http.StatusServiceUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{err: test.err}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+			request := httptest.NewRequest(http.MethodGet, "/artifacts/artifact-id", nil)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d; body=%q", response.Code, test.status, response.Body.String())
+			}
+			if response.Header().Get("Retry-After") != test.retryAfter {
+				t.Fatalf("retry-after = %q, want %q", response.Header().Get("Retry-After"), test.retryAfter)
+			}
+			if strings.Contains(response.Body.String(), test.err.Error()) && test.err != ErrInvalid {
+				t.Fatalf("response leaked storage error: %q", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestDownloadHTTPHandlerUsesBoundedContentOpenPath(t *testing.T) {
+	content := []byte("bounded content")
+	store := &contentHTTPArtifactStoreStub{
+		httpArtifactStoreStub: httpArtifactStoreStub{
+			artifact: protocol.Artifact{ID: "artifact-content-open", Name: "content.bin", Size: int64(len(content))},
+			reader:   writeArtifactReader(t, content),
+		},
+	}
+	handler, err := NewDownloadHTTPHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-content-open/content?limit=4", nil))
+	if response.Code != http.StatusOK || store.contentOpens != 1 || store.fullOpens != 0 {
+		t.Fatalf("content response status=%d/content opens=%d/full opens=%d", response.Code, store.contentOpens, store.fullOpens)
+	}
+}
+
+func TestDownloadHTTPHandlerMapsInChunkContentChangesToConflict(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		reader *contentErrorReader
+	}{
+		{name: "seek", reader: &contentErrorReader{seekErr: ErrContentChanged}},
+		{name: "read", reader: &contentErrorReader{readErr: ErrContentChanged}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &contentHTTPArtifactStoreStub{
+				httpArtifactStoreStub: httpArtifactStoreStub{
+					artifact: protocol.Artifact{ID: "artifact-content-change", Name: "content.bin", Size: 4},
+					reader:   test.reader,
+				},
+			}
+			handler, err := NewDownloadHTTPHandler(store, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := chi.NewRouter()
+			router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-content-change/content?limit=4", nil))
+			if response.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusConflict, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestDownloadHTTPHandlerMapsFullDownloadContentChangesToConflict(t *testing.T) {
+	content := []byte("original bytes")
+	reader := &fullDownloadErrorReader{
+		Reader: bytes.NewReader(content),
+		Err:    ErrContentChanged,
+	}
+	artifact := protocol.Artifact{ID: "artifact-full-content-change", Name: "content.bin", Size: int64(len(content))}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: reader}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-full-content-change", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusConflict, response.Body.String())
+	}
+	if response.Body.String() == string(content) {
+		t.Fatal("full download returned content after the content identity changed")
+	}
+}
+
+func TestDownloadHTTPHandlerRejectsSameSizeCorruptionBeforeWritingBytes(t *testing.T) {
+	content := []byte("corrupt bytes")
+	artifact := protocol.Artifact{
+		ID:     "artifact-full-corruption",
+		Name:   "content.bin",
+		Size:   int64(len(content)),
+		Sha256: "52c3935626c104b2cbc9031291a1c4d56614c38f52072a361d658a58a9c48698",
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-full-corruption", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusNotFound, response.Body.String())
+	}
+	if response.Body.String() == string(content) {
+		t.Fatal("full download returned same-size corrupt bytes")
+	}
+}
+
+func TestDownloadHTTPHandlerBoundsConcurrentFullDownloadStaging(t *testing.T) {
+	content := []byte("bounded download")
+	artifact := protocol.Artifact{ID: "artifact-buffer-capacity", Name: "content.bin", Size: int64(len(content))}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxConcurrentStagedDownload; i++ {
+		handler.downloadStagingSlots <- struct{}{}
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-buffer-capacity", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+}
+
+func TestDownloadHTTPHandlerBoundsConcurrentDownloadResponses(t *testing.T) {
+	content := []byte("bounded response")
+	artifact := protocol.Artifact{ID: "artifact-response-capacity", Name: "content.bin", Size: int64(len(content))}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxConcurrentDownloadResponses; i++ {
+		handler.downloadResponseSlots <- struct{}{}
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID, nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+}
+
+func TestDownloadHTTPHandlerBoundsHeadAndContentVerification(t *testing.T) {
+	artifact := protocol.Artifact{ID: "artifact-verification-capacity", Name: "content.bin", Size: 4}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, []byte("data"))}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxConcurrentStagedDownload; i++ {
+		handler.downloadStagingSlots <- struct{}{}
+	}
+	router := chi.NewRouter()
+	router.Head("/artifacts/{artifact_id}", handler.ServeHTTP)
+	router.Get("/artifacts/{artifact_id}/content", handler.ServeContentHTTP)
+
+	headResponse := httptest.NewRecorder()
+	router.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/artifacts/"+artifact.ID, nil))
+	if headResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusServiceUnavailable)
+	}
+	contentResponse := httptest.NewRecorder()
+	router.ServeHTTP(contentResponse, httptest.NewRequest(http.MethodGet, "/artifacts/"+artifact.ID+"/content", nil))
+	if contentResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("content status = %d, want %d", contentResponse.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestDownloadHTTPHandlerStagesWithinAggregateBudget(t *testing.T) {
+	content := []byte("staged bytes")
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.stagingBudget = semaphore.NewWeighted(int64(len(content)))
+
+	artifact := protocol.Artifact{Size: int64(len(content))}
+	staged, release, err := handler.stageDownload(context.Background(), bytes.NewReader(content), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedPath := staged.Name()
+	info, err := staged.Stat()
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		release()
+		t.Fatalf("staging file mode = %o, want 600", info.Mode().Perm())
+	}
+	if handler.stagingBudget.TryAcquire(1) {
+		handler.stagingBudget.Release(1)
+		release()
+		t.Fatal("staging budget admitted bytes beyond its aggregate limit")
+	}
+	got, err := io.ReadAll(staged)
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		release()
+		t.Fatalf("staged content = %q, want %q", got, content)
+	}
+	release()
+	if _, err := os.Stat(stagedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging file remains after release: stat error = %v", err)
+	}
+	if !handler.stagingBudget.TryAcquire(int64(len(content))) {
+		t.Fatal("staging budget was not released")
+	}
+	handler.stagingBudget.Release(int64(len(content)))
+}
+
+func TestDownloadHTTPHandlerRetriesFailedStagingCleanup(t *testing.T) {
+	content := []byte("retry cleanup")
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.stagingBudget = semaphore.NewWeighted(int64(len(content)))
+	attempts := 0
+	handler.removeStagingFile = func(path string) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("transient cleanup failure")
+		}
+		return os.Remove(path)
+	}
+	artifact := protocol.Artifact{Size: int64(len(content))}
+	staged, release, err := handler.stageDownload(context.Background(), bytes.NewReader(content), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedPath := staged.Name()
+	release()
+	if handler.stagingBudget.TryAcquire(int64(len(content))) {
+		handler.stagingBudget.Release(int64(len(content)))
+		t.Fatal("staging budget released before failed cleanup was retried")
+	}
+	handler.retryPendingStagingCleanup()
+	if _, err := os.Stat(stagedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging file remains after retry: %v", err)
+	}
+	if !handler.stagingBudget.TryAcquire(int64(len(content))) {
+		t.Fatal("staging budget was not released after cleanup retry")
+	}
+	handler.stagingBudget.Release(int64(len(content)))
+}
+
+func TestCleanupOrphanedDownloadStagingRemovesRecentFiles(t *testing.T) {
+	file, err := os.CreateTemp("", "loomhelm-artifact-download-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupOrphanedDownloadStaging(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recent orphaned staging file remains: %v", err)
+	}
+}
+
+func TestNewDownloadHTTPHandlerFailsClosedWhenStagingCleanupCannotReadDirectory(t *testing.T) {
+	missingDir := filepath.Join(t.TempDir(), "missing")
+	_, err := newDownloadHTTPHandler(httpArtifactStoreStub{}, nil, missingDir, os.Remove)
+	if !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("constructor error = %v, want ErrStoreUnavailable", err)
+	}
+}
+
+func TestNewDownloadHTTPHandlerFailsClosedWhenStagingCleanupCannotRemoveFile(t *testing.T) {
+	directory := t.TempDir()
+	file, err := os.Create(filepath.Join(directory, "loomhelm-artifact-download-orphan"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = newDownloadHTTPHandler(httpArtifactStoreStub{}, nil, directory, func(string) error {
+		return errors.New("remove denied")
+	})
+	if !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("constructor error = %v, want ErrStoreUnavailable", err)
+	}
+}
+
+func TestDownloadHTTPHandlerUsesStoreArtifactSizeLimit(t *testing.T) {
+	handler, err := NewDownloadHTTPHandler(&Store{maxBytes: 8}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.maxStagingBytes != 8 {
+		t.Fatalf("staging limit = %d, want configured store limit 8", handler.maxStagingBytes)
+	}
+	if !handler.stagingBudget.TryAcquire(8) {
+		t.Fatal("staging budget does not admit the configured store limit")
+	}
+	if handler.stagingBudget.TryAcquire(1) {
+		handler.stagingBudget.Release(1)
+		handler.stagingBudget.Release(8)
+		t.Fatal("staging budget exceeded the configured store limit")
+	}
+	handler.stagingBudget.Release(8)
+}
+
+func TestDownloadHTTPHandlerStopsStagingWhenRequestIsCanceled(t *testing.T) {
+	content := []byte("12345678")
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.stagingBudget = semaphore.NewWeighted(int64(len(content)))
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := &cancelAfterReadSeeker{Reader: bytes.NewReader(content), cancel: cancel}
+	_, _, err = handler.stageDownload(ctx, reader, protocol.Artifact{Size: int64(len(content))})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("stageDownload error = %v, want context.Canceled", err)
+	}
+	if !handler.stagingBudget.TryAcquire(int64(len(content))) {
+		t.Fatal("canceled staging did not release its aggregate budget")
+	}
+	handler.stagingBudget.Release(int64(len(content)))
+}
+
+func TestDownloadHTTPHandlerRejectsContentAboveStagingLimit(t *testing.T) {
+	content := []byte("do not return")
+	artifact := protocol.Artifact{ID: "artifact-over-staging-limit", Name: "content.bin", Size: maxStagedDownloadBytes + 1}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{artifact: artifact, reader: writeArtifactReader(t, content)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/artifact-over-staging-limit", nil))
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusRequestEntityTooLarge, response.Body.String())
+	}
+	if response.Body.String() == string(content) {
+		t.Fatal("download returned content above the staging limit")
+	}
+}
+
+func TestContentReaderRejectsInPlaceChangeAfterRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	original := []byte("original content")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	version, err := filePathVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationVersion, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &contentReader{File: file, version: version, mutationVersion: mutationVersion}
+	if _, err := io.ReadFull(reader, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteAt([]byte{'X'}, 0); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, err := writer.WriteAt(original[:1], 0); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Read(make([]byte, 4)); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("in-place content read error = %v, want ErrContentChanged", err)
+	}
+	if err := reader.verifyContentVersion(context.Background()); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("in-place content change error = %v, want ErrContentChanged", err)
+	}
+}
+
+func TestFileContentMutationVersionDetectsRewriteWithRestoredModTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	original := []byte("original content")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	before, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteAt([]byte("changed  content"), 0); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Fatal("content version did not change after an in-place rewrite with restored mtime")
+	}
+}
+
+func TestContentReaderAllowsUnchangedHardLinkLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	content := []byte("immutable content")
+	digest := sha256.Sum256(content)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	version, err := filePathVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationVersion, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &contentReader{
+		File:            file,
+		version:         version,
+		mutationVersion: mutationVersion,
+		artifact: protocol.Artifact{
+			Size:   int64(len(content)),
+			Sha256: hex.EncodeToString(digest[:]),
+		},
+	}
+	linkPath := filepath.Join(filepath.Dir(path), "staging")
+	if err := os.Link(path, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(linkPath)
+	if err := reader.verifyContentVersion(context.Background()); err != nil {
+		t.Fatalf("hard-link lifecycle verification error = %v", err)
+	}
+}
+
+func TestContentReaderRejectsRewriteWithHardLinkLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	original := []byte("original content")
+	digest := sha256.Sum256(original)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	version, err := filePathVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationVersion, err := fileContentMutationVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &contentReader{
+		File:            file,
+		version:         version,
+		mutationVersion: mutationVersion,
+		artifact: protocol.Artifact{
+			Size:   int64(len(original)),
+			Sha256: hex.EncodeToString(digest[:]),
+		},
+	}
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteAt([]byte("rewritten content"), 0); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(filepath.Dir(path), "staging")
+	if err := os.Link(path, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(linkPath)
+	if err := reader.verifyContentVersion(context.Background()); !errors.Is(err, ErrContentChanged) {
+		t.Fatalf("rewrite with hard-link lifecycle error = %v, want ErrContentChanged", err)
+	}
+}
+
+func TestFilePathVersionIgnoresHardLinkLifecycle(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "artifact")
+	linkPath := filepath.Join(directory, "staging")
+	if err := os.WriteFile(path, []byte("immutable content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	before, err := filePathVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(path, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	after, err := filePathVersion(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("content version changed across hard-link lifecycle: before=%q after=%q", before, after)
+	}
+}
+
+func TestDownloadHTTPHandlerRejectsMethodsAndMissingRouteParameter(t *testing.T) {
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Handle("/artifacts/{artifact_id}", handler)
+	request := httptest.NewRequest(http.MethodPost, "/artifacts/artifact-id", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD" {
+		t.Fatalf("POST response = status %d/allow %q", response.Code, response.Header().Get("Allow"))
+	}
+
+	routeContext := chi.NewRouteContext()
+	request = httptest.NewRequest(http.MethodGet, "/artifacts/", nil)
+	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing route parameter status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestDownloadHTTPHandlerUsesCallerErrorEnvelope(t *testing.T) {
+	var got struct {
+		status  int
+		err     error
+		message string
+	}
+	handler, err := NewDownloadHTTPHandler(httpArtifactStoreStub{err: ErrNotFound}, func(_ http.ResponseWriter, _ *http.Request, status int, err error, message string) {
+		got.status, got.err, got.message = status, err, message
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Get("/artifacts/{artifact_id}", handler.ServeHTTP)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/artifacts/missing", nil))
+	if got.status != http.StatusNotFound || !errors.Is(got.err, ErrNotFound) || got.message == "" {
+		t.Fatalf("error callback = %#v", got)
+	}
+}
+
+type httpArtifactStoreStub struct {
+	artifact protocol.Artifact
+	reader   protocol.ArtifactReader
+	err      error
+}
+
+type contentHTTPArtifactStoreStub struct {
+	httpArtifactStoreStub
+	contentOpens  int
+	fullOpens     int
+	contentReader protocol.ArtifactReader
+}
+
+func (s *contentHTTPArtifactStoreStub) Open(ctx context.Context, id string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	s.fullOpens++
+	return s.httpArtifactStoreStub.Open(ctx, id)
+}
+
+func (s *contentHTTPArtifactStoreStub) OpenContentAt(ctx context.Context, id, _ string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	s.contentOpens++
+	artifact, reader, err := s.httpArtifactStoreStub.Open(ctx, id)
+	if err != nil {
+		return protocol.Artifact{}, nil, err
+	}
+	if s.contentReader != nil {
+		return artifact, s.contentReader, nil
+	}
+	return artifact, &contentVersionReaderStub{ArtifactReader: reader, version: "v1-test"}, nil
+}
+
+type contentVersionReaderStub struct {
+	protocol.ArtifactReader
+	version string
+}
+
+type contentVerificationReaderStub struct {
+	*bytes.Reader
+	version            string
+	verifyErr          error
+	verifyErrors       []error
+	verifyVersionErr   error
+	verifyCalls        int
+	verifyVersionCalls int
+	readBeforeVerify   bool
+}
+
+func (r *contentVerificationReaderStub) Read(buffer []byte) (int, error) {
+	if r.verifyCalls == 0 {
+		r.readBeforeVerify = true
+	}
+	return r.Reader.Read(buffer)
+}
+
+func (r *contentVerificationReaderStub) Close() error { return nil }
+
+func (r *contentVerificationReaderStub) contentVersion() string { return r.version }
+
+func (r *contentVerificationReaderStub) verifyContent(context.Context, protocol.Artifact) error {
+	r.verifyCalls++
+	if len(r.verifyErrors) > 0 {
+		err := r.verifyErrors[0]
+		r.verifyErrors = r.verifyErrors[1:]
+		return err
+	}
+	return r.verifyErr
+}
+
+func (r *contentVerificationReaderStub) verifyContentVersion(context.Context) error {
+	r.verifyVersionCalls++
+	return r.verifyVersionErr
+}
+
+type contentErrorReader struct {
+	seekErr error
+	readErr error
+}
+
+type fullDownloadErrorReader struct {
+	*bytes.Reader
+	Err    error
+	failed bool
+}
+
+type cancelAfterReadSeeker struct {
+	*bytes.Reader
+	cancel context.CancelFunc
+}
+
+func (r *cancelAfterReadSeeker) Read(buffer []byte) (int, error) {
+	n, err := r.Reader.Read(buffer)
+	r.cancel()
+	return n, err
+}
+
+func (r *fullDownloadErrorReader) Read(buffer []byte) (int, error) {
+	if r.failed {
+		return 0, r.Err
+	}
+	r.failed = true
+	if len(buffer) > 1 {
+		buffer = buffer[:1]
+	}
+	return r.Reader.Read(buffer)
+}
+
+func (r *fullDownloadErrorReader) ReadAt(buffer []byte, offset int64) (int, error) {
+	return r.Reader.ReadAt(buffer, offset)
+}
+
+func (r *fullDownloadErrorReader) Seek(offset int64, whence int) (int64, error) {
+	return r.Reader.Seek(offset, whence)
+}
+
+func (r *fullDownloadErrorReader) Close() error { return nil }
+
+func (r *contentErrorReader) Read([]byte) (int, error) {
+	if r.readErr != nil {
+		return 0, r.readErr
+	}
+	return 0, io.EOF
+}
+
+func (r *contentErrorReader) ReadAt([]byte, int64) (int, error) {
+	if r.readErr != nil {
+		return 0, r.readErr
+	}
+	return 0, io.EOF
+}
+
+func (r *contentErrorReader) Seek(int64, int) (int64, error) {
+	return 0, r.seekErr
+}
+
+func (r *contentErrorReader) Close() error { return nil }
+
+func (r *contentVersionReaderStub) contentVersion() string {
+	return r.version
+}
+
+func (s httpArtifactStoreStub) Put(context.Context, protocol.Artifact, io.Reader) (protocol.Artifact, error) {
+	return protocol.Artifact{}, errors.New("unexpected Put")
+}
+
+func (s httpArtifactStoreStub) Metadata(context.Context, string) (protocol.Artifact, error) {
+	return protocol.Artifact{}, errors.New("unexpected Metadata")
+}
+
+func (s httpArtifactStoreStub) Open(context.Context, string) (protocol.Artifact, protocol.ArtifactReader, error) {
+	if s.err != nil {
+		return protocol.Artifact{}, nil, s.err
+	}
+	return s.artifact, s.reader, nil
+}
+
+func writeArtifactReader(t *testing.T, content []byte) protocol.ArtifactReader {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "artifact")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reader
+}

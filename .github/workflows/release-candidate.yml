@@ -34,8 +34,8 @@ jobs:
     steps:
       - name: Require the protected parent branch
         run: |
-          test "$GITHUB_REF" = refs/heads/feat/phase1 || {
-            echo "Release Candidate must run from feat/phase1" >&2
+          test "$GITHUB_REF" = refs/heads/main || {
+            echo "Release Candidate must run from main" >&2
             exit 1
           }
 
@@ -67,8 +67,8 @@ jobs:
               core.setFailed(`source run is not Candidate CI: ${run.name} ${run.path}`);
               return;
             }
-            if (run.event !== "workflow_dispatch" || run.head_branch !== "feat/phase1") {
-              core.setFailed(`source run must be a manual Candidate CI run from feat/phase1: ${run.event}/${run.head_branch}`);
+            if (run.event !== "workflow_dispatch" || run.head_branch !== "main") {
+              core.setFailed(`source run must be a manual Candidate CI run from main: ${run.event}/${run.head_branch}`);
               return;
             }
             if (run.head_repository?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
@@ -113,7 +113,7 @@ jobs:
       - name: Check out trusted release tooling
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: feat/phase1
+          ref: main
           fetch-depth: 0
           persist-credentials: false
       - name: Download the immutable candidate

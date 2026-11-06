@@ -1,0 +1,124 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	cat <<'EOF'
+usage: scripts/reproduce-candidate --source-sha SHA [--output DIR] [--goos GOOS] [--goarch GOARCH]
+
+Build the same source SHA twice and compare candidate and package digests.
+EOF
+}
+
+source_sha=""
+output_dir=""
+goos=""
+goarch=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--source-sha)
+			[ "$#" -ge 2 ] || { echo "reproduce-candidate: --source-sha needs a value" >&2; exit 2; }
+			source_sha=$2
+			shift 2
+			;;
+		--source-sha=*) source_sha=${1#*=}; shift ;;
+		--output)
+			[ "$#" -ge 2 ] || { echo "reproduce-candidate: --output needs a value" >&2; exit 2; }
+			output_dir=$2
+			shift 2
+			;;
+		--output=*) output_dir=${1#*=}; shift ;;
+		--goos)
+			[ "$#" -ge 2 ] || { echo "reproduce-candidate: --goos needs a value" >&2; exit 2; }
+			goos=$2
+			shift 2
+			;;
+		--goos=*) goos=${1#*=}; shift ;;
+		--goarch)
+			[ "$#" -ge 2 ] || { echo "reproduce-candidate: --goarch needs a value" >&2; exit 2; }
+			goarch=$2
+			shift 2
+			;;
+		--goarch=*) goarch=${1#*=}; shift ;;
+		--help|-h) usage; exit 0 ;;
+		*) echo "reproduce-candidate: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+	esac
+done
+
+if [ -z "$source_sha" ]; then
+	echo "reproduce-candidate: --source-sha is required" >&2
+	exit 2
+fi
+
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+if [ -z "$output_dir" ]; then
+	output_dir=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-candidate-repro.XXXXXX")
+else
+	case "$output_dir" in
+		/*) ;;
+		*)
+			echo "reproduce-candidate: --output must be an absolute path outside the checkout" >&2
+			exit 2
+			;;
+	esac
+	case "$output_dir" in
+		"$repo_root"|"$repo_root/"*)
+			echo "reproduce-candidate: --output must be outside the checkout" >&2
+			exit 2
+			;;
+	esac
+if [ -e "$output_dir" ] || [ -L "$output_dir" ]; then
+	echo "reproduce-candidate: refusing to overwrite existing output: $output_dir" >&2
+	exit 1
+fi
+mkdir -p "$output_dir"
+fi
+cleanup() {
+	status=$?
+	rm -rf -- "$output_dir"
+	exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+build_args="--source-sha $source_sha"
+if [ -n "$goos" ]; then build_args="$build_args --goos $goos"; fi
+if [ -n "$goarch" ]; then build_args="$build_args --goarch $goarch"; fi
+# The output directories are outside the checkout by default, so each build
+# still sees the same clean source SHA and cannot include the other build.
+# shellcheck disable=SC2086
+"$repo_root/scripts/build-candidate" $build_args --output "$output_dir/first"
+# shellcheck disable=SC2086
+"$repo_root/scripts/build-candidate" $build_args --output "$output_dir/second"
+
+python3 - "$output_dir/first/candidate-manifest.json" "$output_dir/second/candidate-manifest.json" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+first_path, second_path = map(Path, sys.argv[1:])
+first = json.loads(first_path.read_text(encoding="utf-8"))
+second = json.loads(second_path.read_text(encoding="utf-8"))
+if first != second:
+    raise SystemExit("reproduce-candidate: candidate manifests differ")
+
+
+def sidecar(path: Path, name: str) -> str:
+    fields = path.read_text(encoding="ascii").split()
+    if len(fields) != 2 or fields[1] != name:
+        raise SystemExit(f"reproduce-candidate: malformed package sidecar: {path}")
+    return fields[0]
+
+
+first_package = sidecar(first_path.parent / "candidate.tar.gz.sha256", "candidate.tar.gz")
+second_package = sidecar(second_path.parent / "candidate.tar.gz.sha256", "candidate.tar.gz")
+first_package_bytes = (first_path.parent / "candidate.tar.gz").read_bytes()
+second_package_bytes = (second_path.parent / "candidate.tar.gz").read_bytes()
+if hashlib.sha256(first_package_bytes).hexdigest() != first_package or hashlib.sha256(second_package_bytes).hexdigest() != second_package:
+    raise SystemExit("reproduce-candidate: package sidecar does not match package bytes")
+if first_package != second_package or first_package_bytes != second_package_bytes:
+    raise SystemExit("reproduce-candidate: deterministic package digests differ")
+if hashlib.sha256(first_path.read_bytes()).hexdigest() != hashlib.sha256(second_path.read_bytes()).hexdigest():
+    raise SystemExit("reproduce-candidate: manifest bytes differ")
+digest = first["candidate"]["digest"]
+print(f"reproduce-candidate: reproducible candidate_digest={digest} package_digest={first_package} source_sha={first['candidate']['source_sha']}")
+PY

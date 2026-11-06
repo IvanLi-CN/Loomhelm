@@ -1,0 +1,328 @@
+#!/bin/sh
+set -u
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "checks: cannot resolve repository root" >&2
+	exit 1
+}
+cd "$repo_root" || exit 1
+
+usage() {
+	cat <<'EOF'
+usage: scripts/checks <command>
+
+Commands:
+  all          Run every repository quality check.
+  quality      Check the quality declaration, Markdown/dprint, scripts and deployment config.
+  bootstrap    Run the canonical worktree bootstrap entrypoint.
+  generated    Check protocol, sqlc and module generated-state drift.
+  source       Run Go tests, race tests and vet.
+  database     Run the real PostgreSQL-backed database and job tests.
+  web          Run client transport tests, frozen Web typecheck and production/Storybook builds.
+  client       Install and verify the independent TypeScript client on Node.js and Bun.
+  react        Run the pinned React Doctor changed-file check.
+EOF
+}
+
+check_failures=0
+total_failures=0
+
+run_command() {
+	label=$1
+	shift
+	printf '\n[check] %s\n' "$label"
+	"$@"
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		printf '[check] FAIL: %s (exit %s)\n' "$label" "$status" >&2
+		check_failures=$((check_failures + 1))
+	else
+		printf '[check] PASS: %s\n' "$label"
+	fi
+}
+
+finish_check() {
+	if [ "$check_failures" -ne 0 ]; then
+		return 1
+	fi
+	return 0
+}
+
+run_group() {
+	label=$1
+	shift
+	check_failures=0
+	printf '\n=== %s ===\n' "$label"
+	"$@"
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		total_failures=$((total_failures + 1))
+	fi
+}
+
+check_quality() {
+	run_command "complete repository layout" python3 scripts/check-repository-layout
+	run_command "quality-gates declaration" \
+		python3 .agents/skills/quality-gates/assets/scripts/check_quality_gates.py \
+		--repo-root . --allow-unchecked-branch-protection
+	run_command "Markdown and dprint" python3 tools/markdown.py check
+	run_command "shell and Python syntax" check_syntax
+	run_command "V01 acceptance ledger tests" python3 scripts/v01_acceptance_test.py
+	run_command "deployment configuration" check_deployment
+	finish_check
+}
+
+check_syntax() {
+	for script in scripts/accept-v01 scripts/build-candidate scripts/build-connector-release scripts/build-deployment-envelope scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
+		sh -n "$script"
+	done
+	python3 - <<'PY'
+import ast
+from pathlib import Path
+
+for path in (
+    Path("deploy/preview/control.py"),
+    Path("deploy/preview/control_test.py"),
+    Path("scripts/check-react-doctor"),
+	Path("scripts/v01_acceptance.py"),
+	Path("scripts/v01_acceptance_test.py"),
+):
+    ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+PY
+}
+
+check_deployment() {
+	if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+		echo "checks: Docker Compose is required for deployment configuration validation" >&2
+		return 1
+	fi
+	tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-quality.XXXXXX") || return 1
+	trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
+	mkdir -p "$tmp_dir/state/caddy" "$tmp_dir/web"
+	LOOMHELM_POSTGRES_PORT=55432 \
+		docker compose --project-name loomhelm-quality-dev -f deploy/dev/compose.yaml config >/dev/null || return 1
+	LOOMHELM_PREVIEW_STATE_DIR="$tmp_dir/state" \
+	LOOMHELM_PREVIEW_WEB_DIR="$tmp_dir/web" \
+	LOOMHELM_PREVIEW_HTTP_PORT=18080 \
+	LOOMHELM_PREVIEW_ADMIN_PORT=18081 \
+	LOOMHELM_BLUE_SERVER_PORT=18082 \
+	LOOMHELM_GREEN_SERVER_PORT=18083 \
+	LOOMHELM_ARTIFACT_VOLUME_NAME=loomhelm-quality-preview-artifacts \
+	LOOMHELM_PROXY_NETWORK=loomhelm-quality-preview-proxy \
+	LOOMHELM_DATABASE_NETWORK=loomhelm-quality-preview-database \
+	LOOMHELM_DATABASE_NETWORK_EXTERNAL=true \
+	LOOMHELM_DATABASE_URL=postgres://loomhelm:loomhelm_dev_only@127.0.0.1:55432/loomhelm?sslmode=disable \
+	LOOMHELM_DRAIN_TOKEN=quality-check-token \
+		docker compose --project-name loomhelm-quality-preview -f deploy/preview/compose.yaml config >/dev/null
+	docker compose --project-name loomhelm-quality-example --env-file deploy/example/.env.example -f deploy/example/compose.yaml config >/dev/null
+	cat >"$tmp_dir/production.env" <<EOF
+LOOMHELM_CADDY_IMAGE=caddy:2.10-alpine
+LOOMHELM_CONTROLLER_IMAGE=ghcr.io/example/loomhelm-controller:quality
+LOOMHELM_CONTROLLER_VERSION=quality
+LOOMHELM_DATABASE_URL=postgres://loomhelm:loomhelm_dev_only@127.0.0.1:55432/loomhelm?sslmode=disable
+LOOMHELM_COMPOSE_PROJECT=loomhelm-quality-production
+LOOMHELM_DEPLOYMENT_OWNER_USER_IDS=quality-owner
+LOOMHELM_DOCKER_GID=0
+LOOMHELM_CONTROL_SUBNET=172.31.240.0/28
+LOOMHELM_CONTROL_DYNAMIC_SUBNET=172.31.240.8/29
+LOOMHELM_CONTROLLER_CONTROL_IP=172.31.240.3
+LOOMHELM_CADDY_ADMIN_SUBNET=172.31.241.0/28
+LOOMHELM_CADDY_ADMIN_IP=172.31.241.2
+LOOMHELM_CONTROLLER_ADMIN_IP=172.31.241.3
+LOOMHELM_HTTP_PORT=18090
+LOOMHELM_CADDY_CONFIG_DIR=$tmp_dir/caddy
+LOOMHELM_INSTALLATION_ROOT=$tmp_dir/install
+LOOMHELM_DEPLOYMENT_ENV_FILE=$tmp_dir/production.env
+LOOMHELM_DEPLOYMENT_BLUE_URL=http://server-blue:8080
+LOOMHELM_DEPLOYMENT_GREEN_URL=http://server-green:8080
+LOOMHELM_DEPLOYMENT_BLUE_WORKER_URL=http://worker-blue:8081
+LOOMHELM_DEPLOYMENT_GREEN_WORKER_URL=http://worker-green:8081
+LOOMHELM_WEB_ROOT=$tmp_dir/web
+LOOMHELM_DEPLOYMENT_STATE_DIR=$tmp_dir/deployment
+LOOMHELM_ARTIFACT_ROOT=$tmp_dir/artifacts
+LOOMHELM_DRAIN_TOKEN=quality-check-token
+LOOMHELM_CONNECTOR_IMAGE=ghcr.io/example/loomhelm-connector@sha256:0000000000000000000000000000000000000000000000000000000000000000
+LOOMHELM_CONNECTOR_VERSION=quality-connector
+LOOMHELM_CONNECTOR_SERVER_URL=https://connector.example.test
+LOOMHELM_CONNECTOR_HOST_ID=quality-host
+LOOMHELM_CONNECTOR_TOKEN=quality-token
+LOOMHELM_CONNECTOR_JOURNAL_ROOT=$tmp_dir/connector
+LOOMHELM_CONNECTOR_WORKSPACE_ROOT=$tmp_dir/workspace
+LOOMHELM_WORKER_LEASE_KEY=loomhelm-worker
+LOOMHELM_SESSION_COOKIE_SECURE=true
+LOOMHELM_BLUE_SERVER_IMAGE=ghcr.io/example/loomhelm-server:quality
+LOOMHELM_BLUE_WORKER_IMAGE=ghcr.io/example/loomhelm-worker:quality
+LOOMHELM_BLUE_SOURCE_SHA=0000000000000000000000000000000000000000
+LOOMHELM_BLUE_ARTIFACT_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
+LOOMHELM_BLUE_WORKER_GENERATION=1
+LOOMHELM_GREEN_SERVER_IMAGE=ghcr.io/example/loomhelm-server:quality
+LOOMHELM_GREEN_WORKER_IMAGE=ghcr.io/example/loomhelm-worker:quality
+LOOMHELM_GREEN_SOURCE_SHA=0000000000000000000000000000000000000000
+LOOMHELM_GREEN_ARTIFACT_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
+LOOMHELM_GREEN_WORKER_GENERATION=2
+EOF
+	production_config="$tmp_dir/production.json"
+	docker compose --env-file "$tmp_dir/production.env" --project-name loomhelm-quality-production -f deploy/production/compose.yaml config --format json >"$production_config" || return 1
+	python3 - "$production_config" <<'PY'
+import json
+import sys
+
+services = json.loads(open(sys.argv[1], encoding="utf-8").read())["services"]
+for service_name in ("worker-blue", "worker-green"):
+    if service_name in services:
+        raise SystemExit(f"{service_name} must not be enabled without the controller profile")
+PY
+	production_profile_config="$tmp_dir/production-profile.json"
+	docker compose --env-file "$tmp_dir/production.env" --project-name loomhelm-quality-production --profile deployment-controller -f deploy/production/compose.yaml config --format json >"$production_profile_config" || return 1
+	python3 - "$production_profile_config" <<'PY'
+import json
+import ipaddress
+import sys
+
+services = json.loads(open(sys.argv[1], encoding="utf-8").read())["services"]
+for service_name in ("worker-blue", "worker-green"):
+    if service_name not in services:
+        raise SystemExit(f"{service_name} must be present with the controller profile")
+    profiles = services[service_name].get("profiles")
+    if profiles != ["deployment-controller"]:
+        raise SystemExit(f"{service_name} must be controller-profiled, got {profiles!r}")
+controller_volumes = services["deployment-controller"]["volumes"]
+if not any(volume.get("target") == "/opt/loomhelm-web" for volume in controller_volumes):
+    raise SystemExit("deployment-controller must mount the public Web root directly")
+def network_names(service_name):
+    return set(services[service_name].get("networks", {}))
+
+if "caddy-admin" not in network_names("caddy") or "control" in network_names("caddy"):
+    raise SystemExit("Caddy must use caddy-admin and stay off the drain control network")
+if not {"control", "caddy-admin"}.issubset(network_names("deployment-controller")):
+    raise SystemExit("deployment-controller must join both control networks")
+control_ipam = json.loads(open(sys.argv[1], encoding="utf-8").read())["networks"]["control"]["ipam"]["config"][0]
+dynamic_subnet = ipaddress.ip_network(control_ipam["ip_range"], strict=False)
+controller_control_ip = ipaddress.ip_address(services["deployment-controller"]["networks"]["control"]["ipv4_address"])
+if controller_control_ip in dynamic_subnet:
+    raise SystemExit("control dynamic IP range must exclude the controller control IP")
+for service_name in ("server-blue", "server-green", "worker-blue", "worker-green"):
+    names = network_names(service_name)
+    if "control" not in names or "caddy-admin" in names:
+        raise SystemExit(f"{service_name} must use control and stay off caddy-admin")
+PY
+}
+
+check_bootstrap() {
+	run_command "canonical worktree bootstrap" scripts/setup
+	finish_check
+}
+
+check_generated() {
+	run_command "public contract generation drift" scripts/codegen -check
+	run_command "sqlc generation drift" check_sqlc
+	finish_check
+}
+
+check_sqlc() {
+	sqlc_command=${SQLC_BIN:-sqlc}
+	if [ -x "$sqlc_command" ]; then
+		sqlc_executable=$sqlc_command
+	elif command -v "$sqlc_command" >/dev/null 2>&1; then
+		sqlc_executable=$(command -v "$sqlc_command")
+	else
+		echo "checks: sqlc is required for generation drift validation" >&2
+		return 1
+	fi
+	tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-sqlc.XXXXXX") || return 1
+	trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
+	mkdir -p "$tmp_dir/internal/platform/database"
+	cp sqlc.yaml "$tmp_dir/sqlc.yaml"
+	cp -R db "$tmp_dir/db"
+	cp -R internal/platform/database/queries "$tmp_dir/internal/platform/database/queries"
+	cp -R internal/platform/database/generated "$tmp_dir/internal/platform/database/generated"
+	"$sqlc_executable" generate -f "$tmp_dir/sqlc.yaml" || return 1
+	diff -ru --no-dereference internal/platform/database/generated "$tmp_dir/internal/platform/database/generated"
+}
+
+check_source() {
+	run_command "Go unit and integration-capable tests" go test -p=1 ./...
+	run_command "Go race tests" go test -p=1 -race ./...
+	run_command "Go shuffled tests" go test -p=1 -shuffle=on ./...
+	run_command "Go vet" go vet ./...
+	finish_check
+}
+
+check_database() {
+	if [ -z "${LOOMHELM_DATABASE_URL:-}" ]; then
+		echo "checks: LOOMHELM_DATABASE_URL is required; database checks must not silently skip" >&2
+		check_failures=$((check_failures + 1))
+	else
+		run_command "PostgreSQL-backed database and River job tests" scripts/db test
+	fi
+	finish_check
+}
+
+check_web() {
+	run_command "frozen Web dependency install" bun install --frozen-lockfile
+	run_command "Web tests" bun test packages/api-client/test web/test web/src
+	run_command "Web typecheck" bun run typecheck
+	run_command "Web production build" bun run build
+	run_command "Storybook build" bun run build:storybook
+	finish_check
+}
+
+check_client() {
+	run_command "TypeScript client frozen dependency install" npm --prefix clients/typescript ci
+	run_command "TypeScript client typecheck" npm --prefix clients/typescript run check
+	run_command "TypeScript client Node.js tests" npm --prefix clients/typescript test
+	run_command "TypeScript client Bun tests" npm --prefix clients/typescript run test:bun
+	finish_check
+}
+
+check_react() {
+	run_command "React Doctor" scripts/check-react-doctor
+	finish_check
+}
+
+run_named_group() {
+	case "$1" in
+		quality) run_group "quality" check_quality ;;
+		bootstrap) run_group "bootstrap" check_bootstrap ;;
+		generated) run_group "generated" check_generated ;;
+		source) run_group "source" check_source ;;
+		database) run_group "database" check_database ;;
+		web) run_group "web" check_web ;;
+		client) run_group "TypeScript client" check_client ;;
+		react) run_group "React Doctor" check_react ;;
+		*)
+			echo "checks: unknown command: $1" >&2
+			usage >&2
+			return 2
+			;;
+	esac
+}
+
+command=${1:-all}
+if [ "$#" -gt 0 ]; then
+	shift
+fi
+
+if [ "$command" = "all" ]; then
+	if [ "$#" -ne 0 ]; then
+		echo "checks: all does not accept extra arguments" >&2
+		usage >&2
+		exit 2
+	fi
+	for group in quality bootstrap generated source database web client react; do
+		run_named_group "$group"
+	done
+else
+	if [ "$#" -ne 0 ]; then
+		echo "checks: command does not accept extra arguments: $*" >&2
+		usage >&2
+		exit 2
+	fi
+	run_named_group "$command"
+fi
+
+if [ "$total_failures" -ne 0 ]; then
+	printf '\nchecks: failed group count=%s\n' "$total_failures" >&2
+	exit 1
+fi
+printf '\nchecks: all requested groups passed\n'

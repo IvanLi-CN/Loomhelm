@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Add the durable keyset index required to read every approval revision for one run without changing the execution approval table or its historical rows.",
+    "release_unit_description": "Phase-one execution-domain candidate following migration 00010; this migration is reserved for the Server-side approval-history read boundary.",
+    "version_impact": "minor"
+  },
+  "compatibility_assessment": {
+    "public_api": "minor",
+    "persistent_state": "patch",
+    "reason": "The candidate adds an additive REST/MCP read operation and optional public approval metadata while the database migration adds only a query index; existing 00010 rows and columns remain readable without backfill."
+  },
+  "durable_state": {
+    "description": "Approval history remains keyed by the existing persisted run_id, created_at and id values; the new index accelerates the run-bound keyset read and does not create or rewrite rows.",
+    "storage_implementation": "PostgreSQL index managed by the embedded Goose migration history. The existing execution_approvals table from 00009 and its 00010-compatible columns remain unchanged.",
+    "source_compatibility_range": {
+      "from_program_versions": "Phase-one execution-domain candidate containing migrations 00009 and 00010.",
+      "to_program_version": "Phase-one approval-history read candidate containing migration 00011.",
+      "readable_earlier_state": true,
+      "older_program_can_read_new_state": true,
+      "direct_major_skips_supported": false
+    }
+  },
+  "database_migration": {
+    "applicable": true,
+    "ddl_structural_changes": [
+      {
+        "id": "ddl-00011-approval-run-created-index",
+        "description": "Create one ordered index on execution_approvals(run_id, created_at, id) in the Goose transaction; no DML, backfill, column change or row rewrite is performed.",
+        "order": 1,
+        "observable": true,
+        "pauseable": false
+      }
+    ],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": false,
+    "operation_sequence": [
+      "ddl-00011-approval-run-created-index"
+    ],
+    "progress_signals": [
+      "A fresh PostgreSQL schema is migrated through 00010 and 00011; migration history records 00011 only after the index transaction commits.",
+      "The migration is re-entered after a successful pass and the unique index name is observed exactly once.",
+      "A deliberate index-name collision makes the migration fail without recording a successful 00011 state; removing the collision permits forward re-entry and successful recognition.",
+      "An approval row created in the 00010 schema is unchanged and remains readable after 00011 through the durable approval store.",
+      "The approval read path rechecks run authorization on every page and binds opaque cursors to the requested run."
+    ],
+    "pause_points": [
+      "Before applying 00011, verify the candidate source identity and PostgreSQL migration lock availability.",
+      "After the index transaction commits and before enabling approval-history reads for traffic.",
+      "If the index operation fails, stop the rollout, remove or repair the conflicting database object with a forward operation, and re-enter 00011; do not mark the candidate ready from partial state."
+    ]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version-or-a-corrected-re-entry-after-the-failed-index-operation; no row backfill or historical approval rewrite is required",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "minor": {
+      "required_test_evidence": [
+        "The PostgreSQL path from 00010 to 00011 verifies the index, migration history, old approval-row readability and unchanged persisted identity/context fields.",
+        "Re-entry after a successful 00011 pass is idempotent and leaves exactly one run-created approval index.",
+        "A deliberate 00011 index collision fails before successful recognition, and after forward cleanup the same migration re-enters and commits.",
+        "Real HTTP approval-list reads return the persisted id, revision and context for every status, link requested_event_id to the matching approval.requested event without rewriting its raw payload, and support reconnect with the same identity.",
+        "Read authorization, malformed/duplicate/cross-run cursor handling, explicit limit bounds, no-store headers and dependency failure mapping are covered without constructing database identities in the client."
+      ]
+    }
+  }
+}

@@ -1,0 +1,76 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repo_root=$(git -C "$script_dir/.." rev-parse --show-toplevel 2>/dev/null) || {
+	echo "dev: cannot resolve a Git worktree; run scripts/dev from a real checkout or linked worktree" >&2
+	exit 1
+}
+repo_root=$(CDPATH= cd -- "$repo_root" && pwd -P)
+cd "$repo_root"
+
+if ! command -v docker >/dev/null 2>&1; then
+	echo "docker is required for the development database" >&2
+	exit 1
+fi
+
+if ! docker compose version >/dev/null 2>&1; then
+	echo "docker compose is required for the development database" >&2
+	exit 1
+fi
+
+if [ -n "${LOOMHELM_DEV_PROJECT_NAME:-}" ]; then
+	project_name=$LOOMHELM_DEV_PROJECT_NAME
+else
+	if command -v sha256sum >/dev/null 2>&1; then
+		worktree_hash=$(printf '%s' "$repo_root" | sha256sum | awk '{print substr($1, 1, 12)}')
+	elif command -v shasum >/dev/null 2>&1; then
+		worktree_hash=$(printf '%s' "$repo_root" | shasum -a 256 | awk '{print substr($1, 1, 12)}')
+	else
+		echo "dev: sha256sum or shasum is required to derive a worktree-isolated Compose project" >&2
+		exit 1
+	fi
+	project_name="loomhelm-dev-${worktree_hash}"
+fi
+
+case "$project_name" in
+	[a-z0-9]*)
+		;;
+	*)
+		echo "dev: Compose project name must start with a lowercase letter or digit: $project_name" >&2
+		exit 1
+		;;
+esac
+case "$project_name" in
+	*[!a-z0-9_-]*)
+		echo "dev: Compose project name contains unsupported characters: $project_name" >&2
+		exit 1
+		;;
+esac
+if [ "${#project_name}" -gt 63 ]; then
+	echo "dev: Compose project name must be at most 63 characters: $project_name" >&2
+	exit 1
+fi
+
+env_file=.env.example
+if [ -L .env.local ]; then
+	if [ ! -e .env.local ] || [ ! -f .env.local ]; then
+		echo "dev: refusing to follow a broken or non-file .env.local symlink" >&2
+		exit 1
+	fi
+	env_file=.env.local
+elif [ -e .env.local ]; then
+	if [ ! -f .env.local ]; then
+		echo "dev: .env.local exists but is not a regular file" >&2
+		exit 1
+	fi
+	env_file=.env.local
+fi
+
+if [ "$#" -eq 0 ]; then
+	set -- up -d
+fi
+
+echo "dev: using Compose project $project_name for worktree $repo_root"
+echo "dev: host ports come from $env_file; conflicts are reported without stopping other listeners"
+exec docker compose --project-name "$project_name" --env-file "$env_file" -f deploy/dev/compose.yaml "$@"

@@ -1,0 +1,91 @@
+const SESSION_CREATION_INTENT_PREFIX = "loomhelm:session-creation-intent:";
+const BROWSER_CONTEXT_NAME_PREFIX = "loomhelm:browser-context:";
+let browserContextId: string | undefined;
+
+function createBrowserContextId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return `browser-${globalThis.crypto.randomUUID()}`;
+  return `browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function getBrowserContextId(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  if (browserContextId) return browserContextId;
+
+  const existingName = window.name.startsWith(BROWSER_CONTEXT_NAME_PREFIX) ? window.name.slice(BROWSER_CONTEXT_NAME_PREFIX.length) : "";
+  if (existingName) {
+    browserContextId = existingName;
+    return browserContextId;
+  }
+
+  const nextId = createBrowserContextId();
+  try {
+    window.name = `${BROWSER_CONTEXT_NAME_PREFIX}${nextId}`;
+  } catch {
+    // The context can still be isolated for this page lifetime when window.name is unavailable.
+  }
+  browserContextId = nextId;
+  return browserContextId;
+}
+
+function getIdentityScope(principalId: string | undefined): string {
+  return encodeURIComponent(principalId?.trim() || "anonymous");
+}
+
+export function buildSessionCreationIntentKey({
+  browserContext,
+  conversationTitle,
+  pathname,
+  principalId,
+  projectId,
+  taskId
+}: {
+  browserContext: string;
+  conversationTitle: string;
+  pathname: string;
+  principalId?: string;
+  projectId?: string;
+  taskId?: string;
+}): string {
+  // The workbench and /conversations/new are two entry points for one durable creation intent.
+  void pathname;
+  return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(browserContext)}:${encodeURIComponent([conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
+}
+
+export function buildLegacySessionCreationIntentKey({
+  browserContext,
+  conversationTitle,
+  pathname,
+  principalId,
+  projectId,
+  taskId
+}: {
+  browserContext: string;
+  conversationTitle: string;
+  pathname: string;
+  principalId?: string;
+  projectId?: string;
+  taskId?: string;
+}): string {
+  return `${SESSION_CREATION_INTENT_PREFIX}${getIdentityScope(principalId)}:${encodeURIComponent(browserContext)}:${encodeURIComponent([pathname, conversationTitle, taskId ?? "", projectId ?? ""].join("|"))}`;
+}
+
+export function getLegacySessionCreationIntentKeys(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string[] {
+  if (typeof window === "undefined") return [];
+  const browserContext = getBrowserContextId();
+  if (!browserContext) return [];
+  const pathnames = [...new Set([window.location.pathname, "/", "/conversations/new"])];
+  return pathnames.map((pathname) => buildLegacySessionCreationIntentKey({ browserContext, conversationTitle, pathname, principalId, projectId, taskId }));
+}
+
+export function hasSessionCreationIntentConflict(intents: readonly { attemptId?: string; commandId: string; fingerprint: string }[]): boolean {
+  if (intents.length < 2) return false;
+  const identity = `${intents[0].commandId}\u0000${intents[0].fingerprint}`;
+  const attemptId = intents[0].attemptId ?? intents[0].commandId;
+  return intents.some((intent) => `${intent.commandId}\u0000${intent.fingerprint}` !== identity || (intent.attemptId ?? intent.commandId) !== attemptId);
+}
+
+export function getSessionCreationIntentKey(principalId: string | undefined, conversationTitle: string, taskId?: string, projectId?: string): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const browserContext = getBrowserContextId();
+  return browserContext ? buildSessionCreationIntentKey({ browserContext, conversationTitle, pathname: window.location.pathname, principalId, projectId, taskId }) : undefined;
+}

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Bound artifact content recovery selection to an ordered partial index.",
+    "release_unit_description": "Phase-one artifact recovery follow-up; an online retryable index keeps recurring content and final-object reconciliation bounded as artifact history grows.",
+    "version_impact": "minor"
+  },
+  "compatibility_assessment": {
+    "public_api": "patch",
+    "persistent_state": "minor",
+    "reason": "The migration adds only an internal PostgreSQL lookup index. It does not change REST or MCP shapes, row values, or the fail-closed behavior of earlier candidates; the recovery-capable candidate uses the index when selecting existing content and final-object recheck rows."
+  },
+  "durable_state": {
+    "description": "conversation_artifacts content-recovery work is selected by staging_reclaim_after, created_at and id through a partial index restricted to unavailable content-mismatch and final-object recheck rows.",
+    "storage_implementation": "PostgreSQL partial B-tree index managed by embedded Goose migration 00016 outside a transaction with a dedicated migration session, a session-local current_schema() search_path, and CREATE INDEX CONCURRENTLY; no table, column, or historical data rewrite is performed, and a failed attempt is dropped and retried without resolving an index through another schema.",
+    "source_compatibility_range": {
+      "from_program_versions": "Phase-one artifact content-recovery candidate containing migration 00015.",
+      "to_program_version": "Phase-one artifact content-recovery candidate containing migration 00016.",
+      "readable_earlier_state": true,
+      "older_program_can_read_new_state": true,
+      "direct_major_skips_supported": false,
+      "compatibility_boundary": "Earlier candidates ignore the additive index and continue to read the existing artifact rows fail-closed; the recovery-capable candidate benefits from bounded selection after 00016 commits."
+    }
+  },
+  "database_migration": {
+    "applicable": true,
+    "ddl_structural_changes": [
+      {
+        "id": "ddl-00016-artifact-content-recovery-index",
+        "description": "Replace any incomplete current-schema attempt and create a partial lookup index for due unavailable content-mismatch or final-object recheck rows with CREATE INDEX CONCURRENTLY outside a transaction, without rewriting historical artifact values or resolving an index from another schema.",
+        "order": 1,
+        "observable": true,
+        "pauseable": false
+      }
+    ],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": false,
+    "operation_sequence": [
+      "00016-artifact-content-recovery-index",
+      "content-mismatch-recovery-admission"
+    ],
+    "progress_signals": [
+      "The non-transactional concurrent build keeps ordinary artifact writes available; Goose records migration 00016 only after the complete index build succeeds.",
+      "Recovery selection remains ordered by due time and bounded by the existing limit while PostgreSQL can use the partial index for content and final-object recheck rows."
+    ],
+    "pause_points": [
+      "If a concurrent build is canceled or times out, the next migration attempt drops only the current-schema index and retries before enabling the recurring recovery loop."
+    ]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version; the index may remain in place while content-mismatch recovery admission is disabled",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "minor": {
+      "required_test_evidence": [
+        "Migration from 00015 creates the partial index without a transaction, repeated migration is idempotent, and a rolled-back and re-entered attempt is recoverable.",
+        "The shared application pool retains its configured search_path after migration; migration-only session settings are not reused by application queries.",
+        "The pg_indexes definition and EXPLAIN plan show the partial index matches the content and final-object recovery predicate and ordered limit.",
+        "Recovery selection returns due content and final-object recheck rows in bounded order without changing row values or states."
+      ]
+    }
+  }
+}

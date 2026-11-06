@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+web/node_modules
+web/dist
+web/storybook-static
+.tmp
+bin
+coverage
+dist

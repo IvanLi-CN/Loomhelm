@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Reject an incomplete monorepo checkout before running component checks."""
+
+import json
+from pathlib import Path
+
+root = Path(__file__).resolve().parent.parent
+required = (
+    "go.mod",
+    "cmd/server/main.go",
+    "cmd/worker/main.go",
+    "cmd/connector/main.go",
+    "internal/app/server.go",
+    "web/package.json",
+    "packages/api-client/package.json",
+    "db/migrations",
+    "deploy/production/compose.yaml",
+    "clients/typescript/package.json",
+    "clients/typescript/package-lock.json",
+    "clients/typescript/src/index.ts",
+)
+errors = [f"missing component: {path}" for path in required if not (root / path).exists()]
+package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+if package.get("workspaces") != ["web", "packages/*"]:
+    errors.append("root workspaces must preserve the Web/shared-package dependency boundary")
+if (root / "client").exists():
+    errors.append("obsolete client/ directory remains; TypeScript client belongs in clients/typescript/")
+if errors:
+    raise SystemExit("\n".join(errors))
+print("repository layout: server, Go client, Web App and independent TypeScript client present")

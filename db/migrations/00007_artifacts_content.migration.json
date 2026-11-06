@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Add durable metadata for original conversation artifacts while storing their bytes in a dedicated file volume.",
+    "release_unit_description": "Phase-one conversation artifact/content service candidate.",
+    "version_impact": "minor"
+  },
+  "durable_state": {
+    "description": "Original artifact bytes survive process restart in a dedicated object directory; PostgreSQL retains the artifact identity, session/run association, content type, size, SHA-256, creation time, pending/ready/unavailable publication state, the exact private staging object and its filesystem incarnation, its staging recovery retry deadline and ready-row reclamation marker, the per-name cleanup debt for known-unreferenced staging objects, optionally retaining a filesystem incarnation when one is available, and the reason for an unavailable publication.",
+    "staging_recovery": {
+      "pending_row": "A pending row that encounters a transient recovery failure remains pending but receives a bounded retry deadline, so one failing identity cannot occupy every later recovery batch.",
+      "ready_row": "A ready row records the staging filesystem incarnation and records staging_reclaimed_at only after the matching staging object is removed and the containing directory is synced; a replaced or already-missing incarnation is preserved and the marker is advanced without deleting the replacement, while failed reclamation records a bounded retry deferral.",
+      "unknown_identity_ready_row": "When a ready row has no recorded staging incarnation but a staging path still exists, recovery preserves that diagnostic file, syncs the directory, and advances staging_reclaimed_at without deleting the unknown object; any cleanup debt for the same name is retired as diagnostic debt without deleting the current file. This intentional retention removes the row from ready reclamation but leaves the bytes for diagnosis.",
+      "unreferenced_cleanup": "A caller-owned staging object whose database outcome is confirmed and whose name is proven absent from active publication rows may be recorded as cleanup debt before removal; recovery retries the exact name only when its recorded filesystem incarnation still matches, while a replaced object is preserved and the debt is deferred until an explicit enqueue refreshes the recorded incarnation. A pre-intent Put cancelled before its rejection cleanup transaction commits retains unconfirmed staging bytes for diagnosis without cleanup debt; if that transaction commits first, the resulting per-name debt is recoverable. An unauthorized pre-intent Put records debt only when the exact staging incarnation is known.",
+      "pre_intent_crash": "A staging object without a committed intent is retained for diagnosis because recovery cannot prove that an active uploader is not still using it; it is not referenced by publication queries or identity coordination."
+    },
+    "unavailable_reasons": [
+      {
+        "reason": "staging-missing",
+        "meaning": "Never-ready recorded staging bytes are missing.",
+        "identical_retry_repairable": true
+      },
+      {
+        "reason": "staging-corrupt",
+        "meaning": "Never-ready recorded staging bytes fail the retained size or SHA-256 metadata.",
+        "identical_retry_repairable": true
+      },
+      {
+        "reason": "staging-invalid",
+        "meaning": "The recorded staging name is invalid or escaped the private object directory.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "final-conflict",
+        "meaning": "A nonmatching or nonregular final object prevents publication.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "final-verification",
+        "meaning": "The newly linked final object failed post-publication verification.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "final-missing",
+        "meaning": "A previously ready final object is missing.",
+        "identical_retry_repairable": false
+      },
+      {
+        "reason": "final-mismatch",
+        "meaning": "A previously ready final object fails the retained size or SHA-256 metadata.",
+        "identical_retry_repairable": false
+      }
+    ],
+    "storage_implementation": "PostgreSQL publication intent managed by the embedded Goose migration and immutable, verified files below a configured dedicated artifact root.",
+    "source_compatibility_range": {
+      "from_program_version": "Phase-one candidate before migration 00007; no earlier artifact metadata or file-volume state is supported.",
+      "to_program_version": "Phase-one candidate containing migration 00007.",
+      "direct_major_skips_supported": false,
+      "earlier_state": "The absent table is treated as an unapplied migration; the candidate is not ready until migration 00007 commits. Session/Run ownership foreign keys are deferred until the E01 schema is published.",
+      "mixed_process_compatibility": {
+        "supported": false,
+        "reason": "No mixed-process compatibility window is claimed for artifact-capable processes; admission requires the phase-one candidate and its recovery behavior to be deployed together with the migration."
+      },
+      "switchback_eligibility": {
+        "supported": false,
+        "reason": "A pre-00007 program is not an eligible switchback target after this durable state is introduced; recovery is forward-only and does not reverse or compensate the migration."
+      }
+    }
+  },
+  "database_migration": {
+    "applicable": true,
+    "ddl_structural_changes": [
+      {
+        "id": "ddl-00007-artifacts-content",
+        "description": "Create conversation_artifacts, conversation_artifact_staging_cleanup and their active, diagnostic-lookup, coordination and retry indexes in one atomic Goose DDL transaction; the only observable and pauseable boundary is after that transaction commits.",
+        "order": 1,
+        "observable": true,
+        "pauseable": true
+      }
+    ],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": true,
+    "operation_sequence": [
+      "ddl-00007-artifacts-content",
+      "artifact-file-volume-admission"
+    ],
+    "progress_signals": [
+      "Goose records migration 00007 before artifact metadata is read or written.",
+      "A successful upload reports the persisted metadata only after a pending intent is committed, final bytes are hashed, synced, linked without overwrite, final bytes are revalidated, marked ready and its staging object is durably reclaimed.",
+      "Recover processes a bounded pending set under per-identity database coordination and records unavailable state for missing or corrupt bytes; it never invents replacement content.",
+      "An explicit identical retry may replace only never-ready staging-missing or staging-corrupt state after reauthorization, exact metadata and byte validation, final absence confirmation and a durable pending repair intent.",
+      "Metadata and Open expose only verified ready objects and revalidate the stored file size and SHA-256 before returning metadata or a reader.",
+      "Content classification retains raw envelopes and unknown fields under 4 MiB record, 64 MiB consumed-batch and 10,000-record limits; runtime JSONL input uses an owned cancellable io.ReadCloser."
+    ],
+    "pause_points": [
+      "After the metadata migration commits and before the Server or Connector mounts the artifact service.",
+      "After each staged file has passed size/hash validation and before its pending intent is committed.",
+      "After startup/runtime recovery completes its bounded pass and before file publication/download admission."
+    ]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version-and-new-ordered-migration; pending intents remain recoverable, ambiguous database outcomes never trigger destructive compensation, missing/corrupt bytes become explicitly unavailable, and only the narrow explicit retry transition may repair never-ready staging-missing or staging-corrupt rows",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "minor": {
+      "required_test_evidence": [
+        "A permitted Put persists original bytes and ready metadata, and Metadata/Open remain available after database close and reopen.",
+        "Process interruption after staging, intent, repair intent, final publication and readiness, including lost database responses, is recovered by a new Store process without deleting potentially committed bytes; ready-row staging reclamation is bounded and retryable.",
+        "Separate processes coordinate same-ID publication, repair and reconciliation; identical immutable retries converge, while conflicting association, metadata, content, final objects, unknown reasons and previously-ready loss cannot overwrite or resurrect a publication.",
+        "Size and SHA-256 mismatches, unsupported non-cancellable readers, malformed identifiers, traversal/symlink paths and unauthorized operations are rejected without exposing host paths or partial metadata; cancellation cleanup remains bounded, retaining unconfirmed staging for diagnosis when safe unlink cannot be established.",
+        "R02 basic and unknown fixture content retains its raw envelope/payload and remains a non-executing classification fallback under the per-record, total-byte and record-count budgets; fixture-only sanitization does not rewrite runtime codec data.",
+        "Migration 00007 is recognized idempotently and is not automatically reversed; E01 Session/Run ownership foreign keys are added only by a later ordered migration after their schema exists."
+      ]
+    }
+  }
+}
