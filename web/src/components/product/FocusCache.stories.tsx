@@ -175,7 +175,7 @@ const productionStoryRelationships: Readonly<Record<string, TaskRelationshipPage
     parents: [],
     children: [{ child_task_id: "FOCUS-2", created_at: "2026-11-07T00:00:00Z", kind: "parent_child", parent_task_id: "FOCUS-1" }],
     prerequisites: [],
-    dependents: []
+    dependents: [{ created_at: "2026-11-07T00:00:00Z", dependent_task_id: "FOCUS-BETA", kind: "prerequisite", prerequisite_task_id: "FOCUS-1" }]
   },
   "FOCUS-2": {
     parents: [{ child_task_id: "FOCUS-2", created_at: "2026-11-07T00:00:00Z", kind: "parent_child", parent_task_id: "FOCUS-1" }],
@@ -514,7 +514,11 @@ function ProductionRecoveryPreviewTrigger({ mock }: { mock: ProductionStoryMock 
   return null;
 }
 
-function ProductionBoundaryHarness({ offlinePreview = false, showMountProbe = true }: { offlinePreview?: boolean; showMountProbe?: boolean } = {}) {
+function ProductionMockOnlyNotice() {
+  return <div className="border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 text-xs text-[var(--muted)]"><div className="mx-auto max-w-6xl"><span className="section-kicker">FOCUS CACHE / MOCK ONLY</span><span className="ml-3">本页仅由本地 mock client 驱动，不连接真实会话、网络或浏览器程序。</span></div></div>;
+}
+
+function ProductionBoundaryHarness({ offlinePreview = false, showMountProbe = true, showControls = true }: { offlinePreview?: boolean; showMountProbe?: boolean; showControls?: boolean } = {}) {
   const rootRef = useRef<HTMLDivElement>(null);
   const mockRef = useRef<ProductionStoryMock | null>(null);
   const routerRef = useRef<ReturnType<typeof createProductionStoryRouter> | null>(null);
@@ -523,10 +527,10 @@ function ProductionBoundaryHarness({ offlinePreview = false, showMountProbe = tr
   const mock = mockRef.current;
   const storyRouter = routerRef.current;
   return (
-    <div ref={rootRef} className="min-h-screen bg-[var(--canvas)]" data-visual-evidence-surface>
+    <div ref={rootRef} className="min-h-screen bg-[var(--canvas)]" data-visual-evidence-surface data-visual-evidence-target={showControls ? undefined : ""}>
       <AppProviders productionClient={mock.client}>
         {offlinePreview && <ProductionRecoveryPreviewTrigger mock={mock} />}
-        <ProductionStoryControls mock={mock} storyRouter={storyRouter} />
+        {showControls ? <ProductionStoryControls mock={mock} storyRouter={storyRouter} /> : <ProductionMockOnlyNotice />}
         <div className="min-h-[70dvh]"><RouterProvider router={storyRouter} /></div>
       </AppProviders>
       {showMountProbe && <ProductionMountProbe rootRef={rootRef} />}
@@ -712,12 +716,15 @@ export const ProductionBoundary: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "恢复 mock 在线" }));
     await waitFor(() => expect(readCounter("production-task-calls")).toBeGreaterThan(graphRecoveryBefore.tasks));
     await waitFor(() => expect(canvas.queryAllByText("Beta 私有任务", { exact: true }).length).toBeGreaterThan(0));
+    await waitFor(() => expect(canvas.queryAllByText(/已授权关系：前置任务：FOCUS-1 焦点缓存任务/).length).toBeGreaterThan(0));
+    await waitFor(() => expect(canvas.queryAllByText(/后续任务：FOCUS-BETA Beta 私有任务/).length).toBeGreaterThan(0));
 
     const relationshipForbiddenBefore = readRequests();
     await userEvent.click(canvas.getByRole("button", { name: "模拟关系权限收紧并刷新" }));
     await waitFor(() => expect(canvas.getByTestId("production-relationship-read-state")).toHaveTextContent("beta-forbidden"));
     await waitFor(() => expect(readCounter("production-relationship-calls")).toBeGreaterThan(relationshipForbiddenBefore.relationships));
     await waitFor(() => expect(canvas.queryAllByText("Beta 私有任务", { exact: true })).toHaveLength(0));
+    await waitFor(() => expect(canvas.queryAllByText(/后续任务：FOCUS-BETA Beta 私有任务/)).toHaveLength(0));
     expect(canvas.getByTestId("production-task-read-state")).toHaveTextContent("available");
     expect(canvas.queryAllByText("焦点缓存任务", { exact: true }).length).toBeGreaterThan(0);
     expect(canvas.queryAllByText("焦点缓存任务 2", { exact: true }).length).toBeGreaterThan(0);
@@ -735,23 +742,23 @@ export const ProductionBoundary: Story = {
 
     await userEvent.click(canvas.getByRole("button", { name: "恢复 mock 在线" }));
     await waitFor(() => expect(canvas.queryAllByText("Beta 私有任务", { exact: true }).length).toBeGreaterThan(0));
-    await userEvent.click(canvas.getByRole("button", { name: "列表" }));
-    await waitFor(() => expect(canvas.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true"));
 
     const permissionBefore = readRequests();
     await userEvent.click(canvas.getByRole("button", { name: "撤销 Beta 项目并刷新" }));
     await waitFor(() => expect(canvas.getByTestId("production-revoked-projects")).toHaveTextContent("project-beta"));
     await waitFor(() => expect(readCounter("production-project-calls")).toBeGreaterThan(permissionBefore.projects));
     await waitFor(() => expect(readCounter("production-membership-calls")).toBeGreaterThan(permissionBefore.memberships));
-    await waitFor(() => expect(canvas.queryByText("Beta 私有任务", { exact: true })).toBeNull());
-    expect(canvas.getByText("焦点缓存任务", { exact: true })).toBeInTheDocument();
-    expect(canvas.queryByRole("link", { name: /Beta workspace/ })).toBeNull();
+    await waitFor(() => expect(canvas.queryAllByText("Beta 私有任务", { exact: true })).toHaveLength(0));
+    expect(canvas.queryAllByText("焦点缓存任务", { exact: true }).length).toBeGreaterThan(0);
+    expect(canvas.queryAllByRole("link", { name: /Beta workspace/ })).toHaveLength(0);
 
     await pause(1100);
     const replacementBefore = readRequests();
     await userEvent.click(canvas.getByRole("button", { name: "切换主体并恢复" }));
     await waitFor(() => expect(canvasElement.querySelector('[data-runtime="production"][data-mount-identity="principal-b"]')).not.toBeNull());
-    await waitFor(() => expect(canvas.getByText("主体 B 焦点任务", { exact: true })).toBeInTheDocument());
+    await userEvent.click(canvas.getByRole("button", { name: "列表" }));
+    await waitFor(() => expect(canvas.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(canvas.queryAllByText("主体 B 焦点任务", { exact: true }).length).toBeGreaterThan(0));
     const replacementNodes = readNodes();
     if (!replacementNodes.shell || !replacementNodes.outlet) throw new Error("replacement production nodes were not rendered");
     expect(replacementNodes.shell).not.toBe(initialNodes.shell);
@@ -785,5 +792,5 @@ export const ProductionBoundary: Story = {
 };
 
 export const ProductionRecoveryPreview: Story = {
-  render: () => <ProductionBoundaryHarness offlinePreview showMountProbe={false} />
+  render: () => <ProductionBoundaryHarness offlinePreview showMountProbe={false} showControls={false} />
 };
