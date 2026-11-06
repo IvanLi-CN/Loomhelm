@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { taskStates, type TaskState, type TaskView } from "@/demo/types";
-import { useOptionalProjectTaskSource } from "@/features/tasks/source";
+import { useOptionalProjectTaskSource, useProjectTaskSourceContext } from "@/features/tasks/source";
+import type { ProductionProjectTaskSource } from "@/features/projects/production-source";
 import { taskStateClasses, taskStateLabels, type ProjectTaskSource, type TaskRecord } from "@/features/tasks/types";
 
 function parentIdsFor(task: TaskRecord): readonly string[] {
@@ -233,22 +234,63 @@ export interface TaskExplorerProps {
   renderTaskLink?: RenderTaskLink;
 }
 
-export function TaskExplorer({ scope = "global", projectId, source: providedSource, renderTaskLink = defaultRenderTaskLink }: TaskExplorerProps) {
-  const defaultSource = useOptionalProjectTaskSource();
-  const source = providedSource ?? defaultSource;
+function isProductionSource(source: ProjectTaskSource): source is ProductionProjectTaskSource {
+  return "setTaskReadScope" in source && typeof source.setTaskReadScope === "function";
+}
+
+function TaskExplorerFromHook(props: TaskExplorerProps) {
+  const source = useOptionalProjectTaskSource();
+  const { source: _providedSource, ...contentProps } = props;
+  return <TaskExplorerContent {...contentProps} source={source} />;
+}
+
+function TaskExplorerWithSource(props: TaskExplorerProps) {
+  const sharedSource = useProjectTaskSourceContext();
+  if (sharedSource !== undefined) {
+    const { source: _providedSource, ...contentProps } = props;
+    return <TaskExplorerContent {...contentProps} source={sharedSource} />;
+  }
+  return <TaskExplorerFromHook {...props} />;
+}
+
+type TaskExplorerContentProps = Omit<TaskExplorerProps, "source"> & { source: ProjectTaskSource | null };
+
+function TaskExplorerContent({ scope = "global", projectId, source, renderTaskLink = defaultRenderTaskLink }: TaskExplorerContentProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<TaskState | "all">("all");
-  const sourceTasks = source?.getTasksForScope(projectId) ?? [];
+  const view = source?.getTaskView(scope) ?? "list";
+  useEffect(() => {
+    if (!source || !isProductionSource(source)) return;
+    source.setTaskReadScope({ projectId, mode: view === "graph" ? "graph" : "list" });
+  }, [projectId, source, view]);
+  const sourceTasks = useMemo(() => source?.getTasksForScope(projectId) ?? [], [projectId, source]);
   const tasks = useMemo(() => sourceTasks.filter((task) => { const matchesSearch = !search || `${task.id} ${task.title} ${task.goal}`.toLowerCase().includes(search.toLowerCase()); return matchesSearch && (filter === "all" || task.state === filter); }), [filter, search, sourceTasks]);
 
   if (!source) return <div className="error-state"><span className="empty-icon empty-icon-danger" aria-hidden="true">!</span><h2>任务暂不可用</h2><p>当前无法读取任务，请稍后再试。</p></div>;
-  const view = source.getTaskView(scope);
+  const productionState = isProductionSource(source) ? source.resourceStates : undefined;
+  const productionSource = isProductionSource(source) ? source : undefined;
+  const taskReadState = productionState?.tasks;
+  const relationshipReadState = productionState?.relationships;
+  const hasStaleTaskData = Boolean(taskReadState?.isStale && sourceTasks.length);
+  const taskReadErrorWithData = taskReadState?.status === "error" && sourceTasks.length > 0;
+  const relationReadErrorWithData = view === "graph" && relationshipReadState?.status === "error" && sourceTasks.length > 0;
+  const relationReadLoading = view === "graph" && relationshipReadState?.status === "loading" && !relationshipReadState.data;
 
   return (
     <div className="task-explorer" data-task-scope={scope}>
       {source.notice && <div className="inline-state inline-state-warning" role="status"><span aria-hidden="true">!</span>{source.notice}</div>}
+      {hasStaleTaskData && <div className="inline-state inline-state-info" role="status">当前任务范围正在后台更新，已保留最近成功数据。</div>}
+      {taskReadErrorWithData && <div className="inline-state inline-state-warning" role="alert">当前任务范围刷新失败，已保留最近成功数据；请稍后重试。</div>}
+      {relationReadLoading && <div className="inline-state inline-state-info" role="status" aria-busy="true">正在读取当前图谱关系，任务列表保持可用。</div>}
+      {relationReadErrorWithData && <div className="inline-state inline-state-warning" role="alert">当前图谱关系刷新失败，已保留最近成功的任务关系。</div>}
       <div className="task-toolbar"><label className="search-field"><Search size={16} aria-hidden="true" /><span className="sr-only">搜索任务</span><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务、目标或编号" /></label><label className="filter-field"><SlidersHorizontal size={15} aria-hidden="true" /><span className="sr-only">任务状态筛选</span><Select value={filter} onValueChange={(value) => setFilter(value as TaskState | "all")}><SelectTrigger size="sm" className="task-filter-trigger" aria-label="任务状态筛选"><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="all">全部状态</SelectItem>{taskStates.map((state) => <SelectItem value={state} key={state}>{state}</SelectItem>)}</SelectGroup></SelectContent></Select></label><TaskViewSwitch source={source} scope={scope} value={view} /></div>
-      {source.status === "error" ? <TaskReadRecovery source={source} /> : source.status === "loading" ? <div className="task-loading" aria-busy="true"><span /><span /><span /></div> : source.status === "permission-changed" && !sourceTasks.length ? <TaskReadRecovery source={source} /> : !tasks.length ? <div className="empty-state"><h2>{sourceTasks.length ? "没有符合条件的任务" : "还没有任务数据"}</h2><p>{sourceTasks.length ? "调整搜索或状态筛选后再查看。" : "从当前授权项目创建一项任务，或等待项目范围接入。"}</p></div> : view === "board" ? <TaskBoard source={source} tasks={tasks} renderTaskLink={renderTaskLink} /> : view === "graph" ? <TaskGraph source={source} tasks={tasks} projectId={projectId} renderTaskLink={renderTaskLink} /> : <TaskList source={source} tasks={tasks} renderTaskLink={renderTaskLink} />}
+      {source.status === "error" && !sourceTasks.length ? <TaskReadRecovery source={source} /> : source.status === "loading" && !sourceTasks.length ? <div className="task-loading" aria-busy="true"><span /><span /><span /></div> : source.status === "permission-changed" && !sourceTasks.length ? <TaskReadRecovery source={source} /> : !tasks.length ? <div className="empty-state"><h2>{sourceTasks.length ? "没有符合条件的任务" : "还没有任务数据"}</h2><p>{sourceTasks.length ? "调整搜索或状态筛选后再查看。" : "从当前授权项目创建一项任务，或等待项目范围接入。"}</p></div> : view === "board" ? <TaskBoard source={source} tasks={tasks} renderTaskLink={renderTaskLink} /> : view === "graph" ? <TaskGraph source={source} tasks={tasks} projectId={projectId} renderTaskLink={renderTaskLink} /> : <TaskList source={source} tasks={tasks} renderTaskLink={renderTaskLink} />}
+      {productionSource?.hasMoreTasks && sourceTasks.length > 0 && <div className="flex justify-center py-5"><Button type="button" variant="secondary" className="button button-secondary" onClick={() => { void productionSource.loadMoreTasks(); }} disabled={productionSource.isLoadingMoreTasks}>{productionSource.isLoadingMoreTasks ? "正在读取更多任务…" : "读取更多任务"}</Button></div>}
     </div>
   );
+}
+
+export function TaskExplorer(props: TaskExplorerProps) {
+  // An explicit source is authoritative; context and fallback hooks are only for the source-less demo/route path.
+  return props.source ? <TaskExplorerContent {...props} source={props.source} /> : <TaskExplorerWithSource {...props} />;
 }
