@@ -1018,7 +1018,7 @@ func isClosedDrainEndpoint(err error) bool {
 		return true
 	}
 	var dnsErr *net.DNSError
-	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
+	return errors.As(err, &dnsErr)
 }
 
 var errServerRemainsReady = errors.New("server remains ready")

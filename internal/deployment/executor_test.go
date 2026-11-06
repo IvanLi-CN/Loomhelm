@@ -261,7 +261,7 @@ func TestCommandExecutorTreatsMissingDrainHostAsAlreadyDrained(t *testing.T) {
 		DrainTimeout:    time.Second,
 		HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			if request.URL.Host == missingHost {
-				return nil, &net.DNSError{Name: "worker-green", Err: "no such host", IsNotFound: true}
+				return nil, &net.DNSError{Name: "worker-green", Err: "bad address"}
 			}
 			return http.DefaultTransport.RoundTrip(request)
 		})},
