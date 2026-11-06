@@ -163,7 +163,14 @@ jobs:
         with:
           bun-version: 1.4.4
       - name: Verify the independent TypeScript client
-        run: scripts/checks client
+        run: |
+          # Hosted tool-cache ancestors can be writable. Preserve the launcher's
+          # trust boundary with a private root-owned copy of this matrix runtime.
+          node_source=$(node -p 'process.execPath')
+          sudo install -d -m 755 /usr/local/lib/loomhelm/runtime
+          sudo install -m 755 "$node_source" /usr/local/lib/loomhelm/runtime/node
+          /usr/local/lib/loomhelm/runtime/node --version
+          scripts/checks client
 
   skills-native-macos:
     name: Skills Native macOS

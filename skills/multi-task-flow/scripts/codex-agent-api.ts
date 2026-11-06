@@ -48,6 +48,7 @@ export async function sendCodexMessage(input: {
     };
   let socket: Socket | undefined;
   let retained = false;
+  let mayHaveDelivered = false;
   try {
     const connected = await connectSocket(path);
     socket = connected.socket;
@@ -73,18 +74,21 @@ export async function sendCodexMessage(input: {
     });
     if (resumed.error)
       throw new Error(String(record(resumed.error)?.message ?? "Codex app-server rejected thread/resume"));
+    mayHaveDelivered = true;
     const started = await rpc(socket, buffer, 3, "turn/start", {
       threadId: input.recipient_thread_id,
       input: [{ type: "text", text: input.prompt }],
       clientUserMessageId: callId,
     });
-    if (started.error)
+    if (started.error) {
+      mayHaveDelivered = false;
       throw new Error(
         String(
           record(started.error)?.message ??
             "Codex app-server rejected turn/start",
         ),
       );
+    }
     const turn = record(record(started.result)?.turn);
     if (typeof turn?.id !== "string") throw new Error("Codex app-server omitted accepted turn identity");
     // Publish acceptance promptly so the recipient can acknowledge the ledger
@@ -104,7 +108,7 @@ export async function sendCodexMessage(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      outcome: message.includes("timed out") || message.includes("turn ended with status") || message.includes("closed the WebSocket") ? "unknown" : "failed",
+      outcome: mayHaveDelivered || message.includes("timed out") || message.includes("closed the WebSocket") ? "unknown" : "failed",
       provider_receipt: {
         provider: "codex-app-server",
         evidence_ref: `codex-app-server:${callId}:error`,

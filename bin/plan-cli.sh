@@ -96,6 +96,7 @@ fi
 runtime_candidates=()
 
 runtime_candidates+=(
+  /usr/local/lib/loomhelm/runtime/node
   /opt/homebrew/bin/node
   /usr/local/bin/node
   /usr/bin/node
