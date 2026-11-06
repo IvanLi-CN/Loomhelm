@@ -5,3 +5,5 @@ export * from './runtime/lock.js';
 export * from './tasks/model.js';
 export * from './tasks/ledger.js';
 export * from './git.js';
+export * from './dispatch/index.js';
+export * from './orchestration/index.js';
