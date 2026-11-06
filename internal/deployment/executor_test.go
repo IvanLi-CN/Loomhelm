@@ -22,6 +22,12 @@ type failOnceRoundTripper struct {
 	next   http.RoundTripper
 }
 
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
 func (r *failOnceRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
 	if r.failed.CompareAndSwap(false, true) {
 		return nil, errors.New("temporary public proxy failure")
@@ -226,6 +232,39 @@ func TestCommandExecutorTreatsClosedWorkerAsAlreadyDrained(t *testing.T) {
 		DrainWorkerURLs: map[string]string{"green": closedWorkerURL},
 		DrainToken:      "drain-secret",
 		DrainTimeout:    time.Second,
+	}
+	if err := executor.Execute(context.Background(), Operation{Kind: "drain", Slot: "green"}); err != nil {
+		t.Fatalf("drain error = %v", err)
+	}
+}
+
+func TestCommandExecutorTreatsMissingDrainHostAsAlreadyDrained(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/-/drain":
+			writer.WriteHeader(http.StatusAccepted)
+		case "/readyz":
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	missingHost := "worker-green:8080"
+	executor := &CommandExecutor{
+		SlotURLs:        map[string]string{"green": server.URL},
+		WorkerURLs:      map[string]string{"green": "http://" + missingHost},
+		DrainSlotURLs:   map[string]string{"green": server.URL},
+		DrainWorkerURLs: map[string]string{"green": "http://" + missingHost},
+		DrainToken:      "drain-secret",
+		DrainTimeout:    time.Second,
+		HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Host == missingHost {
+				return nil, &net.DNSError{Name: "worker-green", Err: "no such host", IsNotFound: true}
+			}
+			return http.DefaultTransport.RoundTrip(request)
+		})},
 	}
 	if err := executor.Execute(context.Background(), Operation{Kind: "drain", Slot: "green"}); err != nil {
 		t.Fatalf("drain error = %v", err)
