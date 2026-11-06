@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"true && python3 /opt/codex/bin/flow_receipt.py --repo /tmp/demo record --kind review --review-profile merge-proof --base-ref abc123 --review-model gpt-5.6-sol --review-effort low --head-sha def456\",\"workdir\":\"/tmp/demo\"}","call_id":"call_wrapped_helper"}}

@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `fast-track`; `lock_status`: `locked`。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `normal`; `lock_status`: `locked`。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR状态=不存在；可开 PR（local）。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-flow-switch-local-proof","last_agent_message":"Step 4 Ready，本地 merge-proof 完成。"}}

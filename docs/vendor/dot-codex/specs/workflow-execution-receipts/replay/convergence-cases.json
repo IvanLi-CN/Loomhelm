@@ -1,0 +1,22 @@
+[
+  {
+    "name": "third-repair-with-remaining-blockers-is-terminal",
+    "blocking_fingerprints": [["A", "B", "C", "D"], ["A", "B", "C"], ["A", "B"], ["A"]],
+    "states": ["initial", "progress", "progress", "NON_CONVERGENT"]
+  },
+  {
+    "name": "third-repair-may-clear-all-blockers",
+    "blocking_fingerprints": [["A", "B", "C"], ["A", "B"], ["A"], []],
+    "states": ["initial", "progress", "progress", "complete"]
+  },
+  {
+    "name": "initial-clear-review-is-complete",
+    "blocking_fingerprints": [[]],
+    "states": ["complete"]
+  },
+  {
+    "name": "no-progress-diagnoses-once-then-stops",
+    "blocking_fingerprints": [["A", "B"], ["A"], ["A"], ["A"]],
+    "states": ["initial", "progress", "diagnostic_required", "NON_CONVERGENT"]
+  }
+]

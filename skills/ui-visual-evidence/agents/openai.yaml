@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI visual evidence"
+  short_description: "Return stable rendered UI images before handoff"
+  default_prompt: "Use $ui-visual-evidence to decide whether the current work is UI-affecting, preserve any owner-explicit evidence-source lock, choose the best stable render source (ui_demo for full pages/flows, Storybook for components/fragments, mock_ui or other fallbacks as needed), require an existing owner, project, or active-spec exception before using Storybook for a full page when no qualified ui_demo exists, and report a blocker when that exception is absent. Resolve mobile viewport precedence from owner, project, spec, and the selected evidence source before falling back to 393x852 CSS px, apply and verify the resolved viewport before recording it, follow the viewport-safe evidence ladder, normalize screenshots, and persist final evidence to spec assets when applicable."

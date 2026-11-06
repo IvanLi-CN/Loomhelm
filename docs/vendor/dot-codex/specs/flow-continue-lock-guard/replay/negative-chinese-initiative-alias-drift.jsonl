@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<proposed_plan>\n## Flow Decision\n- `flow_type`: `多ticket倡议`\n- `flow_source`: `user_explicit`\n- `lock_status`: `locked`\n</proposed_plan>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"read_mcp_resource","arguments":"{\"uri\":\"skills/local-merge-flow/SKILL.md\"}"}}

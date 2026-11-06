@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"这个仓库当前是 manual-only，没有自动 workflow evidence 仍属正常，继续按普通 PR 门禁处理。"}]}}

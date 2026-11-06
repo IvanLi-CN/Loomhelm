@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"视觉比较=需确认，已展示当前截图与差异热图。这些截图准确反映了本次改动吗？现在调用 $pr-create 开始 PR 收敛。"}]}}

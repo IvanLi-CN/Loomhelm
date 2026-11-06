@@ -1,0 +1,31 @@
+# Implementation
+
+- Shared Late PR resolution preserves repair eligibility and the three canonical dispositions when a concrete deferral is considered after a completed review boundary. Main-Agent evidence distinguishes current-PR repairs from authorized follow-up handoffs without changing reviewer schemas. Batch counts support diagnosis and continuation without limiting authorized in-scope repairs.
+
+- Formal review is routed by the shared delivery contracts and flow consumers. Readiness, wait, classification, pre-write accounting, and verification therefore have one convergence path without a standalone review-loop runtime stage.
+- The retired standalone review-loop instructions and their private anchor are removed; historical migration fixtures remain only where they translate legacy task text to the current reviewer binding.
+- Stateful/concurrent readiness calls for executed boundary validation; review result placement and cumulative CI/review repair accounting point to their shared contracts rather than creating tracked result-refresh commits.
+- Shared delivery skills use direct Tier 1..4 review evidence at PR and local-merge convergence.
+- The review contract defines lane scope, profile guidance, direct repair refresh, finding disposition, and high-risk full refresh without ledger orchestration.
+- Review Readiness is checked before runtime formal launch; direct plans carry Tier, rationale, runtime strategy, and profile guidance without reviewer scheduling, and changed Candidates receive fresh reviewers.
+- Main-agent disposition keeps repair in scope and diagnoses recurring root causes; design returns stop ordinary convergence and observations remain report-only.
+- ReviewReplay checks the diagnosis trigger before repair and keeps owner approval separate from in-scope repair count.
+- Current lane evidence binds `repo_root` and the active flow anchor carries the cumulative Repair Batch count; missing or stale evidence remains `unchecked` and blocks clear.
+- `ReviewReplay` contract tests also reject mismatched base/head, lane, scope, review profile, locked flow, ownership promise, or Repair Batch count before a continuation can relaunch a lane.
+- Active review Spec checks now mutate-test every required disposition, `unchecked` evidence, and complete anchor field across all four owned Specs.
+- Continuation tests independently reject stale base/head, lane, scope, profile, flow, ownership, and batch-count anchors.
+- Repair replay now requires an explicit `In-Scope Review Finding` before any candidate mutation or Repair Batch launch.
+- Actual review-base adoption requires an observed replacement SHA and fresh required lanes; missing replacement evidence is `unchecked`. Ordinary target advancement keeps the live round bound and is handled at its end; old results are not relabeled across bases.
+- Direct plan checks require a Tier 1..4 value, a tier-consistent runtime strategy that names a runtime launch/create action, and a concrete host-supported model/effort pair; Tier 1/2 remain assessment/advisory-only while Tier 3/4 require readiness-gated formal lanes.
+- Runtime launch checks the autonomous model allowlist and a session-scoped `agent-model` directive captured by the first non-empty `UserPromptSubmit` line before accepting an explicit exception.
+- `ReviewReplay` stores and validates the structured lane evidence fields before moving a required lane to terminal clear state, including exact lane scope, non-empty actual profile, and rejection of unknown fields.
+- `ReviewReplay` rejects disposition tokens outside the three canonical values before repair classification; malformed dispositions cannot become report-only or enter a Repair Batch.
+- `ReviewReplay` requires an explicit readiness success for initial launch and a non-empty demonstrated finding before an In-Scope Repair Batch.
+- `ReviewReplay` rejects unsupported actual model/effort pairs and unknown dispositions embedded in structured findings before terminal clear state.
+- `ReviewReplay` requires an `In-Scope` repair to have a demonstrated finding, not merely a non-empty observation list; direct formal fields are unique.
+- Structured finding objects now require the explicit `demonstrated` or `observation` kind before terminal evidence is accepted.
+- A blocking finding in complete clear terminal evidence remains a finding for disposition; only missing, stale, malformed, or unavailable evidence stays `unchecked`.
+- Priority-aware repair eligibility is owned by the shared review-proof contract: the initial Formal Review Wave permits an optional P2-only repair; later P2 repair requires a P0/P1 or qualifying current-Candidate CI trigger; low-priority findings can clear with `repair_not_required_low_priority` and a next-stop owner report, while P3 findings remain non-blocking targets.
+- The instruction architecture checker asserts this canonical Spec's disposition, evidence, Candidate-anchor fields, and behavioral boundary in isolated-copy tests.
+- The checker also guards the readiness vocabulary and the `0017` ADR binding across the active review Specs.
+- The flow receipt TypeScript adapter remains validation/lifecycle infrastructure; its review orchestration is listed for later removal in `../workflow-execution-receipts/contracts/review-orchestration-retirement.md`.

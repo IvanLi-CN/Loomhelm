@@ -1,0 +1,4 @@
+# Current contract replay cases. Historical fast-track fixtures remain separate audit material.
+manual-recovery-positive.jsonl pass
+tracking-heartbeat-negative.jsonl TRACKING_SCHEDULED_AUTOMATION_FORBIDDEN
+unrelated-automation-positive.jsonl pass

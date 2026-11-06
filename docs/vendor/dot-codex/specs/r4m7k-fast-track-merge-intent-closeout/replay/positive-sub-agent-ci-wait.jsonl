@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"function_call","name":"multi_agent_v1__spawn_agent","call_id":"spawn-1","arguments":"{\"message\":\"phase=post_merge_target_ci bound_sha=abc1234\"}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"spawn-1","output":"{\"agent_id\":\"agent-1\"}"}}
+{"type":"response_item","payload":{"type":"function_call","name":"multi_agent_v1__wait_agent","call_id":"wait-1","arguments":"{\"targets\":[\"agent-1\"],\"timeout_ms\":30000}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"wait-1","output":"{\"message\":\"Wait completed.\",\"timed_out\":false}"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"后续追踪=sub-agent\n追踪目标=post_merge_target_ci\n追踪绑定sha=abc1234\n追踪终态=success\n追踪处置=report-only"}]}}

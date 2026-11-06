@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `fast-track`; stop condition=merge-only."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"PR 已合并，继续"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已确认 PR merged，继续回到 $pr-merge 处理共享 Step 6。"}]}}

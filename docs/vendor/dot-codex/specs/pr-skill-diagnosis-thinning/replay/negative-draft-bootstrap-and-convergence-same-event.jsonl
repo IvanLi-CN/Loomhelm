@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"MODE=draft-bootstrap 创建 feedback-only Draft PR。视觉比较=需确认，已展示当前截图与差异热图。这些截图准确反映了本次改动吗？现在执行 bind-pr 并启动正式 review。"}]}}

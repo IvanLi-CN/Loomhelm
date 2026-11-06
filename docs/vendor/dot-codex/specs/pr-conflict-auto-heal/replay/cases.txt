@@ -1,0 +1,6 @@
+fail negative-conflict-hidden-as-ci-absence.jsonl CONFLICT_HIDDEN_AS_CI_ABSENCE
+fail negative-conflict-escalated-to-owner.jsonl CONFLICT_ESCALATED_TO_OWNER
+pass positive-conflict-auto-heal-routed.jsonl -
+pass positive-merge-only-conflict-auto-heal.jsonl -
+pass positive-manual-only-no-checks.jsonl -
+pass positive-pull-request-target-conflict-runs.jsonl -

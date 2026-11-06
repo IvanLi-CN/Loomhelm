@@ -22,7 +22,8 @@
     "TypeScript Client (Node 24)"
   ],
   "informational_checks": [
-    "Candidate Reproducibility"
+    "Candidate Reproducibility",
+    "Skills Native macOS"
   ],
   "waivers": [],
   "expected_pr_workflows": [

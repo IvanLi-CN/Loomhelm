@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"ptc-wrapper-result","output":"phase=pr_head_ci bound_sha=abc1234 terminal_state=passed external_locator=https://ci.example/runs/42"}}

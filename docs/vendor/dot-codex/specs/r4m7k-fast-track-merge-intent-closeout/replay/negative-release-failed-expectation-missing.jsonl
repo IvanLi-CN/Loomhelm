@@ -1,0 +1,1 @@
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并。发布状态=失败；发布处置=owner-action-required；失败面=container publish。"}}

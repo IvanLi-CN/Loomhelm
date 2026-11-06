@@ -1,0 +1,6 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: fast-track"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<proposed_plan>\n# Demo Locked Fast-track\n\n## Flow Decision\n- `flow_type`: `fast-track`\n- `flow_source`: `user_explicit`\n- `lock_status`: `locked`\n</proposed_plan>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"当前 stop condition 是 merge-only。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续 [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"freshness gate 已 clear，剩余阻断主要是 reviewer feedback / review threads。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"剩余阻断是 reviewer feedback，需要显式授权进入 PR convergence 才能改并推。"}]}}

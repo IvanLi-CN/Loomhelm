@@ -1,0 +1,104 @@
+import { describe, expect, test } from "bun:test";
+import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
+import { plan } from "../scripts/schema";
+import { actualIntervals, buildView, planWarnings, plannedIntervals } from "../scripts/view";
+import { initialOutput } from "../web/agent-output";
+import { rangeFromIntervals } from "../web/execution-range";
+
+const at = "2026-01-01T00:00:00.000Z";
+function taskNode(id: string, minutes: number | null) {
+  return { id, kind: "task", ref_id: id, group_id: null, label: id, estimate_minutes: minutes, estimate_basis: minutes === null ? null : "estimate", estimate_confidence: minutes === null ? null : "medium" };
+}
+function fixture(nodes: unknown[], edges: unknown[], startAt: string | null = at) {
+  return plan.parse({ id: "plan", supersedes_id: null, approval_id: null, created_at: at, start_at: startAt, atoms: [], atomic_edges: [], nodes, edges, cut_rules: [], actions: [] });
+}
+
+describe("timeline projections", () => {
+  test("projects atom completion only from an event for the same owner and stable ID", () => {
+    const ledger = createDemoLedger(1_767_200_000_000);
+    const completed = ledger.events.find((event) => event.id === "atom-finish-model")!;
+    const atoms = () => (buildView(ledger).tasks as Array<{ id: string; atoms: Array<{ completed_at: string | null }> }>).find((task) => task.id === "model")!.atoms;
+    expect(atoms()[0]?.completed_at).toBe(completed.occurred_at);
+    completed.subject_id = "ledger";
+    expect(atoms()[0]?.completed_at).toBeNull();
+    completed.subject_id = "model";
+    completed.data.atom_id = "another-atom";
+    expect(atoms()[0]?.completed_at).toBeNull();
+  });
+  test("never uses ledger events as conversation output", () => {
+    const view = buildView(createDemoLedger(1_767_200_000_000));
+    const ledgerTask = (view.tasks as Array<{ id: string; latest_output: string | null }>).find((task) => task.id === "ledger");
+    const plannedTask = (view.tasks as Array<{ id: string; latest_output: string | null }>).find((task) => task.id === "verify");
+    expect(ledgerTask?.latest_output).toBeNull();
+    expect(plannedTask?.latest_output).toBeNull();
+    expect(view.execution_phase).toBe("implementation");
+    expect(view.active_plan_id).toBe(view.execution_plan_id);
+    expect(view.plan_state).toMatchObject({ approval_pending: false, lifecycle: "approved" });
+    expect((view.semantic_context as { field_metadata: Record<string, unknown> }).field_metadata).toHaveProperty("execution_phase");
+  });
+
+  test("projects the supplied conversation snapshot without mutating the ledger", () => {
+    const ledger = createDemoLedger(1_767_200_000_000);
+    const before = JSON.stringify(ledger);
+    const output = { ...initialOutput(ledger.tasks[0]!.thread_id), state: "available" as const, text: "fresh commentary", stale: false };
+    const view = buildView(ledger, undefined, { [ledger.tasks[0]!.id]: output });
+    expect((view.tasks as Array<Record<string, unknown>>)[0]!.latest_agent_output).toEqual(output);
+    expect((view.tasks as Array<Record<string, unknown>>)[0]!.latest_output).toBe("fresh commentary");
+    expect(JSON.stringify(ledger)).toBe(before);
+  });
+
+  test("uses historical execution intervals for group duration", () => {
+    expect(rangeFromIntervals([
+      { start: "2026-10-31T00:00:00.000Z", end: "2026-10-31T01:00:00.000Z" },
+      { start: "2026-10-31T02:00:00.000Z", end: null },
+    ])).toEqual({ start: "2026-10-31T00:00:00.000Z", end: null });
+  });
+
+  test("respects parallel capacity and prerequisite completion", () => {
+    const input = fixture([taskNode("a", 60), taskNode("b", 30), taskNode("c", 10)], [{ id: "b-c", from_node_id: "b", to_node_id: "c", requires: "integrated" }]);
+    const rows = plannedIntervals(input, 2);
+    expect(rows.find((item) => item.node_id === "a")!.start).toBe(at);
+    expect(rows.find((item) => item.node_id === "b")!.start).toBe(at);
+    expect(rows.find((item) => item.node_id === "c")!.start).toBe("2026-01-01T00:30:00.000Z");
+  });
+
+  test("keeps unknown time unknown rather than assuming zero duration", () => {
+    const input = fixture([taskNode("a", null), taskNode("b", 30)], [{ id: "a-b", from_node_id: "a", to_node_id: "b", requires: "integrated" }]);
+    const rows = plannedIntervals(input, 3);
+    expect(rows.find((item) => item.node_id === "a")!.end).toBeNull();
+    expect(rows.find((item) => item.node_id === "b")!.start).toBeNull();
+    const unknownStart = plannedIntervals(fixture([taskNode("a", 30)], [], null), 3);
+    expect(unknownStart).toHaveLength(1);
+    expect(unknownStart[0]!.start).toBeNull();
+  });
+
+  test("reports a missing plan start without inventing schedule dates", () => {
+    const missingStart = fixture([taskNode("a", 30)], [], null);
+    expect(planWarnings(missingStart)).toEqual([{ code: "missing_start_at", reason: "The selected plan has no start time, so theoretical intervals cannot be calculated." }]);
+    expect(plannedIntervals(missingStart, 3)[0]).toMatchObject({ start: null, end: null });
+    expect(planWarnings(fixture([taskNode("a", 30)], []))).toEqual([]);
+
+    const ledger = createDemoLedger(1_767_200_000_000);
+    ledger.plans[0]!.start_at = null;
+    const view = buildView(ledger) as { plan_warnings: Array<{ code: string; reason: string }> };
+    expect(view.plan_warnings).toEqual([{ code: "missing_start_at", reason: "The selected plan has no start time, so theoretical intervals cannot be calculated." }]);
+  });
+
+  test("does not invent an end time for a running task", () => {
+    const rows = actualIntervals({ tasks: [{ id: "a", group_id: "g" }], events: [{ subject_id: "a", data: {}, type: "task_started", occurred_at: at }] } as any);
+    expect(rows).toEqual([{ task_id: "a", group_id: "g", state: "running", start: at, end: null }]);
+  });
+
+  test("retains historical groups at a cut and ignores failed merge attempts", () => {
+    const cutAt = "2026-01-01T00:30:00.000Z";
+    const rows = actualIntervals({ tasks: [{ id: "a", group_id: "new" }], events: [
+      { subject_id: "a", data: { group_id: "old" }, type: "task_started", occurred_at: at },
+      { subject_id: "old", data: { task_id: "a", outcome: "failed" }, type: "merge_resolved", occurred_at: "2026-01-01T00:15:00.000Z" },
+      { subject_id: "old", data: { old_group_id: "old", new_group_id: "new", reassigned_task_ids: ["a"] }, type: "cut_applied", occurred_at: cutAt },
+    ] } as any);
+    expect(rows).toEqual([
+      { task_id: "a", group_id: "old", state: "running", start: at, end: cutAt },
+      { task_id: "a", group_id: "new", state: "running", start: cutAt, end: null },
+    ]);
+  });
+});

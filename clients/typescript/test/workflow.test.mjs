@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LocalWorkflow, loadSkills, requireSkill, satisfiesVersion } from '../dist/workflow/index.js';
+import { LocalValidation, loadSkills, requireSkill, satisfiesVersion } from '../dist/workflow/index.js';
 import { runProcess } from '../dist/runtime/process.js';
 
 async function temporary(fn) {
@@ -33,7 +33,7 @@ async function fixture(dir) {
   await git(['add', 'SPEC.md']);
   await git(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'fixture']);
   const base = await git(['rev-parse', 'HEAD']);
-  return { repo, git, base, workflow: await LocalWorkflow.open(repo, base) };
+  return { repo, git, base, workflow: await LocalValidation.open(repo, base) };
 }
 async function prepared(dir) {
   const value = await fixture(dir);
@@ -100,7 +100,7 @@ test('stages enforce contracts, implementation, required validation and immutabl
     command('test', 'process.stdout.write(process.cwd())'),
     command('optional', 'process.exit(4)', { required: false }),
   ]);
-  assert.equal(snapshot.stage, 'can-open-pr');
+  assert.equal(snapshot.stage, 'locally-validated');
   assert.equal(snapshot.receipts[0].stdout, repo); assert.equal(snapshot.receipts[0].head, base);
   assert.equal(snapshot.receipts[1].status, 'failed');
   assert.equal((await workflow.readiness()).ready, true);
@@ -170,13 +170,13 @@ test('cancellation and concurrent operations preserve a non-ready gate', () => t
 
 test('entry refuses default, detached, dirty and unrelated bases', () => temporary(async dir => {
   const { repo, git, base } = await fixture(dir);
-  await git(['switch', '-c', 'main']); await assert.rejects(LocalWorkflow.open(repo, base), /Topic/);
-  await git(['switch', '--detach', base]); await assert.rejects(LocalWorkflow.open(repo, base), /Topic/);
+  await git(['switch', '-c', 'main']); await assert.rejects(LocalValidation.open(repo, base), /Topic/);
+  await git(['switch', '--detach', base]); await assert.rejects(LocalValidation.open(repo, base), /Topic/);
   await git(['switch', 'feat/workflow-test']);
-  await writeFile(join(repo, 'dirty'), 'keep'); await assert.rejects(LocalWorkflow.open(repo, base), /Clean/);
+  await writeFile(join(repo, 'dirty'), 'keep'); await assert.rejects(LocalValidation.open(repo, base), /Clean/);
   await rm(join(repo, 'dirty'));
-  await assert.rejects(LocalWorkflow.open(repo, '--all'), /Explicit/);
-  await assert.rejects(LocalWorkflow.open(repo, 'missing'), /resolve base/);
+  await assert.rejects(LocalValidation.open(repo, '--all'), /Explicit/);
+  await assert.rejects(LocalValidation.open(repo, 'missing'), /resolve base/);
 }));
 
 const cliPath = new URL('../dist/workflow/cli.js', import.meta.url).pathname;
@@ -189,16 +189,16 @@ test('Node/Bun standalone CLI checks Skills then validates offline with JSON out
     contracts: decisions, implementation: 'Fixture implementation', validations: [command('test', 'console.log("verified")')],
   };
   const path = join(dir, 'workflow.json'); await writeFile(path, JSON.stringify(manifest));
-  let result = await runProcess(process.execPath, [cliPath, 'verify', path]);
+  let result = await runProcess(process.execPath, [cliPath, 'local-verify', path]);
   assert.equal(result.code, 0, result.stderr);
   const output = JSON.parse(result.stdout); assert.equal(output.readiness.ready, true);
   assert.equal(output.selectedSkills[0].version, '1.2.3');
   assert.equal(output.receipts[0].stdout.trim(), 'verified');
   manifest.validations = [command('fail', 'process.exit(9)')]; await writeFile(path, JSON.stringify(manifest));
-  result = await runProcess(process.execPath, [cliPath, 'verify', path]);
+  result = await runProcess(process.execPath, [cliPath, 'local-verify', path]);
   assert.equal(result.code, 1); assert.equal(JSON.parse(result.stdout).receipts[0].code, 9);
   manifest.skills.requirements[0].range = '^2.0.0'; await writeFile(path, JSON.stringify(manifest));
-  result = await runProcess(process.execPath, [cliPath, 'verify', path]);
+  result = await runProcess(process.execPath, [cliPath, 'local-verify', path]);
   assert.equal(result.code, 1); assert.match(JSON.parse(result.stderr).error, /version mismatch/);
   result = await runProcess(process.execPath, [cliPath, 'skills', skillsRoot]);
   assert.equal(result.code, 0); assert.equal(JSON.parse(result.stdout).skills[0].name, 'engineering');
@@ -222,7 +222,7 @@ test('verify rejects Skill diagnostics before requirements or validation command
         validations: [command('marker', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`)],
       };
       const path = join(dir, 'diagnostics.json'); await writeFile(path, JSON.stringify(manifest));
-      const result = await runProcess(process.execPath, [cliPath, 'verify', path]);
+      const result = await runProcess(process.execPath, [cliPath, 'local-verify', path]);
       assert.equal(result.code, 1, `${problem} diagnostics must fail verification`);
       assert.equal(result.stdout, '', 'No successful verification result may be emitted');
       const output = JSON.parse(result.stderr);

@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: normal"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<proposed_plan>\n# Repair Permit Recovery\n\n## Flow Decision\n- `flow_type`: `normal`\n- `flow_source`: `user_explicit`\n- `lock_status`: `locked`\n</proposed_plan>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Partial recovery facts: permit_status=issued; permit_id=permit-fixture-007; base_relation=fast-forward; previous_base_sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee; current_base_sha=ffffffffffffffffffffffffffffffffffffffff; current_head_sha=0000000000000000000000000000000000000000; live_pr=PR-fixture-47."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"load_skill","arguments":"{\"path\":\"skills/pr-create/SKILL.md\"}"}}

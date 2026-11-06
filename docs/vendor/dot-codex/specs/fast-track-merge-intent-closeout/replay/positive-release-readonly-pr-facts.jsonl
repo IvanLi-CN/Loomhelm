@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `fast-track`; `release_disposition`: `repository-native: release-label`; release_route_resolved; current_repository_facts: managed_release_labels: release-ready"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh api repos/example/repo/pulls/42 --method GET\"}","call_id":"read-pr-1"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Current PR facts read; no PR or label mutation performed."}}

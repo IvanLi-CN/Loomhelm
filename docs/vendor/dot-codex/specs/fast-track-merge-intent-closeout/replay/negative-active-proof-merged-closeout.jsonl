@@ -1,0 +1,6 @@
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"codex review --base origin/main\",\"workdir\":\"/repo\"}","call_id":"call_launch"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_launch","output":"codex review Process running with session ID 42"}}
+{"type":"response_item","payload":{"type":"function_call","name":"write_stdin","arguments":"{\"session_id\":42}","call_id":"call_poll"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_poll","output":"startup_success\nreview proof still running"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"active review proof 42 还在跑；latest head=abcdef1"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-active-proof-merged-closeout","last_agent_message":"PR 已合并；本地收尾=未执行。"}}

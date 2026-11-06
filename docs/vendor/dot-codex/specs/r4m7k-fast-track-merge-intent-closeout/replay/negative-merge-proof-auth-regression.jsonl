@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"当前 stop condition 是 merge-only。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"现在已经到 Step 5C Ready，继续 merge path。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"latest PR.head.sha 缺 fresh merge-proof。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"merge-only authorization does not cover running a loop that may create or require pushing review-fix commits. Ask whether to switch into PR convergence on a writable checkout of the current PR head instead."}]}}

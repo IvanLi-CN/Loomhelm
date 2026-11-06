@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"sleep 1 && codex -m gpt-5.4 -c model_reasoning_effort=\\\"high\\\" --sandbox read-only -a never review --base origin/main > /tmp/review.log 2>&1\",\"workdir\":\"/tmp/demo\",\"tty\":true}","call_id":"call_wrapped_launch"}}

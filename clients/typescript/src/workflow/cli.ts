@@ -1,18 +1,18 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { LocalWorkflow, type ContractDecision, type ValidationEntry } from './local.js';
+import { LocalValidation, type ContractDecision, type ValidationEntry } from './local.js';
 import { loadSkills, requireSkill, type SkillScope } from './skills.js';
 
 async function main(): Promise<void> {
   const [command, path, user, ...extra] = process.argv.slice(2);
-  if (!path || extra.length || (command === 'verify' && user)) throw new Error('Usage: workflow/cli.js skills <project-skills-dir> [user-skills-dir] | verify <manifest.json>');
+  if (!path || extra.length || (command === 'local-verify' && user)) throw new Error('Usage: workflow/cli.js skills <project-skills-dir> [user-skills-dir] | local-verify <manifest.json>');
   if (command === 'skills') {
     const catalog = await loadSkills({ project: resolve(path), ...(user ? { user: resolve(user) } : {}) });
     console.log(JSON.stringify(catalog));
     if (catalog.diagnostics.length) process.exitCode = 1;
     return;
   }
-  if (command !== 'verify') throw new Error('Unknown workflow command');
+  if (command !== 'local-verify') throw new Error('Unknown workflow command');
   const manifestPath = resolve(path);
   const raw: unknown = JSON.parse(await readFile(manifestPath, 'utf8'));
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid workflow manifest');
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
       return requireSkill(catalog, requirement.name, requirement);
     });
   }
-  const workflow = await LocalWorkflow.open(repository, manifest.base, flowType);
+  const workflow = await LocalValidation.open(repository, manifest.base, flowType);
   await workflow.settleContracts(manifest.contracts as ContractDecision[]);
   await workflow.recordImplementation(manifest.implementation);
   const snapshot = await workflow.validate(manifest.validations as ValidationEntry[]);

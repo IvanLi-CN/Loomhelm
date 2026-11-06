@@ -5,7 +5,7 @@
 !.env.*.example
 node_modules/
 /.tmp/
-/bin/
+/bin/*.node
 /dist/
 /coverage/
 /web/dist/
@@ -14,3 +14,10 @@ node_modules/
 /.loomhelm-preview/
 /client/.loomhelm/
 *.log
+
+/bin/native/*.node
+/bin/native/build.json
+/bin/**/*.js
+/bin/**/*.js.map
+/skills/**/*.js
+/skills/**/*.js.map

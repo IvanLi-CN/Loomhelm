@@ -1,0 +1,6 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"merge and cleanup"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr merge 1 --merge --delete-branch=false\",\"workdir\":\"/repo\"}","call_id":"call_merge"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_merge","output":"✓ Merged pull request #1"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg 'cleanup_proof=allowed_complete' docs\",\"workdir\":\"/repo\"}","call_id":"call_rg_cleanup_proof"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_rg_cleanup_proof","output":"docs/example.md: cleanup_proof=allowed_complete"}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-cleanup-diagnostic-output-no-proof","last_agent_message":"PR 已合并；本地收尾=未执行。"}}

@@ -1,0 +1,3 @@
+{"case":"pending-post-merge","expected_error":"owner-action blocker: post_merge acceptance is pending"}
+{"case":"wrong-merge-sha","expected_error":"owner-action blocker: phase acceptance evidence is invalid"}
+{"case":"candidate-only-after-merge","expected_error":"owner-action blocker: phase acceptance evidence is invalid"}

@@ -1,6 +1,6 @@
-# 本地工程工作流
+# 局部验证与通用 Skill 目录读取
 
-`workflow/index.ts` 提供 Skills 发现、兼容性检查与本地工程阶段 API。`workflow/cli.ts` 是独立机器可读入口，编译后可通过 Node.js 或 Bun 调用；现有客户端公共入口不因本模块改变。实现以 `docs/design/client.md` 中的 Skills 和工作流职责为边界，参考已安装 `project-engineering-workflow` 的本地阶段语义。
+`workflow/index.ts` 仅提供通用 Skills 目录读取和局部验证 API；正式迁入入口由 `SkillsRuntime` 与根 `skills/` 提供。局部验证不代表完整工程交付、PR 就绪或发布完成。`workflow/cli.ts` 是独立机器可读入口，编译后可通过 Node.js 或 Bun 调用；现有客户端公共入口不因本模块改变。实现以 `docs/design/client.md` 中的 Skills 和工作流职责为边界，参考已安装 `project-engineering-workflow` 的本地阶段语义。
 
 ## Skills
 
@@ -34,25 +34,25 @@ const skill = requireSkill(catalog, 'engineering', {
 
 ## 本地阶段
 
-`LocalWorkflow.open(repository, baseRef, flowType)` 完成执行上下文检查：必须有可解析的明确 base、非 `main`/`master` 的命名分支、干净工作区，以及从 base 派生的 HEAD。模块仅检查本地 Git，不 fetch、不变更 remote，也不修改已有改动。
+`LocalValidation.open(repository, baseRef, flowType)` 完成执行上下文检查：必须有可解析的明确 base、非 `main`/`master` 的命名分支、干净工作区，以及从 base 派生的 HEAD。模块仅检查本地 Git，不 fetch、不变更 remote，也不修改已有改动。
 
 | 调用 | 完成的本地阶段 | 下一阶段 |
 | - | - | - |
 | `open` | 执行上下文 | `durable-contracts` |
 | `settleContracts` | 记录 Spec 和 ADR 的适用性结论及文件指纹 | `delivery-slices` |
 | `recordImplementation` | 记录调用方已完成的实现说明 | `validation` |
-| `validate` | 执行显式配置的验证命令并保存结果 | `can-open-pr` 或 `validation` |
+| `validate` | 执行显式配置的验证命令并保存结果 | `locally-validated` 或 `validation` |
 | `readiness` | 重新读取 Git 和合同文件，检查结果是否仍适用 | 返回当前门禁 |
 
 `settleContracts` 必须分别包含 Spec 和 ADR 的结论：`link` 要求存在的仓库相对文件路径，`not-needed` 要求空路径列表，两者均要求理由。真实路径不能经符号链接逃出仓库。设计决策及批准由调用方负责；模块不创建或替代 Spec/ADR，也不把说明文字当作人工批准。合同变化后必须重新结算合同、记录实现并验证。
 
 每条验证包含唯一 `id`、可执行文件 `command` 和字符串数组 `args`，默认是必需验证。命令在仓库根目录通过现有 `runProcess` 执行，禁用隐式 shell 展开。验证默认超时 30 秒、输出上限 1 MiB，可显式调整至最多 1800 秒和 64 MiB。命令本身拥有当前用户权限，调用方须只提交已授权的命令；本模块不是命令沙箱。
 
-至少需要一条必需验证。所有必需验证通过、整套验证执行结束且候选未变化，才能进入 `can-open-pr`。可选验证失败会保留失败事实，不阻塞必需验证；任何验证造成 Git 状态或合同变化都会阻止就绪。非零退出、超时、输出超限、启动失败与取消都不会被记作通过。取消之后未开始的条目不生成执行收据；完整套件缺失条目时不能就绪。
+至少需要一条必需验证。所有必需验证通过、整套验证执行结束且候选未变化，才能进入 `locally-validated`。可选验证失败会保留失败事实，不阻塞必需验证；任何验证造成 Git 状态或合同变化都会阻止就绪。非零退出、超时、输出超限、启动失败与取消都不会被记作通过。取消之后未开始的条目不生成执行收据；完整套件缺失条目时不能就绪。
 
 收据包含随机执行身份、命令、仓库、base、HEAD、实际开始与结束时间、退出码、信号、状态、输出与输出摘要。现有进程适配器在超时、取消、输出超限等异常时只返回异常，因此这些收据不声称保留部分 stdout/stderr。状态快照使用深拷贝；单实例拒绝并行变更，每次验证调用都重新运行命令。调用方负责持久保存返回结果、跨实例锁与重启恢复，本模块不伪造持久化或幂等执行保证。
 
-`can-open-pr` 只表示该模块覆盖的本地阶段已通过，不是远端发布授权、完整 Review Readiness、merge-ready 或 Flow Complete。调用方仍负责项目适用的 Spec 同步、视觉证据、经验验收、审查层级与正式 review/CI 等门禁。`flowType` 保留 `normal`、`fast-track`、`local-merge` 路由身份，但不从中继承 push、PR、merge 或 release 权限。候选 HEAD 变化、工作区变脏或合同指纹变化后，`readiness()` 返回未完成门禁，旧收据保留为历史事实。
+`locally-validated` 只表示该模块覆盖的本地阶段已通过，不是远端发布授权、完整 Review Readiness、merge-ready 或 Flow Complete。调用方仍负责项目适用的 Spec 同步、视觉证据、经验验收、审查层级与正式 review/CI 等门禁。`flowType` 保留 `normal`、`fast-track`、`local-merge` 路由身份，但不从中继承 push、PR、merge 或 release 权限。候选 HEAD 变化、工作区变脏或合同指纹变化后，`readiness()` 返回未完成门禁，旧收据保留为历史事实。
 
 ## 验证入口
 

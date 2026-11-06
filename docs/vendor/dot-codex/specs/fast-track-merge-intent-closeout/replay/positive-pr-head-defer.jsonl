@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"后续追踪=defer\n追踪目标=pr_head_ci\n追踪绑定sha=abc1234\nresult=INFRA_BLOCKED\ntracking_target=pr_head_ci\nchecked_sha=abc1234\nterminal_state=unavailable\nexternal_locator=local://tracker/unavailable"}]}}

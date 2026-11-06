@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"The owner requires checkout page evidence to come from ui_demo. The owner requires settings page evidence to come from ui_demo. No qualified ui_demo exists for the settings page; the settings page is approved for Storybook fallback."}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"settings page uses Storybook fallback.\n视觉证据目标源=storybook_canvas\n视觉证据=存在"}]}}

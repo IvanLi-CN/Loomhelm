@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: fast-track"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<proposed_plan>\n# Demo Locked Fast-track\n\n## Flow Decision\n- `flow_type`: `fast-track`\n- `flow_source`: `user_explicit`\n- `lock_status`: `locked`\n</proposed_plan>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请你合并 [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"恢复到 fast-track，继续当前 PR 收敛路径，没有切到 local-merge。"}]}}

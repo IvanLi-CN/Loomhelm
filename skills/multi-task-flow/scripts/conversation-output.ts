@@ -1,0 +1,323 @@
+import { latestConversationOutput } from "./conversation-history";
+export { messageOutput } from "./conversation-history";
+import { randomUUID } from "node:crypto";
+import { observeCodex, type JsonRecord } from "./codex-agent-api";
+import {
+  initialOutput,
+  type AgentOutput,
+  type OutputSnapshot,
+} from "../web/agent-output";
+
+type Binding = { id: string; thread_id: string | null };
+type NativeConnection = Awaited<ReturnType<typeof observeCodex>>;
+type Connection = Pick<NativeConnection, "request" | "close"> &
+  Partial<Pick<NativeConnection, "subscriptions">>;
+export type ConnectObserver = (
+  notify: (value: JsonRecord) => void,
+  close: () => void,
+) => Promise<Connection>;
+const object = (v: unknown): JsonRecord | null =>
+  typeof v === "object" && v !== null && !Array.isArray(v)
+    ? (v as JsonRecord)
+    : null;
+const key = (turn: unknown, item: unknown) => JSON.stringify([turn, item]);
+
+type ThreadState = {
+  output: AgentOutput;
+  version: number;
+  items: Map<
+    string,
+    { rank: number; text: string; phase: string | null; done: boolean }
+  >;
+  rank: number;
+  selectedRank: number;
+  streamGeneration: number;
+  reading: boolean;
+  failures: number;
+  retryAt: number;
+};
+/** Latest output is ephemeral and independent of ledger revision. */
+export class ConversationOutputs {
+  private bindings = new Map<string, string | null>();
+  private threads = new Map<string, ThreadState>();
+  private connection: Connection | null = null;
+  private generation = 0;
+  private revision = 0;
+  private readonly epoch = randomUUID();
+  private active = false;
+  private opening: number | null = null;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private pollTimer: ReturnType<typeof setTimeout> | undefined;
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private backoff = 1000;
+  receivedDelta = false;
+  constructor(
+    private publish: (snapshot: OutputSnapshot) => void,
+    private connect: ConnectObserver = observeCodex,
+    private pollMs = 2000,
+  ) {}
+  snapshot(): OutputSnapshot {
+    return {
+      output_epoch: this.epoch,
+      output_revision: this.revision,
+      outputs: Object.fromEntries(
+        [...this.bindings].map(([id, thread]) => [
+          id,
+          thread
+            ? (this.threads.get(thread)?.output ?? initialOutput(thread))
+            : initialOutput(null),
+        ]),
+      ),
+    };
+  }
+  bind(tasks: Binding[]): void {
+    const next = new Map(tasks.map((t) => [t.id, t.thread_id]));
+    const changed =
+      JSON.stringify([...next]) !== JSON.stringify([...this.bindings]);
+    this.bindings = next;
+    const wanted = new Set([...next.values()].filter((t): t is string => !!t));
+    this.connection?.subscriptions?.retain(wanted);
+    for (const thread of this.threads.keys())
+      if (!wanted.has(thread)) this.threads.delete(thread);
+    for (const thread of wanted)
+      if (!this.threads.has(thread)) {
+        this.threads.set(thread, {
+          output: initialOutput(thread),
+          version: 0,
+          items: new Map(),
+          rank: 0,
+          selectedRank: 0,
+          streamGeneration: -1,
+          reading: false,
+          failures: 0,
+          retryAt: 0,
+        });
+        if (this.connection)
+          void this.load(thread, this.connection, this.generation);
+      }
+    if (changed) this.changed(true);
+    if (!wanted.size && this.active) this.stop();
+  }
+  start(): void {
+    if (!this.active && this.threads.size) {
+      this.active = true;
+      void this.open();
+    }
+  }
+  stop(): void {
+    this.active = false;
+    this.generation++;
+    this.opening = null;
+    clearTimeout(this.timer);
+    clearTimeout(this.pollTimer);
+    clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
+    const connection = this.connection;
+    this.connection = null;
+    connection?.close();
+  }
+  private changed(immediate: boolean): void {
+    this.revision++;
+    if (immediate) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+      this.publish(this.snapshot());
+    } else if (!this.flushTimer)
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = undefined;
+        this.publish(this.snapshot());
+      }, 100);
+  }
+  private set(state: ThreadState, output: AgentOutput, immediate = true): void {
+    // No notification or version churn merely because a history read succeeded again.
+    const { observed_at: _old, ...old } = state.output;
+    const { observed_at: _new, ...next } = output;
+    if (JSON.stringify(old) === JSON.stringify(next)) return;
+    state.output = output;
+    this.changed(immediate);
+  }
+  private async open(): Promise<void> {
+    if (!this.active || this.opening !== null) return;
+    const generation = ++this.generation;
+    this.opening = generation;
+    let lostAlready = false;
+    const lost = () => {
+      if (generation !== this.generation || !this.active || lostAlready) return;
+      lostAlready = true;
+      this.connection = null;
+      clearTimeout(this.pollTimer);
+      for (const state of this.threads.values())
+        this.set(state, { ...state.output, state: "unavailable", stale: true });
+      this.timer = setTimeout(() => void this.open(), this.backoff);
+      this.backoff = Math.min(this.backoff * 2, 30000);
+    };
+    try {
+      const connection = await this.connect((e) => {
+        if (generation === this.generation && this.active && !lostAlready)
+          this.notify(e);
+      }, lost);
+      if (!this.active || generation !== this.generation || lostAlready) {
+        connection.close();
+        return;
+      }
+      this.connection = connection;
+      connection.subscriptions?.retain(this.threads.keys());
+      void this.catchUp(connection, generation);
+    } catch {
+      lost();
+    } finally {
+      if (this.opening === generation) this.opening = null;
+    }
+  }
+  private async catchUp(
+    connection: Connection,
+    generation: number,
+  ): Promise<void> {
+    for (const thread of this.threads.keys()) {
+      if (
+        !this.active ||
+        generation !== this.generation ||
+        this.connection !== connection
+      )
+        return;
+      await this.load(thread, connection, generation);
+    }
+    if (
+      this.active &&
+      generation === this.generation &&
+      this.connection === connection
+    ) {
+      this.backoff = 1000;
+      // Historical catch-up is not evidence of native streaming support.
+      this.pollTimer = setTimeout(
+        () => void this.catchUp(connection, generation),
+        this.pollMs,
+      );
+    }
+  }
+  private async load(
+    thread: string,
+    connection: Connection,
+    generation: number,
+  ): Promise<void> {
+    const state = this.threads.get(thread);
+    if (!state || state.reading || state.retryAt > Date.now()) return;
+    state.reading = true;
+    const version = state.version;
+    const valid = () =>
+      this.active &&
+      generation === this.generation &&
+      this.connection === connection &&
+      this.threads.get(thread) === state &&
+      state.version === version;
+    try {
+      await connection.subscriptions?.ensure(thread);
+      if (!valid()) return;
+      const selected = await latestConversationOutput(thread, connection);
+      if (!valid()) return;
+      // Never replace a locally streaming item with an older persisted item.
+      if (state.streamGeneration === generation) {
+        if (selected?.message_id !== state.output.message_id) return;
+        if (
+          state.output.text &&
+          selected.text &&
+          selected.text.length < state.output.text.length
+        )
+          return;
+      }
+      if (selected) {
+        const identity = key(selected.turn_id, selected.message_id);
+        const known = state.items.get(identity);
+        if (known && known.rank < state.selectedRank) return;
+        state.items.set(identity, {
+          rank: known?.rank ?? ++state.rank,
+          text: selected.text!,
+          phase: selected.phase,
+          done: selected.message_status === "completed",
+        });
+        state.selectedRank = state.items.get(identity)!.rank;
+      }
+      state.failures = 0;
+      state.retryAt = 0;
+      this.set(
+        state,
+        selected ?? {
+          ...initialOutput(thread),
+          state: "empty",
+          stale: false,
+          observed_at: new Date().toISOString(),
+        },
+      );
+    } catch {
+      if (valid()) {
+        state.retryAt =
+          Date.now() +
+          Math.min(1000 * 2 ** Math.min(state.failures++, 5), 30000);
+        this.set(state, { ...state.output, state: "unavailable", stale: true });
+      }
+    } finally {
+      state.reading = false;
+    }
+  }
+  private notify(event: JsonRecord): void {
+    const params = object(event.params);
+    const thread = params?.threadId;
+    if (typeof thread !== "string" || !params) return;
+    const state = this.threads.get(thread);
+    if (!state) return;
+    const method = event.method;
+    if (
+      method === "turn/completed" &&
+      object(params.turn)?.id === state.output.turn_id
+    ) {
+      state.version++;
+      this.set(state, { ...state.output, message_status: "completed" });
+      return;
+    }
+    const delta = method === "item/agentMessage/delta";
+    const item = object(params.item);
+    if (
+      !delta &&
+      (!["item/started", "item/completed"].includes(String(method)) ||
+        item?.type !== "agentMessage")
+    )
+      return;
+    const id = delta ? params.itemId : item?.id;
+    if (typeof id !== "string" || typeof params.turnId !== "string") return;
+    const identity = key(params.turnId, id);
+    let entry = state.items.get(identity);
+    if (!entry) {
+      entry = { rank: ++state.rank, text: "", phase: null, done: false };
+      state.items.set(identity, entry);
+    }
+    state.version++;
+    state.streamGeneration = this.generation;
+    if (delta) {
+      if (typeof params.delta !== "string" || entry.done) return;
+      this.receivedDelta = true;
+      entry.text += params.delta;
+    } else {
+      if (method === "item/started" && entry.done) return;
+      entry.text = typeof item?.text === "string" ? item.text : entry.text;
+      entry.phase = typeof item?.phase === "string" ? item.phase : entry.phase;
+      entry.done = method === "item/completed";
+    }
+    if (!entry.text.trim() || entry.rank < state.selectedRank) return;
+    state.selectedRank = entry.rank;
+    this.set(
+      state,
+      {
+        state: "available",
+        text: entry.text,
+        thread_id: thread,
+        turn_id: params.turnId,
+        message_id: id,
+        phase: entry.phase,
+        message_status: entry.done ? "completed" : "in_progress",
+        observed_at: new Date().toISOString(),
+        stale: false,
+      },
+      !delta,
+    );
+  }
+}

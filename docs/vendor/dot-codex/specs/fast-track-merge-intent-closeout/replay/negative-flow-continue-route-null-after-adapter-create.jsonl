@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `fast-track`; stop condition=merge-ready."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"python3 bin/code_hosting.py pr-create --repo example/repo --base main --head topic\"}","call_id":"adapter-create"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"route-null-after-adapter","output":{"pre_merge_release_route":"no-managed-route","route_source":"none","target_repo":"example/repo","target_pr":null,"target_head":"abc1234","target_base":"main","current_repository_facts":"no release policy or managed release labels","current_pr_facts":"no open PR for exact head/base pair; head=abc1234; base=main","managed_release_labels":[]}}}

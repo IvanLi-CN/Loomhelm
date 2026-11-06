@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_pr","output":"[{\"type\":\"text\",\"text\":\"{\\\"number\\\":130,\\\"mergeable_state\\\":\\\"dirty\\\"}\"}]"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR 目前是 merge conflict，先按冲突阻断处理，不继续猜 review approval。"}]}}

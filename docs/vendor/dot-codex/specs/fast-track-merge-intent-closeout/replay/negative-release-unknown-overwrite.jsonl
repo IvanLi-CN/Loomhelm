@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `fast-track`; `release_disposition`: `unknown`."}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`release_disposition`: `repository-native: guessed-route`; no current repository facts were read."}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr create --repo example/repo --base main --head topic\"}","call_id":"publish-after-guess"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR publication attempted."}}

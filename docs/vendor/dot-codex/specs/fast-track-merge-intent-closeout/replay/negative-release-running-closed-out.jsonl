@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR 已合并。 release_expected=true；发布状态=运行中。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并；发布状态=运行中；目标分支 CI 已通过，合并流程完成。"}}

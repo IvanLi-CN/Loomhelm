@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"output_text","text":"在浏览器打开 http://127.0.0.1:44720/preview.html"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"当前没有可用的 ego-browser。若你允许我使用 chrome:control-chrome 打开页面，我可以继续。"}]}}

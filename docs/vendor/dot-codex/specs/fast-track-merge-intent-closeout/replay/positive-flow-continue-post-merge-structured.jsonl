@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `fast-track`; stop condition=merge-only."}]}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"get-pr","output":{"state":"MERGED","mergedAt":"2026-09-23T00:00:00Z","number":42}}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已确认 PR merged，继续回到 $pr-merge 处理共享 Step 6。"}]}}

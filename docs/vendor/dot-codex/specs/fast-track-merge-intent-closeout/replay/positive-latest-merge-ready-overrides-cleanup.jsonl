@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"route-none","output":{"pre_merge_release_route":"no-managed-route","route_source":"none","target_repo":"example/repo","target_pr":42,"current_repository_facts":"no release policy or managed release labels","current_pr_facts":"PR #42; head=abc1234; base=main","managed_release_labels":[]}}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"merge and cleanup"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"准备好 PR"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR状态=存在。现在已经到 Step 5C Ready，latest PR 可立即合并。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-latest-merge-ready-overrides-cleanup","last_agent_message":"PR状态=存在；PR 已到 merge-ready。"}}

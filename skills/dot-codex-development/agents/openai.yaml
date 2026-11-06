@@ -1,0 +1,4 @@
+interface:
+  display_name: "dot-codex Development"
+  short_description: "Safely develop and validate dot-codex worktrees"
+  default_prompt: "Use $dot-codex-development to resolve the candidate worktree and validate it in place without redirecting CODEX_HOME."

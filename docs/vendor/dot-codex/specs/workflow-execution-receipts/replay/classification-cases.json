@@ -1,0 +1,62 @@
+[
+  {
+    "name": "project-doc-delta-rebinds",
+    "paths": ["docs/guide.md"],
+    "spec_contract_changed": false,
+    "effective_merge_before": "merge",
+    "effective_merge_after": "merge",
+    "reusable": true,
+    "needs_attestation": true,
+    "reasons": ["scoped_non_effective_delta"]
+  },
+  {
+    "name": "spec-state-delta-rebinds",
+    "paths": ["docs/specs/topic/IMPLEMENTATION.md"],
+    "spec_contract_changed": false,
+    "effective_merge_before": "merge",
+    "effective_merge_after": "merge",
+    "reusable": true,
+    "needs_attestation": true,
+    "reasons": ["scoped_non_effective_delta"]
+  },
+  {
+    "name": "spec-contract-invalidates",
+    "paths": ["docs/specs/topic/SPEC.md"],
+    "spec_contract_changed": true,
+    "effective_merge_before": "merge",
+    "effective_merge_after": "merge",
+    "reusable": false,
+    "needs_attestation": false,
+    "reasons": ["spec_contract_changed"]
+  },
+  {
+    "name": "workflow-invalidates",
+    "paths": [".github/workflows/ci.yml"],
+    "spec_contract_changed": false,
+    "effective_merge_before": "merge",
+    "effective_merge_after": "merge",
+    "reusable": false,
+    "needs_attestation": false,
+    "reasons": ["effective_input_changed:.github/workflows/ci.yml"]
+  },
+  {
+    "name": "effective-merge-result-invalidates",
+    "paths": ["docs/guide.md"],
+    "spec_contract_changed": false,
+    "effective_merge_before": "old",
+    "effective_merge_after": "new",
+    "reusable": false,
+    "needs_attestation": false,
+    "reasons": ["effective_merge_result_changed"]
+  },
+  {
+    "name": "arbitrary-product-image-invalidates",
+    "paths": ["assets/product.png"],
+    "spec_contract_changed": false,
+    "effective_merge_before": "merge",
+    "effective_merge_after": "merge",
+    "reusable": false,
+    "needs_attestation": false,
+    "reasons": ["unclassified_effective_input_delta"]
+  }
+]

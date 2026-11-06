@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"历史记录：视觉确认=local-pending；确认绑定sha=aaaaaaaa；确认资源摘要=bbbbbbbbbbbbbbbb；确认来源=local。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"恢复任务后已重新渲染并比较。视觉比较=一致，与上一版视觉一致。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"调用 $pr-create 开始 PR 收敛。"}]}}

@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_pr","output":"[{\"type\":\"text\",\"text\":\"{\\\"number\\\":144,\\\"mergeable_state\\\":\\\"dirty\\\"}\"}]"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR 当前是 merge conflict，直接进入自动解冲并续推，不走 workflow absence 诊断。"}]}}

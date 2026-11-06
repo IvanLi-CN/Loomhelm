@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"review proof 还在跑，当前没有新的人工决策阻断。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-active-gate-early-closeout","last_agent_message":"review proof 还在跑，当前没有新的人工决策阻断。"}}

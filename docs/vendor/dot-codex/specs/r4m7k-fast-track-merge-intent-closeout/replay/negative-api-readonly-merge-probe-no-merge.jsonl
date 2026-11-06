@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"merge"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh api repos/owner/repo/pulls/1/merge\",\"workdir\":\"/repo\"}","call_id":"call_api_readonly_merge_probe"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_api_readonly_merge_probe","output":"{\"message\":\"Not Found\"}"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Step 5C Ready：PR 可立即合并。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-api-readonly-merge-probe-no-merge","last_agent_message":"PR 已到 Step 5C Ready。"}}

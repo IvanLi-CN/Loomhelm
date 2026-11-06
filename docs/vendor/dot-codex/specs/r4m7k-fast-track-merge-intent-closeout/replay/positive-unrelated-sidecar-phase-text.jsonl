@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"function_call","name":"multi_agent_v1__spawn_agent","arguments":"{\"task_name\":\"review-proof-sidecar\",\"prompt\":\"review context mentions post_merge_target_ci but this is not a CI tracker\"}"}}

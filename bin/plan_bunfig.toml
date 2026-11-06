@@ -1,0 +1,2 @@
+# Repository-controlled Bun configuration for sensitive plan CLIs.
+# Keep preload and command hooks out of this file.

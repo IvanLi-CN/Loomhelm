@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "method": "mcp__codex_app__navigate_to_codex_page",
+  "verified_at": "2026-10-31T03:27:42Z",
+  "evidence_ref": "examples/orchestration-viewer/link-verification.json",
+  "results": [
+    { "thread_id": "01a18bf3-feb7-7d52-98b3-dc25f8549f69", "navigated": true },
+    { "thread_id": "01a14809-f2f6-75d0-81f1-72ab8eccb5fa", "navigated": true },
+    { "thread_id": "01a18e2c-89e7-75e2-9dd5-941ff028de77", "navigated": true },
+    { "thread_id": "01a17446-5c36-7210-b444-4cc42e214bb9", "navigated": true },
+    { "thread_id": "01a17b7f-1da1-7ae3-8b4e-63e730d88b1b", "navigated": true },
+    { "thread_id": "01a187e1-2733-7be2-acf9-2afb16a40220", "navigated": true },
+    { "thread_id": "01a186c5-3685-7633-8574-d037c70cc54c", "navigated": true },
+    { "thread_id": "01a1852d-fc21-7060-8574-91505764f8a9", "navigated": true },
+    { "thread_id": "01a16be6-a5e5-7343-9267-bd11bdf4e57d", "navigated": true },
+    { "thread_id": "01a17bb7-51ec-7832-9211-608e2789c4ba", "navigated": true },
+    { "thread_id": "01a14ad0-3362-7dd0-bc63-e78aae2f0e88", "navigated": true }
+  ]
+}

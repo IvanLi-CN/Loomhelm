@@ -1,0 +1,6 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"这个组件状态矩阵需要补视觉证据。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"这是组件/片段场景，先补 Storybook 覆盖。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"视觉证据目标源=storybook_docs\n视觉证据=存在"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"现在请刷新这个完整页面的最终视觉证据。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"这是整页 page-flow 取证。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我先走 Storybook，把整页图补出来。"}]}}

@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"decision-only","output":{"release_expected":false}}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并。发布状态=未触发；依据=release_expected=false。"}}

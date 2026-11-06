@@ -1,0 +1,304 @@
+{
+  "source": "18932caa0fedc34725d3f1d99462a063d87b4599",
+  "cases": [
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/session-019ce28f-bc31-7d02-990f-c9f02c1bf028.jsonl",
+      "finding_codes": [
+        "LOCKED_FLOW_DRIFT_TO_LOCAL_MERGE",
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-locked-fast-track-drift-to-local-merge.jsonl",
+      "finding_codes": [
+        "LOCKED_FLOW_DRIFT_TO_LOCAL_MERGE",
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-merge-path-review-feedback-needs-auth.jsonl",
+      "finding_codes": [
+        "MERGE_PATH_REVIEW_FEEDBACK_NOT_ROUTED",
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-chinese-initiative-alias-drift.jsonl",
+      "finding_codes": [
+        "LOCKED_FLOW_DRIFT_TO_LOCAL_MERGE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-initiative-flow-chinese-alias-drift.jsonl",
+      "finding_codes": [
+        "LOCKED_FLOW_DRIFT_TO_LOCAL_MERGE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-issued-permit-base-fast-forward-not-resumed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_NOT_RESUMED"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-invalidated-permit-base-advance-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-incomplete-permit-base-advance-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-partial-refresh-permit-base-advance-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-untrusted-permit-base-advance-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-contradictory-permit-base-advance-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-noncanonical-live-pr-match-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-flow-switch-after-repair-continue-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-pr-create-with-convergence-reopen.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-repair-wave-empty-values-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-latest-untrusted-permit-base-advance-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-noncanonical-base-relation-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-negated-permit-base-advance-routed.jsonl",
+      "finding_codes": [
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-textual-pr-create-not-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_NOT_RESUMED"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-top-level-convergence-reopen-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-draft-bootstrap-permit-base-advance-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-extra-load-skill-argument-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-duplicate-load-skill-argument-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-repair-wave-unknown-option-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-repair-wave-sentinel-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-repair-wave-bare-head-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-shell-repair-wave-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-noncanonical-python-repair-wave-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-rejected-route-retry-routed.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE",
+        "REPAIR_PERMIT_BASE_ADVANCE_INVALID_ROUTE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-explicit-local-merge-switch.jsonl",
+      "finding_codes": []
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-generic-merge-stays-fast-track.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-generic-continue-stays-initiative.jsonl",
+      "finding_codes": []
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-issued-permit-base-fast-forward-resumes.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-issued-permit-base-fast-forward-opens-repair-wave.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-issued-permit-repair-wave-without-head.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-ordinary-pr-create-without-recovery-facts.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-canonical-pr-publication-procedure.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-canonical-pr-merge-procedure.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-invalidated-permit-base-advance-stays-blocked.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-negated-merge-does-not-resume-repair.jsonl",
+      "finding_codes": []
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-merge-path-review-feedback-routes-pr-create.jsonl",
+      "finding_codes": [
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-pending-ui-confirmation-routed-to-pr-create.jsonl",
+      "finding_codes": [
+        "PENDING_VISUAL_RESPONSE_ROUTED_TO_PR_CREATE",
+        "RELEASE_ROUTE_NOT_RERESOLVED_ON_CONTINUE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-assistant-narration-clears-ui-confirmation.jsonl",
+      "finding_codes": [
+        "PENDING_VISUAL_RESPONSE_ROUTED_TO_PR_CREATE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-mixed-visual-status-cannot-clear-confirmation.jsonl",
+      "finding_codes": [
+        "PENDING_VISUAL_RESPONSE_ROUTED_TO_PR_CREATE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/negative-same-event-visual-request-and-pr-route.jsonl",
+      "finding_codes": [
+        "PENDING_VISUAL_RESPONSE_ROUTED_TO_PR_CREATE"
+      ]
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-confirmed-ui-routes-to-pr-create.jsonl",
+      "finding_codes": []
+    },
+    {
+      "path": "docs/specs/flow-continue-lock-guard/replay/positive-unchanged-ui-routes-to-pr-create.jsonl",
+      "finding_codes": []
+    }
+  ]
+}

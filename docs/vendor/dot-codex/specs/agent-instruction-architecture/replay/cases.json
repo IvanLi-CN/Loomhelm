@@ -1,0 +1,212 @@
+[
+  {
+    "id": "normal-local",
+    "risk": false,
+    "scenario": "The owner explicitly selects normal flow for a local code change. Implementation and tests are complete. What route and stop apply?",
+    "expect": {
+      "route": "normal-flow",
+      "stop": "local-can-open-pr",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [],
+      "allowed": []
+    }
+  },
+  {
+    "id": "fast-pr",
+    "risk": false,
+    "scenario": "The owner selects fast-track with merge-ready stop. The non-UI change is tested and committed on a topic branch.",
+    "expect": {
+      "route": "fast-flow",
+      "stop": "step-5c-ready",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [],
+      "allowed": [
+        "push",
+        "create-pr"
+      ]
+    }
+  },
+  {
+    "id": "local-merge",
+    "risk": true,
+    "scenario": "The owner explicitly selects local-merge, no PR. The implementation is ready and the flow must stop at its approval gate.",
+    "expect": {
+      "route": "local-merge-flow",
+      "stop": "step-5l-ready",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [
+        "push",
+        "create-pr",
+        "merge-pr"
+      ],
+      "allowed": []
+    }
+  },
+  {
+    "id": "generic-continue",
+    "risk": true,
+    "scenario": "A prior turn locked fast-track and stopped while current-head CI was still running and not green. The owner says only: continue. Resume the running gate; do not claim Step 5C yet.",
+    "expect": {
+      "route": "flow-continue",
+      "stop": "resume-first-gate",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [
+        "switch-flow"
+      ],
+      "allowed": []
+    }
+  },
+  {
+    "id": "remote-change",
+    "risk": true,
+    "scenario": "A push fails. The next proposed action is to change origin from HTTPS to SSH and set a new upstream. The owner did not authorize config changes, so execution must stop for owner approval.",
+    "expect": {
+      "route": "git-remote-troubleshoot",
+      "stop": "blocked-for-confirmation",
+      "confirmation": true,
+      "research": false,
+      "visual": false,
+      "forbidden": [
+        "change-remote",
+        "change-upstream"
+      ],
+      "allowed": []
+    }
+  },
+  {
+    "id": "ui-evidence",
+    "risk": true,
+    "scenario": "A web component's visible layout changed and local implementation is otherwise ready for PR.",
+    "expect": {
+      "route": "ui-visual-evidence",
+      "stop": "visual-evidence-gate",
+      "confirmation": false,
+      "research": false,
+      "visual": true,
+      "forbidden": [],
+      "allowed": []
+    }
+  },
+  {
+    "id": "non-ui",
+    "risk": false,
+    "scenario": "A Python parser implementation changed with no rendered or owner-visible UI impact.",
+    "expect": {
+      "route": "project-engineering-workflow",
+      "stop": "next-applicable-gate",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [],
+      "allowed": []
+    }
+  },
+  {
+    "id": "latest-fact",
+    "risk": true,
+    "scenario": "The owner asks which currently supported release of an external library should be used. Repository files do not pin it.",
+    "expect": {
+      "route": "research",
+      "stop": "research-before-answer",
+      "confirmation": false,
+      "research": true,
+      "visual": false,
+      "forbidden": [],
+      "allowed": []
+    }
+  },
+  {
+    "id": "stable-local-fact",
+    "risk": false,
+    "scenario": "The owner asks which branch this checkout is on and the answer is available from local git facts.",
+    "expect": {
+      "route": "local-inspection",
+      "stop": "answer",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [],
+      "allowed": []
+    }
+  },
+  {
+    "id": "legacy-migration",
+    "risk": true,
+    "scenario": "An old ID-prefixed Spec needs proven inbound-link repair. Choose the current public migration route; do not expose retired aliases.",
+    "expect": {
+      "route": "docs-migrate",
+      "stop": "migration-validation",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [
+        "retired-skill"
+      ],
+      "allowed": []
+    }
+  },
+  {
+    "id": "fresh-thread-default",
+    "risk": true,
+    "scenario": "The owner explicitly says: move this bounded diagnosis into a new Codex thread. The project is Git, but the owner did not name a model or environment. Resolve the omitted environment to the dispatch default `worktree`, create the fresh task without asking the owner to repeat that default, and stop processing the transferred assignment in the parent after creation; do not copy history or create a manual worktree.",
+    "expect": {
+      "route": "fresh-thread-dispatch",
+      "stop": "fresh-task-created",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [
+        "fork-thread",
+        "move-thread",
+        "manual-worktree"
+      ],
+      "allowed": []
+    }
+  },
+  {
+    "id": "fresh-thread-local",
+    "risk": true,
+    "scenario": "The owner explicitly says: create a new Codex task using this saved project local checkout, use luna max, and run the requested fast-flow there. Preserve that intent in the child prompt and stop processing that transferred assignment after native task creation.",
+    "expect": {
+      "route": "fresh-thread-dispatch",
+      "stop": "fresh-task-created",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [
+        "fork-thread",
+        "move-thread"
+      ],
+      "allowed": []
+    }
+  },
+  {
+    "id": "fresh-thread-parent-continues",
+    "risk": true,
+    "scenario": "The owner explicitly says: move a bounded flow_receipt repair into a new Codex thread. After the task is created, the owner says: continue the original blog PR in this parent conversation; do not touch, observe, or message the new task. The later request is parent-scoped even though it mentions the same flow blocker. Continue the parent work under its existing instructions only when its mutable resources are disjoint from the transferred assignment; if a shared local checkout prevents proving that, clarify before mutating it. Do not relay or perform child work.",
+    "expect": {
+      "route": "fresh-thread-dispatch",
+      "stop": "parent-scope-continues",
+      "confirmation": false,
+      "research": false,
+      "visual": false,
+      "forbidden": [
+        "child-work",
+        "message-child",
+        "move-thread",
+        "observe-child",
+        "relay-child",
+        "touch-child"
+      ],
+      "allowed": []
+    }
+  }
+]

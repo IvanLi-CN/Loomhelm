@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call","name":"multi_agent_v1__spawn_agent","arguments":"{\"task_name\":\"post-merge-ci-tracker\",\"phase\":\"post_merge_target_ci\",\"bound_sha\":\"abc1234\",\"prompt\":\"track post_merge_target_ci\"}"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"后续追踪=sub-agent\n追踪目标=post_merge_target_ci\n追踪绑定sha=abc1234"}]}}

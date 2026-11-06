@@ -1,0 +1,511 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "505961771a0d2496155d23132a8c0bd8beac0a24",
+  "entries": [
+    {
+      "name": "cn-ecommerce-data-collection",
+      "entry": "skills/cn-ecommerce-data-collection/SKILL.md",
+      "files": 2,
+      "internalSkills": [],
+      "externalSkills": [
+        {
+          "skill": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations and controlled visual evidence"
+        }
+      ],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "dev-plan",
+      "entry": "skills/dev-plan/SKILL.md",
+      "files": 267,
+      "internalSkills": [
+        "fast-flow",
+        "flow-continue",
+        "multi-task-flow",
+        "normal-flow",
+        "topic-spec"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/dev-plan/scripts/test_migrate_task_orchestration.ts"
+      ]
+    },
+    {
+      "name": "docs-migrate",
+      "entry": "skills/docs-migrate/SKILL.md",
+      "files": 11,
+      "internalSkills": [
+        "git-worktree",
+        "spec-sync"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/docs-migrate/scripts/gen_legacy_spec_id.ts",
+        "skills/docs-migrate/scripts/specs_migrate_guard.ts",
+        "skills/docs-migrate/scripts/test_gen_legacy_spec_id.ts",
+        "skills/docs-migrate/scripts/test_specs_migrate_guard.ts"
+      ]
+    },
+    {
+      "name": "dot-codex-development",
+      "entry": "skills/dot-codex-development/SKILL.md",
+      "files": 4,
+      "internalSkills": [
+        "dev-plan"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/dot-codex-development/scripts/context.ts",
+        "skills/dot-codex-development/scripts/test_context.ts"
+      ]
+    },
+    {
+      "name": "fast-flow",
+      "entry": "skills/fast-flow/SKILL.md",
+      "files": 1,
+      "internalSkills": [
+        "dev-plan",
+        "multi-task-flow",
+        "project-engineering-workflow"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "find-next-plan",
+      "entry": "skills/find-next-plan/SKILL.md",
+      "files": 4,
+      "internalSkills": [],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/find-next-plan/scripts/find_next_plan.ts",
+        "skills/find-next-plan/scripts/test_find_next_plan.ts"
+      ]
+    },
+    {
+      "name": "flow-continue",
+      "entry": "skills/flow-continue/SKILL.md",
+      "files": 1,
+      "internalSkills": [
+        "dev-plan",
+        "fast-flow",
+        "git-cleanup",
+        "local-merge-flow",
+        "multi-task-flow",
+        "normal-flow",
+        "spec-sync"
+      ],
+      "externalSkills": [
+        {
+          "skill": "grill-with-docs",
+          "strength": "required-when-applicable",
+          "condition": "unresolved design decisions; must return to design rather than execute"
+        }
+      ],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "fresh-thread-dispatch",
+      "entry": "skills/fresh-thread-dispatch/SKILL.md",
+      "files": 3,
+      "internalSkills": [
+        "fast-flow"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "git-branch",
+      "entry": "skills/git-branch/SKILL.md",
+      "files": 1,
+      "internalSkills": [
+        "git-cleanup",
+        "project-engineering-workflow"
+      ],
+      "externalSkills": [
+        {
+          "skill": "git-sync",
+          "strength": "required-when-applicable",
+          "condition": "topic branch synchronization or detached-HEAD alignment"
+        }
+      ],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "git-cleanup",
+      "entry": "skills/git-cleanup/SKILL.md",
+      "files": 9,
+      "internalSkills": [
+        "git-branch",
+        "git-worktree",
+        "global-port-manager",
+        "local-merge-flow"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/git-cleanup/scripts/closeout_context.ts",
+        "skills/git-cleanup/scripts/closeout_gate.ts",
+        "skills/git-cleanup/scripts/local_merge_closeout_context.ts",
+        "skills/git-cleanup/scripts/local_merge_closeout_gate.ts",
+        "skills/git-cleanup/scripts/test_closeout_context.ts",
+        "skills/git-cleanup/scripts/test_closeout_gate.ts",
+        "skills/git-cleanup/scripts/test_local_merge_closeout_context.ts",
+        "skills/git-cleanup/scripts/test_local_merge_closeout_gate.ts"
+      ]
+    },
+    {
+      "name": "git-worktree",
+      "entry": "skills/git-worktree/SKILL.md",
+      "files": 1,
+      "internalSkills": [
+        "git-branch",
+        "git-cleanup",
+        "global-port-manager"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "global-port-manager",
+      "entry": "skills/global-port-manager/SKILL.md",
+      "files": 3,
+      "internalSkills": [],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/global-port-manager/scripts/port_registry.ts",
+        "skills/global-port-manager/scripts/test_port_registry.ts"
+      ]
+    },
+    {
+      "name": "gui-escalation-gate",
+      "entry": "skills/gui-escalation-gate/SKILL.md",
+      "files": 1,
+      "internalSkills": [],
+      "externalSkills": [
+        {
+          "skill": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations and controlled visual evidence"
+        }
+      ],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "hardware-doc-ingest",
+      "entry": "skills/hardware-doc-ingest/SKILL.md",
+      "files": 4,
+      "internalSkills": [],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts",
+        "skills/hardware-doc-ingest/scripts/verify_doc_locks.ts"
+      ]
+    },
+    {
+      "name": "implement-only-flow",
+      "entry": "skills/implement-only-flow/SKILL.md",
+      "files": 1,
+      "internalSkills": [
+        "dev-plan"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "kaisoumail-deployment-inventory",
+      "entry": "skills/kaisoumail-deployment-inventory/SKILL.md",
+      "files": 4,
+      "internalSkills": [],
+      "externalSkills": [
+        {
+          "skill": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations and controlled visual evidence"
+        }
+      ],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "local-merge-flow",
+      "entry": "skills/local-merge-flow/SKILL.md",
+      "files": 1,
+      "internalSkills": [
+        "git-cleanup",
+        "project-engineering-workflow"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "multi-task-flow",
+      "entry": "skills/multi-task-flow/SKILL.md",
+      "files": 161,
+      "internalSkills": [
+        "dev-plan",
+        "fast-flow"
+      ],
+      "externalSkills": [],
+      "platform": "macOS launchd for installed viewer; POSIX ledger/HTTP on macOS/Linux",
+      "scripts": [
+        "skills/multi-task-flow/scripts/build-service.ts",
+        "skills/multi-task-flow/scripts/build.ts",
+        "skills/multi-task-flow/scripts/codex-agent-api.ts",
+        "skills/multi-task-flow/scripts/codex-desktop-follower.ts",
+        "skills/multi-task-flow/scripts/codex-observer.ts",
+        "skills/multi-task-flow/scripts/codex-rpc.ts",
+        "skills/multi-task-flow/scripts/codex-socket.ts",
+        "skills/multi-task-flow/scripts/codex-subscription.ts",
+        "skills/multi-task-flow/scripts/contract.ts",
+        "skills/multi-task-flow/scripts/conversation-history.ts",
+        "skills/multi-task-flow/scripts/conversation-output.ts",
+        "skills/multi-task-flow/scripts/demo-static.ts",
+        "skills/multi-task-flow/scripts/desktop-output-state.ts",
+        "skills/multi-task-flow/scripts/diagnose-candidate-sandbox.ts",
+        "skills/multi-task-flow/scripts/engine.ts",
+        "skills/multi-task-flow/scripts/errors.ts",
+        "skills/multi-task-flow/scripts/execution-profile.ts",
+        "skills/multi-task-flow/scripts/graph.ts",
+        "skills/multi-task-flow/scripts/ledger-maintenance.ts",
+        "skills/multi-task-flow/scripts/legacy-plan-alias.ts",
+        "skills/multi-task-flow/scripts/orchestrate.ts",
+        "skills/multi-task-flow/scripts/preferences.ts",
+        "skills/multi-task-flow/scripts/preview-source.ts",
+        "skills/multi-task-flow/scripts/profile-http.ts",
+        "skills/multi-task-flow/scripts/profile-migration.ts",
+        "skills/multi-task-flow/scripts/profile-mutation.ts",
+        "skills/multi-task-flow/scripts/revisions-json.ts",
+        "skills/multi-task-flow/scripts/revisions.ts",
+        "skills/multi-task-flow/scripts/schema.ts",
+        "skills/multi-task-flow/scripts/serve.ts",
+        "skills/multi-task-flow/scripts/server-contract.ts",
+        "skills/multi-task-flow/scripts/server-files.ts",
+        "skills/multi-task-flow/scripts/server.ts",
+        "skills/multi-task-flow/scripts/service-auth.ts",
+        "skills/multi-task-flow/scripts/service-compatibility.ts",
+        "skills/multi-task-flow/scripts/service-contract.ts",
+        "skills/multi-task-flow/scripts/service-http.ts",
+        "skills/multi-task-flow/scripts/service-import-recovery.ts",
+        "skills/multi-task-flow/scripts/service-import.ts",
+        "skills/multi-task-flow/scripts/service-launchd.ts",
+        "skills/multi-task-flow/scripts/service-lifecycle.ts",
+        "skills/multi-task-flow/scripts/service-log.ts",
+        "skills/multi-task-flow/scripts/service-maintenance.ts",
+        "skills/multi-task-flow/scripts/service-pages.ts",
+        "skills/multi-task-flow/scripts/service-paths.ts",
+        "skills/multi-task-flow/scripts/service-release.ts",
+        "skills/multi-task-flow/scripts/service-state.ts",
+        "skills/multi-task-flow/scripts/service-usage.ts",
+        "skills/multi-task-flow/scripts/service.ts",
+        "skills/multi-task-flow/scripts/store-io.ts",
+        "skills/multi-task-flow/scripts/store-ledger.ts",
+        "skills/multi-task-flow/scripts/store-migration.ts",
+        "skills/multi-task-flow/scripts/store.ts",
+        "skills/multi-task-flow/scripts/verify-service-browser.ts",
+        "skills/multi-task-flow/scripts/verify-service-native.ts",
+        "skills/multi-task-flow/scripts/view-atoms.ts",
+        "skills/multi-task-flow/scripts/view-warnings.ts",
+        "skills/multi-task-flow/scripts/view.ts"
+      ]
+    },
+    {
+      "name": "normal-flow",
+      "entry": "skills/normal-flow/SKILL.md",
+      "files": 1,
+      "internalSkills": [
+        "project-engineering-workflow"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "project-doc-promote",
+      "entry": "skills/project-doc-promote/SKILL.md",
+      "files": 1,
+      "internalSkills": [
+        "docs-migrate"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "project-engineering-workflow",
+      "entry": "skills/project-engineering-workflow/SKILL.md",
+      "files": 16,
+      "internalSkills": [
+        "docs-migrate",
+        "fast-flow",
+        "flow-continue",
+        "git-branch",
+        "git-cleanup",
+        "local-merge-flow",
+        "normal-flow",
+        "storybook-stories",
+        "ui-visual-evidence"
+      ],
+      "externalSkills": [
+        {
+          "skill": "agent-vm",
+          "strength": "required-when-applicable",
+          "condition": "isolated Linux / Docker / heavyweight integration verification"
+        },
+        {
+          "skill": "git-sync",
+          "strength": "required-when-applicable",
+          "condition": "topic branch synchronization or detached-HEAD alignment"
+        },
+        {
+          "skill": "grill-with-docs",
+          "strength": "required-when-applicable",
+          "condition": "unresolved design decisions; must return to design rather than execute"
+        }
+      ],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/project-engineering-workflow/scripts/base_alignment_helper.ts",
+        "skills/project-engineering-workflow/scripts/merge_preflight.ts",
+        "skills/project-engineering-workflow/scripts/test_base_alignment_helper.ts",
+        "skills/project-engineering-workflow/scripts/test_merge_preflight.ts"
+      ]
+    },
+    {
+      "name": "rust-crate-release",
+      "entry": "skills/rust-crate-release/SKILL.md",
+      "files": 5,
+      "internalSkills": [],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "solution-sync",
+      "entry": "skills/solution-sync/SKILL.md",
+      "files": 2,
+      "internalSkills": [
+        "docs-migrate",
+        "project-doc-promote"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "spec-sync",
+      "entry": "skills/spec-sync/SKILL.md",
+      "files": 5,
+      "internalSkills": [],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/spec-sync/scripts/spec_drift_check.sh",
+        "skills/spec-sync/scripts/spec_drift_check.ts",
+        "skills/spec-sync/scripts/test_spec_drift_check.ts"
+      ]
+    },
+    {
+      "name": "srv-101-ops",
+      "entry": "skills/srv-101-ops/SKILL.md",
+      "files": 2,
+      "internalSkills": [],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/srv-101-ops/scripts/resolve-target"
+      ]
+    },
+    {
+      "name": "storybook-screenshots",
+      "entry": "skills/storybook-screenshots/SKILL.md",
+      "files": 2,
+      "internalSkills": [
+        "storybook-stories",
+        "ui-visual-evidence"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "storybook-stories",
+      "entry": "skills/storybook-stories/SKILL.md",
+      "files": 3,
+      "internalSkills": [
+        "global-port-manager",
+        "storybook-screenshots",
+        "ui-visual-evidence"
+      ],
+      "externalSkills": [
+        {
+          "skill": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations and controlled visual evidence"
+        }
+      ],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "topic-spec",
+      "entry": "skills/topic-spec/SKILL.md",
+      "files": 14,
+      "internalSkills": [
+        "dev-plan",
+        "docs-migrate",
+        "project-doc-promote"
+      ],
+      "externalSkills": [],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": []
+    },
+    {
+      "name": "ui-visual-evidence",
+      "entry": "skills/ui-visual-evidence/SKILL.md",
+      "files": 9,
+      "internalSkills": [
+        "storybook-screenshots",
+        "storybook-stories"
+      ],
+      "externalSkills": [
+        {
+          "skill": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations and controlled visual evidence"
+        },
+        {
+          "skill": "firmware-display-preview",
+          "strength": "required-when-applicable",
+          "condition": "firmware display visual scenarios only"
+        }
+      ],
+      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
+      "scripts": [
+        "skills/ui-visual-evidence/scripts/compare_visual_evidence.ts",
+        "skills/ui-visual-evidence/scripts/pr_body_image_gate.ts",
+        "skills/ui-visual-evidence/scripts/test_compare_visual_evidence.ts",
+        "skills/ui-visual-evidence/scripts/test_pr_body_image_gate.ts",
+        "skills/ui-visual-evidence/scripts/test_trim_whitespace.ts",
+        "skills/ui-visual-evidence/scripts/trim_whitespace.ts"
+      ]
+    }
+  ]
+}

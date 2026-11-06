@@ -165,6 +165,33 @@ jobs:
       - name: Verify the independent TypeScript client
         run: scripts/checks client
 
+  skills-native-macos:
+    name: Skills Native macOS
+    needs: quality-gates
+    runs-on: macos-14
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.4
+      - name: Build and verify POSIX compatibility
+        run: |
+          bun install --frozen-lockfile
+          node scripts/build-skills-native.mjs
+          bun scripts/build-client-skills.mjs
+          node scripts/test-skills-native.mjs
+          bun test ./bin/native-tests/core ./bin/native-tests/visual
+
   candidate-build:
     name: Candidate Build
     needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, typescript-client]

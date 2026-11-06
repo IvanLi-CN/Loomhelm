@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"如果你要，我下一步可以继续做其中一件：\n1. 继续轮询到 `mergeable_state` 刷新正常\n2. 直接继续处理合并流程"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_status","output":"[{\"type\":\"text\",\"text\":\"{\\\"state\\\":\\\"success\\\",\\\"statuses\\\":[{\\\"context\\\":\\\"Review Policy Gate\\\",\\\"description\\\":\\\"Author @IvanLi-CN has admin permission; approval not required.\\\"}]}\"}]"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"checks 还是绿的，所以最可能剩下的是 review approval 门禁。"}]}}

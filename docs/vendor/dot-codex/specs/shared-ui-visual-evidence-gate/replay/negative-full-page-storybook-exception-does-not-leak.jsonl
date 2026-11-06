@@ -1,0 +1,6 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"当前缺少合格 ui_demo，这个完整页面可以走 Storybook fallback。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"当前缺少合格 ui_demo，需要完整页面级 Storybook fallback。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"视觉证据目标源=storybook_canvas\n视觉证据=存在"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"另一个完整页面需要最终视觉证据。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"当前缺少合格 ui_demo，需要完整页面级 Storybook fallback。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"视觉证据目标源=storybook_canvas\n视觉证据=存在"}]}}

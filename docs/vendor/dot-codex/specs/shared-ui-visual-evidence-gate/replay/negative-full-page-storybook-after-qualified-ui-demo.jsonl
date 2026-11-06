@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"当前缺少合格 ui_demo，这个完整页面可以走 Storybook fallback。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"先确认当前页面的验收范围。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"视觉证据目标源=ui_demo"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"当前有合格 ui_demo，但仍使用完整页面级 Storybook fallback。"}]}}

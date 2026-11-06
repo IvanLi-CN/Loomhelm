@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"unrelated maintenance"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"mcp__codex_app__automation_update","arguments":"{\"mode\":\"create\",\"kind\":\"heartbeat\",\"name\":\"unrelated maintenance\",\"tracking_scope\":\"unrelated\",\"rrule\":\"FREQ=DAILY\"}"}}

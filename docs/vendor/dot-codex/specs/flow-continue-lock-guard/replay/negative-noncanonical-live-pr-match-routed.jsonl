@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: normal"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovery facts: permit_status=issued; permit_id=permit-fixture-103; base_relation=fast-forward; previous_base_sha=cccccccccccccccccccccccccccccccccccccccc; current_base_sha=dddddddddddddddddddddddddddddddddddddddd; live_pr=PR-fixture-103; live_pr_match=yes."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"load_skill","arguments":"{\"path\":\"skills/pr-create/SKILL.md\"}"}}

@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"merge"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr merge 1 --merge --delete-branch=false\",\"workdir\":\"/repo\"}","call_id":"call_merge"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_merge","output":"✓ Merged pull request #1"}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-negated-fork-remote-branch-exists","last_agent_message":"结果=已合并；不是 fork PR head；远端分支=存在；本地收尾=未执行。"}}

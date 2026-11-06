@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `fast-track`; `release_disposition`: `repository-native: no release-label route`; release_disposition proves publication and release_expected=true。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Step 6 已完成，仅依据 release_disposition。"}}

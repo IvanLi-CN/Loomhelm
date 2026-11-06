@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR状态=存在；current head 已绑定；Step 5C Ready。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Step 5C Ready。"}}

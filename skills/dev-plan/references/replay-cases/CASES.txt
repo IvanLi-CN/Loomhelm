@@ -1,0 +1,248 @@
+# expect  path  required_code
+fail historical-flow-not-locked-before-plan.jsonl FLOW_NOT_LOCKED_BEFORE_PLAN
+fail historical-missing-flow-type.jsonl MISSING_FLOW_TYPE
+fail missing-task-orchestration.jsonl MISSING_TASK_ORCHESTRATION_SECTION
+fail invalid-task-orchestration-content.jsonl TASK_ORCHESTRATION_NON_LIST_CONTENT
+fail flat-task-orchestration-list.jsonl TASK_ORCHESTRATION_TASK_OUTSIDE_WAVE
+fail checkbox-task-orchestration.jsonl TASK_ORCHESTRATION_CHECKBOX_FORBIDDEN
+fail missing-task-orchestration-task.jsonl TASK_ORCHESTRATION_EMPTY_WAVE
+fail wave-sequence-jump.jsonl TASK_ORCHESTRATION_WAVE_SEQUENCE_INVALID
+fail wave-sequence-repeat.jsonl TASK_ORCHESTRATION_WAVE_SEQUENCE_INVALID
+fail duplicate-task-in-wave.jsonl TASK_ORCHESTRATION_DUPLICATE_TASK_IN_WAVE
+fail missing-task-skill-binding.jsonl TASK_ORCHESTRATION_MISSING_SKILL_BINDING
+fail summary-blank-bullet.jsonl SUMMARY_EMPTY
+fail missing-goals.jsonl MISSING_GOALS_SECTION
+fail missing-non-goals.jsonl MISSING_NON_GOALS_SECTION
+fail goals-empty-orchestration-only.jsonl GOALS_EMPTY
+fail goal-blank-bullet.jsonl GOAL_TITLE_EMPTY
+fail goal-without-detail.jsonl GOAL_DETAIL_MISSING
+fail non-goals-blank-bullet.jsonl NON_GOAL_EMPTY
+fail invalid-section-order.jsonl SECTION_ORDER_INVALID
+fail persisted-plan-artifact-in-orchestration.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail mixed-plan-cleanup-create-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail decision-log-artifact-in-orchestration.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail handoff-log-artifact-in-orchestration.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail decision-log-future-work-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail handoff-log-future-work-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail decision-log-timeline-planning-handoff-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail handoff-log-history-agent-session-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail plan-md-handoff-job-future-sessions-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail decision-log-job-future-handoffs-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail generate-handoff-log-future-sessions-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail keep-handoff-log-future-sessions-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail decision-log-workflow-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail handoff-log-pipeline-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail move-plan-md-handoff-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail prepare-handoff-log-next-session-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail create-plan-md-implementation-steps-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail update-plan-md-implementation-steps-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail read-plan-md-handoff-context-artifact.jsonl TASK_ORCHESTRATION_PERSISTED_PLAN_ARTIFACT_FORBIDDEN
+fail placeholder-acceptance.jsonl ACCEPTANCE_PLACEHOLDER
+fail blank-acceptance-bullet.jsonl ACCEPTANCE_EMPTY
+fail acceptance-notes-only.jsonl ACCEPTANCE_PLACEHOLDER
+fail acceptance-follow-up-items-only.jsonl ACCEPTANCE_PLACEHOLDER
+fail acceptance-tba-only.jsonl ACCEPTANCE_PLACEHOLDER
+fail goal-placeholder-detail.jsonl GOAL_DETAIL_MISSING
+fail goal-tba-detail.jsonl GOAL_DETAIL_MISSING
+fail non-goals-placeholder.jsonl NON_GOAL_PLACEHOLDER
+fail non-goals-none-placeholder.jsonl NON_GOAL_PLACEHOLDER
+fail redundant-execution-steps.jsonl REDUNDANT_EXECUTION_STEPS_SECTION
+fail missing-flow-question.jsonl FLOW_QUESTION_MISSING
+fail unrelated-flow-wording.jsonl FLOW_QUESTION_MISSING
+fail unrelated-flow-wording-default-fast-track.jsonl DEFAULT_FAST_TRACK_NOT_ALLOWED_HERE
+fail default-fast-track-missing-merge-ready-stop.jsonl DEFAULT_FAST_TRACK_MISSING_MERGE_READY_STOP
+fail flow-decision-mismatch-lock.jsonl FLOW_DECISION_MISMATCH_LOCK
+fail conflicting-flow-signals-default-fast-track.jsonl DEFAULT_FAST_TRACK_NOT_ALLOWED_HERE
+fail skill-binding-no-dollar-prefix.jsonl TASK_ORCHESTRATION_SKILL_REF_FORMAT_INVALID
+fail skill-binding-mixed-dollar-and-plain.jsonl TASK_ORCHESTRATION_SKILL_REF_FORMAT_INVALID
+fail invalid-flow-type-substring.jsonl UNKNOWN_FLOW_TYPE
+fail invalid-user-flow-lock-substring.jsonl FLOW_NOT_LOCKED_BEFORE_PLAN
+fail implement-only-forbidden-task-orchestration.jsonl IMPLEMENT_ONLY_FORBIDDEN_TASK_IN_ORCHESTRATION
+fail implement-only-forbidden-sync-task-orchestration.jsonl IMPLEMENT_ONLY_FORBIDDEN_TASK_IN_ORCHESTRATION
+fail implement-only-forbidden-copy-spec-task.jsonl IMPLEMENT_ONLY_FORBIDDEN_TASK_IN_ORCHESTRATION
+fail implement-only-forbidden-create-for-tests-task.jsonl IMPLEMENT_ONLY_FORBIDDEN_TASK_IN_ORCHESTRATION
+fail implement-only-forbidden-update-tests-slug-task.jsonl IMPLEMENT_ONLY_FORBIDDEN_TASK_IN_ORCHESTRATION
+fail implement-only-forbidden-sync-against-existing-task.jsonl IMPLEMENT_ONLY_FORBIDDEN_TASK_IN_ORCHESTRATION
+fail implement-only-forbidden-update-existing-spec-task.jsonl IMPLEMENT_ONLY_FORBIDDEN_TASK_IN_ORCHESTRATION
+fail implement-only-forbidden-create-migrated-copy-task.jsonl IMPLEMENT_ONLY_FORBIDDEN_TASK_IN_ORCHESTRATION
+fail implement-only-forbidden-skill-topic-spec.jsonl IMPLEMENT_ONLY_FORBIDDEN_SKILL
+fail implement-only-forbidden-skill-normal-flow.jsonl IMPLEMENT_ONLY_FORBIDDEN_SKILL
+fail missing-development-baseline.jsonl MISSING_DEVELOPMENT_BASELINE
+fail flow-decision-baseline-only-outside-section.jsonl MISSING_DEVELOPMENT_BASELINE
+fail abstract-development-baseline.jsonl ABSTRACT_DEVELOPMENT_BASELINE
+fail abstract-development-baseline-combined-phrase.jsonl ABSTRACT_DEVELOPMENT_BASELINE
+fail filesystem-path-development-baseline.jsonl INVALID_DEVELOPMENT_BASELINE
+fail context-dependent-alias-development-baseline.jsonl INVALID_DEVELOPMENT_BASELINE
+fail context-dependent-remote-head-development-baseline.jsonl INVALID_DEVELOPMENT_BASELINE
+fail placeholder-development-baseline.jsonl INVALID_DEVELOPMENT_BASELINE
+fail explicit-owner-baseline-mismatch.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-after-flow-answer.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-after-standalone-flow-restatement.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-plain-chinese.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-yong-plain-chinese.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-directional-baseline.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-base-ref-equals.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-base-equals.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-english-is.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-legal-trailing-punct.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-short-ref.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-legal-trailing-semicolon-plain.jsonl OWNER_BASELINE_MISMATCH
+fail explicit-owner-baseline-mismatch-plan-page-upload-api-scope-clarification.jsonl OWNER_BASELINE_MISMATCH
+pass positive-fast-track.jsonl -
+pass ../plan-cases/positive-fast-track.md - raw-plan
+pass ../plan-cases/positive-fast-track-aggregate-pr-exclusion.md - raw-plan
+pass ../plan-cases/positive-empirical-acceptance.md - raw-plan
+pass ../plan-cases/positive-phase-aware-direct.md - raw-plan
+fail ../plan-cases/positive-multi-task-flow.md DEV_PLAN_MULTI_TASK_FLOW_FORBIDDEN raw-plan
+fail ../plan-cases/negative-multi-task-flow-single-task.md DEV_PLAN_MULTI_TASK_FLOW_FORBIDDEN raw-plan
+fail ../plan-cases/negative-empirical-acceptance-missing.md EMPIRICAL_ACCEPTANCE_DISPOSITION_REQUIRED raw-plan
+fail ../plan-cases/negative-empirical-acceptance-scenarios.md EMPIRICAL_ACCEPTANCE_ASSERTIONS_INVALID raw-plan
+fail ../plan-cases/negative-empirical-acceptance-placeholders.md EMPIRICAL_ACCEPTANCE_ASSERTIONS_INVALID raw-plan
+fail ../plan-cases/negative-direct-review-tier-missing.md FORMAL_REVIEW_TIER_REQUIRED raw-plan
+fail ../plan-cases/negative-fast-track-pr-forbidden.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-no-pr-local.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-avoid-pr-delivery.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-avoid-pr-creation.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-avoid-open-pr.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-no-direct-pr.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-direct-pr-omitted.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-local-only-delivery.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-no-pr-delivery.md FAST_TRACK_PR_FORBIDDEN raw-plan
+fail ../plan-cases/negative-fast-track-pr-target-only.md FAST_TRACK_PR_ACCEPTANCE_MISSING raw-plan
+fail ../plan-cases/negative-fast-track-pr-acceptance-missing.md FAST_TRACK_PR_ACCEPTANCE_MISSING raw-plan
+fail ../plan-cases/negative-fast-track-pr-acceptance-split.md FAST_TRACK_PR_ACCEPTANCE_MISSING raw-plan
+fail ../plan-cases/negative-fast-track-unlocked.md LOCK_STATUS_NOT_LOCKED raw-plan
+fail ../plan-cases/negative-phase-aware-missing-phase.md ACCEPTANCE_MAPPING_INVALID raw-plan
+pass positive-agent-profiles.jsonl -
+fail ../plan-cases/positive-initiative-bootstrap-v5.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/positive-initiative-delivery-v5.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/negative-initiative-adr-contracts-missing.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/negative-initiative-adr-contracts-trailing-comma.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/negative-initiative-adr-contracts-duplicate.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/negative-initiative-adr-contracts-unsorted.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/negative-initiative-adr-contracts-duplicate-path.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/negative-initiative-adr-contracts-malformed-sha.md RETIRED_FLOW_TYPE raw-plan
+pass ../plan-cases/positive-plan-constraints.md - raw-plan
+pass ../plan-cases/positive-plan-task-metadata.md - raw-plan
+fail ../plan-cases/positive-wave-thread-v2.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/negative-wave-thread-v2-duplicate-contract.md RETIRED_FLOW_TYPE raw-plan
+fail positive-wave-thread-v2-legacy.jsonl RETIRED_FLOW_TYPE
+fail ../plan-cases/negative-plan-provenance-section.md PLAN_PROVENANCE_SECTION_FORBIDDEN raw-plan
+fail ../plan-cases/negative-plan-provenance-variant.md PLAN_PROVENANCE_SECTION_FORBIDDEN raw-plan
+fail ../plan-cases/negative-plan-constraint-acceptance.md PLAN_CONSTRAINT_ACCEPTANCE_UNKNOWN raw-plan
+fail ../plan-cases/negative-plan-constraint-task-item.md TASK_ORCHESTRATION_CONSTRAINT_REFERENCE_FORBIDDEN raw-plan
+pass positive-subagent-readonly-negation.jsonl -
+pass positive-subagent-indirect-readonly-negation.jsonl -
+pass positive-subagent-git-readonly-commands.jsonl -
+pass positive-subagent-git-config-worktree-readonly.jsonl -
+fail negative-agent-profile-missing.jsonl TASK_ORCHESTRATION_AGENT_PROFILE_MISSING
+fail negative-agent-profile-invalid.jsonl TASK_ORCHESTRATION_AGENT_PROFILE_INVALID
+fail negative-main-agent-profile.jsonl MAIN_AGENT_PROFILE_FORBIDDEN
+fail negative-legacy-profile-text.jsonl TASK_ORCHESTRATION_LEGACY_PROFILE_FORBIDDEN
+fail negative-specialist-review-profile.jsonl FORMAL_REVIEW_PREDECLARATION_FORBIDDEN
+fail negative-specialist-review-effort.jsonl FORMAL_REVIEW_PREDECLARATION_FORBIDDEN
+fail negative-formal-main-agent-predeclaration.jsonl FORMAL_REVIEW_PREDECLARATION_FORBIDDEN
+fail negative-formal-evidence-predeclaration.jsonl FORMAL_REVIEW_PREDECLARATION_FORBIDDEN
+fail ../plan-cases/negative-runtime-strategy-ungated.md FORMAL_REVIEW_RUNTIME_STRATEGY_INVALID raw-plan
+fail ../plan-cases/negative-runtime-profile-pair.md FORMAL_REVIEW_PROFILE_RECOMMENDATION_INVALID raw-plan
+fail ../plan-cases/negative-runtime-profile-reviewer-identity.md FORMAL_REVIEW_PROFILE_RECOMMENDATION_INVALID raw-plan
+pass positive-runtime-formal-review.jsonl -
+fail negative-task-executor-noninitiative.jsonl TASK_EXECUTOR_FORBIDDEN_FLOW
+fail negative-subagent-shared-write.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-shared-write-english.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-local-write.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-contradictory-write.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-generic-english-write.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-filesystem-write-actions.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-implementing-write.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-generic-implementation-write.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-implementation-multiword.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-git-write-commands.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-git-and-shell-write-commands.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-git-global-options.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-subagent-git-config-worktree.jsonl SUB_AGENT_SHARED_WRITE_FORBIDDEN
+fail negative-task-agent-alias.jsonl TASK_ORCHESTRATION_INVALID_ITEM
+pass positive-large-coupled-default-fast-track.jsonl -
+fail negative-default-initiative-eligibility-unproven.jsonl DEFAULT_INITIATIVE_ELIGIBILITY_UNPROVEN
+fail positive-default-initiative-from-planned-scope.jsonl DEFAULT_INITIATIVE_INVALID_FLOW_DECISION
+fail negative-initiative-prerequisite-silent-downgrade.jsonl INITIATIVE_PREREQUISITES_UNAVAILABLE
+pass positive-subagent-review-implementation.jsonl -
+pass positive-subagent-git-stash-readonly.jsonl -
+fail negative-subagent-git-readonly-mixed-commands.jsonl -
+fail negative-new-delivery-topology.jsonl LEGACY_ROUTING_FIELD_FORBIDDEN
+fail negative-new-mixed-top-level-flow.jsonl UNKNOWN_FLOW_TYPE
+fail negative-initiative-with-legacy-fast-alias.jsonl UNKNOWN_FLOW_TYPE
+pass positive-no-delivery-topology.jsonl -
+pass positive-direct-dev-plan-issue-parser.jsonl -
+pass positive-normal.jsonl -
+pass positive-normal-decision-log-entries.jsonl -
+pass positive-normal-decision-log-ui.jsonl -
+pass positive-normal-handoff-log-ui.jsonl -
+pass positive-normal-plan-md-cleanup.jsonl -
+pass positive-normal-next-session-decision-log-api.jsonl -
+pass positive-normal-future-handoff-log-timeline.jsonl -
+pass positive-normal-plan-file-upload-api.jsonl -
+pass positive-normal-plan-md-user-upload.jsonl -
+pass positive-normal-plan-md-importer.jsonl -
+pass positive-normal-plan-md-import-review-page.jsonl -
+pass positive-normal-plan-md-planning-ui-import.jsonl -
+pass positive-normal-agent-decision-log-api.jsonl -
+pass positive-normal-agent-handoff-log-exporter.jsonl -
+pass positive-normal-next-session-decision-log-exporter.jsonl -
+pass positive-normal-plan-template-decision-log-history.jsonl -
+pass positive-normal-plan-template-handoff-log-history.jsonl -
+pass positive-normal-progress-log-ui.jsonl -
+pass positive-default-fast-track-no-flow.jsonl -
+pass positive-flow-lock-direct-local-merge-skill.jsonl -
+pass positive-flow-lock-standalone-normal-punctuation.jsonl -
+pass positive-normal-pending-state-acceptance.jsonl -
+pass positive-flow-lock-rui.jsonl -
+pass positive-flow-lock-latest-explicit-user.jsonl -
+pass positive-flow-lock-fast-flow-keyed.jsonl -
+pass non-baseline-based-on-docs-text.jsonl -
+pass positive-explicit-english-branch-baseline-is.jsonl -
+pass positive-explicit-branch-baseline-after-flow-answer.jsonl -
+pass positive-explicit-branch-baseline-after-standalone-flow-restatement.jsonl -
+pass positive-explicit-branch-baseline-directional-baseline.jsonl -
+pass positive-explicit-branch-baseline-base-ref-equals.jsonl -
+pass positive-explicit-branch-baseline.jsonl -
+pass positive-explicit-branch-baseline-legal-trailing-punct.jsonl -
+pass positive-explicit-branch-baseline-legal-trailing-punct-comma-clause.jsonl -
+pass positive-explicit-branch-baseline-legal-trailing-semicolon-plain.jsonl -
+pass positive-directional-product-wording-no-baseline.jsonl -
+pass positive-explicit-branch-baseline-plain-chinese.jsonl -
+pass positive-explicit-branch-baseline-yong-plain-chinese.jsonl -
+pass positive-explicit-branch-baseline-trailing-comma-clause.jsonl -
+pass positive-explicit-branch-baseline-special-chars.jsonl -
+pass positive-explicit-branch-baseline-feature-head.jsonl -
+pass positive-explicit-branch-baseline-topic-prefix.jsonl -
+pass positive-explicit-branch-baseline-short-ref.jsonl -
+pass positive-explicit-branch-baseline-replace-clause.jsonl -
+pass positive-explicit-commit-baseline.jsonl -
+pass positive-default-mainline-concrete-baseline.jsonl -
+pass positive-default-mainline-token-ref.jsonl -
+pass positive-explicit-branch-baseline-placeholder-token-ref.jsonl -
+pass positive-explicit-branch-baseline-doc-like-ref.jsonl -
+pass positive-multi-plan-baseline-reset-generic-reask.jsonl -
+pass positive-multi-plan-baseline-reset-merge-ready.jsonl -
+pass positive-multi-plan-baseline-reset-plan-task-wording.jsonl -
+pass positive-multi-plan-baseline-reset-merge-queue-api.jsonl -
+pass positive-multi-plan-baseline-reset.jsonl -
+pass positive-multi-plan-baseline-reset-no-dev-plan-token.jsonl -
+pass positive-multi-plan-baseline-reset-replan-task.jsonl -
+pass positive-multi-plan-baseline-reset-replan-merge-ready-clause.jsonl -
+pass positive-multi-plan-baseline-reset-explicit-dev-plan-with-continue-wording.jsonl -
+pass positive-equivalent-remote-ref-baseline.jsonl -
+pass positive-explicit-branch-baseline-after-prose-flow-answer.jsonl -
+pass positive-scope-clarification-plan-md-no-reset.jsonl -
+pass positive-scope-clarification-import-page-no-reset.jsonl -
+pass positive-scope-clarification-new-plan-file-upload-api-no-reset.jsonl -
+pass positive-scope-clarification-plan-page-upload-api-no-reset.jsonl -
+pass positive-skill-binding-fullwidth-comma.jsonl -
+pass positive-implement-only-pure.jsonl -
+pass positive-implement-only-add-tests-reference.jsonl -
+pass positive-implement-only-parser-reference.jsonl -
+pass positive-implement-only-update-parser-reference.jsonl -
+fail ambiguous-continue-fallback.jsonl FLOW_QUESTION_MISSING
+fail ../plan-cases/positive-parallel-pr.md RETIRED_FLOW_TYPE raw-plan
+fail ../plan-cases/negative-parallel-pr-overlap.md RETIRED_FLOW_TYPE raw-plan

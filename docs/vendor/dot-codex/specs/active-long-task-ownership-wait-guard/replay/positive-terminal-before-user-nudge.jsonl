@@ -1,0 +1,7 @@
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\": \"python3 worker.py --job 301\", \"workdir\": \"/tmp/repo\", \"tty\": true}", "call_id": "call_launch_job"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_launch_job", "output": "Command: /bin/zsh -lc 'python3 worker.py --job 301'\nChunk ID: c1\nWall time: 1.0000 seconds\nProcess running with session ID 301\nOriginal token count: 0\nOutput:\njob #301 booting\n"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "job #301 还在跑，我继续盯着，等它收口。"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "write_stdin", "arguments": "{\"session_id\": 301, \"chars\": \"\", \"yield_time_ms\": 5000}", "call_id": "call_poll_done"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_poll_done", "output": "Chunk ID: c2\nWall time: 5.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\njob finished\n"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "这轮已经拿到终态了：job #301 完成，我现在给你最终结果。"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "继续"}]}}

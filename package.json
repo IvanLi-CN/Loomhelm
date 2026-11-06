@@ -13,9 +13,25 @@
     "build:storybook": "bun run --filter @loomhelm/web build-storybook",
     "storybook": "bun run --filter @loomhelm/web storybook",
     "typecheck": "bun run --filter @loomhelm/web typecheck",
-    "check:client": "scripts/checks client"
+    "check:client": "scripts/checks client",
+    "skills:build": "node scripts/build-skills-native.mjs && bun scripts/build-client-skills.mjs && bun run --cwd skills/multi-task-flow build",
+    "skills:package": "npm run build --prefix clients/typescript",
+    "skills:test": "bun test ./bin/tests && bun run --cwd skills/multi-task-flow test:all",
+    "test:core": "bun test ./bin/tests/core",
+    "test:hosting": "bun test ./bin/tests/hosting",
+    "test:flow": "bun test ./bin/tests/flow",
+    "test:plan": "bun test ./bin/tests/plan",
+    "test:docs": "bun test ./bin/tests/docs",
+    "test:workspace": "bun test ./bin/tests/workspace",
+    "test:visual": "bun test ./bin/tests/visual",
+    "test:checks": "bun test ./bin/tests/checks"
   },
   "devDependencies": {
-    "react-doctor": "0.9.18"
+    "react-doctor": "0.9.18",
+    "@types/bun": "1.4.4",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "sharp": "0.35.5"
   }
 }

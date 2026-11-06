@@ -1,0 +1,7 @@
+fail negative-owner-locked-web-demo-replaced-by-storybook.jsonl LOCKED_NON_STORYBOOK_SOURCE_REPLACED_BY_STORYBOOK
+fail negative-owner-lock-survives-blocker-before-storybook.jsonl LOCKED_NON_STORYBOOK_SOURCE_REPLACED_BY_STORYBOOK
+fail negative-full-page-storybook-before-ui-demo-check.jsonl FULL_PAGE_STORYBOOK_BEFORE_UI_DEMO_CHECK
+fail negative-mixed-component-then-full-page-storybook.jsonl FULL_PAGE_STORYBOOK_BEFORE_UI_DEMO_CHECK
+pass positive-component-storybook-allowed.jsonl -
+pass positive-full-page-storybook-fallback-after-no-ui-demo.jsonl -
+pass positive-user-allows-storybook-after-no-ui-demo.jsonl -

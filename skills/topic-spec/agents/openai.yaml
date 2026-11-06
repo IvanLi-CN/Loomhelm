@@ -1,0 +1,4 @@
+interface:
+  display_name: "Topic Spec"
+  short_description: "Create durable topic-level SPEC documents"
+  default_prompt: "Use $topic-spec to create or update a durable topic-level SPEC with its implementation and history companions."

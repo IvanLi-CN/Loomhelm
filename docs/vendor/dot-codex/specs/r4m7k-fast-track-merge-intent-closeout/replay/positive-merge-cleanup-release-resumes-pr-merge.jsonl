@@ -1,0 +1,6 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: fast-track"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"当前 stop condition 是 merge+cleanup。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR 已合并；cleanup_proof=allowed_complete；后续追踪=none；追踪终态=success；发布状态=未终态；release_expected=true。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续 [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"cleanup 与 Step 6A 已完成，回 $pr-merge 继续 Step 6B 发布终态跟踪。"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"sed -n '1,260p' skills/pr-merge/SKILL.md\",\"workdir\":\"/repo\"}","call_id":"call_release_step6b"}}

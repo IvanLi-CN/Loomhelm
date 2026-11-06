@@ -1,0 +1,5 @@
+# status path expected_code
+fail ../../../../sessions/2026/03/16/rollout-2026-03-16T02-47-56-019cf2d3-8b9f-78a0-8c0e-81b3b59d082f.jsonl EXEC_SESSION_WAIT_MISUSE
+fail ../../../../sessions/2026/03/16/rollout-2026-03-16T02-47-56-019cf2d3-8b9f-78a0-8c0e-81b3b59d082f.jsonl NON_DIRECT_REVIEW_LAUNCH
+fail negative-live-proof-duplicate-launch.jsonl DUPLICATE_LIVE_REVIEW_LAUNCH
+pass positive-single-proof-polling.jsonl -

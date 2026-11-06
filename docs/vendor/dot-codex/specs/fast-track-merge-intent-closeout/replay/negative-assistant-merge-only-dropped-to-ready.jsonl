@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fast-track stop condition: merge-only intent."}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"现在已经到 Step 5C Ready，latest PR 可立即合并。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-assistant-merge-only-dropped","last_agent_message":"PR 已到 merge-ready"}}

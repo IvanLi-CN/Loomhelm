@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"MODE=draft-bootstrap；反馈 Draft 已创建。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"远端反馈视觉比较=需确认，已展示当前截图与差异热图。这些截图准确反映了当前改动吗？"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"可以，没问题。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"渲染面已变化，需要重新比较。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"现在执行 bind-pr 并启动正式 review。"}]}}

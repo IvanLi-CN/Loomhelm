@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`flow_type`: `fast-track`。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`lock_status`: `locked`。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR状态=存在；current head was bound to live PR, but the record is stale。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-fast-track-distant-stale-current-head","last_agent_message":"Step 4 Ready，本地 merge-proof 完成。"}}

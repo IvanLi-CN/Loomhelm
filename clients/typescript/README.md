@@ -1,8 +1,11 @@
 # Loomhelm TypeScript 客户端
 
-与现有 Go 客户端并存的独立 TypeScript 包，不替换 Go 客户端。正式基线为 Node.js 22 或更新版本，Bun 1.4 可用于开发与兼容性验证。没有生产依赖，不要求服务端、Web App、Codex 凭据或网络连接。
+与现有 Go 客户端并存的独立 TypeScript 包，不替换 Go 客户端。生产入口支持 Node.js 22/24 与 Bun。独立运行开发辅助能力无需服务端或 Web App；Codex 会话、浏览器与专项操作仍要求对应宿主能力和授权。生产依赖包括 sharp 与 zod，文件安全使用随产物构建的 Node-API POSIX 适配。
 
 ```sh
+bun install --frozen-lockfile
+bun install --cwd skills/multi-task-flow --frozen-lockfile
+bun run skills:build
 cd clients/typescript
 npm ci
 npm test
@@ -58,22 +61,30 @@ node dist/cli.js --config config.example.json codex retry DISPATCH_ID accept
 
 未显式提供决定时，CLI 会向 Codex 明确拒绝审批请求。可在派发 JSON 中传入 `approvalDecision`：`accept`、`decline` 或 `cancel`。重试失败或结果未知的派发前，必须先单独调用 `approve`；重试命令中的审批决定只用于处理该次重试期间出现的审批请求。RPC 明确拒绝会记为失败；响应丢失和完成等待超时会记为未知。重复使用 request ID 会读取既有日志，不会创建第二个线程。若进程在预留任务后、保存 thread ID 前退出，日志会留下未决的 `created` 记录，并对外报告为未知；由于无法证明 Codex 是否已创建线程，CLI 会禁止在缺少 thread ID 时批准或重试。
 
-## 持久任务流
+## Skills 与正式任务流
 
-`flow` 命令将任务图和执行日志保存在 `stateDir/task-flow/`。每次 CLI 调用都是独立进程；`recover` 会明确地把中断时仍在运行的任务恢复到待处理队列。`schedule` 和 `status` 会根据已持久化的失败任务重新推导被依赖阻塞的任务；它们只更新本进程的状态视图，不会启动外部工作。无关的可执行任务仍会列出。
+完整源包位于根 `skills/`，共享支持位于根 `bin/`。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度。上游合同归档在 `docs/vendor/dot-codex/`，不替代本项目规范。构建把这些资源、生产 JavaScript、原生适配与网页打入 `dist/toolkit/`，执行时不搜索全局 dot-codex 代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根，原 `.ts` 命令可通过 `skills run` 执行其编译入口。
 
 ```sh
-node dist/cli.js --config config.example.json flow init '[{"id":"build","kind":"contribution","goal":"Build the client"},{"id":"verify","kind":"verification","goal":"Verify the build","dependencies":["build"]}]'
-node dist/cli.js --config config.example.json flow status
-node dist/cli.js --config config.example.json flow schedule
-node dist/cli.js --config config.example.json flow start build
-node dist/cli.js --config config.example.json flow finish build merged
-node dist/cli.js --config config.example.json flow recover
+node dist/cli.js skills list
+node dist/cli.js skills check project-engineering-workflow
+node dist/cli.js skills run bin/plan_contract_check.ts --plan - < plan.md
+node dist/cli.js flow view --input - < view-request.json
 ```
 
-使用 `node dist/cli.js workflow skills PROJECT_SKILLS_DIR [USER_SKILLS_DIR]` 检查 Skills，或用 `node dist/cli.js workflow verify MANIFEST_JSON_PATH` 执行独立的本地工程工作流。清单格式、验证命令和阶段规则见 [workflow/README.md](src/workflow/README.md)。也可直接调用 `node dist/workflow/cli.js`。
+`flow COMMAND --input -` 原样承接 Multi-task Flow 请求、JSON 输出和退出码，账本仍为 schema_version=2 / contract_version=2。生产 socket 优先级为 `--socket` / 配置 `codexAppServerSocket`、`LOOMHELM_CODEX_APP_SERVER_SOCKET`、`CODEX_APP_SERVER_SOCKET`、原 Codex 默认路径。普通 fresh dispatch 与活跃运行的 conversation-create 具有不同授权和回执合同，不能互相冒充。
 
-命令成功时会向 stdout 输出一份 JSON 结果。参数或配置错误会向 stderr 输出 `{"code":"CLI_ERROR","error":"..."}` 并以非零状态退出。派发结果为 `failed` 时退出码是 1；未解决的 `unknown` 状态退出码是 2。CLI 不会根据错误或缺失输入推断审批决定。
+旧 `flow schedule/start/finish/recover` 以及数组式 init 返回 `FLOW_LEGACY_ARGUMENTS_UNSUPPORTED`。旧 `orchestration.json`、`tasks.json`、`dispatch.json` 保留原处，不自动转换或删除。旧 `TaskGraph` / `TaskOrchestrator` 已移除。核心本地任务执行、幂等收据和显式 Codex 子进程派发继续作为独立底层能力存在。
+
+`workflow local-verify MANIFEST_JSON_PATH` 和 `LocalValidation` 仅承载可复用的局部验证，输出 `locally-validated`；不证明完整工程工作流、PR 就绪或发布完成。旧 `workflow verify` 明确报兼容错误。正式交付必须按迁入的工程 Skills 执行授权、审查、CI 和停靠合同。
+
+本地编排网页保留鉴权、loopback、PID/generation、端口租约和 macOS 按需 launchd 管理。升级代码不授权替换现有 viewer、抢占端口或写入真实旧运行；使用独立测试 scope 验证。更旧账本仍遵守原只读/维护边界，不能一概声明兼容可写。
+
+## 平台与构建
+
+原生适配使用固定 Node 22.14.0 头文件、固定摘要及系统 C 编译器，不依赖 node-gyp 或新增 Python 安全进程。构建和原始测试允许 Bun；Node 生产脚本不会调用 Bun 兜底。目标平台为 macOS arm64 与 Linux x64，支持声明须以对应验证为准。Windows 没有适配。专项 Skill 仍要求各自的外部工具与授权，发现源包不代表已具备其宿主能力。
+
+来源提交未包含独立 LICENSE 文件，不能据此推断公共再分发许可；保留源文件原有版权和许可内容及来源清单。
 
 ## 集成边界
 

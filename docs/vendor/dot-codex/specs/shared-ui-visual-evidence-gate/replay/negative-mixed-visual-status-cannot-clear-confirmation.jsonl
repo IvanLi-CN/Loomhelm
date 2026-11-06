@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"视觉比较=需确认，已展示上一版、当前截图与差异热图。这些截图准确反映了本次改动吗？"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"视觉比较=一致；但当前候选仍视觉比较=需确认，等待主人确认截图。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"现在调用 $pr-create 开始 PR 收敛。"}]}}

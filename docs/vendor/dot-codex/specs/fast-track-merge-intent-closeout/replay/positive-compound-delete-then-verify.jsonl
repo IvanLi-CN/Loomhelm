@@ -1,0 +1,8 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"merge"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"headRefName=topic"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr merge 1 --merge --delete-branch=false\",\"workdir\":\"/repo\"}","call_id":"call_merge"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_merge","output":"✓ Merged pull request #1"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"git push origin --delete topic && gh pr view 1\",\"workdir\":\"/repo\"}","call_id":"call_delete_verify"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_delete_verify","output":"remote branch: absent"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"legacy-release-contract","output":{"release_expected":false,"release_epoch":"merge-abc1234","target_repo":"example/repo","target_branch":"main","target_sha":"abc1234","reason":"release_expected=false; release workflow skipped for this merge SHA"}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-compound-delete-then-verify","last_agent_message":"结果=已合并；远端分支=不存在；主工作区基线更新=已更新；本地收尾=未执行。； release_expected=false；发布状态=未触发；依据=legacy fixture 无仓库发布面；发布版本=none；发布tag=none；发布channel=none；发布绑定sha=none；发布workflow=none；发布URL=none；发布时间=none；发布产物=none；发布处置=report-only"}}

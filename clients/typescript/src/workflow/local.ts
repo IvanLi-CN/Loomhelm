@@ -4,7 +4,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { GitAdapter } from '../git.js';
 import { runProcess } from '../runtime/process.js';
 
-export type LocalStage = 'durable-contracts' | 'delivery-slices' | 'validation' | 'can-open-pr';
+export type LocalStage = 'durable-contracts' | 'delivery-slices' | 'validation' | 'locally-validated';
 export type FlowType = 'normal' | 'fast-track' | 'local-merge';
 export interface ContractDecision { kind: 'spec' | 'adr'; disposition: 'link' | 'not-needed'; reason: string; paths: string[] }
 export interface ValidationEntry { id: string; command: string; args: string[]; required?: boolean; timeoutMs?: number; maxOutputBytes?: number }
@@ -24,10 +24,10 @@ function digest(value: string | Buffer): string { return createHash('sha256').up
 
 /** Local stages only; callers own persistence and integration with task ledgers.
  * No push, PR, merge, release, formal review, or global Skill mutation. */
-export class LocalWorkflow {
+export class LocalValidation {
   private busy = false;
   private constructor(private state: WorkflowSnapshot) {}
-  static async open(repository: string, baseRef: string, flowType: FlowType = 'normal'): Promise<LocalWorkflow> {
+  static async open(repository: string, baseRef: string, flowType: FlowType = 'normal'): Promise<LocalValidation> {
     if (!['normal', 'fast-track', 'local-merge'].includes(flowType)) throw new Error('Invalid flow type');
     if (!nonempty(baseRef) || baseRef.startsWith('-')) throw new Error('Explicit base required');
     const current = await new GitAdapter(repository).inspect();
@@ -38,7 +38,7 @@ export class LocalWorkflow {
     const base = result.stdout.trim();
     const ancestor = await runProcess('git', ['-C', current.root, 'merge-base', '--is-ancestor', base, current.head]);
     if (ancestor.code !== 0) throw new Error('Base must be an ancestor of candidate');
-    return new LocalWorkflow({ flowType, repository: await realpath(current.root), branch: current.branch, base,
+    return new LocalValidation({ flowType, repository: await realpath(current.root), branch: current.branch, base,
       stage: 'durable-contracts', contracts: [], implementation: null, validationHead: null, receipts: [] });
   }
   snapshot(): WorkflowSnapshot { return structuredClone(this.state); }
@@ -96,7 +96,7 @@ export class LocalWorkflow {
   /** Explicit commands only, without shell expansion. New calls rerun the suite. */
   async validate(entries: ValidationEntry[], signal?: AbortSignal): Promise<WorkflowSnapshot> {
     return this.exclusive(async () => {
-      if (!this.state.implementation || !['validation', 'can-open-pr'].includes(this.state.stage)) throw new Error('Implementation evidence required before validation');
+      if (!this.state.implementation || !['validation', 'locally-validated'].includes(this.state.stage)) throw new Error('Implementation evidence required before validation');
       if (!Array.isArray(entries) || entries.length === 0) throw new Error('Validation entries required');
       const suite = structuredClone(entries), ids = new Set<string>();
       for (const entry of suite) {
@@ -137,14 +137,14 @@ export class LocalWorkflow {
       }
       const required = suite.filter(entry => entry.required !== false);
       if (required.length > 0 && this.state.receipts.length === suite.length && this.state.receipts.every(receipt => receipt.candidateUnchanged) && required.every(entry => this.state.receipts.some(receipt => receipt.entry.id === entry.id && receipt.status === 'passed'))) {
-        this.state.validationHead = head; this.state.stage = 'can-open-pr';
+        this.state.validationHead = head; this.state.stage = 'locally-validated';
       }
       return this.snapshot();
     });
   }
   async readiness(): Promise<{ ready: boolean; firstUnfinishedGate: LocalStage; reason: string | null }> {
     return this.exclusive(async () => {
-      if (this.state.stage !== 'can-open-pr') return { ready: false, firstUnfinishedGate: this.state.stage, reason: null };
+      if (this.state.stage !== 'locally-validated') return { ready: false, firstUnfinishedGate: this.state.stage, reason: null };
       try {
         if (await this.candidate() !== this.state.validationHead) throw new Error('Validation HEAD is stale');
         try { await this.checkContracts(); }
@@ -152,7 +152,7 @@ export class LocalWorkflow {
           this.state.stage = 'durable-contracts'; this.state.validationHead = null;
           return { ready: false, firstUnfinishedGate: 'durable-contracts', reason: error instanceof Error ? error.message : 'Contract unavailable' };
         }
-        return { ready: true, firstUnfinishedGate: 'can-open-pr', reason: null };
+        return { ready: true, firstUnfinishedGate: 'locally-validated', reason: null };
       } catch (error) {
         this.state.stage = 'validation'; this.state.validationHead = null;
         return { ready: false, firstUnfinishedGate: 'validation', reason: error instanceof Error ? error.message : 'Candidate unavailable' };

@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"后续追踪=app-automation\n追踪目标=post_merge_target_ci"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"automation_update","arguments":"{\"kind\":\"heartbeat\",\"prompt\":\"track post-merge CI\"}"}}
