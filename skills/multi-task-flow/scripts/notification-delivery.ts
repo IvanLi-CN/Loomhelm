@@ -58,7 +58,9 @@ export async function deliverClaimedNotification(
   }
   // Validate cached identity/actor under the ledger lock even during an active
   // send. A repeated caller can observe its original unknown intent safely.
-  const cached: any = store.update(raw => claim(raw, true));
+  // Never use update for this read: it normalizes historical records on commit,
+  // even when no request exists and the later CAS must reject without writing.
+  const cached: any = claim(store.read(), true);
   if (cached) return cached.replay;
   const lock = flightLock(store, notificationId);
   try {
