@@ -12,6 +12,7 @@ export const EXPECTED_PRINCIPAL_HEADER = "X-Loomhelm-Expected-Principal";
 
 export interface AuthenticatedApiClient extends GeneratedApiClient {
   bootstrapBrowserSession: () => Promise<BrowserSessionBootstrap>;
+  revalidateBrowserSession: () => Promise<BrowserSessionBootstrap>;
   invalidateBrowserSession: () => void;
   bindBrowserSession: (binding: BrowserSessionBinding) => GeneratedApiClient;
 }
@@ -124,12 +125,14 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
 
   let browserSession: BrowserSessionBootstrap | undefined;
   let bootstrapPromise: Promise<BrowserSessionBootstrap> | undefined;
+  let revalidationPromise: Promise<BrowserSessionBootstrap> | undefined;
   let browserSessionGeneration = 0;
 
   const invalidateBrowserSession = (): void => {
     browserSessionGeneration += 1;
     browserSession = undefined;
     bootstrapPromise = undefined;
+    revalidationPromise = undefined;
   };
 
   const notifyUnauthorized = async (response: Response, notifyAuthAssembly = true): Promise<void> => {
@@ -158,29 +161,43 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
     ? createGeneratedApiClient({ baseUrl: options.baseUrl, fetch: fetchBrowserSession, headers: undefined })
     : undefined;
 
+  const requestBrowserSession = async (requestGeneration: number): Promise<BrowserSessionBootstrap> => {
+    const session = validateBrowserSession(await bootstrapClient!.getBrowserSession());
+    if (requestGeneration !== browserSessionGeneration) {
+      throw new ApiClientConfigurationError("browser session bootstrap was invalidated before it completed");
+    }
+    await options.onBrowserSession?.(session);
+    if (requestGeneration !== browserSessionGeneration) {
+      throw new ApiClientConfigurationError("browser session bootstrap was invalidated while it was being assembled");
+    }
+    browserSession = session;
+    return session;
+  };
+
   const bootstrapBrowserSession = async (): Promise<BrowserSessionBootstrap> => {
     if (!sameOriginProtection || !bootstrapClient) {
       throw new ApiClientConfigurationError("same_origin browser protection is not configured");
     }
     if (browserSession) return browserSession;
-    if (!bootstrapPromise) {
-      const requestGeneration = browserSessionGeneration;
-      bootstrapPromise = (async () => {
-        const session = validateBrowserSession(await bootstrapClient.getBrowserSession());
-        if (requestGeneration !== browserSessionGeneration) {
-          throw new ApiClientConfigurationError("browser session bootstrap was invalidated before it completed");
-        }
-        await options.onBrowserSession?.(session);
-        if (requestGeneration !== browserSessionGeneration) {
-          throw new ApiClientConfigurationError("browser session bootstrap was invalidated while it was being assembled");
-        }
-        browserSession = session;
-        return session;
-      })().finally(() => {
-        if (requestGeneration === browserSessionGeneration) bootstrapPromise = undefined;
-      });
-    }
+    if (bootstrapPromise) return bootstrapPromise;
+    const requestGeneration = browserSessionGeneration;
+    bootstrapPromise = requestBrowserSession(requestGeneration).finally(() => {
+      if (requestGeneration === browserSessionGeneration) bootstrapPromise = undefined;
+    });
     return bootstrapPromise;
+  };
+
+  const revalidateBrowserSession = async (): Promise<BrowserSessionBootstrap> => {
+    if (!sameOriginProtection || !bootstrapClient) {
+      throw new ApiClientConfigurationError("same_origin browser protection is not configured");
+    }
+    if (bootstrapPromise) return bootstrapPromise;
+    if (revalidationPromise) return revalidationPromise;
+    const requestGeneration = browserSessionGeneration;
+    revalidationPromise = requestBrowserSession(requestGeneration).finally(() => {
+      if (requestGeneration === browserSessionGeneration) revalidationPromise = undefined;
+    });
+    return revalidationPromise;
   };
 
   const fetchWithAuthentication: typeof globalThis.fetch = async (input, init = {}) => {
@@ -272,5 +289,5 @@ export function createAuthenticatedApiClient(options: AuthenticatedApiClientOpti
   };
   wrapLogoutWithInvalidation(client);
 
-  return Object.assign(client, { bootstrapBrowserSession, invalidateBrowserSession, bindBrowserSession });
+  return Object.assign(client, { bootstrapBrowserSession, revalidateBrowserSession, invalidateBrowserSession, bindBrowserSession });
 }

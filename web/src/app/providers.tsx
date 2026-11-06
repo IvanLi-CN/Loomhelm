@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 import {
   createProductionApiAssembly,
+  withProductionAuthMessage,
   type ProductionApiAssembly
 } from "@/lib/api/client";
 
@@ -93,6 +94,10 @@ function errorMessage(error: unknown, operation: string): string {
   return error instanceof Error ? `${operation}失败：${error.message}` : `${operation}失败。`;
 }
 
+function isAuthInvalidationError(error: unknown): error is ApiClientError {
+  return error instanceof ApiClientError && (error.status === 401 || error.status === 403);
+}
+
 export function createLoadingProductionAssembly(client: AuthenticatedApiClient, sessionGeneration = 0): ProductionApiAssembly {
   return createProductionApiAssembly({
     client,
@@ -168,6 +173,8 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
   const assemblyRef = useRef(initialAssembly);
   const sessionGenerationRef = useRef(initialAssembly?.auth.sessionGeneration ?? 0);
   const lastResumeValidationRef = useRef(0);
+  const resumeValidationPromiseRef = useRef<Promise<void> | null>(null);
+  const resumeValidationRequestIdRef = useRef(0);
   const seenInvalidationSignalsRef = useRef(new Set<string>());
 
   const clearPrincipalCache = useCallback((principalId: string) => clearPrincipalQueries(queryClient, principalId), []);
@@ -198,6 +205,9 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
 
   const invalidateAndRevalidate = useCallback(() => {
     if (!productionClient) return;
+    resumeValidationRequestIdRef.current += 1;
+    resumeValidationPromiseRef.current = null;
+    lastResumeValidationRef.current = 0;
     productionClient.invalidateBrowserSession();
     const generation = sessionGenerationRef.current + 1;
     sessionGenerationRef.current = generation;
@@ -205,6 +215,51 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
       if (generation === sessionGenerationRef.current) bootstrapForGeneration(generation);
     });
   }, [bootstrapForGeneration, commitAssembly, productionClient]);
+
+  const revalidateInBackground = useCallback(() => {
+    if (!productionClient || resumeValidationPromiseRef.current) return;
+    const current = assemblyRef.current;
+    if (current?.auth.status !== "authenticated" || !current.auth.principalId) return;
+    const now = Date.now();
+    if (now - lastResumeValidationRef.current < 1000) return;
+    lastResumeValidationRef.current = now;
+
+    const principalId = current.auth.principalId;
+    const generation = sessionGenerationRef.current;
+    const requestId = resumeValidationRequestIdRef.current + 1;
+    resumeValidationRequestIdRef.current = requestId;
+    const isCurrentValidation = (): boolean => {
+      if (requestId !== resumeValidationRequestIdRef.current || generation !== sessionGenerationRef.current) return false;
+      const latest = assemblyRef.current;
+      return latest?.auth.status === "authenticated" && latest.auth.principalId === principalId;
+    };
+
+    const pending = productionClient.revalidateBrowserSession()
+      .then((session) => {
+        if (!isCurrentValidation()) return;
+        if (session.user_id !== principalId) {
+          invalidateAndRevalidate();
+          return;
+        }
+        const latest = assemblyRef.current;
+        if (latest?.auth.message) void commitAssembly(withProductionAuthMessage(latest));
+      })
+      .catch((error: unknown) => {
+        if (!isCurrentValidation()) return;
+        if (isAuthInvalidationError(error)) {
+          invalidateAndRevalidate();
+          return;
+        }
+        const latest = assemblyRef.current;
+        if (latest?.auth.status === "authenticated" && latest.auth.principalId === principalId) {
+          void commitAssembly(withProductionAuthMessage(latest, errorMessage(error, "后台验证浏览器会话")));
+        }
+      })
+      .finally(() => {
+        if (requestId === resumeValidationRequestIdRef.current) resumeValidationPromiseRef.current = null;
+      });
+    resumeValidationPromiseRef.current = pending;
+  }, [commitAssembly, invalidateAndRevalidate, productionClient]);
 
   useEffect(() => {
     if (!productionClient) return;
@@ -269,10 +324,7 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
     if (!productionClient || typeof window === "undefined") return;
     const revalidateOnResume = () => {
       if (document.visibilityState === "hidden" || assemblyRef.current?.auth.status !== "authenticated") return;
-      const now = Date.now();
-      if (now - lastResumeValidationRef.current < 1000) return;
-      lastResumeValidationRef.current = now;
-      invalidateAndRevalidate();
+      revalidateInBackground();
     };
     document.addEventListener("visibilitychange", revalidateOnResume);
     window.addEventListener("focus", revalidateOnResume);
@@ -280,7 +332,7 @@ export function AppProviders({ children, apiAssembly = null, productionClient }:
       document.removeEventListener("visibilitychange", revalidateOnResume);
       window.removeEventListener("focus", revalidateOnResume);
     };
-  }, [invalidateAndRevalidate, productionClient]);
+  }, [productionClient, revalidateInBackground]);
 
   const authActions = useMemo<ProductionAuthActions>(() => ({
     login: defaultAuthActions.login,
