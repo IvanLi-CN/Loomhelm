@@ -6,7 +6,7 @@
 
 ## 模块边界
 
-根 `skills/` 保存源 Skill、references、测试及模板，根 `bin/` 保存共享执行模块；上游合同归档在 `docs/vendor/dot-codex/`。`skills/source-manifest.json` 保存源提交、逐文件源摘要和安装摘要，`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
+根 `skills/` 保存源 Skill、references、测试及模板，根 `skills/bin/` 保存共享执行模块；上游合同归档在 `skills/docs/vendor/dot-codex/`。`skills/source-manifest.json` 保存源提交、逐文件源摘要和安装摘要，`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
 
 生产构建保留模块目录，并将 TypeScript 入口转换为 Node 兼容 JavaScript，避免 bundle 改变相对资源路径。计划 finalizer 单独封装，继续通过校验过的入口描述符运行。POSIX 操作由最小 Node-API 层承接；生产 JavaScript 绑定原生模块摘要，经非跟随打开和描述符检查后加载，保留原子不覆盖重命名与原 flock 互斥。
 
@@ -24,7 +24,7 @@
 
 ## 验证边界
 
-vendor 源码安装必须保留 `skills/`、`bin/`、`docs/vendor/dot-codex/` 与 `scripts/` 的相对布局。Skills Switch 的 Skill 发现不能代替运行依赖安装；自动推导的 `skills/` sparse checkout 会遗漏根共享脚本。`scripts/check-skills-installation.mjs` 以来源清单只读检查源资源闭包，CI 用真实本地克隆复现只检出 Skills 的失败，再验证补齐显式路径后原 `context.ts` 入口可加载。源资源完整、平台构建和真实宿主能力分别验收，不互相冒充。
+vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、构建和检查支持分别位于 `skills/bin/`、`skills/docs/vendor/dot-codex/` 与 `skills/scripts/`；来源清单拒绝任何安装路径越出 `skills/`。隔离验证仅复制该目录并在其中安装声明依赖，验证原始 Skill 入口和生产脚本，不借用根 `bin/`、源码 checkout 或用户级全局程序。
 
 原共享脚本回归、原 Multi-task Flow 与网页回归、原生安全回归、客户端双运行时测试及来源隔离测试分别运行。macOS 本地结果不能代替 Linux CI，模拟 socket 不能代替真实宿主接力，已有旧运行的测试副本不能授权写入真实账本。当前候选的精确提交、经验验收和正式审查证据由交付流程保管；没有完整证据时不宣称合并就绪。
 

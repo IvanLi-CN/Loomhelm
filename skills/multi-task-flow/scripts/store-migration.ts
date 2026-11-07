@@ -7,7 +7,7 @@ import {
   writeAtomicNoFollow,
   writeExclusiveNoFollow,
   type DirectoryIdentity,
-} from "../../../bin/modules/visual/secure_io";
+} from "../../bin/modules/visual/secure_io";
 import { validateLedger, type Ledger } from "./schema";
 import { requireLedgerCompatibility } from "./service-contract";
 

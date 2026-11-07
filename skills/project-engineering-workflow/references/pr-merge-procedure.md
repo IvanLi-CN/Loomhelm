@@ -28,7 +28,7 @@ For `mode=merge`:
 3. Validate the approved merge method against the explicit allowlist and execute exactly one guarded direct merge. Bind the command to the envelope's exact repository with `--repo "$REPO"`; a PR number without this binding is not sufficient. Do not accept a repository default or an interactive method prompt:
 
    ```bash
-   bun bin/code_hosting.ts \
+   bun skills/bin/code_hosting.ts \
      --repo-root "$CANDIDATE_ROOT" --remote "$BASE_REMOTE" pr-merge \
      --number "$PR" --method "$MERGE_METHOD" \
      --expected-base "$LOCKED_BASE" --expected-head "$LOCKED_HEAD"
@@ -41,7 +41,7 @@ For `mode=merge`:
 6. Resolve the live normalized `head_repository`, `head_ref`, and `is_cross_repository` immediately before remote-head cleanup. Delete only when `head_repository == REPO` and `head_ref` is non-empty, using the exact API ref and repository binding:
 
    ```bash
-   bun bin/code_hosting.ts \
+   bun skills/bin/code_hosting.ts \
      --repo-root "$CANDIDATE_ROOT" --remote "$BASE_REMOTE" branch-delete \
      --branch "$HEAD_REF"
    ```

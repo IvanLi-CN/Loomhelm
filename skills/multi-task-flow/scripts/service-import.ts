@@ -15,8 +15,8 @@ import {
   readRegularNoFollow,
   writeExclusiveNoFollow,
   renameNoReplace,
-} from "../../../bin/modules/visual/secure_io";
-import { identity } from "../../../bin/modules/visual/isolation";
+} from "../../bin/modules/visual/secure_io";
+import { identity } from "../../bin/modules/visual/isolation";
 import { requireLedgerCompatibility } from "./service-contract";
 import { validateLedger } from "./schema";
 import { requireCondition } from "./errors";

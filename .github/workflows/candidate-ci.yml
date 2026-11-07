@@ -194,10 +194,11 @@ jobs:
       - name: Build and verify POSIX compatibility
         run: |
           bun install --frozen-lockfile
-          node scripts/build-skills-native.mjs
-          bun scripts/build-client-skills.mjs
-          node scripts/test-skills-native.mjs
-          bun test ./bin/native-tests/core ./bin/native-tests/visual
+          npm ci --prefix skills --ignore-scripts --no-audit --no-fund
+          node skills/scripts/build-skills-native.mjs
+          bun skills/scripts/build-client-skills.mjs
+          node skills/scripts/test-skills-native.mjs
+          bun test ./skills/bin/native-tests/core ./skills/bin/native-tests/visual
 
   candidate-build:
     name: Candidate Build

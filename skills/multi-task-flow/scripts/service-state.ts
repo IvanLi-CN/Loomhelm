@@ -14,7 +14,7 @@ import {
 } from "./service-contract";
 import { requireCondition } from "./errors";
 import type { ServicePaths } from "./service-paths";
-import { readRegularNoFollow } from "../../../bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "../../bin/modules/visual/secure_io";
 
 const leaseSchema = z
   .object({

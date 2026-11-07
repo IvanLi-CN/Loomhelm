@@ -21,3 +21,9 @@ node_modules/
 /bin/**/*.js.map
 /skills/**/*.js
 /skills/**/*.js.map
+
+/skills/bin/native/*.node
+/skills/bin/native/build.json
+/skills/.cache/
+
+/skills/docs/**/*.js

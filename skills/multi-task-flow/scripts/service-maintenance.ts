@@ -1,4 +1,4 @@
-import { Runtime } from "../../../bin/modules/core/runtime";
+import { Runtime } from "../../bin/modules/core/runtime";
 import {
   compatibilityReport,
   requireReport,
@@ -13,17 +13,17 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { withExclusiveLockAsync } from "../../../bin/modules/flow/storage";
+import { withExclusiveLockAsync } from "../../bin/modules/flow/storage";
 import {
   PortRegistry,
   defaultRegistryDir,
   processAlive,
-} from "../../../bin/modules/workspace/port_registry";
+} from "../../bin/modules/workspace/port_registry";
 import {
   renameNoReplace,
   readRegularNoFollow,
   writeExclusiveNoFollow,
-} from "../../../bin/modules/visual/secure_io";
+} from "../../bin/modules/visual/secure_io";
 import { ensureDirectory, readRegular } from "./store";
 import { ServiceState } from "./service-state";
 import { ServiceAuth } from "./service-auth";
