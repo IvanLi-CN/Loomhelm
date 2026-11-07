@@ -135,9 +135,10 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		return fmt.Errorf("read current Codex source snapshot: %w", err)
 	}
 
-	// BindTaskAuthorized locks Session -> Task -> Host. Pre-lock every binding
-	// row before taking the Host lock so snapshot import follows the same order
-	// and cannot form a Host/Session wait cycle with a concurrent bind.
+	// Import coordinates with Host lifecycle and Session activation through a
+	// single lock order: source -> Host -> Session -> Task -> Codex. The Host
+	// lock is acquired before binding discovery so an activation that starts
+	// before the Codex row exists cannot permanently miss reconciliation.
 	threadIDs := make([]string, 0, len(snapshot.Threads))
 	for _, thread := range snapshot.Threads {
 		threadID := strings.TrimSpace(thread.ThreadID)
@@ -147,9 +148,6 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		threadIDs = append(threadIDs, threadID)
 	}
 	sort.Strings(threadIDs)
-	if err := lockImportBindingRows(ctx, tx, hostID, threadIDs); err != nil {
-		return err
-	}
 	if err := tx.QueryRow(ctx, `
 		SELECT status, connection_generation FROM host_registrations WHERE id = $1 FOR UPDATE
 	`, hostID).Scan(&hostStatus, &hostGeneration); err != nil {
@@ -170,6 +168,9 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			return err
 		}
 		return errStaleSnapshot
+	}
+	if err := lockImportBindingRows(ctx, tx, hostID, threadIDs); err != nil {
+		return err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -407,6 +408,19 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 				WHERE NOT codex_thread_files.complete
 			`, hostID, threadID, strings.TrimSpace(file.Path), contentType, file.Size, strings.TrimSpace(file.SHA256), file.Content, strings.TrimSpace(file.ContentRef), file.Complete, snapshot.AsOf); err != nil {
 				return fmt.Errorf("persist Codex file snapshot: %w", err)
+			}
+		}
+		if allFilesComplete {
+			filePaths := make([]string, 0, len(thread.Files))
+			for _, file := range thread.Files {
+				filePaths = append(filePaths, strings.TrimSpace(file.Path))
+			}
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM codex_thread_files
+				WHERE host_id = $1 AND thread_id = $2 AND NOT complete
+				  AND NOT (path = ANY($3::text[]))
+			`, hostID, threadID, filePaths); err != nil {
+				return fmt.Errorf("remove superseded incomplete Codex files: %w", err)
 			}
 		}
 		if _, err := tx.Exec(ctx, `

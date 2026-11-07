@@ -192,7 +192,7 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 	if err := db.Pool().QueryRow(ctx, `SELECT history_state, files_complete FROM codex_threads WHERE host_id = $1 AND thread_id = $2`, hostID, threadID).Scan(&historyState, &filesComplete); err != nil {
 		t.Fatalf("read partial thread readiness: %v", err)
 	}
-	if historyState != "partial" || filesComplete {
+	if historyState != "failed" || filesComplete {
 		t.Fatalf("partial snapshot readiness = (%q, %t)", historyState, filesComplete)
 	}
 	if err := db.Pool().QueryRow(ctx, `

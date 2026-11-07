@@ -1380,6 +1380,14 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 		return protocol.CodexConversation{}, fmt.Errorf("begin Codex binding: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var lockedHostID string
+	if err := tx.QueryRow(ctx, `
+		SELECT id FROM host_registrations WHERE id = $1 FOR UPDATE
+	`, access.host.ID).Scan(&lockedHostID); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, ErrNotFound
+	} else if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("lock Codex Host for binding: %w", err)
+	}
 	var conversationTitle, sourceKind, sourceStatus, historyState string
 	var codexProjectID *string
 	var filesComplete bool
