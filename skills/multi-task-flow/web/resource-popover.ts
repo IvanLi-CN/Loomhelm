@@ -10,9 +10,9 @@ let active: { close: (restore?: boolean) => void; refresh: () => void } | null =
 export function refreshResourcePopover(): void { active?.refresh(); }
 export function closeResourcePopover(): void { active?.close(); }
 const node = (tag: string, value = "", className = "") => { const n = document.createElement(tag); n.textContent = value; n.className = className; return n; };
-function icon(name: "copy" | "refresh" | "external"): SVGElement {
+function icon(name: "copy" | "refresh" | "external" | "message"): SVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true"); svg.setAttribute("focusable", "false");
-  const paths: Record<string, string[]> = { copy: ["M9 9h10v10H9z", "M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"], refresh: ["M20 11a8 8 0 1 0 2 5.3", "M20 4v7h-7"], external: ["M14 3h7v7", "M21 3 11 13", "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"] };
+  const paths: Record<string, string[]> = { message: ["M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"], copy: ["M9 9h10v10H9z", "M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"], refresh: ["M20 11a8 8 0 1 0 2 5.3", "M20 4v7h-7"], external: ["M14 3h7v7", "M21 3 11 13", "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"] };
   for (const d of paths[name]!) { const path = document.createElementNS(svg.namespaceURI, "path"); path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "currentColor"); path.setAttribute("stroke-width", "2"); path.setAttribute("stroke-linecap", "round"); path.setAttribute("stroke-linejoin", "round"); svg.append(path); } return svg;
 }
 export type ResourceSource = { kind: "task" | "group"; id: string; thread: string | null; output: () => AgentOutput | undefined; start: string | null; end: string | null; view: View };
@@ -59,6 +59,7 @@ export function timingText(source: ResourceSource, now = Date.now()): string {
   return [actualStart ? `开始时间：${fullLocalTime(actualStart)}` : "尚未开始或开始时间不可用", actualEnd ? `结束时间：${fullLocalTime(actualEnd)}` : "", `已用时：${formatDuration(actualStart, actualEnd, now)}`, `排期用时：${budget > 0 ? formatDuration(start!, end!) : "不可用"}`, percentage !== null ? `用时占比：${percentage}%${percentage > 100 ? `\n超出排期：${percentage - 100}%` : ""}` : "用时占比：不可用"].filter(Boolean).join("\n");
 }
 export function attachResourcePopover(trigger: HTMLElement, type: "conversation" | "pr" | "time", source: ResourceSource): void {
+  trigger.dataset.resourceTrigger = type;
   trigger.removeAttribute("title");
   trigger.setAttribute("aria-haspopup", "dialog"); trigger.setAttribute("aria-expanded", "false");
   const panel = node("div", "", "resource-popover"); panel.id = `resource-popover-${++serial}`; panel.hidden = true;
@@ -90,11 +91,15 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
       const signature = JSON.stringify([source.thread, output?.thread_title]);
       if (signature !== titleSignature) { titleSignature = signature; identity.replaceChildren(copyRow("对话 ID", source.thread), copyRow("标题", output?.thread_title ?? null)); }
       const message = output?.text || (source.thread ? output?.state === "empty" ? "尚无助手消息" : "读取失败或暂不可用" : "尚未关联对话");
-      const nextBody = JSON.stringify([output?.message_status, output?.stale, message]);
+      const nextBody = JSON.stringify([output?.message_status, output?.stale, output?.sent_at, message]);
       if (nextBody !== bodySignature) {
         bodySignature = nextBody; const top = body.scrollTop;
         const heading = node("div", "", "resource-section-heading");
-        heading.append(node("h3", "最新回复", "resource-heading"));
+        const messageIcon = node("span", "", "resource-message-icon");
+        messageIcon.setAttribute("role", "img"); messageIcon.setAttribute("aria-label", "助手消息"); messageIcon.append(icon("message"));
+        const sent = node("time", output?.sent_at ? fullLocalTime(output.sent_at) : "发送时间不可用", "resource-message-time");
+        if (output?.sent_at) sent.setAttribute("datetime", output.sent_at);
+        heading.append(messageIcon, sent);
         if (output?.message_status === "in_progress") heading.append(badge("生成中", "live"));
         if (output?.stale) heading.append(badge("数据已过期", "warning"));
         body.replaceChildren(heading, node("div", message, "resource-message")); body.scrollTop = top;

@@ -5,6 +5,10 @@
 - Implementation: Shared viewer candidate implemented; current-head acceptance remains CI-bound.
 - Lifecycle: PR readiness requires current-candidate validation, formal review and applicable CI evidence.
 
+## 卡片预览边界
+
+普通卡片悬浮预览移除助手正文与输出空状态，宽度上限280px，字段标签保持完整、长值可换行。对话全文保留在对话图标浮层；消息头显示气泡图标和真实消息开始时间。普通卡片区域恢复宽屏悬浮，三个专用触发区抑制普通预览。时间显示日期和秒，隐藏时区名称。定向组件测试与构建通过；当前候选的完整浏览器视觉验收仍待完成。
+
 ## Shared Viewer Coverage
 
 - User-root paths, explicit build/API/frontend/ledger compatibility and isolated profiles.

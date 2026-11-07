@@ -92,6 +92,29 @@ describe("dashboard hover preview DOM", () => {
     bridge.dispose();
   });
 
+  test("wide cards retain ordinary hover while resource targets suppress and restore it", async () => {
+    const card = document.createElement("article"), ordinary = document.createElement("span"), resource = document.createElement("button"), preview = document.createElement("aside");
+    resource.dataset.resourceTrigger = "conversation";
+    card.append(ordinary, resource); document.body.append(card, preview); preview.hidden = true;
+    const bridge = createHoverPreviewBridge(preview, () => undefined);
+    const controller = createHoverController({
+      element: <T extends HTMLElement>() => preview as T, getData: () => null,
+      getViewState: () => DEFAULT_VIEW_STATE, getSelected: () => ({ task: null, group: null }),
+      getKeyboardSelection: () => false, getBridge: () => bridge, getAnyHover: () => true,
+      getAnyFinePointer: () => true, getDetailPanelViewport: () => true,
+      taskPreview: () => document.createElement("div"), groupPreview: () => document.createElement("div"),
+      updateDetailsSurface: () => undefined, focusSelectedObject: () => undefined,
+    });
+    controller.bindHoverTarget(card, document.createElement("div"));
+    const over = (target: Element, from: Element | null) => target.dispatchEvent(new window.PointerEvent("pointerover", { bubbles: true, relatedTarget: from }));
+    over(resource, null); card.dispatchEvent(new window.PointerEvent("pointerenter"));
+    await new Promise(r => setTimeout(r, 280)); expect(preview.hidden).toBe(true);
+    over(ordinary, resource); await new Promise(r => setTimeout(r, 280)); expect(preview.hidden).toBe(false);
+    over(resource, ordinary); await new Promise(r => setTimeout(r, 200)); expect(preview.hidden).toBe(true);
+    over(ordinary, resource); await new Promise(r => setTimeout(r, 280)); expect(preview.hidden).toBe(false);
+    bridge.dispose();
+  });
+
   test("renders the facts that make a task preview useful", () => {
     const preview = renderTaskPreview({
       title: "账本持久化与并发锁",
@@ -102,7 +125,6 @@ describe("dashboard hover preview DOM", () => {
       finishedAt: "未知",
       duration: "2小时15分",
       blocker: null,
-      latestOutput: "账本锁与原子写入已完成，正在等待调度事实。",
       executionGroups: "第一组：账本与调度、第二组：页面与验收",
     });
 
@@ -110,7 +132,7 @@ describe("dashboard hover preview DOM", () => {
     expect(getByText(preview, "持续时间")).toBeTruthy();
     expect(getByText(preview, "2小时15分")).toBeTruthy();
     expect(getByText(preview, "第一组：账本与调度、第二组：页面与验收")).toBeTruthy();
-    expect(getByText(preview, "账本锁与原子写入已完成，正在等待调度事实。")).toBeTruthy();
+    expect(preview.querySelector(".agent-output-text, [data-output-task-id], .hover-preview-output")).toBeNull();
   });
 
   test("formats completed and running durations from recorded timestamps", () => {
@@ -137,12 +159,13 @@ describe("dashboard hover preview DOM", () => {
   test("uses a distinct empty state when no Agent output exists", () => {
     const empty = renderTaskOutput(null);
     const output = renderTaskOutput("已完成依赖校验，等待下一步调度。");
-    const preview = renderTaskPreview({ title: "待开始任务", state: "待开始", kind: "验证", group: "第二组", startedAt: "未知", finishedAt: "未知", duration: "未知", blocker: null, latestOutput: null });
+    const preview = renderTaskPreview({ title: "待开始任务", state: "待开始", kind: "验证", group: "第二组", startedAt: "未知", finishedAt: "未知", duration: "未知", blocker: null });
 
     expect(empty.textContent).toBe("");
     expect(empty.classList.contains("is-empty")).toBe(true);
     expect(empty.dataset.emptyLabel).toBe("尚无 Agent 输出");
     expect(getByText(output, "已完成依赖校验，等待下一步调度。")).toBeTruthy();
-    expect(preview.querySelector(".hover-preview-output.is-empty")?.getAttribute("aria-label")).toBe("尚无 Agent 输出");
+    expect(preview.textContent).not.toContain("尚无 Agent 输出");
+    expect(preview.querySelector(".task-card-output, .hover-preview-output")).toBeNull();
   });
 });

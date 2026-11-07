@@ -1,3 +1,4 @@
+import { messageSentAt } from "./conversation-history";
 import { latestConversationOutput } from "./conversation-history";
 export { messageOutput } from "./conversation-history";
 import { randomUUID } from "node:crypto";
@@ -27,7 +28,7 @@ type ThreadState = {
   version: number;
   items: Map<
     string,
-    { rank: number; text: string; phase: string | null; done: boolean }
+    { rank: number; text: string; phase: string | null; done: boolean; sent_at: string | null }
   >;
   rank: number;
   selectedRank: number;
@@ -244,6 +245,7 @@ export class ConversationOutputs {
           text: selected.text!,
           phase: selected.phase,
           done: selected.message_status === "completed",
+          sent_at: selected.sent_at ?? known?.sent_at ?? null,
         });
         state.selectedRank = state.items.get(identity)!.rank;
       }
@@ -297,9 +299,10 @@ export class ConversationOutputs {
     const identity = key(params.turnId, id);
     let entry = state.items.get(identity);
     if (!entry) {
-      entry = { rank: ++state.rank, text: "", phase: null, done: false };
+      entry = { rank: ++state.rank, text: "", phase: null, done: false, sent_at: null };
       state.items.set(identity, entry);
     }
+    entry.sent_at = messageSentAt(item?.startedAtMs ?? params.startedAtMs) ?? entry.sent_at;
     state.version++;
     state.streamGeneration = this.generation;
     if (delta) {
@@ -319,6 +322,7 @@ export class ConversationOutputs {
       {
         state: "available",
         text: entry.text,
+        sent_at: entry.sent_at,
         thread_id: thread,
         turn_id: params.turnId,
         message_id: id,

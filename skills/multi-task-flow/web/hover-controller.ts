@@ -103,7 +103,7 @@ export function createHoverController(context: HoverControllerContext) {
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = null;
     previewTimer = setTimeout(() => {
-      if (document.querySelector(".resource-popover:not([hidden])")) return;
+      if (document.querySelector(".resource-popover:not([hidden]), .unbound-pr-tooltip:not([hidden])")) return;
       const current = context.getViewState();
       if (!canShowHoverPreview({ selected: selected(), detailOpen: current.detail, hoverCapable: supportsHoverDetails(), detailPanelViewport: context.getDetailPanelViewport(), keyboardSelection: context.getKeyboardSelection() })) return;
       const preview = context.element("hover-preview");
@@ -142,7 +142,18 @@ export function createHoverController(context: HoverControllerContext) {
   document.addEventListener("resource-popover-open", () => { hideHoverPreview(); dismiss(); });
 
   const bindHoverTarget = (target: HTMLElement, content: HTMLElement): void => {
-    context.getBridge()?.bindTarget(target, () => showHoverPreview(content, target), hideHoverPreview);
+    const excluded = (node: EventTarget | null): boolean => node instanceof window.Element && Boolean(node.closest("[data-resource-trigger]"));
+    let resourceHovered = false;
+    const enter = (event: PointerEvent): void => {
+      if (!resourceHovered && !excluded(event.target)) showHoverPreview(content, target);
+    };
+    context.getBridge()?.bindTarget(target, enter, () => { resourceHovered = false; hideHoverPreview(); });
+    // pointerenter does not fire again when moving between descendants of a card.
+    target.addEventListener("pointerover", (event) => {
+      resourceHovered = excluded(event.target);
+      if (resourceHovered) { hideHoverPreview(); dismiss(); }
+      else if (excluded(event.relatedTarget)) showHoverPreview(content, target);
+    });
   };
 
   const recordPointerType = (value: string | null | undefined): void => {

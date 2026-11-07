@@ -3,6 +3,12 @@ import { record as object } from "./codex-socket";
 import type { AgentOutput } from "../web/agent-output";
 type ReadConnection = Pick<Awaited<ReturnType<typeof observeCodex>>, "request">;
 
+export function messageSentAt(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 /** Normalize only public assistant text, never tool/reasoning/user items. */
 export function messageOutput(
   thread: string,
@@ -20,6 +26,7 @@ export function messageOutput(
   return {
     state: "available",
     text: item.text,
+    sent_at: messageSentAt(envelope.startedAtMs ?? item.startedAtMs),
     thread_id: thread,
     turn_id: typeof envelope.turnId === "string" ? envelope.turnId : null,
     message_id: item.id,

@@ -35,7 +35,7 @@ describe("dashboard detail surface DOM", () => {
     expect(surface).toBe("none");
     expect(elements.details.hidden).toBe(true);
     expect(elements.workspace.classList.contains("has-details")).toBe(false);
-    expect(canShowHoverPreview({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe(false);
+    expect(canShowHoverPreview({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe(true);
   });
 
   test("opens the wide inspector only for an explicitly selected object", () => {
@@ -72,7 +72,7 @@ describe("dashboard detail surface DOM", () => {
 
   test("does not allow a hover preview beside an open desktop inspector", () => {
     expect(canShowHoverPreview({ selected: true, detailOpen: true, hoverCapable: true, detailPanelViewport: true })).toBe(false);
-    expect(canShowHoverPreview({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe(false);
+    expect(canShowHoverPreview({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe(true);
     expect(canShowHoverPreview({ selected: true, detailOpen: true, hoverCapable: true, detailPanelViewport: false })).toBe(false);
   });
 

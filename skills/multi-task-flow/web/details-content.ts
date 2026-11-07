@@ -216,7 +216,7 @@ export function createDetailContent(context: DetailContentContext) {
     const data = context.getData();
     const group = data?.groups.find((item) => item.id === task.group_id);
     const executionGroups = [...new Set(data?.actual_intervals.filter((row) => row.task_id === task.id).map((row) => row.group_id) ?? [])].map((id) => data?.groups.find((item) => item.id === id)?.title ?? id);
-    return renderTaskPreview({ title: task.title, state: context.labelTask(task), kind: taskKindLabel(task.kind), group: group?.title ?? task.group_id, startedAt: task.started_at ?? "", finishedAt: task.finished_at ?? "", duration: formatDuration(task.started_at, task.finished_at), blocker: task.blocker, latestOutput: task.latest_output?.trim() || null, output: task.latest_agent_output ?? initialOutput(task.thread_id), taskId: task.id, ...(executionGroups.length > 1 ? { executionGroups: executionGroups.join("、") } : {}) });
+    return renderTaskPreview({ title: task.title, state: context.labelTask(task), kind: taskKindLabel(task.kind), group: group?.title ?? task.group_id, startedAt: task.started_at ?? "", finishedAt: task.finished_at ?? "", duration: formatDuration(task.started_at, task.finished_at), blocker: task.blocker, ...(executionGroups.length > 1 ? { executionGroups: executionGroups.join("、") } : {}) });
   };
 
   const groupPreview = (group: Group): HTMLElement => {

@@ -2,6 +2,8 @@
 
 ## Lifecycle / Compatibility
 
+- 卡片普通悬浮预览不再重复对话正文，改为280px紧凑任务信息；对话、PR、时间保留独立触发区。消息时间为可选只读投影，既有账本无需迁移。
+
 - 2026-11-05: Added the execution-profile contract: one run default, independent delivery-unit/task overrides, complete model-plus-thinking pairs, pre-creation editing with claim replacement, and CLI-owned conversation creation. Runtime changes made inside an existing conversation remain outside the orchestration ledger.
 
 - This topic introduces a separate coordinator and leaves existing legacy coordination sessions and contracts in place.

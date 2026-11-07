@@ -22,6 +22,12 @@ describe("conversation output projection", () => {
     for (const type of ["reasoning", "userMessage", "commandExecution", "system"]) expect(messageOutput("thread", { item: { id: "a", type, text: "private" } })).toBeNull();
     expect(messageOutput("thread", message("a", " \n"))).toBeNull();
   });
+  test("uses only the actual assistant item timestamp, never the observation time", () => {
+    const startedAtMs = Date.parse("2026-11-07T01:02:03Z");
+    expect(messageOutput("thread", { ...message("a", "hello"), startedAtMs })?.sent_at).toBe("2026-11-07T01:02:03.000Z");
+    expect(messageOutput("thread", message("a", "hello"))?.sent_at).toBeNull();
+    expect(messageOutput("thread", { ...message("a", "hello"), startedAtMs: Infinity })?.sent_at).toBeNull();
+  });
   test("paginates past tools and whitespace, deduplicates bound threads", async () => {
     const calls: JsonRecord[] = [];
     const f = fixture(async (_m, params) => { calls.push(params); return params.cursor ? { data: [message("latest", "progress"), message("older", "old")] } : { data: [message("blank", " "), { item: { type: "reasoning", text: "hidden" } }], nextCursor: "page2" }; });
