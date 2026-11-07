@@ -16,10 +16,26 @@ from policy import ReleaseError, canonical
 from product import prerequisites, inventory, ROOT
 
 
+def persist_receipt(path, receipt):
+    data = canonical(receipt)+b'\n'
+    if path.is_symlink():
+        raise ReleaseError('receipt symlink refused')
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != data:
+            raise ReleaseError('existing stage receipt differs; retain it and use a new output directory')
+        return
+    try:
+        with path.open('xb') as output:
+            output.write(data)
+    except FileExistsError:
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != data:
+            raise ReleaseError('stage receipt concurrently changed')
+
+
 def stage(api, record, directory):
     if record['state'] != 'completed':
         raise ReleaseError('Deploy requires completed release identity')
-    release = api.ensure_draft(record)
+    release = api.existing_release(record)
     if release['draft']:
         raise ReleaseError('Deploy refuses draft release')
     api.verify_tag(record['version'], record['merge_sha'], required=True)
@@ -96,7 +112,7 @@ def main():
                 with saved.open('xb') as output:output.write(envelope.read_bytes())
             receipt.update(status='imported',runtime_images=images,envelope_sha256=hashlib.sha256(envelope.read_bytes()).hexdigest())
     # A local stage/import receipt is never a production deployment receipt.
-    (destination/'stage-receipt.json').write_bytes(canonical(receipt)+b'\n')
+    persist_receipt(destination/'stage-receipt.json',receipt)
     print(json.dumps(receipt))
 
 

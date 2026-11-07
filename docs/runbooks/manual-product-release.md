@@ -7,12 +7,12 @@
 | 配置 | 所有者 | 用途 |
 | - | - | - |
 | `RELEASE_APP_ID` variable | 仓库维护者 | 安装在本仓库的 App 身份 |
-| `RELEASE_APP_PRIVATE_KEY` secret | 仓库维护者 | 短期 installation token，contents / pull_requests / issues 最小读写权限 |
+| `RELEASE_APP_PRIVATE_KEY` secret | 仓库维护者 | 短期 installation token，contents / pull_requests / issues 读写，Actions / Checks / Administration 只读；Administration 仅用于核验保护，不授权修改 |
 | `RELEASE_GPG_PRIVATE_KEY` secret | 签名维护者 | ephemeral runner 导入的发布签名私钥；必须支持非交互签名 |
-| `RELEASE_GPG_KEY_ID` variable | 签名维护者 | GitHub 能验证的 GPG 签名身份 |
+| `RELEASE_GPG_KEY_ID` variable | 签名维护者 | GitHub 能验证的完整 40 位 GPG 主密钥指纹；ledger 逐提交核对该指纹 |
 | `RELEASE_SIGNING_EMAIL` variable | 签名维护者 | 与 GitHub 已验证签名身份相符的提交邮箱 |
 
-main 必须要求 PR、签名提交与仓库 quality-gates 声明的检查。release-ledger 必须禁止删除和非快进、要求签名，只有授权发布者可追加；初次 reservation 可原子创建空缺 ref。正式 v* tags 必须禁止更新与删除。权限不足、配置不完整或规则无法核验时 fail closed，不修改平台配置作为自动补救。
+main 必须要求 PR、签名提交与仓库 quality-gates 声明的检查。release-ledger 必须以两层 active ruleset 保护：creation/update 只允许专用 Release App bypass；独立且无 bypass 的规则要求签名、禁止删除和非快进。初次 reservation 可原子创建空缺 ref。正式 v* tags 必须以无 bypass 的规则禁止更新与删除。入口必须读到完整 bypass actors；GitHub 未返回该字段时不能推断为空，须由 owner 解决规则可见性后再做 A6，不增加 App 写入平台规则的权限。权限不足、配置不完整或规则无法核验时 fail closed，不修改平台配置作为自动补救。
 
 ## 新发布
 
@@ -31,13 +31,13 @@ Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 /
 | 故障 | 处理 |
 | - | - |
 | 准备分支已推送但 ledger 未推进 | 对账确定性分支、签名、parent 和版本投影 tree，复用原准备身份 |
-| 上传响应丢失 | 查询原 draft 资产并下载验证，同内容复用；不同内容阻断 |
+| 上传响应丢失 | 查询原 draft 资产并下载验证，同内容复用；不同内容或额外未登记资产阻断 |
 | 上传部分完成 | 复用原 frozen inventory，补齐剩余原件；优先原构建 run，已持久资产可直接复用 |
 | 原构建 artifact 过期 | 从 draft 复核已持久资产；缺失冻结原件阻断，不重建 |
 | Release 已公开但 completion 丢失 | 查询原 tag、SHA 与资产集合，通过后补记 |
 | tag 或资产被另一身份占用 | 停止，不改写、不自动选择 successor |
 | 通知失败 | 独立记录失败，重跑通知流程；不修改发布或部署结果 |
-| 显式终止 | 有权限维护者使用同一 policy 终止并记录原因，保留墓碑和历史版本占用 |
+| 显式终止 | 开始公开前可取消并保留墓碑；公开意图已写入后只能恢复完成，不再允许终止 |
 
 正式发布资产、manifest 与校验和长期保留；未完成发布的冻结原件保留至恢复完成或显式终止。Actions retention 仅是传输窗口。
 
@@ -68,3 +68,9 @@ PR 包场景使用明确标记的 `0.0.0-ci` 合成版本与零身份检验正�
 服务端包附带同版本、同 SHA 的 `bin/loomhelm-migrate`，OCI 内对应路径为 `/loomhelm-migrate`。初始数据库仍遵循既有 approval-history 的 prepare → backfill → validate → indexes → cutover 顺序；工具不改变数据库/journal schema，不在正式部署中自动越过暂停点。成品测试仅对一次性空数据库执行这些既有步骤后观察 Server/Worker readiness。
 
 持久冻结前先追加 staged inventory（固定期望 digest 与原构建 run，接续已禁止重建）。逐项上传、下载核验后才追加 frozen；因此 frozen 的每个原件都已有长期 draft asset 副本，不依赖 Actions retention。staged 中尚未持久化的原件若丢失，仍必须阻断并报告损失，不能以重新构建补齐。
+
+构建矩阵开始前，签名 ledger 用 CAS 固定唯一 Actions run/attempt；重新运行同一个 run 的另一 attempt 也只能下载原 run 的成品，不得重新构建。若中断发生在 inventory 固定前，恢复仅用这些原始 archive 生成 manifest 和校验和。缺少任何原包都必须阻断。发布 policy hash 同时覆盖 release-contract 与 quality-gates，准备期间变更门禁也会拒绝接续。
+
+全部资产复核后，公开 API 调用前先以 CAS 写入不可撤销的公开意图。取消先赢得 CAS 时不会公开；公开意图先写入后禁止取消，即使公开请求结果未知也只能沿原版本、SHA 和 digest 对账完成。该边界不把意图记为已公开或已完成。
+
+部署 stage 回执只允许首次创建或逐字相同的复用，拒绝 symlink 与不同结果覆盖。需要改变 stage/import 模式时使用新的输出目录，保留旧回执。普通 candidate/preview 始终使用 dev 构建身份；只有绑定 reservation 的正式包构建器显式注入产品版本，避免根 VERSION 已投影后影响预览。

@@ -21,6 +21,7 @@ class Provider:
     def ensure_draft(self,r):
         self.verify_tag()
         return dict(id=1,draft=self.draft)
+    def existing_release(self,r):return self.ensure_draft(r)
     def api(self,path,method='GET',body=None):
         if method=='PATCH':self.draft=False;self.publications+=1;return {}
         return [dict(id=name,name=name) for name in self.assets]

@@ -209,7 +209,12 @@ PY
 echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
 GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
 	go mod download
-product_version=$(python3 tools/release/product.py check)
+projected_version=$(python3 tools/release/product.py check)
+product_version=dev
+if [ -n "${LOOMHELM_PRODUCT_BUILD_VERSION:-}" ]; then
+    [ "$LOOMHELM_PRODUCT_BUILD_VERSION" = "$projected_version" ] || [ "${LOOMHELM_FIXTURE_BUILD_VERSION:-}" = 0.0.0-ci ] || exit 1
+    product_version=$LOOMHELM_PRODUCT_BUILD_VERSION
+fi
 if [ -n "${LOOMHELM_FIXTURE_BUILD_VERSION:-}" ]; then
 	[ "$LOOMHELM_FIXTURE_BUILD_VERSION" = 0.0.0-ci ] || exit 1
 	product_version=$LOOMHELM_FIXTURE_BUILD_VERSION

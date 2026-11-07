@@ -11,7 +11,7 @@ def assemble(directory, record):
     if {p.name for p in files} != set(contract()['artifacts']) or any(p.is_symlink() or not p.is_file() for p in files):
         raise ReleaseError('all native product partitions are required')
     hashes={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
-    manifest=dict(schema_version=1,identity=record['id'],version=record['version'],source_sha=record['merge_sha'],policy_hash=record['intent']['policy_hash'],artifacts=hashes,build_run_id=__import__('os').environ.get('GITHUB_RUN_ID'))
+    manifest=dict(schema_version=1,identity=record['id'],version=record['version'],source_sha=record['merge_sha'],policy_hash=record['intent']['policy_hash'],artifacts=hashes,build_run_id=record.get('build_source',{}).get('run_id'),build_attempt=record.get('build_source',{}).get('attempt'))
     (directory/'release-manifest.json').write_bytes(canonical(manifest)+b'\n')
     hashes['release-manifest.json']=hashlib.sha256((directory/'release-manifest.json').read_bytes()).hexdigest()
     (directory/'SHA256SUMS').write_text(''.join(f'{value}  {name}\n' for name,value in sorted(hashes.items())))

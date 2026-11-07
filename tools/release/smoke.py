@@ -43,7 +43,7 @@ def runtime_smoke(tags, record):
             name=owner+'-'+component;containers.append(name)
             port=8080 if component=='server' else 8081
             env=['LOOMHELM_HTTP_ADDR=0.0.0.0:8080','LOOMHELM_DATABASE_URL=postgres://loomhelm:package-smoke-only@db:5432/loomhelm?sslmode=disable','LOOMHELM_DRAIN_TOKEN=package-smoke-only','LOOMHELM_ARTIFACT_ROOT=/tmp/artifacts','LOOMHELM_WORKER_HTTP_ADDR=0.0.0.0:8081']
-            command=['docker','run','-d','--name',name,'--network',owner,'--tmpfs','/tmp:rw,mode=1777','-p',f'127.0.0.1::{port}']
+            command=['docker','run','-d','--name',name,'--network',owner,'-p',f'127.0.0.1::{port}']
             for value in env:command+=['-e',value]
             subprocess.run(command+[tags[component]],check=True,stdout=subprocess.DEVNULL)
             bindings=json.loads(subprocess.check_output(['docker','inspect',name,'--format','{{json .NetworkSettings.Ports}}'],text=True))

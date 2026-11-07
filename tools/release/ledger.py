@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -34,8 +35,13 @@ class Ledger:
         if self.head:
             git('fetch', '--no-tags', self.remote, self.ref)
             if self.signed:
+                expected = os.environ.get('RELEASE_SIGNING_KEY_ID','').upper()
+                if not re.fullmatch('[0-9A-F]{40}',expected):
+                    raise ReleaseError('trusted full GPG primary fingerprint is required')
                 for sha in git('rev-list', self.head).stdout.decode().split():
                     git('verify-commit', sha)
+                    if git('show','-s','--format=%GP',sha).stdout.decode().strip().upper() != expected:
+                        raise ReleaseError('ledger commit signer is not the authorized release key')
             self.state = json.loads(git('show', f'{self.head}:ledger.json').stdout)
             if self.state.get('schema_version') != 1:
                 raise ReleaseError('unsupported ledger schema')
@@ -49,7 +55,7 @@ class Ledger:
             new = state['releases'].get(identity)
             if new is None or new['events'][:len(old['events'])] != old['events']:
                 raise ReleaseError('ledger history cannot be removed or rewritten')
-            for field in ('id','version','intent','merge_sha','preparation_sha','branch'):
+            for field in ('id','version','intent','merge_sha','preparation_sha','branch','publication_intent','build_source'):
                 if field in old and old[field] != new.get(field):
                     raise ReleaseError('reserved identity field cannot change: '+field)
             if old.get('state') in ('staged','frozen','completed','terminated') and old.get('artifacts') != new.get('artifacts'):
@@ -93,11 +99,23 @@ def transition(record, kind, **fields):
     allowed = {
         'prepared': ('reserved',), 'bound': ('prepared',),
         'staged': ('bound',), 'frozen': ('staged',), 'uploaded': ('staged','frozen'),
+        'publication_intent': ('frozen',),
         'completed': ('frozen',), 'terminated': ('reserved','prepared','bound','staged','frozen'),
+        'build_claim': ('bound',),
         'notification': ('reserved','prepared','bound','staged','frozen','completed','terminated'),
     }
     if kind not in allowed or record['state'] not in allowed[kind]:
         raise ReleaseError('invalid release state transition')
+    if kind == 'terminated' and record.get('publication_intent'):
+        raise ReleaseError('publication started; reconcile the same identity, never terminate')
+    if kind == 'publication_intent':
+        if record.get('publication_intent'):
+            raise ReleaseError('publication intent already recorded')
+        record['publication_intent'] = True
+    elif kind == 'build_claim':
+        if record.get('build_source'):
+            raise ReleaseError('original build already claimed')
+        record['build_source'] = dict(run_id=fields['run_id'], attempt=fields['attempt'])
     if kind == 'prepared':
         record.update(branch=fields['branch'], preparation_sha=fields['preparation_sha'])
         record['state'] = kind

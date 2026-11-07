@@ -30,6 +30,20 @@ def contract():
     return value
 
 
+def policy_hash():
+    return digest(dict(release=contract(), quality_gates=json.loads((ROOT/'.github/quality-gates.json').read_text())))
+
+
+def claim_build(ledger, record, run_id, attempt):
+    if record['state'] != 'bound':
+        return
+    if not str(run_id).isdigit() or not str(attempt).isdigit():
+        raise ReleaseError('an authoritative Actions run and attempt are required')
+    if not record.get('build_source'):
+        transition(record, 'build_claim', run_id=str(run_id), attempt=str(attempt))
+        ledger.append(ledger.state)
+
+
 def project(version):
     Version(version)
     (ROOT/'VERSION').write_text(version+'\n')
@@ -60,7 +74,7 @@ def check_projections():
 
 
 def prerequisites(api, require_sign=True):
-    if require_sign and not os.environ.get('RELEASE_SIGNING_KEY_ID'):
+    if require_sign and not re.fullmatch('[0-9A-Fa-f]{40}', os.environ.get('RELEASE_SIGNING_KEY_ID','')):
         raise ReleaseError('RELEASE_SIGNING_KEY_ID is required')
     # Effective rules, including rulesets. Empty/unreadable rules fail closed.
     for branch in ('main','release-ledger'):
@@ -70,16 +84,31 @@ def prerequisites(api, require_sign=True):
             raise ReleaseError('protected signed branch prerequisites missing: '+branch)
         if branch == 'main' and 'pull_request' not in types:
             raise ReleaseError('main must require pull requests')
+    app_id = os.environ.get('RELEASE_APP_ID','')
+    if not app_id.isdigit():
+        raise ReleaseError('dedicated RELEASE_APP_ID is required')
     rulesets = api.api('rulesets?per_page=100')
     protected = False
+    ledger_writer = False
+    ledger_immutable = set()
     for summary in rulesets:
         ruleset = api.api('rulesets/'+str(summary['id']))
         includes = ruleset.get('conditions',{}).get('ref_name',{}).get('include',[])
         excludes = ruleset.get('conditions',{}).get('ref_name',{}).get('exclude',[])
-        if ruleset['target'] == 'tag' and ruleset['enforcement'] == 'active' and not excludes and ('refs/tags/v*' in includes or '~ALL' in includes):
+        # An omitted actor list is an unverifiable permission boundary, not empty.
+        if 'bypass_actors' not in ruleset:
+            raise ReleaseError('ruleset bypass actors are not visible; owner platform audit is required')
+        bypass = ruleset['bypass_actors']
+        if ruleset['target'] == 'branch' and ruleset['enforcement'] == 'active' and not excludes and ('refs/heads/release-ledger' in includes or '~ALL' in includes):
+            types = {r['type'] for r in ruleset['rules']}
+            if not bypass:
+                ledger_immutable |= types
+            if {'creation','update'} <= types and len(bypass) == 1 and bypass[0].get('actor_type') == 'Integration' and bypass[0].get('actor_id') == int(app_id) and bypass[0].get('bypass_mode') == 'always':
+                ledger_writer = True
+        if ruleset['target'] == 'tag' and ruleset['enforcement'] == 'active' and not bypass and not excludes and ('refs/tags/v*' in includes or '~ALL' in includes):
             protected = {'update','deletion'} <= {r['type'] for r in ruleset['rules']}
-            if protected:
-                break
+    if not ledger_writer or not {'required_signatures','non_fast_forward','deletion'} <= ledger_immutable:
+        raise ReleaseError('ledger requires App-only creation/update and non-bypassable signature/history protection')
     if not protected:
         raise ReleaseError('immutable product tag protection is required')
 
@@ -87,13 +116,15 @@ def prerequisites(api, require_sign=True):
 def trusted_baseline(api, records):
     finals = []
     for record in records.values():
-        if record['state'] == 'completed' and not Version(record['version']).pre:
+        if record['state'] == 'completed':
             release = api.release(record['version'])
-            if not release or release['draft'] or release['prerelease']:
+            if not release or release['draft'] or release['prerelease'] != bool(Version(record['version']).pre):
                 raise ReleaseError('completed baseline publication missing')
             api.verify_tag(record['version'], record['merge_sha'], required=True)
             api.verify_assets(release, record['artifacts'])
-            finals.append(Version(record['version']))
+            api.match_release(release, record)
+            if not Version(record['version']).pre:
+                finals.append(Version(record['version']))
     return max(finals).text if finals else None
 
 
@@ -138,11 +169,11 @@ def inventory(directory, record):
 def publish(api, ledger, record, directory):
     if record['state'] == 'bound':
         frozen = inventory(directory,record)
-        transition(record,'staged',artifacts=frozen,build_run_id=os.environ.get('GITHUB_RUN_ID'))
+        transition(record,'staged',artifacts=frozen,build_run_id=record.get('build_source',{}).get('run_id',os.environ.get('GITHUB_RUN_ID')),inventory_run_id=os.environ.get('GITHUB_RUN_ID'))
         ledger.append(ledger.state)
     if record['state'] not in ('staged','frozen','completed'):
         raise ReleaseError('identity is not frozen')
-    release = api.ensure_draft(record)
+    release = api.existing_release(record) if record['state'] == 'completed' else api.ensure_draft(record)
     # Completed recovery is also verified; it never mutates the version.
     if record['state'] == 'completed':
         if release['draft']:
@@ -169,20 +200,26 @@ def publish(api, ledger, record, directory):
             transition(record,'frozen',artifacts=record['artifacts'])
             ledger.append(ledger.state)
         api.verify_tag(record['version'],record['merge_sha'],required=True)
+        if not record.get('publication_intent'):
+            transition(record,'publication_intent')
+            ledger.append(ledger.state)
         api.api('releases/'+str(release['id']),'PATCH',dict(draft=False))
     # Re-read the public record: a lost response must not create a second Release.
-    release = api.ensure_draft(record)
+    release = api.existing_release(record)
     if release['draft']:
         raise ReleaseError('release is not publicly completed')
     api.verify_tag(record['version'],record['merge_sha'],required=True)
     verified = api.verify_assets(release,record['artifacts'])
+    if not record.get('publication_intent'):
+        transition(record,'publication_intent')
+        ledger.append(ledger.state)
     transition(record,'completed',verified_artifacts=verified)
     ledger.append(ledger.state)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=['check','project','reserve','prepare','bind','inspect','verify','publish','notify','terminate'])
+    parser.add_argument('action',choices=['check','project','reserve','prepare','bind','inspect','verify','publish','notify','terminate','claim-build'])
     parser.add_argument('--target')
     parser.add_argument('--identity')
     parser.add_argument('--source-sha')
@@ -209,9 +246,9 @@ def main():
             raise ReleaseError('exact source SHA required')
         api.verify_source(sha,checks)
         # Resolve once; a retried symbolic intent must not re-read a new baseline.
-        same = [r for r in records.values() if r['intent']['target'] == args.target and r['intent']['source_sha'] == sha and r['intent']['policy_hash'] == digest(contract()) and r['intent']['owner'] == os.environ['GITHUB_ACTOR'] and r['state'] != 'terminated']
+        same = [r for r in records.values() if r['intent']['target'] == args.target and r['intent']['source_sha'] == sha and r['intent']['policy_hash'] == policy_hash() and r['intent']['owner'] == os.environ['GITHUB_ACTOR'] and r['state'] != 'terminated']
         baseline = same[0]['intent']['baseline'] if same else trusted_baseline(api,records)
-        record = reserve(records,args.target,sha,digest(contract()),os.environ['GITHUB_ACTOR'],baseline)
+        record = reserve(records,args.target,sha,policy_hash(),os.environ['GITHUB_ACTOR'],baseline)
         if record['id'] not in records:
             event(record,'reserved',run=os.environ.get('GITHUB_RUN_ID'),attempt=os.environ.get('GITHUB_RUN_ATTEMPT'))
             records[record['id']] = record
@@ -220,7 +257,7 @@ def main():
         if args.identity not in records:
             raise ReleaseError('unknown release identity')
         record = records[args.identity]
-        if record['intent']['policy_hash'] != digest(contract()):
+        if record['intent']['policy_hash'] != policy_hash():
             raise ReleaseError('policy differs from reserved identity')
         if args.action == 'prepare':
             if record['state'] in ('bound','staged','frozen','completed'):
@@ -262,10 +299,12 @@ def main():
                 ledger.append(ledger.state)
             elif record.get('merge_sha') != args.source_sha:
                 raise ReleaseError('merge SHA collision')
+        elif args.action == 'claim-build':
+            claim_build(ledger,record,os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT'))
         elif args.action == 'verify':
             if record['state'] != 'completed':
                 raise ReleaseError('Deploy requires a completed product release')
-            release = api.ensure_draft(record)
+            release = api.existing_release(record)
             if release['draft']:
                 raise ReleaseError('Deploy cannot consume a draft release')
             api.verify_tag(record['version'],record['merge_sha'],required=True)

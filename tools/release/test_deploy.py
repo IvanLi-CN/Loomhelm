@@ -9,9 +9,9 @@ class DeploymentTests(unittest.TestCase):
         for state in ('reserved','prepared','bound','staged','frozen','terminated'):
             api=Mock()
             with self.assertRaises(ReleaseError):stage(api,{'state':state},Path('/not-created'))
-            api.ensure_draft.assert_not_called()
+            api.existing_release.assert_not_called()
 
     def test_completed_ledger_alone_cannot_authorize_draft_deploy(self):
-        api=Mock();api.ensure_draft.return_value={'draft':True}
+        api=Mock();api.existing_release.return_value={'draft':True}
         with self.assertRaises(ReleaseError):stage(api,{'state':'completed'},Path('/not-created'))
         api.verify_assets.assert_not_called()

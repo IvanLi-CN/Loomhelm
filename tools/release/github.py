@@ -88,18 +88,32 @@ class GitHub:
 
     def verify_assets(self, release, inventory):
         assets = {a['name']: a for a in self.api(f'releases/{release["id"]}/assets?per_page=100')}
+        if set(assets) != set(inventory):
+            raise ReleaseError('Release asset names differ from the frozen inventory')
         for name, expected in inventory.items():
             if name not in assets or hashlib.sha256(self.asset_bytes(assets[name])).hexdigest() != expected:
                 raise ReleaseError('missing or conflicting frozen asset: '+name)
         return inventory
+
+    def existing_release(self, record):
+        self.verify_tag(record['version'], record['merge_sha'], required=True)
+        release = self.release(record['version'])
+        if not release:
+            raise ReleaseError('recorded Release missing; verification never creates one')
+        self.match_release(release, record)
+        return release
+
+    @staticmethod
+    def match_release(release, record):
+        if release.get('body') != 'Loomhelm release identity: '+record['id'] or release.get('target_commitish') != record['merge_sha'] or release.get('prerelease') != ('-' in record['version']):
+            raise ReleaseError('Release belongs to another identity')
 
     def ensure_draft(self, record):
         self.verify_tag(record['version'], record['merge_sha'])
         release = self.release(record['version'])
         marker = 'Loomhelm release identity: '+record['id']
         if release:
-            if release['body'] != marker or release['target_commitish'] != record['merge_sha'] or release['prerelease'] != ('-' in record['version']):
-                raise ReleaseError('Release belongs to another identity')
+            self.match_release(release, record)
             return release
         self.ensure_tag(record['version'], record['merge_sha'])
         return self.api('releases','POST',dict(tag_name='v'+record['version'],target_commitish=record['merge_sha'],name='Loomhelm '+record['version'],body=marker,draft=True,prerelease='-' in record['version']))

@@ -15,6 +15,7 @@ jobs:
   prepare:
     runs-on: ubuntu-24.04
     env:
+      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
       RELEASE_SIGNING_KEY_ID: ${{ vars.RELEASE_GPG_KEY_ID }}
     steps:
       - name: Require protected main
@@ -29,6 +30,9 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-checks: read
+          permission-administration: read
           permission-contents: write
           permission-pull-requests: write
           permission-issues: write

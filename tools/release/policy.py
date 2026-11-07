@@ -39,7 +39,7 @@ def digest(value):
     return hashlib.sha256(canonical(value)).hexdigest()
 
 
-def resolve(target, baseline, occupied=()):
+def resolve(target, baseline, occupied=(), completed=()):
     if not target:
         raise ReleaseError('release_target is required')
     base = Version(baseline) if baseline else None
@@ -56,6 +56,8 @@ def resolve(target, baseline, occupied=()):
     version = Version(target)
     if base and (version <= base or version.core <= base.core):
         raise ReleaseError('target must advance trusted final baseline')
+    if completed and version <= max(Version(v) for v in completed):
+        raise ReleaseError('target must advance every completed final or prerelease')
     if target in occupied:
         raise ReleaseError('version is already reserved; recover the original identity')
     return target
@@ -68,6 +70,6 @@ def reserve(records, target, source_sha, policy_hash, owner, baseline):
             return record
     if any(r['state'] not in ('completed', 'terminated') for r in records.values()):
         raise ReleaseError('another release identity is active')
-    version = resolve(target, baseline, [r['version'] for r in records.values()])
+    version = resolve(target, baseline, [r['version'] for r in records.values()], [r['version'] for r in records.values() if r['state']=='completed'])
     identity = digest(dict(unit='loomhelm', version=version, **intent))
     return dict(id=identity, version=version, intent=intent, state='reserved', artifacts={}, events=[])

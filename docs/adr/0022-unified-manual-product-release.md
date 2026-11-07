@@ -28,3 +28,5 @@ Git ledger 复用 GitHub 授权与签名审计，避免新增状态服务；代�
 - [发布操作手册](../runbooks/manual-product-release.md)
 
 逐项上传期间使用 staged 状态固定期望 digest 和原始构建 run；所有 draft 资产可下载复核后才进入 frozen。staged 和 frozen 的恢复均不重建。如此区分未完成传输与已有长期原件副本的冻结事实，冻结保留不依赖 Actions retention。
+
+开始构建前用签名 CAS 固定唯一 run/attempt；发布 policy identity 同时包含 release-contract 与 quality-gates。公开前再用签名 CAS 记录不可撤销的公开意图，取消与公开通过同一 ref 竞争。取消先赢则不公开，公开意图先赢则永久禁止终止，只允许原身份对账和完成。它避免外部 API 公开动作与本地终止之间不存在跨系统事务的问题，但不把意图当作公开事实。

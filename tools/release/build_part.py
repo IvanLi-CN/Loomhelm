@@ -12,7 +12,7 @@ import subprocess
 import tarfile
 import tempfile
 from policy import ReleaseError, canonical
-from product import ROOT, check_projections
+from product import ROOT, check_projections, policy_hash
 
 
 def run(*args, **kwargs):
@@ -48,9 +48,14 @@ def build(record, part, output):
     projected = check_projections()
     if record['state']!='bound' or record['merge_sha']!=sha or (not fixture and (projected == 'dev' or projected!=record['version'])):
         raise ReleaseError('build source/identity mismatch')
+    if record['intent']['policy_hash'] != policy_hash():
+        raise ReleaseError('reserved release/quality policy changed')
+    if not fixture and record.get('build_source') != dict(run_id=os.environ.get('GITHUB_RUN_ID'),attempt=os.environ.get('GITHUB_RUN_ATTEMPT')):
+        raise ReleaseError('only the original claimed Actions build may create packages')
     # PR-only synthetic version proves formal guards without allocating a release.
     # Real publication records cannot enable this path or use this version source.
     os.environ.pop('LOOMHELM_FIXTURE_BUILD_VERSION', None)
+    os.environ['LOOMHELM_PRODUCT_BUILD_VERSION'] = record['version']
     if fixture:
         os.environ['LOOMHELM_FIXTURE_BUILD_VERSION'] = record['version']
     if subprocess.check_output(['git','status','--porcelain']):
@@ -80,7 +85,9 @@ def build(record, part, output):
                     shutil.copy2(candidate/'bin'/component,context/component)
                     shutil.copy2('/etc/ssl/certs/ca-certificates.crt',context/'ca-certificates.crt')
                     shutil.copy2(migration,context/'loomhelm-migrate')
-                    (context/'Dockerfile').write_text(f'FROM scratch\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nCOPY {component} /{component}\nCOPY loomhelm-migrate /loomhelm-migrate\nUSER 65532:65532\nENTRYPOINT ["/{component}"]\n')
+                    (context/'tmp').mkdir(mode=0o1777)
+                    (context/'tmp').chmod(0o1777)
+                    (context/'Dockerfile').write_text(f'FROM scratch\nCOPY --chmod=1777 tmp/ /tmp/\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nCOPY {component} /{component}\nCOPY loomhelm-migrate /loomhelm-migrate\nUSER 65532:65532\nENTRYPOINT ["/{component}"]\n')
                     path=images/(component+'.oci.tar')
                     run('docker','buildx','build','--builder',builder,'--platform','linux/amd64','--provenance=false','--output','type=oci,dest='+str(path),str(context))
                     with tarfile.open(path) as tar:
