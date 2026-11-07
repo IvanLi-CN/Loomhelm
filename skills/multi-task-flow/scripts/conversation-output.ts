@@ -233,6 +233,7 @@ export class ConversationOutputs {
       if (!valid()) return;
       const selected = await latestConversationOutput(thread, connection);
       if (!valid()) return;
+      state.activeTurnId = runtimeTurnId;
       // Runtime status is independent of which public message wins the text fence.
       this.set(state, { ...state.output, agent_state: runtime, runtime_turn_id: runtimeTurnId });
       // Never replace a locally streaming item with an older persisted item.
@@ -289,7 +290,8 @@ export class ConversationOutputs {
     if (method === "thread/status/changed") {
       const status = object(params.status)?.type;
       state.version++;
-      this.set(state, { ...state.output, agent_state: status === "active" ? "active" : status === "idle" && state.output.agent_state === "idle" && state.output.runtime_turn_id ? "idle" : "unknown", observed_at: new Date().toISOString() });
+      state.activeTurnId = null;
+      this.set(state, { ...state.output, agent_state: status === "active" ? "active" : "unknown", runtime_turn_id: null, observed_at: new Date().toISOString() });
       if (status === "idle" && this.connection) void this.load(thread, this.connection, this.generation);
       return;
     }
@@ -301,7 +303,7 @@ export class ConversationOutputs {
     }
     if (
       ["turn/completed", "turn/failed", "turn/interrupted"].includes(String(method)) &&
-      object(params.turn)?.id === (state.activeTurnId ?? state.output.turn_id)
+      typeof state.activeTurnId === "string" && object(params.turn)?.id === state.activeTurnId
     ) {
       state.version++;
       const turnStatus = object(params.turn)?.status;
