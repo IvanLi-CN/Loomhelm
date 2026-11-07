@@ -1,5 +1,7 @@
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createSingleDeliveryUnitOutputs } from "../examples/single-delivery-unit/outputs";
+import { createSingleDeliveryUnitLedger } from "../examples/single-delivery-unit/ledger";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 import type { AgentOutput } from "../web/agent-output";
 import type { Task } from "../web/model";
@@ -7,7 +9,8 @@ import { buildView } from "./view";
 
 const output = join(import.meta.dir, "..", "dist");
 const outputDemo = process.argv.includes("--agent-output");
-const ledger = outputDemo
+const singleUnit = process.argv.includes("--single-delivery-unit");
+const ledger = singleUnit ? createSingleDeliveryUnitLedger() : outputDemo
   ? createDemoLedger(Date.parse("2026-11-05T08:00:00Z"))
   : createDemoLedger();
 // The static shim has no native connection; only synthetic text is rendered.
@@ -32,6 +35,7 @@ const demoOutputs = Object.fromEntries(
           : `已完成接口与数据投影核对，正在验证实时更新。\n这是任务 ${task.title} 的最新 Agent 进展。\n卡片和悬浮卡片按展示行数截断，详情保留完整换行。`.repeat(
               3,
             ),
+      thread_title: `演示对话 · ${task.title}`,
       thread_id: task.thread_id,
       turn_id: "demo-turn",
       message_id: "demo-message",
@@ -45,11 +49,15 @@ const demoOutputs = Object.fromEntries(
 const view = buildView(
   ledger,
   undefined,
-  outputDemo ? (demoOutputs as Record<string, AgentOutput>) : {},
+  singleUnit ? createSingleDeliveryUnitOutputs(ledger) : outputDemo ? (demoOutputs as Record<string, AgentOutput>) : {},
 );
-if (outputDemo)
+if (outputDemo && !singleUnit)
   for (const task of view.tasks as Task[])
     task.thread_id = demoOutputs[task.id]!.thread_id;
+if (outputDemo && !singleUnit) for (const group of view.groups) {
+  group.agent_thread_id = `demo-group-${group.id}`;
+  group.latest_agent_output = { ...demoOutputs[demoTasks[0]!.id]!, thread_id: group.agent_thread_id, thread_title: `交付单元对话 · ${group.title}` } as AgentOutput;
+}
 const groups = view.groups as Array<Record<string, unknown>>;
 // Synthetic presentation variant; never changes or initializes a real run.
 if (process.argv.includes("--bootstrap") && groups[0]) {
@@ -62,7 +70,7 @@ const response = JSON.stringify({
   revision: ledger.revision,
   output_epoch: "static-demo",
   output_revision: 1,
-  watching: outputDemo,
+  watching: outputDemo || singleUnit,
   active_plan_id: ledger.active_plan_id,
   view,
 }).replaceAll("<", "\\u003c");
@@ -108,17 +116,25 @@ const profileDemo = JSON.stringify({
   ],
   read_only: true,
 });
-const shim = `<script>${outputDemo ? "Date.now=()=>1793865600000;" : ""}window.fetch=async(input,options)=>options?.method==="POST"&&String(input).includes("api/execution-profile")?new Response(JSON.stringify({message:"静态预览不会保存配置"}),{status:405}):new Response(String(input).includes("api/execution-profile")?${JSON.stringify(profileDemo)}:String(input).includes("api/preferences")?${JSON.stringify(preferences)}:JSON.stringify(${response}),{headers:{"Content-Type":"application/json"}});window.EventSource=class{listeners={};constructor(){window.demoOutputUpdate=(taskId,text)=>{const state=${response};const task=state.view.tasks.find(t=>t.id===taskId);const output={...task.latest_agent_output,text,state:"available",stale:false};this.revision=(this.revision??1)+1;for(const handler of this.listeners["agent-output"]??[])handler({data:JSON.stringify({output_epoch:"static-demo",output_revision:this.revision,outputs:Object.fromEntries(state.view.tasks.map(t=>[t.id,t.id===taskId?output:t.latest_agent_output]))})});};}addEventListener(type,handler){(this.listeners[type]??=[]).push(handler);if(type==="open")queueMicrotask(()=>handler(new Event("open")));}close(){}};document.addEventListener("DOMContentLoaded",()=>{if(new URLSearchParams(location.search).has("evidence")){const observer=new MutationObserver(()=>{const card=document.querySelector('[data-task-id="ledger"]');if(card){observer.disconnect();requestAnimationFrame(()=>card.scrollIntoView({block:"center"}));}});observer.observe(document.body,{childList:true,subtree:true});}const d=document.getElementById("details-content");new MutationObserver(()=>{for(const a of d.querySelectorAll("a")){const href=a.getAttribute("href");if(href&&href.startsWith("api/document/"))a.setAttribute("href","demo-documents/"+href.slice(13)+".html")}}).observe(d,{childList:true,subtree:true})});</script>`;
+const prDemo = JSON.stringify({ data: { number: 42, title: "演示 PR：卡片悬浮信息", url: "https://github.com/example/repo/pull/42", state: "OPEN", mergedAt: null, mergeable: "MERGEABLE", ci: "运行中", checks: [{ name: "Unit tests", conclusion: "SUCCESS" }, { name: "Browser checks", status: "IN_PROGRESS" }] }, observed_at: "2026-11-05T08:00:00Z", stale: false, loading: false, error: null });
+const shim = `<script>${outputDemo ? "Date.now=()=>1793865600000;" : singleUnit ? `Date.now=()=>${Date.parse(ledger.updated_at)};` : ""}window.fetch=async(input,options)=>options?.method==="POST"&&String(input).includes("api/execution-profile")?new Response(JSON.stringify({message:"静态预览不会保存配置"}),{status:405}):new Response(String(input).includes("api/execution-profile")?${JSON.stringify(profileDemo)}:String(input).includes("api/preferences")?${JSON.stringify(preferences)}:String(input).includes("api/resource-details")?${JSON.stringify(prDemo)}:JSON.stringify(${response}),{headers:{"Content-Type":"application/json"}});window.EventSource=class{listeners={};constructor(){window.demoOutputUpdate=(taskId,text)=>{const state=${response};const task=state.view.tasks.find(t=>t.id===taskId);const output={...task.latest_agent_output,text,state:"available",stale:false};this.revision=(this.revision??1)+1;for(const handler of this.listeners["agent-output"]??[])handler({data:JSON.stringify({output_epoch:"static-demo",output_revision:this.revision,outputs:Object.fromEntries([...state.view.tasks.map(t=>[t.id,t.id===taskId?output:t.latest_agent_output]),...state.view.groups.map(g=>["group:"+g.id,g.latest_agent_output])])})});};}addEventListener(type,handler){(this.listeners[type]??=[]).push(handler);if(type==="open")queueMicrotask(()=>handler(new Event("open")));}close(){}};document.addEventListener("DOMContentLoaded",()=>{if(new URLSearchParams(location.search).has("evidence")){const observer=new MutationObserver(()=>{const card=document.querySelector('[data-task-id="ledger"]');if(card){observer.disconnect();requestAnimationFrame(()=>card.scrollIntoView({block:"center"}));}});observer.observe(document.body,{childList:true,subtree:true});}const d=document.getElementById("details-content");new MutationObserver(()=>{for(const a of d.querySelectorAll("a")){const href=a.getAttribute("href");if(href&&href.startsWith("api/document/"))a.setAttribute("href","demo-documents/"+href.slice(13)+".html")}}).observe(d,{childList:true,subtree:true})});</script>`;
 const source = readFileSync(join(output, "index.html"), "utf8");
 const css = 'href="assets/app.css"';
 const script = '<script type="module" src="assets/app.js"></script>';
 if (!source.includes(css) || !source.includes(script))
   throw new Error("Dashboard template does not match the demo generator");
-const html = source
+const template = singleUnit ? source.replace("<title>任务编排</title>", "<title>文档检索服务 · Mock 示例</title>").replace('class="product-name">任务编排</div>', 'class="product-name">Mock 编排 · 固定快照</div>') : source;
+const html = template
   .replace(css, 'href="app.css"')
   .replace(script, `${shim}\n  <script defer src="app.js"></script>`);
-writeFileSync(join(output, "preview.html"), html);
-console.log(`Demo preview built: ${join(output, "preview.html")}`);
+const filename = singleUnit ? "single-delivery-unit.html" : "preview.html";
+writeFileSync(join(output, filename), html);
+console.log(`Demo preview built: ${join(output, filename)}`);
+if (singleUnit) {
+  for (const [surface, width] of [["tasks", 1440], ["graph", 2540]] as const) {
+    writeFileSync(join(output, `single-delivery-unit-${surface}.html`), html.replace("</head>", `<style>body{width:${width}px;max-width:${width}px}</style></head>`));
+  }
+}
 
 if (outputDemo) {
   writeFileSync(
@@ -129,4 +145,8 @@ if (outputDemo) {
     join(output, "output-hover.html"),
     `<html><meta charset="utf-8"><style>body{margin:0}iframe{display:block;border:0;width:1100px;height:900px}</style><iframe src="preview.html?tab=graph&layout=grid&evidence=tasks"></iframe></html>`,
   );
+}
+
+if (outputDemo) for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 393, 852]] as const) {
+  writeFileSync(join(output, `resource-${name}.html`), `<html><meta charset="utf-8"><style>body{margin:0;width:${width}px}iframe{display:block;border:0;width:${width}px;height:${height}px}</style><iframe title="卡片悬浮信息演示" src="preview.html?tab=graph&layout=grid&evidence=tasks"></iframe></html>`);
 }

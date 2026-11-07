@@ -1,3 +1,4 @@
+import { refreshResourcePopover } from "./resource-popover";
 import { OutputSnapshots, initialOutput, refreshOutputNodes, type OutputSnapshot } from "./agent-output";
 import { createProfileEditor } from "./profile-editor";
 import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
@@ -17,9 +18,8 @@ import { installViewStateNavigation } from "./navigation";
 import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-preview";
 import { formatDuration, formatLocalTime } from "./time";
 import { renderTimestamp, refreshTimestamps } from "./timestamp";
-import { rangeFromIntervals } from "./execution-range";
 import { taskKindLabel } from "./labels";
-import { DEFAULT_VIEW_STATE, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
+import { DEFAULT_VIEW_STATE, defaultTaskLayout, hasValidLayoutParam, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
 const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest };
 createIcons({ icons: ICONS });
 moment.defineLocale("zh-task", { parentLocale: "en", months: "一月_二月_三月_四月_五月_六月_七月_八月_九月_十月_十一月_十二月".split("_"), monthsShort: "1月_2月_3月_4月_5月_6月_7月_8月_9月_10月_11月_12月".split("_"), weekdays: "星期日_星期一_星期二_星期三_星期四_星期五_星期六".split("_"), weekdaysShort: "周日_周一_周二_周三_周四_周五_周六".split("_"), weekdaysMin: "日_一_二_三_四_五_六".split("_") });
@@ -37,10 +37,16 @@ function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void 
   const outputSnapshot = outputSnapshots.accept(next, requestEpoch);
   if (!data || !outputSnapshot) return;
   for (const task of data.tasks) {
-    const output = outputSnapshot.outputs[task.id];
+    const output = outputSnapshot.outputs[`task:${task.id}`] ?? outputSnapshot.outputs[task.id];
     task.latest_agent_output = output?.thread_id === task.thread_id ? output : initialOutput(task.thread_id);
   }
+  for (const group of data.groups) {
+    const thread = group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id;
+    const output = outputSnapshot.outputs[`group:${group.id}`];
+    group.latest_agent_output = output?.thread_id === thread ? output : initialOutput(thread ?? null);
+  }
   refreshOutputNodes(document, data.tasks);
+  refreshResourcePopover();
 }
 let viewState: ViewState = parseViewState(window.location.search);
 let selectedTask: string | null = viewState.selected?.kind === "task" ? viewState.selected.id : null;
@@ -93,7 +99,7 @@ function stateValidation() {
 }
 function syncUrl(): void {
   const phaseDefaultTab = phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab;
-  replaceViewState(viewState, activePlanId || null, phaseDefaultTab);
+  replaceViewState(viewState, activePlanId || null, phaseDefaultTab, defaultTaskLayout(data?.groups.length ?? 0));
 }
 function filterFromControls(): void {
   viewState = { ...viewState, query: $<HTMLInputElement>("search").value.trim(), group: menuValue("group-filter"), state: menuValue("state-filter"), kind: menuValue("kind-filter") };
@@ -142,7 +148,7 @@ function updateVersionMenu(): void {
   for (const plan of data.plans) {
     const listItem = document.createElement("li"); const option = document.createElement("a");
     const selected = (activePlan || defaultPlan) === plan.id;
-    option.href = canonicalViewUrl(window.location.href, { ...viewState, plan: plan.id === defaultPlan ? null : plan.id }, defaultPlan, phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab);
+    option.href = canonicalViewUrl(window.location.href, { ...viewState, plan: plan.id === defaultPlan ? null : plan.id }, defaultPlan, phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab, defaultTaskLayout(data?.groups.length ?? 0));
     option.role = "option"; option.dataset.menuValue = plan.id; option.setAttribute("aria-selected", String(selected)); option.textContent = plan.id;
     option.addEventListener("click", (event) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -172,6 +178,7 @@ function renderSummary(): void {
 }
 function refreshCardDurations(): void {
   refreshTimestamps();
+  refreshResourcePopover();
   for (const element of document.querySelectorAll<HTMLElement>("[data-duration-start]")) {
     const start = element.dataset.durationStart || null;
     const end = element.dataset.durationEnd || null;
@@ -224,7 +231,6 @@ const cardRenderer = createCardRenderer({
   getSelectedGroup: () => selectedGroup,
   labels,
   safeExternal,
-  groupRange,
   selectTask: (id) => selectTask(id),
   selectGroup: (id) => selectGroup(id),
   setKeyboardSelection: () => { keyboardSelection = true; },
@@ -235,13 +241,6 @@ const cardRenderer = createCardRenderer({
 const { renderList, renderGroups } = cardRenderer;
 function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
 function safeExternal(url: string | null): string | null { if (!url || !data) return null; try { const parsed = new URL(url); return parsed.protocol === "https:" && parsed.hostname === data.orchestration.repository.host && !parsed.port && !parsed.username && !parsed.password ? parsed.href : null; } catch { return null; } }
-function taskRange(tasks: Task[]): { start: string | null; end: string | null } {
-  return rangeFromIntervals(tasks.map((task) => ({ start: task.started_at, end: task.finished_at })));
-}
-function groupRange(groupId: string, tasks: Task[]): { start: string | null; end: string | null } {
-  const historical = data?.actual_intervals.filter((interval) => interval.group_id === groupId) ?? [];
-  return historical.length ? rangeFromIntervals(historical) : taskRange(tasks);
-}
 let profileCapabilities: ProfileCapabilities | null = null;
 let profileCapabilityError = "正在读取模型能力…";
 async function loadProfileCapabilities(): Promise<void> {
@@ -260,7 +259,7 @@ async function updateProfile(targetType: ProfileTarget, targetId: string, profil
   if (!response.ok) throw new Error(result.message ?? result.error ?? "配置保存失败");
   await refresh();
 }
-const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, groupRange, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
+const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
 const { clearDetails, showTask, showGroup, taskPreview, groupPreview } = detailContent;
 const hasSelectedObject = (): boolean => Boolean(
   (selectedTask && data?.tasks.some((task) => task.id === selectedTask))
@@ -455,8 +454,9 @@ async function refresh(): Promise<void> {
       result = await response.json() as ViewResponse;
     }
     if (serial !== requestSerial || result.revision < revision) return;
-    const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries(data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)])) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
+    const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries([...data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)]), ...data.groups.map(g => [`group:${g.id}`, g.latest_agent_output ?? initialOutput(g.agent_thread_id)])]) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
     if (!hydrated && !userChangedTab && !hasValidTabParam(window.location.search)) viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
+    if (!hasValidLayoutParam(window.location.search)) viewState = { ...viewState, layout: defaultTaskLayout(data.groups.length) };
     viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
     if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true; phase = currentPhase; const shouldFocusRestoredDetails = !hydrated && viewState.detail; hydrated = true; if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true; syncUrl(); connection(deriveConnectionStatus(connected, result.watching)); $("load-error").hidden = true; render();
   } catch (error) { if (serial !== requestSerial) return; connection("stale"); if (!data) { $("load-error").hidden = false; $("load-error").textContent = `首次加载失败：${error instanceof Error ? error.message : "无法读取数据"}`; } }
@@ -478,7 +478,7 @@ document.addEventListener("keydown", (event) => { const target = event.target as
 $("close-details").addEventListener("click", closeDetails); $("details-backdrop").addEventListener("click", closeDetails); $("phase-jump").addEventListener("click", () => { phaseTransition = false; setTab("actual"); });
 $("zoom-in").addEventListener("click", () => graphController.zoomIn()); $("zoom-out").addEventListener("click", () => graphController.zoomOut()); $("fit").addEventListener("click", () => graphController.fit());
 $("timeline-zoom-in").addEventListener("click", () => timelineController.adjustWindow("in")); $("timeline-zoom-out").addEventListener("click", () => timelineController.adjustWindow("out")); $("timeline-fit").addEventListener("click", () => timelineController.fit());
-installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if (targetPlan !== viewState.plan) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
+installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId)) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
 window.addEventListener("keydown", (event) => { trapDetailsFocus(event); if (event.key === "Escape" && viewState.detail) closeDetails(); });
 window.addEventListener("resize", () => { refreshResponsiveDetails(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks()); window.requestAnimationFrame(() => timelineController.redraw()); });
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);

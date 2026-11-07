@@ -1,6 +1,6 @@
 # 客户端 Skills 资源索引
 
-本目录完整迁入批准的 29 套 dot-codex 自有源包；固定源提交、逐文件摘要和迁移适配见 `source-manifest.json`，依赖与脚本发现见 `catalog.json`。独立可复用的外部 Skills 仍由宿主提供，不复制其源包。上游合同归档在 `docs/vendor/dot-codex/`，不覆盖项目 Policy。
+本目录完整迁入批准的 29 套 dot-codex 自有源包；固定源提交、逐文件摘要和迁移适配见 `source-manifest.json`，依赖与脚本发现见 `catalog.json`。独立可复用的外部 Skills 仍由宿主提供，不复制其源包。上游合同归档在 `skills/docs/vendor/dot-codex/`，不覆盖项目 Policy。
 
 构建后，Node.js 或 Bun 均可执行 `clients/typescript/dist/cli.js skills list/check/run`；原 `.ts` 脚本通过 `skills run <资源相对路径>` 执行编译入口。文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向包内 `dist/toolkit/` 或本仓库资源根。保留的 Bun 构建/原始测试命令属于开发工具链，不构成 Node 生产命令的兜底路径。专项操作仍需要其原授权、外部工具和宿主能力。
 
@@ -11,8 +11,8 @@ Standalone reusable Skills are maintained in [agent-toolkit](https://github.com/
 Run the local index check after changing this directory:
 
 ```bash
-bun bin/skills_index_check.ts
-bun test bin/test_skills_index_check.ts
+bun skills/bin/skills_index_check.ts
+bun test skills/bin/test_skills_index_check.ts
 ```
 
 | Skill | Private reason | Path |

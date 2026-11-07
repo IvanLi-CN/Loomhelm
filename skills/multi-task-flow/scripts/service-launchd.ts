@@ -1,4 +1,4 @@
-import { Runtime } from "../../../bin/modules/core/runtime";
+import { Runtime } from "../../bin/modules/core/runtime";
 import { join } from "node:path";
 import { requireCondition, ContractError } from "./errors";
 import { writeAtomic } from "./store";

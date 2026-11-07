@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { PortRegistry } from "../../../bin/modules/workspace/port_registry";
+import { PortRegistry } from "../../bin/modules/workspace/port_registry";
 import { LedgerStore } from "../scripts/store";
 import { ServiceAuth } from "../scripts/service-auth";
 import { startSharedViewer, listRuns, selectAssets } from "../scripts/service-http";

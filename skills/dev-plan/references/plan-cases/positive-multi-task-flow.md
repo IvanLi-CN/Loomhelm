@@ -38,10 +38,10 @@
 
 ## Acceptance & Validation
 
-- A1 [contract/direct] multi-task batch topology | scope=`batch:multi-core` | phase=`pre_merge` | evidence=`bin/tests/plan/orchestration.test.ts::multi-task-flow canonical facts` | assertions=`top-level multi-task flow preserves one parent batch and three task nodes`
-- A2 [behavior/direct] task A boundary | scope=`task:task-a` | phase=`pre_merge` | evidence=`bin/tests/plan/review.test.ts::multi-task-flow projection` | assertions=`task A retains its owned surface and acceptance scope`
-- A3 [behavior/direct] task B boundary | scope=`task:task-b` | phase=`pre_merge` | evidence=`bin/tests/plan/review.test.ts::multi-task-flow projection` | assertions=`task B retains its owned surface and acceptance scope`
-- A4 [contract/direct] task C dependency | scope=`task:task-c` | phase=`pre_merge` | evidence=`bin/tests/plan/orchestration.test.ts::multi-task-flow canonical facts` | assertions=`task C keeps explicit integrated dependencies on task A and task B`
+- A1 [contract/direct] multi-task batch topology | scope=`batch:multi-core` | phase=`pre_merge` | evidence=`skills/bin/tests/plan/orchestration.test.ts::multi-task-flow canonical facts` | assertions=`top-level multi-task flow preserves one parent batch and three task nodes`
+- A2 [behavior/direct] task A boundary | scope=`task:task-a` | phase=`pre_merge` | evidence=`skills/bin/tests/plan/review.test.ts::multi-task-flow projection` | assertions=`task A retains its owned surface and acceptance scope`
+- A3 [behavior/direct] task B boundary | scope=`task:task-b` | phase=`pre_merge` | evidence=`skills/bin/tests/plan/review.test.ts::multi-task-flow projection` | assertions=`task B retains its owned surface and acceptance scope`
+- A4 [contract/direct] task C dependency | scope=`task:task-c` | phase=`pre_merge` | evidence=`skills/bin/tests/plan/orchestration.test.ts::multi-task-flow canonical facts` | assertions=`task C keeps explicit integrated dependencies on task A and task B`
 
 ## Assumptions/Defaults
 

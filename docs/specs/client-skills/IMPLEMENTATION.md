@@ -6,7 +6,7 @@
 
 ## 模块边界
 
-根 `skills/` 保存源 Skill、references、测试及模板，根 `bin/` 保存共享执行模块；上游合同归档在 `docs/vendor/dot-codex/`。`skills/source-manifest.json` 保存源提交、逐文件源摘要和安装摘要，`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
+根 `skills/` 保存源 Skill、references、测试及模板，根 `skills/bin/` 保存共享执行模块；上游合同归档在 `skills/docs/vendor/dot-codex/`。`skills/source-manifest.json` 保存源提交、逐文件源摘要和安装摘要，`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
 
 生产构建保留模块目录，并将 TypeScript 入口转换为 Node 兼容 JavaScript，避免 bundle 改变相对资源路径。计划 finalizer 单独封装，继续通过校验过的入口描述符运行。POSIX 操作由最小 Node-API 层承接；生产 JavaScript 绑定原生模块摘要，经非跟随打开和描述符检查后加载，保留原子不覆盖重命名与原 flock 互斥。
 
@@ -24,6 +24,8 @@
 
 ## 验证边界
 
+vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、构建和检查支持分别位于 `skills/bin/`、`skills/docs/vendor/dot-codex/` 与 `skills/scripts/`；来源清单拒绝任何安装路径越出 `skills/`。隔离验证仅复制该目录并在其中安装声明依赖，验证原始 Skill 入口和生产脚本，不借用根 `bin/`、源码 checkout 或用户级全局程序。
+
 原共享脚本回归、原 Multi-task Flow 与网页回归、原生安全回归、客户端双运行时测试及来源隔离测试分别运行。macOS 本地结果不能代替 Linux CI，模拟 socket 不能代替真实宿主接力，已有旧运行的测试副本不能授权写入真实账本。当前候选的精确提交、经验验收和正式审查证据由交付流程保管；没有完整证据时不宣称合并就绪。
 
 ## 上游缺陷与本项目适配
@@ -37,3 +39,11 @@
 通知发送还保留调用者的原始请求身份：持久化占用在账本锁内核对 expected_revision，同一 request_id 只重放该次尝试的不可变结果，明确失败后的新尝试必须使用新身份。缓存预检只读，被拒绝的过期请求不得规范化写回历史账本或恢复快照。在外部发送整个生命周期持有独立的通知文件锁，显式对账与发送互斥；进程退出后文件锁由操作系统释放，unknown 仍须先对账。此行为沿用 schema2/contract2，不新增状态格式。端口管理脚本通过构建产物支持 Node.js 与 Bun；源文件示例中的 Bun 不构成生产硬依赖。
 
 资源筛选排除提供方 Python→TypeScript 历史迁移的映射、场景见证、基线采集和生成工具，以及该次迁移的专项历史文档；这些内容不属于客户端功能或其行为回归。共享 CLI 的实际命令路由和对应功能测试继续保留。来源清单显式记录排除范围，导入和校验拒绝重新带入，客户端打包重建自身生成目录以清除增量构建残留。
+
+## 编排网页与合成示例
+
+依赖图使用 MIT 许可的 React Flow 与 EPL-2.0 许可的 elkjs，保留现有投影、悬浮预览、详情与可访问节点列表。ELK 同时计算卡片位置与正交连线路径，按 edge container 转换坐标；默认横向，标题字号 15px，卡片按标题长度取 136–184px 宽度，状态更新复用结构布局。任务网格默认值按交付单元数量决定，并通过 URL 保留显式布局选择。
+
+`skills/multi-task-flow/examples/single-delivery-unit/` 提供文档检索服务的独立合成快照。源码预览与静态预览共享该数据，合成输出通过内存适配器投影；正式服务配置拒绝该适配器。示例入口和命令见该目录 README。合成对话只显示 Mock 标识，不生成原生应用链接。控制器回归验证布局计算期间重复刷新、最新状态合并与过期结果丢弃。回归覆盖 `tests/ui/graph-controller.test.tsx`、`graph-layout.test.ts`、`view-state.test.ts`、`single-delivery-unit.test.ts`、`source-preview.test.ts`；执行 `bun run --cwd skills/multi-task-flow verify` 验证。
+
+新增图布局模块、React 卡片渲染器、独立示例与回归文件同时登记在 `skills/support-manifest.json`，由来源校验脚本刷新安装摘要；维护者修改这些资源后需要同步来源摘要，再通过安装闭包检查。

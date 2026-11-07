@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
-import { readRegularNoFollow } from "../../../bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "../../bin/modules/visual/secure_io";
 import { LedgerStore, safeId } from "./store";
 import { ServiceState } from "./service-state";
 import { digest, verifyRelease } from "./service-release";

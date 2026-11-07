@@ -4,7 +4,7 @@ Use this contract for shared Step 5, `$flow-continue`, and the workflow PR publi
 
 ## 1. Platform Live Truth Source
 
-- Before saying why a PR currently cannot merge, refresh the live PR fact set through `bin/code_hosting.ts`. Minimum surfaces:
+- Before saying why a PR currently cannot merge, refresh the live PR fact set through `skills/bin/code_hosting.ts`. Minimum surfaces:
   - provider-normalized PR state, closed/merged status, draft, mergeability, head SHA, base SHA, and target/source refs
   - provider-normalized commit status, check/workflow runs, and review-policy contexts bound to the current SHA
   - add reviews / review comments / review threads only when the live status surfaces still leave review policy as a real candidate blocker

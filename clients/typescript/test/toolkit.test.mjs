@@ -39,10 +39,10 @@ test('packaged catalog contains all approved Skills and rejects path escape', as
 
 test('packaged plan checker preserves stdin pass and rejection without invoking Bun', async () => {
   const plan = await readFile(join(runtime.root, 'skills/dev-plan/references/plan-cases/positive-fast-track.md'), 'utf8');
-  const pass = await runtime.run('bin/plan_contract_check.ts', ['--plan', '-'], { input: plan });
+  const pass = await runtime.run('skills/bin/plan_contract_check.ts', ['--plan', '-'], { input: plan });
   assert.equal(pass.code, 0, pass.stderr);
   assert.match(pass.stdout, /PASS/);
-  const reject = await runtime.run('bin/plan_contract_check.ts', ['--plan', '-'], { input: 'invalid' });
+  const reject = await runtime.run('skills/bin/plan_contract_check.ts', ['--plan', '-'], { input: 'invalid' });
   assert.equal(reject.code, 1, reject.stderr);
   assert.match(reject.stdout, /MISSING_FLOW_TYPE/);
 });

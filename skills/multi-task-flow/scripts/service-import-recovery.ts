@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { renameNoReplace } from "../../../bin/modules/visual/secure_io";
+import { renameNoReplace } from "../../bin/modules/visual/secure_io";
 import {
   readRegular,
   syncDirectory,

@@ -42,7 +42,7 @@ export function resolveDetailSurface(context: DetailSurfaceContext): DetailSurfa
 }
 
 export function canShowHoverPreview(context: Pick<DetailSurfaceContext, "selected" | "detailOpen" | "hoverCapable" | "detailPanelViewport" | "keyboardSelection">): boolean {
-  if (context.keyboardSelection || !context.hoverCapable || context.detailPanelViewport) return false;
+  if (context.keyboardSelection || !context.hoverCapable) return false;
   return !context.detailOpen;
 }
 

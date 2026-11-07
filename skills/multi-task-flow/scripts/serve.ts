@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { Runtime } from "../../../bin/modules/core/runtime";
+import { Runtime } from "../../bin/modules/core/runtime";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ContractError, requireCondition } from "./errors";
@@ -9,7 +9,7 @@ import {
   defaultRegistryDir,
   PortRegistry,
   RegistryError,
-} from "../../../bin/modules/workspace/port_registry";
+} from "../../bin/modules/workspace/port_registry";
 
 const args = process.argv.slice(2);
 function flag(name: string): string {

@@ -131,7 +131,7 @@ It is valid to mix both source types in one PR if that is the clearest evidence 
 - For spec/plan-related evidence, update the corresponding source-of-truth file section:
   - preferred `SPEC.md` `## Visual Evidence` for `Spec:` / `Specs:`
   - preferred `PLAN.md` `## Visual Evidence` for legacy `Plan:` / `Plans:`
-- If a historical spec/plan still has retired PR selectors or `## Visual Evidence (PR)`, run `bun bin/visual_evidence_document.ts migrate --path <touched-spec-or-plan>` before handoff. Ambiguous sections containing images remain unchanged and require a manual decision.
+- If a historical spec/plan still has retired PR selectors or `## Visual Evidence (PR)`, run `bun skills/bin/visual_evidence_document.ts migrate --path <touched-spec-or-plan>` before handoff. Ambiguous sections containing images remain unchanged and require a manual decision.
 - Use `![alt](./assets/<file>)` entries as the visual-evidence source of truth inside the relevant section.
 - PR transport selection is task-scoped and must be passed explicitly to `pr_body_image_gate.ts` Phase A with repeated `--evidence` paths or `--no-evidence`; the owner-facing section is not a PR selector database.
 - If an image already exists in another repo path, do not relocate it only for PR formatting.
@@ -141,7 +141,7 @@ It is valid to mix both source types in one PR if that is the clearest evidence 
 - Storybook asset placement and chat image paths are different concerns.
 - Keep the canonical review asset in its repo/spec/plan path as usual.
 - Before showing any local Storybook image in chat, create an immutable snapshot with:
-  - `bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/bin/snapshot_local_image.ts" --source <image-path> --cwd <working-dir>`
+  - `bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/bin/snapshot_local_image.ts" --source <image-path> --cwd <working-dir>`
 - Use only the returned `snapshot_path` in chat Markdown.
 - Never point chat Markdown directly at `docs/specs/.../assets/...`, temporary Storybook capture files, or other mutable working paths.
 
