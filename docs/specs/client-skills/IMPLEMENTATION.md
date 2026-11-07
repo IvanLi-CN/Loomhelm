@@ -24,6 +24,8 @@
 
 ## 验证边界
 
+vendor 源码安装必须保留 `skills/`、`bin/`、`docs/vendor/dot-codex/` 与 `scripts/` 的相对布局。Skills Switch 的 Skill 发现不能代替运行依赖安装；自动推导的 `skills/` sparse checkout 会遗漏根共享脚本。`scripts/check-skills-installation.mjs` 以来源清单只读检查源资源闭包，CI 用真实本地克隆复现只检出 Skills 的失败，再验证补齐显式路径后原 `context.ts` 入口可加载。源资源完整、平台构建和真实宿主能力分别验收，不互相冒充。
+
 原共享脚本回归、原 Multi-task Flow 与网页回归、原生安全回归、客户端双运行时测试及来源隔离测试分别运行。macOS 本地结果不能代替 Linux CI，模拟 socket 不能代替真实宿主接力，已有旧运行的测试副本不能授权写入真实账本。当前候选的精确提交、经验验收和正式审查证据由交付流程保管；没有完整证据时不宣称合并就绪。
 
 ## 上游缺陷与本项目适配

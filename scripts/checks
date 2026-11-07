@@ -271,6 +271,7 @@ check_client() {
 	run_command "Migrated toolkit frozen dependencies" bun install --frozen-lockfile
 	run_command "Dashboard frozen dependencies" bun install --cwd skills/multi-task-flow --frozen-lockfile
 	run_command "Migrated source inventory" node scripts/check-client-skills.mjs
+	run_command "Skill vendor installation layout regression" node --test scripts/check-skills-installation.test.mjs
 	run_command "Toolkit production and native build" bun run skills:build
 	run_command "POSIX cross-implementation safety" node scripts/test-skills-native.mjs
 	run_command "Original shared toolkit and native regression" bun test ./bin/tests ./bin/native-tests

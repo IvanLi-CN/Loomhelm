@@ -65,6 +65,22 @@ node dist/cli.js --config config.example.json codex retry DISPATCH_ID accept
 
 完整源包位于根 `skills/`，共享支持位于根 `bin/`。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度。上游合同归档在 `docs/vendor/dot-codex/`，不替代本项目规范。构建把这些资源、生产 JavaScript、原生适配与网页打入 `dist/toolkit/`，执行时不搜索全局 dot-codex 代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根，原 `.ts` 命令可通过 `skills run` 执行其编译入口。
 
+通过 vendor 源码安装 Skills 时，不能只检出 `skills/`。脚本使用相对路径访问 `bin/`，合同资源位于 `docs/vendor/dot-codex/`，构建入口位于 `scripts/`。Skills Switch 的自动发现只推导 Skill 目录，不推导脚本依赖闭包；该来源须显式配置如下路径，否则能发现 Skill 但运行时会报告 `Cannot find module '../../../bin/compatibility_cli'`。修改用户级 catalog 或 vendor checkout 前须取得对应授权。
+
+```yaml
+sources:
+  vendor-shared/IvanLi-CN/Loomhelm:
+    branch: main
+    sparsePaths:
+      - skills
+      - bin
+      - docs/vendor/dot-codex
+      - scripts
+    discoveryPriority: []
+```
+
+安装后执行 `node scripts/check-skills-installation.mjs --root <vendor-root>` 检查全部迁入源资源。这个只读检查不安装文件、不改变 Git 配置，也不证明原生模块、外部工具或宿主能力就绪。源码安装仍须按下文构建所需原生模块和生产入口；完整客户端产物已携带这些资源，不需要 vendor checkout。
+
 ```sh
 node dist/cli.js skills list
 node dist/cli.js skills check project-engineering-workflow
