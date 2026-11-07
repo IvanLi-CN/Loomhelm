@@ -34,7 +34,7 @@ Task MUST 具备目标、范围、验收条件、依赖和稳定身份。相同 
 
 - Method: Bun 源码入口配置与 CLI 集成验证。
 - covers: `REQ-CORE-001`
-- Pass condition: 无服务端完成任务生命周期，非法配置被拒绝。
+- Pass condition: 无服务端通过实际 Bun 子进程直接执行 TS CLI 完成任务生命周期，非法配置被拒绝，测试不得调用旧 dist 入口。
 
 ### VER-CORE-002
 
@@ -50,7 +50,7 @@ Task MUST 具备目标、范围、验收条件、依赖和稳定身份。相同 
 
 ## Related ADRs
 
-- [ADR 0017](../../adr/0020-bun-source-runtime.md)
+- [ADR 0020](../../adr/0020-bun-source-runtime.md)
 
 ## References
 
