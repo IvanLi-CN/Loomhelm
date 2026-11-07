@@ -158,6 +158,21 @@ function approve(ledger: ReturnType<typeof fixture>) {
   );
 }
 
+test("terminal task creates a pending conversation archive resource", () => {
+  const ledger = fixture();
+  const task = ledger.tasks[1]!;
+  task.kind = "verification";
+  task.thread_id = "task-b-thread";
+  task.state = "running";
+  apply(ledger, "task-update", request(ledger, "complete-b", {
+    task_id: task.id,
+    state: "completed",
+    evidence: "verification complete",
+    occurred_at: at,
+  }, { role: "task", thread_id: task.thread_id }));
+  expect(ledger.resources).toContainEqual(expect.objectContaining({ kind: "conversation", target: "task-b-thread", status: "pending" }));
+});
+
 function v2Fixture() {
   const ledger: any = structuredClone(fixture());
   ledger.schema_version = 2;

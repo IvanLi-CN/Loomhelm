@@ -21,6 +21,7 @@ export const DEPENDENCY_LABELS: Record<string, string> = {
 };
 
 export const STATE_LABELS: Record<string, string> = {
+  agent_idle: "Agent 空闲",
   planned: "待开始",
   ready: "就绪",
   starting: "启动中",

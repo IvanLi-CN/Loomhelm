@@ -34,6 +34,17 @@ export type Task = {
   hold_reason?: string | null;
   latest_output?: string | null;
   latest_agent_output?: AgentOutput;
+  agent_idle?: boolean;
+  conversation_resource?: {
+    id: string;
+    kind: "conversation";
+    target: string | null;
+    status: "unknown" | "active" | "pending" | "closed" | "archive_failed" | "archive_unknown" | "not_applicable";
+    evidence_ref: string | null;
+    error?: string | null;
+    last_attempt_at?: string | null;
+    operation_id?: string | null;
+  } | null;
   pr: { url: string | null } | null;
   requirements_path: string | null;
   started_at: string | null;

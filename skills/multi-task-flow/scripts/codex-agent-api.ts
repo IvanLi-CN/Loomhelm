@@ -31,6 +31,60 @@ export type CodexThreadCreateResult = {
   error?: string;
 };
 
+export type CodexArchiveResult = {
+  outcome: "succeeded" | "failed" | "unknown" | "deferred";
+  evidence_ref: string;
+  error?: string;
+};
+
+/** Reads only the archived listing; absence is never itself proof of archive. */
+export async function archivedCodexThread(threadId: string): Promise<boolean> {
+  return withCodexArchiveConnection(async (socket, buffer) => {
+    let cursor: unknown;
+    const seen = new Set<unknown>();
+    let id = 2;
+    do {
+      const page = await rpc(socket, buffer, id++, "thread/list", { archived: true, limit: 100, ...(cursor ? { cursor } : {}) });
+      if (page.error) throw new Error(String(record(page.error)?.message ?? "Archive lookup failed"));
+      const result = record(page.result);
+      if (!Array.isArray(result?.data)) throw new Error("Invalid archived thread listing");
+      if (result.data.some(item => record(item)?.id === threadId)) return true;
+      cursor = result.nextCursor;
+      if (cursor && seen.has(cursor)) throw new Error("Repeated archived listing cursor");
+      seen.add(cursor);
+    } while (cursor);
+    return false;
+  });
+}
+async function withCodexArchiveConnection<T>(action: (socket: Socket, buffer: { value: Buffer }) => Promise<T>): Promise<T> {
+  const path = socketPath();
+  if (!path) throw new Error("Codex app-server control socket is unavailable");
+  const connected = await connectSocket(path);
+  try {
+    const buffer = { value: connected.buffer };
+    const initialized = await rpc(connected.socket, buffer, 1, "initialize", { clientInfo: { name: "multi-task-flow", version: "1" }, capabilities: {} });
+    if (initialized.error) throw new Error(String(record(initialized.error)?.message ?? "Codex initialization failed"));
+    return await action(connected.socket, buffer);
+  } finally { connected.socket.destroy(); }
+}
+export async function archiveCodexThread(threadId: string, operationId = randomUUID()): Promise<CodexArchiveResult> {
+  const evidence = `codex-app-server:${operationId}`;
+  let submitted = false;
+  try {
+    return await withCodexArchiveConnection(async (socket, buffer) => {
+      const read = await rpc(socket, buffer, 2, "thread/read", { threadId, includeTurns: false });
+      if (read.error || record(record(record(read.result)?.thread)?.status)?.type !== "idle")
+        return { outcome: "deferred", evidence_ref: evidence, error: "Conversation is not confirmed idle; archive deferred" };
+      submitted = true;
+      const archived = await rpc(socket, buffer, 3, "thread/archive", { threadId });
+      if (archived.error) return { outcome: "failed", evidence_ref: evidence, error: String(record(archived.error)?.message ?? "Archive rejected") };
+      return { outcome: "succeeded", evidence_ref: evidence };
+    });
+  } catch (error) {
+    return { outcome: submitted ? "unknown" : "failed", evidence_ref: `${evidence}:error`, error: (error instanceof Error ? error.message : String(error)).slice(0, 500) };
+  }
+}
+
 export async function sendCodexMessage(input: {
   recipient_thread_id: string;
   prompt: string;

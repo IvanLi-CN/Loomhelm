@@ -116,7 +116,15 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   select.addEventListener("click", (event) => { event.stopPropagation(); if (event.detail === 0) context.setKeyboardSelection(); context.selectTask(task.id); });
   head.append(select);
   const actions = text("div", "", "task-card-actions");
-  actions.append(iconAction(task.thread_id ? "打开任务对话" : "任务对话尚未创建", "message-circle", task.thread_id ? conversationUrl(task.thread_id) : null));
+  const archiveStatus = task.conversation_resource?.status;
+  const conversationLabel = archiveStatus === "archive_failed" ? "对话归档失败，打开详情重试" : archiveStatus === "archive_unknown" ? "对话归档结果未知，打开详情对账" : task.agent_idle ? "Agent 已停止工作，打开任务对话" : "打开任务对话";
+  const conversationIcon = archiveStatus === "archive_failed" || archiveStatus === "archive_unknown" ? "archive-x" : task.agent_idle ? "pause-circle" : "message-circle";
+  if (archiveStatus === "archive_failed" || archiveStatus === "archive_unknown") {
+    const action = iconAction(conversationLabel, conversationIcon, null) as HTMLButtonElement;
+    action.disabled = false;
+    action.addEventListener("click", event => { event.stopPropagation(); context.selectTask(task.id); });
+    actions.append(action);
+  } else actions.append(iconAction(task.thread_id ? conversationLabel : "任务对话尚未创建", conversationIcon, task.thread_id ? conversationUrl(task.thread_id) : null));
   const pr = context.safeExternal(task.pr?.url ?? null);
   actions.append(iconAction(pr ? "打开任务 PR" : "任务 PR 尚未创建", "git-pull-request", pr, true));
   head.append(actions);

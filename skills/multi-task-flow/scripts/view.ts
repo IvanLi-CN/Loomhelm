@@ -274,6 +274,13 @@ export function buildView(
         hold_reason: isHeld ? "等待高影响计划修订批准" : null,
         latest_agent_output: outputs[task.id] ?? initialOutput(task.thread_id),
         latest_output: outputs[task.id]?.text ?? null,
+        agent_idle: ["starting", "running"].includes(task.state) && task.disposition === "active" && outputs[task.id]?.stale === false && outputs[task.id]?.agent_state === "idle",
+        conversation_resource: task.thread_id
+          ? ledger.resources.find(
+              (resource) =>
+                resource.kind === "conversation" && resource.target === task.thread_id,
+            ) ?? null
+          : null,
       };
     });
   const planSummary = ledger.plans.map((item) => ({

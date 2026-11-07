@@ -318,6 +318,9 @@ h1 { margin: 3px 0 0; color: var(--text); font-size: 26px; line-height: 1.14; fo
 .details-heading button { position: absolute; top: 12px; right: 0; }
 .details-empty { min-height: 150px; padding-top: 24px; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .details-empty strong { color: var(--text); font-size: 14px; font-weight: 500; }
+.detail-action { border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; color: var(--text); background: var(--control); cursor: pointer; font: inherit; }
+.detail-action:hover { border-color: var(--accent); }
+.detail-action:disabled { opacity: .5; cursor: default; }
 .empty-rule { width: 28px; height: 2px; margin-bottom: 10px; background: var(--accent); }
 .detail-title { padding-right: 38px; margin: 22px 0 7px; color: var(--text); font-size: 20px; font-weight: 500; line-height: 1.25; overflow-wrap: anywhere; }
 .detail-state { width: fit-content; margin-bottom: 16px; padding: 4px 7px; border: 1px solid var(--control); border-radius: var(--radius-chip); color: var(--pill-neutral-ink); background: var(--pill-neutral-bg); font-size: 11px; }

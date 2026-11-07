@@ -2,7 +2,7 @@ import { OutputSnapshots, initialOutput, refreshOutputNodes, type OutputSnapshot
 import { createProfileEditor } from "./profile-editor";
 import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
 import moment from "moment";
-import { createIcons, Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest } from "lucide";
+import { createIcons, Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, PauseCircle, ArchiveX } from "lucide";
 import { createCardRenderer } from "./cards";
 import { createTimelineController } from "./timeline";
 import { createGraphController } from "./graph";
@@ -20,7 +20,7 @@ import { renderTimestamp, refreshTimestamps } from "./timestamp";
 import { rangeFromIntervals } from "./execution-range";
 import { taskKindLabel } from "./labels";
 import { DEFAULT_VIEW_STATE, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
-const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest };
+const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, PauseCircle, ArchiveX };
 createIcons({ icons: ICONS });
 moment.defineLocale("zh-task", { parentLocale: "en", months: "一月_二月_三月_四月_五月_六月_七月_八月_九月_十月_十一月_十二月".split("_"), monthsShort: "1月_2月_3月_4月_5月_6月_7月_8月_9月_10月_11月_12月".split("_"), weekdays: "星期日_星期一_星期二_星期三_星期四_星期五_星期六".split("_"), weekdaysShort: "周日_周一_周二_周三_周四_周五_周六".split("_"), weekdaysMin: "日_一_二_三_四_五_六".split("_") });
 moment.locale("zh-task");
@@ -36,11 +36,16 @@ const outputSnapshots = new OutputSnapshots();
 function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void {
   const outputSnapshot = outputSnapshots.accept(next, requestEpoch);
   if (!data || !outputSnapshot) return;
+  let idleChanged = false;
   for (const task of data.tasks) {
+    const previousIdle = task.agent_idle;
     const output = outputSnapshot.outputs[task.id];
     task.latest_agent_output = output?.thread_id === task.thread_id ? output : initialOutput(task.thread_id);
+    task.agent_idle = ["starting", "running"].includes(task.state) && (!task.disposition || task.disposition === "active") && !task.latest_agent_output.stale && task.latest_agent_output.agent_state === "idle";
+    idleChanged ||= previousIdle !== task.agent_idle;
   }
   refreshOutputNodes(document, data.tasks);
+  if (hydrated && idleChanged) render();
 }
 let viewState: ViewState = parseViewState(window.location.search);
 let selectedTask: string | null = viewState.selected?.kind === "task" ? viewState.selected.id : null;
@@ -66,6 +71,16 @@ const anyFinePointerCapability = window.matchMedia("(any-pointer: fine)");
 function text(tag: string, value: string, ...classNames: string[]): HTMLElement { const element = document.createElement(tag); if (classNames.length) element.className = classNames.join(" "); element.textContent = value; return element; }
 function clear(id: string): HTMLElement { const element = $(id); element.replaceChildren(); return element; }
 function label(task: Task): string { return task.state === "planned" && task.is_ready ? "就绪" : labels[task.state] ?? task.state; }
+async function archiveConversation(taskId: string): Promise<void> {
+  try {
+    const response = await fetch("api/conversation-archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task_id: taskId }) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await refresh();
+  } catch {
+    const notice = document.getElementById("connection-notice");
+    if (notice) { notice.hidden = false; notice.textContent = "归档重试失败，请稍后重试并检查对话资源状态。"; }
+  }
+}
 function groupColor(groupId: string | null): string { if (!data || !groupId) return "#87978f"; const index = data.groups.findIndex((item) => item.id === groupId); return palette[Math.max(0, index) % palette.length] ?? "#87978f"; }
 function stateColor(state: string, ready = false): string {
   const normalized = ready && state === "planned" ? "ready" : state;
@@ -260,7 +275,7 @@ async function updateProfile(targetType: ProfileTarget, targetId: string, profil
   if (!response.ok) throw new Error(result.message ?? result.error ?? "配置保存失败");
   await refresh();
 }
-const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, groupRange, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
+const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, groupRange, archiveConversation, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
 const { clearDetails, showTask, showGroup, taskPreview, groupPreview } = detailContent;
 const hasSelectedObject = (): boolean => Boolean(
   (selectedTask && data?.tasks.some((task) => task.id === selectedTask))

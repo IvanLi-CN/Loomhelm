@@ -24,7 +24,7 @@ describe("conversation output projection", () => {
   });
   test("paginates past tools and whitespace, deduplicates bound threads", async () => {
     const calls: JsonRecord[] = [];
-    const f = fixture(async (_m, params) => { calls.push(params); return params.cursor ? { data: [message("latest", "progress"), message("older", "old")] } : { data: [message("blank", " "), { item: { type: "reasoning", text: "hidden" } }], nextCursor: "page2" }; });
+    const f = fixture(async (_m, params) => { if (_m === "thread/read") return {}; calls.push(params); return params.cursor ? { data: [message("latest", "progress"), message("older", "old")] } : { data: [message("blank", " "), { item: { type: "reasoning", text: "hidden" } }], nextCursor: "page2" }; });
     try {
       await tick();
       expect(calls).toHaveLength(2);
@@ -50,9 +50,37 @@ describe("conversation output projection", () => {
     }
     expect(messageOutput("thread", { ...message("saved", "final"), completedAtMs: 0 })?.message_status).toBe("completed");
   });
+  test("marks a confirmed completed turn as agent idle", async () => {
+    const f = fixture(async (method) => method === "thread/read" ? { thread: { status: { type: "idle" } } } : { data: [{ ...message("done", "finished"), completedAtMs: 1 }] });
+    try { await tick(); expect(f.provider.snapshot().outputs.a?.agent_state).toBe("idle"); } finally { f.provider.stop(); }
+  });
+  test("terminal turn events expose idle; obsolete turns and unknown runtime do not", async () => {
+    for (const status of ["completed", "interrupted", "failed"]) {
+      const f = fixture();
+      try {
+        await tick();
+        f.event("turn/started", { turn: { id: "new", status: "inProgress" } });
+        expect(f.provider.snapshot().outputs.a?.agent_state).toBe("active");
+        f.event("turn/completed", { turn: { id: "old", status } });
+        expect(f.provider.snapshot().outputs.a?.agent_state).toBe("active");
+        f.event("turn/completed", { turn: { id: "new", status } });
+        expect(f.provider.snapshot().outputs.a?.agent_state).toBe("idle");
+        f.event("thread/status/changed", { status: { type: "notLoaded" } });
+        expect(f.provider.snapshot().outputs.a?.agent_state).toBe("unknown");
+        f.lost();
+        expect(f.provider.snapshot().outputs.a?.stale).toBe(true);
+      } finally { f.provider.stop(); }
+    }
+  });
+  test("completed public messages do not prove an idle runtime", async () => {
+    for (const type of ["active", "notLoaded", "systemError"]) {
+      const f = fixture(async method => method === "thread/read" ? { thread: { status: { type } } } : { data: [{ ...message("done", "final"), completedAtMs: 1 }] });
+      try { await tick(); expect(f.provider.snapshot().outputs.a?.agent_state).toBe(type === "active" ? "active" : "unknown"); } finally { f.provider.stop(); }
+    }
+  });
   test("full turn fallback happens only on an explicit unsupported-method error", async () => {
     const calls: string[] = [];
-    const f = fixture(async (method, params) => { calls.push(method); if (method === "thread/items/list") throw new Error("method not found"); expect(params.itemsView).toBe("full"); return { data: [{ id: "turn", status: "completed", items: [message("old", "old").item, message("new", "final", "final_answer").item] }] }; });
+    const f = fixture(async (method, params) => { if (method === "thread/read") return {}; calls.push(method); if (method === "thread/items/list") throw new Error("method not found"); expect(params.itemsView).toBe("full"); return { data: [{ id: "turn", status: "completed", items: [message("old", "old").item, message("new", "final", "final_answer").item] }] }; });
     try { await tick(); expect(calls).toEqual(["thread/items/list", "thread/turns/list"]); expect(f.provider.snapshot().outputs.a?.text).toBe("final"); } finally { f.provider.stop(); }
   });
   test("streamed text wins over in-flight history; completion replaces deltas and duplicates do not regress", async () => {

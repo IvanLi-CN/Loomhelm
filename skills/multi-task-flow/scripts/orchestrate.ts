@@ -1,3 +1,4 @@
+import { sweepConversationArchives } from "./conversation-archive";
 import { Runtime } from "../../../bin/modules/core/runtime";
 import {
   effectiveProfile,
@@ -543,6 +544,9 @@ try {
         }),
       );
     }
+  }
+  if (["task-update", "notification-ack", "notification-reconcile", "merge-resolve", "task-migrate"].includes(command)) {
+    await sweepConversationArchives(new LedgerStore(root, input.run_id)).catch(() => {});
   }
   try {
     renewViewerUsage(root, input.run_id);

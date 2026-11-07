@@ -17,6 +17,8 @@ import { ContractError, requireCondition } from "./errors";
 import { LedgerStore, safeId } from "./store";
 import { validateLedger } from "./schema";
 import { buildView } from "./view";
+import { sweepConversationArchives, retryConversationArchive } from "./conversation-archive";
+import { z } from "zod";
 import { GlobalPreferencesStore, parseThemePayload } from "./preferences";
 import {
   readBodyWithinLimit,
@@ -80,6 +82,17 @@ export function createRunDashboard(options: DashboardOptions) {
     (snapshot) => publish("agent-output", snapshot),
     options.connectObserver,
   );
+  let archiveRunning = false;
+  let lastArchiveSweep = 0;
+  const archivePendingConversations = async (): Promise<void> => {
+    if (options.readOnly || archiveRunning || Date.now() - lastArchiveSweep < 1000) return;
+    archiveRunning = true;
+    lastArchiveSweep = Date.now();
+    try {
+      await sweepConversationArchives(store, options.archiveProvider);
+    } catch { /* Durable intent and resource diagnostics survive observer restarts. */ }
+    finally { archiveRunning = false; }
+  };
   outputs.bind(validateLedger(store.read()).tasks);
   let watcher: FSWatcher | null = null;
   const closeWatcher = (): void => {
@@ -99,6 +112,7 @@ export function createRunDashboard(options: DashboardOptions) {
             lastRevision = ledger.revision;
             watching = watchHealthy;
             publish("revision", { revision: lastRevision, watching });
+            void archivePendingConversations();
           } catch {
             watching = false;
             publish("stale", { reason: "ledger_unreadable" });
@@ -119,6 +133,7 @@ export function createRunDashboard(options: DashboardOptions) {
       publish("stale", { reason: "watch_failed" });
     }
   };
+  void archivePendingConversations();
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const activate = () => {
     if (heartbeat) return;
@@ -141,6 +156,7 @@ export function createRunDashboard(options: DashboardOptions) {
         watching = false;
         publish("stale", { reason: "ledger_unreadable" });
       }
+      void archivePendingConversations();
       publish("heartbeat", { watching });
     }, 15_000);
   };
@@ -199,6 +215,16 @@ export function createRunDashboard(options: DashboardOptions) {
           responseHeaders,
           (revision) => publish("revision", { revision, watching }),
         );
+      }
+      if (path === "/api/conversation-archive") {
+        if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers });
+        requireCondition(!options.readOnly, "READ_ONLY_SOURCE", "External source viewers are read-only", 3);
+        const raw = await readBodyWithinLimit(request, 8192);
+        if (raw === null) return Response.json({ error: "request_body_too_large" }, { status: 413, headers });
+        const parsed = z.object({ task_id: z.string().min(1) }).strict().parse(JSON.parse(raw));
+        const result = await retryConversationArchive(store, parsed.task_id, options.archiveProvider);
+        publish("revision", { revision: validateLedger(store.read()).revision, watching });
+        return Response.json(result, { headers });
       }
       if (request.method !== "GET")
         return new Response("Method not allowed", { status: 405, headers });
@@ -310,7 +336,7 @@ export function createRunDashboard(options: DashboardOptions) {
         headers: { ...responseHeaders, "Content-Type": contentType },
       });
     } catch (error) {
-      if (path === "/api/execution-profile") {
+      if (path === "/api/execution-profile" || path === "/api/conversation-archive") {
         return profileErrorResponse(error, headers);
       }
       const status =

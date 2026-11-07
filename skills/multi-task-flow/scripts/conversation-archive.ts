@@ -1,0 +1,91 @@
+import { createHash, randomUUID } from "node:crypto";
+import { join } from "node:path";
+import { tryLockFile } from "../../../bin/modules/core/security_file";
+import { apply } from "./engine";
+import { ContractError, requireCondition } from "./errors";
+import { validateLedger, type Ledger } from "./schema";
+import type { LedgerStore } from "./store";
+import { archiveCodexThread, archivedCodexThread } from "./codex-agent-api";
+
+export type ArchiveProvider = {
+  archive: typeof archiveCodexThread;
+  isArchived: typeof archivedCodexThread;
+};
+const provider: ArchiveProvider = { archive: archiveCodexThread, isArchived: archivedCodexThread };
+const terminal = (task: Ledger["tasks"][number]) =>
+  ["completed", "closed"].includes(task.state) || ["abandoned", "superseded"].includes(task.disposition);
+
+function eligible(ledger: Ledger, taskId: string): string {
+  const task = ledger.tasks.find(task => task.id === taskId);
+  requireCondition(task?.thread_id && terminal(task), "TASK_NOT_TERMINAL", "Task is not ready for conversation archive", 4);
+  const thread = task.thread_id;
+  requireCondition(thread !== ledger.control.owner_thread_id && !ledger.groups.some(group => group.agent_thread_id === thread), "SHARED_CONVERSATION", "Coordinator conversations cannot be archived as child tasks", 4);
+  requireCondition(!ledger.tasks.some(other => other.thread_id === thread && !terminal(other)), "SHARED_CONVERSATION", "Another task still uses this conversation", 4);
+  requireCondition(!ledger.operations.some(op => ["claimed", "unknown"].includes(op.status)), "OPERATIONS_PENDING", "Unresolved operations prevent conversation archive", 4);
+  requireCondition(!ledger.follow_prs.some(pr => pr.origin_task_id === taskId && pr.state !== "merged"), "FOLLOW_PR_PENDING", "Follow PR is not merged", 4);
+  requireCondition(!ledger.notifications.some(notice => {
+    const event = ledger.events.find(event => event.id === notice.event_id);
+    return (notice.recipient_thread_id === thread || event?.subject_id === taskId || event?.data.task_id === taskId) && notice.ack_status !== "acknowledged";
+  }), "NOTIFICATIONS_PENDING", "Task notifications must be acknowledged before archive", 4);
+  return thread;
+}
+
+/** One OS lock spans reconciliation, durable intent, provider await and receipt. */
+export async function retryConversationArchive(store: LedgerStore, taskId: string, api: ArchiveProvider = provider) {
+  const initial = validateLedger(store.read());
+  const thread = eligible(initial, taskId);
+  const key = createHash("sha256").update(thread).digest("hex");
+  const lock = tryLockFile(join(store.runPath, "locks", `archive-${key}.lock`));
+  if (!lock) throw new ContractError("ARCHIVE_IN_FLIGHT", "Conversation archive is already in progress", 4);
+  try {
+    const ledger = validateLedger(store.read());
+    eligible(ledger, taskId);
+    const existing = ledger.resources.find(resource => resource.kind === "conversation" && resource.target === thread);
+    if (existing?.status === "closed") return existing;
+    const operationId = `archive-${randomUUID()}`;
+    const resource = existing ?? { id: `conversation-${key.slice(0, 32)}`, kind: "conversation" as const, target: thread, status: "pending" as const, evidence_ref: null };
+    let writeSequence = 0;
+    const write = (status: "pending" | "closed" | "archive_failed" | "archive_unknown", error: string | null, evidence: string) => {
+      store.update(raw => {
+        const current = validateLedger(raw);
+        // Re-prove ownership and exact binding before every write.
+        requireCondition(current.tasks.find(task => task.id === taskId)?.thread_id === thread, "RESOURCE_MISMATCH", "Conversation binding changed", 4);
+        return apply(raw, "resource-update", {
+          run_id: current.orchestration_id,
+          actor: { role: "main", thread_id: current.control.owner_thread_id },
+          request_id: `${operationId}-${++writeSequence}`,
+          expected_revision: current.revision,
+          payload: { resource: { ...resource, status, error, evidence_ref: evidence, operation_id: operationId, last_attempt_at: new Date().toISOString() } },
+        });
+      });
+      return validateLedger(store.read()).resources.find(item => item.id === resource.id)!;
+    };
+    // Unknown attempts are reconciled first. A negative lookup cannot prove
+    // that an earlier request will not complete, so never resend from unknown.
+    if (existing?.status === "archive_unknown") {
+      try {
+        if (await api.isArchived(thread)) return write("closed", null, `codex-app-server:${operationId}:reconciled`);
+        return write("archive_unknown", "Archive not confirmed; previous request remains unresolved", `codex-app-server:${operationId}:not-confirmed`);
+      } catch (error) {
+        return write("archive_unknown", String(error).slice(0, 500), `codex-app-server:${operationId}:lookup-error`);
+      }
+    }
+    // Claim before crossing the provider boundary. Process death leaves unknown.
+    write("archive_unknown", "Archive attempt is in progress; reconcile after interruption", `codex-app-server:${operationId}:intent`);
+    let result;
+    try { result = await api.archive(thread, operationId); }
+    catch (error) { result = { outcome: "unknown" as const, evidence_ref: `codex-app-server:${operationId}:error`, error: String(error).slice(0, 500) }; }
+    return write(result.outcome === "succeeded" ? "closed" : result.outcome === "failed" ? "archive_failed" : result.outcome === "deferred" ? "pending" : "archive_unknown", result.error ?? null, result.evidence_ref);
+  } finally { lock.release(); }
+}
+
+export async function sweepConversationArchives(store: LedgerStore, api: ArchiveProvider = provider): Promise<void> {
+  const ledger = validateLedger(store.read());
+  for (const task of ledger.tasks.filter(terminal)) {
+    const resource = ledger.resources.find(resource => resource.kind === "conversation" && resource.target === task.thread_id);
+    // Failures and unknowns require the explicit retry/reconcile button.
+    if (resource?.status === "closed" || resource?.status === "archive_failed" || resource?.status === "archive_unknown") continue;
+    try { await retryConversationArchive(store, task.id, api); }
+    catch { /* Eligibility/locks defer work; the next lifecycle trigger revisits it. */ }
+  }
+}

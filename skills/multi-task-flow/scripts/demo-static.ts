@@ -6,7 +6,8 @@ import type { Task } from "../web/model";
 import { buildView } from "./view";
 
 const output = join(import.meta.dir, "..", "dist");
-const outputDemo = process.argv.includes("--agent-output");
+const archiveDemo = process.argv.includes("--archive-fixture");
+const outputDemo = archiveDemo || process.argv.includes("--agent-output");
 const ledger = outputDemo
   ? createDemoLedger(Date.parse("2026-11-05T08:00:00Z"))
   : createDemoLedger();
@@ -50,6 +51,25 @@ const view = buildView(
 if (outputDemo)
   for (const task of view.tasks as Task[])
     task.thread_id = demoOutputs[task.id]!.thread_id;
+if (archiveDemo) {
+  // Controlled fixture: no live Codex connection or ledger writes.
+  view.profile_read_only = false;
+  for (const task of view.tasks as Task[]) {
+    task.latest_agent_output!.text = `任务 ${task.title} 的受控运行时观察。`;
+    if (task.id === "deploy" || task.id === "dashboard-ui") {
+      task.latest_agent_output!.agent_state = task.id === "deploy" ? "active" : "idle";
+      task.latest_agent_output!.stale = false;
+      task.agent_idle = task.id === "dashboard-ui";
+    }
+    if (task.id === "model" || task.id === "ledger") task.conversation_resource = {
+      id: `fixture-${task.id}`, kind: "conversation", target: task.thread_id!,
+      status: task.id === "model" ? "archive_failed" : "archive_unknown",
+      error: task.id === "model" ? "归档请求被拒绝，可重新尝试" : "归档请求回执丢失，需要对账确认",
+      evidence_ref: `fixture:archive:${task.id}`, operation_id: `fixture-${task.id}`,
+      last_attempt_at: "2026-11-05T08:00:00Z",
+    };
+  }
+}
 const groups = view.groups as Array<Record<string, unknown>>;
 // Synthetic presentation variant; never changes or initializes a real run.
 if (process.argv.includes("--bootstrap") && groups[0]) {
@@ -108,7 +128,8 @@ const profileDemo = JSON.stringify({
   ],
   read_only: true,
 });
-const shim = `<script>${outputDemo ? "Date.now=()=>1793865600000;" : ""}window.fetch=async(input,options)=>options?.method==="POST"&&String(input).includes("api/execution-profile")?new Response(JSON.stringify({message:"静态预览不会保存配置"}),{status:405}):new Response(String(input).includes("api/execution-profile")?${JSON.stringify(profileDemo)}:String(input).includes("api/preferences")?${JSON.stringify(preferences)}:JSON.stringify(${response}),{headers:{"Content-Type":"application/json"}});window.EventSource=class{listeners={};constructor(){window.demoOutputUpdate=(taskId,text)=>{const state=${response};const task=state.view.tasks.find(t=>t.id===taskId);const output={...task.latest_agent_output,text,state:"available",stale:false};this.revision=(this.revision??1)+1;for(const handler of this.listeners["agent-output"]??[])handler({data:JSON.stringify({output_epoch:"static-demo",output_revision:this.revision,outputs:Object.fromEntries(state.view.tasks.map(t=>[t.id,t.id===taskId?output:t.latest_agent_output]))})});};}addEventListener(type,handler){(this.listeners[type]??=[]).push(handler);if(type==="open")queueMicrotask(()=>handler(new Event("open")));}close(){}};document.addEventListener("DOMContentLoaded",()=>{if(new URLSearchParams(location.search).has("evidence")){const observer=new MutationObserver(()=>{const card=document.querySelector('[data-task-id="ledger"]');if(card){observer.disconnect();requestAnimationFrame(()=>card.scrollIntoView({block:"center"}));}});observer.observe(document.body,{childList:true,subtree:true});}const d=document.getElementById("details-content");new MutationObserver(()=>{for(const a of d.querySelectorAll("a")){const href=a.getAttribute("href");if(href&&href.startsWith("api/document/"))a.setAttribute("href","demo-documents/"+href.slice(13)+".html")}}).observe(d,{childList:true,subtree:true})});</script>`;
+const archiveShim = archiveDemo ? `const fixture=${response};window.demoArchiveCalls=[];window.fetch=async(input,options)=>{const path=String(input);if(path.includes("api/conversation-archive")&&options?.method==="POST"){const taskId=JSON.parse(options.body).task_id;const task=fixture.view.tasks.find(t=>t.id===taskId);window.demoArchiveCalls.push(taskId);task.conversation_resource.status="closed";task.conversation_resource.error=null;fixture.revision++;return new Response(JSON.stringify(task.conversation_resource));}return new Response(path.includes("api/preferences")?${JSON.stringify(preferences)}:path.includes("api/execution-profile")?${JSON.stringify(profileDemo)}:JSON.stringify(fixture),{headers:{"Content-Type":"application/json"}});};` : "";
+const shim = `<script>${outputDemo ? "Date.now=()=>1793865600000;" : ""}window.fetch=async(input,options)=>options?.method==="POST"&&String(input).includes("api/execution-profile")?new Response(JSON.stringify({message:"静态预览不会保存配置"}),{status:405}):new Response(String(input).includes("api/execution-profile")?${JSON.stringify(profileDemo)}:String(input).includes("api/preferences")?${JSON.stringify(preferences)}:JSON.stringify(${response}),{headers:{"Content-Type":"application/json"}});window.EventSource=class{listeners={};constructor(){window.demoOutputUpdate=(taskId,text)=>{const state=${response};const task=state.view.tasks.find(t=>t.id===taskId);const output={...task.latest_agent_output,text,state:"available",stale:false};this.revision=(this.revision??1)+1;for(const handler of this.listeners["agent-output"]??[])handler({data:JSON.stringify({output_epoch:"static-demo",output_revision:this.revision,outputs:Object.fromEntries(state.view.tasks.map(t=>[t.id,t.id===taskId?output:t.latest_agent_output]))})});};}addEventListener(type,handler){(this.listeners[type]??=[]).push(handler);if(type==="open")queueMicrotask(()=>handler(new Event("open")));}close(){}};${archiveShim}document.addEventListener("DOMContentLoaded",()=>{if(new URLSearchParams(location.search).has("evidence")){const observer=new MutationObserver(()=>{const card=document.querySelector('[data-task-id="ledger"]');if(card){observer.disconnect();requestAnimationFrame(()=>card.scrollIntoView({block:"center"}));}});observer.observe(document.body,{childList:true,subtree:true});}const d=document.getElementById("details-content");new MutationObserver(()=>{for(const a of d.querySelectorAll("a")){const href=a.getAttribute("href");if(href&&href.startsWith("api/document/"))a.setAttribute("href","demo-documents/"+href.slice(13)+".html")}}).observe(d,{childList:true,subtree:true})});</script>`;
 const source = readFileSync(join(output, "index.html"), "utf8");
 const css = 'href="assets/app.css"';
 const script = '<script type="module" src="assets/app.js"></script>';

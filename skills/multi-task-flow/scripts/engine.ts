@@ -6,7 +6,7 @@ import {
   RECOMMENDATION_VERSION,
 } from "./execution-profile";
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ContractError, requireCondition } from "./errors";
 import {
   changeReason,
@@ -2353,6 +2353,22 @@ export function execute(
         target.finished_at = payload.occurred_at
           ? z.iso.datetime({ offset: false }).parse(payload.occurred_at)
           : null;
+      if ((state === "completed" || state === "closed") && target.thread_id) {
+        const resourceId = `conversation-${createHash("sha256").update(target.thread_id).digest("hex").slice(0, 32)}`;
+        const resource = ledger.resources.find((item) => item.kind === "conversation" && item.target === target.thread_id);
+        if (!resource) {
+          ledger.resources.push({
+            id: resourceId,
+            kind: "conversation",
+            target: target.thread_id,
+            status: "pending",
+            evidence_ref: null,
+            error: null,
+            last_attempt_at: null,
+            operation_id: null,
+          });
+        }
+      }
       const eventType =
         state === "running"
           ? previousState === "starting"
