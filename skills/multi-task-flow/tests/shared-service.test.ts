@@ -32,7 +32,7 @@ test("one-time login persists sessions and explicit rotation revokes them", () =
 test("multi-run routing has one listener, authenticated APIs and lazy watchers", async () => {
   const { root, state } = fixture(); const release = fixtureRelease(root);
   fixtureRun(state.paths.data, "first"); fixtureRun(state.paths.data, "second");
-  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "dist"), 0); servers.push(viewer);
+  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);
   const base = `http://127.0.0.1:${viewer.port}`;
   const credential = new ServiceAuth(state).credential();
   const headers = { authorization: "Bearer " + credential };
@@ -50,7 +50,7 @@ test("multi-run routing has one listener, authenticated APIs and lazy watchers",
 });
 test("browser login, CSRF checks and credential-free resource links", async () => {
   const { root, state } = fixture(); const release = fixtureRelease(root); fixtureRun(state.paths.data);
-  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "dist"), 0); servers.push(viewer);
+  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);
   const base = `http://127.0.0.1:${viewer.port}`;
   const ticket = new ServiceAuth(state).ticket();
   const exchange = () => fetch(base + "/api/v1/login", { method: "POST", headers: { origin: base, "content-type": "application/json" }, body: JSON.stringify({ ticket }) });
@@ -79,7 +79,7 @@ test("install persists a fixed port without starting a process and rejects corru
   expect(result.started).toBe(false); expect(state.config().port).toBe(result.port);
   expect(state.runtime().phase).toBe("stopped");
   expect(readFileSync(join(state.paths.config, "viewer.plist"), "utf8")).toContain("<key>RunAtLoad</key><false/>");
-  writeFileSync(join(bundle.source, "dist", "app.js"), "corrupt");
+  writeFileSync(join(bundle.source, "skills/multi-task-flow/dist/app.js"), "corrupt");
   expect(() => verifyRelease(bundle.source)).toThrow("checksum");
 });
 test("code health failure restores config and preserves leases without touching ledger", async () => {

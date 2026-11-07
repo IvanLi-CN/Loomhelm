@@ -86,7 +86,7 @@ If the repo already has a different convention (e.g., `docs/hardware/datasheets/
 Example (flat layout):
 
 ```bash
-bun "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts" \
+bun --no-install "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts" \
   --extract-path "<mineru.extract_path>" \
   --dest-dir "docs/datasheets" \
   --slug "st-stm32h743-datasheet" \
@@ -99,7 +99,7 @@ bun "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/ingest_mineru_ext
 Example (one folder per doc, recommended):
 
 ```bash
-bun "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts" \
+bun --no-install "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts" \
   --extract-path "<mineru.extract_path>" \
   --dest-dir "docs/datasheets" \
   --doc-subdir "st-stm32h743-datasheet" \
@@ -109,7 +109,7 @@ bun "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/ingest_mineru_ext
 Re-ingest / regenerate (explicit overwrite):
 
 ```bash
-bun "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts" \
+bun --no-install "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts" \
   --extract-path "<mineru.extract_path>" \
   --dest-dir "docs/datasheets" \
   --doc-subdir "st-stm32h743-datasheet" \
@@ -135,7 +135,7 @@ When asked about the document contents later, read and cite from `.../<slug>.md`
 Optional integrity check (useful in CI/pre-commit):
 
 ```bash
-bun "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/verify_doc_locks.ts" docs/datasheets
+bun --no-install "$LOOMHELM_TOOLKIT_ROOT/skills/hardware-doc-ingest/scripts/verify_doc_locks.ts" docs/datasheets
 ```
 
 ## References (load only when needed)

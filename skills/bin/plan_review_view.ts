@@ -12,9 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dlopen, FFIType, ptr } from "./modules/core/posix";
-import * as snapshotSupport from "./modules/plan/private_snapshot";
-import * as reviewSupport from "./modules/plan/review";
+import { dlopen, FFIType } from "bun:ffi";
 
 interface PrivateSnapshot {
   path: string;
@@ -35,7 +33,7 @@ interface PosixLibrary {
   symbols: {
     openat(
       directoryFd: number,
-      path: number,
+      path: Uint8Array,
       flags: number,
       mode: number,
     ): number;
@@ -71,8 +69,10 @@ function loadPosix(): PosixLibrary {
   throw new Error("DEV_PLAN_SOURCE_NATIVE_LIBRARY_UNAVAILABLE");
 }
 
-function cString(value: string): number {
-  return ptr(new TextEncoder().encode(value + "\0"));
+// Pass the owning buffer to Bun FFI; a bare pointer cannot keep it alive.
+function cString(value: string): Uint8Array {
+  if (value.includes("\0")) throw new Error("native path contains NUL");
+  return new TextEncoder().encode(value + "\0");
 }
 
 function openAt(
@@ -141,11 +141,18 @@ function assertCandidateRootStable(root: string): void {
   }
 }
 
+function assertTrustedSourceMetadata(entry: { uid: number; mode: number }, path: string): void {
+  const uid = process.getuid?.();
+  if (uid === undefined || (entry.uid !== 0 && entry.uid !== uid) || (entry.mode & 0o022) !== 0)
+    throw new Error("DEV_PLAN_SOURCE_PERMISSIONS_FORBIDDEN: " + path);
+}
+
 function assertSecureCandidateTree(root: string): void {
   const pending = [root];
   while (pending.length) {
     const current = pending.pop()!;
     const entry = lstatSync(current);
+    assertTrustedSourceMetadata(entry, current);
     if (entry.isSymbolicLink())
       throw new Error("DEV_PLAN_SOURCE_SYMLINK_FORBIDDEN: " + current);
     if (entry.isDirectory()) {
@@ -175,15 +182,18 @@ function readCandidateFile(
   sourceFd: number,
   name: string,
 ): Buffer {
+  assertTrustedSourceMetadata(fstatSync(sourceFd), sourcePath);
   const fd = openAt(sourceFd, name, fileFlags());
   try {
     const before = fstatSync(fd);
+    assertTrustedSourceMetadata(before, join(sourcePath, name));
     if (!before.isFile() || before.nlink !== 1)
       throw new Error(
         "DEV_PLAN_SOURCE_FILE_FORBIDDEN: " + join(sourcePath, name),
       );
     const contents = readFileSync(fd);
     const after = fstatSync(fd);
+    assertTrustedSourceMetadata(after, join(sourcePath, name));
     if (
       !after.isFile() ||
       after.nlink !== 1 ||
@@ -203,6 +213,7 @@ function copyCandidateDirectory(
   destinationPath: string,
   selectedName?: string,
 ): void {
+  assertTrustedSourceMetadata(fstatSync(sourceFd), sourcePath);
   mkdirSync(destinationPath, { mode: 0o700 });
   const names =
     selectedName === undefined ? readdirSync(sourcePath) : [selectedName];
@@ -218,6 +229,7 @@ function copyCandidateDirectory(
       if (childDirectoryFd >= 0) {
         try {
           const child = fstatSync(childDirectoryFd);
+          assertTrustedSourceMetadata(child, join(sourcePath, name));
           if (!child.isDirectory())
             throw new Error("DEV_PLAN_SOURCE_TYPE_FORBIDDEN: " + name);
           copyCandidateDirectory(
@@ -235,12 +247,14 @@ function copyCandidateDirectory(
       const sourceFileFd = openAt(sourceFd, name, fileFlags());
       try {
         const before = fstatSync(sourceFileFd);
+        assertTrustedSourceMetadata(before, join(sourcePath, name));
         if (!before.isFile())
           throw new Error("DEV_PLAN_SOURCE_TYPE_FORBIDDEN: " + name);
         if (before.nlink !== 1)
           throw new Error("DEV_PLAN_SOURCE_HARDLINK_FORBIDDEN: " + name);
         const contents = readFileSync(sourceFileFd);
         const after = fstatSync(sourceFileFd);
+        assertTrustedSourceMetadata(after, join(sourcePath, name));
         if (
           !after.isFile() ||
           after.nlink !== 1 ||
@@ -325,11 +339,21 @@ async function main(): Promise<number> {
     try {
       sourceFd = openDirectoryNoFollow(sourcePath);
       const source = fstatSync(sourceFd);
+      assertTrustedSourceMetadata(source, sourcePath);
       if (!source.isDirectory())
         throw new Error("DEV_PLAN_SOURCE_TYPE_FORBIDDEN: " + sourcePath);
       modulesFd = openAt(sourceFd, "modules", directoryFlags());
+      assertTrustedSourceMetadata(fstatSync(modulesFd), join(sourcePath,"modules"));
       planFd = openAt(modulesFd, "plan", directoryFlags());
-      privateSnapshotModule = snapshotSupport;
+      assertTrustedSourceMetadata(fstatSync(planFd), join(sourcePath,"modules/plan"));
+      const privateSnapshotSource = readCandidateFile(
+        join(sourcePath, "modules/plan"),
+        planFd,
+        "private_snapshot.ts",
+      );
+      privateSnapshotModule = (await import(
+        `data:text/typescript;base64,${privateSnapshotSource.toString("base64")}`
+      )) as PrivateSnapshotModule;
       const privateSnapshot = privateSnapshotModule.createPrivateSnapshot();
       snapshot = privateSnapshot;
       copyCandidateDirectory(
@@ -344,7 +368,9 @@ async function main(): Promise<number> {
     }
 
     process.env.PLAN_CONTRACT_REPO_ROOT = root;
-    const review = reviewSupport;
+    const review = await import(
+      pathToFileURL(join(snapshot!.path, "bin/modules/plan/review.ts")).href
+    );
     exitCode = await review.cli(process.argv.slice(2), {
       stdout: (value: string) => (stdout += value),
       stderr: (value: string) => (stderr += value),

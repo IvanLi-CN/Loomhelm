@@ -1,9 +1,9 @@
 // Deterministic stdio peer: no credentials, model calls, services or network.
 import { createInterface } from 'node:readline';
-import { closeSync } from 'node:fs';
+import { closeSync, writeSync } from 'node:fs';
 const mode = process.argv[2] ?? 'normal';
 let initialized = false, handshake = false, delayed, outstanding, approvalTurn;
-const send = message => process.stdout.write(JSON.stringify(message) + '\n');
+const send = message => writeSync(1, JSON.stringify(message) + '\n');
 const result = (request, value) => send({ id: request.id, result: value });
 const turn = status => ({ id: 'turn-1', status, items: [], error: null });
 if (mode === 'stubborn') {
@@ -37,11 +37,13 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   if (request.method === 'thread/start') {
     if (mode === 'disconnect') return process.exit(9);
+    // Bun's process.stdout lazily duplicates fd 1; use writeSync above so EOF
+    // closes the actual sole output descriptor while the process stays alive.
     if (mode === 'eof') return closeSync(1);
     if (mode === 'invalid-payload') return result(request, { thread: { id: null } });
-    if (mode === 'malformed') return process.stdout.write('{bad\n');
+    if (mode === 'malformed') return writeSync(1, '{bad\n');
     if (mode === 'invalid-response') return send({ id: request.id, result: {}, error: { code: 1, message: 'both' } });
-    if (mode === 'oversize') return process.stdout.write('x'.repeat(3000));
+    if (mode === 'oversize') return writeSync(1, 'x'.repeat(3000));
     if (mode === 'timeout') return;
     if (mode === 'late') return setTimeout(() => result(request, { thread: { id: 'late' } }), 200);
     if (mode === 'error') return send({ id: request.id, error: { code: -32001, message: 'denied', data: { reason: 'fixture' } } });
@@ -67,9 +69,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     const delta = { method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'message-1', delta: '心羽🐱' } };
     const wire = Buffer.from(JSON.stringify(delta) + '\n');
     const split = wire.indexOf(Buffer.from('🐱')) + 1;
-    process.stdout.write(wire.subarray(0, split));
+    writeSync(1, wire.subarray(0, split));
     setTimeout(() => {
-      process.stdout.write(wire.subarray(split));
+      writeSync(1, wire.subarray(split));
       send(delta); // Intentional repeated event; adapter preserves it for reconciliation.
       send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: turn('failed') } });
       result(request, { turn: turn('inProgress'), params: request.params });

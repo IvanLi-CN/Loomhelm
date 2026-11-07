@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import * as constants from "node:constants";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { dlopen, FFIType, ptr } from "../core/posix";
+import { dlopen, FFIType } from "bun:ffi";
 import { linuxLibraries, loadRenameAt2 } from "./native_rename";
 import { openTrustedDirectory } from "./trusted_directory";
 import { writeAll } from "./write_all";
@@ -12,7 +12,7 @@ const open = fs.openSync,
 const directoryFlags = c.O_RDONLY | c.O_DIRECTORY | c.O_NOFOLLOW;
 type NativeSymbol = "openat" | "fchmod" | "mkdirat" | "renameat" | "unlinkat";
 type PosixLibrary = {
-  symbols: Record<NativeSymbol, (...args: number[]) => number>;
+  symbols: Record<NativeSymbol, (...args: (number | Uint8Array)[]) => number>;
 };
 type AtomicContent = string | Uint8Array | ((fileFd: number) => void);
 export type DirectoryIdentity = { dev: number; ino: number };
@@ -65,7 +65,9 @@ function openDirectoryNoFollow(
   stopAt?: string,
   expectedIdentity?: DirectoryIdentity,
 ): { descriptor: number; canonicalPath: string } {
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
+  if (stopAt?.includes("\0")) throw new Error("native path contains NUL");
   const requestedRoot = resolve(stopAt ?? sep);
   if (stopAt && !isWithin(requestedRoot, absolute))
     throw new Error("path is outside its trusted root");
@@ -111,7 +113,7 @@ function openDirectoryNoFollow(
       const encoded = new TextEncoder().encode(`${component}\0`);
       const next = api.symbols.openat(
         descriptor,
-        ptr(encoded),
+        encoded,
         c.O_RDONLY | c.O_NOFOLLOW | c.O_NONBLOCK | c.O_DIRECTORY,
         0,
       );
@@ -152,6 +154,7 @@ export function readRegularNoFollow(
 ): Buffer {
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("platform lacks no-follow path opening");
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const parent = dirname(absolute);
   const leaf = basename(absolute);
@@ -164,7 +167,7 @@ export function readRegularNoFollow(
   const encoded = new TextEncoder().encode(`${leaf}\0`);
   let descriptor = api.symbols.openat(
     directory.descriptor,
-    ptr(encoded),
+    encoded,
     c.O_RDONLY | c.O_NOFOLLOW | c.O_NONBLOCK,
     0,
   );
@@ -199,6 +202,7 @@ export function writeExclusiveNoFollow(
 ): void {
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("sandbox log path lacks no-follow support");
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   if (!basename(absolute) || basename(absolute) === sep)
     throw new Error("sandbox log path must be a file");
@@ -216,7 +220,7 @@ export function writeExclusiveNoFollow(
     const leaf = new TextEncoder().encode(`${basename(absolute)}\0`);
     fileFd = api.symbols.openat(
       directoryFd,
-      ptr(leaf),
+      leaf,
       c.O_RDWR | c.O_CREAT | c.O_EXCL | c.O_NOFOLLOW,
       0o600,
     );
@@ -238,7 +242,7 @@ export function writeExclusiveNoFollow(
     if (created && !completed)
       api.symbols.unlinkat(
         directoryFd,
-        ptr(new TextEncoder().encode(`${basename(absolute)}\0`)),
+        new TextEncoder().encode(`${basename(absolute)}\0`),
         0,
       );
     fs.closeSync(directoryFd);
@@ -255,6 +259,7 @@ export function createDirectoryNoFollow(
     throw new Error(
       "directory creation without symlink traversal is unavailable",
     );
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const directory = openDirectoryNoFollow(
     dirname(absolute),
@@ -264,7 +269,7 @@ export function createDirectoryNoFollow(
   try {
     const leaf = new TextEncoder().encode(`${basename(absolute)}\0`);
     if (
-      loadPosix().symbols.mkdirat(directory.descriptor, ptr(leaf), mode) !== 0
+      loadPosix().symbols.mkdirat(directory.descriptor, leaf, mode) !== 0
     )
       throw nativeOpenError(absolute, "directory creation failed");
   } finally {
@@ -287,7 +292,7 @@ export function copyFileExclusiveNoFollow(
     const leaf = new TextEncoder().encode(`${basename(temporary)}\0`);
     let fileFd = loadPosix().symbols.openat(
       directory.descriptor,
-      ptr(leaf),
+      leaf,
       c.O_RDWR | c.O_NOFOLLOW,
       0,
     );
@@ -309,11 +314,12 @@ export function copyFileExclusiveNoFollow(
   }
 }
 export function unlinkNoFollow(path: string, stopAt?: string): void {
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const directory = openDirectoryNoFollow(dirname(absolute), stopAt);
   const name = new TextEncoder().encode(`${basename(absolute)}\0`);
   try {
-    if (loadPosix().symbols.unlinkat(directory.descriptor, ptr(name), 0) !== 0)
+    if (loadPosix().symbols.unlinkat(directory.descriptor, name, 0) !== 0)
       throw new Error("no-follow unlink failed");
   } finally {
     fs.closeSync(directory.descriptor);
@@ -328,6 +334,7 @@ export function writeAtomicNoFollow(
 ): void {
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("atomic no-follow write is unavailable");
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const directory = openDirectoryNoFollow(
     dirname(absolute),
@@ -347,7 +354,7 @@ export function writeAtomicNoFollow(
   try {
     fileFd = api.symbols.openat(
       directory.descriptor,
-      ptr(encodedTemporary),
+      encodedTemporary,
       c.O_RDWR | c.O_CREAT | c.O_EXCL | c.O_NOFOLLOW,
       0o600,
     );
@@ -373,9 +380,9 @@ export function writeAtomicNoFollow(
     if (
       api.symbols.renameat(
         directory.descriptor,
-        ptr(encodedTemporary),
+        encodedTemporary,
         directory.descriptor,
-        ptr(encodedDestination),
+        encodedDestination,
       ) !== 0
     )
       throw new Error("atomic output rename failed");
@@ -383,7 +390,7 @@ export function writeAtomicNoFollow(
   } finally {
     if (fileFd >= 0) fs.closeSync(fileFd);
     if (!committed)
-      api.symbols.unlinkat(directory.descriptor, ptr(encodedTemporary), 0);
+      api.symbols.unlinkat(directory.descriptor, encodedTemporary, 0);
     fs.closeSync(directory.descriptor);
   }
 }
@@ -411,6 +418,7 @@ export function renameNoReplace(
 ): void {
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("atomic no-replace rename is unavailable");
+  if (source.includes("\0") || destination.includes("\0")) throw new Error("native path contains NUL");
   const sourcePath = resolve(source);
   const destinationPath = resolve(destination);
   const sourceParent = dirname(sourcePath);
@@ -427,7 +435,7 @@ export function renameNoReplace(
   const destinationName = new TextEncoder().encode(
     `${basename(destinationPath)}\0`,
   );
-  let renameFunction: (...args: number[]) => number;
+  let renameFunction: (...args: (number | Uint8Array)[]) => number;
   let closeLibrary = (): void => {};
   let flags: number;
   try {
@@ -454,9 +462,9 @@ export function renameNoReplace(
     }
     const result = renameFunction(
       directoryFd,
-      ptr(sourceName),
+      sourceName,
       directoryFd,
-      ptr(destinationName),
+      destinationName,
       flags,
     );
     if (result !== 0) {

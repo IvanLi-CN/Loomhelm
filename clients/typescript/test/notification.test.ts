@@ -1,13 +1,13 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, realpath, readFile, writeFile, rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { SkillsRuntime } from '../dist/index.js';
-import { LedgerStore } from '../dist/toolkit/skills/multi-task-flow/scripts/store.js';
-import { apply } from '../dist/toolkit/skills/multi-task-flow/scripts/engine.js';
-import { deliverClaimedNotification, reconcileNotification } from '../dist/toolkit/skills/multi-task-flow/scripts/notification-delivery.js';
+import { SkillsRuntime } from '../src/index.ts';
+import { LedgerStore } from '../toolkit/skills/multi-task-flow/scripts/store.ts';
+import { apply } from '../toolkit/skills/multi-task-flow/scripts/engine.ts';
+import { deliverClaimedNotification, reconcileNotification } from '../toolkit/skills/multi-task-flow/scripts/notification-delivery.ts';
 
 const accepted = { outcome: 'sent', provider_receipt: { provider: 'codex-app-server', evidence_ref: 'fixture:accepted', message_id: 'fixture-turn' } };
 async function fixture() {
@@ -29,7 +29,7 @@ async function fixture() {
 }
 
 function cli(f, command, request) {
-  return spawnSync(process.execPath, [new URL('../dist/cli.js', import.meta.url).pathname, 'flow', command, '--input', '-'], { input: JSON.stringify(request), env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: join(f.root, 'delivery'), LOOMHELM_CODEX_APP_SERVER_SOCKET: join(f.root, 'absent.sock') }, encoding: 'utf8' });
+  return spawnSync(process.execPath, [new URL('../src/cli.ts', import.meta.url).pathname, 'flow', command, '--input', '-'], { input: JSON.stringify(request), env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: join(f.root, 'delivery'), LOOMHELM_CODEX_APP_SERVER_SOCKET: join(f.root, 'absent.sock') }, encoding: 'utf8' });
 }
 
 test('stale production notification-send preserves historical bytes, revision and backup', async () => {

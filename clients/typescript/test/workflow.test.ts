@@ -1,10 +1,10 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LocalValidation, loadSkills, requireSkill, satisfiesVersion } from '../dist/workflow/index.js';
-import { runProcess } from '../dist/runtime/process.js';
+import { LocalValidation, loadSkills, requireSkill, satisfiesVersion } from '../src/workflow/index.ts';
+import { runProcess } from '../src/runtime/process.ts';
 
 async function temporary(fn) {
   const dir = await mkdtemp(join(tmpdir(), 'loomhelm-workflow-'));
@@ -179,8 +179,8 @@ test('entry refuses default, detached, dirty and unrelated bases', () => tempora
   await assert.rejects(LocalValidation.open(repo, 'missing'), /resolve base/);
 }));
 
-const cliPath = new URL('../dist/workflow/cli.js', import.meta.url).pathname;
-test('Node/Bun standalone CLI checks Skills then validates offline with JSON output', () => temporary(async dir => {
+const cliPath = new URL('../src/workflow/cli.ts', import.meta.url).pathname;
+test('Bun standalone TS CLI checks Skills then validates offline with JSON output', () => temporary(async dir => {
   const { repo, base } = await fixture(dir);
   const skillsRoot = join(dir, 'skills'); await skill(skillsRoot, 'engineering', compatible());
   const manifest = {

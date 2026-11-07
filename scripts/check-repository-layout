@@ -16,7 +16,7 @@ required = (
     "db/migrations",
     "deploy/production/compose.yaml",
     "clients/typescript/package.json",
-    "clients/typescript/package-lock.json",
+    "clients/typescript/bun.lock",
     "clients/typescript/src/index.ts",
 )
 errors = [f"missing component: {path}" for path in required if not (root / path).exists()]

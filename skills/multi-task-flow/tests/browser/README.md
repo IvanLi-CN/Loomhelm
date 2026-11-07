@@ -5,7 +5,7 @@ The agreed seam is the rendered mock example: click a task to open details and c
 Build the existing `demo:static` surface and use its current owned preview server. In the Codex in-app browser REPL, bind the preview tab and viewport capability, import the checked-in runner, then run it:
 
 ```js
-var regression = await import("file:///absolute/repo/skills/multi-task-flow/tests/browser/card-width-regression.mjs");
+var regression = await import("file:///absolute/repo/skills/multi-task-flow/tests/browser/card-width-regression.ts");
 await regression.checkCardWidths(tab, viewport);
 ```
 

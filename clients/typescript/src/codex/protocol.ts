@@ -1,5 +1,5 @@
 // Generated from codex-cli 0.166.0 app-server generate-ts (stable).
-// Run: node src/codex/generate-protocol.mjs
+// Run: bun src/codex/generate-protocol.ts
 // Upstream: https://github.com/openai/codex (Apache-2.0).
 // Bundled dependency closure; only import declarations and generator headers removed.
 

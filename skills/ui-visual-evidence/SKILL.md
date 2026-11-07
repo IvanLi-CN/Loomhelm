@@ -173,7 +173,7 @@ Never:
 
 - Always show the same final image asset set in chat before declaring visual verification complete.
 - Before any owner-facing local image is shown in chat, create an immutable snapshot with:
-  - `bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/bin/snapshot_local_image.ts" --source <image-path> --cwd <working-dir>`
+  - `bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/bin/snapshot_local_image.ts" --source <image-path> --cwd <working-dir>`
   - use only the returned `snapshot_path` in chat Markdown
 - If the task is spec-associated:
   - store new visual evidence assets in `docs/specs/<topic>/assets/`; keep historical ID-prefixed Spec asset paths readable, but do not create new ones
@@ -192,7 +192,7 @@ Never:
 - Capture and normalize final candidate images into a temporary, non-canonical location before replacing an associated Spec/Plan asset. Compare each candidate only against the Git blob at its exact repo-relative destination path in the locked `FlowLedger.base_sha`:
 
   ```sh
-  bun skills/ui-visual-evidence/scripts/compare_visual_evidence.ts \
+  bun --no-install skills/ui-visual-evidence/scripts/compare_visual_evidence.ts \
     --base-sha <FlowLedger.base_sha> \
     --candidate <repo-relative-destination-path> <normalized-final-image> \
     --output-dir <temporary-comparison-directory>
@@ -233,7 +233,7 @@ The workflow PR procedures call this skill's `pr_body_image_gate.ts` for the two
 
 - Phase A accepts exactly one explicit Task Evidence Set (`--evidence` repeated) or `--no-evidence`, rewrites the section against the open PR head branch, and verifies the selected platform's rendered Markdown HTML.
 - Phase B accepts no new image selection, reads only the managed section, rewrites URLs to the base repository and actual merge commit SHA, verifies rendered Markdown HTML, and reports bounded retryable failures without changing merge state.
-- Run the focused offline coverage with `bun test skills/ui-visual-evidence/scripts/test_pr_body_image_gate.ts` and `bun skills/bin/pr_body_image_contract_check.ts`.
+- Run the focused offline coverage with `bun --no-install test skills/ui-visual-evidence/scripts/test_pr_body_image_gate.ts` and `bun --no-install skills/bin/pr_body_image_contract_check.ts`.
 
 PR body writes use provider-specific concurrency guards. Gitea sends its `content_version`. GitHub's pull-request PATCH endpoint rejects conditional request headers, so GitHub performs an identity/body refresh before the PATCH and verifies identity/body again afterward. This detects changes observed around the write but is not an atomic compare-and-swap or a provider-guaranteed concurrency guarantee.
 

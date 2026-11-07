@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { runProcess } from "../../modules/core/process";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const ROOT = resolve(import.meta.dir, "../../../..");
 const LAUNCHER = resolve(ROOT, "skills/bin/plan-cli.sh");
@@ -64,6 +66,23 @@ describe("trusted dev-plan launcher", () => {
     });
     expect(result.exitCode, result.stderr).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("repository-approved runtime");
+    expect(result.stderr).toContain("repository-approved Bun runtime");
   }, 15000);
 });
+
+for (const target of ["modules/plan/private_snapshot.ts", "modules/plan/review.ts", "modules/plan"]) {
+  test("refuses writable snapshot source " + target + " before execution", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "plan-source-permissions-")));
+    try {
+      const bin = join(root,"skills/bin"); cpSync(join(ROOT,"skills/bin"),bin,{recursive:true});
+      const path = join(bin,target), marker = join(root,"executed");
+      if (target.endsWith(".ts")) writeFileSync(path,`import {writeFileSync as __permissionMarker} from "node:fs"; __permissionMarker(${JSON.stringify(marker)},"unsafe");\n`+readFileSync(path,"utf8"));
+      chmodSync(path,target.endsWith(".ts") ? 0o666 : 0o777);
+      const result=await runProcess({command:join(bin,"plan-cli.sh"),args:["--input","-"],cwd:root,stdin:"invalid",env:{...process.env},timeoutMs:15000});
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("DEV_PLAN_SOURCE_PERMISSIONS_FORBIDDEN");
+      expect(result.stdout).toBe("");
+      expect(existsSync(marker)).toBe(false);
+    } finally {rmSync(root,{recursive:true,force:true});}
+  },20000);
+}
