@@ -18,7 +18,6 @@ import { installViewStateNavigation } from "./navigation";
 import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-preview";
 import { formatDuration, formatLocalTime } from "./time";
 import { renderTimestamp, refreshTimestamps } from "./timestamp";
-import { rangeFromIntervals } from "./execution-range";
 import { taskKindLabel } from "./labels";
 import { DEFAULT_VIEW_STATE, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
 const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest };
@@ -232,7 +231,6 @@ const cardRenderer = createCardRenderer({
   getSelectedGroup: () => selectedGroup,
   labels,
   safeExternal,
-  groupRange,
   selectTask: (id) => selectTask(id),
   selectGroup: (id) => selectGroup(id),
   setKeyboardSelection: () => { keyboardSelection = true; },
@@ -243,13 +241,6 @@ const cardRenderer = createCardRenderer({
 const { renderList, renderGroups } = cardRenderer;
 function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
 function safeExternal(url: string | null): string | null { if (!url || !data) return null; try { const parsed = new URL(url); return parsed.protocol === "https:" && parsed.hostname === data.orchestration.repository.host && !parsed.port && !parsed.username && !parsed.password ? parsed.href : null; } catch { return null; } }
-function taskRange(tasks: Task[]): { start: string | null; end: string | null } {
-  return rangeFromIntervals(tasks.map((task) => ({ start: task.started_at, end: task.finished_at })));
-}
-function groupRange(groupId: string, tasks: Task[]): { start: string | null; end: string | null } {
-  const historical = data?.actual_intervals.filter((interval) => interval.group_id === groupId) ?? [];
-  return historical.length ? rangeFromIntervals(historical) : taskRange(tasks);
-}
 let profileCapabilities: ProfileCapabilities | null = null;
 let profileCapabilityError = "正在读取模型能力…";
 async function loadProfileCapabilities(): Promise<void> {
@@ -268,7 +259,7 @@ async function updateProfile(targetType: ProfileTarget, targetId: string, profil
   if (!response.ok) throw new Error(result.message ?? result.error ?? "配置保存失败");
   await refresh();
 }
-const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, groupRange, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
+const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
 const { clearDetails, showTask, showGroup, taskPreview, groupPreview } = detailContent;
 const hasSelectedObject = (): boolean => Boolean(
   (selectedTask && data?.tasks.some((task) => task.id === selectedTask))

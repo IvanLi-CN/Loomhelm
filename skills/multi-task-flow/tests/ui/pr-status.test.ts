@@ -20,3 +20,34 @@ test("PR icons distinguish merge and CI states and share one request per URL", a
     a.remove(); publishPRStatus(url, snapshot); expect(b.dataset.ciState).toBe("成功");
   } finally { globalThis.fetch = original; a.remove(); b.remove(); }
 });
+
+test("an older card response cannot overwrite a newer popover publication", async () => {
+  const original = globalThis.fetch;
+  const url = "https://github.com/example/repo/pull/986";
+  let resolve!: (value: Response) => void;
+  globalThis.fetch = (() => new Promise<Response>(done => { resolve = done; })) as typeof fetch;
+  const trigger = document.createElement("a"); document.body.append(trigger);
+  const latest: PRSnapshot = { data: { number: 986, title: "PR", url, state: "MERGED", mergedAt: null, mergeable: "UNKNOWN", ci: "成功", checks: [] }, observed_at: "2026-11-07T01:00:00Z", stale: false, loading: false, error: null };
+  try {
+    bindPRStatus(trigger, "task", "one", url);
+    publishPRStatus(url, latest);
+    resolve(Response.json({ ...latest, observed_at: null, data: { ...latest.data!, state: "OPEN", ci: "失败" } }));
+    await new Promise(done => setTimeout(done, 0));
+    expect(trigger.dataset.prState).toBe("MERGED"); expect(trigger.dataset.ciState).toBe("成功");
+    const next = document.createElement("a"); document.body.append(next);
+    bindPRStatus(next, "group", "two", url);
+    expect(next.dataset.prState).toBe("MERGED"); next.remove();
+  } finally { globalThis.fetch = original; trigger.remove(); }
+});
+
+test("out-of-order timestamped PR publications retain the newer observed result", () => {
+  const url = "https://github.com/example/repo/pull/987";
+  const snapshot: PRSnapshot = { data: { number: 987, title: "PR", url, state: "MERGED", mergedAt: null, mergeable: "UNKNOWN", ci: "成功", checks: [] }, observed_at: "2026-11-07T02:00:00Z", stale: false, loading: false, error: null };
+  publishPRStatus(url, snapshot);
+  const trigger = document.createElement("a"); document.body.append(trigger);
+  try {
+    bindPRStatus(trigger, "task", "one", url);
+    publishPRStatus(url, { ...snapshot, observed_at: "2026-11-07T01:00:00Z", data: { ...snapshot.data!, state: "OPEN", ci: "失败" } });
+    expect(trigger.dataset.prState).toBe("MERGED"); expect(trigger.dataset.ciState).toBe("成功");
+  } finally { trigger.remove(); }
+});

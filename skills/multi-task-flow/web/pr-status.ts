@@ -10,6 +10,10 @@ function svg(paths: string[]): SVGElement {
   return root;
 }
 export function publishPRStatus(url: string, snapshot: PRSnapshot): void {
+  const previous = cache.get(url)?.snapshot;
+  const previousTime = Date.parse(previous?.observed_at ?? "");
+  const nextTime = Date.parse(snapshot.observed_at ?? "");
+  if (Number.isFinite(previousTime) && Number.isFinite(nextTime) && nextTime < previousTime) return;
   cache.set(url, { snapshot, at: Date.now() });
   for (const [trigger, entry] of listeners) {
     if (!trigger.isConnected) { listeners.delete(trigger); continue; }
@@ -45,6 +49,11 @@ export function bindPRStatus(trigger: HTMLElement, kind: "task" | "group", id: s
       return await response.json() as PRSnapshot;
     });
     flights.set(url, flight);
-    void flight.then(snapshot => publishPRStatus(url, snapshot), () => { if (previous) publishPRStatus(url, { ...previous.snapshot, stale: true }); }).finally(() => flights.delete(url));
+    // A popover may publish while this independent card request is in flight.
+    void flight.then(snapshot => {
+      if (cache.get(url) === previous) publishPRStatus(url, snapshot);
+    }, () => {
+      if (previous && cache.get(url) === previous) publishPRStatus(url, { ...previous.snapshot, stale: true });
+    }).finally(() => flights.delete(url));
   }
 }

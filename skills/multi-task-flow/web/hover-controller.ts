@@ -28,6 +28,14 @@ export function createHoverController(context: HoverControllerContext) {
   let lastPointerType: PointerType | null = null;
   let previewTimer: ReturnType<typeof setTimeout> | null = null;
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
+  let previewGeneration = 0;
+  let previewFrame: number | null = null;
+
+  const cancelPreviewFrame = (): void => {
+    previewGeneration++;
+    if (previewFrame !== null) window.cancelAnimationFrame(previewFrame);
+    previewFrame = null;
+  };
 
   const selected = (): boolean => {
     const current = context.getSelected();
@@ -77,6 +85,7 @@ export function createHoverController(context: HoverControllerContext) {
   };
 
   const dismiss = (): void => {
+    cancelPreviewFrame();
     if (hideTimer) clearTimeout(hideTimer);
     const preview = context.element("hover-preview");
     preview.classList.remove("is-visible");
@@ -87,6 +96,7 @@ export function createHoverController(context: HoverControllerContext) {
   };
 
   const hideHoverPreview = (): void => {
+    cancelPreviewFrame();
     if (previewTimer) clearTimeout(previewTimer);
     previewTimer = null;
     const bridge = context.getBridge();
@@ -97,12 +107,16 @@ export function createHoverController(context: HoverControllerContext) {
   const showHoverPreview = (content: HTMLElement, anchor: HoverAnchor): void => {
     const viewState = context.getViewState();
     if (!canShowHoverPreview({ selected: selected(), detailOpen: viewState.detail, hoverCapable: supportsHoverDetails(), detailPanelViewport: context.getDetailPanelViewport(), keyboardSelection: context.getKeyboardSelection() })) return;
+    cancelPreviewFrame();
+    const generation = previewGeneration;
     const bridge = context.getBridge();
     bridge?.cancelDismiss();
     if (previewTimer) clearTimeout(previewTimer);
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = null;
     previewTimer = setTimeout(() => {
+      previewTimer = null;
+      if (generation !== previewGeneration) return;
       if (document.querySelector(".resource-popover:not([hidden]), .unbound-pr-tooltip:not([hidden])")) return;
       const current = context.getViewState();
       if (!canShowHoverPreview({ selected: selected(), detailOpen: current.detail, hoverCapable: supportsHoverDetails(), detailPanelViewport: context.getDetailPanelViewport(), keyboardSelection: context.getKeyboardSelection() })) return;
@@ -112,7 +126,11 @@ export function createHoverController(context: HoverControllerContext) {
       preview.replaceChildren(content);
       preview.hidden = false;
       positionPreview(anchor);
-      if (entering) window.requestAnimationFrame(() => preview.classList.add("is-visible"));
+      if (entering) previewFrame = window.requestAnimationFrame(() => {
+        if (generation !== previewGeneration) return;
+        previewFrame = null;
+        if (!document.querySelector(".resource-popover:not([hidden]), .unbound-pr-tooltip:not([hidden])")) preview.classList.add("is-visible");
+      });
     }, 250);
   };
 

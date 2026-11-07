@@ -11,6 +11,33 @@ beforeEach(() => {
 });
 
 describe("dashboard hover preview DOM", () => {
+  test("opening a resource cancels a queued ordinary preview paint", async () => {
+    const preview = document.createElement("aside"), target = document.createElement("button");
+    document.body.append(preview, target); preview.hidden = true;
+    const raf = window.requestAnimationFrame, cancel = window.cancelAnimationFrame;
+    const frames: FrameRequestCallback[] = [];
+    window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+    window.cancelAnimationFrame = () => undefined;
+    const bridge = createHoverPreviewBridge(preview, () => undefined);
+    const controller = createHoverController({
+      element: <T extends HTMLElement>() => preview as T, getData: () => null,
+      getViewState: () => DEFAULT_VIEW_STATE, getSelected: () => ({ task: null, group: null }),
+      getKeyboardSelection: () => false, getBridge: () => bridge, getAnyHover: () => true,
+      getAnyFinePointer: () => true, getDetailPanelViewport: () => true,
+      taskPreview: () => document.createElement("div"), groupPreview: () => document.createElement("div"),
+      updateDetailsSurface: () => undefined, focusSelectedObject: () => undefined,
+    });
+    try {
+      controller.showHoverPreview(document.createElement("div"), target);
+      await new Promise(done => setTimeout(done, 270));
+      expect(preview.hidden).toBe(false); expect(frames.length).toBe(1);
+      document.dispatchEvent(new Event("resource-popover-open"));
+      // An already-dispatched frame must also remain harmless after closing.
+      frames[0]!(0);
+      expect(preview.classList.contains("is-visible")).toBe(false);
+      await new Promise(done => setTimeout(done, 200)); expect(preview.hidden).toBe(true);
+    } finally { window.requestAnimationFrame = raf; window.cancelAnimationFrame = cancel; bridge.dispose(); }
+  });
   test("keeps the preview open when the pointer crosses from the target into it", async () => {
     const target = document.createElement("button");
     const preview = document.createElement("aside");

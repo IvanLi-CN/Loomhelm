@@ -248,6 +248,18 @@
 
 ![393×852 CSS 像素的移动端编排 dashboard（合成数据）](assets/dashboard-mobile.png)
 
+### 卡片悬浮信息
+
+合成 `ui_demo` 覆盖桌面1440×1000与移动端393×852 CSS视口，复用生产卡片和浮层组件，不连接真实对话或远端 PR。对话与 PR 浮层保留480px宽度上限，用时浮层采用288px紧凑布局；移动端仍保留8px视口边距。图片保留原页面上下文，未裁去组件内部留白。
+
+![对话全文与身份复制操作](assets/card-hover-conversation-desktop.png)
+
+![PR 状态、检查结果与图标操作](assets/card-hover-pr-desktop.png)
+
+![桌面紧凑用时浮层](assets/card-hover-time-desktop.png)
+
+![移动端看板用时与超出排期占比](assets/card-hover-board-time-mobile.png)
+
 ### 源码开发预览
 
 - 示例必须按 `examples/<scenario-id>/` 独立目录组织，目录包含该示例的数据入口、需求内容和说明；源码预览读取具名示例并将需求文档复制到隔离账本目录。

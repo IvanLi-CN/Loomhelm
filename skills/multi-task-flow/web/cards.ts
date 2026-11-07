@@ -15,7 +15,6 @@ type CardContext = {
   getSelectedGroup: () => string | null;
   labels: Record<string, string>;
   safeExternal: (url: string | null) => string | null;
-  groupRange: (groupId: string, tasks: Task[]) => { start: string | null; end: string | null };
   selectTask: (id: string) => void;
   selectGroup: (id: string) => void;
   setKeyboardSelection: () => void;
