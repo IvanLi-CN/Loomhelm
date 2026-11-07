@@ -1,6 +1,6 @@
 # Release Tracking Short Contract
 
-Use this contract for shared Step 6B, `$fast-flow`, `$flow-continue`, and the workflow PR merge procedure. Requirements: [Release Tracking](../../../docs/vendor/dot-codex/specs/release-tracking/SPEC.md). Pre-merge route absence and a release decision card do not establish actual post-merge publication.
+Use this contract for shared Step 6B, `$fast-flow`, `$flow-continue`, and the workflow PR merge procedure. Requirements: [Release Tracking](../../../skills/docs/vendor/dot-codex/specs/release-tracking/SPEC.md). Pre-merge route absence and a release decision card do not establish actual post-merge publication.
 
 ## Identity and publication proof
 

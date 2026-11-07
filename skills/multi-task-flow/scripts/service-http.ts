@@ -1,5 +1,5 @@
 import type { ConnectObserver } from "./conversation-output";
-import { Runtime } from "../../../bin/modules/core/runtime";
+import { Runtime } from "../../bin/modules/core/runtime";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";

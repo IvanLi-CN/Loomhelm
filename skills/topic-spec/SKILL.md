@@ -58,7 +58,7 @@ Before implementation, the shared workflow records `spec_disposition=link|update
 
 ## Contract Check
 
-- For a new or modified canonical `docs/specs/<slug>/SPEC.md`, run `bun bin/spec_contract_check.ts --path docs/specs/<slug>/SPEC.md` (or the candidate-home equivalent) before handoff. The checker is structural: workflow topics may describe PR/Phase behavior, but task-state headings and unresolved decisions remain invalid.
+- For a new or modified canonical `docs/specs/<slug>/SPEC.md`, run `bun skills/bin/spec_contract_check.ts --path docs/specs/<slug>/SPEC.md` (or the candidate-home equivalent) before handoff. The checker is structural: workflow topics may describe PR/Phase behavior, but task-state headings and unresolved decisions remain invalid.
 
 ## Templates
 

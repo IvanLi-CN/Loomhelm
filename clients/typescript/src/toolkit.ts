@@ -59,7 +59,7 @@ export class SkillsRuntime {
   }
   async run(script: string, args: readonly string[], options: ProcessOptions = {}): Promise<ProcessResult> {
     const manifest = await this.manifest();
-    if (!manifest.files.some(file => file.path === script) || !/^(skills\/[^/]+\/scripts|bin)\/.+/.test(script)) throw new Error('Unknown toolkit script');
+    if (!manifest.files.some(file => file.path === script) || !/^(skills\/[^/]+\/scripts|skills\/bin)\/.+/.test(script)) throw new Error('Unknown toolkit script');
     const compiled = script.endsWith('.ts') ? script.slice(0, -3) + '.js' : script;
     const root = await realpath(this.root);
     const target = await realpath(resolve(root, compiled));

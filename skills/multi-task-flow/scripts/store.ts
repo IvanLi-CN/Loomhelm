@@ -21,7 +21,7 @@ import {
   identity,
   removeStagingPath,
   type FileIdentity,
-} from "../../../bin/modules/visual/isolation";
+} from "../../bin/modules/visual/isolation";
 import {
   createDirectoryNoFollow,
   readRegularNoFollow,
@@ -30,7 +30,7 @@ import {
   writeAtomicNoFollow,
   writeExclusiveNoFollow,
   type DirectoryIdentity,
-} from "../../../bin/modules/visual/secure_io";
+} from "../../bin/modules/visual/secure_io";
 import { normalizeLegacyLedger } from "./schema";
 import { orchestrationRoot } from "./service-paths";
 import { requireLedgerCompatibility } from "./service-contract";

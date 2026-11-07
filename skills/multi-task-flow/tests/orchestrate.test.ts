@@ -604,7 +604,7 @@ describe("orchestrate init", () => {
     const design = readFileSync(
       join(
         import.meta.dir,
-        "../../../docs/vendor/dot-codex/design/multi-task-flow/data-and-scripts.md",
+        "../../../skills/docs/vendor/dot-codex/design/multi-task-flow/data-and-scripts.md",
       ),
       "utf8",
     );

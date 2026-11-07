@@ -1,3 +1,3 @@
-import { runCompatibilityCli } from "../../../bin/compatibility_cli";
+import { runCompatibilityCli } from "../../bin/compatibility_cli";
 
 if (import.meta.main) process.exitCode = await runCompatibilityCli("context");

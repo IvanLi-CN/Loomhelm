@@ -39,8 +39,8 @@
 
 ## Acceptance & Validation
 
-- A1 [contract/direct] duplicate contract | scope=`batch:batch-a` | phase=`pre_merge` | evidence=`bin/test_wave_thread_plan_contract.ts` | assertions=`stable duplicate-contract finding; Agent default decision card includes version-expectation confirmation`
-- A2 [contract/direct] task binding | scope=`task:task-a1` | phase=`pre_merge` | evidence=`bin/plan_contract_check.ts` | assertions=`canonical task fields remain parseable`
+- A1 [contract/direct] duplicate contract | scope=`batch:batch-a` | phase=`pre_merge` | evidence=`skills/bin/test_wave_thread_plan_contract.ts` | assertions=`stable duplicate-contract finding; Agent default decision card includes version-expectation confirmation`
+- A2 [contract/direct] task binding | scope=`task:task-a1` | phase=`pre_merge` | evidence=`skills/bin/plan_contract_check.ts` | assertions=`canonical task fields remain parseable`
 
 ## Assumptions/Defaults
 

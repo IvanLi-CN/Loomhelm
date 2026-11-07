@@ -1,4 +1,4 @@
-import { Runtime } from "../../../bin/modules/core/runtime";
+import { Runtime } from "../../bin/modules/core/runtime";
 import {
   effectiveProfile,
   materializeRecommendation,
