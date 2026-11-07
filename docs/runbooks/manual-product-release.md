@@ -22,7 +22,7 @@ main 必须要求 PR、签名提交与仓库 quality-gates 声明的检查。rel
 
 Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 / Linux amd64、Web 均为必需产物。TS 包携带完整 toolkit/native 资源，无需源码仓库；需要 Node 22 或 24。包内 --version 报告构建版本和 SHA，正式程序拒绝运行配置覆盖身份。
 
-服务端包包含候选文件与离线 OCI images，images/images.json 绑定 archive SHA256 和 OCI manifest digest。安装工具必须验证后导入原 OCI 内容；不得通过生产机器重建获取镜像。预览 candidate schema 2 的既有晋级验证保持有效，产品级发布 manifest 额外绑定完整组件集合及版本。
+服务端包在 candidate/ 子目录保留原 schema 2 bundle，images/ 子目录保存离线 OCI images，images/images.json 绑定 archive SHA256 和 OCI manifest digest。安装工具必须验证后导入原 OCI 内容；不得通过生产机器重建获取镜像。预览 candidate schema 2 的既有晋级验证保持有效，产品级发布 manifest 额外绑定完整组件集合及版本。
 
 ## 完成与恢复
 
@@ -64,3 +64,7 @@ PR 的 Product Release Contract 覆盖版本规则、实际裸 Git CAS、状态�
 PR 包场景使用明确标记的 `0.0.0-ci` 合成版本与零身份检验正式门禁；它不占用产品版本、不成为 baseline，并被公开入口拒绝。
 
 浏览器 OIDC start/callback 与 device verify 是窄范围认证导航，由原有 OIDC state、device code 与 CSRF 校验处理，不能携带 fetch 自定义头，也不被判为兼容业务连接。所有 session、REST 业务、MCP、事件及 Go gateway 请求仍必须通过产品版本门禁；不能用认证导航例外绕过业务路径。
+
+服务端包附带同版本、同 SHA 的 `bin/loomhelm-migrate`，OCI 内对应路径为 `/loomhelm-migrate`。初始数据库仍遵循既有 approval-history 的 prepare → backfill → validate → indexes → cutover 顺序；工具不改变数据库/journal schema，不在正式部署中自动越过暂停点。成品测试仅对一次性空数据库执行这些既有步骤后观察 Server/Worker readiness。
+
+持久冻结前先追加 staged inventory（固定期望 digest 与原构建 run，接续已禁止重建）。逐项上传、下载核验后才追加 frozen；因此 frozen 的每个原件都已有长期 draft asset 副本，不依赖 Actions retention。staged 中尚未持久化的原件若丢失，仍必须阻断并报告损失，不能以重新构建补齐。

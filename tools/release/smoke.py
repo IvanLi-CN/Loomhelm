@@ -1,5 +1,6 @@
 """Observe exact archived bytes on a native runner, without user Codex credentials."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,8 @@ from policy import ReleaseError
 def run_version(argv, record):
     result=subprocess.run(argv,capture_output=True,text=True,check=True)
     info=json.loads(result.stdout)
-    if (info['version'],info['source_sha'])!=(record['version'],record['merge_sha']):raise ReleaseError('native package identity mismatch')
+    print(json.dumps(dict(observation='native-package-version',command=Path(argv[0]).name,**info)),flush=True)
+    if (info['version'],info['source_sha'],info['policy'])!=(record['version'],record['merge_sha'],'loomhelm-manual-v1'):raise ReleaseError('native package identity mismatch')
 
 
 def runtime_smoke(tags, record):
@@ -31,6 +33,10 @@ def runtime_smoke(tags, record):
             if probe.returncode==0:break
             time.sleep(1)
         else:raise ReleaseError('native package database did not become ready')
+        # The existing approval-history rollout is explicit even on a clean DB.
+        # Exercise the packaged migrator, not Go source or altered readiness.
+        for operation in ('prepare','backfill','validate','indexes','cutover'):
+            subprocess.run(['docker','run','--rm','--network',owner,'-e','LOOMHELM_DATABASE_URL=postgres://loomhelm:package-smoke-only@db:5432/loomhelm?sslmode=disable','--entrypoint','/loomhelm-migrate',tags['server'],'--operation',operation],check=True)
         for component in ('server','worker'):
             name=owner+'-'+component;containers.append(name)
             port=8080 if component=='server' else 8081
@@ -75,14 +81,28 @@ def smoke(directory,record):
             if path.name.startswith('go-client-'):
                 run_version([str(root/'loomhelm-connector'),'--version'],record)
             elif path.name.startswith('ts-client-'):
+                manifest=json.loads((root/'dist/toolkit/artifact-manifest.json').read_text())
+                if manifest['candidateSha']!=record['merge_sha'] or manifest['dirty']:
+                    raise ReleaseError('TS resource provenance differs from clean Candidate')
+                for resource in manifest['files']:
+                    relative=Path(resource['path'])
+                    if relative.is_absolute() or '..' in relative.parts:
+                        raise ReleaseError('unsafe TS resource path')
+                    payload=root/'dist/toolkit'/relative
+                    if not payload.is_file() or hashlib.sha256(payload.read_bytes()).hexdigest()!=resource['sha256']:
+                        raise ReleaseError('incomplete or altered TS resource: '+str(relative))
+                print(json.dumps(dict(observation='typescript-resource-inventory',files=len(manifest['files']),candidate_sha=manifest['candidateSha'])),flush=True)
+                subprocess.run(['node','-e','require(process.argv[1])',str(root/'dist/toolkit/skills/bin/native/posix.node')],check=True)
                 run_version(['node',str(root/'dist/cli.js'),'--version'],record)
                 subprocess.run(['node',str(root/'dist/cli.js'),'skills','list'],check=True,stdout=subprocess.DEVNULL)
             elif path.name.startswith('web'):
                 info=json.loads((root/'product-version.json').read_text())
                 if info['version']!=record['version'] or info['source_sha']!=record['merge_sha']:raise ReleaseError('Web build identity mismatch')
             elif path.name.startswith('server'):
+                run_version([str(root/'bin/loomhelm-migrate'),'--version'],record)
                 for name in ('server','worker','connector'):
-                    run_version([str(root/'bin'/name),'--version'],record)
+                    run_version([str(root/'candidate/bin'/name),'--version'],record)
+                subprocess.run(['scripts/promote-candidate','--manifest',str(root/'candidate/candidate-manifest.json'),'--destination',str(root/'verification'),'--expected-source-sha',record['merge_sha'],'--dry-run'],check=True)
                 images=json.loads((root/'images/images.json').read_text())
                 tags={}
                 for name,entry in images.items():

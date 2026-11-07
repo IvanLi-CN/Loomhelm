@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/buildinfo"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
@@ -62,6 +63,9 @@ type migrationProgressOutput struct {
 }
 
 func main() {
+	if buildinfo.PrintVersion(os.Args[1:], os.Stdout) {
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := runWithArgs(ctx, os.Args[1:]); err != nil {

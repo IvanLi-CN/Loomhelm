@@ -8,7 +8,7 @@ export class ProductVersionError extends Error {
 export async function checkServerVersion(baseUrl: string, fetcher: typeof fetch = fetch): Promise<void> {
   if (buildInfo.version === 'dev') return;
   const response = await fetcher(new URL('/version', baseUrl), { cache: 'no-store', redirect: 'error' });
-  const value: unknown = await response.json();
+  const value: unknown = await response.json().catch(() => { throw new ProductVersionError(); });
   if (!response.ok || !value || typeof value !== 'object' || !('version' in value) || !('policy' in value) || value.version !== buildInfo.version || value.policy !== buildInfo.policy) throw new ProductVersionError();
 }
 export async function versionedFetch(baseUrl: string, input: string | URL, init: RequestInit = {}, fetcher: typeof fetch = fetch): Promise<Response> {

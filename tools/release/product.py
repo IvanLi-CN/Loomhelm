@@ -19,7 +19,15 @@ PROJECTIONS = ('VERSION','clients/typescript/package.json','clients/typescript/p
 
 
 def contract():
-    return json.loads((ROOT/'.github/release-contract.json').read_text())
+    value = json.loads((ROOT/'.github/release-contract.json').read_text())
+    expected = dict(schema_version=1, policy='loomhelm-manual-v1', release_unit='loomhelm',
+        target='semver-final-or-prerelease-without-build-metadata', baseline='verified-public-completed-final',
+        ledger_ref='refs/heads/release-ledger', tag_prefix='v', single_active_reservation=True,
+        notification_transport='github-issue', compatibility={'default':'exact-version','allow':[]})
+    artifacts = {'server-linux-amd64.tar.gz','go-client-darwin-arm64.tar.gz','go-client-linux-amd64.tar.gz','ts-client-darwin-arm64.tar.gz','ts-client-linux-amd64.tar.gz','web.tar.gz'}
+    if set(value) != set(expected) | {'artifacts'} or any(value.get(key) != expected[key] for key in expected) or len(value['artifacts']) != len(artifacts) or set(value['artifacts']) != artifacts:
+        raise ReleaseError('unsupported or incomplete executable release policy')
+    return value
 
 
 def project(version):
@@ -132,9 +140,9 @@ def inventory(directory, record):
 def publish(api, ledger, record, directory):
     if record['state'] == 'bound':
         frozen = inventory(directory,record)
-        transition(record,'frozen',artifacts=frozen,build_run_id=os.environ.get('GITHUB_RUN_ID'))
+        transition(record,'staged',artifacts=frozen,build_run_id=os.environ.get('GITHUB_RUN_ID'))
         ledger.append(ledger.state)
-    if record['state'] not in ('frozen','completed'):
+    if record['state'] not in ('staged','frozen','completed'):
         raise ReleaseError('identity is not frozen')
     release = api.ensure_draft(record)
     # Completed recovery is also verified; it never mutates the version.
@@ -158,6 +166,10 @@ def publish(api, ledger, record, directory):
             transition(record,'uploaded',name=name,digest=expected)
             ledger.append(ledger.state)
         api.verify_assets(release,record['artifacts'])
+        if record['state'] == 'staged':
+            # Freeze only after all originals have durable draft copies.
+            transition(record,'frozen',artifacts=record['artifacts'])
+            ledger.append(ledger.state)
         api.verify_tag(record['version'],record['merge_sha'],required=True)
         api.api('releases/'+str(release['id']),'PATCH',dict(draft=False))
     # Re-read the public record: a lost response must not create a second Release.
@@ -181,6 +193,7 @@ def main():
     args = parser.parse_args()
     os.chdir(ROOT)
     if args.action == 'check':
+        contract()
         print(check_projections()); return
     if args.action == 'project':
         project(args.target); return
@@ -212,7 +225,7 @@ def main():
         if record['intent']['policy_hash'] != digest(contract()):
             raise ReleaseError('policy differs from reserved identity')
         if args.action == 'prepare':
-            if record['state'] in ('bound','frozen','completed'):
+            if record['state'] in ('bound','staged','frozen','completed'):
                 print(json.dumps(record,sort_keys=True)); return
             if record['state'] == 'reserved':
                 if git('status','--porcelain').stdout:
@@ -265,6 +278,9 @@ def main():
             api.verify_source(record['merge_sha'],checks)
             publish(api,ledger,record,args.directory or Path('/nonexistent-frozen-originals'))
         elif args.action == 'terminate':
+            published = api.release(record['version'])
+            if published and not published['draft']:
+                raise ReleaseError('public identity must reconcile completion; cannot terminate publication facts')
             transition(record,'terminated',reason=args.reason)
             ledger.append(ledger.state)
         elif args.action == 'notify':

@@ -102,6 +102,16 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 	if b.openBrowser == nil {
 		b.openBrowser = openConnectorBrowser
 	}
+	preflight := *b.client
+	preflight.Jar = nil
+	preflight.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("version redirects are not allowed") }
+	endpoint, err := connectorHTTPURL(cfg.ConnectorServerURL, "/version")
+	if err != nil {
+		return auth.ConnectorCredential{}, err
+	}
+	if err := buildinfo.CheckServer(ctx, &preflight, endpoint); err != nil {
+		return auth.ConnectorCredential{}, err
+	}
 	cachePath := strings.TrimSpace(cfg.ConnectorCredentialPath)
 	if cachePath == "" {
 		_, defaultCachePath, err := platform.DefaultConnectorStatePaths()
@@ -110,7 +120,7 @@ func (b connectorCredentialBootstrapper) bootstrap(ctx context.Context, cfg plat
 		}
 		cachePath = defaultCachePath
 	}
-	cachePath, err := connectorCredentialCachePath(cachePath)
+	cachePath, err = connectorCredentialCachePath(cachePath)
 	if err != nil {
 		return auth.ConnectorCredential{}, err
 	}
@@ -268,6 +278,9 @@ func (b connectorCredentialBootstrapper) resolveAPIKey(ctx context.Context, base
 		return auth.ConnectorCredential{}, fmt.Errorf("request Connector identity: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUpgradeRequired {
+		return auth.ConnectorCredential{}, errors.New("PRODUCT_VERSION_INCOMPATIBLE: update the Go client before reconnecting; saved credentials remain unchanged")
+	}
 	if response.StatusCode != http.StatusOK {
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound {
 			return auth.ConnectorCredential{}, fmt.Errorf("%w: Connector identity request failed with status %d", errConnectorCredentialRejected, response.StatusCode)
@@ -464,6 +477,9 @@ func (b connectorCredentialBootstrapper) postConnectorJSON(ctx context.Context, 
 		return err
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUpgradeRequired {
+		return errors.New("PRODUCT_VERSION_INCOMPATIBLE: update the Go client before reconnecting; local state is preserved")
+	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return connectorHTTPStatusError{status: response.StatusCode}
 	}

@@ -22,7 +22,7 @@ else:
     # Failure before reservation has no product identity; keep generic metadata.
     marker='<!-- loomhelm-release-run:'+str(run['id'])+' -->'
     response=api.issues()
-    matches=[i for i in response if marker in (i.get('body') or '')]
+    matches=[i for i in response if marker in (i.get('body') or '') and 'pull_request' not in i]
     body=marker+'\nWorkflow: '+run['name']+'\nRun: '+run['html_url']+'\nSHA: '+run['head_sha']+'\nAttempt: '+str(run['run_attempt'])+'\nNo verified release identity; inspect the failed run before retry.'
     if len(matches)>1:raise ReleaseError('ambiguous workflow notification identity')
     if matches:api.api('issues/'+str(matches[0]['number']),'PATCH',dict(body=body))

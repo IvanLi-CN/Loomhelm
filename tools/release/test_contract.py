@@ -26,3 +26,20 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(lock['packages']['node_modules/x']['version'],'5.0.0')
                 (root/'web/package.json').write_text('{"version":"1.2.4"}')
                 with self.assertRaises(ReleaseError):product.check_projections()
+
+    def test_incomplete_artifact_matrix_is_not_a_supported_policy(self):
+        original=product.contract()
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'.github').mkdir()
+            original['artifacts'].remove('go-client-linux-amd64.tar.gz')
+            (root/'.github/release-contract.json').write_text(json.dumps(original))
+            with patch.object(product,'ROOT',root), self.assertRaises(ReleaseError):product.contract()
+
+    def test_missing_signing_and_protection_fail_closed(self):
+        from unittest.mock import Mock
+        import os
+        api=Mock()
+        with patch.dict(os.environ, {}, clear=True), self.assertRaises(ReleaseError):product.prerequisites(api)
+        api.api.assert_not_called()
+        api.api.return_value=[]
+        with patch.dict(os.environ, {'RELEASE_SIGNING_KEY_ID':'fixture'}, clear=True), self.assertRaises(ReleaseError):product.prerequisites(api)

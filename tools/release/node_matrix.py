@@ -15,3 +15,5 @@ for archive in a.directory.glob('ts-client-*.tar.gz'):
             run_version(['npx','--yes','--package=node@'+major,'node',str(Path(tmp)/'dist/cli.js'),'--version'],record)
 
             subprocess.run(['npx','--yes','--package=node@'+major,'node',str(Path(tmp)/'dist/cli.js'),'skills','list'], check=True, stdout=subprocess.DEVNULL)
+
+            subprocess.run(['npx','--yes','--package=node@'+major,'node','-e','require(process.argv[1])',str(Path(tmp)/'dist/toolkit/skills/bin/native/posix.node')], check=True)

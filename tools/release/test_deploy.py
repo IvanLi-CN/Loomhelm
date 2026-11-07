@@ -6,7 +6,7 @@ from policy import ReleaseError
 
 class DeploymentTests(unittest.TestCase):
     def test_incomplete_release_never_downloads_or_imports(self):
-        for state in ('reserved','prepared','bound','frozen','terminated'):
+        for state in ('reserved','prepared','bound','staged','frozen','terminated'):
             api=Mock()
             with self.assertRaises(ReleaseError):stage(api,{'state':state},Path('/not-created'))
             api.ensure_draft.assert_not_called()

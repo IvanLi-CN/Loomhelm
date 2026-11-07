@@ -40,6 +40,7 @@ def frozen():
     r=reserve({},'1.0.0','a'*40,'policy','owner',None)
     transition(r,'prepared',branch='th/release',preparation_sha='b'*40)
     transition(r,'bound',merge_sha='c'*40)
+    transition(r,'staged',artifacts={'package':hashlib.sha256(b'original').hexdigest()})
     transition(r,'frozen',artifacts={'package':hashlib.sha256(b'original').hexdigest()})
     return r
 
@@ -74,3 +75,16 @@ class PublicationTests(unittest.TestCase):
         r=frozen();api=Provider();api.tag_wrong=True
         with self.assertRaises(ReleaseError):publish(api,MemoryLedger(r),r,Path('/missing'))
         self.assertEqual(api.uploads,0)
+
+    def test_partial_upload_is_staged_until_all_originals_are_durable(self):
+        from unittest.mock import patch
+        record=frozen();record['state']='bound';record['artifacts']={}
+        api=Provider();api.fail_upload=True;ledger=MemoryLedger(record)
+        with tempfile.TemporaryDirectory() as tmp, patch('product.inventory',return_value={'package':hashlib.sha256(b'original').hexdigest()}):
+            directory=Path(tmp);(directory/'package').write_bytes(b'original')
+            with self.assertRaises(ReleaseError):publish(api,ledger,record,directory)
+            self.assertEqual(record['state'],'staged')
+            (directory/'package').unlink()
+            publish(api,ledger,record,directory)
+        self.assertEqual(record['state'],'completed')
+        self.assertEqual(api.uploads,1)

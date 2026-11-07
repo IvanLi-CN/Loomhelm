@@ -95,8 +95,11 @@ func (c *Client) Connect(ctx context.Context) (*ClientConnection, error) {
 	}
 	parsed, _ := url.Parse(c.url)
 	parsed.Scheme = "https"
-	parsed.Path = "/version"
-	if err := buildinfo.CheckServer(ctx, &httpClientCopy, parsed.String()); err != nil {
+	parsed.Path = strings.TrimSuffix(strings.TrimRight(parsed.Path, "/"), "/gateway") + "/version"
+	parsed.RawPath = ""
+	preflightClient := httpClientCopy
+	preflightClient.Jar = nil
+	if err := buildinfo.CheckServer(ctx, &preflightClient, parsed.String()); err != nil {
 		return nil, err
 	}
 	ws, _, err := websocket.Dial(ctx, c.url, &websocket.DialOptions{

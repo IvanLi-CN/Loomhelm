@@ -26,3 +26,5 @@ Git ledger 复用 GitHub 授权与签名审计，避免新增状态服务；代�
 
 - [统一发布合同](../specs/manual-version-release-delivery/SPEC.md)
 - [发布操作手册](../runbooks/manual-product-release.md)
+
+逐项上传期间使用 staged 状态固定期望 digest 和原始构建 run；所有 draft 资产可下载复核后才进入 frozen。staged 和 frozen 的恢复均不重建。如此区分未完成传输与已有长期原件副本的冻结事实，冻结保留不依赖 Actions retention。

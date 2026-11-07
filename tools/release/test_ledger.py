@@ -26,6 +26,8 @@ class LedgerTests(unittest.TestCase):
                 state['releases']['one']={'id':'one','version':'1.0.0','intent':{},'events':[{'sequence':1,'kind':'reserved'}]}
                 first.append(state)
                 with self.assertRaises(ReleaseError): second.append({'schema_version':1,'releases':{'other':{'events':[]}}})
+                with self.assertRaises(ReleaseError):Ledger(signed=True).read()
+                with self.assertRaises(ReleaseError):first.append({'schema_version':2,'releases':{}})
                 old=first.head
                 reread=Ledger(signed=False)
                 value=reread.read()

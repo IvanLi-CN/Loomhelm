@@ -69,14 +69,18 @@ def build(record, part, output):
             client=stage/'client';client.mkdir()
             shutil.copy2(candidate/'bin/connector',client/'loomhelm-connector')
             archive(client,output/'go-client-linux-amd64.tar.gz',epoch)
-            images= candidate/'images';images.mkdir()
+            migration=stage/'loomhelm-migrate'
+            flags=f'-s -w -buildid= -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.Version={record["version"]} -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.SourceSHA={sha}'
+            run('go','build','-trimpath','-buildvcs=false','-ldflags',flags,'-o',str(migration),'./internal/platform/database/cmd/migrate',env=dict(os.environ,CGO_ENABLED='0'))
+            images= stage/'images';images.mkdir()
             receipts={}
             with oci_builder() as builder:
                 for component in ('server','worker'):
                     context=stage/component;context.mkdir()
                     shutil.copy2(candidate/'bin'/component,context/component)
                     shutil.copy2('/etc/ssl/certs/ca-certificates.crt',context/'ca-certificates.crt')
-                    (context/'Dockerfile').write_text(f'FROM scratch\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nCOPY {component} /{component}\nUSER 65532:65532\nENTRYPOINT ["/{component}"]\n')
+                    shutil.copy2(migration,context/'loomhelm-migrate')
+                    (context/'Dockerfile').write_text(f'FROM scratch\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nCOPY {component} /{component}\nCOPY loomhelm-migrate /loomhelm-migrate\nUSER 65532:65532\nENTRYPOINT ["/{component}"]\n')
                     path=images/(component+'.oci.tar')
                     run('docker','buildx','build','--builder',builder,'--platform','linux/amd64','--provenance=false','--output','type=oci,dest='+str(path),str(context))
                     with tarfile.open(path) as tar:
@@ -84,7 +88,12 @@ def build(record, part, output):
                         receipts[component]=dict(archive=path.name,manifest_digest=index['manifests'][0]['digest'],sha256=hashlib.sha256(path.read_bytes()).hexdigest())
                     # Load the same OCI artifact for the native smoke test, no rebuild.
             (images/'images.json').write_bytes(canonical(receipts)+b'\n')
-            archive(candidate,output/'server-linux-amd64.tar.gz',epoch)
+            bundle=stage/'server-package';bundle.mkdir()
+            (bundle/'bin').mkdir()
+            shutil.copy2(migration,bundle/'bin/loomhelm-migrate')
+            shutil.copytree(candidate,bundle/'candidate')
+            shutil.copytree(images,bundle/'images')
+            archive(bundle,output/'server-linux-amd64.tar.gz',epoch)
         elif part=='go-client':
             if machine!='darwin-arm64': raise ReleaseError('Go macOS package requires native macOS arm64')
             flags=f'-s -w -buildid= -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.Version={record["version"]} -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.SourceSHA={sha}'

@@ -164,7 +164,7 @@ jobs:
         with:
           name: release-identity
           path: ${{ runner.temp }}/release-record
-      - name: Freeze or recover same identity
+      - name: Assemble or recover same identity
         env:
           IDENTITY: ${{ inputs.identity }}
           NEW_BUILD: ${{ needs.resolve.outputs.build }}
@@ -174,4 +174,17 @@ jobs:
           else
             python3 tools/release/workflow.py recover --record "$RUNNER_TEMP/release-record/identity.json" --directory "$RUNNER_TEMP/product"
           fi
-          scripts/product-release publish --identity "$IDENTITY" --directory "$RUNNER_TEMP/product"
+      - name: Retain staged metadata before durable inventory claim
+        if: needs.resolve.outputs.build == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-inventory
+          path: |
+            ${{ runner.temp }}/product/release-manifest.json
+            ${{ runner.temp }}/product/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 90
+      - name: Persist and publish exact original bytes
+        env:
+          IDENTITY: ${{ inputs.identity }}
+        run: scripts/product-release publish --identity "$IDENTITY" --directory "$RUNNER_TEMP/product"

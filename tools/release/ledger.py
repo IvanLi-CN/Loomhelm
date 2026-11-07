@@ -43,6 +43,8 @@ class Ledger:
         return self.state
 
     def append(self, state):
+        if state.get('schema_version') != 1:
+            raise ReleaseError('unsupported ledger schema')
         for identity, old in self.original['releases'].items():
             new = state['releases'].get(identity)
             if new is None or new['events'][:len(old['events'])] != old['events']:
@@ -50,7 +52,7 @@ class Ledger:
             for field in ('id','version','intent','merge_sha','preparation_sha','branch'):
                 if field in old and old[field] != new.get(field):
                     raise ReleaseError('reserved identity field cannot change: '+field)
-            if old.get('state') in ('frozen','completed','terminated') and old.get('artifacts') != new.get('artifacts'):
+            if old.get('state') in ('staged','frozen','completed','terminated') and old.get('artifacts') != new.get('artifacts'):
                 raise ReleaseError('frozen inventory cannot change')
         for record in state['releases'].values():
             if any(e.get('sequence') != i+1 for i,e in enumerate(record['events'])):
@@ -90,9 +92,9 @@ def event(record, kind, **fields):
 def transition(record, kind, **fields):
     allowed = {
         'prepared': ('reserved',), 'bound': ('prepared',),
-        'frozen': ('bound',), 'uploaded': ('frozen',),
-        'completed': ('frozen',), 'terminated': ('reserved','prepared','bound','frozen'),
-        'notification': ('reserved','prepared','bound','frozen','completed','terminated'),
+        'staged': ('bound',), 'frozen': ('staged',), 'uploaded': ('staged','frozen'),
+        'completed': ('frozen',), 'terminated': ('reserved','prepared','bound','staged','frozen'),
+        'notification': ('reserved','prepared','bound','staged','frozen','completed','terminated'),
     }
     if kind not in allowed or record['state'] not in allowed[kind]:
         raise ReleaseError('invalid release state transition')
@@ -102,9 +104,11 @@ def transition(record, kind, **fields):
     elif kind == 'bound':
         record['merge_sha'] = fields['merge_sha']
         record['state'] = kind
-    elif kind == 'frozen':
+    elif kind in ('staged','frozen'):
         if not fields['artifacts']:
             raise ReleaseError('empty frozen inventory')
+        if kind == 'frozen' and fields['artifacts'] != record['artifacts']:
+            raise ReleaseError('staged inventory cannot change during durable freeze')
         record['artifacts'] = fields['artifacts']
         record['state'] = kind
     elif kind == 'completed':

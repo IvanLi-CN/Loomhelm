@@ -35,6 +35,7 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(ReleaseError): transition(r,'completed',verified_artifacts={})
         transition(r,'prepared',branch='th/release',preparation_sha='b'*40)
         transition(r,'bound',merge_sha='c'*40)
+        transition(r,'staged',artifacts={'a':'digest'})
         transition(r,'frozen',artifacts={'a':'digest'})
         with self.assertRaises(ReleaseError): transition(r,'completed',verified_artifacts={'a':'wrong'})
         transition(r,'completed',verified_artifacts={'a':'digest'})

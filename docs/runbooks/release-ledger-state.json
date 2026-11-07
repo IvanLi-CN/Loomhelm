@@ -23,7 +23,7 @@
   },
   "rollout_observability": {
     "operations_must_remain_separate": true,
-    "operation_sequence": ["reserve", "prepare", "bind", "freeze", "upload-and-verify", "publish", "complete"],
+    "operation_sequence": ["reserve", "prepare", "bind", "stage", "upload-and-verify", "freeze", "publish", "complete"],
     "progress_signals": ["签名 commit SHA", "CAS ref", "sequence/kind", "逐项 artifact digest", "公开状态", "completion"],
     "pause_points": ["每个成功追加的阶段之后；仅沿原 identity 接续"]
   },

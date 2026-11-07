@@ -89,7 +89,7 @@ def main():
                 archive.extractall(server,filter='data')
             images=import_images(server,record)
             envelope=server/'deployment-envelope.json'
-            subprocess.run(['scripts/build-deployment-envelope','--candidate-manifest',str(server/'candidate-manifest.json'),'--server-image',images['server'],'--worker-image',images['worker'],'--output',str(envelope)],check=True)
+            subprocess.run(['scripts/build-deployment-envelope','--candidate-manifest',str(server/'candidate/candidate-manifest.json'),'--server-image',images['server'],'--worker-image',images['worker'],'--output',str(envelope)],check=True)
             saved=destination/'deployment-envelope.json'
             if saved.is_symlink() or (saved.exists() and saved.read_bytes()!=envelope.read_bytes()):raise ReleaseError('existing deployment envelope differs; reconcile without overwrite')
             if not saved.exists():
