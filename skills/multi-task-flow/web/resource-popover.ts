@@ -25,7 +25,7 @@ function checkLabel(value: string): string {
   const labels: Record<string, string> = { SUCCESS: "通过", FAILURE: "失败", ERROR: "错误", CANCELLED: "已取消", TIMED_OUT: "超时", ACTION_REQUIRED: "需操作", IN_PROGRESS: "运行中", QUEUED: "排队中", PENDING: "等待中", SKIPPED: "已跳过", NEUTRAL: "中立", UNKNOWN: "未知" };
   return labels[value] ? `${labels[value]} · ${value}` : value;
 }
-function copyRow(label: string, value: string | null, href: string | null = null): HTMLElement {
+function copyRow(label: string, value: string | null, href: string | null = null, actionLabel = `复制${label}`): HTMLElement {
   const row = node("div", "", "resource-copy-row");
   row.dataset.field = label === "标题" ? "title" : "identifier";
   const content = node("div", "", "resource-field");
@@ -36,11 +36,11 @@ function copyRow(label: string, value: string | null, href: string | null = null
   content.append(valueNode);
   row.append(content);
   if (value) {
-    const action = `复制${label}`;
+    const action = actionLabel;
     const button = document.createElement("button"); button.type = "button"; button.className = "resource-icon-button"; button.setAttribute("aria-label", action); button.dataset.action = action;
     button.append(icon("copy"));
     const hint = attachTooltip(button, node("span", action), action); row.append(button, hint);
-    button.addEventListener("click", async () => { try { await navigator.clipboard.writeText(value); button.dataset.feedback = "已复制"; } catch { button.dataset.feedback = "复制失败"; } });
+    button.addEventListener("click", async () => { try { await navigator.clipboard.writeText(value); button.dataset.feedback = "已复制"; button.setAttribute("aria-label", `${action}：已复制`); } catch { button.dataset.feedback = "复制失败"; button.setAttribute("aria-label", `${action}：复制失败`); } });
   }
   return row;
 }
@@ -132,7 +132,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
       pr = next; identity.replaceChildren();
       if (next.loading) refreshTimer = setTimeout(() => { if (!panel.hidden) void loadPR(); }, 1000);
       if (next.data) {
-        const numberRow = copyRow("PR 编号", String(next.data.number));
+        const numberRow = copyRow("PR", `#${next.data.number}`, null, "复制 PR 编号");
         const urlRow = copyRow("链接", next.data.url, next.data.url);
         const link = document.createElement("a"); link.href = next.data.url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "resource-link-button"; link.setAttribute("aria-label", "打开 PR"); link.append(icon("external")); const linkHint = attachTooltip(link, node("span", "打开 PR"), "打开 PR"); urlRow.append(link, linkHint);
         identity.append(numberRow, urlRow);
@@ -157,7 +157,12 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
         const updated = node("p", `更新于 ${next.observed_at ? fullLocalTime(next.observed_at) : "未知"}${next.stale ? " · 已过期" : ""}${next.loading ? " · 刷新中" : ""}`, "resource-updated");
         body.replaceChildren(heading, states, conflict, checks, updated);
         if (next.error) body.append(node("p", next.error, "resource-error"));
-      } else body.textContent = next.error || "尚未关联 PR";
+      } else {
+        const heading = node("div", "", "resource-section-heading");
+        heading.append(node("h3", "PR 信息", "resource-pr-title"));
+        const retry = document.createElement("button"); retry.type = "button"; retry.className = "resource-icon-button resource-refresh-button"; retry.dataset.retry = "true"; retry.setAttribute("aria-label", "重试 PR 查询"); retry.append(icon("refresh")); heading.append(retry, attachTooltip(retry, node("span", "重试 PR 查询"), "重试 PR 查询")); retry.addEventListener("click", () => void loadPR(true));
+        body.replaceChildren(heading, node("p", next.error || "尚未关联 PR", "resource-error"));
+      }
 
     } catch { if (current === requestId && !panel.hidden) { body.textContent = `${pr?.data ? `${pr.data.title}\n${pr.data.state} · CI ${pr.data.ci}\n数据已过期\n` : ""}读取失败，请稍后重试`;
       if (!identity.querySelector("button[data-retry]")) { const retry = document.createElement("button"); retry.type = "button"; retry.dataset.retry = "true"; retry.textContent = "重试"; retry.addEventListener("click", () => void loadPR(true)); identity.append(retry); } } }
@@ -190,6 +195,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
   trigger.addEventListener("pointerenter", e => { if (e.pointerType === "mouse") { cancel(); openTimer = setTimeout(open, 250); } });
   trigger.addEventListener("pointerleave", scheduleClose); panel.addEventListener("pointerenter", cancel); panel.addEventListener("pointerleave", scheduleClose);
   trigger.addEventListener("focus", () => { if (!touchStart && !suppressFocus) open(); });
+  trigger.addEventListener("keydown", event => { if ((event.key === "Enter" || event.key === " ") && trigger.tagName === "BUTTON") { event.preventDefault(); open(); } });
   for (const target of [trigger, panel]) target.addEventListener("focusout", () => setTimeout(() => { if (!panel.contains(document.activeElement) && document.activeElement !== trigger) close(); }, 0));
   trigger.addEventListener("pointerdown", e => { if (e.pointerType !== "mouse") { touchStart = { x: e.clientX, y: e.clientY }; longPressed = false; openTimer = setTimeout(() => { longPressed = true; open(); }, 500); } });
   trigger.addEventListener("pointermove", e => { if (touchStart && Math.hypot(e.clientX - touchStart.x, e.clientY - touchStart.y) > 10) { cancel(); touchStart = null; } });
