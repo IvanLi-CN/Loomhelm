@@ -93,14 +93,15 @@ func newApplicationServices(ctx context.Context, pool *pgxpool.Pool, cfg platfor
 	if err != nil {
 		return nil, fmt.Errorf("initialize deployment service: %w", err)
 	}
+	codexService := codex.NewService(pool, identity, hostService, projectService)
 	return &applicationServices{
 		identity:   identity,
 		deployment: deploymentService,
 		projects:   projectService,
 		tasks:      tasks.NewService(pool, identity, projectService),
-		sessions:   sessions.NewStore(pool),
+		sessions:   sessions.NewStore(pool, sessions.StoreConfig{BindingReconciler: codexService.ReconcileSessionTaskBinding}),
 		hosts:      hostService,
-		codex:      codex.NewService(pool, identity, hostService, projectService),
+		codex:      codexService,
 		runHistory: runs.NewStore(pool),
 		runRecords: runs.NewStore(pool),
 		drafts:     drafts.NewStore(pool),

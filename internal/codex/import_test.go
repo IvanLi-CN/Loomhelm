@@ -1,6 +1,10 @@
 package codex
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+)
 
 func TestRecoverySnapshotAllowedAfterOnlineHostRestart(t *testing.T) {
 	tests := []struct {
@@ -22,5 +26,20 @@ func TestRecoverySnapshotAllowedAfterOnlineHostRestart(t *testing.T) {
 				t.Fatalf("recoverySnapshotAllowed() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestThreadHistoryStateRejectsExplicitCompleteStateOnThreadError(t *testing.T) {
+	thread := protocol.CodexSourceThreadSnapshot{
+		HistoryState:  protocol.CodexHistoryStateComplete,
+		FilesComplete: true,
+		Error:         "history material unavailable",
+	}
+	status := threadSnapshotStatus(thread)
+	if status.State != protocol.CodexSyncStateFailed || status.Complete {
+		t.Fatalf("threadSnapshotStatus() = %+v, want failed and incomplete", status)
+	}
+	if got := threadHistoryState(thread, status); got != protocol.CodexHistoryStateFailed {
+		t.Fatalf("threadHistoryState() = %q, want failed", got)
 	}
 }

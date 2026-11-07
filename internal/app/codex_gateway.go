@@ -19,11 +19,19 @@ type gatewayCodexSyncRunner struct {
 }
 
 func (w gatewayCodexTitleWriter) SetTitle(ctx context.Context, hostID, threadID, title string) error {
+	return w.setTitle(ctx, fmt.Sprintf("loomhelm-title-%d", time.Now().UTC().UnixNano()), hostID, threadID, title)
+}
+
+func (w gatewayCodexTitleWriter) SetTitleWithOperation(ctx context.Context, operationID, hostID, threadID, title string) error {
+	return w.setTitle(ctx, operationID, hostID, threadID, title)
+}
+
+func (w gatewayCodexTitleWriter) setTitle(ctx context.Context, operationID, hostID, threadID, title string) error {
 	if w.server == nil {
 		return fmt.Errorf("Codex Host gateway is unavailable")
 	}
 	ack, err := w.server.SendSourceCommand(ctx, hostID, gateway.SourceCommand{
-		OperationID: fmt.Sprintf("loomhelm-title-%d", time.Now().UTC().UnixNano()),
+		OperationID: operationID,
 		Method:      "thread/name/set",
 		ThreadID:    threadID,
 		Title:       title,
