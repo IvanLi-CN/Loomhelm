@@ -392,6 +392,35 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		`, hostID, threadID, threadHistoryState(thread, threadStatus), allFilesComplete, safeCodexError(thread.Error), snapshot.AsOf); err != nil {
 			return fmt.Errorf("finalize Codex thread snapshot: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE codex_threads AS codex
+			SET bound_task_id = task.id,
+				bound_session_id = session.id,
+				updated_at = GREATEST(codex.updated_at, session.updated_at)
+			FROM execution_sessions AS session
+			LEFT JOIN tasks AS task ON task.session_id = session.id
+			WHERE codex.host_id = $1
+			  AND codex.thread_id = $2
+			  AND session.host_id = $1
+			  AND session.external_thread_ref = $2
+			  AND codex.bound_task_id IS NULL
+			  AND codex.bound_session_id IS NULL
+			  AND (task.id IS NULL OR NOT EXISTS (
+				  SELECT 1 FROM codex_threads AS other
+				  WHERE other.bound_task_id = task.id
+					AND (other.host_id <> codex.host_id OR other.thread_id <> codex.thread_id)
+			  ))
+			  AND NOT EXISTS (
+				  SELECT 1 FROM codex_thread_links AS link WHERE link.session_id = session.id
+			  )
+			  AND NOT EXISTS (
+				  SELECT 1 FROM codex_threads AS other
+				  WHERE other.bound_session_id = session.id
+					AND (other.host_id <> codex.host_id OR other.thread_id <> codex.thread_id)
+			  )
+		`, hostID, threadID); err != nil {
+			return fmt.Errorf("reconcile Codex thread identity with Session: %w", err)
+		}
 
 		threadComplete := allFilesComplete && threadHistoryComplete(thread, threadStatus)
 		threadSnapshotID := snapshot.OperationID + ":thread:" + threadID

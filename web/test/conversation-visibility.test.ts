@@ -38,6 +38,16 @@ describe("conversation visibility routing", () => {
     expect(response.has_more).toBe(false);
   });
 
+  test("fails closed when Codex pagination returns a historical cursor", async () => {
+    const client = {
+      listCodexConversations: async (params: { after_cursor?: string; limit?: number }) => params.after_cursor
+        ? { has_more: true, items: [], next_cursor: "cursor-1" }
+        : { has_more: true, items: [], next_cursor: "cursor-1" }
+    };
+
+    await expect(listAllCodexConversations(client)).rejects.toThrow("分页游标未前进");
+  });
+
   test("keeps only unbound main threads in the formal conversation index", () => {
     const base = { source_kind: "main", bound_task_id: undefined, bound_session_id: undefined } as CodexConversation;
 

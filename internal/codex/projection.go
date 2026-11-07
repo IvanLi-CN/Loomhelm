@@ -128,7 +128,7 @@ func (s *Service) readProjectedConversation(ctx context.Context, access sourceAc
 	}
 	item.ReadOnly = true
 	item.CanEditTitle = boolPointer(false)
-	if item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && capabilityContains(capabilities, "thread/name/set") {
+	if item.SourceKind == protocol.CodexThreadSourceKindMain && item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && capabilityContains(capabilities, "thread/name/set") {
 		allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
 		if authorizeErr != nil {
 			return protocol.CodexConversation{}, authorizeErr

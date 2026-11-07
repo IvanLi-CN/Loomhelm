@@ -688,7 +688,7 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 		if *query.Bound {
 			where += " AND t.bound_task_id IS NOT NULL"
 		} else {
-			where += " AND t.bound_task_id IS NULL"
+			where += " AND t.bound_task_id IS NULL AND NOT EXISTS (SELECT 1 FROM execution_sessions session WHERE session.host_id = t.host_id AND session.external_thread_ref = t.thread_id)"
 		}
 	}
 	if value := strings.TrimSpace(valueOrEmpty(query.ProjectID)); value != "" {
@@ -704,66 +704,112 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 		where += fmt.Sprintf(" AND (t.conversation_title ILIKE $%d OR t.preview ILIKE $%d OR t.cwd ILIKE $%d)", len(args), len(args), len(args))
 	}
 	afterCursor := valueOrEmpty(query.AfterCursor)
-	if afterCursor != "" && decodeConversationCursor(afterCursor) == nil {
+	var cursor *conversationCursor
+	if afterCursor != "" {
+		cursor = decodeConversationCursor(afterCursor)
+	}
+	if afterCursor != "" && cursor == nil {
 		return protocol.CodexConversationListResponse{}, ErrInvalid
 	}
-	if cursor := decodeConversationCursor(afterCursor); cursor != nil {
-		args = append(args, cursor.UpdatedAt, cursor.ThreadID)
-		where += fmt.Sprintf(" AND (t.last_activity_at, t.thread_id) < ($%d, $%d)", len(args)-1, len(args))
+	snapshotAsOf := asOf
+	if cursor != nil {
+		if !cursor.SnapshotAsOf.IsZero() {
+			snapshotAsOf = cursor.SnapshotAsOf
+		}
 	}
-	args = append(args, limit+1)
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-		SELECT t.host_id, t.thread_id, t.project_id, cp.name, t.conversation_title, t.codex_title,
-		       t.preview, t.cwd, t.source_kind, t.source_status, t.history_state, t.files_complete,
-		       t.title_sync_state, t.title_sync_error, t.title_conflict_codex_title, t.title_conflict_detected_at,
-		       t.bound_task_id, t.bound_session_id, t.as_of, t.updated_at, t.last_activity_at,
-		       COALESCE(src.capabilities, '[]'::jsonb), task.project_id, COALESCE(src.state, 'offline')
-		FROM codex_threads t
-		LEFT JOIN codex_projects cp ON cp.host_id = t.host_id AND cp.project_id = t.project_id
-		LEFT JOIN tasks task ON task.id = t.bound_task_id
-		LEFT JOIN codex_sync_sources src ON src.host_id = t.host_id
-		%s
-		ORDER BY t.last_activity_at DESC, t.thread_id DESC
-		LIMIT $%d
-	`, where, len(args)), args...)
-	if err != nil {
-		return protocol.CodexConversationListResponse{}, fmt.Errorf("list Codex conversations: %w", err)
-	}
-	defer rows.Close()
 	items := make([]protocol.CodexConversation, 0, limit)
 	var next *string
-	for rows.Next() {
-		item, capabilities, taskProjectID, activity, threadSourceState, scanErr := scanConversation(rows)
-		if scanErr != nil {
-			return protocol.CodexConversationListResponse{}, scanErr
+	var pageCursor = cursor
+	var pageBoundary *conversationCursor
+	for {
+		pageArgs := append([]any(nil), args...)
+		pageWhere := where
+		if pageCursor != nil {
+			pageArgs = append(pageArgs, pageCursor.UpdatedAt, pageCursor.ThreadID)
+			pageWhere += fmt.Sprintf(" AND (t.last_activity_at, t.thread_id) < ($%d, $%d)", len(pageArgs)-1, len(pageArgs))
 		}
-		if taskProjectID != nil {
-			allowed, authorizeErr := s.projects.CanReadProject(ctx, principal, *taskProjectID)
-			if authorizeErr != nil {
-				return protocol.CodexConversationListResponse{}, authorizeErr
+		pageArgs = append(pageArgs, snapshotAsOf)
+		pageWhere += fmt.Sprintf(" AND t.as_of <= $%d", len(pageArgs))
+		pageArgs = append(pageArgs, limit+1)
+		rows, queryErr := s.pool.Query(ctx, fmt.Sprintf(`
+			SELECT t.host_id, t.thread_id, t.project_id, cp.name, t.conversation_title, t.codex_title,
+			       t.preview, t.cwd, t.source_kind, t.source_status, t.history_state, t.files_complete,
+			       t.title_sync_state, t.title_sync_error, t.title_conflict_codex_title, t.title_conflict_detected_at,
+			       t.bound_task_id, t.bound_session_id, t.as_of, t.updated_at, t.last_activity_at,
+			       COALESCE(src.capabilities, '[]'::jsonb), task.project_id, COALESCE(src.state, 'offline')
+			FROM codex_threads t
+			LEFT JOIN codex_projects cp ON cp.host_id = t.host_id AND cp.project_id = t.project_id
+			LEFT JOIN tasks task ON task.id = t.bound_task_id
+			LEFT JOIN codex_sync_sources src ON src.host_id = t.host_id
+			%s
+			ORDER BY t.last_activity_at DESC, t.thread_id DESC
+			LIMIT $%d
+		`, pageWhere, len(pageArgs)), pageArgs...)
+		if queryErr != nil {
+			return protocol.CodexConversationListResponse{}, fmt.Errorf("list Codex conversations: %w", queryErr)
+		}
+		candidateCount := 0
+		var lastCandidate *conversationCursor
+		foundVisibleAfterBoundary := false
+		for rows.Next() {
+			candidateCount++
+			item, capabilities, taskProjectID, activity, threadSourceState, scanErr := scanConversation(rows)
+			if scanErr != nil {
+				rows.Close()
+				return protocol.CodexConversationListResponse{}, scanErr
 			}
-			if !allowed {
-				continue
+			candidateCursor := &conversationCursor{UpdatedAt: activity, ThreadID: item.ThreadID, SnapshotAsOf: snapshotAsOf}
+			lastCandidate = candidateCursor
+			if taskProjectID != nil {
+				allowed, authorizeErr := s.projects.CanReadProject(ctx, principal, *taskProjectID)
+				if authorizeErr != nil {
+					rows.Close()
+					return protocol.CodexConversationListResponse{}, authorizeErr
+				}
+				if !allowed {
+					continue
+				}
+			}
+			if len(items) == limit {
+				foundVisibleAfterBoundary = true
+				break
+			}
+			item.ReadOnly, item.CanEditTitle = true, boolPointer(false)
+			if item.BoundTaskID != nil && item.SourceKind == protocol.CodexThreadSourceKindMain && sourceAvailability == string(protocol.CodexSourceStateOnline) && threadSourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && taskProjectID != nil && capabilityContains(capabilities, "thread/name/set") {
+				allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
+				if authorizeErr != nil {
+					rows.Close()
+					return protocol.CodexConversationListResponse{}, authorizeErr
+				}
+				item.ReadOnly = !allowed
+				item.CanEditTitle = boolPointer(allowed)
+			}
+			items = append(items, item)
+			if len(items) == limit {
+				boundary := *candidateCursor
+				pageBoundary = &boundary
 			}
 		}
-		item.ReadOnly, item.CanEditTitle = true, boolPointer(false)
-		if item.BoundTaskID != nil && sourceAvailability == string(protocol.CodexSourceStateOnline) && threadSourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && taskProjectID != nil && capabilityContains(capabilities, "thread/name/set") {
-			allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
-			if authorizeErr != nil {
-				return protocol.CodexConversationListResponse{}, authorizeErr
-			}
-			item.ReadOnly = !allowed
-			item.CanEditTitle = boolPointer(allowed)
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return protocol.CodexConversationListResponse{}, fmt.Errorf("read Codex conversations: %w", rowsErr)
 		}
-		if len(items) == limit {
-			cursor := encodeConversationCursor(conversationCursor{UpdatedAt: activity, ThreadID: item.ThreadID})
-			next = &cursor
+		if foundVisibleAfterBoundary {
+			if pageBoundary == nil {
+				return protocol.CodexConversationListResponse{}, fmt.Errorf("list Codex conversations cursor boundary is missing")
+			}
+			encoded := encodeConversationCursor(*pageBoundary)
+			next = &encoded
 			break
 		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return protocol.CodexConversationListResponse{}, fmt.Errorf("read Codex conversations: %w", err)
+		if candidateCount < limit+1 || lastCandidate == nil {
+			break
+		}
+		if pageCursor != nil && pageCursor.UpdatedAt.Equal(lastCandidate.UpdatedAt) && pageCursor.ThreadID == lastCandidate.ThreadID {
+			return protocol.CodexConversationListResponse{}, fmt.Errorf("list Codex conversations cursor did not advance")
+		}
+		pageCursor = lastCandidate
 	}
 	if asOf.IsZero() {
 		asOf = s.now()
@@ -971,6 +1017,9 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 	item, capabilities, taskProjectID, _, sourceState, err := s.readConversation(ctx, access, principal, threadID)
 	if err != nil {
 		return protocol.CodexConversation{}, err
+	}
+	if item.SourceKind != protocol.CodexThreadSourceKindMain {
+		return protocol.CodexConversation{}, ErrInvalid
 	}
 	if item.BoundTaskID == nil || taskProjectID == nil {
 		return protocol.CodexConversation{}, ErrForbidden
@@ -1256,9 +1305,6 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	if importedBy == nil || *importedBy != principal.UserID || request.ConfirmShare == nil || !*request.ConfirmShare {
 		return protocol.CodexConversation{}, ErrForbidden
 	}
-	if taskSessionID != nil {
-		return protocol.CodexConversation{}, ErrConflict
-	}
 	var linkedTask, linkedSession string
 	var linkedHost, linkedThread string
 	if err := tx.QueryRow(ctx, `SELECT host_id, thread_id, task_id, session_id FROM codex_thread_links WHERE request_id = $1`, request.RequestID).Scan(&linkedHost, &linkedThread, &linkedTask, &linkedSession); err == nil {
@@ -1272,19 +1318,61 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return protocol.CodexConversation{}, fmt.Errorf("read binding idempotency record: %w", err)
 	}
-	sessionID := newID("session")
-	generation := newID("codex-source")
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO execution_sessions (id, host_id, external_thread_ref, path, state, project_id, generation, terminal_reason)
-		VALUES ($1, $2, $3, 'existing_active', 'unsupported', $4, $5, 'Codex source binding is read-only until execution control is separately verified')
-	`, sessionID, access.host.ID, threadID, taskProjectID, generation); err != nil {
-		if isUniqueViolation(err) {
+	var existingSessionID string
+	var sessionTaskID *string
+	var sessionProjectID *string
+	sessionLookupErr := tx.QueryRow(ctx, `
+		SELECT session.id, session.project_id, task.id
+		FROM execution_sessions AS session
+		LEFT JOIN tasks AS task ON task.session_id = session.id
+		WHERE session.host_id = $1 AND session.external_thread_ref = $2
+		FOR UPDATE OF session
+	`, access.host.ID, threadID).Scan(&existingSessionID, &sessionProjectID, &sessionTaskID)
+	if sessionLookupErr != nil && !errors.Is(sessionLookupErr, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, fmt.Errorf("read existing Codex Session: %w", sessionLookupErr)
+	}
+	if existingSession != nil {
+		if errors.Is(sessionLookupErr, pgx.ErrNoRows) || *existingSession != existingSessionID {
 			return protocol.CodexConversation{}, ErrConflict
 		}
-		return protocol.CodexConversation{}, fmt.Errorf("create bound Codex Session: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE tasks SET session_id = $2, updated_at = $3 WHERE id = $1 AND session_id IS NULL`, request.TaskID, sessionID, s.now()); err != nil {
-		return protocol.CodexConversation{}, fmt.Errorf("bind Task Session: %w", err)
+	if sessionLookupErr == nil && sessionTaskID != nil && *sessionTaskID != request.TaskID {
+		return protocol.CodexConversation{}, ErrConflict
+	}
+	if sessionLookupErr == nil && sessionProjectID != nil && *sessionProjectID != taskProjectID {
+		return protocol.CodexConversation{}, ErrConflict
+	}
+	if taskSessionID != nil {
+		if errors.Is(sessionLookupErr, pgx.ErrNoRows) || *taskSessionID != existingSessionID {
+			return protocol.CodexConversation{}, ErrConflict
+		}
+	}
+	sessionID := existingSessionID
+	if errors.Is(sessionLookupErr, pgx.ErrNoRows) {
+		sessionID = newID("session")
+		generation := newID("codex-source")
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO execution_sessions (id, host_id, external_thread_ref, path, state, project_id, generation, creator_user_id, terminal_reason)
+			VALUES ($1, $2, $3, 'existing_active', 'unsupported', $4, $5, $6, 'Codex source binding is read-only until execution control is separately verified')
+		`, sessionID, access.host.ID, threadID, taskProjectID, generation, principal.UserID); err != nil {
+			if isUniqueViolation(err) {
+				return protocol.CodexConversation{}, ErrConflict
+			}
+			return protocol.CodexConversation{}, fmt.Errorf("create bound Codex Session: %w", err)
+		}
+	} else if sessionProjectID == nil {
+		if _, err := tx.Exec(ctx, `UPDATE execution_sessions SET project_id = $2, updated_at = $3 WHERE id = $1 AND project_id IS NULL`, sessionID, taskProjectID, s.now()); err != nil {
+			return protocol.CodexConversation{}, fmt.Errorf("assign Codex Session project: %w", err)
+		}
+	}
+	if taskSessionID == nil {
+		result, err := tx.Exec(ctx, `UPDATE tasks SET session_id = $2, updated_at = $3 WHERE id = $1 AND session_id IS NULL`, request.TaskID, sessionID, s.now())
+		if err != nil {
+			return protocol.CodexConversation{}, fmt.Errorf("bind Task Session: %w", err)
+		}
+		if result.RowsAffected() != 1 {
+			return protocol.CodexConversation{}, ErrConflict
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO codex_thread_links (host_id, thread_id, task_id, session_id, request_id, linked_by)
@@ -1404,15 +1492,17 @@ func (s *Service) RequestSync(ctx context.Context, principal auth.Principal, req
 }
 
 type conversationCursor struct {
-	UpdatedAt time.Time
-	ThreadID  string
+	UpdatedAt    time.Time
+	ThreadID     string
+	SnapshotAsOf time.Time
 }
 
 func encodeConversationCursor(cursor conversationCursor) string {
 	data, _ := json.Marshal(struct {
-		UpdatedAt string `json:"updated_at"`
-		ThreadID  string `json:"thread_id"`
-	}{cursor.UpdatedAt.UTC().Format(time.RFC3339Nano), cursor.ThreadID})
+		UpdatedAt    string `json:"updated_at"`
+		ThreadID     string `json:"thread_id"`
+		SnapshotAsOf string `json:"snapshot_as_of,omitempty"`
+	}{cursor.UpdatedAt.UTC().Format(time.RFC3339Nano), cursor.ThreadID, formatOptionalTime(cursor.SnapshotAsOf)})
 	return base64.RawURLEncoding.EncodeToString(data)
 }
 
@@ -1425,8 +1515,9 @@ func decodeConversationCursor(value string) *conversationCursor {
 		return nil
 	}
 	var decoded struct {
-		UpdatedAt string `json:"updated_at"`
-		ThreadID  string `json:"thread_id"`
+		UpdatedAt    string `json:"updated_at"`
+		ThreadID     string `json:"thread_id"`
+		SnapshotAsOf string `json:"snapshot_as_of"`
 	}
 	if json.Unmarshal(data, &decoded) != nil || decoded.ThreadID == "" {
 		return nil
@@ -1435,7 +1526,14 @@ func decodeConversationCursor(value string) *conversationCursor {
 	if err != nil {
 		return nil
 	}
-	return &conversationCursor{UpdatedAt: updated, ThreadID: decoded.ThreadID}
+	var snapshotAsOf time.Time
+	if decoded.SnapshotAsOf != "" {
+		snapshotAsOf, err = time.Parse(time.RFC3339Nano, decoded.SnapshotAsOf)
+		if err != nil {
+			return nil
+		}
+	}
+	return &conversationCursor{UpdatedAt: updated, ThreadID: decoded.ThreadID, SnapshotAsOf: snapshotAsOf}
 }
 
 func normalizeLimit(value *int64) int {
@@ -1475,6 +1573,13 @@ func nullableStringValue(value string) *string {
 func boolPointer(value bool) *bool { return &value }
 
 func formatTime(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return formatTime(value)
+}
 
 func uniqueStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))

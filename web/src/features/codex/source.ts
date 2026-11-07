@@ -20,6 +20,7 @@ export async function listAllCodexConversations(
   const items: CodexConversation[] = [];
   let afterCursor: string | undefined;
   let firstPage: CodexConversationListResponse | undefined;
+  const seenCursors = new Set<string>();
 
   for (;;) {
     const page = await client.listCodexConversations({ ...params, after_cursor: afterCursor, limit: params.limit ?? codexConversationPageSize });
@@ -28,8 +29,10 @@ export async function listAllCodexConversations(
     if (!page.has_more) {
       return { as_of: firstPage.as_of, has_more: false, items, next_cursor: undefined, snapshot_state: firstPage.snapshot_state };
     }
-    if (!page.next_cursor || page.next_cursor === afterCursor) throw new Error("Codex 对话分页游标无效");
-    afterCursor = page.next_cursor;
+    const nextCursor = page.next_cursor?.trim();
+    if (!nextCursor || seenCursors.has(nextCursor)) throw new Error("Codex 对话分页游标未前进");
+    seenCursors.add(nextCursor);
+    afterCursor = nextCursor;
   }
 }
 

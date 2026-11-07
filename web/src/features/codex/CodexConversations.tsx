@@ -153,8 +153,8 @@ export function CodexConversationWorkspace({ hostId, threadId, returnTo }: { hos
   }, [detail?.conversation.conversation_title]);
 
   const conversation = detail?.conversation;
-  const titleWritable = Boolean(conversation?.can_edit_title && !conversation.read_only && conversation.history_state === "complete" && conversation.files_complete);
-  const titleRetryable = Boolean(conversation?.bound_task_id && (conversation.title_sync_state === "failed" || conversation.title_sync_state === "paused" || conversation.title_sync_state === "unsupported"));
+  const titleWritable = Boolean(conversation?.source_kind === "main" && conversation.can_edit_title && !conversation.read_only && conversation.history_state === "complete" && conversation.files_complete);
+  const titleRetryable = Boolean(conversation?.source_kind === "main" && conversation.bound_task_id && (conversation.title_sync_state === "failed" || conversation.title_sync_state === "paused" || conversation.title_sync_state === "unsupported"));
   const bindableTasks = taskSource?.tasks.filter((task) => !task.conversationId && taskSource.getProjectPermissions(task.projectId).canWrite) ?? [];
   const saveTitle = async (nextTitle: string, resolution?: string, allowRetry = false): Promise<boolean> => {
     if (!conversation || !nextTitle.trim() || (!titleWritable && !allowRetry)) return false;
