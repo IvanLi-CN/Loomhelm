@@ -40,6 +40,11 @@ export function isTopLevelCodexConversation(conversation: CodexConversation): bo
   return conversation.source_kind === "main" && !conversation.bound_task_id && !conversation.bound_session_id;
 }
 
+export function findBoundCodexConversation(conversations: readonly CodexConversation[], sessionId: string | undefined): CodexConversation | undefined {
+  if (!sessionId) return undefined;
+  return conversations.find((conversation) => conversation.source_kind === "main" && conversation.bound_session_id === sessionId);
+}
+
 function requestID(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `${prefix}-${crypto.randomUUID()}`;
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;

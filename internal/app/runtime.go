@@ -23,7 +23,6 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/jobs"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/IvanLi-CN/Loomhelm/internal/runs"
-	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 )
@@ -160,7 +159,6 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 	var artifactRecovery artifactRecoveryStore
 	var artifactUploadHandler gateway.ArtifactUploadHandler
 	if cfg.Component == platform.ComponentServer {
-		sessionStore := sessions.NewStore(db.Pool())
 		runStore := runs.NewStore(db.Pool(), runs.StoreConfig{EnqueueRunJobTx: enqueueRunJob})
 		approvalStore := approvals.NewStore(db.Pool())
 		hostRegistry := hosts.NewService(db.Pool())
@@ -169,6 +167,7 @@ func openDatabaseRuntime(ctx context.Context, cfg platform.Config, logger *slog.
 			db.Close()
 			return nil, serviceErr
 		}
+		sessionStore := services.sessions
 		recoveryCtx, cancelCodexRecovery := context.WithTimeout(ctx, cfg.StartupBudget())
 		if recoveryErr := services.codex.ReconcileSyncOperations(recoveryCtx); recoveryErr != nil {
 			cancelCodexRecovery()

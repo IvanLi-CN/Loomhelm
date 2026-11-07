@@ -189,6 +189,10 @@ The U05 candidate uses the login-free, mock-only `ui_demo` route `/demo/producti
 
 ![U05 authorized conversation index on a 393x852 mobile viewport](assets/u05-production-sessions-page-mobile-393x852.png)
 
+The owner-confirmed `storybook_canvas` state `Features/Conversations/Production Workspace — BoundCodexContinuity` verifies that a bound Session exposes its original Codex main-thread history through a stable source-scoped route without creating a duplicate conversation identity; the source-managed component surface uses a 48px outer margin and the capture is mock-only.
+
+![U05 bound Codex continuity in the production workspace](assets/u05-bound-codex-continuity-storybook.png)
+
 ## Rollout and Compatibility
 
 The initial application schema retains platform short-job results; River retains queue state separately. There is no previously deployed application schema or production compatibility claim. Re-entering startup may apply pending migrations but must not reverse them, and a migration failure prevents readiness. Empty-database migration, startup re-entry and persistence after restart have VM observations; a backend image was built and identified by its local content hash. Immutable candidate publication/promotion and tar-based handoff are implemented; supported blue-green compatibility windows, traffic switching, cross-process Worker fencing and production deployment still require their deployment implementation and observations. The planned release channel is an isolated parent-branch preview; production configuration is not established here.

@@ -232,6 +232,9 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		if sourceKindErr != nil {
 			return sourceKindErr
 		}
+		if err := lockImportBindingRows(ctx, tx, hostID, threadID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO codex_threads (
 				host_id, thread_id, project_id, parent_thread_id, source_kind, codex_title,
@@ -553,6 +556,34 @@ func (s *Service) FailSync(ctx context.Context, hostID, operationID string, sync
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// lockImportBindingRows follows the Session -> Task -> Codex lock order used
+// by Bind and Session activation before the import upserts the Codex row.
+func lockImportBindingRows(ctx context.Context, tx pgx.Tx, hostID, threadID string) error {
+	var sessionID string
+	if err := tx.QueryRow(ctx, `
+		SELECT session.id
+		FROM execution_sessions AS session
+		WHERE session.host_id = $1 AND session.external_thread_ref = $2
+		FOR UPDATE OF session
+	`, hostID, threadID).Scan(&sessionID); errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("lock Codex binding Session: %w", err)
+	}
+	var taskID string
+	if err := tx.QueryRow(ctx, `
+		SELECT task.id
+		FROM tasks AS task
+		WHERE task.session_id = $1
+		FOR UPDATE OF task
+	`, sessionID).Scan(&taskID); errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("lock Codex binding Task: %w", err)
+	}
+	return nil
 }
 
 // ReconcileSyncOperations closes the in-memory runner gap after a Server

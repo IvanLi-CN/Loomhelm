@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { codexQueryKeys, codexRouteKey, isTopLevelCodexConversation, listAllCodexConversations, parseCodexRouteKey } from "../src/features/codex/source";
+import { codexQueryKeys, codexRouteKey, findBoundCodexConversation, isTopLevelCodexConversation, listAllCodexConversations, parseCodexRouteKey } from "../src/features/codex/source";
 import type { CodexConversation } from "@loomhelm/protocol";
 
 describe("conversation visibility routing", () => {
@@ -55,5 +55,14 @@ describe("conversation visibility routing", () => {
     expect(isTopLevelCodexConversation({ ...base, bound_task_id: "task-1" })).toBe(false);
     expect(isTopLevelCodexConversation({ ...base, bound_session_id: "session-1" })).toBe(false);
     expect(isTopLevelCodexConversation({ ...base, source_kind: "subagent" })).toBe(false);
+  });
+
+  test("finds the bound main Codex thread for a Session without exposing subagents", () => {
+    const main = { source_kind: "main", bound_session_id: "session-1", thread_id: "main-thread" } as CodexConversation;
+    const subagent = { source_kind: "subagent", bound_session_id: "session-1", thread_id: "subagent-thread" } as CodexConversation;
+
+    expect(findBoundCodexConversation([subagent, main], "session-1")).toBe(main);
+    expect(findBoundCodexConversation([main], "session-2")).toBeUndefined();
+    expect(findBoundCodexConversation([main], undefined)).toBeUndefined();
   });
 });
