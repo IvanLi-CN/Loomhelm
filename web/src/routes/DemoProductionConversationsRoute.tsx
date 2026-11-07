@@ -19,7 +19,7 @@ export function DemoProductionConversationsRoute() {
   return (
     <AppProviders apiAssembly={apiAssembly}>
       <div data-demo-surface="u05-production-sessions" data-visual-evidence-surface="u05-production-sessions" data-visual-evidence-target="u05-production-sessions-page">
-        <ProductionConversationsRoute />
+        <ProductionConversationsRoute detailReturnTo="demo-production-conversations" />
       </div>
     </AppProviders>
   );

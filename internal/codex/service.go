@@ -1189,19 +1189,22 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 		return protocol.CodexConversation{}, fmt.Errorf("begin Codex binding: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var conversationTitle, sourceStatus, historyState string
+	var conversationTitle, sourceKind, sourceStatus, historyState string
 	var codexProjectID *string
 	var filesComplete bool
 	var existingTask, existingSession *string
 	var importedBy *string
 	var snapshotAsOf time.Time
 	if err := tx.QueryRow(ctx, `
-		SELECT conversation_title, project_id, source_status, history_state, files_complete, bound_task_id, bound_session_id, imported_by, as_of
+		SELECT conversation_title, project_id, source_kind, source_status, history_state, files_complete, bound_task_id, bound_session_id, imported_by, as_of
 		FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE
-	`, access.host.ID, threadID).Scan(&conversationTitle, &codexProjectID, &sourceStatus, &historyState, &filesComplete, &existingTask, &existingSession, &importedBy, &snapshotAsOf); errors.Is(err, pgx.ErrNoRows) {
+	`, access.host.ID, threadID).Scan(&conversationTitle, &codexProjectID, &sourceKind, &sourceStatus, &historyState, &filesComplete, &existingTask, &existingSession, &importedBy, &snapshotAsOf); errors.Is(err, pgx.ErrNoRows) {
 		return protocol.CodexConversation{}, ErrNotFound
 	} else if err != nil {
 		return protocol.CodexConversation{}, fmt.Errorf("lock Codex conversation: %w", err)
+	}
+	if sourceKind != string(protocol.CodexThreadSourceKindMain) {
+		return protocol.CodexConversation{}, ErrInvalid
 	}
 	var taskProjectID string
 	var taskSessionID *string

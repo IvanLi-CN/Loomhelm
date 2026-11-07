@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useOptionalProductionApi } from "@/app/providers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { CodexConversationsRoute } from "@/features/codex/CodexConversations";
+import { CodexConversationsRoute, type ConversationReturnTo } from "@/features/codex/CodexConversations";
 import { listAllSessions } from "@/features/conversations/session-list";
 import type { PublishedSessionApi } from "@/features/sessions/api";
 
@@ -48,9 +48,10 @@ export interface ProductionConversationsRouteProps {
   principalId?: string;
   sessionGeneration?: number;
   includeCodex?: boolean;
+  detailReturnTo?: ConversationReturnTo;
 }
 
-export function ProductionConversationsRoute({ api, principalId: providedPrincipalId, sessionGeneration: providedSessionGeneration, includeCodex = true }: ProductionConversationsRouteProps = {}) {
+export function ProductionConversationsRoute({ api, principalId: providedPrincipalId, sessionGeneration: providedSessionGeneration, includeCodex = true, detailReturnTo }: ProductionConversationsRouteProps = {}) {
   const assembly = useOptionalProductionApi();
   const [search, setSearch] = useState("");
   const sessionApi = api ?? (assembly?.auth.status === "authenticated" ? assembly.client : undefined);
@@ -111,7 +112,7 @@ export function ProductionConversationsRoute({ api, principalId: providedPrincip
           </div>
         )}
       </section>
-      {showCodex && <CodexConversationsRoute />}
+      {showCodex && <CodexConversationsRoute returnTo={detailReturnTo} topLevelOnly />}
     </div>
   );
 }

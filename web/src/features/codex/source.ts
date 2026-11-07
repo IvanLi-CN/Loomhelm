@@ -1,31 +1,59 @@
+import type { GeneratedApiClient, ListCodexConversationsParams } from "@loomhelm/api-client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CodexConversation, CodexConversationDetail, CodexSource, CodexSyncResponse, CodexTitleUpdateRequest } from "@loomhelm/protocol";
+import type { CodexConversationListResponse } from "@loomhelm/protocol";
 
 import { useOptionalProductionApi } from "@/app/providers";
 import { useOptionalProjectTaskSource } from "@/features/tasks/source";
 
 export const codexQueryKeys = {
-  overview: (principalId: string, sessionGeneration: number, search: string, includeArchived: boolean) => ["loomhelm", principalId, sessionGeneration, "codex", "overview", search, includeArchived] as const,
+  overview: (principalId: string, sessionGeneration: number, search: string, includeArchived: boolean, bound: boolean | undefined = undefined) => ["loomhelm", principalId, sessionGeneration, "codex", "overview", search, includeArchived, bound ?? "all"] as const,
   detail: (principalId: string, sessionGeneration: number, hostId: string, threadId: string) => ["loomhelm", principalId, sessionGeneration, "codex", "conversation", hostId, threadId] as const
 };
+
+const codexConversationPageSize = 100;
+
+export async function listAllCodexConversations(
+  client: Pick<GeneratedApiClient, "listCodexConversations">,
+  params: Omit<ListCodexConversationsParams, "after_cursor"> = {}
+): Promise<CodexConversationListResponse> {
+  const items: CodexConversation[] = [];
+  let afterCursor: string | undefined;
+  let firstPage: CodexConversationListResponse | undefined;
+
+  for (;;) {
+    const page = await client.listCodexConversations({ ...params, after_cursor: afterCursor, limit: params.limit ?? codexConversationPageSize });
+    firstPage ??= page;
+    items.push(...page.items);
+    if (!page.has_more) {
+      return { as_of: firstPage.as_of, has_more: false, items, next_cursor: undefined, snapshot_state: firstPage.snapshot_state };
+    }
+    if (!page.next_cursor || page.next_cursor === afterCursor) throw new Error("Codex 对话分页游标无效");
+    afterCursor = page.next_cursor;
+  }
+}
+
+export function isTopLevelCodexConversation(conversation: CodexConversation): boolean {
+  return conversation.source_kind === "main" && !conversation.bound_task_id && !conversation.bound_session_id;
+}
 
 function requestID(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `${prefix}-${crypto.randomUUID()}`;
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function useCodexOverview(search: string, includeArchived: boolean) {
+export function useCodexOverview(search: string, includeArchived: boolean, bound?: boolean) {
   const assembly = useOptionalProductionApi();
   const principalId = assembly?.auth.principalId ?? "anonymous";
   const sessionGeneration = assembly?.auth.sessionGeneration ?? 0;
   const enabled = assembly?.auth.status === "authenticated";
   return useQuery({
-    queryKey: codexQueryKeys.overview(principalId, sessionGeneration, search, includeArchived),
+    queryKey: codexQueryKeys.overview(principalId, sessionGeneration, search, includeArchived, bound),
     queryFn: async () => {
       if (!assembly) throw new Error("浏览器会话尚未就绪");
       const [sources, conversations] = await Promise.all([
         assembly.client.listCodexSources(),
-        assembly.client.listCodexConversations({ search: search.trim() || undefined, include_archived: includeArchived, limit: 100 })
+        listAllCodexConversations(assembly.client, { bound, search: search.trim() || undefined, include_archived: includeArchived })
       ]);
       return { sources: sources.items, conversations: conversations.items, asOf: conversations.as_of, snapshotState: conversations.snapshot_state };
     },
