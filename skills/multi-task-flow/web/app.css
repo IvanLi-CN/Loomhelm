@@ -585,3 +585,13 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .unbound-pr-hint button:hover { color: var(--text); }
 .unbound-pr-hint button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .unbound-pr-hint svg { width: 14px; height: 14px; }
+.resource-action[data-pr-state] { position: relative; }
+.resource-action[data-pr-state=MERGED] > svg { color: var(--positive); }
+.resource-action[data-pr-state=CLOSED] > svg { color: var(--negative); }
+.pr-ci-mark { position: absolute; right: 0; bottom: 0; display: grid; place-items: center; width: 12px; height: 12px; border-radius: 50%; background: var(--raised); color: var(--muted); }
+.pr-ci-mark svg { width: 10px; height: 10px; }
+.resource-action[data-ci-state="成功"] .pr-ci-mark { color: var(--positive); }
+.resource-action[data-ci-state="失败"] .pr-ci-mark { color: var(--negative); }
+.resource-action[data-ci-state="运行中"] .pr-ci-mark { color: var(--accent); animation: pr-check-running 1.2s linear infinite; }
+@keyframes pr-check-running { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .resource-action[data-ci-state="运行中"] .pr-ci-mark { animation: none; } }

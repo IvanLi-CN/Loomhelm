@@ -1,3 +1,4 @@
+import { publishPRStatus } from "./pr-status";
 import type { AgentOutput } from "./agent-output";
 import type { View } from "./model";
 import { formatDuration, fullLocalTime } from "./time";
@@ -132,6 +133,8 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
       const next = await response.json() as PRSnapshot;
       if (current !== requestId || panel.hidden) return;
       pr = next; identity.replaceChildren();
+      const bound = source.kind === "task" ? source.view.tasks.find(t => t.id === source.id)?.pr : source.view.groups.find(g => g.id === source.id)?.parent_pr;
+      if (bound?.url) publishPRStatus(bound.url, next);
       if (next.loading) refreshTimer = setTimeout(() => { if (!panel.hidden) void loadPR(); }, 1000);
       if (next.data) {
         const numberRow = copyRow("PR", `#${next.data.number}`, null, "复制 PR 编号");

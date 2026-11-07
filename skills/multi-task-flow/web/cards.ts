@@ -1,3 +1,4 @@
+import { bindPRStatus } from "./pr-status";
 import { attachResourcePopover, closeResourcePopover, type ResourceSource } from "./resource-popover";
 import { initialOutput } from "./agent-output";
 import { conversationUrl } from "./links";
@@ -108,7 +109,12 @@ function resources(actions: HTMLElement, meta: HTMLElement | null, kind: "task" 
   const source: ResourceSource = { kind, id, view, thread, output: () => kind === "task" ? task?.latest_agent_output : group?.latest_agent_output, start: kind === "task" ? task?.started_at ?? null : group?.started_at ?? null, end: kind === "task" ? task?.finished_at ?? null : group?.finished_at ?? null };
   const triggers = actions.children;
   if (triggers[0]) attachResourcePopover(triggers[0] as HTMLElement, "conversation", source);
-  if (triggers[1]) attachResourcePopover(triggers[1] as HTMLElement, "pr", source);
+  if (triggers[1]) {
+    const prTrigger = triggers[1] as HTMLElement;
+    attachResourcePopover(prTrigger, "pr", source);
+    const prUrl = kind === "task" ? task?.pr?.url : group?.parent_pr?.url;
+    if (prUrl) bindPRStatus(prTrigger, kind, id, prUrl);
+  }
   const time = meta?.firstElementChild as HTMLElement | null;
   if (time) attachResourcePopover(time, "time", source);
 }
