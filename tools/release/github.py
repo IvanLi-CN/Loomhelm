@@ -1,6 +1,8 @@
 """Bound GitHub adapter. All provider reads/writes use gh, never ambient HTTP."""
+import base64
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -23,6 +25,49 @@ class GitHub:
                 return None
             raise ReleaseError('GitHub authority unavailable: '+result.stderr.strip())
         return json.loads(result.stdout) if result.stdout.strip() else None
+
+    def graphql(self, query, variables):
+        result = subprocess.run(['gh','api','graphql','--input','-'],input=json.dumps(dict(query=query,variables=variables)),text=True,capture_output=True)
+        if result.returncode:
+            raise ReleaseError('GitHub GraphQL authority unavailable: '+result.stderr.strip())
+        data = json.loads(result.stdout)
+        if data.get('errors'):
+            raise ReleaseError('GitHub GraphQL request failed; reconcile before retry')
+        return data['data']
+
+    def signed_commit(self, branch, expected, files, message):
+        query = 'mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid signature{isValid}}}}'
+        signoff = 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
+        if os.environ.get('GITHUB_ACTIONS') != 'true':
+            result = subprocess.run(['git','var','GIT_COMMITTER_IDENT'],text=True,capture_output=True,check=True)
+            signoff = result.stdout.strip().rsplit('>',1)[0]+'>'
+        value = self.graphql(query, {'input': dict(branch=dict(repositoryNameWithOwner=self.repo,refName=branch),expectedHeadOid=expected,fileChanges=dict(additions=[dict(path=name,contents=base64.b64encode(data).decode()) for name,data in files.items()]),message=dict(headline=message,body='Signed-off-by: '+signoff))})['createCommitOnBranch']['commit']
+        if not (value.get('signature') or {}).get('isValid'):
+            raise ReleaseError('platform commit signature unavailable; stop and reconcile')
+        self.verify_record_commit(value['oid'])
+        return value['oid']
+
+    def verify_record_commit(self, sha):
+        value = self.api('commits/'+sha)
+        if value['sha'] != sha or not value['commit']['verification']['verified'] or (value.get('author') or {}).get('login') not in ('github-actions[bot]',self.repo.split('/')[0]):
+            raise ReleaseError('release record is not a verified repository-owner or Actions commit')
+
+    def main_protection(self):
+        owner,name = self.repo.split('/')
+        return self.graphql('query($owner:String!,$name:String!){repository(owner:$owner,name:$name){ref(qualifiedName:"refs/heads/main"){branchProtectionRule{requiresApprovingReviews requiresCommitSignatures isAdminEnforced allowsForcePushes allowsDeletions requiresStatusChecks requiresStrictStatusChecks requiredStatusCheckContexts}}}}',dict(owner=owner,name=name))['repository']['ref']['branchProtectionRule']
+
+    def require_empty_release_history(self):
+        page = 1
+        while True:
+            releases = self.api(f'releases?per_page=100&page={page}')
+            if any((r.get('body') or '').startswith('Loomhelm release identity: ') for r in releases):
+                raise ReleaseError('ledger missing but product publication history exists; restore records, never bootstrap')
+            if len(releases) < 100:
+                break
+            page += 1
+        refs = self.api('git/matching-refs/heads/th/release-')
+        if refs:
+            raise ReleaseError('ledger missing but preparation refs exist; restore records, never bootstrap')
 
     def release(self, version):
         return self.api('releases/tags/v'+version, missing=True)

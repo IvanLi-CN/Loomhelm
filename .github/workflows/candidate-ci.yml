@@ -274,6 +274,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+      - name: Audit existing main protection without release writes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/product-release audit
       - name: Verify version policy, real Git CAS and publication recovery
         run: |
           scripts/product-release check

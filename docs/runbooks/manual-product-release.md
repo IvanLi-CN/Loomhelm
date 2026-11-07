@@ -2,23 +2,17 @@
 
 ## 首次启用前
 
-本轮代码交付不执行真实发版。owner 必须准备专用 GitHub App 和可验证提交签名；不能以管理员临时直推 main 替代准备 PR。配置完成前，入口拒绝执行。
+发布只使用现有认证：Actions 内使用 GitHub 提供的短期 `GITHUB_TOKEN`；主机上的 owner 操作使用已登录的 `gh`。不要求新增 App、私钥 Secret、独立签名身份或 Rulesets。main 现有的 PR、签名、管理员约束、strict required checks 由只读审计核验；任何无法读取的事实均报告为未知，不能当成未配置。
 
-| 配置 | 所有者 | 用途 |
-| - | - | - |
-| `RELEASE_APP_ID` variable | 仓库维护者 | 安装在本仓库的 App 身份 |
-| `RELEASE_APP_PRIVATE_KEY` secret | 仓库维护者 | 短期 installation token，contents / pull_requests / issues 读写，Actions / Checks / Administration 只读；Administration 仅用于核验保护，不授权修改 |
-| `RELEASE_GPG_PRIVATE_KEY` secret | 签名维护者 | ephemeral runner 导入的发布签名私钥；必须支持非交互签名 |
-| `RELEASE_GPG_KEY_ID` variable | 签名维护者 | GitHub 能验证的完整 40 位 GPG 主密钥指纹；ledger 逐提交核对该指纹 |
-| `RELEASE_SIGNING_EMAIL` variable | 签名维护者 | 与 GitHub 已验证签名身份相符的提交邮箱 |
+`scripts/product-release audit` 只读核验 main 保护，不创建 reservation、分支、提交或 Release，也不读取 Secret 内容。该审计证明主干保护可读取并符合声明，不证明发布写权限或真实发布已成功。
 
-main 必须要求 PR、签名提交与仓库 quality-gates 声明的检查。release-ledger 必须以两层 active ruleset 保护：creation/update 只允许专用 Release App bypass；独立且无 bypass 的规则要求签名、禁止删除和非快进。初次 reservation 可原子创建空缺 ref。正式 v* tags 必须以无 bypass 的规则禁止更新与删除。入口必须读到完整 bypass actors；GitHub 未返回该字段时不能推断为空，须由 owner 解决规则可见性后再做 A6，不增加 App 写入平台规则的权限。权限不足、配置不完整或规则无法核验时 fail closed，不修改平台配置作为自动补救。
+GitHub 原生 `createCommitOnBranch` 为发布记录和版本投影生成平台签名；`expectedHeadOid` 将提交创建与 ref 前移绑定为一个原子操作。签名不可用、提交身份不符或 CAS 冲突时停止，不能降级为无签名写入。仓库访问控制仍有效，操作不设置 bypass、不强推、不修改平台规则。已有版本标签指向其他 SHA 时停止，不覆盖或重建。
 
 ## 新发布
 
 从 main 运行 Manual Release，只填写一个 release_target：patch、minor、major 或完整 final/prerelease 版本。不支持 build metadata。首次没有合法 completed final baseline 时必须填写完整版本；历史 connector-v* tag 不自动转换为产品 baseline。
 
-工作流占用唯一身份并创建版本准备 PR；按正常质量门禁审核与合并，随后从 main 运行 Release，传入已有 reservation ID。入口自动读取准确合并 SHA，检查源码在准备期间没有混入业务改动。没有显式 target 时不得默认 patch。
+工作流占用唯一身份并生成签名版本准备分支；保留仓库当前禁止 Actions 创建 PR 的设置。owner 或已获授权的 agent 用现有 gh 身份打开普通版本准备 PR，链接由 Actions summary 提供。按正常质量门禁审核与合并，随后从 main 运行 Release，传入已有 reservation ID。入口自动读取准确合并 SHA，检查源码在准备期间没有混入业务改动。没有显式 target 时不得默认 patch。
 
 Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 / Linux amd64、Web 均为必需产物。TS 包携带 TypeScript 源码、完整 toolkit、依赖与 Bun FFI 资源，无需源码仓库；仅支持固定 Bun 1.4.4，保留主干 ADR 0021 的源码运行合同，不再支持 Node。Bun 根 lock 不保存根包版本，冻结安装验证依赖一致性；package.json 与包内源码 stamp 负责产品版本投影。包内 --version 报告构建版本和 SHA，正式程序拒绝运行配置覆盖身份。
 
@@ -57,7 +51,7 @@ PR 的 Product Release Contract 覆盖版本规则、实际裸 Git CAS、状态�
 
 ## 部署准备与离线导入
 
-`GITHUB_REPOSITORY=IvanLi-CN/Loomhelm scripts/deploy-product --identity <reservation> --directory <installation-staging-dir>` 只接受签名 ledger 中 completed 且公开的身份，下载并逐项验证完整冻结产物。已有文件 digest 冲突即停止。此步骤需要发布签名公钥验证与只读 GitHub 权限，不需要发布私钥。
+`GITHUB_REPOSITORY=IvanLi-CN/Loomhelm scripts/deploy-product --identity <reservation> --directory <installation-staging-dir>` 只接受签名 ledger 中 completed 且公开的身份，下载并逐项验证完整冻结产物。已有文件 digest 冲突即停止。此步骤使用现有只读 GitHub 权限核验平台签名、发布记录与资产，不需要本地签名私钥。
 
 在已授权部署主机追加 `--import-images` 会用 skopeo 导入原 OCI archive，核对导入后的 image ID，并生成兼容现有 schema 2 candidate 的 deployment envelope。离线运行使用不可变 `sha256:<config-digest>` 镜像 ID；原 OCI manifest digest 另行保留。正式程序直接使用编译版本，不再把 source SHA 当作运行版本覆盖。此工具只生成 stage/import 回执，不执行 slot promotion，也不能把本地导入回执当作生产部署成功。
 
@@ -74,3 +68,9 @@ PR 包场景使用明确标记的 `0.0.0-ci` 合成版本与零身份检验正�
 全部资产复核后，公开 API 调用前先以 CAS 写入不可撤销的公开意图。取消先赢得 CAS 时不会公开；公开意图先写入后禁止取消，即使公开请求结果未知也只能沿原版本、SHA 和 digest 对账完成。该边界不把意图记为已公开或已完成。
 
 部署 stage 回执只允许首次创建或逐字相同的复用，拒绝 symlink 与不同结果覆盖。需要改变 stage/import 模式时使用新的输出目录，保留旧回执。普通 candidate/preview 始终使用 dev 构建身份；只有绑定 reservation 的正式包构建器显式注入产品版本，避免根 VERSION 已投影后影响预览。
+
+## 身份记录初始化与审计
+
+首次初始化以已验证 main 提交作为 Git 分支种子，以原子 create-ref 占用 `release-ledger`，然后用精确旧 head 追加 ledger.json。创建 ref 后中断可复用空种子，不重建另一个身份；竞争者必须重新读取。读取逐项验证发布提交的平台签名、author、单 parent、仅 ledger.json 的变更和 JSON 追加语义。存在产品 Release 或版本准备分支却缺失 ledger 时阻断，要求恢复记录，不能当作全新产品重新开始。
+
+GitHub 原生提交接口的签名与 CAS 行为依据 [createCommitOnBranch](https://docs.github.com/en/enterprise-cloud@latest/graphql/reference/commits)。内置令牌创建 PR 后的检查审批行为依据 [GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token)；本项目保留现有 owner 创建 PR 路径，不为减少人工步骤新增凭据或更改仓库设置。

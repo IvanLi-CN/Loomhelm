@@ -41,32 +41,44 @@ class LedgerTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-
-    def test_signed_history_is_pinned_to_the_authorized_primary_key(self):
+    def test_verified_platform_history_is_read_and_append_only_semantics_are_checked(self):
+        from unittest.mock import Mock
+        import json
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp)/'gpg'
-            home.mkdir(mode=0o700)
-            with patch.dict(os.environ, {'GNUPGHOME': str(home)}):
-                subprocess.run(['gpg','--batch','--passphrase','','--quick-generate-key','Release Fixture <fixture@example.invalid>','ed25519','sign','0'],check=True,capture_output=True)
-                keys = subprocess.check_output(['gpg','--batch','--with-colons','--list-secret-keys'],stderr=subprocess.DEVNULL,text=True)
-                fingerprint = next(line.split(':')[9] for line in keys.splitlines() if line.startswith('fpr:'))
-                subprocess.run(['git','init','--bare',tmp+'/remote'],check=True,capture_output=True)
-                subprocess.run(['git','init',tmp+'/local'],check=True,capture_output=True)
-                os.chdir(tmp+'/local')
-                try:
-                    def run(*args): subprocess.run(['git',*args],check=True,capture_output=True)
-                    run('config','user.name','Release Fixture')
-                    run('config','user.email','fixture@example.invalid')
-                    run('config','gpg.format','openpgp')
-                    run('config','user.signingkey',fingerprint)
-                    run('remote','add','origin',tmp+'/remote')
-                    ledger = Ledger()
-                    with patch.dict(os.environ, {'RELEASE_SIGNING_KEY_ID': fingerprint}):
-                        ledger.append(ledger.read())
-                        self.assertEqual(Ledger().read()['releases'], {})
-                    with patch.dict(os.environ, {'RELEASE_SIGNING_KEY_ID': 'F'*40}), self.assertRaises(ReleaseError):
-                        Ledger().read()
-                finally:
-                    os.chdir(previous)
-                    subprocess.run(['gpgconf','--kill','gpg-agent'],capture_output=True)
+            subprocess.run(['git','init','--bare',tmp+'/remote'],check=True,capture_output=True)
+            subprocess.run(['git','init',tmp+'/local'],check=True,capture_output=True)
+            os.chdir(tmp+'/local')
+            try:
+                def run(*args):return subprocess.check_output(['git',*args],stderr=subprocess.PIPE).decode().strip()
+                run('config','user.email','fixture@example.invalid')
+                run('config','user.name','Platform API Fixture')
+                run('config','commit.gpgsign','false')
+                run('remote','add','origin',tmp+'/remote')
+                # Real Git history; API verification is injected here, not claimed
+                # as empirical evidence for GitHub's actual signing service.
+                run('commit','--allow-empty','--signoff','-m','chore: fixture seed')
+                seed = run('rev-parse','HEAD')
+                state={'schema_version':1,'releases':{'one':{'id':'one','version':'1.0.0','intent':{},'events':[{'sequence':1,'kind':'reserved'}]}}}
+                Path('ledger.json').write_text(json.dumps(state))
+                run('add','ledger.json');run('commit','--signoff','-m','chore: fixture record')
+                first=run('rev-parse','HEAD')
+                run('push','origin','HEAD:refs/heads/release-ledger')
+                api=Mock()
+                ledger=Ledger(api=api)
+                self.assertEqual(ledger.read(),state)
+                self.assertEqual(ledger.read(),state)
+                api.verify_record_commit.assert_called_with(first)
+                api.verify_source.assert_called_with(seed,[])
+                state['releases']['one']['events'].append({'sequence':2,'kind':'notification'})
+                Path('ledger.json').write_text(json.dumps(state))
+                run('add','ledger.json');run('commit','--signoff','-m','chore: fixture append')
+                run('push','origin','HEAD:refs/heads/release-ledger')
+                self.assertEqual(Ledger(api=api).read(),state)
+                state['releases']['one']['events'][0]['kind']='rewritten'
+                Path('ledger.json').write_text(json.dumps(state))
+                run('add','ledger.json');run('commit','--signoff','-m','chore: fixture corrupt')
+                run('push','origin','HEAD:refs/heads/release-ledger')
+                with self.assertRaises(ReleaseError):Ledger(api=api).read()
+            finally:
+                os.chdir(previous)
