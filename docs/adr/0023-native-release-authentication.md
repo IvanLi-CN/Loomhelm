@@ -12,7 +12,7 @@ ADR 0022 规定统一产品身份、签名追加 Git ledger 与版本准备 PR�
 
 保留 ADR 0022 的发布身份、CAS、公开意图、完整资产、共同完成和原件恢复语义。仅接续其认证、签名和平台核验适配：Actions 使用现有短期令牌，owner/agent 使用现有 gh 登录；通过 GitHub 原生 createCommitOnBranch 的平台签名和 expectedHeadOid 原子提交维护发布记录及版本投影，不配置额外签名私钥。
 
-main 保护按现有原生分支保护核验 PR、签名、管理员执行、禁止强推/删除和 strict required checks，不要求为了通过审计新增 Rulesets。仓库现有访问控制保留，发布程序只能追加记录、创建不存在的版本 tag，不能覆盖 tag 或修改保护配置。
+main 保护按现有原生分支保护核验 PR、签名、管理员执行、禁止强推/删除和 strict required checks，不要求为了通过审计新增 Rulesets。完整配置审计使用 owner 已有 gh 身份；CI 内置令牌只核验公开的 protected 与 required contexts，其余标为待 owner 审计。发布执行另验实际源码的签名、精确 merged main PR 与 required checks，不把平台详情不可读伪装成通过。仓库现有访问控制保留，发布程序只能追加记录、创建不存在的版本 tag，不能覆盖 tag 或修改保护配置。
 
 首次 ledger 分支以已验证 main 为种子，原子占用 ref 后再精确 CAS 追加首条记录。空种子可恢复；若已有产品发布或版本准备分支但 ledger 丢失，则阻断并恢复历史。读取验证平台签名、发布 author、单 parent 和追加 JSON；不将签名身份更换为任意新密钥。
 

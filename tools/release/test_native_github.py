@@ -11,6 +11,9 @@ from product import prerequisites
 
 
 class NativeGitHubTests(unittest.TestCase):
+    def branch(self):
+        return dict(name='main',protected=True,protection={'required_status_checks':dict(enforcement_level='everyone',contexts=self.protection()['requiredStatusCheckContexts'])})
+
     def protection(self):
         from product import ROOT
         return dict(requiresApprovingReviews=True,requiresCommitSignatures=True,isAdminEnforced=True,allowsForcePushes=False,allowsDeletions=False,requiresStatusChecks=True,requiresStrictStatusChecks=True,requiredStatusCheckContexts=json.loads((ROOT/'.github/quality-gates.json').read_text())['required_checks'])
@@ -18,8 +21,9 @@ class NativeGitHubTests(unittest.TestCase):
     def test_existing_classic_protection_passes_without_rulesets_or_new_credentials(self):
         api = Mock()
         api.main_protection.return_value = self.protection()
+        api.api.return_value = self.branch()
         prerequisites(api)
-        api.api.assert_not_called()
+        api.api.assert_called_once_with('branches/main')
 
     def test_missing_signature_pr_check_or_admin_protection_fails(self):
         for key in ('requiresApprovingReviews','requiresCommitSignatures','isAdminEnforced','requiresStatusChecks','requiresStrictStatusChecks','requiredStatusCheckContexts','allowsForcePushes','allowsDeletions'):
@@ -27,7 +31,8 @@ class NativeGitHubTests(unittest.TestCase):
             protection[key] = [] if key=='requiredStatusCheckContexts' else not protection[key]
             api = Mock()
             api.main_protection.return_value = protection
-            with self.subTest(key=key), self.assertRaises(ReleaseError):prerequisites(api)
+            api.api.return_value = self.branch()
+            with self.subTest(key=key), self.assertRaises(ReleaseError):prerequisites(api,detailed=True)
 
     def test_platform_signing_uses_exact_head_and_original_file_bytes(self):
         api = GitHub('owner/repo')

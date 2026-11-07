@@ -4,7 +4,7 @@
 
 发布只使用现有认证：Actions 内使用 GitHub 提供的短期 `GITHUB_TOKEN`；主机上的 owner 操作使用已登录的 `gh`。不要求新增 App、私钥 Secret、独立签名身份或 Rulesets。main 现有的 PR、签名、管理员约束、strict required checks 由只读审计核验；任何无法读取的事实均报告为未知，不能当成未配置。
 
-`scripts/product-release audit` 只读核验 main 保护，不创建 reservation、分支、提交或 Release，也不读取 Secret 内容。该审计证明主干保护可读取并符合声明，不证明发布写权限或真实发布已成功。
+`scripts/product-release audit` 只读核验 main 保护，不创建 reservation、分支、提交或 Release，也不读取 Secret 内容。owner 使用现有 gh 登录时，审计核验完整保护配置；CI 内置令牌仅核验可读取的 protected 与 required contexts，完整配置明确标为 owner-audit-required，不伪装已验证。发布入口另外逐项核验实际 source 的签名、已合并 main PR 及精确 SHA 的成功检查。该审计不证明发布写权限或真实发布已成功。
 
 GitHub 原生 `createCommitOnBranch` 为发布记录和版本投影生成平台签名；`expectedHeadOid` 将提交创建与 ref 前移绑定为一个原子操作。签名不可用、提交身份不符或 CAS 冲突时停止，不能降级为无签名写入。仓库访问控制仍有效，操作不设置 bypass、不强推、不修改平台规则。已有版本标签指向其他 SHA 时停止，不覆盖或重建。
 

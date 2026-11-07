@@ -37,6 +37,6 @@ class ContractTests(unittest.TestCase):
     def test_unreadable_main_protection_fails_closed(self):
         from unittest.mock import Mock
         api = Mock()
-        api.main_protection.return_value = None
+        api.api.return_value = None
         with self.assertRaises(ReleaseError): product.prerequisites(api)
-        api.api.assert_not_called()
+        api.api.assert_called_once_with('branches/main')

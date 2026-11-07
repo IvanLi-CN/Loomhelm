@@ -30,7 +30,7 @@ Implementation: 统一合同及原生包验证入口已由 PR #77 合并，合�
 
 main 已有原生分支保护，required checks 共十一项，strict、签名及管理员保护有效。此前只检查 Rulesets 导致的误判已修正。额外 App、发布私钥和强制 Rulesets 不再是前置条件，不能把不采用这些方案记为配置缺失。
 
-仓库当前禁止 Actions 创建 PR；保持该设置，版本准备分支由工作流创建，普通 PR 由 owner 或已获授权的 agent 用现有 gh 身份打开。写权限与平台签名的真实行为必须在授权发布时观察；PR fixtures 不能证明真实发布成功。
+仓库当前禁止 Actions 创建 PR；保持该设置，版本准备分支由工作流创建，普通 PR 由 owner 或已获授权的 agent 用现有 gh 身份打开。内置令牌不能读取管理员级保护详情；CI 只验证可见 protected 与 required contexts，完整配置由 owner 现有 gh 审计并保留证据。发布运行另外拒绝无精确 main 合并 PR、无签名或检查不通过的真实源码。写权限与平台签名的真实行为必须在授权发布时观察；PR fixtures 不能证明真实发布成功。
 
 A6 已有真实 Merge Receipt；owner 已将真实首发纳入后续执行，但完整版本目标与明确发布授权仍待提供，不自动选择 patch 或完整版本。GitHub API 返回不可见或无权限时，记录 unknown，而非宣称资源不存在。
 

@@ -112,6 +112,9 @@ class GitHub:
         comparison = self.api('compare/'+sha+'...main')
         if comparison['status'] not in ('ahead','identical'):
             raise ReleaseError('source is outside main history')
+        pulls = self.api('commits/'+sha+'/pulls?per_page=100')
+        if not any(p.get('merged_at') and p.get('merge_commit_sha') == sha and p.get('base',{}).get('ref') == 'main' for p in pulls):
+            raise ReleaseError('source has no exact merged main PR')
         checks = []
         page = 1
         while True:
