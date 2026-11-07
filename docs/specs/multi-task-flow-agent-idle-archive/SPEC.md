@@ -71,6 +71,26 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 - 子任务完成后自动发起归档；明确失败和未知均可在详情中看到并通过“重新归档”恢复。
 - 归档异常不会把已完成任务改回运行中，也不会触发重复任务执行。
 
+## Verification
+
+### VER-IDLE-001
+
+- covers: `REQ-IDLE-001`, `REQ-IDLE-002`, `REQ-IDLE-003`, `REQ-IDLE-004`, `REQ-IDLE-005`
+- Method: `task-runtime.test.ts`、`codex-agent-observer.test.ts` 与 schema/engine replay 测试。
+- Pass condition: 明确 idle 才写入状态，active/unknown 恢复运行状态，等待、终态和交接事实不被覆盖，不发送 turn。
+
+### VER-ARCHIVE-001
+
+- covers: `REQ-ARCHIVE-001`, `REQ-ARCHIVE-002`, `REQ-ARCHIVE-003`, `REQ-ARCHIVE-005`, `REQ-ARCHIVE-007`
+- Method: `conversation-archive.test.ts` 的持锁竞争、故障注入、RPC 与正向对账测试。
+- Pass condition: 单次归档意图可恢复，未知不盲目重发，手动恢复阻止自动重归档；任务终态与 turn 调用不变。
+
+### VER-ARCHIVE-002
+
+- covers: `REQ-ARCHIVE-004`, `REQ-ARCHIVE-006`
+- Method: UI tooltip/conversation-control 测试及隔离 `preview:idle-archive` 浏览器交互。
+- Pass condition: 聊天气泡角标、原因、时间、操作按钮正确，原生 title 数量为零，归档与取消归档均只更新资源。
+
 ## Visual Evidence
 
 - Storybook覆盖=不适用
@@ -83,6 +103,10 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 - 主人已确认真实源码服务中的归档成功与手动取消归档交互；入口保留聊天气泡和状态角标。
 - [归档成功与取消归档按钮](assets/conversation-archived.png)
 - [取消归档后保持手动状态](assets/conversation-restored.png)
+
+- 主干布局集成后重新验证，归档资源交互与已确认效果一致。
+- [主干集成后的归档成功](assets/integrated-conversation-archived.jpg)
+- [主干集成后的手动恢复](assets/integrated-conversation-restored.jpg)
 
 ## Related ADRs
 
