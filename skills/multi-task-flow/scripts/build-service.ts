@@ -32,14 +32,18 @@ const hash=v=>createHash("sha256").update(v).digest("hex");
 const root=process.env.LOOMHELM_VIEWER_RELEASE,temporary=process.env.LOOMHELM_VIEWER_RUNTIME_TEMP;
 delete process.env.LOOMHELM_VIEWER_RELEASE;delete process.env.LOOMHELM_VIEWER_RUNTIME_TEMP;
 try {
-const trusted=p=>{const s=fs.lstatSync(p);if(s.isSymbolicLink()||(s.uid!==0&&s.uid!==process.getuid())||((s.mode&0o022)!==0&&!(s.uid===0&&(s.mode&0o1000)!==0)))throw Error("VIEWER_RESOURCE_UNTRUSTED");return s;};
-for(let p=root;;p=path.dirname(p)){if(!trusted(p).isDirectory())throw Error("VIEWER_DIRECTORY_UNTRUSTED");if(p===path.dirname(p))break;}
+const trusted=(p,stickyAncestor=false)=>{const s=fs.lstatSync(p);if(s.isSymbolicLink()||(s.uid!==0&&s.uid!==process.getuid())||((s.mode&0o022)!==0&&!(stickyAncestor&&s.isDirectory()&&s.uid===0&&(s.mode&0o1000)!==0)))throw Error("VIEWER_RESOURCE_UNTRUSTED");return s;};
+for(let p=root;;p=path.dirname(p)){if(!trusted(p,p!==root).isDirectory())throw Error("VIEWER_DIRECTORY_UNTRUSTED");if(p===path.dirname(p))break;}
 const read=p=>{const s=trusted(p);if(!s.isFile()||s.nlink!==1)throw Error("VIEWER_RESOURCE_UNTRUSTED");const fd=fs.openSync(p,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);try{const a=fs.fstatSync(fd);if(a.dev!==s.dev||a.ino!==s.ino)throw Error("VIEWER_RESOURCE_CHANGED");return fs.readFileSync(fd);}finally{fs.closeSync(fd);}};
 const m=JSON.parse(read(path.join(root,"manifest.json"))),{build_id,...body}=m;
 const launcherHash=body.files.viewer;delete body.files.viewer;
 body.files=Object.fromEntries(Object.entries(body.files).sort(([a],[b])=>a.localeCompare(b)));
 if(hash(JSON.stringify(body))!==${JSON.stringify(resourceIdentity)})throw Error("VIEWER_RESOURCE_IDENTITY_MISMATCH");
 body.files.viewer=launcherHash;
+// Reject additional files before Bun can resolve an extensionless import to them.
+const listed=new Set([...Object.keys(body.files),"manifest.json"]);
+const walk=directory=>{for(const name of fs.readdirSync(directory)){const p=path.join(directory,name),s=trusted(p);if(s.isDirectory())walk(p);else if(!s.isFile()||s.nlink!==1||!listed.has(path.relative(root,p).split(path.sep).join("/")))throw Error("VIEWER_RESOURCE_UNLISTED");}};
+walk(root);
 for(const [name,expected]of Object.entries(body.files)){
 if(name.includes("\\\\")||name.split("/").some(p=>!p||p==="."||p==="..")||(name!=="viewer"&&!name.startsWith("skills/")))throw Error("VIEWER_RESOURCE_PATH");
 const p=path.join(root,name);if(fs.realpathSync(p)!==p)throw Error("VIEWER_RESOURCE_PATH");
@@ -60,10 +64,11 @@ metadata() {
   if [[ "$os" == Darwin ]]; then stat -f '%d:%i:%l:%u:%Lp' -- "$1"; else stat -c '%d:%i:%h:%u:%a' -- "$1"; fi
 }
 trusted() {
-  local path="$1" allow_group="\${2:-0}" uid mode
+  local path="$1" allow_group="\${2:-0}" uid mode sticky_directory=0
   [[ -e "$path" && ! -L "$path" ]] || return 1
   if [[ "$os" == Darwin ]]; then uid=$(stat -f '%u' -- "$path"); mode=$(stat -f '%Lp' -- "$path"); else uid=$(stat -c '%u' -- "$path"); mode=$(stat -c '%a' -- "$path"); fi
-  [[ "$uid" == 0 || "$uid" == "$(id -u)" ]] && (( (8#$mode & 18) == 0 || ($uid == 0 && (8#$mode & 512) != 0) || ($allow_group == 1 && $uid == $(id -u) && (8#$mode & 2) == 0) ))
+  [[ -d "$path" ]] && sticky_directory=1
+  [[ "$uid" == 0 || "$uid" == "$(id -u)" ]] && (( (8#$mode & 18) == 0 || ($uid == 0 && $sticky_directory == 1 && (8#$mode & 512) != 0) || ($allow_group == 1 && $uid == $(id -u) && (8#$mode & 2) == 0) ))
 }
 # Validate the pinned executable and every ancestor before opening its descriptor.
 [[ -f "$runtime" && -x "$runtime" ]] && trusted "$runtime" || { echo BUN_RUNTIME_UNTRUSTED >&2; exit 2; }

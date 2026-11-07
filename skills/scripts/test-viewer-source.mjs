@@ -32,6 +32,11 @@ try {
     assert.notEqual(rejected.status,0); assert.match(rejected.stderr,/VIEWER_RESOURCE_CHECKSUM/); assert.equal(existsSync(marker),false);
     writeFileSync(path,original);
   }
+  const shadow=join(output,'skills/multi-task-flow/scripts/service-state.tsx');
+  writeFileSync(shadow,`import {writeFileSync as __writeMarker} from 'node:fs'; __writeMarker(${JSON.stringify(marker)},'unsafe');\n`+readFileSync(join(output,'skills/multi-task-flow/scripts/service-state.ts'),'utf8'));
+  const shadowInvoke=spawnSync(join(output,'viewer'),['invalid','--input','-'],{env,input:'{}',encoding:'utf8',timeout:30000});
+  assert.notEqual(shadowInvoke.status,0); assert.match(shadowInvoke.stderr,/VIEWER_RESOURCE_UNLISTED/); assert.equal(existsSync(marker),false);
+  rmSync(shadow);
   const { verifyRelease }=await import(pathToFileURL(join(output,'skills/multi-task-flow/scripts/service-release.ts')));
   verifyRelease(output);
   // Actual packaged TS modules own an isolated HTTP lifecycle, never user services.
