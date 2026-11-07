@@ -28,6 +28,14 @@ export const DEFAULT_VIEW_STATE: ViewState = {
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const tabs = new Set<DashboardTab>(["graph", "planned", "actual"]);
 const taskLayouts = new Set<TaskLayout>(["board", "grid"]);
+
+export function defaultTaskLayout(groupCount: number): TaskLayout {
+  return groupCount === 1 ? "grid" : "board";
+}
+
+export function hasValidLayoutParam(search: string): boolean {
+  return taskLayouts.has(new URLSearchParams(search).get("layout") as TaskLayout);
+}
 const zoomBounds = { min: 0.2, max: 2.5 };
 export const MAX_TIMELINE_SPAN_MS = 10_000 * 365.25 * 24 * 60 * 60 * 1000;
 
@@ -80,7 +88,7 @@ export function parseViewState(search: string, validation: ViewStateValidation =
   const rawZoom = Number(params.get("zoom"));
   const zoom = Number.isFinite(rawZoom) && rawZoom >= zoomBounds.min && rawZoom <= zoomBounds.max ? Math.round(rawZoom * 100) / 100 : DEFAULT_VIEW_STATE.zoom;
   const tab = tabs.has(params.get("tab") as DashboardTab) ? params.get("tab") as DashboardTab : DEFAULT_VIEW_STATE.tab;
-  const layout = taskLayouts.has(params.get("layout") as TaskLayout) ? params.get("layout") as TaskLayout : DEFAULT_VIEW_STATE.layout;
+  const layout = taskLayouts.has(params.get("layout") as TaskLayout) ? params.get("layout") as TaskLayout : defaultTaskLayout(validation.groups?.size ?? 0);
   const selected = parseSelection(params.get("selected"), validation);
   const [plannedStart, plannedEnd] = validDateRange(params.get("plannedStart"), params.get("plannedEnd"));
   const [actualStart, actualEnd] = validDateRange(params.get("actualStart"), params.get("actualEnd"));
@@ -130,10 +138,10 @@ export function sanitizeViewState(state: ViewState, validation: ViewStateValidat
   };
 }
 
-export function serializeViewState(state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab): string {
+export function serializeViewState(state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): string {
   const params = new URLSearchParams();
   if (state.tab !== defaultTab) params.set("tab", state.tab);
-  if (state.layout !== DEFAULT_VIEW_STATE.layout) params.set("layout", state.layout);
+  if (state.layout !== defaultLayout) params.set("layout", state.layout);
   if (state.query) params.set("q", state.query);
   if (state.group) params.set("group", state.group);
   if (state.state) params.set("state", state.state);
@@ -148,9 +156,9 @@ export function serializeViewState(state: ViewState, defaultPlan: string | null 
   return params.toString();
 }
 
-export function canonicalViewUrl(currentUrl: string, state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab): string {
+export function canonicalViewUrl(currentUrl: string, state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): string {
   const url = new URL(currentUrl);
-  const query = serializeViewState(state, defaultPlan, defaultTab);
+  const query = serializeViewState(state, defaultPlan, defaultTab, defaultLayout);
   url.search = query ? `?${query}` : "";
   url.username = "";
   url.password = "";
@@ -158,14 +166,14 @@ export function canonicalViewUrl(currentUrl: string, state: ViewState, defaultPl
   return url.toString();
 }
 
-export function replaceViewStateOn(history: ViewStateHistory, currentUrl: string, state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab): string {
-  const nextUrl = canonicalViewUrl(currentUrl, state, defaultPlan, defaultTab);
+export function replaceViewStateOn(history: ViewStateHistory, currentUrl: string, state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): string {
+  const nextUrl = canonicalViewUrl(currentUrl, state, defaultPlan, defaultTab, defaultLayout);
   history.replaceState(null, "", nextUrl);
   return nextUrl;
 }
 
-export function replaceViewState(state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab): void {
-  replaceViewStateOn(window.history, window.location.href, state, defaultPlan, defaultTab);
+export function replaceViewState(state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): void {
+  replaceViewStateOn(window.history, window.location.href, state, defaultPlan, defaultTab, defaultLayout);
 }
 
 export function selectionFromState(state: ViewState): Selection | null { return state.selected; }
