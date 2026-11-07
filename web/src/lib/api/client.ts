@@ -1,3 +1,4 @@
+import { versionedWebFetch } from './version';
 import {
   createAuthenticatedApiClient,
   type AuthenticatedApiClientOptions,
@@ -64,7 +65,7 @@ export function readMetaCsrfToken(): string | undefined {
 export function createWebApiClient(options: WebApiClientOptions = {}): AuthenticatedApiClient {
   return createAuthenticatedApiClient({
     baseUrl: options.baseUrl ?? import.meta.env.VITE_API_BASE_URL,
-    fetch: options.fetch,
+    fetch: versionedWebFetch(options.fetch ?? globalThis.fetch, options.baseUrl ?? import.meta.env.VITE_API_BASE_URL),
     headers: options.headers,
     credentials: options.credentials,
     accessToken: options.accessToken,

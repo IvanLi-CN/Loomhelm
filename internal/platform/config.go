@@ -2,6 +2,7 @@ package platform
 
 import (
 	"fmt"
+	"github.com/IvanLi-CN/Loomhelm/internal/buildinfo"
 	"math"
 	"net"
 	"net/url"
@@ -141,7 +142,7 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 		return Config{}, fmt.Errorf("unknown component %q", component)
 	}
 
-	version := lookupOrDefault(lookup, "LOOMHELM_VERSION", "dev")
+	version := lookupOrDefault(lookup, "LOOMHELM_VERSION", buildinfo.Version)
 	if strings.TrimSpace(version) == "" {
 		return Config{}, fmt.Errorf("LOOMHELM_VERSION must not be empty")
 	}
@@ -154,7 +155,7 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 	config := Config{
 		Component:          component,
 		Version:            strings.TrimSpace(version),
-		CandidateSourceSHA: strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CANDIDATE_SOURCE_SHA", version)),
+		CandidateSourceSHA: strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_CANDIDATE_SOURCE_SHA", buildinfo.SourceSHA)),
 		ArtifactDigest:     strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_DIGEST", "unknown")),
 		ArtifactRoot:       strings.TrimSpace(lookupOrDefault(lookup, "LOOMHELM_ARTIFACT_ROOT", "")),
 		ShutdownTimeout:    shutdownTimeout,
@@ -245,6 +246,9 @@ func LoadConfigWithLookup(component Component, lookup func(string) (string, bool
 }
 
 func (c Config) Validate() error {
+	if err := buildinfo.ValidateOverride(c.Version, c.CandidateSourceSHA); err != nil {
+		return err
+	}
 	if !isKnownComponent(c.Component) {
 		return fmt.Errorf("unknown component %q", c.Component)
 	}

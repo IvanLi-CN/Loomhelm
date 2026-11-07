@@ -19,7 +19,10 @@
     "Candidate Build",
     "Blue-Green Control Contract",
     "TypeScript Client (Node 22)",
-    "TypeScript Client (Node 24)"
+    "TypeScript Client (Node 24)",
+    "Product Release Contract",
+    "Product Package (ubuntu-24.04)",
+    "Product Package (macos-15)"
   ],
   "informational_checks": [
     "Candidate Reproducibility",
@@ -37,7 +40,10 @@
         "Candidate Build",
         "Candidate Reproducibility",
         "TypeScript Client (Node 22)",
-        "TypeScript Client (Node 24)"
+        "TypeScript Client (Node 24)",
+        "Product Release Contract",
+        "Product Package (ubuntu-24.04)",
+        "Product Package (macos-15)"
       ]
     },
     {

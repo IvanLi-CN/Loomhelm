@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/IvanLi-CN/Loomhelm/internal/buildinfo"
 	"io"
 	"log/slog"
 	"net"
@@ -261,6 +262,7 @@ func (b connectorCredentialBootstrapper) resolveAPIKey(ctx context.Context, base
 		return auth.ConnectorCredential{}, fmt.Errorf("create Connector identity request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+apiKey)
+	request.Header.Set(buildinfo.Header, buildinfo.Version)
 	response, err := b.client.Do(request)
 	if err != nil {
 		return auth.ConnectorCredential{}, fmt.Errorf("request Connector identity: %w", err)
@@ -456,6 +458,7 @@ func (b connectorCredentialBootstrapper) postConnectorJSON(ctx context.Context, 
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(buildinfo.Header, buildinfo.Version)
 	response, err := b.client.Do(request)
 	if err != nil {
 		return err

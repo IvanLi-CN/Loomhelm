@@ -1,0 +1,66 @@
+name: Manual Release
+on:
+  workflow_dispatch:
+    inputs:
+      release_target:
+        description: patch, minor, major or an explicit final/prerelease version
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: loomhelm-manual-release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_SIGNING_KEY_ID: ${{ vars.RELEASE_GPG_KEY_ID }}
+    steps:
+      - name: Require protected main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Configure ephemeral release signing
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          printf 'GH_TOKEN=%s\n' "$APP_TOKEN" >> "$GITHUB_ENV"
+          test -n "$SIGNING_KEY"
+          printf '%s' "$SIGNING_KEY" | gpg --batch --import
+          git config user.name 'Loomhelm Release'
+          git config user.email '${{ vars.RELEASE_SIGNING_EMAIL }}'
+          git config gpg.format openpgp
+      - name: Configure bound App Git transport
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
+      - name: Reserve owner intent
+        env:
+          TARGET: ${{ inputs.release_target }}
+        run: |
+          scripts/product-release reserve --target "$TARGET" --source-sha "$GITHUB_SHA" > "$RUNNER_TEMP/identity.json"
+      - name: Create protected preparation PR
+        run: |
+          identity=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/identity.json"))["id"])')
+          scripts/product-release prepare --identity "$identity"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: release-identity
+          path: ${{ runner.temp }}/identity.json
+          if-no-files-found: ignore

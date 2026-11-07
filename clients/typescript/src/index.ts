@@ -7,3 +7,5 @@ export * from './tasks/ledger.js';
 export * from './git.js';
 export * from './dispatch/index.js';
 export * from './toolkit.js';
+
+export * from './version.js';
