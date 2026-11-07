@@ -1,4 +1,5 @@
 #!/usr/bin/env -S bun --no-install
+import { buildInfo } from './build-info.ts';
 import { LocalClient } from './client.ts';
 import { StateLock } from './runtime/lock.ts';
 import { loadConfig } from './config.ts';
@@ -11,6 +12,7 @@ import { runFlowCommand } from './cli/flow.ts';
 import { fileURLToPath } from 'node:url';
 
 async function main(args: string[]): Promise<void> {
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "version")) { console.log(JSON.stringify(buildInfo)); return; }
   let configPath: string | undefined;
   if (args[0] === '--config') { args.shift(); configPath = args.shift(); if (!configPath) throw new Error('Missing config path'); }
   const [command, ...rest] = args;

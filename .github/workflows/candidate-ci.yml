@@ -266,3 +266,46 @@ jobs:
           bun-version: 1.4.4
       - name: Rebuild and compare candidate identity
         run: scripts/reproduce-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate-repro"
+
+  product-release-contract:
+    name: Product Release Contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+      - name: Verify version policy, real Git CAS and publication recovery
+        run: |
+          scripts/product-release check
+          python3 -m unittest discover -s tools/release -p 'test_*.py'
+
+  product-package-smoke:
+    name: Product Package (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go.mod
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: 1.4.4
+      - name: Prepare fixture record at exact Candidate SHA
+        run: python3 tools/release/fixture_record.py > "$RUNNER_TEMP/record.json"
+      - name: Prepare offline image importer
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+      - name: Build and observe native package partitions
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then part=server; else part=go-client; fi
+          python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part "$part" --output "$RUNNER_TEMP/core-product"
+          python3 tools/release/smoke.py --record "$RUNNER_TEMP/record.json" --directory "$RUNNER_TEMP/core-product"
+          python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part ts-client --output "$RUNNER_TEMP/ts-product"
+          python3 tools/release/smoke.py --record "$RUNNER_TEMP/record.json" --directory "$RUNNER_TEMP/ts-product"

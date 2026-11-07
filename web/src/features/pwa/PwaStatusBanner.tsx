@@ -2,6 +2,7 @@ import { AlertTriangle, CloudOff, Download, LoaderCircle } from "lucide-react";
 
 export function PwaStatusBanner({
   isOnline,
+  versionMismatch = false,
   updateAvailable,
   updateApplied = false,
   updating,
@@ -11,6 +12,7 @@ export function PwaStatusBanner({
   placement = "fixed"
 }: {
   isOnline: boolean;
+  versionMismatch?: boolean;
   updateAvailable: boolean;
   updateApplied?: boolean;
   updating: boolean;
@@ -23,6 +25,10 @@ export function PwaStatusBanner({
 
   if (!isOnline) {
     return <div className={`${positionClass} flex items-start gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 text-[var(--ink)] shadow-[var(--shadow)]`} role="status" aria-live="polite"><CloudOff className="mt-0.5 shrink-0 text-[var(--warning)]" size={18} aria-hidden="true" /><div className="grid gap-1"><strong className="text-sm">当前处于离线状态</strong><span className="text-xs leading-5 text-[var(--muted)]">当前页面中的已加载内容仍可查看；发送、审批与控制命令不会离线排队或自动补发。</span></div></div>;
+  }
+
+  if (versionMismatch) {
+    return <div className={`${positionClass} flex items-start gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 text-[var(--ink)] shadow-[var(--shadow)]`} role="status" aria-live="polite"><AlertTriangle className="mt-0.5 shrink-0 text-[var(--warning)]" size={18} aria-hidden="true" /><div className="grid gap-1"><strong className="text-sm">页面需要更新</strong><span className="text-xs leading-5 text-[var(--muted)]">当前页面与服务端版本不一致，联网操作已暂停。输入和会话仍保留在当前页面；请先保存内容，再更新页面，不会自动重发操作。</span></div></div>;
   }
 
   if (registrationError) {

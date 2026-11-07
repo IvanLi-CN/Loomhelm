@@ -9,10 +9,14 @@ import (
 	"syscall"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/app"
+	"github.com/IvanLi-CN/Loomhelm/internal/buildinfo"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 )
 
 func main() {
+	if buildinfo.PrintVersion(os.Args[1:], os.Stdout) {
+		return
+	}
 	config, err := platform.LoadConfig(platform.ComponentConnector)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "invalid configuration: %v\n", err)

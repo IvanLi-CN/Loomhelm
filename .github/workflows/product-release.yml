@@ -1,0 +1,198 @@
+name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      identity:
+        description: Existing durable reservation ID; no version allocation
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: loomhelm-product-release
+  cancel-in-progress: false
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      record: ${{ steps.resolve.outputs.record }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      build: ${{ steps.resolve.outputs.build }}
+      state: ${{ steps.resolve.outputs.state }}
+    env:
+      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+      RELEASE_SIGNING_KEY_ID: ${{ vars.RELEASE_GPG_KEY_ID }}
+    steps:
+      - run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-checks: read
+          permission-administration: read
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Configure ephemeral release signing
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          printf 'GH_TOKEN=%s\n' "$APP_TOKEN" >> "$GITHUB_ENV"
+          test -n "$SIGNING_KEY"
+          printf '%s' "$SIGNING_KEY" | gpg --batch --import
+          git config user.name 'Loomhelm Release'
+          git config user.email '${{ vars.RELEASE_SIGNING_EMAIL }}'
+          git config gpg.format openpgp
+      - name: Configure bound App Git transport
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
+      - name: Resolve exact merged preparation
+        id: resolve
+        env:
+          IDENTITY: ${{ inputs.identity }}
+        run: |
+          scripts/product-release inspect --identity "$IDENTITY" > "$RUNNER_TEMP/identity.json"
+          python3 tools/release/workflow.py bind --record "$RUNNER_TEMP/identity.json"
+          scripts/product-release inspect --identity "$IDENTITY" > "$RUNNER_TEMP/identity.json"
+          scripts/product-release claim-build --identity "$IDENTITY"
+          scripts/product-release inspect --identity "$IDENTITY" > "$RUNNER_TEMP/identity.json"
+          python3 tools/release/workflow.py outputs --record "$RUNNER_TEMP/identity.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: release-identity
+          path: ${{ runner.temp }}/identity.json
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            part: server
+          - runner: macos-15
+            part: go-client
+          - runner: ubuntu-24.04
+            part: ts-client
+          - runner: macos-15
+            part: ts-client
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go.mod
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-identity
+          path: ${{ runner.temp }}/release-record
+      - name: Prepare offline image importer
+        if: matrix.part == 'server'
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+      - name: Build native product partition
+        env:
+          PART: ${{ matrix.part }}
+        run: python3 tools/release/build_part.py --record "$RUNNER_TEMP/release-record/identity.json" --part "$PART" --output "$RUNNER_TEMP/product"
+      - name: Smoke test frozen package bytes
+        run: python3 tools/release/smoke.py --record "$RUNNER_TEMP/release-record/identity.json" --directory "$RUNNER_TEMP/product"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: product-${{ matrix.part }}-${{ matrix.runner }}
+          path: ${{ runner.temp }}/product/*
+          if-no-files-found: error
+          retention-days: 90
+  publish:
+    needs: [resolve, build]
+    if: always() && needs.resolve.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+      RELEASE_SIGNING_KEY_ID: ${{ vars.RELEASE_GPG_KEY_ID }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-checks: read
+          permission-administration: read
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Configure ephemeral release signing
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          printf 'GH_TOKEN=%s\n' "$APP_TOKEN" >> "$GITHUB_ENV"
+          test -n "$SIGNING_KEY"
+          printf '%s' "$SIGNING_KEY" | gpg --batch --import
+          git config user.name 'Loomhelm Release'
+          git config user.email '${{ vars.RELEASE_SIGNING_EMAIL }}'
+          git config gpg.format openpgp
+      - name: Configure bound App Git transport
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: needs.resolve.outputs.build == 'true'
+        with:
+          pattern: product-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/product
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-identity
+          path: ${{ runner.temp }}/release-record
+      - name: Assemble or recover same identity
+        env:
+          IDENTITY: ${{ inputs.identity }}
+          NEW_BUILD: ${{ needs.resolve.outputs.build }}
+        run: |
+          if [ "$NEW_BUILD" = true ]; then
+            python3 tools/release/assemble.py --record "$RUNNER_TEMP/release-record/identity.json" --directory "$RUNNER_TEMP/product"
+          else
+            python3 tools/release/workflow.py recover --record "$RUNNER_TEMP/release-record/identity.json" --directory "$RUNNER_TEMP/product"
+          fi
+      - name: Retain staged metadata before durable inventory claim
+        if: needs.resolve.outputs.state == 'bound'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-inventory
+          path: |
+            ${{ runner.temp }}/product/release-manifest.json
+            ${{ runner.temp }}/product/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 90
+      - name: Persist and publish exact original bytes
+        env:
+          IDENTITY: ${{ inputs.identity }}
+        run: scripts/product-release publish --identity "$IDENTITY" --directory "$RUNNER_TEMP/product"

@@ -1,0 +1,63 @@
+name: Release Failure Notification
+on:
+  workflow_run:
+    workflows: [Manual Release, Release]
+    types: [completed]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: loomhelm-release-failure-sidecar
+  cancel-in-progress: false
+jobs:
+  notify:
+    if: github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+      RELEASE_SIGNING_KEY_ID: ${{ vars.RELEASE_GPG_KEY_ID }}
+    steps:
+      - name: Checkout trusted default-branch notifier only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-checks: read
+          permission-administration: read
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Configure ephemeral release signing
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          printf 'GH_TOKEN=%s\n' "$APP_TOKEN" >> "$GITHUB_ENV"
+          test -n "$SIGNING_KEY"
+          printf '%s' "$SIGNING_KEY" | gpg --batch --import
+          git config user.name 'Loomhelm Release'
+          git config user.email '${{ vars.RELEASE_SIGNING_EMAIL }}'
+          git config gpg.format openpgp
+      - name: Configure bound App Git transport
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
+      - name: Read failure identity as data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        continue-on-error: true
+        with:
+          name: release-identity
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/failed-release-record
+      - name: Reconcile Issue notification
+        run: python3 tools/release/notify_failure.py
