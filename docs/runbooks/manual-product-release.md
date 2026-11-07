@@ -50,3 +50,17 @@ Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 /
 ## 验收边界
 
 PR 的 Product Release Contract 覆盖版本规则、实际裸 Git CAS、状态机和故障注入；Product Package 的 Linux/macOS 任务观察冻结包及 Node 22/24 运行。真实 GitHub publication、Issue 投递、权限和恢复演练必须在实际 Merge Receipt 与 owner 首发 target 授权后完成；本地模拟不能替代。
+
+## Ledger 状态兼容
+
+[状态迁移记录](release-ledger-state.json) 声明无 ref 到 schema 1 的初始化、受支持状态、暂停点与前向恢复边界。未知 schema 拒绝读取；旧版本只支持自己声明的 schema，不自动降级或清空 reservation。
+
+## 部署准备与离线导入
+
+`GITHUB_REPOSITORY=IvanLi-CN/Loomhelm scripts/deploy-product --identity <reservation> --directory <installation-staging-dir>` 只接受签名 ledger 中 completed 且公开的身份，下载并逐项验证完整冻结产物。已有文件 digest 冲突即停止。此步骤需要发布签名公钥验证与只读 GitHub 权限，不需要发布私钥。
+
+在已授权部署主机追加 `--import-images` 会用 skopeo 导入原 OCI archive，核对导入后的 image ID，并生成兼容现有 schema 2 candidate 的 deployment envelope。离线运行使用不可变 `sha256:<config-digest>` 镜像 ID；原 OCI manifest digest 另行保留。正式程序直接使用编译版本，不再把 source SHA 当作运行版本覆盖。此工具只生成 stage/import 回执，不执行 slot promotion，也不能把本地导入回执当作生产部署成功。
+
+PR 包场景使用明确标记的 `0.0.0-ci` 合成版本与零身份检验正式门禁；它不占用产品版本、不成为 baseline，并被公开入口拒绝。
+
+浏览器 OIDC start/callback 与 device verify 是窄范围认证导航，由原有 OIDC state、device code 与 CSRF 校验处理，不能携带 fetch 自定义头，也不被判为兼容业务连接。所有 session、REST 业务、MCP、事件及 Go gateway 请求仍必须通过产品版本门禁；不能用认证导航例外绕过业务路径。

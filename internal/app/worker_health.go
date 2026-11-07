@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"github.com/IvanLi-CN/Loomhelm/internal/buildinfo"
 	"net"
 	"net/http"
 	"time"
@@ -119,7 +120,9 @@ func (w *Worker) handleWorkerReady(writer http.ResponseWriter, _ *http.Request) 
 }
 
 func (w *Worker) handleWorkerVersion(writer http.ResponseWriter, _ *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
 	w.writeWorkerJSON(writer, http.StatusOK, versionResponse{
+		Policy: buildinfo.Policy, Compatibility: "exact-version",
 		Component:          string(w.cfg.Component),
 		Version:            w.cfg.Version,
 		CandidateSourceSHA: w.cfg.CandidateSource(),

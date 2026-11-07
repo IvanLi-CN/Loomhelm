@@ -115,6 +115,9 @@ def inventory(directory, record):
     if {p.name for p in paths} != required or any(not p.is_file() or p.is_symlink() for p in paths):
         raise ReleaseError('incomplete or unsafe product artifact set')
     manifest = json.loads((directory/'release-manifest.json').read_text())
+    Version(record['version'])
+    if record.get('fixture'):
+        raise ReleaseError('PR fixtures cannot be published')
     if (manifest['version'],manifest['source_sha'],manifest['identity'],manifest['policy_hash']) != (record['version'],record['merge_sha'],record['id'],record['intent']['policy_hash']):
         raise ReleaseError('product manifest identity mismatch')
     result = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
@@ -272,8 +275,15 @@ def main():
             run_id = os.environ.get('FAILURE_RUN_ID','')
             if not run_id.isdigit():
                 raise ReleaseError('invalid failed workflow run')
-            issue = api.notify(record,f'https://github.com/{repo}/actions/runs/{run_id}',stage)
-            transition(record,'notification',issue=issue['number'],run=run_id)
+            transition(record,'notification',status='pending',run=run_id,stage=stage)
+            ledger.append(ledger.state)
+            try:
+                issue = api.notify(record,f'https://github.com/{repo}/actions/runs/{run_id}',stage)
+            except ReleaseError:
+                transition(record,'notification',status='failed-or-unknown',run=run_id,stage=stage)
+                ledger.append(ledger.state)
+                raise
+            transition(record,'notification',status='delivered',issue=issue['number'],run=run_id,stage=stage)
             ledger.append(ledger.state)
     print(json.dumps(record,sort_keys=True))
 

@@ -1,5 +1,6 @@
 """Build one frozen product partition on its native runner, from a clean SHA."""
 import argparse
+from contextlib import contextmanager
 import gzip
 import hashlib
 import json
@@ -18,6 +19,18 @@ def run(*args, **kwargs):
     subprocess.run(args,check=True,**kwargs)
 
 
+@contextmanager
+def oci_builder():
+    # A task-owned container driver supports OCI export on stock Actions hosts.
+    with tempfile.TemporaryDirectory(prefix='loomhelm-oci-') as owner:
+        name = Path(owner).name.lower().replace('_', '-')
+        run('docker', 'buildx', 'create', '--name', name, '--driver', 'docker-container')
+        try:
+            yield name
+        finally:
+            run('docker', 'buildx', 'rm', name)
+
+
 def archive(source, output, epoch):
     with output.open('wb') as raw, gzip.GzipFile(fileobj=raw, mode='wb', filename='', mtime=0) as compressed, tarfile.open(fileobj=compressed, mode='w') as tar:
         def normalize(info):
@@ -31,8 +44,15 @@ def archive(source, output, epoch):
 def build(record, part, output):
     os.chdir(ROOT)
     sha=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
-    if record['state']!='bound' or record['merge_sha']!=sha or check_projections()!=record['version']:
+    fixture = record.get('fixture') is True and record['id'] == '0'*64 and record['version'] == '0.0.0-ci'
+    projected = check_projections()
+    if record['state']!='bound' or record['merge_sha']!=sha or (not fixture and (projected == 'dev' or projected!=record['version'])):
         raise ReleaseError('build source/identity mismatch')
+    # PR-only synthetic version proves formal guards without allocating a release.
+    # Real publication records cannot enable this path or use this version source.
+    os.environ.pop('LOOMHELM_FIXTURE_BUILD_VERSION', None)
+    if fixture:
+        os.environ['LOOMHELM_FIXTURE_BUILD_VERSION'] = record['version']
     if subprocess.check_output(['git','status','--porcelain']):
         raise ReleaseError('build requires a clean source checkout')
     if output.exists(): raise ReleaseError('refusing to overwrite product output')
@@ -51,16 +71,18 @@ def build(record, part, output):
             archive(client,output/'go-client-linux-amd64.tar.gz',epoch)
             images= candidate/'images';images.mkdir()
             receipts={}
-            for component in ('server','worker'):
-                context=stage/component;context.mkdir()
-                shutil.copy2(candidate/'bin'/component,context/component)
-                (context/'Dockerfile').write_text(f'FROM scratch\nCOPY {component} /{component}\nUSER 65532:65532\nENTRYPOINT ["/{component}"]\n')
-                path=images/(component+'.oci.tar')
-                run('docker','buildx','build','--platform','linux/amd64','--provenance=false','--output','type=oci,dest='+str(path),str(context))
-                with tarfile.open(path) as tar:
-                    index=json.load(tar.extractfile('index.json'))
-                    receipts[component]=dict(archive=path.name,manifest_digest=index['manifests'][0]['digest'],sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-                # Load the same OCI artifact for the native smoke test, no rebuild.
+            with oci_builder() as builder:
+                for component in ('server','worker'):
+                    context=stage/component;context.mkdir()
+                    shutil.copy2(candidate/'bin'/component,context/component)
+                    shutil.copy2('/etc/ssl/certs/ca-certificates.crt',context/'ca-certificates.crt')
+                    (context/'Dockerfile').write_text(f'FROM scratch\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nCOPY {component} /{component}\nUSER 65532:65532\nENTRYPOINT ["/{component}"]\n')
+                    path=images/(component+'.oci.tar')
+                    run('docker','buildx','build','--builder',builder,'--platform','linux/amd64','--provenance=false','--output','type=oci,dest='+str(path),str(context))
+                    with tarfile.open(path) as tar:
+                        index=json.load(tar.extractfile('index.json'))
+                        receipts[component]=dict(archive=path.name,manifest_digest=index['manifests'][0]['digest'],sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+                    # Load the same OCI artifact for the native smoke test, no rebuild.
             (images/'images.json').write_bytes(canonical(receipts)+b'\n')
             archive(candidate,output/'server-linux-amd64.tar.gz',epoch)
         elif part=='go-client':

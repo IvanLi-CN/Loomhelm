@@ -84,7 +84,7 @@ class Ledger:
 
 
 def event(record, kind, **fields):
-    record['events'].append(dict(sequence=len(record['events'])+1, kind=kind, **fields))
+    record['events'].append(dict(sequence=len(record['events'])+1, kind=kind, workflow_run=os.environ.get('GITHUB_RUN_ID'), workflow_attempt=os.environ.get('GITHUB_RUN_ATTEMPT'), **fields))
 
 
 def transition(record, kind, **fields):

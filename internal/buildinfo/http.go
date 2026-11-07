@@ -22,6 +22,21 @@ func Guard(version string, next http.Handler) http.Handler {
 	})
 }
 
+// ApplicationGuard leaves only browser authentication navigation to its own
+// OIDC state/device-code validation. It never treats that navigation as a
+// compatible business connection. All session/business APIs still use Guard.
+func ApplicationGuard(version string, next http.Handler) http.Handler {
+	guarded := Guard(version, next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		navigation := (r.Method == http.MethodGet && (r.URL.Path == "/api/v1/auth/oidc/start" || r.URL.Path == "/api/v1/auth/oidc/callback")) || ((r.Method == http.MethodGet || r.Method == http.MethodPost) && r.URL.Path == "/api/v1/auth/device/verify")
+		if navigation {
+			next.ServeHTTP(w, r)
+			return
+		}
+		guarded.ServeHTTP(w, r)
+	})
+}
+
 // CheckServer is run on each new connection; credentials are not sent to /version.
 func CheckServer(ctx context.Context, client *http.Client, endpoint string) error {
 	if Version == "dev" {

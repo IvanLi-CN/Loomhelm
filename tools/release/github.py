@@ -67,10 +67,17 @@ class GitHub:
         comparison = self.api('compare/'+sha+'...main')
         if comparison['status'] not in ('ahead','identical'):
             raise ReleaseError('source is outside main history')
-        checks = self.api('commits/'+sha+'/check-runs?per_page=100')['check_runs']
+        checks = []
+        page = 1
+        while True:
+            batch = self.api('commits/'+sha+f'/check-runs?per_page=100&page={page}')['check_runs']
+            checks.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
         for name in required_checks:
             matches = [c for c in checks if c['name'] == name]
-            if not matches or matches[0]['head_sha'] != sha or matches[0]['conclusion'] != 'success':
+            if not matches or matches[0]['head_sha'] != sha or matches[0]['conclusion'] != 'success' or matches[0]['status'] != 'completed' or matches[0]['app']['slug'] != 'github-actions':
                 raise ReleaseError('source check missing or unsuccessful: '+name)
 
     def asset_bytes(self, asset):
@@ -91,7 +98,7 @@ class GitHub:
         release = self.release(record['version'])
         marker = 'Loomhelm release identity: '+record['id']
         if release:
-            if release['body'] != marker or release['target_commitish'] != record['merge_sha']:
+            if release['body'] != marker or release['target_commitish'] != record['merge_sha'] or release['prerelease'] != ('-' in record['version']):
                 raise ReleaseError('Release belongs to another identity')
             return release
         self.ensure_tag(record['version'], record['merge_sha'])

@@ -15,7 +15,7 @@ import (
 var (
 	sha40Pattern  = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	imagePattern  = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$`)
+	imagePattern  = regexp.MustCompile(`^(?:[A-Za-z0-9._/:@-]+@)?sha256:[0-9a-f]{64}$`)
 )
 
 // Envelope is the stable deployment-facing projection of candidate schema 2.

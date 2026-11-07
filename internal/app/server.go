@@ -352,7 +352,7 @@ func withListenerCloseError(base, closeErr error) error {
 }
 
 func (s *Server) registerRoutes() {
-	s.router.Mount("/api/v1", buildinfo.Guard(buildinfo.Version, http.HandlerFunc(s.handleApplication)))
+	s.router.Mount("/api/v1", buildinfo.ApplicationGuard(buildinfo.Version, http.HandlerFunc(s.handleApplication)))
 	s.router.Handle("/mcp", buildinfo.Guard(buildinfo.Version, http.HandlerFunc(s.handleMCP)))
 	s.router.Handle(connectorGatewayPath, buildinfo.Guard(buildinfo.Version, http.HandlerFunc(s.handleGateway)))
 	s.router.Get("/livez", s.handleLive)

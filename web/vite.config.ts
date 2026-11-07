@@ -9,7 +9,7 @@ import { defineConfig, loadEnv } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 const webRoot = path.dirname(fileURLToPath(import.meta.url));
-const productBuild = { version: readFileSync(path.resolve(webRoot, "../VERSION"), "utf8").trim(), source_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: webRoot, encoding: "utf8" }).trim(), policy: "loomhelm-manual-v1" };
+const productBuild = { version: process.env.LOOMHELM_FIXTURE_BUILD_VERSION === "0.0.0-ci" ? "0.0.0-ci" : readFileSync(path.resolve(webRoot, "../VERSION"), "utf8").trim(), source_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: webRoot, encoding: "utf8" }).trim(), policy: "loomhelm-manual-v1" };
 const isStorybook = process.env.STORYBOOK === "true";
 
 export default defineConfig(({ mode }) => {
