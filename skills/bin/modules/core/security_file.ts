@@ -9,14 +9,14 @@ import {
   statSync,
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { dlopen, FFIType, ptr } from "bun:ffi";
+import { dlopen, FFIType } from "bun:ffi";
 
 interface PosixLibrary {
   symbols: {
     flock(fd: number, operation: number): number;
     openat(
       directoryFd: number,
-      path: number,
+      path: Uint8Array,
       flags: number,
       mode: number,
     ): number;
@@ -101,7 +101,7 @@ export async function readRegularNoFollow(path: string): Promise<Uint8Array> {
     const fileName = new TextEncoder().encode(`${basename(absolute)}\0`);
     const fd = api.symbols.openat(
       parent.fd,
-      ptr(fileName),
+      fileName,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
       0,
     );
@@ -167,7 +167,7 @@ export function tryLockFile(
       : 0;
     fd = api.symbols.openat(
       parentFd,
-      ptr(fileName),
+      fileName,
       createFlags | constants.O_RDWR | constants.O_NOFOLLOW,
       createIfMissing ? 0o600 : 0,
     );
@@ -175,7 +175,7 @@ export function tryLockFile(
     if (fd < 0 && createIfMissing) {
       fd = api.symbols.openat(
         parentFd,
-        ptr(fileName),
+        fileName,
         constants.O_RDWR | constants.O_NOFOLLOW,
         0,
       );

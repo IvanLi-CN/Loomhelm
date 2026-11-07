@@ -54,7 +54,7 @@ Defaults:
 ## Script
 
 - Path: `skills/global-port-manager/scripts/port_registry.ts`
-- Production runtime: Node.js 22/24 or Bun through the packaged client (`skills run skills/global-port-manager/scripts/port_registry.ts <arguments>`). Bun is not required when using the Node.js client.
+- Production runtime: Bun 1.4.4 directly executes the original TS script through the packaged client (`skills run skills/global-port-manager/scripts/port_registry.ts <arguments>`). Node.js and compiled JS entrypoints are unsupported.
 - The raw TypeScript examples below use Bun for source-development convenience; they do not declare a production dependency on Bun.
 
 Common flags:

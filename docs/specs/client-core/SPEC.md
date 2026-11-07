@@ -32,7 +32,7 @@ Task MUST 具备目标、范围、验收条件、依赖和稳定身份。相同 
 
 ### VER-CORE-001
 
-- Method: Bun 源码入口配置与 CLI 集成验证。
+- Method: 固定 Bun 1.4.4 源码入口配置与 CLI 集成验证。
 - covers: `REQ-CORE-001`
 - Pass condition: 无服务端通过实际 Bun 子进程直接执行 TS CLI 完成任务生命周期，非法配置被拒绝，测试不得调用旧 dist 入口。
 

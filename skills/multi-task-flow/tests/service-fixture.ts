@@ -31,3 +31,13 @@ export function fixtureRun(root: string, id = "demo-run") {
   const store = new LedgerStore(root, id); store.create(run);
   return { run, store };
 }
+
+export function fixtureLegacyRelease(root: string) {
+  const source = join(root, "legacy-bundle");
+  const names = ["viewer", "dist/index.html", "dist/app.js", "dist/app.css"];
+  for (const file of names) { mkdirSync(dirname(join(source,file)), {recursive:true}); writeFileSync(join(source,file), file); }
+  const body = {schema_version:1 as const, source_sha:"a".repeat(40), service_version:"0.0.0-test", platform:`${process.platform}-${process.arch}` as "darwin-arm64" | "linux-x64", ...compatibility, files:Object.fromEntries(names.map(file => [file,digest(file)]))};
+  const manifest = {...body,build_id:buildId(body)};
+  writeFileSync(join(source,"manifest.json"),JSON.stringify(manifest));
+  return {source,manifest};
+}

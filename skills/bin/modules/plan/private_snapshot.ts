@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { CString, dlopen, FFIType, ptr } from "bun:ffi";
+import { CString, dlopen, FFIType } from "bun:ffi";
 
 export interface PrivateSnapshot {
   path: string;
@@ -72,11 +72,11 @@ interface PosixLibrary {
   symbols: {
     openat(
       directoryFd: number,
-      path: number,
+      path: Uint8Array,
       flags: number,
       mode: number,
     ): number;
-    unlinkat(directoryFd: number, path: number, flags: number): number;
+    unlinkat(directoryFd: number, path: Uint8Array, flags: number): number;
     dup(fileDescriptor: number): number;
     fdopendir(fileDescriptor: number): number;
     readdir(directory: number): number;
@@ -133,8 +133,9 @@ function loadPosix(): PosixLibrary {
   throw new Error("DEV_PLAN_TEMP_NATIVE_LIBRARY_UNAVAILABLE");
 }
 
-function cString(value: string): number {
-  return ptr(new TextEncoder().encode(value + "\0"));
+// Pass the owning buffer to Bun FFI; a bare pointer cannot keep it alive.
+function cString(value: string): Uint8Array {
+  return new TextEncoder().encode(value + "\0");
 }
 
 function directoryFlags(): number {

@@ -12,24 +12,24 @@ import {
 import { lstat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dlopen, FFIType, ptr } from "bun:ffi";
+import { dlopen, FFIType } from "bun:ffi";
 import { assertDirectoryIdentity } from "./parent_identity";
 
 interface PosixLibrary {
   symbols: {
     openat(
       directoryFd: number,
-      path: number,
+      path: Uint8Array,
       flags: number,
       mode: number,
     ): number;
     renameat(
       oldDirectoryFd: number,
-      oldPath: number,
+      oldPath: Uint8Array,
       newDirectoryFd: number,
-      newPath: number,
+      newPath: Uint8Array,
     ): number;
-    unlinkat(directoryFd: number, path: number, flags: number): number;
+    unlinkat(directoryFd: number, path: Uint8Array, flags: number): number;
     close(fd: number): number;
   };
 }
@@ -75,8 +75,9 @@ function loadPosix(): PosixLibrary {
   throw new Error("native_library_unavailable");
 }
 
-function cString(value: string): number {
-  return ptr(new TextEncoder().encode(`${value}\0`));
+// Pass the owning buffer to Bun FFI; a bare pointer cannot keep it alive.
+function cString(value: string): Uint8Array {
+  return new TextEncoder().encode(`${value}\0`);
 }
 
 function openAt(

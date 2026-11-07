@@ -1,6 +1,6 @@
 import { dlopen, FFIType } from "bun:ffi";
 
-type RenameLibrary = { symbols: { renameat2: (...args: number[]) => number } };
+type RenameLibrary = { symbols: { renameat2: (...args: (number | Uint8Array)[]) => number } };
 
 let renameLibrary: RenameLibrary | undefined;
 
@@ -11,7 +11,7 @@ export function linuxLibraries(): string[] {
   return ["libc.so.6", ...(arch ? [`libc.musl-${arch}.so.1`] : []), "libc.so"];
 }
 
-export function loadRenameAt2(): (...args: number[]) => number {
+export function loadRenameAt2(): (...args: (number | Uint8Array)[]) => number {
   if (renameLibrary) return renameLibrary.symbols.renameat2;
   for (const library of linuxLibraries()) {
     try {

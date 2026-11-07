@@ -162,6 +162,7 @@ export async function switchRelease(
         const manifest = rollback
           ? verifyRelease(join(state.paths.releases, selected!))
           : stageRelease(state, resolve(source));
+        requireSourceRelease(manifest);
         checkDataCompatibility(state, manifest, approval);
         if (manifest.build_id === old.current_build)
           return { build_id: manifest.build_id, changed: false };
@@ -218,7 +219,9 @@ export async function switchRelease(
               (lease) => lease.id !== "maintenance",
             );
           });
-          if (wasRunning) {
+          // Recovery may restore old configuration, but cannot launch a legacy v1 package.
+          const restartPrevious = wasRunning && verifyRelease(join(state.paths.releases, old.current_build)).schema_version === 2;
+          if (restartPrevious) {
             state.renew(
               {
                 id: "maintenance",
