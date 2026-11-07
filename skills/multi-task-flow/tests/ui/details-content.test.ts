@@ -71,6 +71,17 @@ describe("dashboard details content", () => {
     expect(content).toContain("父 PR 合并");
     expect(content).toContain("父 PR 已合并 merged");
     expect(content).toContain("edge-merge-task");
+
+    let retries = 0;
+    Object.assign(view.tasks[0]!, { state: "agent_idle", thread_id: "thread-task", conversation_resource: { id: "conversation-task", kind: "conversation", target: "thread-task", status: "archive_failed", evidence_ref: "archive-error", error: "archive refused", last_attempt_at: "2026-01-01T00:00:00.000Z", operation_id: "archive-1" } });
+    const archiveDetails = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "执行中", time: () => "未知", safeExternal: () => null, groupRange: () => ({ start: null, end: null }), archiveConversation: () => { retries++; } });
+    Object.assign(view.tasks[0]!, { latest_agent_output: { observed_at: "2026-01-01T00:00:00Z", turn_id: "older-public-turn", runtime_turn_id: "latest-runtime-turn", agent_state: "idle", state: "empty", stale: false } });
+    archiveDetails.showTask(view.tasks[0]!);
+    expect(document.getElementById("details-content")?.textContent).toContain("观察 Turnlatest-runtime-turn");
+    expect(document.getElementById("details-content")?.textContent).not.toContain("older-public-turn");
+    expect(document.getElementById("details-content")?.textContent).toContain("archive refused");
+    (document.querySelector(".detail-action") as HTMLButtonElement).click();
+    expect(retries).toBe(1);
   });
 
   test("renders path provenance and hidden plan boundaries without flattening conditions", () => {

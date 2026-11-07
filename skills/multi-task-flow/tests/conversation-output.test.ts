@@ -8,7 +8,7 @@ function fixture(read: (method: string, params: JsonRecord) => Promise<JsonRecor
   let lost!: () => void;
   let closed = 0;
   let connections = 0;
-  const connect: ConnectObserver = async (n, c) => { notify = n; lost = c; connections++; return { request: (method, params) => method === "thread/read" ? Promise.resolve({ thread: { name: "真实对话标题" } }) : read(method, params), close: () => { closed++; c(); } }; };
+  const connect: ConnectObserver = async (n, c) => { notify = n; lost = c; connections++; return { request: (method, params) => method === "thread/read" ? read(method, params).then(value => ({ ...value, thread: { name: "真实对话标题", ...(value.thread as JsonRecord ?? {}) } })) : read(method, params), close: () => { closed++; c(); } }; };
   const published: unknown[] = [];
   const provider = new ConversationOutputs(s => published.push(s), connect, 20);
   provider.bind([{ id: "a", thread_id: "thread" }, { id: "b", thread_id: "thread" }, { id: "none", thread_id: null }]);
@@ -30,7 +30,7 @@ describe("conversation output projection", () => {
   });
   test("paginates past tools and whitespace, deduplicates bound threads", async () => {
     const calls: JsonRecord[] = [];
-    const f = fixture(async (_m, params) => { calls.push(params); return params.cursor ? { data: [message("latest", "progress"), message("older", "old")] } : { data: [message("blank", " "), { item: { type: "reasoning", text: "hidden" } }], nextCursor: "page2" }; });
+    const f = fixture(async (_m, params) => { if (_m === "thread/read") return {}; calls.push(params); return params.cursor ? { data: [message("latest", "progress"), message("older", "old")] } : { data: [message("blank", " "), { item: { type: "reasoning", text: "hidden" } }], nextCursor: "page2" }; });
     try {
       await tick();
       expect(calls).toHaveLength(2);
@@ -56,9 +56,53 @@ describe("conversation output projection", () => {
     }
     expect(messageOutput("thread", { ...message("saved", "final"), completedAtMs: 0 })?.message_status).toBe("completed");
   });
+  test("marks a confirmed completed turn as agent idle", async () => {
+    const f = fixture(async (method) => method === "thread/read" ? { thread: { status: { type: "idle" } } } : method === "thread/turns/list" ? { data: [{ id: "latest-turn", status: "completed", items: [] }] } : { data: [{ ...message("done", "finished"), completedAtMs: 1 }] });
+    try { await tick(); expect(f.provider.snapshot().outputs.a?.agent_state).toBe("idle");
+        expect(f.provider.snapshot().outputs.a?.runtime_turn_id).toBe("latest-turn");
+        expect(f.provider.snapshot().outputs.a?.observed_at).toBeTruthy(); } finally { f.provider.stop(); }
+  });
+  test("idle requires the latest terminated turn, independently of older public text", async () => {
+    for (const latest of [null, { id: "latest", status: "inProgress" }, { status: "completed" }, { id: "latest", status: "unknown" }, ...["completed", "failed", "interrupted"].map(status => ({ id: "latest", status }))]) {
+      const f = fixture(async method => method === "thread/read" ? { thread: { status: { type: "idle" } } } : method === "thread/turns/list" ? { data: latest ? [latest] : [] } : { data: [{ ...message("old", "older public text"), completedAtMs: 1 }] });
+      try {
+        await tick();
+        const output = f.provider.snapshot().outputs.a!;
+        expect(output.agent_state).toBe(latest?.id && ["completed", "failed", "interrupted"].includes(latest.status!) ? "idle" : "unknown");
+        expect(output.runtime_turn_id).toBe(output.agent_state === "idle" ? "latest" : null);
+        expect(output.turn_id).toBe("turn");
+      } finally { f.provider.stop(); }
+    }
+    const f = fixture();
+    try { await tick(); f.event("thread/status/changed", { status: { type: "idle" } }); expect(f.provider.snapshot().outputs.a?.agent_state).toBe("unknown"); } finally { f.provider.stop(); }
+  });
+  test("terminal turn events expose idle; obsolete turns and unknown runtime do not", async () => {
+    for (const status of ["completed", "interrupted", "failed"]) {
+      const f = fixture();
+      try {
+        await tick();
+        f.event("turn/started", { turn: { id: "new", status: "inProgress" } });
+        expect(f.provider.snapshot().outputs.a?.agent_state).toBe("active");
+        f.event("turn/completed", { turn: { id: "old", status } });
+        expect(f.provider.snapshot().outputs.a?.agent_state).toBe("active");
+        f.event("turn/completed", { turn: { id: "new", status } });
+        expect(f.provider.snapshot().outputs.a?.agent_state).toBe("idle");
+        f.event("thread/status/changed", { status: { type: "notLoaded" } });
+        expect(f.provider.snapshot().outputs.a?.agent_state).toBe("unknown");
+        f.lost();
+        expect(f.provider.snapshot().outputs.a?.stale).toBe(true);
+      } finally { f.provider.stop(); }
+    }
+  });
+  test("completed public messages do not prove an idle runtime", async () => {
+    for (const type of ["active", "notLoaded", "systemError"]) {
+      const f = fixture(async method => method === "thread/read" ? { thread: { status: { type } } } : { data: [{ ...message("done", "final"), completedAtMs: 1 }] });
+      try { await tick(); expect(f.provider.snapshot().outputs.a?.agent_state).toBe(type === "active" ? "active" : "unknown"); } finally { f.provider.stop(); }
+    }
+  });
   test("full turn fallback happens only on an explicit unsupported-method error", async () => {
     const calls: string[] = [];
-    const f = fixture(async (method, params) => { calls.push(method); if (method === "thread/items/list") throw new Error("method not found"); expect(params.itemsView).toBe("full"); return { data: [{ id: "turn", status: "completed", items: [message("old", "old").item, message("new", "final", "final_answer").item] }] }; });
+    const f = fixture(async (method, params) => { if (method === "thread/read") return {}; calls.push(method); if (method === "thread/items/list") throw new Error("method not found"); expect(params.itemsView).toBe("full"); return { data: [{ id: "turn", status: "completed", items: [message("old", "old").item, message("new", "final", "final_answer").item] }] }; });
     try { await tick(); expect(calls).toEqual(["thread/items/list", "thread/turns/list"]); expect(f.provider.snapshot().outputs.a?.text).toBe("final"); } finally { f.provider.stop(); }
   });
   test("streamed text wins over in-flight history; completion replaces deltas and duplicates do not regress", async () => {

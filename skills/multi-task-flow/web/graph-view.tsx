@@ -1,3 +1,4 @@
+import { TreePalm } from 'lucide';
 import React, { memo, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ReactFlow, BaseEdge, Handle, Position, type ReactFlowInstance, type NodeProps, type EdgeProps, type Node, type Edge, MarkerType } from '@xyflow/react';
@@ -7,11 +8,11 @@ import { accessibleNodeLabel, renderAccessibleNodes, highlightAccessibleSelectio
 import { taskKindLabel } from './labels';
 import type { Task } from './model';
 
-type CardData = { title: string; kind: string; state: string; color: string; label: string; ports: {id:string; source:boolean}[]; direction: Direction; group: boolean };
+type CardData = { title: string; kind: string; state: string; idle: boolean; color: string; label: string; ports: {id:string; source:boolean}[]; direction: Direction; group: boolean };
 const Card = memo(function Card({data}: NodeProps) {
   const d = data as unknown as CardData;
   return <div className={d.group ? 'dependency-group' : 'dependency-card'} style={{'--node-color':d.color} as React.CSSProperties}>
-    <div className="dependency-card-meta"><span>{d.kind}</span><span>{d.state}</span></div>
+    <div className="dependency-card-meta"><span>{d.kind}</span><span className={d.idle ? "dependency-state-idle" : undefined}>{d.idle ? <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{TreePalm.map(([tag, props], i) => React.createElement(tag, {...props, key:i}))}</svg> : null}{d.state}</span></div>
     <div className="dependency-card-title">{d.title}</div>
     {d.ports.map(p => <Handle key={p.id} id={p.id} type={p.source?'source':'target'} position={d.direction==='DOWN'?(p.source?Position.Bottom:Position.Top):(p.source?Position.Right:Position.Left)} />)}
   </div>;
@@ -39,7 +40,7 @@ export function createGraphController(context: GraphContext, calculateLayout = l
       ariaLabel: projection ? accessibleNodeLabel(n, projection) : n.title,
       selected:n.nodeKind==='task'?selected.task===n.refId:selected.group===n.refId,
       style:{width,height},
-      data:{title:n.title,group:n.nodeKind==='group',kind:n.nodeKind==='group'?'交付单元':n.nodeKind==='milestone'?'里程碑':taskKindLabel(n.taskKind??'coordination').split(' ')[0],state:n.stateLabel??'',direction,
+      data:{title:n.title,group:n.nodeKind==='group',kind:n.nodeKind==='group'?'交付单元':n.nodeKind==='milestone'?'里程碑':taskKindLabel(n.taskKind??'coordination').split(' ')[0],state:n.stateLabel??'',idle:n.state==='agent_idle',direction,
         color:n.nodeKind==='group'?context.groupColor(n.groupId):n.state?context.stateColor(n.state):context.css('--accent','#5889c4'),
         ports:(projection?.edges??[]).filter(e=>e.source===n.id||e.target===n.id).map(e=>({id:`port:${e.id}:${e.source===n.id?'source':'target'}`,source:e.source===n.id})),},
     }));

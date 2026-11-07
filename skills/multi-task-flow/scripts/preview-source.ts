@@ -15,6 +15,7 @@ import { singleDeliveryUnitObserver } from "../examples/single-delivery-unit/out
 import { createSingleDeliveryUnitLedger, singleDeliveryUnitName } from "../examples/single-delivery-unit/ledger";
 import {
   createViewerValidationLedger,
+  createIdleArchiveExample,
   viewerValidationName,
 } from "../examples/orchestration-viewer";
 import { ServiceState } from "./service-state";
@@ -67,9 +68,13 @@ const state = new ServiceState(
 state.initialize();
 const auth = new ServiceAuth(state);
 auth.initialize();
+const scenarioIndex = process.argv.indexOf("--scenario");
+const scenario = scenarioIndex < 0 ? "default" : process.argv[scenarioIndex + 1];
+if (!["default", "agent-idle-archive"].includes(scenario ?? "")) throw new Error("Unknown preview scenario");
+const example = scenario === "agent-idle-archive" ? createIdleArchiveExample() : null;
 const singleUnit = process.argv.includes("--single-delivery-unit");
-const run = singleUnit ? createSingleDeliveryUnitLedger() : createViewerValidationLedger();
-if (!singleUnit) {
+const run = example?.ledger ?? (singleUnit ? createSingleDeliveryUnitLedger() : createViewerValidationLedger());
+if (!singleUnit && !example) {
 // Exercise the authenticated PR query against the actual candidate alongside unbound cards.
 run.repository = { ...run.repository, host: "github.com", owner: "IvanLi-CN", name: "Loomhelm" };
 const prExample = run.tasks.find(task => task.id === "ledger");
@@ -135,7 +140,8 @@ state.renew(
 let revision = createHash("sha256").update(JSON.stringify(files)).digest("hex");
 const daemon = await runDaemon(state, {
   manifest,
-  name: singleUnit ? singleDeliveryUnitName : viewerValidationName,
+  name: example ? "Agent 空闲与对话归档示例" : singleUnit ? singleDeliveryUnitName : viewerValidationName,
+  demoHooks: example?.dashboard,
   assetsDir,
   revision: () => revision,
   connectObserver: singleUnit ? singleDeliveryUnitObserver(run) : undefined,
@@ -193,7 +199,7 @@ process.once("SIGINT", stop);
 console.log(
   JSON.stringify({
     mode: "source-preview",
-    name: singleUnit ? singleDeliveryUnitName : viewerValidationName,
+    name: example ? "Agent 空闲与对话归档示例" : singleUnit ? singleDeliveryUnitName : viewerValidationName,
     run_id: run.orchestration_id,
     root,
     pid: process.pid,

@@ -128,9 +128,9 @@ export async function startSharedViewer(
   port: number,
   sourceRevision?: () => string,
   sourceName?: string,
-  sourceObserver?: ConnectObserver,
+  demoHooks?: ConnectObserver | Pick<import("./server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">,
 ) {
-  if ((sourceRevision || sourceObserver) && !state.paths.isolated)
+  if ((sourceRevision || demoHooks) && !state.paths.isolated)
     throw new ContractError(
       "INVALID_PROFILE",
       "Source reload requires an isolated profile",
@@ -158,7 +158,7 @@ export async function startSharedViewer(
       runId: id,
       port,
       assetsDir: assets.path,
-      connectObserver: sourceObserver,
+      ...(typeof demoHooks === "function" ? { connectObserver: demoHooks } : demoHooks),
     });
     resources.set(id, run);
     return run;

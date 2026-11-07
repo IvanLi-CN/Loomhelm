@@ -345,12 +345,14 @@ export const task = z
       "ready",
       "starting",
       "running",
+      "agent_idle",
       "waiting",
       "blocked",
       "integrated",
       "completed",
       "closed",
     ]),
+    agent_resume_state: z.enum(["starting", "running"]).optional(),
     disposition: z
       .enum(["active", "superseded", "abandoned"])
       .default("active"),
@@ -483,6 +485,7 @@ const eventType = z.enum([
   "task_started",
   "task_waiting",
   "task_resumed",
+  "task_runtime_observed",
   "task_blocked",
   "task_rebased",
   "task_integrated",
@@ -644,9 +647,17 @@ export const ledgerSchema = z
             "active",
             "pending",
             "closed",
+            "archive_failed",
+            "archive_unknown",
+            "unarchive_failed",
+            "unarchive_unknown",
             "not_applicable",
           ]),
           evidence_ref: nullableText,
+          error: nullableText.optional(),
+          last_attempt_at: timestamp.nullable().optional(),
+          operation_id: nullableText.optional(),
+          archive_policy: z.enum(["auto", "manual"]).optional(),
         })
         .strict(),
     ),
@@ -717,6 +728,7 @@ function sameMembers(left: string[], right: string[]): boolean {
 }
 
 const taskStateEventTypes = new Set([
+  "task_runtime_observed",
   "task_started",
   "task_waiting",
   "task_resumed",
@@ -753,6 +765,7 @@ function taskStateAtEvent(
           "ready",
           "starting",
           "running",
+          "agent_idle",
           "waiting",
           "blocked",
           "integrated",

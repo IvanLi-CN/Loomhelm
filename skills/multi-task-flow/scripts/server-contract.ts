@@ -1,3 +1,4 @@
+import type { ArchiveProvider } from "./conversation-archive";
 import type { ConnectObserver } from "./conversation-output";
 import type { ProfileCapabilities } from "./execution-profile";
 
@@ -9,6 +10,7 @@ export type DashboardOptions = {
   assetsDir: string;
   demoFrame?: boolean;
   connectObserver?: ConnectObserver;
+  archiveProvider?: ArchiveProvider;
   readOnly?: boolean;
   getProfileCapabilities?: () => Promise<ProfileCapabilities>;
 };

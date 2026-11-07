@@ -24,7 +24,7 @@ const brand=document.querySelector(".brand-mark");
 if(brand){
   const home=document.createElement("a");
   home.className=brand.className;home.href="/";
-  home.setAttribute("aria-label","全部编排运行");home.title="全部编排运行";
+  home.setAttribute("aria-label","全部编排运行");home.dataset.tooltip="全部编排运行";
   home.append(...brand.childNodes);brand.replaceWith(home);
 }
 async function renew(){
@@ -36,7 +36,7 @@ async function renew(){
 fetch("api/service").then(r=>r.ok?r.json():null).then(v=>{
   if(!v)return;
   const home=document.querySelector(".brand-mark");
-  if(home)home.title="全部编排运行 · build "+v.build_id;
+  if(home)home.dataset.tooltip="全部编排运行 · build "+v.build_id;
   if(v.warning){
     const anchor=document.getElementById("connection-notice");
     if(anchor){const notice=document.createElement("div");notice.className="notice notice-warning";notice.setAttribute("role","status");notice.textContent=v.warning;anchor.after(notice)}
