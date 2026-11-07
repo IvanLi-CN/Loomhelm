@@ -565,6 +565,8 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .resource-action[aria-disabled=true] { opacity: .5; }
 .resource-icon-button, .resource-link-button { display: inline-grid; place-items: center; width: 30px; height: 30px; min-height: 30px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: transparent; color: var(--muted); }
 .resource-icon-button:hover, .resource-link-button:hover { background: var(--active); color: var(--text); border-color: var(--control); }
+.resource-popover button.resource-refresh-button { border-color: transparent; background: transparent; }
+.resource-popover button.resource-refresh-button:hover { border-color: transparent; background: transparent; color: var(--text); }
 .resource-icon-button svg, .resource-link-button svg { width: 14px; height: 14px; }
 .resource-icon-button[data-feedback="已复制"] { color: var(--positive); border-color: var(--positive); }
 .resource-icon-button[data-feedback="复制失败"] { color: var(--negative); border-color: var(--negative); }
