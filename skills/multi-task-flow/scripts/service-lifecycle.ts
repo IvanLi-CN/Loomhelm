@@ -155,7 +155,9 @@ export async function runDaemon(
   const manifest =
     source?.manifest ??
     verifyRelease(join(state.paths.releases, config.current_build));
-  requireSourceRelease(manifest);
+  // Isolated live-source previews use metadata, not an installed release package.
+  // Installed services must still reject legacy executable bundles.
+  if (!source) requireSourceRelease(manifest);
   const lifetime = tryLockFile(join(state.paths.state, "instance.lock"));
   requireCondition(
     lifetime,
