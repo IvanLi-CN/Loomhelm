@@ -15658,7 +15658,7 @@
     },
     {
       "path": "skills/scripts/check-client-skills.mjs",
-      "installedSha256": "465ea9d20433bc9fb019e0a7b94565bebe9ce208ebe1dbe280605bdbfdd2eb28"
+      "installedSha256": "238419122862863050ef42837c42cb0970cb0ee8c42b46047a388c180931df24"
     },
     {
       "path": "skills/scripts/check-skills-installation.mjs",
@@ -15698,7 +15698,7 @@
     },
     {
       "path": "skills/support-manifest.json",
-      "installedSha256": "1a24341b2ee100a6a886d29af56bb3b67e608252b17c220dc4b1fef78a56b193"
+      "installedSha256": "b18d488e113462d6c93e361cf3c371e4bb4087e5e26ff276aee54dbac1ce72af"
     },
     {
       "path": "skills/multi-task-flow/examples/single-delivery-unit/README.md",
@@ -15739,6 +15739,58 @@
     {
       "path": "skills/scripts/test-viewer-source.mjs",
       "installedSha256": "e4dbb919e542009b69442369c15ace69bae0b9aa40a4820b0011ec8d0a7a6dfe"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-board-group-time-desktop.png",
+      "installedSha256": "0e92bb1c8d18b20d1818dbb18914ad38c6e03d3cf80c5525a7be713578f48205"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-board-group-time-mobile.png",
+      "installedSha256": "38d77282639a501c2f59f3510e9b16bbe7b7fc349d8c194d695aebf8d9556876"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-board-time-mobile.png",
+      "installedSha256": "e981b4f32082cb9710dad6d6b3be87ff6d9e28ff750ad992c191798ee3e2036f"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-conversation-desktop.png",
+      "installedSha256": "995b737ee7f01fc8627d6197f8514f4e0e1c192993757e326ae95f0e9db55746"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-pr-desktop.png",
+      "installedSha256": "c549dc50625fda61cb757370a734ce62b0d2419833a991b27ad7573564e89d58"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-time-desktop.png",
+      "installedSha256": "e167b8406f154629ff950674ead7dd265e4df3337cd79771f549428e3bb5a21e"
+    },
+    {
+      "path": "skills/multi-task-flow/scripts/pr-details.ts",
+      "installedSha256": "30eb60c6483a71038a4c9e06e923c5085113756a8b987195e8c9fdcbb97b9a7c"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/pr-details.test.ts",
+      "installedSha256": "225390d0f70891821fdbb135a5204a3bc8564bf8e9389eeb85a6cc285c39513b"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/ui/pr-status.test.ts",
+      "installedSha256": "98e8e69fc0830768585cb652dac5bf8953294ee3a6ef8f055893e6c25843f07a"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/ui/resource-popover.test.ts",
+      "installedSha256": "3bafd1a6c886970f9ee04115041df2090d899d004c48650dd8d23912fd51f715"
+    },
+    {
+      "path": "skills/multi-task-flow/web/pr-status.ts",
+      "installedSha256": "1b0945b3df1921b6166041ea3a957f66834e11589a7df09b0b5d4c637955fdcb"
+    },
+    {
+      "path": "skills/multi-task-flow/web/resource-popover.ts",
+      "installedSha256": "f057fd11374a5404402fa5821cdcc1ebe73cbffe59554520a9ac8b17d6e0e402"
+    },
+    {
+      "path": "skills/multi-task-flow/web/unbound-pr-hint.ts",
+      "installedSha256": "5d4c6ea399d9f17d54bdced6c6b98fb5eaa55e82f559c88e7fb7efde470819d3"
     },
     {
       "path": "skills/bin/modules/core/runtime.ts",

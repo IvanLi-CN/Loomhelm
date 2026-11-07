@@ -20,5 +20,18 @@
   "skills/multi-task-flow/web/graph-view.tsx",
   "skills/multi-task-flow/tests/ui/graph-controller.test.tsx",
   "skills/scripts/package-source.mjs",
-  "skills/scripts/test-viewer-source.mjs"
+  "skills/scripts/test-viewer-source.mjs",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-board-group-time-desktop.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-board-group-time-mobile.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-board-time-mobile.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-conversation-desktop.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-pr-desktop.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-time-desktop.png",
+  "skills/multi-task-flow/scripts/pr-details.ts",
+  "skills/multi-task-flow/tests/pr-details.test.ts",
+  "skills/multi-task-flow/tests/ui/pr-status.test.ts",
+  "skills/multi-task-flow/tests/ui/resource-popover.test.ts",
+  "skills/multi-task-flow/web/pr-status.ts",
+  "skills/multi-task-flow/web/resource-popover.ts",
+  "skills/multi-task-flow/web/unbound-pr-hint.ts"
 ]
