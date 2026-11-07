@@ -18,7 +18,7 @@
 
 ### REQ-SKILLS-002
 
-生产命令、计划校验与本地网页服务 MUST 在 Node.js 22/24 和 Bun 下遵守相同的输入、退出码、副作用及恢复合同。构建和原始测试允许使用 Bun；Node 生产路径不得调用 Bun 作为隐藏兜底。
+生产命令、计划校验与本地网页服务 MUST 仅使用固定 Bun 1.4.4 直接执行 TypeScript 源码，保持输入、退出码、副作用及恢复合同。生产入口 MUST NOT 依赖预生成的 JavaScript、自建 Node-API 模块或安装时 C 编译；类型检查不得发射生产 JavaScript，浏览器资源构建独立保留。
 
 ### REQ-SKILLS-003
 
@@ -55,13 +55,13 @@
 ### VER-SKILLS-002
 
 - covers: `REQ-SKILLS-002`
-- Method: Node.js 22/24 与 Bun 生产命令矩阵及迁入原始测试。
-- Pass condition: 同一合同输入结果一致，Node 路径不使用 Bun 兜底。
+- Method: Bun 纯源码隔离安装、正式入口与迁入原始测试。
+- Pass condition: 无生成服务端 JavaScript 或 posix.node 时正式命令可运行，依赖缺失准确失败，既有输入输出合同不变。
 
 ### VER-SKILLS-003
 
 - covers: `REQ-SKILLS-003`
-- Method: POSIX 安全故障注入与旧 Bun/新 Node 跨进程竞争。
+- Method: POSIX 安全故障注入与旧上游 Bun/当前 Bun 跨进程竞争。
 - Pass condition: 同时至多一名合法持锁者，目标身份变化或越界失败关闭，不覆盖已存在目标。
 
 ### VER-SKILLS-004
@@ -100,8 +100,7 @@
 
 ## Related ADRs
 
-- [TypeScript 客户端运行时](../../adr/0017-typescript-client-runtime.md)
-- [迁入执行支持与 POSIX 适配](../../adr/0019-client-skills-runtime.md)
+- [Bun 直接运行客户端与 Skills](../../adr/0020-bun-source-runtime.md)
 
 ## References
 

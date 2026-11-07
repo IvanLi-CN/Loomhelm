@@ -12,9 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dlopen, FFIType, ptr } from "./modules/core/posix";
-import * as snapshotSupport from "./modules/plan/private_snapshot";
-import * as reviewSupport from "./modules/plan/review";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 
 interface PrivateSnapshot {
   path: string;
@@ -329,7 +327,14 @@ async function main(): Promise<number> {
         throw new Error("DEV_PLAN_SOURCE_TYPE_FORBIDDEN: " + sourcePath);
       modulesFd = openAt(sourceFd, "modules", directoryFlags());
       planFd = openAt(modulesFd, "plan", directoryFlags());
-      privateSnapshotModule = snapshotSupport;
+      const privateSnapshotSource = readCandidateFile(
+        join(sourcePath, "modules/plan"),
+        planFd,
+        "private_snapshot.ts",
+      );
+      privateSnapshotModule = (await import(
+        `data:text/typescript;base64,${privateSnapshotSource.toString("base64")}`
+      )) as PrivateSnapshotModule;
       const privateSnapshot = privateSnapshotModule.createPrivateSnapshot();
       snapshot = privateSnapshot;
       copyCandidateDirectory(
@@ -344,7 +349,9 @@ async function main(): Promise<number> {
     }
 
     process.env.PLAN_CONTRACT_REPO_ROOT = root;
-    const review = reviewSupport;
+    const review = await import(
+      pathToFileURL(join(snapshot!.path, "bin/modules/plan/review.ts")).href
+    );
     exitCode = await review.cli(process.argv.slice(2), {
       stdout: (value: string) => (stdout += value),
       stderr: (value: string) => (stderr += value),

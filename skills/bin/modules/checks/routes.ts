@@ -34,7 +34,7 @@ function walk(root: string, directory = root): string[] {
   const output: string[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
-    if ([".git", "__pycache__", "node_modules", "dist", ".tmp"].includes(entry.name) || relative(root, path).replaceAll("\\", "/") === "skills/docs/vendor") continue;
+    if ([".git", "__pycache__", "node_modules", "dist", ".tmp"].includes(entry.name) || relative(root, path).replaceAll("\\", "/") === "skills/docs/vendor" || relative(root, path).replaceAll("\\", "/") === "clients/typescript/toolkit") continue;
     if (entry.isDirectory()) output.push(...walk(root, path));
     else output.push(path);
   }

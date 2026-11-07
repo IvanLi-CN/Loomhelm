@@ -1,4 +1,4 @@
-import { dlopen, FFIType } from "../core/posix";
+import { dlopen, FFIType } from "bun:ffi";
 
 type RenameLibrary = { symbols: { renameat2: (...args: number[]) => number } };
 

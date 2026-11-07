@@ -22,5 +22,5 @@ try {
   for (const name of names) visit(join(root, `${name}.ts`));
   const body = [...sources].sort(([a], [b]) => a.localeCompare(b)).map(([path, source]) =>
     `// Source: ${path.slice(root.length + 1)}\n` + source.replace(/^\/\/.*\n/gm, '').replace(/^import type .*\n/gm, '').trim()).join('\n\n');
-  writeFileSync(new URL('./protocol.ts', import.meta.url), `// Generated from ${version.stdout.trim()} app-server generate-ts (stable).\n// Run: node src/codex/generate-protocol.mjs\n// Upstream: https://github.com/openai/codex (Apache-2.0).\n// Bundled dependency closure; only import declarations and generator headers removed.\n\n${body}\n`);
+  writeFileSync(new URL('./protocol.ts', import.meta.url), `// Generated from ${version.stdout.trim()} app-server generate-ts (stable).\n// Run: bun src/codex/generate-protocol.mjs\n// Upstream: https://github.com/openai/codex (Apache-2.0).\n// Bundled dependency closure; only import declarations and generator headers removed.\n\n${body}\n`);
 } finally { rmSync(root, { recursive: true, force: true }); }

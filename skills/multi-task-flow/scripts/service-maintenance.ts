@@ -11,7 +11,7 @@ import {
   realpathSync,
   renameSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { withExclusiveLockAsync } from "../../bin/modules/flow/storage";
 import {
@@ -27,7 +27,7 @@ import {
 import { ensureDirectory, readRegular } from "./store";
 import { ServiceState } from "./service-state";
 import { ServiceAuth } from "./service-auth";
-import { verifyRelease, releaseFiles } from "./service-release";
+import { verifyRelease, requireSourceRelease } from "./service-release";
 import { requireCondition } from "./errors";
 import { type ReleaseManifest } from "./service-contract";
 import { serviceStatus } from "./service-lifecycle";
@@ -42,6 +42,7 @@ export function stageRelease(
   source: string,
 ): ReleaseManifest {
   const manifest = verifyRelease(source);
+  requireSourceRelease(manifest);
   requireCondition(
     manifest.platform === `${process.platform}-${process.arch}`,
     "INCOMPATIBLE_PLATFORM",
@@ -54,7 +55,8 @@ export function stageRelease(
   }
   const staging = join(state.paths.releases, `.stage-${randomUUID()}`);
   ensureDirectory(join(staging, "dist"));
-  for (const name of [...Object.keys(manifest.files), "manifest.json"])
+  for (const name of [...Object.keys(manifest.files), "manifest.json"]) {
+    ensureDirectory(dirname(join(staging,name)));
     writeExclusiveNoFollow(
       join(staging, name),
       readRegularNoFollow(
@@ -65,6 +67,7 @@ export function stageRelease(
       ),
       staging,
     );
+  }
   chmodSync(join(staging, "viewer"), 0o700);
   verifyRelease(staging);
   renameNoReplace(staging, target, state.paths.root);

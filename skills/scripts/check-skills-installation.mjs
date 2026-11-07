@@ -1,11 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, realpathSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 // Source/vendor layouts share the migration inventory. Discovery of SKILL.md
 // alone does not establish that its executable dependency closure was installed.
-export function checkSkillsInstallation(root) {
+export function checkSkillsInstallation(root, { probe = false } = {}) {
   root = resolve(root);
   const inventory = resolve(root, 'skills/source-manifest.json');
   if (!existsSync(inventory)) return { ok: false, code: 'SKILLS_INVENTORY_MISSING', root, missing: ['skills/source-manifest.json'] };
@@ -14,10 +16,11 @@ export function checkSkillsInstallation(root) {
     const file = resolve(root, path);
     if (!existsSync(file)) return false;
     const stat = lstatSync(file);
-    return stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && realpathSync(file).startsWith(realpathSync(resolve(root, 'skills')) + '/');
+    return stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && realpathSync(file) === file && realpathSync(file).startsWith(realpathSync(resolve(root, 'skills')) + '/');
   };
   const missing = [...manifest.files, ...(manifest.additions ?? [])]
     .map(file => file.path).filter(path => !path.startsWith('skills/') || path.split('/').includes('..') || !contained(path));
+  const modified = [...manifest.files, ...(manifest.additions ?? [])].filter(file => !missing.includes(file.path) && createHash("sha256").update(readFileSync(resolve(root,file.path))).digest("hex") !== file.installedSha256).map(file => file.path);
   const escapedImports = [];
   for (const file of [...manifest.files, ...(manifest.additions ?? [])]) {
     if (!/\.(ts|mjs)$/.test(file.path) || !file.path.startsWith('skills/') || file.path.split('/').includes('..') || !contained(file.path)) continue;
@@ -27,24 +30,38 @@ export function checkSkillsInstallation(root) {
       if (!target.startsWith(resolve(root, 'skills') + '/')) escapedImports.push({ file: file.path, import: match[1] });
     }
   }
+  const sourceComplete = missing.length === 0 && modified.length === 0 && escapedImports.length === 0;
+  const runtime = { name: 'bun', required: '1.4.4', actual: typeof Bun === 'undefined' ? null : Bun.version, available: typeof Bun !== 'undefined' && Bun.version === '1.4.4' };
+  const entrypoints = { status: 'not_checked', results: [] };
+  if (probe && sourceComplete && runtime.available) {
+    for (const [script, args] of [['skills/bin/plan-cli.sh',['--help']], ['skills/dot-codex-development/scripts/context.ts',['--help']], ['skills/multi-task-flow/scripts/orchestrate.ts',['view','--input','-']]]) {
+      const result = spawnSync(script.endsWith('.sh') ? '/bin/bash' : process.execPath, [...(script.endsWith('.sh') ? ['-p'] : []), resolve(root,script), ...args], { cwd:root, env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0' }, input:'{}', encoding:'utf8', timeout:30000 });
+      const expected = script.endsWith('orchestrate.ts') ? 2 : 0;
+      entrypoints.results.push({script, code:result.status, ok:!result.error && result.status === expected, error: result.error ? String(result.error) : result.status === expected ? undefined : result.stderr});
+    }
+    entrypoints.status = entrypoints.results.every(result => result.ok) ? 'passed' : 'failed';
+  }
   return {
-    ok: missing.length === 0 && escapedImports.length === 0,
-    code: missing.length || escapedImports.length ? 'SKILLS_INSTALLATION_INCOMPLETE' : 'SKILLS_SOURCE_LAYOUT_COMPLETE',
-    root, skills: manifest.skills.length, missing, escapedImports,
-    // Build outputs, external tools and host capabilities have separate gates.
+    runtime, sourceComplete, entrypoints,
+    ready: sourceComplete && runtime.available && entrypoints.status === 'passed',
+    ok: sourceComplete && (!probe || (runtime.available && entrypoints.status === 'passed')),
+    code: missing.length || modified.length || escapedImports.length ? 'SKILLS_INSTALLATION_INCOMPLETE' : 'SKILLS_SOURCE_LAYOUT_COMPLETE',
+    root, skills: manifest.skills.length, missing, modified, escapedImports,
+    // Host capabilities remain separate from these source and executable probes.
     scope: 'source-resource-layout',
     requiredSparsePaths: ['skills'],
   };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const args = process.argv.slice(2);
+  const probe = process.argv.includes('--probe');
+  const args = process.argv.slice(2).filter(arg => arg !== '--probe');
   if (args.length !== 0 && (args.length !== 2 || args[0] !== '--root')) {
-    console.error('Usage: node skills/scripts/check-skills-installation.mjs [--root PATH]');
+    console.error('Usage: bun skills/scripts/check-skills-installation.mjs [--root PATH] [--probe]');
     process.exitCode = 2;
   } else {
     try {
-      const report = checkSkillsInstallation(args[1] ?? resolve(import.meta.dirname, '../..'));
+      const report = checkSkillsInstallation(args[1] ?? resolve(import.meta.dirname, '../..'), {probe});
       console.log(JSON.stringify(report));
       process.exitCode = report.ok ? 0 : 1;
     } catch (error) {

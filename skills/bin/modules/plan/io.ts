@@ -12,7 +12,7 @@ import {
 import { lstat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dlopen, FFIType, ptr } from "../core/posix";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { assertDirectoryIdentity } from "./parent_identity";
 
 interface PosixLibrary {

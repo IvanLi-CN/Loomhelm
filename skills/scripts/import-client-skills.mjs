@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Maintenance-only importer. Never reads the provider's working-tree files.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const source = process.argv[2];
-if (!source) throw new Error('Usage: node skills/scripts/import-client-skills.mjs SOURCE_REPOSITORY');
+if (!source) throw new Error('Usage: bun skills/scripts/import-client-skills.mjs SOURCE_REPOSITORY');
 const commit = '505961771a0d2496155d23132a8c0bd8beac0a24';
 const git = (...args) => execFileSync('git', ['-C', source, ...args], { maxBuffer: 32 * 1024 * 1024 });
 const tree = git('ls-tree', '-rz', commit, 'skills', 'bin', 'docs').toString().split('\0').filter(Boolean);

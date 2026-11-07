@@ -1,6 +1,6 @@
 import { mkdtempSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { servicePaths } from "../scripts/service-paths";
 import { ServiceAuth } from "../scripts/service-auth";
 import { ServiceState } from "../scripts/service-state";
@@ -17,8 +17,8 @@ export function serviceFixture() {
 }
 export function fixtureRelease(root: string, name = "bundle") {
   const source = join(root, name); mkdirSync(join(source, "dist"), { recursive: true });
-  for (const file of releaseFiles) writeFileSync(join(source, file), file === "dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name);
-  const manifest = { schema_version: 1 as const, source_sha: "a".repeat(40), service_version: "0.0.0-test", platform: `${process.platform}-${process.arch}` as "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64", ...compatibility, files: Object.fromEntries(releaseFiles.map(file => [file, digest(file === "dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name)])) };
+  for (const file of releaseFiles) { mkdirSync(dirname(join(source,file)),{recursive:true}); writeFileSync(join(source, file), file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name); }
+  const manifest = { schema_version: 2 as const, source_sha: "a".repeat(40), service_version: "0.0.0-test", platform: `${process.platform}-${process.arch}` as "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64", ...compatibility, files: Object.fromEntries(releaseFiles.map(file => [file, digest(file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name)])) };
   const result = { ...manifest, build_id: buildId(manifest) };
   writeFileSync(join(source, "manifest.json"), JSON.stringify(result));
   return { source, manifest: result };

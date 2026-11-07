@@ -14,7 +14,7 @@ import { randomBytes } from "node:crypto";
 import { O_CREAT, O_EXCL, O_NOFOLLOW, O_WRONLY } from "node:constants";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { dlopen, FFIType } from "../core/posix";
+import { dlopen, FFIType } from "bun:ffi";
 import { spawnMonitoredSandbox } from "./sandbox_process";
 import {
   readRegularNoFollow,

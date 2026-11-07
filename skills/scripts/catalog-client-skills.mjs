@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { readFileSync, writeFileSync } from 'node:fs';
 const manifest = JSON.parse(readFileSync('skills/source-manifest.json', 'utf8'));
 const files = manifest.files;

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import * as constants from "node:constants";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { dlopen, FFIType, ptr } from "../core/posix";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { linuxLibraries, loadRenameAt2 } from "./native_rename";
 import { openTrustedDirectory } from "./trusted_directory";
 import { writeAll } from "./write_all";

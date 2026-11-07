@@ -4,13 +4,13 @@ import { constants } from 'node:fs';
 import { delimiter, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { runProcess, type ProcessOptions, type ProcessResult } from './runtime/process.js';
+import { runProcess, type ProcessOptions, type ProcessResult } from './runtime/process.ts';
 
 export interface SkillCapabilityReport { name: string; ready: boolean; readinessScope: 'all-declared-scenarios'; resourcesValid: boolean; dependencies: { skill: string; kind: 'skill' | 'command' | 'host'; strength: string; condition: string; available: boolean; code: string }[]; platform: string; arch: string; nativeSupported: boolean; source: string }
 export interface ToolkitManifest { schemaVersion: 1; commit: string; skills: string[]; files: { path: string; source: string; sourceSha256: string }[] }
 /** The packaged resources are authoritative; never fall back to a host checkout. */
 export class SkillsRuntime {
-  constructor(readonly root = fileURLToPath(new URL('./toolkit/', import.meta.url))) {}
+  constructor(readonly root = fileURLToPath(new URL('../toolkit/', import.meta.url))) {}
   async manifest(): Promise<ToolkitManifest> {
     const value = JSON.parse(await readFile(resolve(this.root, 'skills/source-manifest.json'), 'utf8')) as ToolkitManifest;
     if (value.schemaVersion !== 1 || value.skills.length !== 29 || !Array.isArray(value.files)) throw new Error('Invalid toolkit resource manifest');
@@ -60,9 +60,8 @@ export class SkillsRuntime {
   async run(script: string, args: readonly string[], options: ProcessOptions = {}): Promise<ProcessResult> {
     const manifest = await this.manifest();
     if (!manifest.files.some(file => file.path === script) || !/^(skills\/[^/]+\/scripts|skills\/bin)\/.+/.test(script)) throw new Error('Unknown toolkit script');
-    const compiled = script.endsWith('.ts') ? script.slice(0, -3) + '.js' : script;
     const root = await realpath(this.root);
-    const target = await realpath(resolve(root, compiled));
+    const target = await realpath(resolve(root, script));
     const rel = relative(root, target);
     if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`) || !(await stat(target)).isFile()) throw new Error('Unsafe toolkit script');
     const firstLine = (await readFile(target, 'utf8')).split('\n', 1)[0]!;

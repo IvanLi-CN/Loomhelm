@@ -1,9 +1,9 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SkillsRuntime } from '../dist/index.js';
+import { SkillsRuntime } from '../src/index.ts';
 import { spawnSync } from 'node:child_process';
 
 const runtime = new SkillsRuntime();
@@ -15,7 +15,7 @@ test('missing external commands block readiness and CLI without executing or ins
     assert.equal(report.ready, false);
     assert.equal(report.readinessScope, 'all-declared-scenarios');
     assert.ok(report.dependencies.some(dep => dep.kind === 'command' && dep.skill === 'gh' && !dep.available && dep.code === 'HOST_COMMAND_UNAVAILABLE'));
-    const result = spawnSync(process.execPath, [new URL('../dist/cli.js', import.meta.url).pathname, 'skills', 'check', 'git-cleanup'], { env: { ...process.env, PATH: '' }, encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [new URL('../src/cli.ts', import.meta.url).pathname, 'skills', 'check', 'git-cleanup'], { env: { ...process.env, PATH: '' }, encoding: 'utf8' });
     assert.equal(result.status, 3, result.stderr);
     assert.equal(JSON.parse(result.stdout).ready, false);
   } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
@@ -37,7 +37,7 @@ test('packaged catalog contains all approved Skills and rejects path escape', as
   await assert.rejects(runtime.run('../bin/plan_contract_check.ts', []), /Unknown toolkit script/);
 });
 
-test('packaged plan checker preserves stdin pass and rejection without invoking Bun', async () => {
+test('packaged plan checker preserves stdin pass and rejection with the pinned Bun runtime', async () => {
   const plan = await readFile(join(runtime.root, 'skills/dev-plan/references/plan-cases/positive-fast-track.md'), 'utf8');
   const pass = await runtime.run('skills/bin/plan_contract_check.ts', ['--plan', '-'], { input: plan });
   assert.equal(pass.code, 0, pass.stderr);

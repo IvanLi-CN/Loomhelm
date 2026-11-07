@@ -1,11 +1,11 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runProcess } from '../dist/runtime/process.js';
+import { runProcess } from '../src/runtime/process.ts';
 
 const cliPath = resolve('dist/cli.js');
 const fixturePath = resolve('test/fixtures/cli-codex-server.mjs');

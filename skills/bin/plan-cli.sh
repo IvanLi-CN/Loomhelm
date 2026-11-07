@@ -6,9 +6,8 @@ PATH="$trusted_path"
 export PATH
 
 script_dir="$(cd -- "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-entrypoint="$script_dir/plan_review_view.js"
+entrypoint="$script_dir/plan_review_view.ts"
 config="$script_dir/plan_bunfig.toml"
-native_binding="$script_dir/native/posix.node"
 os_name="$(/usr/bin/uname -s)"
 
 realpath_path="/bin/realpath"
@@ -94,12 +93,9 @@ else
   user_home="$(/usr/bin/getent passwd "$(/usr/bin/id -u)" 2>/dev/null | /usr/bin/awk -F: '{print $6}' || true)"
 fi
 runtime_candidates=()
-
+if [[ "$user_home" == /* && "$user_home" != *$'\n'* ]]; then runtime_candidates+=("$user_home/.bun/bin/bun"); fi
 runtime_candidates+=(
-  /usr/local/lib/loomhelm/runtime/node
-  /opt/homebrew/bin/node
-  /usr/local/bin/node
-  /usr/bin/node
+  /usr/local/lib/loomhelm/runtime/bun
   /opt/homebrew/bin/bun
   /usr/local/bin/bun
   /usr/bin/bun
@@ -114,36 +110,26 @@ for candidate in "${runtime_candidates[@]}"; do
   fi
 done
 if [[ -z "$runtime" ]]; then
-  echo "ERROR: repository-approved runtime is unavailable" >&2
+  echo "ERROR: repository-approved Bun runtime is unavailable" >&2
   exit 2
 fi
 regular_file "$runtime" "runtime"
-trusted_directory "$(/usr/bin/dirname -- "$runtime")" 1 || { echo "ERROR: repository-approved runtime directory is not trusted" >&2; exit 2; }
+trusted_directory "$(/usr/bin/dirname -- "$runtime")" 1 || { echo "ERROR: repository-approved Bun runtime directory is not trusted" >&2; exit 2; }
 runtime_owner="$(file_owner "$runtime")"
 runtime_mode="$(file_mode "$runtime")"
 current_uid="$(/usr/bin/id -u)"
 if [[ "$runtime_owner" != "0" && "$runtime_owner" != "$current_uid" ]] || (( (8#$runtime_mode & 18) != 0 )); then
-  echo "ERROR: repository-approved runtime is not trusted" >&2
+  echo "ERROR: repository-approved Bun runtime is not trusted" >&2
   exit 2
 fi
 if [[ -n "${BUN_BIN:-}" ]]; then
   requested_runtime="$("$realpath_path" -- "$BUN_BIN" 2>/dev/null || true)"
   if [[ -z "$requested_runtime" || "$requested_runtime" != "$runtime" ]]; then
-    echo "ERROR: BUN_BIN must name the repository-approved runtime" >&2
+    echo "ERROR: BUN_BIN must name the repository-approved Bun runtime" >&2
     exit 2
   fi
 fi
 
-regular_file "$native_binding" "native binding"
-trusted_directory "$(/usr/bin/dirname -- "$native_binding")" 1 || { echo "ERROR: native binding directory is not trusted" >&2; exit 2; }
-native_identity="$(file_identity "$native_binding")"
-native_owner="$(file_owner "$native_binding")"
-native_mode="$(file_mode "$native_binding")"
-exec 6<"$native_binding"
-if [[ "$(fd_metadata 6 2>/dev/null || true)" != "$native_identity:1:$native_owner:$native_mode" ]]; then
-  echo "ERROR: native binding changed while opening" >&2
-  exit 2
-fi
 runtime_identity="$(file_identity "$runtime")"
 entrypoint_identity="$(file_identity "$entrypoint")"
 config_identity="$(file_identity "$config")"
@@ -153,7 +139,7 @@ config_owner="$(file_owner "$config")"
 config_mode="$(file_mode "$config")"
 exec 7<"$runtime"
 if [[ "$(fd_metadata 7 2>/dev/null || true)" != "$runtime_identity:1:$runtime_owner:$runtime_mode" ]]; then
-  echo "ERROR: repository-approved runtime changed while opening" >&2
+  echo "ERROR: repository-approved Bun runtime changed while opening" >&2
   exit 2
 fi
 exec 8<"$config"
@@ -193,8 +179,14 @@ set -C
 set +C
 /bin/chmod 700 "$runtime_copy"
 
+runtime_version="$(/usr/bin/env -u BUN_INSPECT_PRELOAD -u BUN_OPTIONS -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PATH -u BUN_BIN "$runtime_copy" --version 2>/dev/null || true)"
+if [[ "$runtime_version" != 1.4.4 ]]; then
+  echo "ERROR: Bun 1.4.4 is required; found ${runtime_version:-unavailable}" >&2
+  exit 2
+fi
+
 launcher_code='
-const fs = await import("node:fs");
+const fs = require("node:fs");
 const entrypointFd = Number(process.env.PLAN_REVIEW_ENTRYPOINT_FD);
 const expected = process.env.PLAN_REVIEW_ENTRYPOINT_IDENTITY;
 const configCopy = process.env.PLAN_REVIEW_CONFIG_COPY;
@@ -217,15 +209,13 @@ try {
   const after = fs.fstatSync(fd);
   if (!after.isFile() || after.nlink !== 1 || after.dev !== before.dev || after.ino !== before.ino) throw new Error("trusted plan entrypoint changed while reading");
   process.argv = [process.argv[0], "plan_review_view.ts", ...process.argv.slice(1)];
-  await import(`data:text/javascript;base64,${source.toString("base64")}`);
+  await import(`data:text/typescript;base64,${source.toString("base64")}`);
 }
 finally { fs.closeSync(fd); }
 '
 
-exec /usr/bin/env -u BUN_OPTIONS -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PATH -u BUN_BIN \
-  PATH="$trusted_path" \
-  PLAN_REVIEW_NATIVE_FD=6 \
-  PLAN_REVIEW_NATIVE_IDENTITY="$native_identity" \
+exec /usr/bin/env -u BUN_INSPECT_PRELOAD -u BUN_OPTIONS -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PATH -u BUN_BIN \
+  PATH="$trusted_path" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 \
   PLAN_REVIEW_ENTRYPOINT_FD=9 \
   PLAN_REVIEW_ENTRYPOINT_PATH="$entrypoint" \
   PLAN_REVIEW_ENTRYPOINT_IDENTITY="$entrypoint_identity" \
@@ -233,5 +223,9 @@ exec /usr/bin/env -u BUN_OPTIONS -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PAT
   PLAN_REVIEW_RUNTIME_COPY="$runtime_copy" \
   PLAN_REVIEW_TEMPORARY_DIR="$temporary_dir" \
   "$runtime_copy" \
-  --input-type=module \
+  --config="$config_copy" \
+  --no-install \
+  --no-env-file \
+  --no-macros \
+  --tsconfig-override=/dev/null \
   -e "$launcher_code" -- "$@"

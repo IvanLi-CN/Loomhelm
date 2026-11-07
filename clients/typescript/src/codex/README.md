@@ -1,13 +1,13 @@
 # Codex app-server 适配
 
-本模块使用 Node.js 22+ 的标准 API，通过独立子进程的 stdio NDJSON 连接本机 Codex app-server；同一实现兼容 Bun。调用入口为构建后的 `dist/codex/index.js`，不依赖 Loomhelm 服务端、Web App 或 Bun 专属 API。只有显式调用 `CodexAppServer.start()` 才启动进程。
+本模块在 Bun 1.4.4 中使用标准 API，通过独立子进程的 stdio NDJSON 连接本机 Codex app-server；调用入口为源码 `src/codex/index.ts`，不依赖 Loomhelm 服务端、Web App 。只有显式调用 `CodexAppServer.start()` 才启动进程。
 
-协议来源为本机 `codex-cli 0.166.0` 的 `codex app-server generate-ts` 稳定输出和 [官方 app-server 文档](https://developers.openai.com/codex/app-server)。`protocol.ts` 保存所用参数、响应、服务器请求及依赖的生成类型；生成脚本只移除重复生成头和内部 import，将依赖闭包合并为一个文件，不自行推断字段。升级协议时，在本包目录执行 `node src/codex/generate-protocol.mjs`，审核差异并重跑行为测试。服务器仍使用已有本机 Codex 配置与凭据；适配器不读取、复制或上传凭据。
+协议来源为本机 `codex-cli 0.166.0` 的 `codex app-server generate-ts` 稳定输出和 [官方 app-server 文档](https://developers.openai.com/codex/app-server)。`protocol.ts` 保存所用参数、响应、服务器请求及依赖的生成类型；生成脚本只移除重复生成头和内部 import，将依赖闭包合并为一个文件，不自行推断字段。升级协议时，在本包目录执行 `bun src/codex/generate-protocol.mjs`，审核差异并重跑行为测试。服务器仍使用已有本机 Codex 配置与凭据；适配器不读取、复制或上传凭据。
 
 ## 调用与生命周期
 
 ```ts
-import { CodexAppServer } from './dist/codex/index.js';
+import { CodexAppServer } from './src/codex/index.ts';
 
 const codex = await CodexAppServer.start({
   onEvent(event, value) {
@@ -58,4 +58,4 @@ npm test
 npm run test:bun
 ```
 
-`test/codex.test.mjs` 使用独立 Node 伪服务器，在 Node 与 Bun 进程中分别运行同一适配实现。覆盖握手、请求乱序、官方方法和参数转发、拆分 UTF-8、重复事件、启动响应前的终态、审批显式答复和失效、RPC 错误、超时与迟到响应、帧和请求容量上限、非法响应、断连与 stdout EOF、监听器异常、启动失败以及忽略 TERM 的进程回收。测试不启动真实 Codex、不调用模型、不使用账号或网络。
+`test/codex.test.mjs` 使用独立 Bun 伪服务器，在实际 Bun 进程中运行同一适配实现。覆盖握手、请求乱序、官方方法和参数转发、拆分 UTF-8、重复事件、启动响应前的终态、审批显式答复和失效、RPC 错误、超时与迟到响应、帧和请求容量上限、非法响应、断连与 stdout EOF、监听器异常、启动失败以及忽略 TERM 的进程回收。测试不启动真实 Codex、不调用模型、不使用账号或网络。

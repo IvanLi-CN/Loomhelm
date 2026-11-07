@@ -9,7 +9,7 @@ import {
   statSync,
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { dlopen, FFIType, ptr } from "./posix";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 
 interface PosixLibrary {
   symbols: {

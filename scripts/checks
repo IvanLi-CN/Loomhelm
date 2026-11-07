@@ -19,7 +19,7 @@ Commands:
   source       Run Go tests, race tests and vet.
   database     Run the real PostgreSQL-backed database and job tests.
   web          Run client transport tests, frozen Web typecheck and production/Storybook builds.
-  client       Install and verify the independent TypeScript client on Node.js and Bun.
+  client       Install and verify the independent TypeScript client on Bun from TS sources.
   react        Run the pinned React Doctor changed-file check.
 EOF
 }
@@ -268,20 +268,25 @@ check_web() {
 }
 
 check_client() {
-	run_command "Migrated toolkit frozen dependencies" bun install --frozen-lockfile
-	run_command "Skills subtree dependencies" npm ci --prefix skills --ignore-scripts --no-audit --no-fund
-	run_command "Dashboard frozen dependencies" bun install --cwd skills/multi-task-flow --frozen-lockfile
-	run_command "Migrated source inventory" node skills/scripts/check-client-skills.mjs
-	run_command "Toolkit production and native build" bun run skills:build
-	run_command "Skill vendor installation layout regression" node --test skills/scripts/check-skills-installation.test.mjs
-	run_command "POSIX cross-implementation safety" node skills/scripts/test-skills-native.mjs
-	run_command "Original shared toolkit and native regression" bun test ./skills/bin/tests ./skills/bin/native-tests
-	run_command "Original task flow and UI regression" bun run --cwd skills/multi-task-flow test:all
-	run_command "TypeScript client frozen dependency install" npm --prefix clients/typescript ci
-	run_command "TypeScript client typecheck" npm --prefix clients/typescript run check
-	run_command "TypeScript client Node.js tests" npm --prefix clients/typescript test
-	run_command "TypeScript client Bun tests" npm --prefix clients/typescript run test:bun
-	run_command "Independent artifact isolation" node skills/scripts/test-skills-artifact.mjs
+	export TMPDIR="$repo_root/.tmp/client-tests/tmp"
+	export HOME="$repo_root/.tmp/client-tests/home"
+	export CODEX_HOME="$repo_root/.tmp/client-tests/codex"
+	export BUN_INSTALL_CACHE_DIR="$repo_root/.tmp/client-tests/cache"
+	export BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+	mkdir -p "$TMPDIR" "$HOME" "$CODEX_HOME" "$BUN_INSTALL_CACHE_DIR"
+	run_command "Skills frozen dependencies" bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
+	run_command "Dashboard frozen dependencies" bun install --cwd skills/multi-task-flow --frozen-lockfile --ignore-scripts --backend=copy
+	run_command "Migrated source inventory" bun skills/scripts/check-client-skills.mjs
+	run_command "Dashboard browser assets only" bun run skills:build
+	run_command "Pure-source installation regression" bun test ./skills/scripts/check-skills-installation.test.mjs
+	run_command "Bun FFI cross-process safety" bun skills/scripts/test-skills-native.mjs
+	run_command "Shared toolkit and system-library regression" bun test ./skills/bin/tests ./skills/bin/native-tests
+	run_command "Task flow and UI regression" bun run --cwd skills/multi-task-flow test:all
+	run_command "Client frozen dependency install" bun install --cwd clients/typescript --frozen-lockfile --ignore-scripts --backend=copy
+	run_command "Client typecheck without emit" bun run --cwd clients/typescript check
+	run_command "Client Bun source tests" bun run --cwd clients/typescript test
+	run_command "Independent source package isolation" bun skills/scripts/test-skills-artifact.mjs
+	run_command "Viewer v2 source package and HTTP lifecycle" bun skills/scripts/test-viewer-source.mjs
 	finish_check
 }
 

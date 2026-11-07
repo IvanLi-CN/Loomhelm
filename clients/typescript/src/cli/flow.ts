@@ -1,5 +1,5 @@
-import { loadConfig } from '../config.js';
-import { SkillsRuntime } from '../toolkit.js';
+import { loadConfig } from '../config.ts';
+import { SkillsRuntime } from '../toolkit.ts';
 
 export async function runFlowCommand(args: string[], configPath?: string): Promise<void> {
   if (args[0] === 'help' || !args.length) {

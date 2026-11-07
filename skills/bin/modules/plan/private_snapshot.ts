@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { directoryNames as nativeDirectoryNames, dlopen, FFIType, ptr } from "../core/posix";
+import { CString, dlopen, FFIType, ptr } from "bun:ffi";
 
 export interface PrivateSnapshot {
   path: string;
@@ -110,7 +110,22 @@ function loadPosix(): PosixLibrary {
           args: [FFIType.i32, FFIType.ptr, FFIType.i32],
           returns: FFIType.i32,
         },
-
+        dup: {
+          args: [FFIType.i32],
+          returns: FFIType.i32,
+        },
+        fdopendir: {
+          args: [FFIType.i32],
+          returns: FFIType.ptr,
+        },
+        readdir: {
+          args: [FFIType.ptr],
+          returns: FFIType.ptr,
+        },
+        closedir: {
+          args: [FFIType.ptr],
+          returns: FFIType.i32,
+        },
       }) as PosixLibrary;
       return posixLibrary;
     } catch {}
@@ -151,7 +166,27 @@ function tryOpenAt(directoryFd: number, name: string, flags: number): number {
 }
 
 function directoryNames(directoryFd: number): string[] {
-  return nativeDirectoryNames(directoryFd);
+  const duplicate = loadPosix().symbols.dup(directoryFd);
+  if (duplicate < 0)
+    throw new Error("private snapshot directory duplication failed");
+  const directory = loadPosix().symbols.fdopendir(duplicate);
+  if (!directory) {
+    closeSync(duplicate);
+    throw new Error("private snapshot directory open failed");
+  }
+  const names: string[] = [];
+  const nameOffset = process.platform === "darwin" ? 21 : 19;
+  try {
+    let entry: number | null;
+    while (
+      (entry = loadPosix().symbols.readdir(directory)) !== null &&
+      entry !== 0
+    )
+      names.push(new CString(entry + nameOffset));
+  } finally {
+    loadPosix().symbols.closedir(directory);
+  }
+  return names;
 }
 
 function removeDirectoryContents(directoryFd: number): void {

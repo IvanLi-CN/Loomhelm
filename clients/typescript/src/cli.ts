@@ -1,13 +1,13 @@
-#!/usr/bin/env node
-import { LocalClient } from './client.js';
-import { StateLock } from './runtime/lock.js';
-import { loadConfig } from './config.js';
-import { GitAdapter } from './git.js';
-import { runProcess } from './runtime/process.js';
-import type { Operation } from './tasks/model.js';
-import { runCodexCommand } from './cli/codex.js';
-import { runSkillsCommand } from './cli/skills.js';
-import { runFlowCommand } from './cli/flow.js';
+#!/usr/bin/env bun
+import { LocalClient } from './client.ts';
+import { StateLock } from './runtime/lock.ts';
+import { loadConfig } from './config.ts';
+import { GitAdapter } from './git.ts';
+import { runProcess } from './runtime/process.ts';
+import type { Operation } from './tasks/model.ts';
+import { runCodexCommand } from './cli/codex.ts';
+import { runSkillsCommand } from './cli/skills.ts';
+import { runFlowCommand } from './cli/flow.ts';
 import { fileURLToPath } from 'node:url';
 
 async function main(args: string[]): Promise<void> {
@@ -23,7 +23,7 @@ async function main(args: string[]): Promise<void> {
   if (command === 'workflow') {
     if (rest[0] === 'verify') throw new Error('WORKFLOW_LEGACY_COMMAND_UNSUPPORTED: use local-verify for local validation only; follow the migrated engineering Skills for delivery gates');
     if (!rest.length) throw new Error('Usage: workflow skills PROJECT_SKILLS_DIR [USER_SKILLS_DIR] | local-verify MANIFEST_JSON_PATH');
-    const result = await runProcess(process.execPath, [fileURLToPath(new URL('./workflow/cli.js', import.meta.url)), ...rest]);
+    const result = await runProcess(process.execPath, [fileURLToPath(new URL('./workflow/cli.ts', import.meta.url)), ...rest]);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.code !== 0) process.exitCode = result.code ?? 1;
