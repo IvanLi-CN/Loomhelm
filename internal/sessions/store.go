@@ -217,13 +217,13 @@ func (s *Store) createIntent(ctx context.Context, input CreationIntentInput, aut
 		if err := compareCreationIntent(existing, normalized, digest, true); err != nil {
 			return CreationIntent{}, err
 		}
+		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
+			return CreationIntent{}, err
+		}
 		if authorize != nil {
 			if err := authorize(ctx, tx, normalized); err != nil {
 				return CreationIntent{}, err
 			}
-		}
-		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
-			return CreationIntent{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return CreationIntent{}, fmt.Errorf("commit existing session creation intent: %w", err)
@@ -237,13 +237,13 @@ func (s *Store) createIntent(ctx context.Context, input CreationIntentInput, aut
 		if err := compareCreationIntent(existing, normalized, digest, false); err != nil {
 			return CreationIntent{}, err
 		}
+		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
+			return CreationIntent{}, err
+		}
 		if authorize != nil {
 			if err := authorize(ctx, tx, normalized); err != nil {
 				return CreationIntent{}, err
 			}
-		}
-		if err := validateExistingCreationIntentTarget(ctx, tx, existing); err != nil {
-			return CreationIntent{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return CreationIntent{}, fmt.Errorf("commit existing session creation intent: %w", err)
@@ -251,14 +251,14 @@ func (s *Store) createIntent(ctx context.Context, input CreationIntentInput, aut
 		return existing.Intent, nil
 	}
 
-	if authorize != nil {
-		if err := authorize(ctx, tx, normalized); err != nil {
+	if normalized.TaskID != "" {
+		if err := validateCreationTask(ctx, tx, normalized.ProjectID, normalized.TaskID); err != nil {
 			return CreationIntent{}, err
 		}
 	}
 
-	if normalized.TaskID != "" {
-		if err := validateCreationTask(ctx, tx, normalized.ProjectID, normalized.TaskID); err != nil {
+	if authorize != nil {
+		if err := authorize(ctx, tx, normalized); err != nil {
 			return CreationIntent{}, err
 		}
 	}

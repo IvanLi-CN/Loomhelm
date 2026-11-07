@@ -1414,6 +1414,21 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	} else if err != nil {
 		return protocol.CodexConversation{}, fmt.Errorf("lock binding Task: %w", err)
 	}
+	var taskReserved bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM execution_sessions
+			WHERE creation_task_id = $1
+			  AND creation_state IN ('pending', 'unknown')
+			  AND creation_unknown_reason NOT LIKE 'definite_failure:%'
+		)
+	`, request.TaskID).Scan(&taskReserved); err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("check pending Session Task reservation: %w", err)
+	}
+	if taskReserved {
+		return protocol.CodexConversation{}, ErrConflict
+	}
 	var lockedHostID string
 	if err := tx.QueryRow(ctx, `
 		SELECT id FROM host_registrations WHERE id = $1 FOR UPDATE
@@ -1421,6 +1436,21 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 		return protocol.CodexConversation{}, ErrNotFound
 	} else if err != nil {
 		return protocol.CodexConversation{}, fmt.Errorf("lock Codex Host for binding: %w", err)
+	}
+	var hostHasPendingIntent bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM execution_sessions
+			WHERE host_id = $1
+			  AND creation_state IN ('pending', 'unknown')
+			  AND creation_unknown_reason NOT LIKE 'definite_failure:%'
+		)
+	`, access.host.ID).Scan(&hostHasPendingIntent); err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("check pending Host Session intent: %w", err)
+	}
+	if hostHasPendingIntent {
+		return protocol.CodexConversation{}, ErrConflict
 	}
 	if err := s.hosts.AuthorizeUserTx(ctx, tx, principal.UserID, access.host.ID); err != nil {
 		if errors.Is(err, hosts.ErrForbidden) || errors.Is(err, hosts.ErrNotFound) {
