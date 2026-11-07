@@ -15706,7 +15706,35 @@
     },
     {
       "path": "skills/support-manifest.json",
-      "installedSha256": "104b7f9ee9bf1be675f1aea45ddad05ac7a996c4bcd1148a9a0696de9cfa4618"
+      "installedSha256": "fc09110053fd2b5f883919cc93bf4356a71eb13e8e8e5fddde2cca9ec9566397"
+    },
+    {
+      "path": "skills/multi-task-flow/examples/single-delivery-unit/README.md",
+      "installedSha256": "dc0126950db14b69cc361f2ce5dce4be9abb8c47f52ccef1184c71525c010cd3"
+    },
+    {
+      "path": "skills/multi-task-flow/examples/single-delivery-unit/ledger.ts",
+      "installedSha256": "463f18badb49c94a67ab25d299e7dbe625021bc3a37929bb8258ba42871916a6"
+    },
+    {
+      "path": "skills/multi-task-flow/examples/single-delivery-unit/outputs.ts",
+      "installedSha256": "5bce35dcc5b7667a639d27d1a973f722b60f0cc679a27f2231b8bff718184b7a"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/graph-layout.test.ts",
+      "installedSha256": "46ab8e8d4539e3bf2f69fafbd4ed96cc9ee14975160b8a18d2d69745be19bb52"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/single-delivery-unit.test.ts",
+      "installedSha256": "4c532b1b57982444d6db562de656b63e6262d6eb9930e6905a793fd7604aa9bd"
+    },
+    {
+      "path": "skills/multi-task-flow/web/graph-layout.ts",
+      "installedSha256": "8f3df0f04a753f10128e9c128bca15ffbb05602691726697c48e41700438ad8d"
+    },
+    {
+      "path": "skills/multi-task-flow/web/graph-view.tsx",
+      "installedSha256": "343db42ebc4fc968ae7f024618b690cff935dceee5c9db755b895d9f401cd24e"
     },
     {
       "path": "skills/bin/modules/core/runtime.ts",
