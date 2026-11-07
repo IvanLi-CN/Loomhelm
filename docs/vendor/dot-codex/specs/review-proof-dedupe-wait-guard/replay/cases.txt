@@ -1,0 +1,6 @@
+# status path expected_code
+fail negative-exec-session-wait-misuse.jsonl EXEC_SESSION_WAIT_MISUSE
+fail negative-non-direct-review-launch.jsonl NON_DIRECT_REVIEW_LAUNCH
+fail negative-helper-review-wrapper.jsonl NON_DIRECT_REVIEW_LAUNCH
+fail negative-live-proof-duplicate-launch.jsonl DUPLICATE_LIVE_REVIEW_LAUNCH
+pass positive-single-proof-polling.jsonl -

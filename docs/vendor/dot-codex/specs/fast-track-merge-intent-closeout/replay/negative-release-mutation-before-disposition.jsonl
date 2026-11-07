@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr create --repo example/repo --base main --head topic\"}","call_id":"publish-before-route"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`release_disposition`: `repository-native: no release-label route`."}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR publication attempted before route input."}}

@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"release-contract","output":"release_expected=false; release workflow skipped"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并。release_expected=false；发布状态=失败。"}}

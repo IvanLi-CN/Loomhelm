@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"output_text","text":"在浏览器打开 http://127.0.0.1:44720/preview.html"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我会使用 ego-browser，并在当前用户目标的一个 TaskSpace 内打开这个本地页面。"}]}}

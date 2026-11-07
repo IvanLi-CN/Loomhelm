@@ -8,9 +8,10 @@ export interface ClientConfig {
   stateDir: string;
   processTimeoutMs: number;
   maxOutputBytes: number;
+  codexAppServerSocket?: string;
 }
 
-const fields = new Set(['schemaVersion', 'mode', 'stateDir', 'processTimeoutMs', 'maxOutputBytes']);
+const fields = new Set(['schemaVersion', 'mode', 'stateDir', 'processTimeoutMs', 'maxOutputBytes', 'codexAppServerSocket']);
 const maxProcessTimeoutMs = 2_147_483_647;
 const maxOutputLimit = 64 * 1024 * 1024;
 
@@ -23,11 +24,13 @@ export async function loadConfig(path?: string): Promise<ClientConfig> {
   if (value.schemaVersion !== undefined && value.schemaVersion !== 1) throw new Error('Unsupported config version');
   if (value.mode !== undefined && value.mode !== 'local') throw new Error('Only local mode is implemented');
   if (value.stateDir !== undefined && (typeof value.stateDir !== 'string' || !value.stateDir.trim())) throw new Error('Invalid stateDir');
+  if (value.codexAppServerSocket !== undefined && (typeof value.codexAppServerSocket !== 'string' || !value.codexAppServerSocket.trim())) throw new Error('Invalid codexAppServerSocket');
   const timeout = value.processTimeoutMs ?? 30_000;
   if (typeof timeout !== 'number' || !Number.isSafeInteger(timeout) || timeout < 1 || timeout > maxProcessTimeoutMs) throw new Error('Invalid processTimeoutMs');
   const maxOutputBytes = value.maxOutputBytes ?? 1024 * 1024;
   if (typeof maxOutputBytes !== 'number' || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > maxOutputLimit) throw new Error('Invalid maxOutputBytes');
   return {
+    ...(typeof value.codexAppServerSocket === 'string' ? { codexAppServerSocket: value.codexAppServerSocket } : {}),
     schemaVersion: 1,
     mode: 'local',
     stateDir: value.stateDir ? resolve(base, value.stateDir as string) : resolve(homedir(), '.loomhelm'),

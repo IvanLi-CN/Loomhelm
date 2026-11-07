@@ -1,0 +1,4 @@
+interface:
+  display_name: "Storybook stories"
+  short_description: "Add stories, docs, interaction coverage, and stable evidence surfaces"
+  default_prompt: "Use $storybook-stories to add or update Storybook stories, docs pages, interaction coverage, and source-managed presentation surfaces for selected component evidence. Preserve owner, project, spec, and selected-source mobile viewport choices; when none exists, bind and verify 393x852 CSS px on the Storybook evidence surface. For full pages or flows, prefer stable ui_demo evidence, preserve any owner-explicit non-Storybook source lock, and use a complete Storybook fallback only when no qualified ui_demo exists and an existing owner, project, or active-spec exception explicitly authorizes it; otherwise report a blocker."

@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr merge 1 --merge --delete-branch=false\",\"workdir\":\"/repo\"}","call_id":"call_old_merge"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"合并"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Step 5C Ready，可立即合并。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-earlier-merge-does-not-satisfy-later-intent","last_agent_message":"PR 已到 merge-ready"}}

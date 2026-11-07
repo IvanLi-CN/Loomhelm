@@ -1,0 +1,47 @@
+[
+  {
+    "name": "phase-a-task-evidence-dedupes-first-seen",
+    "type": "gate",
+    "phase": "phase-a",
+    "image_files": ["captures/second.png", "captures/first.png"],
+    "pr_body": "Spec: docs/specs/old/SPEC.md\n\n## Summary\n- task evidence",
+    "evidence_paths": ["captures/second.png", "captures/first.png", "captures/second.png"],
+    "expected_state": "rewritten",
+    "expected_paths": ["captures/second.png", "captures/first.png"]
+  },
+  {
+    "name": "phase-a-missing-declaration-blocks",
+    "type": "gate",
+    "phase": "phase-a",
+    "pr_body": "Spec: docs/specs/old/SPEC.md\n",
+    "expected_state": "blocked",
+    "expected_reasons": ["missing_task_evidence_declaration"]
+  },
+  {
+    "name": "phase-b-reads-managed-section-only",
+    "type": "gate",
+    "phase": "phase-b",
+    "state": "MERGED",
+    "head_ref": "feature/replay",
+    "image_files": ["captures/screen.png"],
+    "pr_body": "Spec: docs/specs/does-not-exist/SPEC.md\n\n## Visual Evidence\n\n![Screen](https://github.com/forker/demo-fork/blob/feature/replay/captures/screen.png?raw=1)\n",
+    "expected_state": "rewritten",
+    "expected_paths": ["captures/screen.png"]
+  },
+  {
+    "name": "phase-b-missing-managed-section-blocks",
+    "type": "gate",
+    "phase": "phase-b",
+    "state": "MERGED",
+    "pr_body": "Spec: docs/specs/does-not-exist/SPEC.md\n",
+    "expected_state": "blocked",
+    "expected_reasons": ["missing_visual_evidence_section"]
+  },
+  {
+    "name": "phase-b-failure-status-text",
+    "type": "status_text",
+    "text": "PR #123\n结果=已合并\nPR图片最终化=失败\n失败证据=managed_section_target_ref_mismatch",
+    "required": ["结果=已合并", "PR图片最终化=失败"],
+    "forbidden": ["结果=未合并"]
+  }
+]

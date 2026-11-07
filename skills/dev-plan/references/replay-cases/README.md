@@ -1,0 +1,190 @@
+# Plan Contract Replay Cases
+
+- `CASES.txt` defines expected results for each replay input.
+- `raw-plan` validates current explicit `$dev-plan` Markdown fixtures without requiring conversation provenance in the plan body.
+- In these fixtures, `merge-ready / Step 5C Ready` wording inside `<proposed_plan>` is a planned stop-condition marker, not a live PR status claim.
+- Mandatory coverage:
+  - one repo-local historical failure fixture for `FLOW_NOT_LOCKED_BEFORE_PLAN`;
+  - one repo-local historical failure fixture for missing flow declaration in plan text;
+- retired Initiative and Parallel PR fixtures are retained as explicit rejection cases so the active checker does not advertise superseded routes as valid plans;
+  - one local failure fixture for missing `Task Orchestration` section;
+  - one local failure fixture for non-list content in `Task Orchestration`;
+  - one local failure fixture for task item outside wave;
+  - one local failure fixture for checkbox markers;
+  - one local failure fixture for empty wave (missing nested task item);
+  - one local failure fixture for wave jump;
+  - one local failure fixture for wave repeat;
+  - one local failure fixture for duplicate task item in the same wave;
+  - one local failure fixture for missing task-level skill binding;
+  - one local failure fixture for missing `Goals`;
+  - one local failure fixture for missing `Non-goals`;
+  - one local failure fixture for empty `Goals`;
+  - one local failure fixture for goal items without follow-up detail text;
+  - one local failure fixture for invalid section order (`Task Orchestration` before `Goals` / `Non-goals`);
+  - one local failure fixture for persisted plan artifacts in `Task Orchestration`;
+  - one local failure fixture for mixed cleanup/create `PLAN.md` wording that must still be rejected as a persisted plan artifact;
+  - one local failure fixture for plain planning `decision log` artifacts in `Task Orchestration`;
+  - one local failure fixture for planning `handoff log` artifacts in `Task Orchestration`;
+  - one local failure fixture proving that generic `PLAN.md` handoff job wording with future-session context is still rejected;
+  - one local failure fixture proving that generic `decision log job` wording with future-handoff context is still rejected;
+  - one local failure fixture proving that `generate` still counts as a persisted-artifact action for planning handoff logs;
+  - one local failure fixture proving that `keep` still counts as a persisted-artifact action for planning handoff logs;
+  - one local failure fixture proving that generic `decision log workflow` wording is still rejected as a planning artifact;
+  - one local failure fixture proving that generic `handoff log pipeline` wording is still rejected as a planning artifact;
+  - one local failure fixture proving that moving a generated `PLAN.md` into a future-handoff location is still rejected as a persisted plan artifact;
+  - one local failure fixture proving that `prepare handoff log for next session` wording is still rejected as a planning artifact;
+  - one local failure fixture proving that generic `create PLAN.md file with implementation steps` wording is still rejected as a persisted plan artifact;
+  - one local failure fixture proving that generic `update PLAN.md with implementation steps` wording is still rejected as a persisted plan artifact;
+  - one local failure fixture for placeholder-only `Acceptance & Validation` text;
+  - one local failure fixture for `Acceptance & Validation` containing only `Notes`;
+  - one local failure fixture for `Acceptance & Validation` containing only `Follow-up items`;
+  - one local failure fixture for `Acceptance & Validation` containing only `TBA`;
+  - one local failure fixture for goal detail lines containing only placeholder text such as `TBD`;
+  - one local failure fixture for goal detail lines containing only placeholder text such as `TBA`;
+  - one local failure fixture for `Non-goals` containing only placeholder bullets;
+  - one positive fixture for a `C*` Constraint bound to a concrete acceptance item;
+  - failure fixtures for provenance leakage variants, a Constraint targeting an unknown acceptance item, and a Task Orchestration item that references a declared Constraint; ordinary task metadata that happens to use `owner` or `adr` remains valid.
+  - one positive normal-flow fixture proving that product-facing `decision log UI` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product-facing `workflow decision log entries` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product-facing `handoff log UI/API` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that cleanup tasks removing legacy `PLAN.md` references are not misclassified as persisted plan artifacts;
+  - one positive normal-flow fixture proving that product-facing `next-session decision log entries API` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product-facing `future handoff log timeline` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that generic product `plan file upload API` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product importer wording around customer-provided `PLAN.md` is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product-facing `agent decision log export API` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product-facing `next-session decision log` exporter wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product-facing `plan template decision log history` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product-facing `plan template handoff log history` wording is not misclassified as a persisted plan artifact;
+  - one positive normal-flow fixture proving that product-facing `progress log UI/API` wording is not misclassified as a persisted plan artifact;
+  - one local failure fixture for redundant `Execution Steps` section;
+  - one local failure fixture for missing `flow_type` question before plan output;
+  - one local failure fixture for unrelated flow wording (non-`flow_type` question);
+  - one local failure fixture proving flow-type/routing wording in the user request must also block silent `default_fast_track` when it does not actually lock a flow;
+  - one local failure fixture proving `default_fast_track` plans must still name a `merge-ready / Step 5C Ready` stop condition instead of stopping at plain PR creation;
+  - one local failure fixture for locked `flow_type` mismatch against `Flow Decision.flow_type`;
+  - one local failure fixture proving mutually conflicting flow signals must not silently fall back to `default_fast_track`;
+  - one local failure fixture for skill binding without `$` prefix in `Task Orchestration`;
+  - one local failure fixture for mixed skill refs where at least one ref misses `$` prefix in `Task Orchestration`;
+  - one local failure fixture for malformed `Flow Decision.flow_type` substring value (must report `UNKNOWN_FLOW_TYPE`);
+  - one local failure fixture for malformed user explicit `flow_type` lock substring (must remain unlocked and fail before plan);
+  - one local failure fixture for `implement-only` task-level spec work inside `Task Orchestration`;
+  - one local failure fixture for `implement-only` sync-spec task inside `Task Orchestration`;
+  - one local failure fixture for `implement-only` copy-spec-path task inside `Task Orchestration`;
+  - one local failure fixture for `implement-only` sync-spec task that references an existing spec path (still forbidden);
+  - one local failure fixture for `implement-only` update-existing-spec task (still forbidden);
+  - one local failure fixture for `implement-only` create-migrated-spec-copy task from existing spec path (still forbidden);
+  - one local failure fixture for `implement-only` create-spec task with `for tests` wording bypass attempt;
+  - one local failure fixture for `implement-only` update-spec task in a `*-tests` path (should not be treated as test-reference exemption);
+  - one local failure fixture for `implement-only` forbidden skill binding to `$topic-spec`;
+  - one local failure fixture for `implement-only` forbidden skill binding to `$normal-flow`;
+  - one local failure fixture for missing `开发基线` in `Flow Decision`;
+  - one local failure fixture proving a later `开发基线` mention outside `Flow Decision` must not satisfy the required field;
+  - one local failure fixture for abstract `开发基线` wording such as `目标仓库主干`;
+  - one local failure fixture proving repository file/doc paths such as `docs/specs/.../SPEC.md` are not accepted as concrete git baselines;
+  - one local failure fixture proving context-dependent Git aliases such as `@{-1}` are not accepted as concrete git baselines;
+  - one local failure fixture proving remote symbolic HEAD aliases are rejected by stable syntax, not by the checker repo's configured remotes;
+  - one local failure fixture proving placeholder values such as `TBD` are not accepted as concrete git baselines;
+  - one local failure fixture proving a plan must preserve the owner's explicit baseline instead of replacing it with another ref;
+  - one local failure fixture proving a later standalone flow answer (for example `normal` after flow clarification) must not clear an earlier owner-explicit baseline;
+  - one local failure fixture proving a later standalone flow restatement in an already locked planning session must not clear an earlier owner-explicit baseline;
+  - one local failure fixture proving plain Chinese owner wording such as `开发基线使用 upstream/release-2026q3` is enforced as an explicit baseline when the plan replaces it;
+  - one local failure fixture proving plain Chinese owner wording such as `开发基线用 upstream/release-2026q3` is also enforced as an explicit baseline when the plan replaces it;
+  - one local failure fixture proving directional owner wording such as ``基于 \``upstream/release-2026q3\` 开发` is also enforced as an explicit baseline when the plan replaces it;
+  - one local failure fixture proving `BASE_REF=...` owner wording is enforced as an explicit baseline when the plan replaces it;
+  - one local failure fixture proving English owner wording such as `base branch is ...` is also enforced as an explicit baseline when the plan replaces it;
+  - one local failure fixture proving legal trailing ref punctuation such as `release/v1.0!` is not silently normalized away during baseline comparison;
+  - one local failure fixture proving short plain-text refs such as `qa` are still enforced as explicit baselines when the plan replaces them;
+  - one local failure fixture proving a plain-text baseline that legally ends with `;` is not silently normalized away during baseline comparison;
+  - one local failure fixture proving a scope clarification like `计划页面上传 API` does not clear an earlier explicit baseline just because it contains the word `计划`;
+  - one `fast-track` positive case;
+  - one positive case for profile-bearing read-only sub-agents;
+  - one positive case proving explicit read-only prohibitions are not treated as shared writes;
+  - one positive case proving ordinary Chinese review wording such as `检查当前功能实现` is not treated as a write;
+  - one positive case proving descriptive English wording such as `source code implements the required behavior` is not treated as a write;
+  - one positive case proving `inspect commit history in the repository` remains read-only;
+  - one positive case proving non-review read-only analysis sidecars may still carry explicit profiles;
+  - one positive case proving a Tier 3 runtime strategy records readiness and profile guidance without a reviewer schedule;
+  - failure fixtures proving delegated or `main-agent` formal reviewer/lane/profile predeclarations report `FORMAL_REVIEW_PREDECLARATION_FORBIDDEN`;
+  - a raw-plan failure fixture proving direct plans must declare a valid `Tier 1` through `Tier 4` review tier;
+- one positive case for Initiative `task:<name>` executors with profiles;
+- one positive case proving every Initiative `task:<name>` has exactly one parseable acceptance/evidence/owner-gate mapping;
+- failure fixtures for missing, duplicate, unknown-task, incompatible-gate, and non-actionable owner-gated acceptance mappings;
+  - one failure fixture for missing delegated-agent profiles;
+  - one failure fixture for unsupported model/effort profiles;
+  - one failure fixture for an inline profile on `main-agent`;
+  - one failure fixture for legacy free-text `model=...` markers in new output;
+  - failure fixtures for a profile model or effort that violates the bound `$review-agent` matrix;
+  - one failure fixture for `task:<name>` in a non-Initiative flow;
+  - failure fixtures for Chinese/English shared-workspace writes, generic English repository/file/code/functionality/solution writes, inflected implementation verbs, command-style patch/remove/permission writes, task-local/filesystem writes, and contradictory write instructions;
+  - one failure fixture for the rejected `task-agent:<name>` alias;
+  - one legacy recovery fixture for an old unprofiled `sub-agent:<name>`;
+  - one `normal` positive case;
+  - one positive case for no-signal `default_fast_track` auto-lock;
+  - one positive case for default target-repo mainline planning that still emits a concrete ref such as `origin/main`;
+  - one positive case proving generic `基于 <spec/doc>` wording is not treated as an owner-explicit git baseline;
+  - one positive case preserving an explicit English owner baseline phrased as `base branch is ...`;
+  - one positive case preserving an explicit owner branch baseline even when flow_type is answered in a later standalone reply;
+  - one positive case preserving an explicit owner branch baseline even when the owner later repeats the same flow token in an already locked planning session;
+  - one positive case preserving an explicit owner branch baseline expressed through directional wording such as ``基于 \``...\` 开发`;
+  - one positive case proving directional product wording such as `基于 new plan file upload API 规划这个任务` does not get misclassified as an owner-explicit git baseline;
+  - one positive case preserving an explicit owner branch baseline expressed as `BASE_REF=...`;
+  - one positive case preserving an explicit owner branch baseline;
+  - one positive case preserving an explicit owner branch baseline that legally ends with punctuation such as `!`;
+  - one positive case preserving an explicit owner branch baseline that legally ends with punctuation such as `!` even when the plain-text request continues with a comma-delimited follow-up clause;
+  - one positive case preserving an explicit owner branch baseline expressed as a short plain-text ref such as `qa`;
+  - one positive case preserving an explicit owner branch baseline that legally ends with `;` in plain text;
+  - one positive case preserving an explicit owner branch baseline expressed in plain Chinese text without backticks or a colon;
+  - one positive case preserving an explicit owner branch baseline expressed in plain Chinese text with `开发基线用 ...` wording;
+  - one positive case preserving an explicit owner branch baseline even when the plain-text request continues with a comma-delimited follow-up clause;
+  - one positive case preserving an explicit owner branch baseline that uses legal git-ref special characters such as `+`;
+  - one positive case preserving an explicit owner branch baseline whose final path component is `HEAD`, such as `feature/HEAD`;
+  - one positive case preserving an explicit owner branch baseline whose ref contains `to` as part of the branch name;
+  - one positive case preserving an explicit owner branch baseline when the later `flow_type` answer is given as natural-language prose instead of a bare standalone token;
+  - one positive case preserving an explicit owner branch baseline whose ref exactly equals a placeholder-like token such as `todo`;
+  - one positive case preserving an explicit owner branch baseline whose ref syntactically resembles a doc path, such as `feature/README.md`;
+  - one positive case preserving an explicit owner commit baseline;
+  - one positive case proving a generic “please give me a new executable plan” re-ask resets the previous owner baseline and flow lock instead of leaking them into the next plan;
+  - one positive case proving a new explicit `$dev-plan` request that contains `merge-ready` wording still resets the previous owner baseline instead of misclassifying that wording as plain continuation;
+  - one positive case proving a new plain-language request such as `请帮我规划这个任务：...` resets the previous owner baseline instead of being validated against stale session state;
+- one positive case proving a new explicit `$dev-plan` request for a task name such as `merge queue API` is not misclassified as plain continuation;
+- one positive case proving an explicit new `$dev-plan` request still resets the planning session even when the same sentence also contains continuation wording such as `继续`;
+- one positive case proving a new explicit `$dev-plan` request resets the previous request's owner baseline instead of leaking it into a later independent plan;
+  - one positive case proving a new independent plan request can reset the previous owner baseline even when the later user turn does not repeat the `$dev-plan` token;
+  - one positive case proving an equivalent remote ref expansion such as `refs/remotes/origin/main` does not trip owner baseline mismatch when the owner asked for `origin/main`;
+  - one positive case proving ordinary scope clarification wording such as `请按 fast-track 把 plan.md cleanup 也规划进去` does not reset an existing planning session's flow lock or explicit baseline;
+  - one positive case proving ordinary scope clarification wording such as `new plan file upload API` does not reset an existing planning session's flow lock or explicit baseline;
+  - one positive case proving ordinary scope clarification wording such as `请按 normal 把计划页面上传 API 也规划进去，flow 和开发基线都不变` does not reset an existing planning session's flow lock or explicit baseline;
+  - one positive case proving ordinary scope clarification wording such as `请把导入页面也规划进去，其他不变` does not reset an existing planning session's flow lock or explicit baseline;
+  - one positive case proving indirect read-only prohibitions such as `not allowed to`, `forbidden from`, and `不允许` are accepted;
+  - one positive case where a direct non-default flow-skill reference overrides the default fast-track path;
+  - one positive case where a standalone flow token still locks correctly even when followed by normal punctuation;
+  - one positive case with `request_user_input` + `flow_type` lock evidence;
+  - one positive case where user explicit lock changes later and latest lock value should win;
+  - one positive case for keyed `flow_type: fast-flow` explicit lock alias;
+  - one positive case proving default Initiative eligibility may be established by the proposed plan's independently acceptable/mergeable Ticket scope and Wave mechanism without requiring owner contract keywords;
+  - one positive case for full-width skill delimiter parsing (e.g. `，`) with valid `$`-prefixed refs;
+  - one positive case for pure `implement-only` orchestration (no spec creation/migration/sync task);
+  - one positive case for `implement-only` test-planning task that references an existing spec path;
+  - one positive case for `implement-only` parser implementation task that references an existing spec path;
+  - one positive case for `implement-only` parser update task that references an existing spec path;
+  - one ambiguous `继续` fallback case (now expected to fail under strict block, with text fallback still listing all four flows).
+  - one negative case proving Git and shell write commands such as `git add`, `git push`, `git branch`, `git tag`, `git update-ref`, `sed -i`, `tee`, and redirection are rejected for sub-agents;
+
+  - one failure case proving bare git commit and Git global-option variants such as git -C . add and git --git-dir=... push are rejected;
+  - one failure case proving git config mutations and git worktree add/remove are rejected;
+  - one positive case proving git apply --check/stat/numstat/summary remain valid read-only validation commands;
+  - one positive case proving git config queries and git worktree list remain valid read-only inspection commands;
+
+Run:
+
+```bash
+bun run bin/plan_contract_check.ts --cases skills/dev-plan/references/replay-cases/CASES.txt
+bun test skills/dev-plan/scripts/test_migrate_task_orchestration.ts
+```
+
+Interpretation:
+
+- `PASS` means the session/fixture matches the Plan contract.
+- `FINDING ... code=...` indicates a policy violation to fix.
+- `CASE_FAIL` means expected/actual mismatch in replay validation.

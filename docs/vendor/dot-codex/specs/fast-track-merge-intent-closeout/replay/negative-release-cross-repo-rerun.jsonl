@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"release-discovery","output":{"release_expected":true,"release_epoch":"merge-abc1234","target_repo":"example/repo","target_branch":"main","target_sha":"abc1234","release_tag":"1.0.0","release_run_id":2,"release_surfaces":["github_release"]}}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"release-failure","output":{"release_run_id":2,"conclusion":"failure","url":"https://github.com/example/repo/actions/runs/2"}}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"release-contract","output":{"release_run_id":2,"idempotent":true,"retry_safe":true}}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh -R other/repo run rerun 2\"}","call_id":"release-rerun"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并。发布状态=失败；发布处置=owner-action-required；未自动 rerun。"}}

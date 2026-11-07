@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>任务编排</title>
+  <link rel="stylesheet" href="assets/app.css">
+  <script type="module" src="assets/app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar" data-ui="app">
+      <div class="identity">
+        <div class="brand-mark" aria-hidden="true"><i data-lucide="network"></i></div>
+        <div class="identity-copy"><div class="product-name">任务编排</div><div id="project-name" class="project-name">正在加载</div></div>
+      </div>
+      <div class="top-actions">
+        <div id="run-profile-control" class="run-profile-control"></div>
+      <div class="top-meta"><span id="connection" class="connection" role="status"><span class="connection-dot"></span>连接中</span><span id="revision" class="revision"></span><span id="updated" class="updated"></span></div>
+        <div class="version-control dropdown dropdown-end" data-menu="version">
+          <span class="version-label">版本</span>
+          <button id="version-trigger" type="button" class="version-trigger menu-trigger btn btn-ghost btn-sm" aria-label="选择计划版本" aria-haspopup="listbox" aria-expanded="false" aria-controls="version-menu"><span id="version-value">当前版本</span><i data-lucide="chevron-down" aria-hidden="true"></i></button>
+          <ul id="version-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="计划版本"></ul>
+        </div>
+        <div class="theme-control dropdown dropdown-end" data-menu="theme">
+          <i data-lucide="contrast" aria-hidden="true"></i>
+          <span class="sr-only">主题</span>
+          <button id="theme-trigger" type="button" class="theme-trigger btn btn-ghost btn-sm" aria-label="主题" aria-haspopup="listbox" aria-expanded="false" aria-controls="theme-menu"><span id="theme-value">深色</span><i data-lucide="chevron-down" aria-hidden="true"></i></button>
+          <ul id="theme-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="主题选项">
+            <li><button type="button" role="option" data-menu-value="system">跟随系统</button></li>
+            <li><button type="button" role="option" data-menu-value="light">浅色</button></li>
+            <li><button type="button" role="option" data-menu-value="dark">深色</button></li>
+          </ul>
+        </div>
+      </div>
+    </header>
+    <main class="main">
+      <section class="overview" aria-label="任务概览">
+        <div id="summary" class="summary" aria-live="polite"></div>
+      </section>
+      <section class="workspace" aria-label="编排视图">
+        <div class="workspace-main">
+          <div class="workspace-view">
+            <div class="view-header">
+            <div class="view-heading"><span class="view-meta">observability</span><span id="view-context" class="view-context">运行视图</span><span id="view-count" class="view-count"></span></div>
+            <div class="tabs" role="tablist" aria-label="视图">
+              <button id="tab-graph" type="button" role="tab" aria-selected="true" aria-controls="graph-view" data-tab="graph">依赖图</button>
+              <button id="tab-planned" type="button" role="tab" aria-selected="false" aria-controls="planned-view" data-tab="planned">理论安排</button>
+              <button id="tab-actual" type="button" role="tab" aria-selected="false" aria-controls="actual-view" data-tab="actual">实际进度</button>
+            </div>
+            <label class="search input"><i data-lucide="search" aria-hidden="true"></i><span class="sr-only">搜索任务</span><input id="search" type="search" placeholder="搜索任务"></label>
+            </div>
+            <div class="filters">
+            <span class="filter-caption">筛选视图</span>
+            <div class="menu-control dropdown" data-menu="group-filter"><button id="group-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按交付单元筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="group-filter-menu"><span id="group-filter-value">全部交付单元</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="group-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按交付单元筛选"></ul></div>
+            <div class="menu-control dropdown" data-menu="state-filter"><button id="state-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按状态筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="state-filter-menu"><span id="state-filter-value">全部状态</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="state-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按状态筛选"></ul></div>
+            <div class="menu-control dropdown" data-menu="kind-filter"><button id="kind-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按任务类型筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="kind-filter-menu"><span id="kind-filter-value">全部类型</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="kind-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按任务类型筛选"></ul></div>
+            <div class="graph-tools" id="graph-tools">
+              <button type="button" id="zoom-out" class="icon-button" title="缩小" aria-label="缩小"><i data-lucide="minus"></i></button>
+              <button type="button" id="zoom-in" class="icon-button" title="放大" aria-label="放大"><i data-lucide="plus"></i></button>
+              <button type="button" id="fit" class="icon-button" title="适应视图" aria-label="适应视图"><i data-lucide="maximize-2"></i></button>
+            </div>
+            <div class="timeline-tools" id="timeline-tools" hidden>
+              <button type="button" id="timeline-zoom-out" class="icon-button" title="缩小时间范围" aria-label="缩小时间范围"><i data-lucide="minus"></i></button>
+              <button type="button" id="timeline-zoom-in" class="icon-button" title="放大时间范围" aria-label="放大时间范围"><i data-lucide="plus"></i></button>
+              <button type="button" id="timeline-fit" class="icon-button" title="适应时间范围" aria-label="适应时间范围"><i data-lucide="maximize-2"></i></button>
+            </div>
+            </div>
+            <div id="connection-notice" class="notice" role="status" hidden></div>
+            <div id="phase-notice" class="notice notice-neutral" role="status" hidden><span id="phase-notice-text"></span><button type="button" id="phase-jump" class="text-button">查看实际进度</button></div>
+            <div id="operation-warning" class="notice" role="status" hidden></div>
+            <div id="plan-warning" class="notice notice-warning" role="status" hidden></div>
+            <div id="load-error" class="notice notice-error" role="alert" hidden></div>
+            <div id="graph-view" class="canvas-view" role="tabpanel" aria-labelledby="tab-graph"><div id="graph-projection-warning" class="notice notice-warning" role="status" hidden></div><div id="graph" aria-label="任务依赖图"></div><div id="graph-a11y" class="graph-a11y" role="list" aria-label="依赖图节点列表"></div><div id="graph-empty" class="empty" hidden>暂无任务</div></div>
+            <div id="planned-view" class="timeline-view" role="tabpanel" aria-labelledby="tab-planned" hidden><div id="planned-timeline"></div><div class="axis-timezone"></div><div id="planned-unknown" class="unknown"></div></div>
+            <div id="actual-view" class="timeline-view" role="tabpanel" aria-labelledby="tab-actual" hidden><div id="actual-timeline"></div><div class="axis-timezone"></div><div id="actual-unknown" class="unknown"></div></div>
+          </div>
+          <div class="workspace-tasks">
+            <section id="group-section" class="task-list-section" aria-labelledby="group-heading"><div class="section-heading"><h2 id="group-heading">交付单元</h2></div><div id="group-list" class="task-list" role="list"></div></section>
+            <section id="task-section" class="task-list-section" aria-labelledby="task-heading"><div class="section-heading"><h2 id="task-heading">任务</h2><div class="section-heading-actions"><span id="task-count" class="section-count"></span><div id="task-layout-switch" class="layout-switch" role="group" aria-label="对象布局"><button id="task-layout-board" type="button" class="icon-button layout-option" aria-label="看板布局" aria-describedby="task-layout-board-tooltip" aria-pressed="true"><i data-lucide="columns-3"></i><span id="task-layout-board-tooltip" class="layout-tooltip" role="tooltip">看板布局：按交付单元分列展示任务</span></button><button id="task-layout-grid" type="button" class="icon-button layout-option" aria-label="网格布局" aria-describedby="task-layout-grid-tooltip" aria-pressed="false"><i data-lucide="layout-grid"></i><span id="task-layout-grid-tooltip" class="layout-tooltip" role="tooltip">网格布局：平铺展示任务</span></button></div></div></div><div id="task-list" class="task-list" role="list"></div></section>
+          </div>
+        </div>
+        <div id="details-backdrop" class="details-backdrop" hidden></div>
+        <aside id="details" class="details" aria-label="详情" aria-hidden="true" tabindex="-1"><div class="details-heading"><button type="button" id="close-details" class="icon-button mobile-close" title="关闭详情" aria-label="关闭详情"><i data-lucide="x"></i></button></div><div id="details-content" class="details-empty"><span class="empty-rule" aria-hidden="true"></span><strong>选择交付单元或任务</strong><span>查看依赖、运行时间和原生会话链接</span></div></aside>
+      </section>
+    </main>
+  </div>
+  <div id="hover-preview" class="hover-preview" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

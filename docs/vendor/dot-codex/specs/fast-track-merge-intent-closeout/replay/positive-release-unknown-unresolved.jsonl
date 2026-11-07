@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"release-discovery","output":{"release_expected":"unknown","release_epoch":"merge-abc1234","target_repo":"example/repo","target_branch":"main","target_sha":"abc1234","reason":"release contract discovery is ambiguous"}}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"等待预算耗尽。release_expected=unknown；发布状态=未终态；发布版本=none；发布tag=none；发布channel=none；发布绑定sha=abc1234；发布workflow=none；发布URL=none；发布时间=none；发布产物=none；发布处置=report-only；post-merge 尚未完成；流程锚点.下一门禁=继续 release tracker。"}}

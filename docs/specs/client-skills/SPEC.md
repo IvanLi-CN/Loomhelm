@@ -1,0 +1,95 @@
+# 客户端 Skills 与工程执行支持
+
+## Context and Scope
+
+本主题约束客户端从固定 dot-codex 源版本迁入的 29 套 Skills、执行脚本、共享支持和本地任务网页。它与客户端独立核心并存，不替代 Go 客户端、服务端或 Web App，不代表 Connected mode 已实现。
+
+## Terms and Interfaces
+
+- Skill 是命名的指令与资源包，不是一次任务执行，也不授予超出调用者授权的权限。
+- 迁入资源以项目根 `skills/` 为源包目录、`bin/` 为共享执行支持目录；生产产物必须携带必要资源。
+- 外部宿主能力包括未迁入的 Skills、原生 Codex 工具及专项 CLI；缺失能力必须明确检测。
+
+## Requirements
+
+### REQ-SKILLS-001
+
+客户端 MUST 完整提供已审查的 29 套源包及必要脚本、references、模板、网页资源、测试与共享依赖。资源 MUST 可追溯到固定来源提交和文件摘要，不得隐式依赖全局 dot-codex 执行代码，也不得复制 `~/.agents` 的 Skill 源包。资源 MUST 排除与客户端实际功能及其行为回归无关的提供方历史语言迁移审计资料；来源清单 MUST 明确记录排除范围，重复导入和增量打包不得重新带入这些资料。
+
+### REQ-SKILLS-002
+
+生产命令、计划校验与本地网页服务 MUST 在 Node.js 22/24 和 Bun 下遵守相同的输入、退出码、副作用及恢复合同。构建和原始测试允许使用 Bun；Node 生产路径不得调用 Bun 作为隐藏兜底。
+
+### REQ-SKILLS-003
+
+文件读写与互斥 MUST 保留目录描述符相对操作、拒绝符号链接、文件身份与权限验证、旧新进程锁互斥、原子不覆盖重命名及原有备份语义。不得以路径预检查或另一种不互斥的锁替代。
+
+### REQ-SKILLS-004
+
+客户端 MUST 直接兼容并合法接续现有 schema2/contract2 Multi-task Flow 运行，不要求导入或转换；保持 owner、revision、请求身份、历史和依赖关系。未知副作用 MUST 先对账；较旧格式保持原有只读及显式维护边界，不自动迁移或转移 owner。
+
+### REQ-SKILLS-005
+
+任务与本地网页 MUST 使用迁入的权威运行合同；可执行后继应通过真实派发接力，交付单元阻塞不得阻止无关可执行贡献。网页 MUST 保留任务图、进度、会话链接、实时更新、鉴权、loopback 和服务所有权验证。
+
+### REQ-SKILLS-006
+
+各工程交付路径 MUST 保持原授权、门禁和停靠点；dev-plan MUST 保持独立临时计划合同，不与运行协调器建立机器交接。外部依赖缺失 MUST 明确阻塞适用场景，不静默减免门禁。
+
+### REQ-SKILLS-007
+
+正式工作流与任务流 MUST 替换此前缩水实现及误导完成声明。不兼容旧命令 MUST 明确报错，不偷偷转换或删除旧状态。客户端独立核心、Codex 底层能力及 Go/Web 工程 MUST 保留。
+
+## Verification
+
+### VER-SKILLS-001
+
+- covers: `REQ-SKILLS-001`
+- Method: 固定来源资源清单、路径闭包和来源隔离产物测试。
+- Pass condition: 29 套资源完整且无全局执行代码回退或外部 Skill 源包混入。
+
+### VER-SKILLS-002
+
+- covers: `REQ-SKILLS-002`
+- Method: Node.js 22/24 与 Bun 生产命令矩阵及迁入原始测试。
+- Pass condition: 同一合同输入结果一致，Node 路径不使用 Bun 兜底。
+
+### VER-SKILLS-003
+
+- covers: `REQ-SKILLS-003`
+- Method: POSIX 安全故障注入与旧 Bun/新 Node 跨进程竞争。
+- Pass condition: 同时至多一名合法持锁者，目标身份变化或越界失败关闭，不覆盖已存在目标。
+
+### VER-SKILLS-004
+
+- covers: `REQ-SKILLS-004`
+- Method: 旧格式测试副本直接接续、交叉读写和重启对账。
+- Pass condition: 不转换即可合法续跑，历史和身份保持，冲突及未知副作用被正确处理。
+
+### VER-SKILLS-005
+
+- covers: `REQ-SKILLS-005`
+- Method: 受控原生 Codex 会话接力及本地网页实时观察。
+- Pass condition: 前驱完成后产生后继实际派发收据，网页同步权威事实，服务鉴权和所有权保持。
+
+### VER-SKILLS-006
+
+- covers: `REQ-SKILLS-006`
+- Method: 工程交付路径与独立计划通过、拒绝和依赖缺失测试。
+- Pass condition: 原授权与停靠点不变，不以局部验证冒充完成或合并许可。
+
+### VER-SKILLS-007
+
+- covers: `REQ-SKILLS-007`
+- Method: 接口和调用方检查、旧状态保留及既有工程回归。
+- Pass condition: 正式入口使用迁入合同，旧命令不静默转换，Go/Web 与独立核心完整。
+
+## Related ADRs
+
+- [TypeScript 客户端运行时](../../adr/0017-typescript-client-runtime.md)
+- [迁入执行支持与 POSIX 适配](../../adr/0019-client-skills-runtime.md)
+
+## References
+
+- [实现说明](IMPLEMENTATION.md)
+- [兼容历史](HISTORY.md)

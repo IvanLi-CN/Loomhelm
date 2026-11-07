@@ -1,0 +1,33 @@
+import { mkdtempSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { servicePaths } from "../scripts/service-paths";
+import { ServiceAuth } from "../scripts/service-auth";
+import { ServiceState } from "../scripts/service-state";
+import { compatibility } from "../scripts/service-contract";
+import { buildId, digest, releaseFiles } from "../scripts/service-release";
+import { LedgerStore } from "../scripts/store";
+import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
+
+export function serviceFixture() {
+  const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "mtf-service-")));
+  const state = new ServiceState(servicePaths({ MULTI_TASK_FLOW_PROFILE: "test", MULTI_TASK_FLOW_ROOT: root }));
+  state.initialize(); new ServiceAuth(state).initialize();
+  return { root, state };
+}
+export function fixtureRelease(root: string, name = "bundle") {
+  const source = join(root, name); mkdirSync(join(source, "dist"), { recursive: true });
+  for (const file of releaseFiles) writeFileSync(join(source, file), file === "dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name);
+  const manifest = { schema_version: 1 as const, source_sha: "a".repeat(40), service_version: "0.0.0-test", platform: `${process.platform}-${process.arch}` as "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64", ...compatibility, files: Object.fromEntries(releaseFiles.map(file => [file, digest(file === "dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name)])) };
+  const result = { ...manifest, build_id: buildId(manifest) };
+  writeFileSync(join(source, "manifest.json"), JSON.stringify(result));
+  return { source, manifest: result };
+}
+export function fixtureRun(root: string, id = "demo-run") {
+  const run = createDemoLedger(); run.orchestration_id = id;
+  run.schema_version = 2;
+  run.source_schema_version = null;
+  run.contract_version = 2;
+  const store = new LedgerStore(root, id); store.create(run);
+  return { run, store };
+}

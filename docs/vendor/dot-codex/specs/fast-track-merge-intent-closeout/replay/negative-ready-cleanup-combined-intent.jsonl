@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"准备好合并并收尾"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Step 5C Ready，可立即合并。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-ready-cleanup-combined-intent","last_agent_message":"Step 5C Ready，可立即合并。"}}

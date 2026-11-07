@@ -1,0 +1,45 @@
+{
+  "run_id": "example-run",
+  "actor": { "role": "main", "thread_id": "example-main-thread" },
+  "payload": {
+    "repository": { "provider": "github", "host": "github.com", "owner": "example", "name": "project", "target_branch": "main" },
+    "config": { "execution_profile": { "model": "gpt-6.1-sol", "thinking": "medium" }, "max_running_tasks": 3, "display_timezone": "Asia/Shanghai", "conversation_links_verified": false },
+    "initial_plan": {
+      "id": "plan-1", "supersedes_id": null, "approval_id": null, "created_at": "2026-01-01T00:00:00.000Z", "start_at": "2026-01-01T00:00:00.000Z",
+      "atoms": [
+        { "id": "atom-1", "title": "Implement core", "task_id": "task-1", "purpose": "Build the core", "output": "Reviewed child PR" },
+        { "id": "atom-2", "title": "Verify CLI", "task_id": "task-2", "purpose": "Verify the CLI boundary", "output": "Reviewed child PR" }
+      ],
+      "group_atoms": [
+        { "id": "group-atom-1", "title": "准备父分支", "group_id": "group-1", "purpose": "建立交付单元父分支", "output": "父分支已准备", "lifecycle_stage": "workspace_ready" },
+        { "id": "group-atom-2", "title": "创建父 PR", "group_id": "group-1", "purpose": "提交交付单元父 PR", "output": "父 PR 已创建", "lifecycle_stage": "pr_created" },
+        { "id": "group-atom-3", "title": "验收集成结果", "group_id": "group-1", "purpose": "核对贡献任务集成结果", "output": "集成结果已验收", "lifecycle_stage": null },
+        { "id": "group-atom-4", "title": "合并父 PR", "group_id": "group-1", "purpose": "合并已验收的父 PR", "output": "父 PR 已合并", "lifecycle_stage": "pr_merged" },
+        { "id": "group-atom-5", "title": "收口", "group_id": "group-1", "purpose": "完成交付单元收口", "output": "交付单元已收口", "lifecycle_stage": "closed" }
+      ],
+      "atomic_edges": [],
+      "nodes": [
+        { "id": "start", "kind": "main_start", "ref_id": null, "group_id": null, "label": "Start", "estimate_minutes": 0, "estimate_basis": null, "estimate_confidence": null },
+        { "id": "group-start", "kind": "group_start", "ref_id": "group-1", "group_id": "group-1", "label": "Group start", "estimate_minutes": 0, "estimate_basis": null, "estimate_confidence": null },
+        { "id": "task-node-1", "kind": "task", "ref_id": "task-1", "group_id": "group-1", "label": "Implement core", "estimate_minutes": 120, "estimate_basis": "Example estimate", "estimate_confidence": "medium" },
+        { "id": "task-node-2", "kind": "task", "ref_id": "task-2", "group_id": "group-1", "label": "Verify CLI", "estimate_minutes": 60, "estimate_basis": "Example estimate", "estimate_confidence": "medium" },
+        { "id": "group-end", "kind": "group_end", "ref_id": "group-1", "group_id": "group-1", "label": "Group complete", "estimate_minutes": 0, "estimate_basis": null, "estimate_confidence": null },
+        { "id": "end", "kind": "main_end", "ref_id": null, "group_id": null, "label": "Complete", "estimate_minutes": 0, "estimate_basis": null, "estimate_confidence": null }
+      ],
+      "edges": [
+        { "id": "edge-1", "from_node_id": "start", "to_node_id": "group-start", "requires": "completed" },
+        { "id": "edge-2", "from_node_id": "group-start", "to_node_id": "task-node-1", "requires": "completed" },
+        { "id": "edge-3", "from_node_id": "group-start", "to_node_id": "task-node-2", "requires": "completed" },
+        { "id": "edge-4", "from_node_id": "task-node-1", "to_node_id": "group-end", "requires": "integrated" },
+        { "id": "edge-5", "from_node_id": "task-node-2", "to_node_id": "group-end", "requires": "integrated" },
+        { "id": "edge-6", "from_node_id": "group-end", "to_node_id": "end", "requires": "completed" }
+      ],
+      "cut_rules": [], "actions": []
+    },
+    "groups": [{ "id": "group-1", "title": "Core", "agent_thread_id": null, "state": "planned", "parent_branch": null, "parent_pr": null, "cut_sha": null, "current_sha": null, "merge_sha": null, "requirements_path": null }],
+    "tasks": [
+      { "id": "task-1", "title": "Implement core", "kind": "contribution", "group_id": "group-1", "thread_id": null, "state": "planned", "atoms": [{ "id": "atom-1", "title": "Implement core", "status": "planned" }], "owned_surfaces": ["src/core"], "base_sha": null, "pr": null, "requirements_path": null, "started_at": null, "finished_at": null, "blocker": null, "assignment_history": [] },
+      { "id": "task-2", "title": "Verify CLI", "kind": "verification", "group_id": "group-1", "thread_id": null, "state": "planned", "atoms": [{ "id": "atom-2", "title": "Verify CLI", "status": "planned" }], "owned_surfaces": ["src/cli"], "base_sha": null, "pr": null, "requirements_path": null, "started_at": null, "finished_at": null, "blocker": null, "assignment_history": [] }
+    ]
+  }
+}

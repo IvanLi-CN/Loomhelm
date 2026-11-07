@@ -1,0 +1,370 @@
+#!/usr/bin/env ruby
+require 'json'
+require 'open3'
+require 'optparse'
+require 'pathname'
+require 'set'
+require 'shellwords'
+
+SSH_ALIAS = '192.168.31.11'.freeze
+SRV_ROOT = '/home/ivan/srv'.freeze
+ROOT_DOCS = [File.join(SRV_ROOT, 'AGENTS.md'), File.join(SRV_ROOT, 'README.md')].freeze
+IGNORE_PATTERNS = [
+  'docker-compose.legacy.yml',
+  'quadlet/',
+  'PODMAN-*',
+  'MIGRATION-TO-QUADLET*',
+  'QUADLET-*'
+].freeze
+
+options = { format: :text }
+OptionParser.new do |opts|
+  opts.banner = 'Usage: resolve-target [--json] [repo-name-or-path]'
+  opts.on('--json', 'Output JSON') { options[:format] = :json }
+end.parse!(ARGV)
+input = ARGV.shift || Dir.pwd
+
+def shell_capture(*command)
+  stdout, stderr, status = Open3.capture3(*command)
+  [stdout, stderr, status.success?]
+end
+
+def ssh_capture(script)
+  shell_capture('ssh', '-n', SSH_ALIAS, "bash -lc #{Shellwords.escape(script)}")
+end
+
+def detect_repo(input)
+  path = Pathname(input).expand_path
+  if path.exist?
+    stdout, = shell_capture('git', '-C', path.to_s, 'rev-parse', '--show-toplevel')
+    repo_root = stdout.strip.empty? ? path : Pathname(stdout.strip)
+    [repo_root.basename.to_s, repo_root.to_s]
+  else
+    [File.basename(input.to_s), nil]
+  end
+end
+
+def remote_repo_slugs(repo_root)
+  return [] unless repo_root
+
+  stdout, = shell_capture('git', '-C', repo_root, 'remote', '-v')
+  slugs = []
+  stdout.lines.each do |line|
+    parts = line.split
+    remote = parts[1]
+    next if remote.nil? || remote.empty?
+
+    remote = remote.sub(%r{\A[^:]+@}, '') if remote.start_with?('git@')
+    remote = remote.sub(%r{\Assh://[^/]+/}, '')
+    remote = remote.sub(%r{\Ahttps?://[^/]+/}, '')
+    basename = File.basename(remote)
+    basename = basename.sub(/\.git\z/, '')
+    slugs << basename unless basename.empty?
+  end
+  slugs.uniq
+end
+
+def stack_from_path(path)
+  match = path.match(%r{\A#{Regexp.escape(SRV_ROOT)}/([^/]+)(?:/|\z)})
+  match && match[1]
+end
+
+repo_name, repo_root = detect_repo(input)
+search_terms = [repo_name, *remote_repo_slugs(repo_root)].compact.map { |term| term.to_s.strip }.reject(&:empty?).uniq
+
+exact_dirs = []
+compose_matches = []
+card_matches = []
+maintenance_matches = []
+container_hits = []
+container_inventory = []
+stack_candidates = Set.new
+exact_dir_stacks = Set.new
+exact_compose_stacks = Set.new
+compose_stacks = Set.new
+card_stacks = Set.new
+direct_card_stacks = Set.new
+weak_card_stacks = Set.new
+container_project_stacks = Set.new
+container_validated_project_stacks = Set.new
+container_working_dir_stacks = Set.new
+container_working_dir_matches = Set.new
+container_label_matches = []
+
+search_terms.each do |term|
+  stdout, = ssh_capture("command find #{SRV_ROOT} -mindepth 1 -maxdepth 1 -type d -name #{Shellwords.escape(term)} -print 2>/dev/null || true")
+  stdout.lines.map(&:strip).reject(&:empty?).each do |path|
+    exact_dirs << path
+    stack = stack_from_path(path)
+    if stack
+      stack_candidates << stack
+      exact_dir_stacks << stack
+      remote_compose_files = ['compose.docker.yml', 'docker-compose.yml'].map do |name|
+        Shellwords.escape(File.join(path, name))
+      end
+      compose_check = remote_compose_files.map { |compose_path| "test -f #{compose_path}" }.join(' || ')
+      stdout, = ssh_capture("(#{compose_check}) && printf yes || true")
+      exact_compose_stacks << stack if stdout.strip == 'yes'
+    end
+  end
+
+  stdout, = ssh_capture("command grep -RIlF -- #{Shellwords.escape(term)} #{SRV_ROOT}/*/compose.docker.yml #{SRV_ROOT}/*/docker-compose.yml 2>/dev/null || true")
+  stdout.lines.map(&:strip).reject(&:empty?).each do |path|
+    compose_matches << path
+    stack = stack_from_path(path)
+    if stack
+      stack_candidates << stack
+      compose_stacks << stack
+    end
+  end
+
+  card_script = [
+    "command grep -RIlF -- #{Shellwords.escape(term)} #{SRV_ROOT}/*/*.md 2>/dev/null",
+    "| command grep -v '#{SRV_ROOT}/maintenance/'",
+    "| command grep -v '/README.md$'",
+    "| command grep -v '/AGENTS.md$'",
+    "| command grep -v '/PODMAN-'",
+    "| command grep -v '/MIGRATION-TO-QUADLET'",
+    "| command grep -v '/QUADLET-'",
+    "|| true"
+  ].join(' ')
+  stdout, = ssh_capture(card_script)
+  stdout.lines.map(&:strip).reject(&:empty?).each do |path|
+    card_matches << path
+    stack = stack_from_path(path)
+    if stack
+      stack_candidates << stack
+      card_stacks << stack
+      if File.basename(path, '.md').casecmp?(term)
+        direct_card_stacks << stack
+      else
+        weak_card_stacks << stack
+      end
+    end
+  end
+
+  filename_card_pattern = Shellwords.escape("#{term}.md")
+  maintenance_glob = Shellwords.escape("#{SRV_ROOT}/maintenance/*")
+  stdout, = ssh_capture("command find #{SRV_ROOT} -mindepth 2 -maxdepth 2 -type f -not -path #{maintenance_glob} -iname #{filename_card_pattern} -print 2>/dev/null || true")
+  stdout.lines.map(&:strip).reject(&:empty?).each do |path|
+    card_matches << path
+    stack = stack_from_path(path)
+    if stack
+      stack_candidates << stack
+      card_stacks << stack
+      direct_card_stacks << stack
+    end
+  end
+
+  stdout, = ssh_capture("command find #{SRV_ROOT}/maintenance -maxdepth 1 -type f -name #{Shellwords.escape("*#{term}*.md")} -print 2>/dev/null || true")
+  stdout.lines.map(&:strip).reject(&:empty?).each do |path|
+    maintenance_matches << path
+  end
+
+  stdout, = ssh_capture("command docker ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null || true")
+  stdout.lines.map(&:strip).reject(&:empty?).each do |line|
+    container_inventory << line
+  end
+end
+
+container_hits = container_inventory.uniq.sort
+matched_container_hits = []
+container_hits.each do |line|
+  container_name = line.split("\t", 2).first
+  next if container_name.nil? || container_name.empty?
+  image = line.split("\t", 2).last.to_s
+
+  label_template = "{{index .Config.Labels \"com.docker.compose.project\"}}\t{{index .Config.Labels \"com.docker.compose.service\"}}\t{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}"
+  stdout, = ssh_capture(
+    "command docker inspect --format #{Shellwords.escape(label_template)} #{Shellwords.escape(container_name)} 2>/dev/null || true",
+  )
+  stdout.lines.map(&:strip).reject(&:empty?).each do |labels|
+    project, service, working_dir = labels.split("\t", 3)
+    next if project.nil? || project.empty? || project == '<no value>'
+
+    working_dir_stack = stack_from_path(working_dir.to_s)
+    label_values = [container_name, image, project, service, working_dir, working_dir_stack].compact
+    next unless search_terms.any? do |term|
+      label_values.any? { |value| value.downcase.include?(term.downcase) }
+    end
+
+    matched_container_hits << line
+
+    container_project_stacks << project
+    if (stack = working_dir_stack)
+      remote_working_dir = Shellwords.escape(working_dir)
+      remote_compose_files = ['compose.docker.yml', 'docker-compose.yml'].map do |name|
+        Shellwords.escape(File.join(working_dir, name))
+      end
+      compose_check = remote_compose_files.map { |path| "test -f #{path}" }.join(' || ')
+      stdout, = ssh_capture("test -d #{remote_working_dir} && (#{compose_check}) && printf yes || true")
+      if stdout.strip == 'yes'
+        container_working_dir_matches << stack
+        container_validated_project_stacks << project if project == stack
+      end
+    end
+    if project.match?(/\A[a-zA-Z0-9][a-zA-Z0-9_-]*\z/)
+      remote_project_dir = File.join(SRV_ROOT, project)
+      remote_project_path = Shellwords.escape(remote_project_dir)
+      remote_project_compose_files = ['compose.docker.yml', 'docker-compose.yml'].map do |name|
+        Shellwords.escape(File.join(remote_project_dir, name))
+      end
+      project_compose_check = remote_project_compose_files.map { |path| "test -f #{path}" }.join(' || ')
+      stdout, = ssh_capture("test -d #{remote_project_path} && (#{project_compose_check}) && printf yes || true")
+      container_validated_project_stacks << project if stdout.strip == 'yes'
+    end
+    container_label_matches << [container_name, project, service, working_dir].compact.join("\t")
+  end
+end
+container_hits = matched_container_hits.uniq.sort
+
+known_stack_candidates = exact_dir_stacks | compose_stacks
+validated_working_dir_stacks = container_working_dir_matches & known_stack_candidates
+container_working_dir_stacks = validated_working_dir_stacks
+validated_project_stacks = container_validated_project_stacks & known_stack_candidates
+container_resolution_stacks = if known_stack_candidates.empty?
+  container_working_dir_matches | container_validated_project_stacks
+else
+  container_working_dir_stacks | validated_project_stacks
+end
+raw_stack_candidates = (stack_candidates | container_working_dir_matches).to_a.sort
+
+effective_stacks, resolution_basis = if !container_resolution_stacks.empty?
+  exact_container_stacks = exact_compose_stacks & container_resolution_stacks
+  if !exact_container_stacks.empty?
+    basis = (container_working_dir_stacks & exact_container_stacks).empty? ? 'docker-compose-project-label' : 'docker-compose-working-dir-label'
+    [exact_container_stacks.to_a.sort, basis]
+  elsif !exact_compose_stacks.empty?
+    [exact_compose_stacks.to_a.sort, 'exact-stack-directory']
+  else
+    basis = (container_working_dir_stacks & container_resolution_stacks).empty? ? 'docker-compose-project-label' : 'docker-compose-working-dir-label'
+    [container_resolution_stacks.to_a.sort, basis]
+  end
+elsif !exact_compose_stacks.empty?
+  [exact_compose_stacks.to_a.sort, 'exact-stack-directory']
+elsif !exact_dir_stacks.empty?
+  [exact_dir_stacks.to_a.sort, 'exact-stack-directory']
+elsif !compose_stacks.empty?
+  [compose_stacks.to_a.sort, 'compose-match']
+elsif !direct_card_stacks.empty?
+  [direct_card_stacks.to_a.sort, 'deployment-card']
+else
+  [[], 'none']
+end
+
+stacks = effective_stacks.uniq.sort
+status = if stacks.empty?
+  'not_found'
+elsif stacks.length == 1
+  'resolved'
+else
+  'ambiguous'
+end
+resolved_stack = stacks.length == 1 ? stacks.first : nil
+compose_files = []
+card_paths = []
+
+if resolved_stack
+  ['compose.docker.yml', 'docker-compose.yml'].each do |name|
+    remote_path = File.join(SRV_ROOT, resolved_stack, name)
+    stdout, = ssh_capture("test -f #{Shellwords.escape(remote_path)} && echo #{Shellwords.escape(remote_path)} || true")
+    compose_files.concat(stdout.lines.map(&:strip).reject(&:empty?))
+  end
+
+  card_paths = card_matches.select { |path| stack_from_path(path) == resolved_stack }.uniq.sort
+end
+
+payload = {
+  repo: repo_name,
+  repo_root: repo_root,
+  ssh_alias: SSH_ALIAS,
+  srv_root: SRV_ROOT,
+  remote_root_docs: ROOT_DOCS,
+  ignore_patterns: IGNORE_PATTERNS,
+  search_terms: search_terms,
+  status: status,
+  stack_candidates: stacks,
+  all_stack_candidates: raw_stack_candidates,
+  ignored_weak_candidates: raw_stack_candidates - stacks,
+  resolution_basis: resolution_basis,
+  resolved_stack: resolved_stack,
+  exact_dirs: exact_dirs.sort.uniq,
+  exact_dir_stacks: exact_dir_stacks.to_a.sort,
+  exact_compose_stacks: exact_compose_stacks.to_a.sort,
+  compose_files: compose_files,
+  card_paths: card_paths,
+  compose_matches: compose_matches.uniq.sort,
+  compose_stacks: compose_stacks.to_a.sort,
+  card_matches: card_matches.uniq.sort,
+  card_stacks: card_stacks.to_a.sort,
+  direct_card_stacks: direct_card_stacks.to_a.sort,
+  weak_card_stacks: weak_card_stacks.to_a.sort,
+  maintenance_matches: maintenance_matches.uniq.sort,
+  container_hits: container_hits,
+  container_label_matches: container_label_matches.uniq.sort,
+  container_project_stacks: container_project_stacks.to_a.sort,
+  container_working_dir_matches: container_working_dir_matches.to_a.sort,
+  container_working_dir_stacks: container_working_dir_stacks.to_a.sort,
+  validated_project_stacks: validated_project_stacks.to_a.sort
+}
+
+if options[:format] == :json
+  puts JSON.pretty_generate(payload)
+  exit(status == 'not_found' ? 2 : status == 'ambiguous' ? 3 : 0)
+end
+
+puts "repo: #{payload[:repo]}"
+puts "repo_root: #{payload[:repo_root] || '(not detected)'}"
+puts "ssh_alias: #{payload[:ssh_alias]}"
+puts "srv_root: #{payload[:srv_root]}"
+puts "status: #{payload[:status]}"
+puts 'remote_root_docs:'
+payload[:remote_root_docs].each { |path| puts "  - #{path}" }
+puts 'search_terms:'
+payload[:search_terms].each { |term| puts "  - #{term}" }
+puts 'stack_candidates:'
+if payload[:stack_candidates].empty?
+  puts '  - (none)'
+else
+  payload[:stack_candidates].each { |stack| puts "  - #{stack}" }
+end
+puts "resolved_stack: #{payload[:resolved_stack] || '(none)'}"
+puts "resolution_basis: #{payload[:resolution_basis]}"
+puts 'compose_files:'
+if payload[:compose_files].empty?
+  puts '  - (none)'
+else
+  payload[:compose_files].each { |path| puts "  - #{path}" }
+end
+puts 'card_paths:'
+if payload[:card_paths].empty?
+  puts '  - (none)'
+else
+  payload[:card_paths].each { |path| puts "  - #{path}" }
+end
+puts 'maintenance_matches:'
+if payload[:maintenance_matches].empty?
+  puts '  - (none)'
+else
+  payload[:maintenance_matches].each { |path| puts "  - #{path}" }
+end
+puts 'container_hits:'
+if payload[:container_hits].empty?
+  puts '  - (none)'
+else
+  payload[:container_hits].each { |line| puts "  - #{line}" }
+end
+puts 'container_label_matches:'
+if payload[:container_label_matches].empty?
+  puts '  - (none)'
+else
+  payload[:container_label_matches].each { |line| puts "  - #{line}" }
+end
+puts 'ignored_weak_candidates:'
+if payload[:ignored_weak_candidates].empty?
+  puts '  - (none)'
+else
+  payload[:ignored_weak_candidates].each { |stack| puts "  - #{stack}" }
+end
+
+exit(status == 'not_found' ? 2 : status == 'ambiguous' ? 3 : 0)

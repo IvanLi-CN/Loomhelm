@@ -1,0 +1,9 @@
+[
+  {
+    "name": "twenty-review-attempts-stop-at-fourth-repair-permit",
+    "review_attempts": 20,
+    "writable_repair_permits": 3,
+    "terminal_attempt": 4,
+    "reopened_budget": 3
+  }
+]

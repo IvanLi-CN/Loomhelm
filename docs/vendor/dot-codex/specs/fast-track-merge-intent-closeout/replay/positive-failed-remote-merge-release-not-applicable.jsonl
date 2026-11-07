@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"merge and cleanup"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr merge 1 --merge --delete-branch=false\",\"workdir\":\"/repo\"}","call_id":"call_merge_failed"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_merge_failed","output":"Pull request was not merged"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"结果=未合并；GitHub 返回 Pull request was not merged；主工作区基线更新=已更新；本地收尾=未执行；发布状态=不适用。"}}

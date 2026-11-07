@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"merge and cleanup"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr merge 1 --merge --delete-branch=false\",\"workdir\":\"/repo\"}","call_id":"call_merge"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR 已合并；下一步会生成 cleanup_proof 并继续收尾。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-cleanup-proof-pending","last_agent_message":"PR 已合并；下一步会生成 cleanup_proof 并继续收尾。"}}

@@ -1,0 +1,8 @@
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\": \"python3 worker.py --job 1\", \"workdir\": \"/tmp/repo\", \"tty\": true}", "call_id": "call_launch_job_1"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_launch_job_1", "output": "Command: /bin/zsh -lc 'python3 worker.py --job 1'\nChunk ID: d1\nWall time: 1.0000 seconds\nProcess running with session ID 1\nOriginal token count: 0\nOutput:\njob #1 booting\n"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "job #1 还在跑，我继续盯着它。"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\": \"python3 worker.py --job 2\", \"workdir\": \"/tmp/repo\", \"tty\": true}", "call_id": "call_launch_job_2"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_launch_job_2", "output": "Command: /bin/zsh -lc 'python3 worker.py --job 2'\nChunk ID: d2\nWall time: 1.0000 seconds\nProcess running with session ID 2\nOriginal token count: 0\nOutput:\njob #2 booting\n"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "write_stdin", "arguments": "{\"session_id\": 1, \"chars\": \"\", \"yield_time_ms\": 5000}", "call_id": "call_poll_done"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_poll_done", "output": "Chunk ID: d3\nWall time: 5.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\njob #1 finished\n"}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "继续"}]}}

@@ -1,0 +1,12 @@
+fail negative-session-approval-evidence-ignored.jsonl APPROVAL_EVIDENCE_IGNORED
+fail negative-dirty-misread-as-approval.jsonl CONFLICT_MISDIAGNOSED_AS_APPROVAL
+fail negative-promised-merge-branch-skipped.jsonl PROMISED_MERGE_BRANCH_NOT_RESUMED
+pass positive-blocked-with-approval-evidence.jsonl -
+pass positive-dirty-conflict-reported.jsonl -
+fail negative-draft-convergence-before-owner-confirmation.jsonl DRAFT_PR_CONVERGENCE_BEFORE_VISUAL_FEEDBACK
+fail negative-draft-direct-gh-convergence-before-owner-confirmation.jsonl DRAFT_PR_CONVERGENCE_BEFORE_VISUAL_FEEDBACK
+fail negative-draft-render-surface-change-after-confirmation.jsonl DRAFT_PR_CONVERGENCE_BEFORE_VISUAL_FEEDBACK
+fail negative-draft-mixed-visual-status-cannot-clear-confirmation.jsonl DRAFT_PR_CONVERGENCE_BEFORE_VISUAL_RESPONSE
+fail negative-draft-bootstrap-and-convergence-same-event.jsonl DRAFT_PR_CONVERGENCE_BEFORE_VISUAL_FEEDBACK
+pass positive-draft-confirmation-before-convergence.jsonl -
+pass positive-draft-unchanged-feedback-before-convergence.jsonl -

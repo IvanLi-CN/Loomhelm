@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fresh Thread Dispatch"
+  short_description: "Create a clean Codex task in a worktree or local checkout."
+  default_prompt: "Use $fresh-thread-dispatch to move this bounded task into a new Codex task."

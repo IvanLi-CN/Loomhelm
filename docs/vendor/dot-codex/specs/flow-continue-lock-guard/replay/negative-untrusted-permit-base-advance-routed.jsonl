@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: normal"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"load_skill","arguments":"{\"path\":\"skills/pr-create/SKILL.md\",\"recovery\":\"permit_status=issued; base_relation=fast-forward; live_pr_match=true\"}"}}

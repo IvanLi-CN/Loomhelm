@@ -1,0 +1,46 @@
+# Shared viewer operations
+
+The formal root is `~/.local/share/multi-task-flow/`: `config/`, `data/runs/`, `releases/`, `state/`, `logs/`. `CODEX_HOME` and the invoking worktree do not select a formal instance. `MULTI_TASK_FLOW_PROFILE=test|development` requires an absolute `MULTI_TASK_FLOW_ROOT`, distinct from the formal root. Isolated profiles derive separate launchd labels, port scopes and registry roots. `TASK_ORCHESTRATION_DATA_ROOT` is an explicit ledger-only fixture override; never use it to create a second formal authority.
+
+All commands use `service.ts <command> --input -`, consuming one JSON object. Normal usage:
+
+- `ensure`, `renew`, `release`: `{"run_id":"example","thread_id":"main-thread","api_version":1}`.
+- `status`, `doctor`: `{}`. Inspect configured identity and runtime before remediation.
+- `login`: `{}` or `{"run_id":"example"}`. Its returned fragment ticket is sensitive.
+
+## Explicit maintenance
+
+Build from clean committed source after `bun run build` in the Skill: `bun scripts/build-service.ts --output /absolute/new-bundle --service-version <semver>`. The bundle includes the native executable with Bun runtime, shared dist and a manifest binding source SHA, platform, file digests and compatibility. No caller working directory or globally installed Bun is required by the installed daemon. The maintenance CLI itself may be run with Bun or the compiled `viewer` executable.
+
+- `install`: `{"source":"/absolute/bundle"}`; optional `registry_dir` selects the registry once. Installation initializes credentials and fixed high port, writes a private plist, and does not bootstrap/start it. Formal label: `cn.ivan.multi-task-flow.viewer`. Next `ensure` bootstraps into the current user's GUI domain, or user domain on headless macOS, and kickstarts it.
+- `upgrade`: `{"source":"/absolute/bundle"}`. Validate hashes, platform and existing ledger/custom-view compatibility before stopping the old build. Switch the configuration atomically, start and health-check; failed health restores old configuration and existing lease deadlines. Old releases remain.
+- `rollback`: `{}`; the previous build must still support current data. This never restores an old data backup over new writes.
+- `credential-rotate`, `credential-revoke`: `{}`; replace the credential and revoke sessions, tickets and browser leases. Agent leases keep their deadlines.
+
+`ensure` performs none of these maintenance actions. No `sudo`, login autostart or unconditional KeepAlive is used. A crash is recovered on the next ensure. A lifetime instance lock, serialized startup and generation/PID guards prevent old processes from altering successor runtime/port ownership. Port conflict fails instead of changing the configured number or taking over another process. The registry directory is resolved at install and saved; no synthetic worktree or `agent_session` is recorded. Active lease registration covers actual runtime only. Logs contain fixed event identities, rotate at 5 MiB and retain three files.
+
+## Contracts
+
+Build ID, source SHA, API major, frontend contract, ledger schema/contract, ledger revision, run ID and plan ID are independent. This release publishes API v1 and frontend contract 1. Readable ledgers include schema 1 with absent legacy contract or contract 1, and schema 2 with contract 1 or 2. Only schema 2 with contract 2 is writable; legacy contracts remain read-only until explicit migration. No unpublished previous API is advertised. Future releases must explicitly publish every supported current/previous major and ledger combination. Unsupported runs are marked individually; a CLI fails incompatible handshakes rather than installing or rewriting data.
+
+## Exact-source import and recovery
+
+`import` (alias `migrate`) accepts `{"source_root":"/absolute/legacy-data","run_id":"example"}`. It verifies one exact run under the ledger lock, stages and verifies a copy, journals the operation, renames the source to an adjacent hidden backup, and leaves a tombstone before publishing the destination. Bound legacy writers fail identity checks; the old path cannot be initialized over the tombstone. There is no automatic discovery, deletion, old-port listener or redirect. The result maps preserved run/plan identities to the new stable URL.
+
+Re-running the exact command is idempotent. A prepared journal after source sealing is resumed only after checking its exact operation paths and backup/ staging digests. A recreated source or changed destination blocks recovery; inspect the journal and retain both copies. No automatic rollback overwrites new data. Imports before source sealing can safely retry normal preparation. Code upgrades and this data operation remain separate explicit actions.
+
+## Compatibility preflight and ledger maintenance
+
+代码升级与持久迁移独立授权。`compatibility-check` 接受 `{ "source": "/absolute/bundle" }` 或 `{ "rollback": true }`，只读返回当前/目标构建、全部 run 的合同、revision、原始 SHA256、读写能力、错误、写入降级项和 `report_digest`。所有保留 run 必须可读；完成、会话归档、无使用租约都不免除读取兼容，也不证明需要继续写入。已有只读 run 不要求迁移。损坏、不可读或自定义 view 不兼容不能确认绕过。
+
+只有当前构建可写而目标不可写的新增降级需要主人逐次确认。展示准确报告后，`upgrade` 或 `rollback` 可附加 `write_downgrade_approval: { report_digest, approval_ref, maintenance_thread_id }`。应用持锁重算报告，run 内容或构建变化即拒绝旧确认；没有降级时不接受多余确认。`install` 无当前构建时只要求读取兼容。错误的 `details` 包含具体 run、能力及预检报告；不要根据通用错误盲目迁移所有 run。
+
+合同迁移使用 `ledger-maintenance-check` 和 `ledger-maintenance-apply`，不是目录导入的历史 `import/migrate` 别名。普通 orchestration `migrate` 与 `execution-profile-migrate` 仍只允许绑定 main；维护入口使用真实维护身份，不恢复原会话、不改 owner、不取得业务控制权。
+
+先用 `ledger-maintenance-check` 输入 `{ "run_id": "exact-run", "action": "contract" }`。执行配置是另一个独立动作：`{ "run_id": "exact-run", "action": "execution-profile", "execution_profile": { "model": "<owner-selected-model>", "thinking": "<owner-selected-thinking>" } }`。check 返回原 owner、revision、源 SHA256、目标、当前/迁移后读取能力、未决操作和 `operation_digest`，不写入状态。
+
+获得主人对准确动作的批准、暂停旧写入器后，apply 传入同样动作参数，并添加 `expected_owner_thread_id`、`expected_revision`、`expected_ledger_sha256`、`operation_digest`、唯一 `request_id`、实际 `maintenance_thread_id`、`approval_ref`、`reason` 和 `writers_paused: true`。`approval_ref` 和暂停声明是同 OS 用户维护信任边界内的审计记录，不是独立认证或进程隔离证明。不要冒用原 owner。claimed/unknown 创建、合并和切割操作须由原业务流程对账，维护命令不会替它们收口；服务租约本身不阻塞。
+
+安全顺序是先显式升级至同时可读源/目标合同的 viewer，再批准单 run 合同迁移，再按需单独批准完整 profile 迁移。服务未安装或不支持目标时 apply 拒绝；不为历史展示补造模型或完成事实。维护锁、run 锁覆盖复核和原子提交，完整旧文件写入 `ledger.maintenance-<request_id>.json`，真实维护身份和批准引用保留于账本 request result。每次变更 revision 增加 1；同请求同内容重放，异内容拒绝。
+
+备份后中断可用相同请求恢复，提交后响应丢失可安全重放。冲突保留双方证据，不覆盖备份或账本。代码健康失败恢复原构建和租约期限；新数据不被旧备份覆盖。迁移后旧构建不可读时 rollback 拒绝，采用兼容过渡构建或向前修复。合作锁不能防止同用户手工改文件或不遵守协议的旧写入器，主人必须确认这些写入已暂停。

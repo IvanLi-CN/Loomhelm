@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: fast-track"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovery facts: permit_status=issued; permit_id=permit-fixture-105; base_relation=fast-forward; previous_base_sha=1111111111111111111111111111111111111111; current_base_sha=2222222222222222222222222222222222222222; live_pr=PR-fixture-105; live_pr_match=true."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"不要合并，先等待主人确认 [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Waiting for an explicit owner decision."}]}}

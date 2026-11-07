@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`release_disposition` is not publication proof and does not prove `release_expected`; Step 6 remains merge-SHA-bound."}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Pre-merge route input remains separate from actual publication evidence."}}

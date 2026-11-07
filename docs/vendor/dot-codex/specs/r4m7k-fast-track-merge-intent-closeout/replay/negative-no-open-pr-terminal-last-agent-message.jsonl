@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR状态=不存在；当前仍只是可开 PR（local）。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-no-open-pr-terminal-last-agent-message","last_agent_message":"PR 已到 merge-ready。"}}

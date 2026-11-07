@@ -1,0 +1,31 @@
+{
+  "name": "multi-task-flow",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test --path-ignore-patterns 'tests/ui/**'",
+    "test:ui": "bun test --preload ./tests/ui/setup.ts tests/ui",
+    "test:all": "bun run test && bun run test:ui",
+    "build": "bun run scripts/build.ts",
+    "verify": "bun run test:all && bun run build",
+    "demo:static": "bun run build && bun run scripts/demo-static.ts",
+    "preview:source": "bun run scripts/preview-source.ts"
+  },
+  "dependencies": {
+    "cytoscape": "3.34.4",
+    "cytoscape-dagre": "4.0.1",
+    "lucide": "1.65.0",
+    "moment": "2.31.0",
+    "vis-data": "8.0.6",
+    "vis-timeline": "8.5.6",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "@testing-library/dom": "10.4.2",
+    "daisyui": "5.7.50",
+    "happy-dom": "21.0.4",
+    "playwright": "1.64.1",
+    "tailwindcss": "4.3.3"
+  }
+}

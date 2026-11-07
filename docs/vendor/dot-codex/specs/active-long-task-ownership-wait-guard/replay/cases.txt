@@ -1,0 +1,11 @@
+# status path expected_code
+fail negative-019d681b-active-proof-owner-leak.jsonl LONG_TASK_OWNERSHIP_LEAK
+fail negative-019d686e-live-exec-owner-leak.jsonl LONG_TASK_OWNERSHIP_LEAK
+fail negative-running-status-alone-owner-leak.jsonl LONG_TASK_OWNERSHIP_LEAK
+fail negative-focused-session-still-live-owner-leak.jsonl LONG_TASK_OWNERSHIP_LEAK
+pass positive-terminal-before-user-nudge.jsonl -
+pass positive-promised-session-exited-before-user-nudge.jsonl -
+pass positive-continue-with-new-owner-input.jsonl -
+pass positive-review-promise-does-not-bind-unrelated-live-session.jsonl -
+pass positive-focused-proof-exits-before-user-nudge.jsonl -
+pass positive-continue-with-extra-request.jsonl -

@@ -1,0 +1,10 @@
+{
+  "suite_sha256": "6adec9c1b9123a66b8862bf6040698cc7dae40bdcb5f40d863b6e1d852ef132c",
+  "model": "gpt-5.6-sol",
+  "runs": 2,
+  "passed": 17,
+  "total": 20,
+  "rate": 0.85,
+  "risk_failed": 1,
+  "instructions_ref": "4a2107acab1b1ac2dade8d543c3fbd1b04306434"
+}

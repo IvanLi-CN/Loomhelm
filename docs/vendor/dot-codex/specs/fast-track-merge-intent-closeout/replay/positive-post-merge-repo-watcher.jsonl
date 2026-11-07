@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"后续追踪=repo-watcher\n追踪目标=post_merge_target_ci\n追踪绑定sha=abc1234\n追踪终态=passed\nexternal_locator=https://ci.example/runs/42\n追踪处置=report-only"}]}}

@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR 已合并。release_expected=false；仓库合同与绑定 SHA 的 live runs 均未声明发布。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并。target-branch CI 已成功，整个 run 已完成。"}}

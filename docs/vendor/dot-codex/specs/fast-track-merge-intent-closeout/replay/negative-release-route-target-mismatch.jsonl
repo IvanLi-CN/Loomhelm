@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"route-managed","output":{"pre_merge_release_route":"managed","route_source":"repository-contract","target_repo":"example/repo","target_pr":42,"current_repository_facts":"managed release labels declared by repository contract","current_pr_facts":"PR #42; head=abc1234; base=main","managed_release_labels":["release-ready"]}}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh api repos/other/repo/pulls/99 --method PATCH --input -\"}","call_id":"api-pr-edit-wrong-target"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR API request sent."}}

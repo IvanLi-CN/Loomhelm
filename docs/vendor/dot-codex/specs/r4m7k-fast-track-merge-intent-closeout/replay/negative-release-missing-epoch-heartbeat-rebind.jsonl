@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"d1","output":{"release_expected":true,"release_epoch":"merge-abc1234","target_repo":"example/repo","target_branch":"main","target_sha":"abc1234","release_tag":"1.0.0","release_surfaces":["github_release"]}}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"heartbeat","output":{"release_expected":true,"status":"running"}}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"d2","output":{"release_expected":true,"release_epoch":"merge-abc1234","target_repo":"other/repo","target_branch":"main","target_sha":"def5678","release_tag":"2.0.0","release_surfaces":["github_release"]}}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"view","output":{"headSha":"def5678","url":"https://github.com/other/repo/releases/tag/2.0.0","publishedAt":"2026-07-26T08:24:20Z"}}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并。\n发布状态=已发布\n发布版本=2.0.0\n发布tag=2.0.0\n发布channel=stable\n发布绑定sha=def5678\n发布URL=https://github.com/other/repo/releases/tag/2.0.0\n发布时间=2026-07-26T08:24:20Z\n发布产物=binaries:1"}}

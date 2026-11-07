@@ -1,0 +1,74 @@
+[
+  {
+    "name": "remote raw github markdown image",
+    "message": "![Remote screenshot](https://raw.githubusercontent.com/example/demo/main/screenshot.png)",
+    "expected": "violation"
+  },
+  {
+    "name": "nested alt markdown image",
+    "message": "![Remote [nested] screenshot](https://example.com/screenshot.png)",
+    "expected": "violation"
+  },
+  {
+    "name": "repo-relative markdown image",
+    "message": "![Repo screenshot](docs/specs/demo/assets/screenshot.png)",
+    "expected": "violation"
+  },
+  {
+    "name": "worktree absolute markdown image",
+    "message": "![Worktree screenshot](/tmp/demo-worktree/screenshot.png)",
+    "expected": "violation"
+  },
+  {
+    "name": "remote html image",
+    "message": "<img alt=\"Remote screenshot\" src=\"https://example.com/screenshot.png\">",
+    "expected": "violation"
+  },
+  {
+    "name": "remote html image with quoted greater-than",
+    "message": "<img alt=\"a > b\" src=\"https://example.com/screenshot.png\">",
+    "expected": "violation"
+  },
+  {
+    "name": "collapsed remote markdown reference image",
+    "message": "![Remote screenshot][]\n\n[Remote screenshot]: https://example.com/screenshot.png",
+    "expected": "violation"
+  },
+  {
+    "name": "remote html srcset image",
+    "message": "<img srcset=\"https://example.com/screenshot.png 1x\">",
+    "expected": "violation"
+  },
+  {
+    "name": "html attribute text is not an image source",
+    "message": "<img alt=\"src=https://example.com/alt.png\" data-src=\"https://example.com/data.png\">",
+    "expected": "pass"
+  },
+  {
+    "name": "ordinary remote hyperlink",
+    "message": "[原图](https://raw.githubusercontent.com/example/demo/main/screenshot.png)",
+    "expected": "pass"
+  },
+  {
+    "name": "fenced code example",
+    "message": "```markdown\n![Remote screenshot](https://example.com/screenshot.png)\n```",
+    "expected": "pass"
+  },
+  {
+    "name": "inline code example",
+    "message": "Use `![Remote screenshot](https://example.com/screenshot.png)` as an example.",
+    "expected": "pass"
+  },
+  {
+    "name": "native image object",
+    "message": {
+      "content": [
+        {
+          "type": "image",
+          "url": "https://example.com/native-image.png"
+        }
+      ]
+    },
+    "expected": "pass"
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "name": "codex-reg-cli-report",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "reg-cli": "0.18.16"
+  }
+}

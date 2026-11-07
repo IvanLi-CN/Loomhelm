@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: fast-track"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<proposed_plan>\n# Recovery\n\n## Flow Decision\n- `flow_type`: `fast-track`\n- `lock_status`: `locked`\n</proposed_plan>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovery facts: permit_status=issued; base_relation=fast-forward; live_pr_match=true."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"load_skill","arguments":"{\"path\":\"skills/pr-create/SKILL.md\",\"mode\":\"draft-bootstrap\",\"mode\":\"ordinary\"}"}}

@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"route-invalid-target","output":{"pre_merge_release_route":"no-managed-route","route_source":"none","target_repo":"example/repo","target_pr":"not-a-number","current_repository_facts":"no release policy or managed release labels","current_pr_facts":"head=abc1234; base=main","managed_release_labels":[]}}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr create --repo example/repo --base main --head topic\"}","call_id":"invalid-target-pr-create"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR published."}}

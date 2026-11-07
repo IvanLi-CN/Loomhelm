@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR 已合并。release_expected=true target_sha=abc1234 release_tag=1.0.0。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并。发布状态=未触发；任务完成。"}}

@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"function_call","name":"multi_agent_v1__spawn_agent","call_id":"spawn-1","arguments":"{\"message\":\"phase=pr_head_ci\"}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"spawn-1","output":"{\"agent_id\":\"agent-1\"}"}}
+{"type":"response_item","payload":{"type":"function_call","name":"multi_agent_v1__wait_agent","call_id":"wait-1","arguments":"{\"targets\":[\"agent-1\"],\"timeout_ms\":30000}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"wait-1","output":"{\"message\":\"Wait completed.\",\"timed_out\":false}"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"result=CI_GREEN\ntracking_target=pr_head_ci\nchecked_sha=abc1234"}]}}

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 
 export interface ProcessResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
-export interface ProcessOptions { cwd?: string; timeoutMs?: number; maxOutputBytes?: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv }
+export interface ProcessOptions { cwd?: string; timeoutMs?: number; maxOutputBytes?: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv; input?: string | Uint8Array }
 /** Owns only its direct child; no detached services or shell expansion. */
 export function runProcess(command: string, args: readonly string[], options: ProcessOptions = {}): Promise<ProcessResult> {
   const timeout = options.timeoutMs ?? 30_000;
@@ -12,7 +12,7 @@ export function runProcess(command: string, args: readonly string[], options: Pr
   return new Promise((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(command, [...args], { cwd: options.cwd, env: options.env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(command, [...args], { cwd: options.cwd, env: options.env, shell: false, stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     } catch (error) {
       reject(error);
       return;
@@ -37,6 +37,7 @@ export function runProcess(command: string, args: readonly string[], options: Pr
     options.signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => stop(new Error('Process timed out')), timeout);
     child.once('error', error => { failure = error; });
+    if (child.stdin) { child.stdin.on('error', error => { if ((error as NodeJS.ErrnoException).code !== 'EPIPE') stop(error); }); child.stdin.end(options.input); }
     child.once('close', (code, signal) => {
       clearTimeout(timer); clearTimeout(escalation); options.signal?.removeEventListener('abort', abort);
       if (failure) reject(failure);

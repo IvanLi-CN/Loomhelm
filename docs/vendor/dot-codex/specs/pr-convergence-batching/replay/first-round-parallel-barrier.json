@@ -1,0 +1,320 @@
+{
+  "scenario": "direct-pr-first-round-parallel-barrier",
+  "historical_snapshot_heading": "## Historical rollout snapshot",
+  "active_quote_policy": "reject-legacy-serial-gate-ignore-required-contract",
+  "evidence_role": "historical-scenario",
+  "historical_binding": {
+    "repository": "IvanLi-CN/dot-codex",
+    "pull_request_number": 183,
+    "base_ref": "origin/main",
+    "base_sha": "3111da93e9701d3c99d17e73868e3f4c59516be9",
+    "head_ref": "th/wave-thread-delivery-batches",
+    "evidence_fields": ["repo_root", "base_sha", "head_sha"]
+  },
+  "parser_cases": [
+    {
+      "name": "thematic-break-hyphen-ends-lazy-quote",
+      "markdown": "> quoted opener\n---\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "explicit-thematic-break-ends-blockquote",
+      "markdown": "> quoted opener\n> ---\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "thematic-break-asterisk-ends-lazy-quote",
+      "markdown": "> quoted opener\n***\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "thematic-break-underscore-ends-lazy-quote",
+      "markdown": "> quoted opener\n___\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "spaced-hyphen-thematic-break-ends-lazy-quote",
+      "markdown": "> quoted opener\n- - -\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "spaced-asterisk-thematic-break-ends-lazy-quote",
+      "markdown": "> quoted opener\n* * *\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "spaced-underscore-thematic-break-ends-lazy-quote",
+      "markdown": "> quoted opener\n_ _ _\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "indented-thematic-break-ends-lazy-quote",
+      "markdown": "> quoted opener\n  ---\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "one-space-thematic-break-ends-lazy-quote",
+      "markdown": "> quoted opener\n ---\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "three-space-thematic-break-ends-lazy-quote",
+      "markdown": "> quoted opener\n   ---\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "four-space-thematic-break-remains-lazy-quote",
+      "markdown": "> quoted opener\n    ---\nACTIVE_CONTRACT\n",
+      "operational_contains": [],
+      "operational_excludes": ["ACTIVE_CONTRACT"]
+    },
+    {
+      "name": "mixed-tab-indent-remains-lazy-quote",
+      "markdown": "> quoted opener\n   \t---\nACTIVE_CONTRACT\n",
+      "operational_contains": [],
+      "operational_excludes": ["ACTIVE_CONTRACT"]
+    },
+    {
+      "name": "tab-spaced-thematic-break-ends-lazy-quote",
+      "markdown": "> quoted opener\n-\t-\t-\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "long-thematic-break-ends-lazy-quote",
+      "markdown": "> quoted opener\n-----\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "top-level-fence-quote-marker-stays-code",
+      "markdown": "````text\n> `````\nFENCED_CONTRACT\n````\n",
+      "operational_contains": [],
+      "operational_excludes": ["FENCED_CONTRACT"]
+    },
+    {
+      "name": "invalid-backtick-info-string-is-not-a-fence",
+      "markdown": "```bad`info\nACTIVE_CONTRACT\n```\nAFTER_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": ["AFTER_CONTRACT"]
+    },
+    {
+      "name": "inline-code-contract-remains-operative",
+      "markdown": "`ACTIVE_CONTRACT`\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "tab-indented-fence-marker-does-not-close-fence",
+      "markdown": "```text\nHIDDEN_CONTRACT\n\t```\nACTIVE_CONTRACT\n```\nAFTER_CONTRACT\n",
+      "operational_contains": ["AFTER_CONTRACT"],
+      "operational_excludes": ["HIDDEN_CONTRACT", "ACTIVE_CONTRACT"]
+    },
+    {
+      "name": "heading-block-ends-lazy-quote",
+      "markdown": "> # quoted heading\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "html-block-ends-lazy-quote",
+      "markdown": "> <div>quoted block</div>\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "unprefixed-html-block-ends-lazy-quote",
+      "markdown": "> quoted opener\n<div>active-looking html</div>\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "arbitrary-html-block-ends-lazy-quote",
+      "markdown": "> quoted opener\n<custom>\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "inline-html-remains-lazy-quote",
+      "markdown": "> <span>quoted inline</span>\nACTIVE_CONTRACT\n",
+      "operational_contains": [],
+      "operational_excludes": ["ACTIVE_CONTRACT"]
+    },
+    {
+      "name": "html-comment-block-is-non-operative",
+      "markdown": "<!--\nHIDDEN_CONTRACT\n-->\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": ["HIDDEN_CONTRACT"]
+    },
+    {
+      "name": "html-script-block-is-non-operative",
+      "markdown": "<script>\nHIDDEN_CONTRACT\n</script>\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": ["HIDDEN_CONTRACT"]
+    },
+    {
+      "name": "html-style-block-is-non-operative",
+      "markdown": "<style>\nHIDDEN_CONTRACT\n</style>\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": ["HIDDEN_CONTRACT"]
+    },
+    {
+      "name": "tab-after-quote-marker-remains-paragraph",
+      "markdown": ">\tquoted opener\nACTIVE_CONTRACT\n",
+      "operational_contains": [],
+      "operational_excludes": ["ACTIVE_CONTRACT"]
+    },
+    {
+      "name": "quote-prefixed-fence-requires-quoted-content",
+      "markdown": "> ```text\nHIDDEN_CONTRACT\n```\n---\nACTIVE_CONTRACT\n",
+      "operational_contains": ["HIDDEN_CONTRACT"],
+      "operational_excludes": ["ACTIVE_CONTRACT"]
+    },
+    {
+      "name": "unprefixed-quote-fence-close-then-top-level-fence",
+      "markdown": "> ```text\n> HIDDEN_CONTRACT\n```\nACTIVE_CONTRACT\n````text\nFENCED_CONTRACT\n````\nOPERATIVE_CONTRACT\n",
+      "operational_contains": ["OPERATIVE_CONTRACT"],
+      "operational_excludes": ["HIDDEN_CONTRACT", "ACTIVE_CONTRACT", "FENCED_CONTRACT"]
+    },
+    {
+      "name": "explicit-quote-fence-close-releases-blockquote",
+      "markdown": "> ```text\n> HIDDEN_CONTRACT\n> ```\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": ["HIDDEN_CONTRACT"]
+    },
+    {
+      "name": "blank-quote-line-closes-lazy-quote",
+      "markdown": "> quoted opener\n>\nACTIVE_CONTRACT\n",
+      "operational_contains": ["ACTIVE_CONTRACT"],
+      "operational_excludes": []
+    },
+    {
+      "name": "unclosed-fence-legacy-gate-is-visible-to-forbidden-scan",
+      "markdown": "```text\nfor tier 3/4, also prepare current formal review evidence\n",
+      "operational_contains": [],
+      "operational_excludes": ["for tier 3/4, also prepare current formal review evidence"],
+      "serial_contains": ["for tier 3/4, also prepare current formal review evidence"],
+      "serial_excludes": []
+    },
+    {
+      "name": "historical-heading-inside-fence-stays-code",
+      "markdown": "````text\n## Historical rollout snapshot\nHISTORICAL_CONTRACT\n````\n",
+      "operational_contains": [],
+      "operational_excludes": ["HISTORICAL_CONTRACT"]
+    },
+    {
+      "name": "indented-code-stays-code",
+      "markdown": "    INDENTED_CONTRACT\n",
+      "operational_contains": [],
+      "operational_excludes": ["INDENTED_CONTRACT"]
+    },
+    {
+      "name": "lazy-quote-continuation-stays-quoted",
+      "markdown": "> quoted opener\nLAZY_QUOTED_CONTRACT\n",
+      "operational_contains": [],
+      "operational_excludes": ["LAZY_QUOTED_CONTRACT"]
+    }
+  ],
+  "consumers": {
+    "workflow": {
+      "required": [
+        "step 4 ready",
+        "does not require completed pr-stage structured findings or dispositions",
+        "exact live pr base/head is bound",
+        "ci tracker and fresh pr-stage formal review in the same first round",
+        "wait for both to reach terminal state",
+        "before finding disposition, any repair batch, or main-agent write, commit, or push",
+        "local-merge still completes formal review before step 5l"
+      ],
+      "forbidden": [
+        "for tier 3/4, also prepare current formal review evidence"
+      ]
+    },
+    "fast-flow": {
+      "required": [
+        "step 4 ready",
+        "does not require completed pr-stage findings or dispositions",
+        "after exact live pr head/base binding",
+        "start the ci tracker and pr-stage formal review in parallel in the first round",
+        "wait for both terminal states before finding disposition",
+        "wait for both terminal states before finding disposition, repair batch, writes, commits, or pushes",
+        "local-merge continues formal review before step 5l"
+      ],
+      "forbidden": [
+        "formal review evidence before pr binding"
+      ]
+    },
+    "publication-procedure": {
+      "required": [
+        "step 4 readiness and tier/rationale assessment",
+        "completed pr-stage formal findings are not required yet for a direct pr path",
+        "after exact live pr base/head binding",
+        "same first round as required-ci tracking",
+        "waits for both to reach terminal state",
+        "before convergence writes, finding disposition, or a repair batch",
+        "draft-bootstrap"
+      ],
+      "forbidden": [
+        "formal review evidence before pr publication"
+      ]
+    },
+    "canonical-review-reference": {
+      "required": [
+        "formal lanes launch after exact live pr head/base binding",
+        "same first round as the ci tracker",
+        "waits for all required lanes and ci to reach terminal state",
+        "before disposition, writing, a repair batch, commit, or push",
+        "for local-merge, formal lanes complete before step 5l"
+      ],
+      "forbidden": [
+        "formal review evidence before pr publication"
+      ]
+    },
+    "mandatory-local-review-proof": {
+      "required": [
+        "step 4 ready",
+        "without completed pr-stage findings or dispositions",
+        "after exact live pr head/base binding",
+        "ci tracker and pr-stage formal review start in the first round",
+        "before finding disposition, writing, commit, or a repair batch",
+        "local-merge formal review still completes before step 5l"
+      ],
+      "forbidden": ["formal review evidence before pr publication"]
+    },
+    "pr-convergence-batching": {
+      "required": [
+        "step 4 ready",
+        "it does not require completed pr-stage findings or dispositions",
+        "exact live pr base/head binding",
+        "ci-operator",
+        "same first round",
+        "main-agent waits for both ci tracker and pr-stage formal review",
+        "either live track blocks polling, finding classification, writing, commit, push, or repair batch launch",
+        "local-merge retains its formal-review-before-step-5l boundary"
+      ],
+      "forbidden": ["formal review evidence before pr publication"]
+    },
+    "adr-0017": {
+      "required": [
+        "step 4 ready",
+        "after exact live pr base/head binding",
+        "fresh pr-stage formal review starts in parallel with ci",
+        "waits for both terminal states before convergence",
+        "no disposition, write, or repair batch may occur while either track is live",
+        "local-merge formal review remains",
+        "complete before"
+      ],
+      "forbidden": ["formal review evidence before pr publication"]
+    }
+  }
+}

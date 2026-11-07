@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solution sync"
+  short_description: "Read or update reusable learnings in docs/solutions"
+  default_prompt: "Use $solution-sync to settle the shared solution gate and update docs/solutions for reusable engineering learnings."

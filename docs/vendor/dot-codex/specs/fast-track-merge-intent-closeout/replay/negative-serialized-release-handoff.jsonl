@@ -1,0 +1,6 @@
+{"type":"post_merge_handoff","payload":{"event":"merged","merge_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","preparation_independent":true,"ci_required_for_dispatch":true,"release_authorized":true}}
+{"type":"post_merge_handoff","payload":{"event":"ci_started","merge_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+{"type":"post_merge_handoff","payload":{"event":"ci_wait","merge_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+{"type":"post_merge_handoff","payload":{"event":"ci_terminal","merge_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","result":"passed"}}
+{"type":"post_merge_handoff","payload":{"event":"preparation_started","merge_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+{"type":"post_merge_handoff","payload":{"event":"dispatch","merge_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}

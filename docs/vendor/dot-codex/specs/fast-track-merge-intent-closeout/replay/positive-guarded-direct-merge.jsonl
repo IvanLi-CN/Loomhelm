@@ -1,0 +1,11 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"route-none","output":{"pre_merge_release_route":"no-managed-route","route_source":"none","target_repo":"example/repo","target_pr":42,"current_repository_facts":"no release policy or managed release labels","current_pr_facts":"PR #42; head=abc1234; base=main","managed_release_labels":[]}}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"合并"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR状态=存在；headRefName=topic Step 5C Ready；继续 handoff 到 $pr-merge。"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"python3 skills/pr-merge/scripts/merge_preflight.py --repo owner/repo --pr 77 --candidate-root /repo\"}","call_id":"call_preflight"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_preflight","output":"{\"outcome\":\"eligible\",\"snapshot\":{\"live_head\":\"abc1234\"},\"merge_guard\":{\"locked_head\":\"abc1234\"},\"validation\":\"not_evaluated\"}"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh pr merge 77 --repo owner/repo --match-head-commit abc1234\"}","call_id":"call_merge"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_merge","output":"✓ Merged pull request #77"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"git push origin --delete topic\"}","call_id":"call_delete"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_delete","output":"To github.com:owner/repo.git\n - [deleted]         topic"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"release-facts","output":{"release_expected":false,"release_epoch":"merge-abc1234","target_repo":"owner/repo","target_branch":"main","target_sha":"abc1234","reason":"no release workflow"}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"guarded-direct-merge","last_agent_message":"PR 已合并；远端分支=不存在；主工作区基线更新=已更新；本地收尾=未执行；release_expected=false；发布状态=未触发；依据=仓库合同无发布面；发布版本=none；发布tag=none；发布channel=none；发布绑定sha=none；发布workflow=none；发布URL=none；发布时间=none；发布产物=none；发布处置=report-only"}}

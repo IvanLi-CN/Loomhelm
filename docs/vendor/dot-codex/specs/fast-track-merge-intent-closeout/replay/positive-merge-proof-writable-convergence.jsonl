@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"route-none","output":{"pre_merge_release_route":"no-managed-route","route_source":"none","target_repo":"example/repo","target_pr":42,"current_repository_facts":"no release policy or managed release labels","current_pr_facts":"PR #42; head=abc1234; base=main","managed_release_labels":[]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"当前 stop condition 是 merge-only。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR状态=存在。现在已经到 Step 5C Ready，继续 merge path。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"latest PR.head.sha 缺 fresh merge-proof，直接进入 same-PR writable merge-proof convergence。"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"sed -n '1,260p' skills/codex-review-loop/SKILL.md\",\"workdir\":\"/repo\"}","call_id":"call_open_review_loop"}}

@@ -1,0 +1,7 @@
+interface:
+  display_name: "KaisouMail Deployment Inventory"
+  short_description: "Check live deployment inventory and drift"
+  default_prompt: "Use $kaisoumail-deployment-inventory to verify where KaisouMail is currently deployed and which live resources are attached."
+
+policy:
+  allow_implicit_invocation: false

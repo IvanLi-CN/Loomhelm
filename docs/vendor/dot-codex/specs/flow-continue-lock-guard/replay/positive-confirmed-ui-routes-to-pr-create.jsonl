@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"flow_type=fast-track\nlock_status=locked"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"视觉比较=需确认，已展示 Draft 的当前截图与差异热图。这些截图准确反映了本次改动吗？"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"这些 Draft 截图准确反映了当前改动。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"续推到 $pr-create。"}]}}

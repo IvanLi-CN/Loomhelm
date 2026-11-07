@@ -1,0 +1,4 @@
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\": \"python3 worker.py --job 7\", \"workdir\": \"/tmp/repo\", \"tty\": true}", "call_id": "call_launch_job"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_launch_job", "output": "Command: /bin/zsh -lc 'python3 worker.py --job 7'\nChunk ID: h1\nWall time: 1.0000 seconds\nProcess running with session ID 7\nOriginal token count: 0\nOutput:\njob #7 booting\n"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "job #7 正在跑。"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "继续"}]}}

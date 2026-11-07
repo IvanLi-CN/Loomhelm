@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请按 $dev-plan 规划两个可独立验收和合并的 Ticket。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<proposed_plan>\n# Locked Initiative\n\n## Flow Decision\n- `flow_type`: `initiative`\n- `flow_source`: `default_initiative_complexity`\n- `lock_status`: `locked`\n</proposed_plan>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续推进 [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"恢复已锁定的 initiative，由 $initiative-flow 从当前 frontier 继续。"}]}}

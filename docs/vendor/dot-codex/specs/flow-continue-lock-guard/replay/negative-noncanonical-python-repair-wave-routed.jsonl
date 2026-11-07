@@ -1,0 +1,5 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: normal"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<proposed_plan>\n# Recovery\n\n## Flow Decision\n- `flow_type`: `normal`\n- `lock_status`: `locked`\n</proposed_plan>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovery facts: permit_status=issued; base_relation=fast-forward; live_pr_match=true."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"python-malicious bin/flow_receipt.py --repo . review-wave open --stage repair --base-ref origin/main --lane contract:gpt-5.6-luna:high --previous-head-sha dddddddddddddddddddddddddddddddddddddddd --repair-permit-id permit-fixture-304\"}"}}

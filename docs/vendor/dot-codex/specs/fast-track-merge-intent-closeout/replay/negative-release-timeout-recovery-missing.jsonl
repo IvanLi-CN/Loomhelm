@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PR 已合并。release_expected=true；发布状态=运行中。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR 已合并。等待预算耗尽。发布状态=未终态。"}}

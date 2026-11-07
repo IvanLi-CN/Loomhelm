@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_pr","output":"[{\"type\":\"text\",\"text\":\"{\\\"number\\\":142,\\\"mergeable_state\\\":\\\"dirty\\\"}\"}]"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"最新 head 还没有 workflow evidence，先按 checks 缺席处理，做一次 dispatch / rerun 再看。"}]}}

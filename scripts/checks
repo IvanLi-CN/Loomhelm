@@ -268,10 +268,18 @@ check_web() {
 }
 
 check_client() {
+	run_command "Migrated toolkit frozen dependencies" bun install --frozen-lockfile
+	run_command "Dashboard frozen dependencies" bun install --cwd skills/multi-task-flow --frozen-lockfile
+	run_command "Migrated source inventory" node scripts/check-client-skills.mjs
+	run_command "Toolkit production and native build" bun run skills:build
+	run_command "POSIX cross-implementation safety" node scripts/test-skills-native.mjs
+	run_command "Original shared toolkit and native regression" bun test ./bin/tests ./bin/native-tests
+	run_command "Original task flow and UI regression" bun run --cwd skills/multi-task-flow test:all
 	run_command "TypeScript client frozen dependency install" npm --prefix clients/typescript ci
 	run_command "TypeScript client typecheck" npm --prefix clients/typescript run check
 	run_command "TypeScript client Node.js tests" npm --prefix clients/typescript test
 	run_command "TypeScript client Bun tests" npm --prefix clients/typescript run test:bun
+	run_command "Independent artifact isolation" node scripts/test-skills-artifact.mjs
 	finish_check
 }
 

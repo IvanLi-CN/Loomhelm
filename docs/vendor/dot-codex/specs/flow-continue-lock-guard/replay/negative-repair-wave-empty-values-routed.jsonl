@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"flow_type: normal"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovery facts: permit_status=issued; permit_id=permit-fixture-107; base_relation=fast-forward; previous_base_sha=5555555555555555555555555555555555555555; current_base_sha=6666666666666666666666666666666666666666; live_pr=PR-fixture-107; live_pr_match=true."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue [$flow-continue]"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"python3 bin/flow_receipt.py --repo . review-wave open --stage repair --base-ref= --head-sha= --scope-class code --lane= --previous-head-sha= --repair-permit-id=\"}"}}

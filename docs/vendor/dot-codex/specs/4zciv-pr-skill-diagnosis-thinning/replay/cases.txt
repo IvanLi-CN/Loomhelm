@@ -1,0 +1,5 @@
+fail negative-session-approval-evidence-ignored.jsonl APPROVAL_EVIDENCE_IGNORED
+fail negative-dirty-misread-as-approval.jsonl CONFLICT_MISDIAGNOSED_AS_APPROVAL
+fail negative-promised-merge-branch-skipped.jsonl PROMISED_MERGE_BRANCH_NOT_RESUMED
+pass positive-blocked-with-approval-evidence.jsonl -
+pass positive-dirty-conflict-reported.jsonl -

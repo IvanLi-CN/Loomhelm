@@ -1,0 +1,3 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"流程锚点：目标=merge；下一门禁=Step 5C；收工条件=merge+cleanup"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"现在已经到 Step 5C Ready，latest PR 可立即合并。"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"demo-assistant-merge-cleanup-dropped","last_agent_message":"PR 已到 merge-ready"}}

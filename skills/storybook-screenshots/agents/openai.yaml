@@ -1,0 +1,4 @@
+interface:
+  display_name: "Storybook screenshots"
+  short_description: "Capture Storybook docs or canvas evidence for review"
+  default_prompt: "Use $storybook-screenshots to capture Storybook docs or canvas screenshots with a viewport-safe, element-first strategy. For mobile evidence, preserve owner, project, spec, and story/docs viewport choices before falling back to 393x852 CSS px; bind and verify the stable Storybook surface before recording it, or return to story coverage when that is unavailable. Full-page fallback capture is valid only after ui-visual-evidence confirms no qualified ui_demo and an existing explicit page-level exception; otherwise report a blocker. Avoid browser-window resizing except as a documented last resort, and do not replace an owner-locked non-Storybook source."

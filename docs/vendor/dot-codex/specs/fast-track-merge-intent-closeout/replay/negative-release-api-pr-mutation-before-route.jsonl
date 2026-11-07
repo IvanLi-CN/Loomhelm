@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"gh api repos/example/repo/pulls --method POST --input -\"}","call_id":"api-pr-create-before-route"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PR API request sent."}}

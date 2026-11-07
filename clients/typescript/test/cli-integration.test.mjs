@@ -122,25 +122,18 @@ test('killed CLI leaves a created reservation that restart reports unknown witho
   assert.match(approve.output.error, /no known thread ID/);
 }));
 
-test('flow commands persist across CLI processes, isolate failed dependencies, and route workflow execution', async () => temporary(async dir => {
+test('legacy flow arguments fail without changing old state; local validation is explicitly scoped', async () => temporary(async dir => {
   const { config } = await setup(dir);
-  const definitions = JSON.stringify([
-    { id: 'compile', kind: 'contribution', goal: 'compile code' },
-    { id: 'independent', kind: 'verification', goal: 'independent check' },
-    { id: 'dependent', kind: 'acceptance', goal: 'accept compile', dependencies: ['compile'] },
-  ]);
-  assert.equal((await invoke(config, process.env, ['flow', 'init', definitions])).code, 0);
-  assert.deepEqual((await invoke(config, process.env, ['flow', 'schedule'])).output.scheduled, ['compile', 'independent']);
-  assert.equal((await invoke(config, process.env, ['flow', 'start', 'compile'])).output.task.state, 'running');
-  assert.equal((await invoke(config, process.env, ['flow', 'finish', 'compile', 'failed', 'compile failure'])).output.task.state, 'failed');
-  const afterFailure = await invoke(config, process.env, ['flow', 'schedule']);
-  assert.deepEqual(afterFailure.output.scheduled, ['independent']);
-  assert.equal(afterFailure.output.result.blocked.includes('dependent'), true);
-  const restarted = await invoke(config, process.env, ['flow', 'status']);
-  assert.equal(restarted.output.tasks.find(task => task.id === 'compile').state, 'failed');
-  assert.equal(restarted.output.tasks.find(task => task.id === 'dependent').state, 'blocked');
-  assert.equal(restarted.output.tasks.find(task => task.id === 'independent').state, 'pending');
-  assert.deepEqual(restarted.output.scheduled, ['independent']);
+  const legacy = join(dir, 'state', 'task-flow'); await mkdir(legacy, { recursive: true });
+  const old = '{"schemaVersion":1,"tasks":[]}';
+  await writeFile(join(legacy, 'orchestration.json'), old);
+  const rejected = await invoke(config, process.env, ['flow', 'schedule']);
+  assert.equal(rejected.code, 1);
+  assert.match(rejected.stderr, /FLOW_LEGACY_ARGUMENTS_UNSUPPORTED/);
+  assert.equal(await readFile(join(legacy, 'orchestration.json'), 'utf8'), old);
+  const oldWorkflow = await invoke(config, process.env, ['workflow', 'verify', 'unused']);
+  assert.equal(oldWorkflow.code, 1);
+  assert.match(oldWorkflow.stderr, /WORKFLOW_LEGACY_COMMAND_UNSUPPORTED/);
 
   const repository = join(dir, 'repository'); await mkdir(repository);
   const git = async (...gitArgs) => {
@@ -155,7 +148,7 @@ test('flow commands persist across CLI processes, isolate failed dependencies, a
     { kind: 'spec', disposition: 'not-needed', reason: 'CLI fixture', paths: [] },
     { kind: 'adr', disposition: 'not-needed', reason: 'CLI fixture', paths: [] },
   ], implementation: 'CLI fixture implementation', validations: [{ id: 'node', command: process.execPath, args: ['-e', 'process.stdout.write("verified")'] }] }));
-  const workflow = await invoke(config, process.env, ['workflow', 'verify', manifest]);
+  const workflow = await invoke(config, process.env, ['workflow', 'local-verify', manifest]);
   assert.equal(workflow.code, 0, workflow.stderr);
   assert.equal(workflow.output.readiness.ready, true);
   assert.equal(workflow.output.receipts[0].stdout, 'verified');

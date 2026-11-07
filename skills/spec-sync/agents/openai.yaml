@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spec sync"
+  short_description: "Sync topic-level specs after implementation changes"
+  default_prompt: "Use $spec-sync to check spec drift and sync docs/specs after implementation or review changes."
