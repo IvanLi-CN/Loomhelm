@@ -223,7 +223,7 @@ export function createRunDashboard(options: DashboardOptions) {
         const object = kind === "task" ? ledger.tasks.find(t => t.id === id) : ledger.groups.find(g => g.id === id);
         if (!object) return new Response("Not found", { status: 404, headers });
         const pr = kind === "task" ? (object as typeof ledger.tasks[number]).pr : (object as typeof ledger.groups[number]).parent_pr;
-        if (!pr?.url) return Response.json({ data: null, observed_at: null, stale: false, loading: false, error: "尚未关联 PR" }, { headers: responseHeaders });
+        if (!pr?.url) return Response.json({ data: null, observed_at: null, stale: false, loading: false, error: null }, { headers: responseHeaders });
         if (ledger.repository.provider !== "github") return Response.json({ error: "此 PR 查询仅支持 GitHub" }, { status: 400, headers: responseHeaders });
         try { return Response.json(await prDetails.read(ledger.repository, pr.url, url.searchParams.get("refresh") === "1"), { headers: responseHeaders }); }
         catch { return Response.json({ error: "PR 与当前仓库不匹配" }, { status: 400, headers: responseHeaders }); }

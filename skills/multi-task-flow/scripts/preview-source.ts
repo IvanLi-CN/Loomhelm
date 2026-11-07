@@ -66,6 +66,10 @@ state.initialize();
 const auth = new ServiceAuth(state);
 auth.initialize();
 const run = createViewerValidationLedger();
+// Exercise the authenticated PR query against the actual candidate alongside unbound cards.
+run.repository = { ...run.repository, host: "github.com", owner: "IvanLi-CN", name: "Loomhelm" };
+const prExample = run.tasks.find(task => task.id === "ledger");
+if (prExample) prExample.pr = { provider: "github", repository: "IvanLi-CN/Loomhelm", id: "71", url: "https://github.com/IvanLi-CN/Loomhelm/pull/71" };
 const store = new LedgerStore(state.paths.data, run.orchestration_id);
 store.create(run);
 cpSync(

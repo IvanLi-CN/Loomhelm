@@ -3,6 +3,7 @@ import type { View } from "./model";
 import { formatDuration, fullLocalTime } from "./time";
 import type { PRSnapshot } from "../scripts/pr-details";
 import { attachTooltip } from "./tooltip";
+import { unboundPRHint } from "./unbound-pr-hint";
 let serial = 0;
 let active: { close: (restore?: boolean) => void; refresh: () => void } | null = null;
 export function refreshResourcePopover(): void { active?.refresh(); }
@@ -118,7 +119,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
   };
   const loadPR = async (force = false) => {
     clearTimeout(refreshTimer);
-    delete panel.dataset.compact;
+    panel.className = "resource-popover"; panel.replaceChildren(identity, body);
     const current = ++requestId;
     const loadingHeading = node("div", "", "resource-section-heading");
     loadingHeading.append(node("h3", pr?.data?.title || "PR 信息", "resource-pr-title"));
@@ -161,7 +162,11 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
       } else {
         const heading = node("div", "", "resource-section-heading");
         const empty = !next.error;
-        if (empty) panel.dataset.compact = "true";
+        if (empty) {
+          panel.className = "unbound-pr-tooltip";
+          panel.replaceChildren(unboundPRHint(() => void loadPR(true), icon("refresh")));
+          position(); return;
+        }
         heading.append(node(empty ? "span" : "h3", empty ? "尚未关联 PR" : "PR 信息", empty ? "resource-empty-label" : "resource-pr-title"));
         const label = empty ? "刷新 PR 信息" : "重试 PR 查询";
         const retry = document.createElement("button"); retry.type = "button"; retry.className = "resource-icon-button resource-refresh-button"; retry.dataset.retry = "true"; retry.setAttribute("aria-label", label); retry.append(icon("refresh")); heading.append(retry, attachTooltip(retry, node("span", label), label)); retry.addEventListener("click", () => void loadPR(true));
