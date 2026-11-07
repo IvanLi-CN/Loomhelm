@@ -82,7 +82,7 @@ bun src/workflow/cli.ts local-verify /path/to/workflow.json
   ],
   "implementation": "Implementation committed and ready for local validation",
   "validations": [
-    { "id": "tests", "command": "node", "args": ["--test", "test/feature.test.mjs"], "timeoutMs": 30000 }
+    { "id": "tests", "command": "bun", "args": ["test", "test/feature.test.ts"], "timeoutMs": 30000 }
   ]
 }
 ```

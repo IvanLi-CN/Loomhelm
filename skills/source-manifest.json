@@ -15658,7 +15658,7 @@
     },
     {
       "path": "skills/scripts/check-client-skills.ts",
-      "installedSha256": "aba63677159386fcb19cc3fb13fed91aa1de1819cfd654b48a840d9aa6a72732"
+      "installedSha256": "1f777eef876362f07a783d180cfb30d584acd8ce6c3bdfe92a962416a9755f63"
     },
     {
       "path": "skills/scripts/check-skills-installation.ts",

@@ -13,11 +13,13 @@ if (refresh) manifest.additions = additional.map(path => ({ path, installedSha25
 const findings = [];
 const gitRoot = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd:root, encoding:'utf8' });
 if (gitRoot.status === 0 && gitRoot.stdout.trim() === root) {
-  const tracked = spawnSync('git', ['ls-files', '-z', '--', 'skills/'], { cwd:root, encoding:'utf8' });
+  const tracked = spawnSync('git', ['ls-files', '-z', '--', 'skills/', 'clients/typescript/'], { cwd:root, encoding:'utf8' });
   if (tracked.status !== 0) throw new Error('Cannot verify tracked resource coverage');
   const covered = new Set([...manifest.files,...(manifest.additions ?? [])].map(file => file.path));
-  for (const file of tracked.stdout.split('\0').filter(Boolean))
-    if (!covered.has(file) && !['skills/source-manifest.json','skills/catalog.json'].includes(file)) findings.push('unlisted:'+file);
+  for (const file of tracked.stdout.split('\0').filter(Boolean)) {
+    if (/\.(?:js|mjs|cjs)$/.test(file)) findings.push('owned-source-must-be-typescript:'+file);
+    if (file.startsWith('skills/') && !covered.has(file) && !['skills/source-manifest.json','skills/catalog.json'].includes(file)) findings.push('unlisted:'+file);
+  }
 }
 
 for (const excluded of manifest.exclusions ?? []) {
