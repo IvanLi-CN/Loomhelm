@@ -19,5 +19,5 @@ export function formatLocalTime(value: string, now = Date.now()): string {
   return age >= 0 && age < 12 * 3600000 ? clock : `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
 }
 export function fullLocalTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZoneName: "long" }).format(new Date(value));
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(value));
 }

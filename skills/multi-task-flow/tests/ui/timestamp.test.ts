@@ -11,6 +11,9 @@ describe("local timestamps", () => {
     expect(formatLocalTime(new Date(now - 7 * 86400000 + 1).toISOString(), now)).toBe("6天前");
     expect(formatLocalTime(new Date(now - 7 * 86400000).toISOString(), now)).toMatch(/^10月29日 \d{2}:\d{2}$/);
   });
+  test("shows absolute dates and seconds without a timezone label", () => {
+    expect(fullLocalTime("2026-11-05T10:42:03Z")).toMatch(/^2026\/11\/05 \d{2}:42:03$/);
+  });
   test("omits absent times and exposes a full absolute tooltip on focus", () => {
     expect(renderTimestamp(null).textContent).toBe("");
     const row = renderStatusRow({ name: "验收", status: "planned" });

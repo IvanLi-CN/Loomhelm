@@ -148,3 +148,18 @@ test("authenticated loopback edits replace claims, emit revisions and freeze on 
     expect(view.view.tasks.find((task: any) => task.id === "b").effective_execution_profile).toEqual({ model: "gpt-6.1-sol", thinking: "medium" });
   } finally { await reader?.cancel(); await server.stop(); }
 });
+
+test("resource details inherit dashboard authorization and reject unbound targets", async () => {
+  const { root, assets, store } = setup();
+  const before = JSON.stringify(store.read());
+  const server = await startDashboard({ root, assetsDir: assets, runId: "run", port: 0, token });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    expect((await fetch(`${base}/s/invalid/api/resource-details?kind=task&id=other`)).status).toBe(404);
+    expect((await fetch(`${base}/s/${token}/api/resource-details?kind=task&id=other`)).status).toBe(404);
+    expect((await fetch(`${base}/s/${token}/api/resource-details?kind=task&id=other&url=https://evil.test`)).status).toBe(400);
+    expect((await fetch(`${base}/s/${token}/api/resource-details?kind=group&id=other`, { method: "POST" })).status).toBe(405);
+    expect((await fetch(`${base}/s/${token}/api/resource-details?kind=task&id=other`, { headers: { origin: "https://evil.test" } })).status).toBe(403);
+    expect(JSON.stringify(store.read())).toBe(before);
+  } finally { await server.stop(); }
+});
