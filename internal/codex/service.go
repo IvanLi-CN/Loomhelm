@@ -728,7 +728,7 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 		  AND private_session.project_id IS NULL
 		  AND private_session.creator_user_id IS DISTINCT FROM $2
 	)`
-	importedVisibility := `t.imported_by = $2 AND NOT EXISTS (
+	importedVisibility := `t.imported_by = $2 AND t.bound_task_id IS NULL AND NOT EXISTS (
 		SELECT 1
 		FROM execution_sessions AS imported_session
 		WHERE imported_session.host_id = t.host_id

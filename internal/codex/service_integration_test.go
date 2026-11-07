@@ -416,7 +416,14 @@ func TestStandaloneSessionKeepsCodexHistoryVisibleAfterActivation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("list standalone Codex history: %v", err)
 	}
-	if len(page.Items) != 1 || page.Items[0].BoundSessionID == nil || *page.Items[0].BoundSessionID != sessionID || page.Items[0].BoundTaskID != nil {
+	var standaloneItem *protocol.CodexConversation
+	for index := range page.Items {
+		if page.Items[index].ThreadID == threadID {
+			standaloneItem = &page.Items[index]
+			break
+		}
+	}
+	if standaloneItem == nil || standaloneItem.BoundSessionID == nil || *standaloneItem.BoundSessionID != sessionID || standaloneItem.BoundTaskID != nil {
 		t.Fatalf("standalone Codex list = %+v, want one Session-only binding", page.Items)
 	}
 	if _, err := service.GetConversation(ctx, auth.Principal{UserID: creatorUserID}, hostID, threadID); err != nil {

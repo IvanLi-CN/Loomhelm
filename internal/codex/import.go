@@ -147,10 +147,8 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		threadIDs = append(threadIDs, threadID)
 	}
 	sort.Strings(threadIDs)
-	for _, threadID := range threadIDs {
-		if err := lockImportBindingRows(ctx, tx, hostID, threadID); err != nil {
-			return err
-		}
+	if err := lockImportBindingRows(ctx, tx, hostID, threadIDs); err != nil {
+		return err
 	}
 	if err := tx.QueryRow(ctx, `
 		SELECT status, connection_generation FROM host_registrations WHERE id = $1 FOR UPDATE
@@ -581,29 +579,40 @@ func (s *Service) FailSync(ctx context.Context, hostID, operationID string, sync
 }
 
 // lockImportBindingRows follows the Session -> Task -> Codex lock order used
-// by Bind and Session activation before the import upserts the Codex row.
-func lockImportBindingRows(ctx context.Context, tx pgx.Tx, hostID, threadID string) error {
-	var sessionID string
-	if err := tx.QueryRow(ctx, `
-		SELECT session.id
-		FROM execution_sessions AS session
-		WHERE session.host_id = $1 AND session.external_thread_ref = $2
-		FOR UPDATE OF session
-	`, hostID, threadID).Scan(&sessionID); errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("lock Codex binding Session: %w", err)
+// by Bind and Session activation before the import upserts the Codex row. All
+// Sessions are locked before any Task so a multi-thread import cannot form a
+// Session/Task wait cycle with a concurrent single-thread binding.
+func lockImportBindingRows(ctx context.Context, tx pgx.Tx, hostID string, threadIDs []string) error {
+	sessionIDs := make([]string, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		var sessionID string
+		if err := tx.QueryRow(ctx, `
+			SELECT session.id
+			FROM execution_sessions AS session
+			WHERE session.host_id = $1 AND session.external_thread_ref = $2
+			ORDER BY session.id
+			FOR UPDATE OF session
+		`, hostID, threadID).Scan(&sessionID); errors.Is(err, pgx.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("lock Codex binding Session: %w", err)
+		}
+		sessionIDs = append(sessionIDs, sessionID)
 	}
-	var taskID string
-	if err := tx.QueryRow(ctx, `
-		SELECT task.id
-		FROM tasks AS task
-		WHERE task.session_id = $1
-		FOR UPDATE OF task
-	`, sessionID).Scan(&taskID); errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("lock Codex binding Task: %w", err)
+	sort.Strings(sessionIDs)
+	for _, sessionID := range sessionIDs {
+		var taskID string
+		if err := tx.QueryRow(ctx, `
+			SELECT task.id
+			FROM tasks AS task
+			WHERE task.session_id = $1
+			ORDER BY task.id
+			FOR UPDATE OF task
+		`, sessionID).Scan(&taskID); errors.Is(err, pgx.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("lock Codex binding Task: %w", err)
+		}
 	}
 	return nil
 }
@@ -729,6 +738,9 @@ func filesCompleteForThread(thread protocol.CodexSourceThreadSnapshot) bool {
 }
 
 func threadHistoryState(thread protocol.CodexSourceThreadSnapshot, status snapshotStatus) protocol.CodexHistoryState {
+	if status.State == protocol.CodexSyncStateFailed {
+		return protocol.CodexHistoryStateFailed
+	}
 	if validHistoryState(thread.HistoryState) {
 		return thread.HistoryState
 	}
