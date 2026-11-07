@@ -111,6 +111,13 @@ def build(record, part, output):
             shutil.copytree(ROOT/'clients/typescript/dist',stage/'dist')
             shutil.copy2(ROOT/'clients/typescript/package.json',stage/'package.json')
             shutil.copy2(ROOT/'clients/typescript/package-lock.json',stage/'package-lock.json')
+            if fixture:
+                # Keep fixture package metadata consistent without changing source.
+                for filename in ('package.json','package-lock.json'):
+                    path=stage/filename
+                    metadata=json.loads(path.read_text());metadata['version']=record['version']
+                    if filename=='package-lock.json':metadata['packages']['']['version']=record['version']
+                    path.write_text(json.dumps(metadata,indent=2)+'\n')
             # Node module resolution from packaged toolkit climbs to package root.
             run('npm','ci','--omit=dev','--prefix',str(stage),'--no-audit','--no-fund')
             archive(stage,output/f'ts-client-{machine}.tar.gz',epoch)

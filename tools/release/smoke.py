@@ -81,6 +81,10 @@ def smoke(directory,record):
             if path.name.startswith('go-client-'):
                 run_version([str(root/'loomhelm-connector'),'--version'],record)
             elif path.name.startswith('ts-client-'):
+                package=json.loads((root/'package.json').read_text())
+                lock=json.loads((root/'package-lock.json').read_text())
+                if package['version']!=record['version'] or lock['version']!=record['version'] or lock['packages']['']['version']!=record['version']:
+                    raise ReleaseError('TS package/lock identity differs from compiled version')
                 manifest=json.loads((root/'dist/toolkit/artifact-manifest.json').read_text())
                 if manifest['candidateSha']!=record['merge_sha'] or manifest['dirty']:
                     raise ReleaseError('TS resource provenance differs from clean Candidate')
