@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runProcess } from '../src/runtime/process.ts';
 
-const cliPath = resolve('dist/cli.js');
+const cliPath = resolve('src/cli.ts');
 const fixturePath = resolve('test/fixtures/cli-codex-server.mjs');
 async function temporary(fn) {
   const dir = await mkdtemp(join(tmpdir(), 'loomhelm-cli-'));
@@ -16,7 +16,7 @@ async function temporary(fn) {
 async function setup(dir, mode = 'complete') {
   const bin = join(dir, 'bin'); await mkdir(bin);
   const codex = join(bin, 'codex');
-  await writeFile(codex, `#!/usr/bin/env node\nimport ${JSON.stringify(fixturePath)};\n`);
+  await writeFile(codex, `#!${process.execPath}\nimport ${JSON.stringify(fixturePath)};\n`);
   await chmod(codex, 0o755);
   const config = join(dir, 'config.json');
   await writeFile(config, JSON.stringify({ schemaVersion: 1, stateDir: join(dir, 'state'), processTimeoutMs: 3000 }));

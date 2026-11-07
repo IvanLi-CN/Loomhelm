@@ -53,9 +53,8 @@ try {
 ## 验证
 
 ```sh
-npm run check
-npm test
-npm run test:bun
+bun run check
+bun run test
 ```
 
 `test/codex.test.mjs` 使用独立 Bun 伪服务器，在实际 Bun 进程中运行同一适配实现。覆盖握手、请求乱序、官方方法和参数转发、拆分 UTF-8、重复事件、启动响应前的终态、审批显式答复和失效、RPC 错误、超时与迟到响应、帧和请求容量上限、非法响应、断连与 stdout EOF、监听器异常、启动失败以及忽略 TERM 的进程回收。测试不启动真实 Codex、不调用模型、不使用账号或网络。

@@ -153,7 +153,7 @@ test('Git worktree creation preserves existing state and refuses unsafe requests
 test('offline CLI creates, executes and queries a task without a server', () => temporary(async dir => {
   const config = join(dir, 'config.json'); await writeFile(config, JSON.stringify({ stateDir: 'state' }));
   const cli = async args => {
-    const result = await runProcess(process.execPath, [resolve('dist/cli.js'), '--config', config, ...args]);
+    const result = await runProcess(process.execPath, [resolve('src/cli.ts'), '--config', config, ...args]);
     assert.equal(result.code, 0, result.stderr); return JSON.parse(result.stdout);
   };
   await cli(['apply', 'create', JSON.stringify(task('cli-task'))]);
