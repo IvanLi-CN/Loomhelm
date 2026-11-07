@@ -39,12 +39,18 @@ export type CodexArchiveResult = {
 
 /** Reads only the archived listing; absence is never itself proof of archive. */
 export async function archivedCodexThread(threadId: string): Promise<boolean> {
+  return listedCodexThread(threadId, true);
+}
+export async function unarchivedCodexThread(threadId: string): Promise<boolean> {
+  return listedCodexThread(threadId, false);
+}
+async function listedCodexThread(threadId: string, archived: boolean): Promise<boolean> {
   return withCodexArchiveConnection(async (socket, buffer) => {
     let cursor: unknown;
     const seen = new Set<unknown>();
     let id = 2;
     do {
-      const page = await rpc(socket, buffer, id++, "thread/list", { archived: true, limit: 100, ...(cursor ? { cursor } : {}) });
+      const page = await rpc(socket, buffer, id++, "thread/list", { archived, limit: 100, ...(cursor ? { cursor } : {}) });
       if (page.error) throw new Error(String(record(page.error)?.message ?? "Archive lookup failed"));
       const result = record(page.result);
       if (!Array.isArray(result?.data)) throw new Error("Invalid archived thread listing");
@@ -82,6 +88,21 @@ export async function archiveCodexThread(threadId: string, operationId = randomU
     });
   } catch (error) {
     return { outcome: submitted ? "unknown" : "failed", evidence_ref: `${evidence}:error`, error: (error instanceof Error ? error.message : String(error)).slice(0, 500) };
+  }
+}
+
+export async function unarchiveCodexThread(threadId: string, operationId = randomUUID()): Promise<CodexArchiveResult> {
+  const evidence = `codex-app-server:${operationId}`;
+  let submitted = false;
+  try {
+    return await withCodexArchiveConnection(async (socket, buffer) => {
+      submitted = true;
+      const result = await rpc(socket, buffer, 2, "thread/unarchive", { threadId });
+      if (result.error) return { outcome: "failed", evidence_ref: evidence, error: String(record(result.error)?.message ?? "Unarchive rejected") };
+      return { outcome: "succeeded", evidence_ref: evidence };
+    });
+  } catch (error) {
+    return { outcome: submitted ? "unknown" : "failed", evidence_ref: `${evidence}:error`, error: String(error).slice(0, 500) };
   }
 }
 

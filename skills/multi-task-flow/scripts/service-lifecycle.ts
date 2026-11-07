@@ -139,6 +139,7 @@ export async function runDaemon(
     name?: string;
     assetsDir: string;
     revision: () => string;
+    demoHooks?: Pick<import("./server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">;
   },
 ) {
   requireCondition(
@@ -239,6 +240,7 @@ export async function runDaemon(
           config.port,
           source?.revision,
           source?.name,
+          source?.demoHooks,
         );
         return viewer;
       },

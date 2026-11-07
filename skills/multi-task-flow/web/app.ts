@@ -1,8 +1,10 @@
+import { installTextTooltips } from "./tooltip";
+import { runtimeTaskState } from "./task-state";
 import { OutputSnapshots, initialOutput, refreshOutputNodes, type OutputSnapshot } from "./agent-output";
 import { createProfileEditor } from "./profile-editor";
 import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
 import moment from "moment";
-import { createIcons, Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, PauseCircle, ArchiveX } from "lucide";
+import { createIcons, Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw } from "lucide";
 import { createCardRenderer } from "./cards";
 import { createTimelineController } from "./timeline";
 import { createGraphController } from "./graph";
@@ -18,17 +20,18 @@ import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-previ
 import { formatDuration, formatLocalTime } from "./time";
 import { renderTimestamp, refreshTimestamps } from "./timestamp";
 import { rangeFromIntervals } from "./execution-range";
-import { taskKindLabel } from "./labels";
+import { taskKindLabel, STATE_LABELS } from "./labels";
 import { DEFAULT_VIEW_STATE, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
-const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, PauseCircle, ArchiveX };
+const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw };
+installTextTooltips();
 createIcons({ icons: ICONS });
 moment.defineLocale("zh-task", { parentLocale: "en", months: "一月_二月_三月_四月_五月_六月_七月_八月_九月_十月_十一月_十二月".split("_"), monthsShort: "1月_2月_3月_4月_5月_6月_7月_8月_9月_10月_11月_12月".split("_"), weekdays: "星期日_星期一_星期二_星期三_星期四_星期五_星期六".split("_"), weekdaysShort: "周日_周一_周二_周三_周四_周五_周六".split("_"), weekdaysMin: "日_一_二_三_四_五_六".split("_") });
 moment.locale("zh-task");
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const palette = ["#1b6c80", "#2f70bb", "#a86f0c", "#6f7880", "#1e7b4f", "#8a6470"];
-const labels: Record<string, string> = { planned: "待开始", ready: "就绪", starting: "启动中", running: "执行中", waiting: "等待中", blocked: "阻塞", integrated: "已集成", completed: "已完成", closed: "已收口", merged: "已合并", active: "进行中" };
-const statusColors: Record<string, string> = { planned: "#8a9295", ready: "#2f70bb", starting: "#2f70bb", running: "#2f70bb", waiting: "#a86f0c", blocked: "#c4242a", integrated: "#1e7b4f", completed: "#1e7b4f", closed: "#71797d", merged: "#1e7b4f" };
-const defaultStates = new Set(Object.keys(labels).filter((key) => !["active", "merged"].includes(key)));
+const labels = STATE_LABELS;
+const statusColors: Record<string, string> = { agent_idle: "#a86f0c", planned: "#8a9295", ready: "#2f70bb", starting: "#2f70bb", running: "#2f70bb", waiting: "#a86f0c", blocked: "#c4242a", integrated: "#1e7b4f", completed: "#1e7b4f", closed: "#71797d", merged: "#1e7b4f" };
+const defaultStates = new Set(Object.keys(labels).filter((key) => !["active", "merged", "unknown", "idle"].includes(key)));
 const defaultKinds = new Set(["contribution", "release", "deployment", "verification", "coordination", "development", "other"]);
 let data: View | null = null;
 let revision = -1;
@@ -38,11 +41,14 @@ function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void 
   if (!data || !outputSnapshot) return;
   let idleChanged = false;
   for (const task of data.tasks) {
-    const previousIdle = task.agent_idle;
+    const previousState = task.state;
     const output = outputSnapshot.outputs[task.id];
     task.latest_agent_output = output?.thread_id === task.thread_id ? output : initialOutput(task.thread_id);
-    task.agent_idle = ["starting", "running"].includes(task.state) && (!task.disposition || task.disposition === "active") && !task.latest_agent_output.stale && task.latest_agent_output.agent_state === "idle";
-    idleChanged ||= previousIdle !== task.agent_idle;
+    const observedState = runtimeTaskState(task, task.latest_agent_output);
+    if (observedState === "agent_idle" && previousState !== "agent_idle") task.agent_resume_state = previousState as "starting" | "running";
+    task.state = observedState;
+    if (observedState !== "agent_idle") delete task.agent_resume_state;
+    idleChanged ||= previousState !== task.state;
   }
   refreshOutputNodes(document, data.tasks);
   if (hydrated && idleChanged) render();
@@ -71,14 +77,14 @@ const anyFinePointerCapability = window.matchMedia("(any-pointer: fine)");
 function text(tag: string, value: string, ...classNames: string[]): HTMLElement { const element = document.createElement(tag); if (classNames.length) element.className = classNames.join(" "); element.textContent = value; return element; }
 function clear(id: string): HTMLElement { const element = $(id); element.replaceChildren(); return element; }
 function label(task: Task): string { return task.state === "planned" && task.is_ready ? "就绪" : labels[task.state] ?? task.state; }
-async function archiveConversation(taskId: string): Promise<void> {
+async function archiveConversation(taskId: string, action: "archive" | "unarchive" = "archive"): Promise<void> {
   try {
-    const response = await fetch("api/conversation-archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task_id: taskId }) });
+    const response = await fetch("api/conversation-archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task_id: taskId, action }) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     await refresh();
   } catch {
     const notice = document.getElementById("connection-notice");
-    if (notice) { notice.hidden = false; notice.textContent = "归档重试失败，请稍后重试并检查对话资源状态。"; }
+    if (notice) { notice.hidden = false; notice.textContent = "对话归档操作失败，请稍后重试并检查资源状态。"; }
   }
 }
 function groupColor(groupId: string | null): string { if (!data || !groupId) return "#87978f"; const index = data.groups.findIndex((item) => item.id === groupId); return palette[Math.max(0, index) % palette.length] ?? "#87978f"; }
@@ -181,8 +187,8 @@ function renderSummary(): void {
   if (!data) return;
   const summary = clear("summary");
   const tasks = data.tasks;
-  const entries = [["就绪", tasks.filter((task) => task.is_ready && task.state === "planned").length, "ready"], ["执行中", `${tasks.filter((task) => ["starting", "running"].includes(task.state)).length}/${data.orchestration.max_running_tasks}`, "running"], ["阻塞", tasks.filter((task) => task.state === "blocked").length, "blocked"], ["已集成", tasks.filter((task) => task.state === "integrated").length, "integrated"], ["已收口", tasks.filter((task) => task.state === "closed").length, "closed"]] as const;
-  const iconNames: Record<string, string> = { ready: "circle-dot", running: "circle-play", blocked: "circle-alert", integrated: "git-merge", closed: "circle-check" };
+  const entries = [["Agent 空闲", tasks.filter(task => task.state === "agent_idle").length, "agent_idle"], ["就绪", tasks.filter((task) => task.is_ready && task.state === "planned").length, "ready"], ["执行中", `${tasks.filter((task) => ["starting", "running"].includes(task.state)).length}/${data.orchestration.max_running_tasks}`, "running"], ["阻塞", tasks.filter((task) => task.state === "blocked").length, "blocked"], ["已集成", tasks.filter((task) => task.state === "integrated").length, "integrated"], ["已收口", tasks.filter((task) => task.state === "closed").length, "closed"]] as const;
+  const iconNames: Record<string, string> = { agent_idle: "tree-palm", ready: "circle-dot", running: "circle-play", blocked: "circle-alert", integrated: "git-merge", closed: "circle-check" };
   for (const [name, count, status] of entries) { const row = text("div", "", "summary-item"); row.dataset.status = status; const icon = text("span", "", "summary-icon"); icon.setAttribute("aria-hidden", "true"); const iconElement = document.createElement("i"); iconElement.dataset.lucide = iconNames[status]; icon.append(iconElement); row.append(icon, text("span", name, "summary-label"), text("strong", String(count))); summary.append(row); }
 }
 function refreshCardDurations(): void {
@@ -239,6 +245,7 @@ const cardRenderer = createCardRenderer({
   getSelectedGroup: () => selectedGroup,
   labels,
   safeExternal,
+  archiveConversation,
   groupRange,
   selectTask: (id) => selectTask(id),
   selectGroup: (id) => selectGroup(id),
@@ -444,7 +451,7 @@ function render(): void {
   planWarning.textContent = planWarnings.some((warning) => warning.code === "missing_start_at")
     ? "理论安排暂不可计算：当前计划未设置开始时间。请在计划版本中补充计划开始时间后重新生成或批准计划。"
     : planWarnings.map((warning) => warning.reason).join(" ");
-  updateMenu("group-filter", data.groups.map((group) => ({ value: group.id, label: group.title })), "全部交付单元"); updateMenu("state-filter", [...defaultStates].filter((key) => !["active", "merged"].includes(key)).map((value) => ({ value, label: value === "ready" ? "就绪" : labels[value] ?? value })), "全部状态"); updateMenu("kind-filter", ["contribution", "release", "deployment", "verification", "coordination"].map((value) => ({ value, label: taskKindLabel(value) })), "全部任务类型"); updateVersionMenu();
+  updateMenu("group-filter", data.groups.map((group) => ({ value: group.id, label: group.title })), "全部交付单元"); updateMenu("state-filter", [...defaultStates].filter((key) => !["active", "merged", "unknown", "idle"].includes(key)).map((value) => ({ value, label: value === "ready" ? "就绪" : labels[value] ?? value })), "全部状态"); updateMenu("kind-filter", ["contribution", "release", "deployment", "verification", "coordination"].map((value) => ({ value, label: taskKindLabel(value) })), "全部任务类型"); updateVersionMenu();
   setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); $("graph-tools").hidden = viewState.tab !== "graph"; $("timeline-tools").hidden = viewState.tab === "graph"; applyStateToControls(); renderSummary(); const tasks = filteredTasks(); $("task-count").textContent = `${tasks.length} / ${data.tasks.length} 个任务`; $("view-context").textContent = viewState.tab === "graph" ? "依赖关系" : viewState.tab === "planned" ? "理论安排" : "实际运行"; $("view-count").textContent = `${tasks.length} 项任务 · ${data.groups.length} 个交付单元`; renderGroups(); renderList(tasks); syncStableGridCardWidth(); setTabAria(viewState.tab); if (viewState.tab === "graph") graphController.render(tasks); else timelineController.renderTimeline(tasks, viewState.tab); const focusDetails = focusDetailsOnNextRender; focusDetailsOnNextRender = false; updateDetailsSurface(viewState.detail, focusDetails); const selectedTaskData = selectedTask ? data.tasks.find((item) => item.id === selectedTask) : null; const selectedGroupData = selectedGroup ? data.groups.find((item) => item.id === selectedGroup) : null; if (selectedTaskData) showTask(selectedTaskData); else if (selectedGroupData) showGroup(selectedGroupData); else clearDetails(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); restoreListFocus(listFocus);
   restoreMenuFocus(menuFocus);
   restoreDetailFocus(detailFocus);

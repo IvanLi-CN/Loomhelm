@@ -56,14 +56,14 @@
             <div class="menu-control dropdown" data-menu="state-filter"><button id="state-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按状态筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="state-filter-menu"><span id="state-filter-value">全部状态</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="state-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按状态筛选"></ul></div>
             <div class="menu-control dropdown" data-menu="kind-filter"><button id="kind-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按任务类型筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="kind-filter-menu"><span id="kind-filter-value">全部类型</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="kind-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按任务类型筛选"></ul></div>
             <div class="graph-tools" id="graph-tools">
-              <button type="button" id="zoom-out" class="icon-button" title="缩小" aria-label="缩小"><i data-lucide="minus"></i></button>
-              <button type="button" id="zoom-in" class="icon-button" title="放大" aria-label="放大"><i data-lucide="plus"></i></button>
-              <button type="button" id="fit" class="icon-button" title="适应视图" aria-label="适应视图"><i data-lucide="maximize-2"></i></button>
+              <button type="button" id="zoom-out" class="icon-button" data-tooltip="缩小" aria-label="缩小"><i data-lucide="minus"></i></button>
+              <button type="button" id="zoom-in" class="icon-button" data-tooltip="放大" aria-label="放大"><i data-lucide="plus"></i></button>
+              <button type="button" id="fit" class="icon-button" data-tooltip="适应视图" aria-label="适应视图"><i data-lucide="maximize-2"></i></button>
             </div>
             <div class="timeline-tools" id="timeline-tools" hidden>
-              <button type="button" id="timeline-zoom-out" class="icon-button" title="缩小时间范围" aria-label="缩小时间范围"><i data-lucide="minus"></i></button>
-              <button type="button" id="timeline-zoom-in" class="icon-button" title="放大时间范围" aria-label="放大时间范围"><i data-lucide="plus"></i></button>
-              <button type="button" id="timeline-fit" class="icon-button" title="适应时间范围" aria-label="适应时间范围"><i data-lucide="maximize-2"></i></button>
+              <button type="button" id="timeline-zoom-out" class="icon-button" data-tooltip="缩小时间范围" aria-label="缩小时间范围"><i data-lucide="minus"></i></button>
+              <button type="button" id="timeline-zoom-in" class="icon-button" data-tooltip="放大时间范围" aria-label="放大时间范围"><i data-lucide="plus"></i></button>
+              <button type="button" id="timeline-fit" class="icon-button" data-tooltip="适应时间范围" aria-label="适应时间范围"><i data-lucide="maximize-2"></i></button>
             </div>
             </div>
             <div id="connection-notice" class="notice" role="status" hidden></div>
@@ -81,7 +81,7 @@
           </div>
         </div>
         <div id="details-backdrop" class="details-backdrop" hidden></div>
-        <aside id="details" class="details" aria-label="详情" aria-hidden="true" tabindex="-1"><div class="details-heading"><button type="button" id="close-details" class="icon-button mobile-close" title="关闭详情" aria-label="关闭详情"><i data-lucide="x"></i></button></div><div id="details-content" class="details-empty"><span class="empty-rule" aria-hidden="true"></span><strong>选择交付单元或任务</strong><span>查看依赖、运行时间和原生会话链接</span></div></aside>
+        <aside id="details" class="details" aria-label="详情" aria-hidden="true" tabindex="-1"><div class="details-heading"><button type="button" id="close-details" class="icon-button mobile-close" data-tooltip="关闭详情" aria-label="关闭详情"><i data-lucide="x"></i></button></div><div id="details-content" class="details-empty"><span class="empty-rule" aria-hidden="true"></span><strong>选择交付单元或任务</strong><span>查看依赖、运行时间和原生会话链接</span></div></aside>
       </section>
     </main>
   </div>

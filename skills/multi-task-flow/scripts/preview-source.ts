@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import {
   createViewerValidationLedger,
+  createIdleArchiveExample,
   viewerValidationName,
 } from "../examples/orchestration-viewer";
 import { ServiceState } from "./service-state";
@@ -65,7 +66,11 @@ const state = new ServiceState(
 state.initialize();
 const auth = new ServiceAuth(state);
 auth.initialize();
-const run = createViewerValidationLedger();
+const scenarioIndex = process.argv.indexOf("--scenario");
+const scenario = scenarioIndex < 0 ? "default" : process.argv[scenarioIndex + 1];
+if (!["default", "agent-idle-archive"].includes(scenario ?? "")) throw new Error("Unknown preview scenario");
+const example = scenario === "agent-idle-archive" ? createIdleArchiveExample() : null;
+const run = example?.ledger ?? createViewerValidationLedger();
 const store = new LedgerStore(state.paths.data, run.orchestration_id);
 store.create(run);
 cpSync(
@@ -126,7 +131,8 @@ state.renew(
 let revision = createHash("sha256").update(JSON.stringify(files)).digest("hex");
 const daemon = await runDaemon(state, {
   manifest,
-  name: viewerValidationName,
+  name: example ? "Agent 空闲与对话归档示例" : viewerValidationName,
+  demoHooks: example?.dashboard,
   assetsDir,
   revision: () => revision,
 });
@@ -183,7 +189,7 @@ process.once("SIGINT", stop);
 console.log(
   JSON.stringify({
     mode: "source-preview",
-    name: viewerValidationName,
+    name: example ? "Agent 空闲与对话归档示例" : viewerValidationName,
     run_id: run.orchestration_id,
     root,
     pid: process.pid,

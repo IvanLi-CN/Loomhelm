@@ -1,6 +1,6 @@
 import cytoscape, { type ElementDefinition } from "cytoscape";
 import dagre from "cytoscape-dagre";
-import { CircleAlert, CircleCheck, CircleDashed, CircleDot, Hourglass, LoaderCircle } from "lucide";
+import { CircleAlert, CircleCheck, CircleDashed, CircleDot, Hourglass, LoaderCircle, TreePalm } from "lucide";
 import type { Task, View } from "./model";
 import { dependencyLabel, taskKindLabel, type StateIconName } from "./labels";
 import { buildGraphProjection, GRAPH_SHAPES, type GraphDependencyPath, type GraphProjection, type GraphProjectionNode } from "./graph-projection";
@@ -26,6 +26,7 @@ type GraphContext = {
 };
 
 const GRAPH_STATUS_ICONS: Record<StateIconName, typeof CircleAlert> = {
+  "tree-palm": TreePalm,
   "circle-alert": CircleAlert,
   "circle-check": CircleCheck,
   "circle-dashed": CircleDashed,

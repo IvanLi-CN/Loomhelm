@@ -1,12 +1,14 @@
+import { renderConversationControl, type ArchiveAction } from "./conversation-control";
 import { initialOutput } from "./agent-output";
 import { conversationUrl } from "./links";
 import { formatDuration } from "./time";
-import { groupExecutionVisualState, stateIconName, STATE_LABELS } from "./labels";
+import { groupExecutionVisualState, stateIconName } from "./labels";
 import { renderTaskOutput } from "./preview-content";
 import type { Group, Task, View } from "./model";
 import type { TaskLayout } from "./view-state";
 
 type CardContext = {
+  archiveConversation?: ArchiveAction;
   getData: () => View | null;
   getLayout: () => TaskLayout;
   getSelectedTask: () => string | null;
@@ -68,7 +70,7 @@ function iconLink(label: string, iconName: string, url: string, external = false
   const anchor = document.createElement("a");
   anchor.className = "resource-action icon-button";
   anchor.href = url;
-  anchor.title = label;
+  anchor.dataset.tooltip = label;
   anchor.setAttribute("aria-label", label);
   if (external) anchor.rel = "noopener noreferrer";
   const icon = document.createElement("i");
@@ -84,7 +86,7 @@ function iconAction(label: string, iconName: string, url: string | null, externa
   button.type = "button";
   button.className = "resource-action icon-button";
   button.disabled = true;
-  button.title = label;
+  button.dataset.tooltip = label;
   button.setAttribute("aria-label", label);
   const icon = document.createElement("i");
   icon.dataset.lucide = iconName;
@@ -109,31 +111,21 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   const select = document.createElement("button");
   select.type = "button";
   select.className = "task-card-select";
-  select.setAttribute("aria-label", selectionAriaLabel("任务", task.title, task.agent_idle ? "agent_idle" : task.is_ready && task.state === "planned" ? "ready" : task.state, context.labels));
+  select.setAttribute("aria-label", selectionAriaLabel("任务", task.title, task.is_ready && task.state === "planned" ? "ready" : task.state, context.labels));
   select.setAttribute("aria-pressed", String(context.getSelectedTask() === task.id));
   select.append(statusIcon(task.state, task.is_ready), text("span", task.title, "task-card-title"));
-  (select.lastElementChild as HTMLElement).title = task.title;
+  (select.lastElementChild as HTMLElement).dataset.tooltip = task.title;
   select.addEventListener("click", (event) => { event.stopPropagation(); if (event.detail === 0) context.setKeyboardSelection(); context.selectTask(task.id); });
   head.append(select);
   const actions = text("div", "", "task-card-actions");
   const archiveStatus = task.conversation_resource?.status;
-  const conversationLabel = archiveStatus === "archive_failed" ? "对话归档失败，打开详情重试" : archiveStatus === "archive_unknown" ? "对话归档结果未知，打开详情对账" : task.agent_idle ? "Agent 已停止工作，打开任务对话" : "打开任务对话";
-  const conversationIcon = archiveStatus === "archive_failed" || archiveStatus === "archive_unknown" ? "archive-x" : task.agent_idle ? "pause-circle" : "message-circle";
-  if (archiveStatus === "archive_failed" || archiveStatus === "archive_unknown") {
-    const action = iconAction(conversationLabel, conversationIcon, null) as HTMLButtonElement;
-    action.disabled = false;
-    action.addEventListener("click", event => { event.stopPropagation(); context.selectTask(task.id); });
-    actions.append(action);
-  } else actions.append(iconAction(task.thread_id ? conversationLabel : "任务对话尚未创建", conversationIcon, task.thread_id ? conversationUrl(task.thread_id) : null));
+  if (archiveStatus && ["closed", "archive_failed", "archive_unknown", "unarchive_failed", "unarchive_unknown"].includes(archiveStatus) || task.conversation_resource?.archive_policy === "manual") {
+    actions.append(renderConversationControl(task, context.archiveConversation, context.getData()?.profile_read_only === true));
+  } else actions.append(iconAction(task.thread_id ? task.state === "agent_idle" ? "Agent 已停止工作，打开任务对话" : "打开任务对话" : "任务对话尚未创建", "message-circle", task.thread_id ? conversationUrl(task.thread_id) : null));
   const pr = context.safeExternal(task.pr?.url ?? null);
   actions.append(iconAction(pr ? "打开任务 PR" : "任务 PR 尚未创建", "git-pull-request", pr, true));
   head.append(actions);
   const meta = text("div", "", "task-card-meta");
-  if (task.agent_idle) {
-    const idle = text("span", STATE_LABELS.agent_idle, "task-runtime-state", "is-idle");
-    idle.setAttribute("aria-label", "任务状态：Agent 空闲");
-    meta.append(idle);
-  }
   meta.append(durationValue(task.started_at, task.finished_at));
   card.append(head, meta, renderTaskOutput(task.latest_output, task.latest_agent_output ?? initialOutput(task.thread_id), task.id));
   card.addEventListener("click", (event) => { if ((event.target as HTMLElement).closest("a, button")) return; context.selectTask(task.id); });
@@ -157,7 +149,7 @@ function groupCard(group: Group, context: CardContext): HTMLElement {
   select.setAttribute("aria-label", selectionAriaLabel("交付单元", group.title, visualState, context.labels));
   select.setAttribute("aria-pressed", String(context.getSelectedGroup() === group.id));
   select.append(statusIcon(visualState), text("span", group.title, "task-card-title"));
-  (select.lastElementChild as HTMLElement).title = group.title;
+  (select.lastElementChild as HTMLElement).dataset.tooltip = group.title;
   select.addEventListener("click", (event) => { event.stopPropagation(); if (event.detail === 0) context.setKeyboardSelection(); context.selectGroup(group.id); });
   head.append(select);
   const actions = text("div", "", "task-card-actions");
@@ -207,7 +199,7 @@ export function createCardRenderer(context: CardContext): { renderList: (tasks: 
       const pr = context.safeExternal(group.parent_pr?.url ?? null);
       actions.append(iconAction(pr ? "打开交付单元 PR" : "交付单元 PR 尚未创建", "git-pull-request", pr, true));
       const progress = text("span", groupAtomProgress(group), "task-column-count");
-      progress.title = groupAtomProgress(group);
+      progress.dataset.tooltip = groupAtomProgress(group);
       heading.append(select, progress, actions);
       const cards = text("div", "", "task-column-list");
       cards.setAttribute("role", "list");

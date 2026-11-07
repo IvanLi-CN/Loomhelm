@@ -60,7 +60,7 @@ describe("dashboard details content", () => {
     expect(content).toContain("edge-merge-task");
 
     let retries = 0;
-    Object.assign(view.tasks[0]!, { agent_idle: true, thread_id: "thread-task", conversation_resource: { id: "conversation-task", kind: "conversation", target: "thread-task", status: "archive_failed", evidence_ref: "archive-error", error: "archive refused", last_attempt_at: "2026-01-01T00:00:00.000Z", operation_id: "archive-1" } });
+    Object.assign(view.tasks[0]!, { state: "agent_idle", thread_id: "thread-task", conversation_resource: { id: "conversation-task", kind: "conversation", target: "thread-task", status: "archive_failed", evidence_ref: "archive-error", error: "archive refused", last_attempt_at: "2026-01-01T00:00:00.000Z", operation_id: "archive-1" } });
     const archiveDetails = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "执行中", time: () => "未知", safeExternal: () => null, groupRange: () => ({ start: null, end: null }), archiveConversation: () => { retries++; } });
     archiveDetails.showTask(view.tasks[0]!);
     expect(document.getElementById("details-content")?.textContent).toContain("archive refused");

@@ -5,13 +5,15 @@ import { apply } from "./engine";
 import { ContractError, requireCondition } from "./errors";
 import { validateLedger, type Ledger } from "./schema";
 import type { LedgerStore } from "./store";
-import { archiveCodexThread, archivedCodexThread } from "./codex-agent-api";
+import { archiveCodexThread, archivedCodexThread, unarchiveCodexThread, unarchivedCodexThread } from "./codex-agent-api";
 
 export type ArchiveProvider = {
   archive: typeof archiveCodexThread;
   isArchived: typeof archivedCodexThread;
+  unarchive?: typeof unarchiveCodexThread;
+  isUnarchived?: typeof unarchivedCodexThread;
 };
-const provider: ArchiveProvider = { archive: archiveCodexThread, isArchived: archivedCodexThread };
+const provider: ArchiveProvider = { archive: archiveCodexThread, isArchived: archivedCodexThread, unarchive: unarchiveCodexThread, isUnarchived: unarchivedCodexThread };
 const terminal = (task: Ledger["tasks"][number]) =>
   ["completed", "closed"].includes(task.state) || ["abandoned", "superseded"].includes(task.disposition);
 
@@ -36,6 +38,12 @@ function eligible(ledger: Ledger, taskId: string): string {
 
 /** One OS lock spans reconciliation, durable intent, provider await and receipt. */
 export async function retryConversationArchive(store: LedgerStore, taskId: string, api: ArchiveProvider = provider) {
+  return changeConversationArchive(store, taskId, api, true);
+}
+export async function retryConversationUnarchive(store: LedgerStore, taskId: string, api: ArchiveProvider = provider) {
+  return changeConversationArchive(store, taskId, api, false);
+}
+async function changeConversationArchive(store: LedgerStore, taskId: string, api: ArchiveProvider, archived: boolean) {
   const initial = validateLedger(store.read());
   const thread = eligible(initial, taskId);
   const key = createHash("sha256").update(thread).digest("hex");
@@ -45,11 +53,17 @@ export async function retryConversationArchive(store: LedgerStore, taskId: strin
     const ledger = validateLedger(store.read());
     eligible(ledger, taskId);
     const existing = ledger.resources.find(resource => resource.kind === "conversation" && resource.target === thread);
-    if (existing?.status === "closed") return existing;
+    if (archived && existing?.status === "closed") return existing;
+    if (!archived && existing?.status === "active") return existing;
+    requireCondition(archived ? !existing?.status.startsWith("unarchive_") : !!existing && ["closed", "unarchive_failed", "unarchive_unknown"].includes(existing.status), "ARCHIVE_STATE_CONFLICT", "Reconcile the current archive operation before changing its direction", 4);
+    if (!archived) requireCondition(api.unarchive && api.isUnarchived, "UNARCHIVE_UNSUPPORTED", "Unarchive is unavailable", 4);
+    const unknown = archived ? "archive_unknown" : "unarchive_unknown";
+    const failed = archived ? "archive_failed" : "unarchive_failed";
+    const complete = archived ? "closed" : "active";
     const operationId = `archive-${randomUUID()}`;
     const resource = existing ?? { id: `conversation-${key.slice(0, 32)}`, kind: "conversation" as const, target: thread, status: "pending" as const, evidence_ref: null };
     let writeSequence = 0;
-    const write = (status: "pending" | "closed" | "archive_failed" | "archive_unknown", error: string | null, evidence: string) => {
+    const write = (status: "pending" | "closed" | "active" | "archive_failed" | "archive_unknown" | "unarchive_failed" | "unarchive_unknown", error: string | null, evidence: string) => {
       store.update(raw => {
         const current = validateLedger(raw);
         // Re-prove ownership and exact binding before every write.
@@ -59,27 +73,27 @@ export async function retryConversationArchive(store: LedgerStore, taskId: strin
           actor: { role: "main", thread_id: current.control.owner_thread_id },
           request_id: `${operationId}-${++writeSequence}`,
           expected_revision: current.revision,
-          payload: { resource: { ...resource, status, error, evidence_ref: evidence, operation_id: operationId, last_attempt_at: new Date().toISOString() } },
+          payload: { resource: { ...resource, archive_policy: archived ? "auto" : "manual", status, error, evidence_ref: evidence, operation_id: operationId, last_attempt_at: new Date().toISOString() } },
         });
       });
       return validateLedger(store.read()).resources.find(item => item.id === resource.id)!;
     };
     // Unknown attempts are reconciled first. A negative lookup cannot prove
     // that an earlier request will not complete, so never resend from unknown.
-    if (existing?.status === "archive_unknown") {
+    if (existing?.status === unknown) {
       try {
-        if (await api.isArchived(thread)) return write("closed", null, `codex-app-server:${operationId}:reconciled`);
-        return write("archive_unknown", "Archive not confirmed; previous request remains unresolved", `codex-app-server:${operationId}:not-confirmed`);
+        if (await (archived ? api.isArchived(thread) : api.isUnarchived!(thread))) return write(complete, null, `codex-app-server:${operationId}:reconciled`);
+        return write(unknown, "Archive not confirmed; previous request remains unresolved", `codex-app-server:${operationId}:not-confirmed`);
       } catch (error) {
-        return write("archive_unknown", String(error).slice(0, 500), `codex-app-server:${operationId}:lookup-error`);
+        return write(unknown, String(error).slice(0, 500), `codex-app-server:${operationId}:lookup-error`);
       }
     }
     // Claim before crossing the provider boundary. Process death leaves unknown.
-    write("archive_unknown", "Archive attempt is in progress; reconcile after interruption", `codex-app-server:${operationId}:intent`);
+    write(unknown, "Archive attempt is in progress; reconcile after interruption", `codex-app-server:${operationId}:intent`);
     let result;
-    try { result = await api.archive(thread, operationId); }
+    try { result = await (archived ? api.archive(thread, operationId) : api.unarchive!(thread, operationId)); }
     catch (error) { result = { outcome: "unknown" as const, evidence_ref: `codex-app-server:${operationId}:error`, error: String(error).slice(0, 500) }; }
-    return write(result.outcome === "succeeded" ? "closed" : result.outcome === "failed" ? "archive_failed" : result.outcome === "deferred" ? "pending" : "archive_unknown", result.error ?? null, result.evidence_ref);
+    return write(result.outcome === "succeeded" ? complete : result.outcome === "failed" ? failed : result.outcome === "deferred" ? "pending" : unknown, result.error ?? null, result.evidence_ref);
   } finally { lock.release(); }
 }
 
@@ -88,7 +102,7 @@ export async function sweepConversationArchives(store: LedgerStore, api: Archive
   for (const task of ledger.tasks.filter(terminal)) {
     const resource = ledger.resources.find(resource => resource.kind === "conversation" && resource.target === task.thread_id);
     // Failures and unknowns require the explicit retry/reconcile button.
-    if (resource?.status === "closed" || resource?.status === "archive_failed" || resource?.status === "archive_unknown") continue;
+    if (resource?.archive_policy === "manual" || resource?.status === "closed" || resource?.status === "archive_failed" || resource?.status === "archive_unknown") continue;
     try { await retryConversationArchive(store, task.id, api); }
     catch { /* Eligibility/locks defer work; the next lifecycle trigger revisits it. */ }
   }

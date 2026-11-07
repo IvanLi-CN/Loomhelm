@@ -1,3 +1,4 @@
+import { observeTaskRuntime } from "./task-runtime";
 import { Runtime } from "../../../bin/modules/core/runtime";
 import {
   ConversationOutputs,
@@ -17,7 +18,7 @@ import { ContractError, requireCondition } from "./errors";
 import { LedgerStore, safeId } from "./store";
 import { validateLedger } from "./schema";
 import { buildView } from "./view";
-import { sweepConversationArchives, retryConversationArchive } from "./conversation-archive";
+import { sweepConversationArchives, retryConversationArchive, retryConversationUnarchive } from "./conversation-archive";
 import { z } from "zod";
 import { GlobalPreferencesStore, parseThemePayload } from "./preferences";
 import {
@@ -79,7 +80,13 @@ export function createRunDashboard(options: DashboardOptions) {
     }
   };
   const outputs = new ConversationOutputs(
-    (snapshot) => publish("agent-output", snapshot),
+    (snapshot) => {
+      if (!options.readOnly) {
+        try { observeTaskRuntime(store, snapshot); }
+        catch { publish("stale", { reason: "runtime_state_write_failed" }); }
+      }
+      publish("agent-output", snapshot);
+    },
     options.connectObserver,
   );
   let archiveRunning = false;
@@ -221,8 +228,8 @@ export function createRunDashboard(options: DashboardOptions) {
         requireCondition(!options.readOnly, "READ_ONLY_SOURCE", "External source viewers are read-only", 3);
         const raw = await readBodyWithinLimit(request, 8192);
         if (raw === null) return Response.json({ error: "request_body_too_large" }, { status: 413, headers });
-        const parsed = z.object({ task_id: z.string().min(1) }).strict().parse(JSON.parse(raw));
-        const result = await retryConversationArchive(store, parsed.task_id, options.archiveProvider);
+        const parsed = z.object({ task_id: z.string().min(1), action: z.enum(["archive", "unarchive"]).default("archive") }).strict().parse(JSON.parse(raw));
+        const result = await (parsed.action === "unarchive" ? retryConversationUnarchive : retryConversationArchive)(store, parsed.task_id, options.archiveProvider);
         publish("revision", { revision: validateLedger(store.read()).revision, watching });
         return Response.json(result, { headers });
       }

@@ -37,11 +37,12 @@ export const STATE_LABELS: Record<string, string> = {
   active: "进行中",
 };
 
-export type StateIconName = "loader-circle" | "hourglass" | "circle-alert" | "circle-check" | "circle-dot" | "circle-dashed";
+export type StateIconName = "tree-palm" | "loader-circle" | "hourglass" | "circle-alert" | "circle-check" | "circle-dot" | "circle-dashed";
 
 export function stateIconName(state: string, ready = false): StateIconName {
   const normalized = ready && state === "planned" ? "ready" : state;
   if (["starting", "running", "active"].includes(normalized)) return "loader-circle";
+  if (normalized === "agent_idle") return "tree-palm";
   if (normalized === "waiting") return "hourglass";
   if (normalized === "blocked") return "circle-alert";
   if (["completed", "integrated", "closed", "merged"].includes(normalized)) return "circle-check";

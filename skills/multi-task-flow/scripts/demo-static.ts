@@ -59,7 +59,7 @@ if (archiveDemo) {
     if (task.id === "deploy" || task.id === "dashboard-ui") {
       task.latest_agent_output!.agent_state = task.id === "deploy" ? "active" : "idle";
       task.latest_agent_output!.stale = false;
-      task.agent_idle = task.id === "dashboard-ui";
+      if (task.id === "dashboard-ui") { task.state = "agent_idle"; task.agent_resume_state = "running"; }
     }
     if (task.id === "model" || task.id === "ledger") task.conversation_resource = {
       id: `fixture-${task.id}`, kind: "conversation", target: task.thread_id!,
@@ -144,7 +144,7 @@ console.log(`Demo preview built: ${join(output, "preview.html")}`);
 if (outputDemo) {
   writeFileSync(
     join(output, "output-desktop.html"),
-    `<html><meta charset="utf-8"><style>body{margin:0}iframe{display:block;border:0;width:1440px;height:1000px}</style><iframe src="preview.html?tab=graph&layout=grid&selected=task%3Aledger&detail=1&evidence=tasks"></iframe></html>`,
+    `<html><meta charset="utf-8"><style>body{margin:0}iframe{display:block;border:0;width:1440px;height:1000px}</style><iframe src="preview.html?tab=graph&layout=grid&selected=task%3Adashboard-ui&detail=1&state=agent_idle"></iframe></html>`,
   );
   writeFileSync(
     join(output, "output-hover.html"),

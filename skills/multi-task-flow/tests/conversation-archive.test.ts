@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { rmSync } from "node:fs";
 import { fixtureRun, serviceFixture } from "./service-fixture";
-import { retryConversationArchive, sweepConversationArchives, type ArchiveProvider } from "../scripts/conversation-archive";
+import { retryConversationArchive, retryConversationUnarchive, sweepConversationArchives, type ArchiveProvider } from "../scripts/conversation-archive";
 
 function fixture() {
   const { root, state } = serviceFixture();
@@ -89,5 +89,37 @@ test("active tasks cannot archive their conversation", async () => {
   try {
     f.store.update(raw => { raw.tasks.find((t: any) => t.id === f.task.id).state = "running"; });
     await expect(retryConversationArchive(f.store, f.task.id, { ...success, archive: async () => { throw new Error("must not call"); } })).rejects.toMatchObject({ code: "TASK_NOT_TERMINAL" });
+  } finally { f.cleanup(); }
+});
+
+
+test("unarchive keeps the terminal task intact and manual restoration survives lifecycle sweeps", async () => {
+  const f = fixture();
+  try {
+    let calls = 0;
+    const api: ArchiveProvider = { ...success, unarchive: async () => { calls++; return { outcome: "succeeded", evidence_ref: "fixture:unarchive" }; }, isUnarchived: async () => true };
+    await retryConversationArchive(f.store, f.task.id, api);
+    const resource = await retryConversationUnarchive(f.store, f.task.id, api);
+    expect(resource.status).toBe("active");
+    expect(resource.archive_policy).toBe("manual");
+    await retryConversationUnarchive(f.store, f.task.id, api);
+    expect(calls).toBe(1);
+    await sweepConversationArchives(f.store, { ...api, archive: async () => { throw new Error("manual restore must not rearchive"); } });
+    expect(f.store.read().resources.find((r: any) => r.id === resource.id).status).toBe("active");
+    expect(f.store.read().tasks.find((t: any) => t.id === f.task.id).state).toBe("completed");
+  } finally { f.cleanup(); }
+});
+
+test("unarchive failure retries; unknown delivery requires positive reconciliation and blocks opposite archive", async () => {
+  const f = fixture();
+  try {
+    await retryConversationArchive(f.store, f.task.id, success);
+    const api: ArchiveProvider = { ...success, unarchive: async () => ({ outcome: "failed", evidence_ref: "fixture:rejected" }), isUnarchived: async () => false };
+    expect((await retryConversationUnarchive(f.store, f.task.id, api)).status).toBe("unarchive_failed");
+    expect((await retryConversationUnarchive(f.store, f.task.id, { ...api, unarchive: async () => ({ outcome: "unknown", evidence_ref: "fixture:lost" }) })).status).toBe("unarchive_unknown");
+    await expect(retryConversationArchive(f.store, f.task.id, api)).rejects.toMatchObject({ code: "ARCHIVE_STATE_CONFLICT" });
+    const noResend = { ...api, unarchive: async () => { throw new Error("must only reconcile"); } };
+    expect((await retryConversationUnarchive(f.store, f.task.id, noResend)).status).toBe("unarchive_unknown");
+    expect((await retryConversationUnarchive(f.store, f.task.id, { ...noResend, isUnarchived: async () => true })).status).toBe("active");
   } finally { f.cleanup(); }
 });

@@ -28,11 +28,13 @@
 
 ### REQ-IDLE-004
 
-本主题不改变既有任务业务状态和交接模型。依赖等待、阻塞、完成、关闭、放弃和 superseded 等既有状态不因 `agent_idle` 被覆盖；本主题不新增或推导 handoff 状态。
+本主题在 Task.state 中增加 agent_idle，不改变既有交接模型。依赖等待、阻塞、完成、关闭、放弃和 superseded 等既有状态不因 `agent_idle` 被覆盖；本主题不新增或推导 handoff 状态。
+
+`agent_idle` MUST 作为任务状态可能值持久化并参与状态筛选、统计和详情展示；不得仅以布尔标记或对话附加徽标代替。只有 starting/running 的 active 任务进入该状态，active/unknown 观察恢复进入前的状态。
 
 ### REQ-IDLE-005
 
-观察器发现 `agent_idle` 时 MUST 发布含 task/thread/turn identity 与观察时间的可追溯运行时事件并刷新 dashboard；系统不得自动发送新 turn、重启对话或改变任务业务状态。恢复动作由用户或既有任务流程执行。
+观察器发现 `agent_idle` 时 MUST 发布含 task/thread/turn identity 与观察时间的可追溯运行时事件并刷新 dashboard；系统不得自动发送新 turn、重启对话或推导其他任务状态。恢复动作由用户或既有任务流程执行。
 
 ### REQ-ARCHIVE-001
 
@@ -48,15 +50,23 @@
 
 ### REQ-ARCHIVE-004
 
-dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；对话图标 MUST 使用异常状态图标，并显示问题、最近尝试和可用证据。
+dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；对话入口 MUST 保留聊天气泡，并叠加可区分归档失败、未知、成功的状态标记；浮层和详情显示问题、最近尝试和可用证据。
 
 ### REQ-ARCHIVE-005
 
 任务详情 MUST 提供“重新归档”操作。该操作只重试归档或执行归档对账，不得自动发送任务消息、重试任务执行或改变任务业务状态。
 
+### REQ-ARCHIVE-006
+
+归档状态入口 MUST 支持悬浮、键盘聚焦、点击和触屏长按打开项目 UI 浮层，说明当前状态，并提供带图标和文字的“重新归档”“归档对账”或“取消归档”按钮。所有控件提示 MUST 使用项目 Tooltip，不使用浏览器原生 title。
+
+### REQ-ARCHIVE-007
+
+取消归档 MUST 只恢复对话资源，不改变任务终态或启动 turn；成功后资源为 active，并持久化 archive_policy=manual，阻止自动 sweep 立即再次归档。失败写入 unarchive_failed，未知写入 unarchive_unknown；未知请求只能通过未归档列表的正向证据对账，不能盲目重发或反向归档。
+
 ## Acceptance
 
-- Agent turn 明确结束且任务没有活跃 turn 时，dashboard 显示 `agent_idle`，并保留既有任务状态和依赖事实。
+- Agent turn 明确结束且任务没有活跃 turn 时，dashboard 显示 `agent_idle`，任务 state 为 agent_idle，保留恢复状态和依赖事实。
 - Agent 连接或观察未知时，dashboard 显示独立资源异常，不显示 `agent_idle`。
 - 子任务完成后自动发起归档；明确失败和未知均可在详情中看到并通过“重新归档”恢复。
 - 归档异常不会把已完成任务改回运行中，也不会触发重复任务执行。
@@ -64,10 +74,16 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 ## Visual Evidence
 
 - Storybook覆盖=不适用
-- 视觉证据目标源=mock_ui
+- 视觉证据目标源=ui_demo
 - 视觉证据=存在
 - 空白裁剪=无需裁剪
 - 聊天回图=已展示
 - 证据落盘=已落盘
-- 视觉比较=需确认
-- 受控 fixture 展示运行中、Agent idle、归档失败和归档未知；详情显示归档原因、最近尝试、证据和“重新归档”。[dashboard-archive-fixture.png](assets/dashboard-archive-fixture.png)
+- 视觉比较=已确认
+- 主人已确认真实源码服务中的归档成功与手动取消归档交互；入口保留聊天气泡和状态角标。
+- [归档成功与取消归档按钮](assets/conversation-archived.png)
+- [取消归档后保持手动状态](assets/conversation-restored.png)
+
+## Related ADRs
+
+- [ADR 0020：以运行时观察表达 Agent 空闲，并独立记录对话归档](../../adr/0020-observational-agent-idle-and-independent-conversation-archive.md)
