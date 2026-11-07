@@ -93,7 +93,8 @@ func (s *Service) readConversation(ctx context.Context, access sourceAccess, pri
 		return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
 	}
 	privateSession := sessionID != nil && sessionProjectID == nil
-	if *importedBy != principal.UserID || access.restricted || privateSession {
+	projectSession := sessionID != nil && sessionProjectID != nil
+	if *importedBy != principal.UserID || access.restricted || privateSession || projectSession || taskProjectID != nil {
 		projectID := taskProjectID
 		if projectID == nil {
 			projectID = sessionProjectID

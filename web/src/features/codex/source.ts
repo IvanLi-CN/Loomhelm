@@ -112,7 +112,7 @@ export function useCodexBindConversation(hostId: string, threadId: string) {
   const principalId = assembly?.auth.principalId ?? "anonymous";
   const sessionGeneration = assembly?.auth.sessionGeneration ?? 0;
   return useMutation({
-    mutationFn: (body: { task_id: string; expected_as_of?: string }) => {
+    mutationFn: (body: { task_id: string; confirm_share: boolean; expected_as_of?: string }) => {
       if (!assembly) throw new Error("浏览器会话尚未就绪");
       return assembly.client.bindCodexConversation({
         host_id: hostId,
@@ -120,7 +120,7 @@ export function useCodexBindConversation(hostId: string, threadId: string) {
         body: {
           request_id: requestID("codex-bind"),
           task_id: body.task_id,
-          confirm_share: true,
+          confirm_share: body.confirm_share,
           expected_as_of: body.expected_as_of
         }
       });

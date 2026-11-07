@@ -728,9 +728,17 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 		  AND private_session.project_id IS NULL
 		  AND private_session.creator_user_id IS DISTINCT FROM $2
 	)`
+	importedVisibility := `t.imported_by = $2 AND NOT EXISTS (
+		SELECT 1
+		FROM execution_sessions AS imported_session
+		WHERE imported_session.host_id = t.host_id
+		  AND imported_session.external_thread_ref = t.thread_id
+		  AND imported_session.creation_state = 'confirmed'
+		  AND (imported_session.project_id IS NOT NULL OR imported_session.creator_user_id IS DISTINCT FROM $2)
+	)`
 	where := fmt.Sprintf(`WHERE t.host_id = $1 AND %s AND (%s OR %s)`, privateSessionVisibility, taskVisibility, restrictedSessionVisibility)
 	if !access.restricted {
-		where = fmt.Sprintf(`WHERE t.host_id = $1 AND %s AND (t.imported_by = $2 OR %s OR %s)`, privateSessionVisibility, taskVisibility, sessionVisibility)
+		where = fmt.Sprintf(`WHERE t.host_id = $1 AND %s AND (%s OR %s OR %s)`, privateSessionVisibility, importedVisibility, taskVisibility, sessionVisibility)
 	}
 	if !boolValue(query.IncludeArchived) {
 		where += " AND t.source_status = 'active'"

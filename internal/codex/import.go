@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -92,25 +93,12 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 	var hostStatus string
 	var hostGeneration int64
 	if err := tx.QueryRow(ctx, `
-		SELECT status, connection_generation FROM host_registrations WHERE id = $1 FOR UPDATE
+		SELECT status, connection_generation FROM host_registrations WHERE id = $1
 	`, hostID).Scan(&hostStatus, &hostGeneration); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		return fmt.Errorf("read Codex Host state: %w", err)
-	}
-	if snapshot.ConnectionGeneration > 0 && (hostStatus != "online" || snapshot.ConnectionGeneration != hostGeneration) {
-		if _, staleErr := tx.Exec(ctx, `
-			UPDATE codex_sync_snapshots
-			SET state = 'stale', complete = FALSE, error = 'superseded by a newer Host connection generation', updated_at = CURRENT_TIMESTAMP
-			WHERE id = $1 AND host_id = $2 AND state = 'syncing'
-		`, snapshot.OperationID, hostID); staleErr != nil {
-			return fmt.Errorf("mark stale Host-generation Codex snapshot: %w", staleErr)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return err
-		}
-		return errStaleSnapshot
 	}
 	var currentAsOf time.Time
 	var currentOperationID, currentSyncState, currentSourceState string
@@ -145,6 +133,45 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("read current Codex source snapshot: %w", err)
+	}
+
+	// BindTaskAuthorized locks Session -> Task -> Host. Pre-lock every binding
+	// row before taking the Host lock so snapshot import follows the same order
+	// and cannot form a Host/Session wait cycle with a concurrent bind.
+	threadIDs := make([]string, 0, len(snapshot.Threads))
+	for _, thread := range snapshot.Threads {
+		threadID := strings.TrimSpace(thread.ThreadID)
+		if threadID == "" {
+			return ErrInvalid
+		}
+		threadIDs = append(threadIDs, threadID)
+	}
+	sort.Strings(threadIDs)
+	for _, threadID := range threadIDs {
+		if err := lockImportBindingRows(ctx, tx, hostID, threadID); err != nil {
+			return err
+		}
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT status, connection_generation FROM host_registrations WHERE id = $1 FOR UPDATE
+	`, hostID).Scan(&hostStatus, &hostGeneration); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lock Codex Host state: %w", err)
+	}
+	if snapshot.ConnectionGeneration > 0 && (hostStatus != "online" || snapshot.ConnectionGeneration != hostGeneration) {
+		if _, staleErr := tx.Exec(ctx, `
+			UPDATE codex_sync_snapshots
+			SET state = 'stale', complete = FALSE, error = 'superseded by a newer Host connection generation', updated_at = CURRENT_TIMESTAMP
+			WHERE id = $1 AND host_id = $2 AND state = 'syncing'
+		`, snapshot.OperationID, hostID); staleErr != nil {
+			return fmt.Errorf("mark stale Host-generation Codex snapshot: %w", staleErr)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return errStaleSnapshot
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -187,13 +214,11 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		}
 	}
 
-	threadIDs := make([]string, 0, len(snapshot.Threads))
 	for _, thread := range snapshot.Threads {
 		threadID := strings.TrimSpace(thread.ThreadID)
 		if threadID == "" {
 			return ErrInvalid
 		}
-		threadIDs = append(threadIDs, threadID)
 		projectID := strings.TrimSpace(valueOrEmpty(thread.ProjectID))
 		projectIDValue := nullableStringValue(projectID)
 		if projectID != "" {
@@ -231,9 +256,6 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		sourceKind, sourceKindErr := normalizeSourceKind(thread.SourceKind)
 		if sourceKindErr != nil {
 			return sourceKindErr
-		}
-		if err := lockImportBindingRows(ctx, tx, hostID, threadID); err != nil {
-			return err
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO codex_threads (
