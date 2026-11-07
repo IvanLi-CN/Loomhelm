@@ -21,7 +21,11 @@ function eligible(ledger: Ledger, taskId: string): string {
   const thread = task.thread_id;
   requireCondition(thread !== ledger.control.owner_thread_id && !ledger.groups.some(group => group.agent_thread_id === thread), "SHARED_CONVERSATION", "Coordinator conversations cannot be archived as child tasks", 4);
   requireCondition(!ledger.tasks.some(other => other.thread_id === thread && !terminal(other)), "SHARED_CONVERSATION", "Another task still uses this conversation", 4);
-  requireCondition(!ledger.operations.some(op => ["claimed", "unknown"].includes(op.status)), "OPERATIONS_PENDING", "Unresolved operations prevent conversation archive", 4);
+  const boundOperation = (op: Ledger["operations"][number]) => {
+    const request = op.request as Record<string, unknown>;
+    return op.target_id === taskId || request.task_id === taskId || request.thread_id === thread;
+  };
+  requireCondition(!ledger.operations.some(op => boundOperation(op) && ["claimed", "unknown"].includes(op.status)), "OPERATIONS_PENDING", "Unresolved task operations prevent conversation archive", 4);
   requireCondition(!ledger.follow_prs.some(pr => pr.origin_task_id === taskId && pr.state !== "merged"), "FOLLOW_PR_PENDING", "Follow PR is not merged", 4);
   requireCondition(!ledger.notifications.some(notice => {
     const event = ledger.events.find(event => event.id === notice.event_id);

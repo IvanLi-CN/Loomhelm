@@ -300,6 +300,7 @@ export class ConversationOutputs {
         ...state.output,
         message_status: typeof turnStatus === "string" ? turnStatus : "completed",
         agent_state: turnStatus === undefined || ["completed", "failed", "interrupted"].includes(String(turnStatus)) ? "idle" : "unknown",
+        observed_at: new Date().toISOString(),
         stale: false,
       });
       return;

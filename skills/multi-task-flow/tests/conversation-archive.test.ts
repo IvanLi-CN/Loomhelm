@@ -76,6 +76,14 @@ test("pending active turns can be retried after termination", async () => {
   } finally { f.cleanup(); }
 });
 
+test("unrelated in-flight operations do not block an eligible task", async () => {
+  const f = fixture();
+  try {
+    f.store.update(raw => { raw.operations.push({ id: "other", kind: "notification", actor_id: "other", target_id: "other-task", status: "unknown", request: {}, expected_sha: null, receipt_fact_id: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() } as any); });
+    expect((await retryConversationArchive(f.store, f.task.id, success)).status).toBe("closed");
+  } finally { f.cleanup(); }
+});
+
 test("active tasks cannot archive their conversation", async () => {
   const f = fixture();
   try {

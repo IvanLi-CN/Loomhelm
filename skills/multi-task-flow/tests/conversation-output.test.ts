@@ -52,7 +52,8 @@ describe("conversation output projection", () => {
   });
   test("marks a confirmed completed turn as agent idle", async () => {
     const f = fixture(async (method) => method === "thread/read" ? { thread: { status: { type: "idle" } } } : { data: [{ ...message("done", "finished"), completedAtMs: 1 }] });
-    try { await tick(); expect(f.provider.snapshot().outputs.a?.agent_state).toBe("idle"); } finally { f.provider.stop(); }
+    try { await tick(); expect(f.provider.snapshot().outputs.a?.agent_state).toBe("idle");
+        expect(f.provider.snapshot().outputs.a?.observed_at).toBeTruthy(); } finally { f.provider.stop(); }
   });
   test("terminal turn events expose idle; obsolete turns and unknown runtime do not", async () => {
     for (const status of ["completed", "interrupted", "failed"]) {
