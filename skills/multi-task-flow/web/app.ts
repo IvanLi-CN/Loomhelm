@@ -1,3 +1,4 @@
+import { refreshResourcePopover } from "./resource-popover";
 import { OutputSnapshots, initialOutput, refreshOutputNodes, type OutputSnapshot } from "./agent-output";
 import { createProfileEditor } from "./profile-editor";
 import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
@@ -37,10 +38,16 @@ function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void 
   const outputSnapshot = outputSnapshots.accept(next, requestEpoch);
   if (!data || !outputSnapshot) return;
   for (const task of data.tasks) {
-    const output = outputSnapshot.outputs[task.id];
+    const output = outputSnapshot.outputs[`task:${task.id}`] ?? outputSnapshot.outputs[task.id];
     task.latest_agent_output = output?.thread_id === task.thread_id ? output : initialOutput(task.thread_id);
   }
+  for (const group of data.groups) {
+    const thread = group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id;
+    const output = outputSnapshot.outputs[`group:${group.id}`];
+    group.latest_agent_output = output?.thread_id === thread ? output : initialOutput(thread ?? null);
+  }
   refreshOutputNodes(document, data.tasks);
+  refreshResourcePopover();
 }
 let viewState: ViewState = parseViewState(window.location.search);
 let selectedTask: string | null = viewState.selected?.kind === "task" ? viewState.selected.id : null;
@@ -172,6 +179,7 @@ function renderSummary(): void {
 }
 function refreshCardDurations(): void {
   refreshTimestamps();
+  refreshResourcePopover();
   for (const element of document.querySelectorAll<HTMLElement>("[data-duration-start]")) {
     const start = element.dataset.durationStart || null;
     const end = element.dataset.durationEnd || null;
@@ -455,7 +463,7 @@ async function refresh(): Promise<void> {
       result = await response.json() as ViewResponse;
     }
     if (serial !== requestSerial || result.revision < revision) return;
-    const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries(data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)])) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
+    const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries([...data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)]), ...data.groups.map(g => [`group:${g.id}`, g.latest_agent_output ?? initialOutput(g.agent_thread_id)])]) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
     if (!hydrated && !userChangedTab && !hasValidTabParam(window.location.search)) viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
     viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
     if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true; phase = currentPhase; const shouldFocusRestoredDetails = !hydrated && viewState.detail; hydrated = true; if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true; syncUrl(); connection(deriveConnectionStatus(connected, result.watching)); $("load-error").hidden = true; render();

@@ -318,6 +318,9 @@ export function buildView(
     groups: atomProjection.groups.map((item) => ({
       ...item,
       ...profileProjection(ledger, "group", item),
+      latest_agent_output: outputs[`group:${item.id}`] ?? initialOutput(item.delivery_unit_kind === "bootstrap" ? ledger.control.owner_thread_id : item.agent_thread_id),
+      started_at: ledger.events.find(e => e.type === "group_execution_updated" && e.data.group_id === item.id && e.data.state === "running")?.occurred_at ?? null,
+      finished_at: ledger.events.find(e => e.type === "group_updated" && e.subject_id === item.id && e.data.state === "closed")?.occurred_at ?? null,
     })),
     tasks: tasks.map((item) => ({
       ...item,

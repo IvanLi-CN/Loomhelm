@@ -38,6 +38,9 @@ type ThreadState = {
 };
 /** Latest output is ephemeral and independent of ledger revision. */
 export class ConversationOutputs {
+  private titles = new Map<string, string | null>();
+  private titleReads = new Set<string>();
+  private titleReadAt = new Map<string, number>();
   private bindings = new Map<string, string | null>();
   private threads = new Map<string, ThreadState>();
   private connection: Connection | null = null;
@@ -61,12 +64,7 @@ export class ConversationOutputs {
       output_epoch: this.epoch,
       output_revision: this.revision,
       outputs: Object.fromEntries(
-        [...this.bindings].map(([id, thread]) => [
-          id,
-          thread
-            ? (this.threads.get(thread)?.output ?? initialOutput(thread))
-            : initialOutput(null),
-        ]),
+        [...this.bindings].flatMap(([id, thread]) => { const output = thread ? ({ ...(this.threads.get(thread)?.output ?? initialOutput(thread)), thread_title: this.titles.get(thread) ?? null }) : initialOutput(null); return id.startsWith("task:") ? [[id, output], [id.slice(5), output]] : [[id, output]]; }),
       ),
     };
   }
@@ -78,7 +76,7 @@ export class ConversationOutputs {
     const wanted = new Set([...next.values()].filter((t): t is string => !!t));
     this.connection?.subscriptions?.retain(wanted);
     for (const thread of this.threads.keys())
-      if (!wanted.has(thread)) this.threads.delete(thread);
+      if (!wanted.has(thread)) { this.threads.delete(thread); this.titles.delete(thread); this.titleReads.delete(thread); this.titleReadAt.delete(thread); }
     for (const thread of wanted)
       if (!this.threads.has(thread)) {
         this.threads.set(thread, {
@@ -211,6 +209,18 @@ export class ConversationOutputs {
       this.threads.get(thread) === state &&
       state.version === version;
     try {
+      if (!this.titleReads.has(thread) && Date.now() - (this.titleReadAt.get(thread) ?? -Infinity) >= 30_000) {
+        this.titleReads.add(thread);
+        this.titleReadAt.set(thread, Date.now());
+        // Metadata must never delay message catch-up or streaming attachment.
+        void connection.request("thread/read", { threadId: thread, includeTurns: false }).then(metadata => {
+          if (this.active && generation === this.generation && this.threads.get(thread) === state) {
+            const title = object(metadata.thread)?.name;
+            const next = typeof title === "string" && title.trim() ? title : null;
+            if (this.titles.get(thread) !== next) { this.titles.set(thread, next); this.changed(true); }
+          }
+        }).catch(() => {}).finally(() => { if (this.threads.get(thread) === state) this.titleReads.delete(thread); });
+      }
       await connection.subscriptions?.ensure(thread);
       if (!valid()) return;
       const selected = await latestConversationOutput(thread, connection);

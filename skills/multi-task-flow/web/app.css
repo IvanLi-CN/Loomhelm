@@ -298,7 +298,7 @@ h1 { margin: 3px 0 0; color: var(--text); font-size: 26px; line-height: 1.14; fo
 .task-card:hover .task-card-meta, .task-card[aria-current="true"] .task-card-meta { background: linear-gradient(90deg, transparent 0%, var(--active) 25%, var(--active) 100%); }
 .task-card-meta-label { flex: none; }
 .task-card-duration { min-width: 0; overflow: hidden; color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-variant-numeric: tabular-nums; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.task-card-output, .task-card-summary { min-height: 0; max-height: calc(1.4em * 3); margin: 0; padding-bottom: 14px; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.task-card-output, .task-card-summary { min-height: 0; max-height: calc(1.4em * 3); margin: 0; padding-bottom: 0; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .task-card-output.is-empty { min-height: 26px; padding: 6px 8px; display: flex; align-items: center; gap: 6px; border: 1px dashed var(--rule); border-radius: var(--radius-control); color: var(--faint); font-size: 10px; font-style: italic; }
 .task-card-output.is-empty::before { width: 5px; height: 5px; flex: none; border: 1px solid currentColor; border-radius: 50%; content: ""; }
 .task-card-output.is-empty::after { content: attr(data-empty-label); }
@@ -513,3 +513,15 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   .run-profile-control { order: 3; width: 100%; }
   .run-profile-control .profile-trigger { justify-content: flex-end; padding-block: 3px; }
 }
+
+/* Resource overlays do not reserve a footer row. Only the time itself receives input. */
+.task-card-duration { pointer-events: auto; border: 0; padding: 0; background: transparent; cursor: help; }
+.resource-popover { position: fixed; z-index: 1000; width: min(480px, calc(100vw - 16px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); color: var(--text); box-shadow: 0 8px 30px #0004; font-size: 12px; line-height: 1.6; }
+.resource-popover[hidden] { display: none; }
+.resource-identity { flex: 0 0 auto; padding: 10px 12px; overflow-wrap: anywhere; }
+.resource-popover[data-placement=above] .resource-identity { order: 2; }
+.resource-body { min-height: 0; overflow: auto; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; overscroll-behavior: contain; }
+.resource-copy-row { display: flex; align-items: start; gap: 8px; margin: 4px 0; }
+.resource-copy-row span { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.resource-popover button { flex: none; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; cursor: pointer; background: var(--active); color: inherit; }
+.resource-action[aria-disabled=true] { opacity: .5; }

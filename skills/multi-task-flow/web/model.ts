@@ -49,6 +49,9 @@ export type Task = {
 };
 
 export type Group = {
+  started_at?: string | null;
+  finished_at?: string | null;
+  latest_agent_output?: AgentOutput;
   id: string;
   title: string;
   delivery_unit_kind?: "bootstrap" | "regular";

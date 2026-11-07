@@ -103,6 +103,7 @@ export function createHoverController(context: HoverControllerContext) {
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = null;
     previewTimer = setTimeout(() => {
+      if (document.querySelector(".resource-popover:not([hidden])")) return;
       const current = context.getViewState();
       if (!canShowHoverPreview({ selected: selected(), detailOpen: current.detail, hoverCapable: supportsHoverDetails(), detailPanelViewport: context.getDetailPanelViewport(), keyboardSelection: context.getKeyboardSelection() })) return;
       const preview = context.element("hover-preview");
@@ -137,6 +138,8 @@ export function createHoverController(context: HoverControllerContext) {
     context.getBridge()?.bindTarget(anchor, () => showHoverPreview(content, anchor), hideHoverPreview);
     showHoverPreview(content, anchor);
   };
+
+  document.addEventListener("resource-popover-open", () => { hideHoverPreview(); dismiss(); });
 
   const bindHoverTarget = (target: HTMLElement, content: HTMLElement): void => {
     context.getBridge()?.bindTarget(target, () => showHoverPreview(content, target), hideHoverPreview);
