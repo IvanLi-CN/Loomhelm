@@ -1,0 +1,16 @@
+[
+  "skills/scripts/build-client-skills.mjs",
+  "skills/scripts/build-skills-native.mjs",
+  "skills/scripts/catalog-client-skills.mjs",
+  "skills/scripts/check-client-skills.mjs",
+  "skills/scripts/check-skills-installation.mjs",
+  "skills/scripts/check-skills-installation.test.mjs",
+  "skills/scripts/import-client-skills.mjs",
+  "skills/scripts/package-client-skills.mjs",
+  "skills/scripts/test-skills-artifact.mjs",
+  "skills/scripts/test-skills-native.mjs",
+  "skills/scripts/verify-skills-modules.mjs",
+  "skills/package.json",
+  "skills/package-lock.json",
+  "skills/support-manifest.json"
+]

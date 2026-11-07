@@ -3,7 +3,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { readRegular } from "./store";
 import { requireCondition } from "./errors";
-import { readRegularNoFollow } from "../../../bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "../../bin/modules/visual/secure_io";
 import {
   releaseManifestSchema,
   type ReleaseManifest,

@@ -179,7 +179,7 @@
 Run:
 
 ```bash
-bun run bin/plan_contract_check.ts --cases skills/dev-plan/references/replay-cases/CASES.txt
+bun run skills/bin/plan_contract_check.ts --cases skills/dev-plan/references/replay-cases/CASES.txt
 bun test skills/dev-plan/scripts/test_migrate_task_orchestration.ts
 ```
 

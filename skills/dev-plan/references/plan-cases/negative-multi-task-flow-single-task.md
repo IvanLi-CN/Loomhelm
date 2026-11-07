@@ -34,7 +34,7 @@
 
 ## Acceptance & Validation
 
-- A1 [contract/direct] multi-task topology | scope=`task:task-a` | phase=`pre_merge` | evidence=`bin/tests/plan/multi-task-flow.test.ts::single-task topology downgrade` | assertions=`a single task node is rejected`
+- A1 [contract/direct] multi-task topology | scope=`task:task-a` | phase=`pre_merge` | evidence=`skills/bin/tests/plan/multi-task-flow.test.ts::single-task topology downgrade` | assertions=`a single task node is rejected`
 
 ## Assumptions/Defaults
 

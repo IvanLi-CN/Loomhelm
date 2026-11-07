@@ -1,1 +1,1 @@
-import "../../../bin/tests/plan/task_migration.test.ts";
+import "../../bin/tests/plan/task_migration.test.ts";

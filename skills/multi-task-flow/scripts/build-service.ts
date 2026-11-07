@@ -61,13 +61,13 @@ const compile = await Bun.build({
   plugins: [{ name: "viewer-native-binding", setup(build) {
     build.onLoad({ filter: /\/scripts\/service\.ts$/ }, ({ path }) => ({ contents: readFileSync(path, "utf8").replaceAll("import.meta.main", "true"), loader: "ts" }));
     build.onLoad({ filter: /\/modules\/core\/posix\.ts$/ }, async ({ path }) => ({
-      contents: readFileSync(path, "utf8").replace("const expectedBindingDigest: string | undefined = undefined;", `const expectedBindingDigest = "${digest(readFileSync(join(toolkitRoot, "bin/native/posix.node")))}";`).replace(/const source =[^;]+;/, 'const source = new URL("./modules/core/posix.js", import.meta.url);').replace("../../native/posix.node", "../../posix.node"),
+      contents: readFileSync(path, "utf8").replace("const expectedBindingDigest: string | undefined = undefined;", `const expectedBindingDigest = "${digest(readFileSync(join(toolkitRoot, "skills/bin/native/posix.node")))}";`).replace(/const source =[^;]+;/, 'const source = new URL("./modules/core/posix.js", import.meta.url);').replace("../../native/posix.node", "../../posix.node"),
       loader: "ts",
     }));
   } }],
 });
 requireCondition(compile.success, "BUILD_FAILED", "Viewer JavaScript compilation failed");
-copyFileSync(join(toolkitRoot, "bin/native/posix.node"), join(output, "posix.node"));
+copyFileSync(join(toolkitRoot, "skills/bin/native/posix.node"), join(output, "posix.node"));
 const runtime = Bun.spawnSync(["/usr/bin/which", "node"]);
 requireCondition(runtime.exitCode === 0, "RUNTIME_REQUIRED", "A Node.js 22/24 runtime is required for launchd packaging");
 const executable = realpathSync(runtime.stdout.toString().trim());
