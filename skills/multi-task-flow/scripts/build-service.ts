@@ -35,15 +35,15 @@ metadata() {
   if [[ "$os" == Darwin ]]; then stat -f '%d:%i:%l:%u:%Lp' -- "$1"; else stat -c '%d:%i:%h:%u:%a' -- "$1"; fi
 }
 trusted() {
-  local path="$1" uid mode
+  local path="$1" allow_group="\${2:-0}" uid mode
   [[ -e "$path" && ! -L "$path" ]] || return 1
   if [[ "$os" == Darwin ]]; then uid=$(stat -f '%u' -- "$path"); mode=$(stat -f '%Lp' -- "$path"); else uid=$(stat -c '%u' -- "$path"); mode=$(stat -c '%a' -- "$path"); fi
-  [[ "$uid" == 0 || "$uid" == "$(id -u)" ]] && (( (8#$mode & 18) == 0 || ($uid == 0 && (8#$mode & 512) != 0) ))
+  [[ "$uid" == 0 || "$uid" == "$(id -u)" ]] && (( (8#$mode & 18) == 0 || ($uid == 0 && (8#$mode & 512) != 0) || ($allow_group == 1 && $uid == $(id -u) && (8#$mode & 2) == 0) ))
 }
 # Validate the pinned executable and every ancestor before opening its descriptor.
 [[ -f "$runtime" && -x "$runtime" ]] && trusted "$runtime" || { echo BUN_RUNTIME_UNTRUSTED >&2; exit 2; }
 path=$(dirname -- "$runtime")
-while true; do trusted "$path" || { echo BUN_RUNTIME_ANCESTOR_UNTRUSTED >&2; exit 2; }; [[ "$path" == / ]] && break; path=$(dirname -- "$path"); done
+while true; do trusted "$path" 1 || { echo BUN_RUNTIME_ANCESTOR_UNTRUSTED >&2; exit 2; }; [[ "$path" == / ]] && break; path=$(dirname -- "$path"); done
 identity=$(metadata "$runtime")
 exec 7<"$runtime"
 if [[ "$os" == Darwin ]]; then opened=$(env -i /usr/bin/perl -e 'my @s=stat(STDIN) or exit 1; printf "%d:%d:%d:%d:%o",$s[0],$s[1],$s[3],$s[4],$s[2]&07777' <&7); else opened=$(stat -L -c '%d:%i:%h:%u:%a' /proc/self/fd/7); fi

@@ -14087,7 +14087,7 @@
       "path": "skills/multi-task-flow/scripts/build-service.ts",
       "sourceBlob": "ca672ad72649091d21a78504664d60e6060c88d5",
       "sourceSha256": "6161f53430c5bd6f5665a2f77129c87cfe937d5c244f3df0eab8533bbecf17c4",
-      "installedSha256": "c04753e7d2f6ce84aeee1d29d4ff924f3331d5d38aea89f43cca4f83eefd7898",
+      "installedSha256": "645f231df7585d778e481a5fa79b4e2ca34aa6f66423ca80467bb7366b8f43a3",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
