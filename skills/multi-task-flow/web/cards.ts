@@ -218,8 +218,10 @@ export function createCardRenderer(context: CardContext): { renderList: (tasks: 
       actions.append(iconAction(pr ? "打开交付单元 PR" : "交付单元 PR 尚未创建", "git-pull-request", pr, true));
       const progress = text("span", groupAtomProgress(group), "task-column-count");
       progress.title = groupAtomProgress(group);
-      resources(actions, null, "group", group.id, context);
-      heading.append(select, progress, actions);
+      const meta = text("div", "", "task-card-meta task-column-time");
+      meta.append(durationValue(group.started_at ?? null, group.finished_at ?? null));
+      resources(actions, meta, "group", group.id, context);
+      heading.append(select, progress, actions, meta);
       const cards = text("div", "", "task-column-list");
       cards.setAttribute("role", "list");
       for (const task of groupTasks) cards.append(taskCard(task, context));

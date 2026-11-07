@@ -276,7 +276,8 @@ h1 { margin: 3px 0 0; color: var(--text); font-size: 26px; line-height: 1.14; fo
 }
 .task-column { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface); }
 .task-column[aria-current="true"] { border-color: var(--accent); }
-.task-column-heading { min-width: 0; min-height: 30px; padding: 0 2px 9px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; border-bottom: 1px solid var(--rule); }
+.task-column-heading { position: relative; min-width: 0; min-height: 30px; padding: 0 2px 9px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; border-bottom: 1px solid var(--rule); }
+.task-column-heading .task-column-time { right: 2px; bottom: -8px; min-height: 0; padding: 0 0 0 4px; background: var(--surface); }
 .task-column-heading .task-row-status-icon { width: 18px; height: 18px; }
 .task-column-select { min-width: 0; padding: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; border: 0; color: var(--text); background: transparent; text-align: left; }
 .task-column-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-control); }

@@ -108,7 +108,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
       const lines = timingText(source).split("\n");
       const heading = node("div", "", "resource-section-heading");
       heading.append(node("h3", "用时详情", "resource-heading"));
-      heading.append(badge(source.end ? "已结束" : source.start ? "计时中" : "未开始", source.end ? "neutral" : source.start ? "live" : "neutral"));
+      heading.append(badge(source.end ? "已结束" : source.start ? "计时中" : "时间未知", source.end ? "neutral" : source.start ? "live" : "neutral"));
       const list = node("dl", "", "resource-time-list");
       for (const line of lines) {
         const separator = line.indexOf("：");
