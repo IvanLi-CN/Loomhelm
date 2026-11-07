@@ -49,7 +49,7 @@ exec 7<"$runtime"
 if [[ "$os" == Darwin ]]; then opened=$(env -i /usr/bin/perl -e 'my @s=stat(STDIN) or exit 1; printf "%d:%d:%d:%d:%o",$s[0],$s[1],$s[3],$s[4],$s[2]&07777' <&7); else opened=$(stat -L -c '%d:%i:%h:%u:%a' /proc/self/fd/7); fi
 [[ "$opened" == "$identity" ]] || { echo BUN_RUNTIME_CHANGED >&2; exit 2; }
 # A private executable snapshot avoids re-opening the checked runtime path.
-temporary=$(mktemp -d "${TMPDIR:-/tmp}/loomhelm-viewer.XXXXXX")
+temporary=$(mktemp -d "\${TMPDIR:-/tmp}/loomhelm-viewer.XXXXXX")
 chmod 700 "$temporary"
 cleanup() { rm -f -- "$temporary/bun"; rmdir -- "$temporary"; }
 trap cleanup EXIT
@@ -59,7 +59,7 @@ trap 'exit 143' TERM HUP
 exec 7<&-
 chmod 700 "$temporary/bun"
 actual=$(shasum -a 256 "$temporary/bun")
-[[ "${actual%% *}" == ${quote(runtimeSha)} ]] || { echo BUN_RUNTIME_CHANGED >&2; exit 2; }
+[[ "\${actual%% *}" == ${quote(runtimeSha)} ]] || { echo BUN_RUNTIME_CHANGED >&2; exit 2; }
 version=$(env -u BUN_OPTIONS -u BUN_INSPECT_PRELOAD -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PATH "$temporary/bun" --version)
 [[ "$version" == 1.4.4 ]] || { echo BUN_RUNTIME_REQUIRED >&2; exit 2; }
 exec env -u BUN_OPTIONS -u BUN_INSPECT_PRELOAD -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PATH LOOMHELM_VIEWER_RUNTIME_TEMP="$temporary" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$temporary/bun" --preload='data:text/javascript,import{unlinkSync,rmdirSync}from"node:fs";const p=process.env.LOOMHELM_VIEWER_RUNTIME_TEMP;delete process.env.LOOMHELM_VIEWER_RUNTIME_TEMP;unlinkSync(p+"/bun");rmdirSync(p);' --config="$viewer_dir/skills/bin/plan_bunfig.toml" --no-install --no-env-file --no-macros --tsconfig-override=/dev/null "$viewer_dir/skills/multi-task-flow/scripts/service.ts" "$@"
