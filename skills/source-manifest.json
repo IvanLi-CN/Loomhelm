@@ -15679,6 +15679,10 @@
     {
       "path": "skills/multi-task-flow/tests/notification-delivery.test.ts",
       "installedSha256": "eff02e795e52125716326e84dbf3027982f11fdf4c62c27e67761a18e9d0d11a"
+    },
+    {
+      "path": "skills/multi-task-flow/scripts/conversation-archive.ts",
+      "installedSha256": "3bba6ed6483305c43c892988f457e62f9641431aa8f37ac6b257bbe958b45978"
     }
   ],
   "exclusions": [
