@@ -1577,16 +1577,15 @@ exit_unchecked() {
 
 validate_canonical_spec_contracts() {
   local target="$1"
-  local checker="${REPO_ROOT}/bin/spec_contract_check.ts"
+  local checker="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../bin" && pwd -P)/spec_contract_check.ts"
   local output=""
   strict_spec_error=""
 
   [[ "$target" =~ ^docs/specs/[a-z0-9]+(-[a-z0-9]+)*/SPEC\.md$ ]] || return 0
   [[ -f "$target" && ! -L "$target" ]] || return 0
   if [[ ! -f "$checker" ]]; then
-    # External/legacy repositories may not have adopted the global checker yet.
-    # Keep their readable compatibility path; candidate dot-codex has the tool.
-    return 0
+    strict_spec_error="bundled Spec checker is unavailable: $checker"
+    return 1
   fi
   if ! output="$(bun "$checker" --path "$target" --repo-root "$REPO_ROOT" 2>&1)"; then
     strict_spec_error="${output//$'\n'/; }"

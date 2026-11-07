@@ -16,8 +16,8 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ContractError, requireCondition } from "./errors";
-import type { FileIdentity } from "../../../bin/modules/visual/isolation";
-import { withExclusiveLock as withFlowExclusiveLock } from "../../../bin/modules/flow/storage";
+import type { FileIdentity } from "../../bin/modules/visual/isolation";
+import { withExclusiveLock as withFlowExclusiveLock } from "../../bin/modules/flow/storage";
 export function ensureDirectory(path: string): void {
   if (!existsSync(path)) {
     const parent = dirname(path);

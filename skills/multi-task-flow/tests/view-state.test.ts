@@ -22,7 +22,7 @@ describe("shareable dashboard view state", () => {
     expect(state.plan).toBeNull();
     expect(state.selected).toBeNull();
     expect(state.zoom).toBe(DEFAULT_VIEW_STATE.zoom);
-    expect(state.layout).toBe(DEFAULT_VIEW_STATE.layout);
+    expect(state.layout).toBe("grid");
     const valid = parseViewState("?q=dashboard&selected=task:task-1&detail=1", { tasks: new Set(["task-1"]) });
     expect(valid.selected).toEqual({ kind: "task", id: "task-1" });
     expect(valid.detail).toBe(true);
@@ -77,4 +77,18 @@ describe("shareable dashboard view state", () => {
     expect(state.plannedStart).toBeNull();
     expect(state.plannedEnd).toBeNull();
   });
+});
+
+test("single delivery unit defaults to grid while explicit layouts survive URL round trips", () => {
+  const single = { groups: new Set(["unit"]) };
+  expect(parseViewState("", single).layout).toBe("grid");
+  expect(parseViewState("?layout=invalid", single).layout).toBe("grid");
+  expect(parseViewState("", { groups: new Set(["a", "b"]) }).layout).toBe("board");
+  expect(parseViewState("", { groups: new Set() }).layout).toBe("board");
+  for (const layout of ["board", "grid"] as const) {
+    const state = parseViewState(`?layout=${layout}`, single);
+    const query = serializeViewState(state, null, "graph", "grid");
+    expect(parseViewState(query, single).layout).toBe(layout);
+    expect(restoreViewStateForNavigation(query, single, "execution").state.layout).toBe(layout);
+  }
 });

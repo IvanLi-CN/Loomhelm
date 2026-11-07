@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { tryLockFile } from "../../../bin/modules/core/security_file";
+import { tryLockFile } from "../../bin/modules/core/security_file";
 import { apply } from "./engine";
 import { ContractError, requireCondition } from "./errors";
 import { validateLedger, type Ledger } from "./schema";

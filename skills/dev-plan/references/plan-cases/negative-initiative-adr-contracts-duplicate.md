@@ -39,7 +39,7 @@
 
 ## Acceptance & Validation
 
-- A1 [contract/direct] Bootstrap contract | evidence=`bin/plan_contract_check.ts` | assertions=`native task budget is zero`
+- A1 [contract/direct] Bootstrap contract | evidence=`skills/bin/plan_contract_check.ts` | assertions=`native task budget is zero`
 
 ## Assumptions/Defaults
 

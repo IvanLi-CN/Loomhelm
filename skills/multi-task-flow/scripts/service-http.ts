@@ -1,4 +1,5 @@
-import { Runtime } from "../../../bin/modules/core/runtime";
+import type { ConnectObserver } from "./conversation-output";
+import { Runtime } from "../../bin/modules/core/runtime";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -127,7 +128,7 @@ export async function startSharedViewer(
   port: number,
   sourceRevision?: () => string,
   sourceName?: string,
-  demoHooks?: Pick<import("./server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">,
+  demoHooks?: ConnectObserver | Pick<import("./server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">,
 ) {
   if ((sourceRevision || demoHooks) && !state.paths.isolated)
     throw new ContractError(
@@ -157,7 +158,7 @@ export async function startSharedViewer(
       runId: id,
       port,
       assetsDir: assets.path,
-      ...demoHooks,
+      ...(typeof demoHooks === "function" ? { connectObserver: demoHooks } : demoHooks),
     });
     resources.set(id, run);
     return run;

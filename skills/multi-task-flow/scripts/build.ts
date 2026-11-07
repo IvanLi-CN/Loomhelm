@@ -16,6 +16,7 @@ const result = await Bun.build({
   naming: "app.js",
   target: "browser",
   minify: true,
+  define: { "process.env.NODE_ENV": JSON.stringify("production"), "import.meta.env": JSON.stringify({MODE:"production"}) },
 });
 if (!result.success) {
   for (const log of result.logs) console.error(log);

@@ -1,13 +1,14 @@
-import { Runtime } from "../../../bin/modules/core/runtime";
+import type { ConnectObserver } from "./conversation-output";
+import { Runtime } from "../../bin/modules/core/runtime";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { tryLockFile } from "../../../bin/modules/core/security_file";
-import { withExclusiveLockAsync } from "../../../bin/modules/flow/storage";
+import { tryLockFile } from "../../bin/modules/core/security_file";
+import { withExclusiveLockAsync } from "../../bin/modules/flow/storage";
 import {
   PortRegistry,
   processAlive,
-} from "../../../bin/modules/workspace/port_registry";
+} from "../../bin/modules/workspace/port_registry";
 import { ServiceState } from "./service-state";
 import { ServiceAuth } from "./service-auth";
 import { startSharedViewer, agentLease } from "./service-http";
@@ -139,6 +140,7 @@ export async function runDaemon(
     name?: string;
     assetsDir: string;
     revision: () => string;
+    connectObserver?: ConnectObserver;
     demoHooks?: Pick<import("./server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">;
   },
 ) {
@@ -240,7 +242,7 @@ export async function runDaemon(
           config.port,
           source?.revision,
           source?.name,
-          source?.demoHooks,
+          { ...source?.demoHooks, connectObserver: source?.demoHooks?.connectObserver ?? source?.connectObserver },
         );
         return viewer;
       },

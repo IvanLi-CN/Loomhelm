@@ -10,13 +10,17 @@
     "verify": "bun run test:all && bun run build",
     "demo:static": "bun run build && bun run scripts/demo-static.ts",
     "preview:idle-archive": "bun run scripts/preview-source.ts --scenario agent-idle-archive",
-    "preview:source": "bun run scripts/preview-source.ts"
+    "preview:source": "bun run scripts/preview-source.ts",
+    "demo:single-delivery-unit": "bun run build && bun run scripts/demo-static.ts --single-delivery-unit",
+    "preview:single-delivery-unit": "bun run scripts/preview-source.ts --single-delivery-unit"
   },
   "dependencies": {
-    "cytoscape": "3.34.4",
-    "cytoscape-dagre": "4.0.1",
+    "@xyflow/react": "12.12.1",
+    "elkjs": "0.12.1",
     "lucide": "1.65.0",
     "moment": "2.31.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "vis-data": "8.0.6",
     "vis-timeline": "8.5.6",
     "zod": "4.6.7"
@@ -24,9 +28,12 @@
   "devDependencies": {
     "@tailwindcss/cli": "4.3.3",
     "@testing-library/dom": "10.4.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "daisyui": "5.7.50",
     "happy-dom": "21.0.4",
     "playwright": "1.64.1",
-    "tailwindcss": "4.3.3"
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3"
   }
 }

@@ -11,6 +11,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { singleDeliveryUnitObserver } from "../examples/single-delivery-unit/outputs";
+import { createSingleDeliveryUnitLedger, singleDeliveryUnitName } from "../examples/single-delivery-unit/ledger";
 import {
   createViewerValidationLedger,
   createIdleArchiveExample,
@@ -26,7 +28,7 @@ import { LedgerStore } from "./store";
 import {
   PortRegistry,
   defaultRegistryDir,
-} from "../../../bin/modules/workspace/port_registry";
+} from "../../bin/modules/workspace/port_registry";
 
 const moduleRoot = resolve(import.meta.dir, "..");
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-source-preview-")));
@@ -70,10 +72,11 @@ const scenarioIndex = process.argv.indexOf("--scenario");
 const scenario = scenarioIndex < 0 ? "default" : process.argv[scenarioIndex + 1];
 if (!["default", "agent-idle-archive"].includes(scenario ?? "")) throw new Error("Unknown preview scenario");
 const example = scenario === "agent-idle-archive" ? createIdleArchiveExample() : null;
-const run = example?.ledger ?? createViewerValidationLedger();
+const singleUnit = process.argv.includes("--single-delivery-unit");
+const run = example?.ledger ?? (singleUnit ? createSingleDeliveryUnitLedger() : createViewerValidationLedger());
 const store = new LedgerStore(state.paths.data, run.orchestration_id);
 store.create(run);
-cpSync(
+if (!singleUnit) cpSync(
   join(moduleRoot, "examples", "orchestration-viewer", "requirements"),
   join(store.runPath, "requirements"),
   { recursive: true },
@@ -131,10 +134,11 @@ state.renew(
 let revision = createHash("sha256").update(JSON.stringify(files)).digest("hex");
 const daemon = await runDaemon(state, {
   manifest,
-  name: example ? "Agent 空闲与对话归档示例" : viewerValidationName,
+  name: example ? "Agent 空闲与对话归档示例" : singleUnit ? singleDeliveryUnitName : viewerValidationName,
   demoHooks: example?.dashboard,
   assetsDir,
   revision: () => revision,
+  connectObserver: singleUnit ? singleDeliveryUnitObserver(run) : undefined,
 });
 let pending = false,
   building = false;
@@ -189,7 +193,7 @@ process.once("SIGINT", stop);
 console.log(
   JSON.stringify({
     mode: "source-preview",
-    name: example ? "Agent 空闲与对话归档示例" : viewerValidationName,
+    name: example ? "Agent 空闲与对话归档示例" : singleUnit ? singleDeliveryUnitName : viewerValidationName,
     run_id: run.orchestration_id,
     root,
     pid: process.pid,

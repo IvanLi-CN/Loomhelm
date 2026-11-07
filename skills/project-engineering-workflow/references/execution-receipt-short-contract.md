@@ -1,6 +1,6 @@
 # Shared Execution Receipt Contract
 
-`${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/bin/flow_receipt.ts --repo <candidate>` maintains non-tracked validation and lifecycle facts below `git rev-parse --git-path codex-flow`. Always pass `--repo <candidate>`; do not copy the helper into the candidate. Code-hosting PRs, required CI, repository validation, release artifacts, and direct review evidence remain authoritative for delivery. Review execution and review gates never depend on this ledger.
+`${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/bin/flow_receipt.ts --repo <candidate>` maintains non-tracked validation and lifecycle facts below `git rev-parse --git-path codex-flow`. Always pass `--repo <candidate>`; do not copy the helper into the candidate. Code-hosting PRs, required CI, repository validation, release artifacts, and direct review evidence remain authoritative for delivery. Review execution and review gates never depend on this ledger.
 
 ## Identity and reuse
 
