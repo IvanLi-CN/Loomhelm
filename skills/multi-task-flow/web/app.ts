@@ -19,7 +19,7 @@ import { formatDuration, formatLocalTime } from "./time";
 import { renderTimestamp, refreshTimestamps } from "./timestamp";
 import { rangeFromIntervals } from "./execution-range";
 import { taskKindLabel } from "./labels";
-import { DEFAULT_VIEW_STATE, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
+import { DEFAULT_VIEW_STATE, defaultTaskLayout, hasValidLayoutParam, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
 const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest };
 createIcons({ icons: ICONS });
 moment.defineLocale("zh-task", { parentLocale: "en", months: "一月_二月_三月_四月_五月_六月_七月_八月_九月_十月_十一月_十二月".split("_"), monthsShort: "1月_2月_3月_4月_5月_6月_7月_8月_9月_10月_11月_12月".split("_"), weekdays: "星期日_星期一_星期二_星期三_星期四_星期五_星期六".split("_"), weekdaysShort: "周日_周一_周二_周三_周四_周五_周六".split("_"), weekdaysMin: "日_一_二_三_四_五_六".split("_") });
@@ -93,7 +93,7 @@ function stateValidation() {
 }
 function syncUrl(): void {
   const phaseDefaultTab = phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab;
-  replaceViewState(viewState, activePlanId || null, phaseDefaultTab);
+  replaceViewState(viewState, activePlanId || null, phaseDefaultTab, defaultTaskLayout(data?.groups.length ?? 0));
 }
 function filterFromControls(): void {
   viewState = { ...viewState, query: $<HTMLInputElement>("search").value.trim(), group: menuValue("group-filter"), state: menuValue("state-filter"), kind: menuValue("kind-filter") };
@@ -142,7 +142,7 @@ function updateVersionMenu(): void {
   for (const plan of data.plans) {
     const listItem = document.createElement("li"); const option = document.createElement("a");
     const selected = (activePlan || defaultPlan) === plan.id;
-    option.href = canonicalViewUrl(window.location.href, { ...viewState, plan: plan.id === defaultPlan ? null : plan.id }, defaultPlan, phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab);
+    option.href = canonicalViewUrl(window.location.href, { ...viewState, plan: plan.id === defaultPlan ? null : plan.id }, defaultPlan, phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab, defaultTaskLayout(data?.groups.length ?? 0));
     option.role = "option"; option.dataset.menuValue = plan.id; option.setAttribute("aria-selected", String(selected)); option.textContent = plan.id;
     option.addEventListener("click", (event) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -457,6 +457,7 @@ async function refresh(): Promise<void> {
     if (serial !== requestSerial || result.revision < revision) return;
     const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries(data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)])) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
     if (!hydrated && !userChangedTab && !hasValidTabParam(window.location.search)) viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
+    if (!hasValidLayoutParam(window.location.search)) viewState = { ...viewState, layout: defaultTaskLayout(data.groups.length) };
     viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
     if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true; phase = currentPhase; const shouldFocusRestoredDetails = !hydrated && viewState.detail; hydrated = true; if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true; syncUrl(); connection(deriveConnectionStatus(connected, result.watching)); $("load-error").hidden = true; render();
   } catch (error) { if (serial !== requestSerial) return; connection("stale"); if (!data) { $("load-error").hidden = false; $("load-error").textContent = `首次加载失败：${error instanceof Error ? error.message : "无法读取数据"}`; } }
@@ -478,7 +479,7 @@ document.addEventListener("keydown", (event) => { const target = event.target as
 $("close-details").addEventListener("click", closeDetails); $("details-backdrop").addEventListener("click", closeDetails); $("phase-jump").addEventListener("click", () => { phaseTransition = false; setTab("actual"); });
 $("zoom-in").addEventListener("click", () => graphController.zoomIn()); $("zoom-out").addEventListener("click", () => graphController.zoomOut()); $("fit").addEventListener("click", () => graphController.fit());
 $("timeline-zoom-in").addEventListener("click", () => timelineController.adjustWindow("in")); $("timeline-zoom-out").addEventListener("click", () => timelineController.adjustWindow("out")); $("timeline-fit").addEventListener("click", () => timelineController.fit());
-installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if (targetPlan !== viewState.plan) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
+installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId)) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
 window.addEventListener("keydown", (event) => { trapDetailsFocus(event); if (event.key === "Escape" && viewState.detail) closeDetails(); });
 window.addEventListener("resize", () => { refreshResponsiveDetails(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks()); window.requestAnimationFrame(() => timelineController.redraw()); });
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);

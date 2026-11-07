@@ -1,3 +1,4 @@
+import type { ConnectObserver } from "./conversation-output";
 import { Runtime } from "../../../bin/modules/core/runtime";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -127,8 +128,9 @@ export async function startSharedViewer(
   port: number,
   sourceRevision?: () => string,
   sourceName?: string,
+  sourceObserver?: ConnectObserver,
 ) {
-  if (sourceRevision && !state.paths.isolated)
+  if ((sourceRevision || sourceObserver) && !state.paths.isolated)
     throw new ContractError(
       "INVALID_PROFILE",
       "Source reload requires an isolated profile",
@@ -156,6 +158,7 @@ export async function startSharedViewer(
       runId: id,
       port,
       assetsDir: assets.path,
+      connectObserver: sourceObserver,
     });
     resources.set(id, run);
     return run;
