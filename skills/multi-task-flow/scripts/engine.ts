@@ -1501,8 +1501,12 @@ export function execute(
           5,
         );
       }
-      if ((op.request.creation_parameters as any)?.transport === "codex-exec" && outcome === "succeeded") {
+      if ((op.request.creation_parameters as any)?.transport === "codex-exec" && outcome !== "unknown") {
         requireCondition(evidence.native_tool_name === "codex exec", "EVIDENCE_REQUIRED", "CLI dispatch requires real exec evidence", 5);
+        if (outcome === "failed") requireCondition(!op.request.observed_thread_id &&
+          !payload.thread_id && !evidence.thread_id && !evidence.workspace_path && !evidence.initial_head && !evidence.turn_completed &&
+          evidence.process_started === false && evidence.resources_created === false,
+          "UNKNOWN_REQUIRES_RECONCILIATION", "Only proven pre-creation failure may release a CLI dispatch; observed identities require reconciliation", 5);
       }
       if (evidence.native_tool_name === "codex exec" && outcome === "succeeded") {
         requireCondition(evidence.exit_code === 0 && evidence.turn_completed === true &&
@@ -4104,6 +4108,8 @@ export function execute(
       const outcome = z
         .enum(["sent", "failed", "unknown"])
         .parse(payload.outcome);
+      requireCondition(object(payload.provider_receipt).provider !== "codex-app-tools" || outcome === "unknown",
+        "NATIVE_RECEIPT_REQUIRED", "Native delivery must claim an unknown attempt before reconciling the platform receipt", 5);
       const attemptId = parse(id, payload.delivery_attempt_id);
       requireCondition(
         !ledger.events.some(
@@ -4225,6 +4231,8 @@ export function execute(
         })
         .strict()
         .parse(payload.provider_receipt);
+      if (nativeAttempt) requireCondition(receipt.provider === "codex-app-tools",
+        "NATIVE_RECEIPT_REQUIRED", "Native attempt requires a matching platform provider", 5);
       notice.status = outcome;
       notice.delivery_status = outcome;
       notice.ack_status = "unacknowledged";
@@ -4259,6 +4267,8 @@ export function execute(
       };
     }
     case "notification-sent": {
+      requireCondition(object(payload.provider_receipt).provider !== "codex-app-tools",
+        "NATIVE_RECEIPT_REQUIRED", "Native delivery requires a claimed attempt and reconciled platform receipt", 5);
       const notice = find(
         ledger.notifications,
         (item) => item.id === string(payload.notification_id),
@@ -4270,8 +4280,7 @@ export function execute(
         "Notification event",
       );
       requireCondition(
-        original.actor_id === request.actor.thread_id || (request.actor.role === "main" &&
-          object(payload.provider_receipt).provider === "codex-app-tools"),
+        original.actor_id === request.actor.thread_id,
         "FORBIDDEN",
         "Only the event sender or native main coordinator can record notification delivery",
         3,

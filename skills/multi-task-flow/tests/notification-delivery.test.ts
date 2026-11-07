@@ -164,6 +164,8 @@ test("native delivery claims once without a provider process and requires the ma
     const receipt = { ...f.parsed, request_id: "native-receipt", expected_revision: f.store.read().revision,
       payload: { notification_id: f.id, reconciliation_id: "native-result", outcome: "sent", provider_receipt: { provider: "codex-app-tools", evidence_ref: "native:accepted", message_id: "accepted-message" } } };
     expect(() => reconcileNotification(f.store, receipt)).toThrow("active delivery attempt");
+    expect(() => reconcileNotification(f.store, { ...receipt, payload: { ...receipt.payload, delivery_attempt_id: claim.delivery_attempt_id,
+      provider_receipt: { ...receipt.payload.provider_receipt, provider: "codex-app-server" } } })).toThrow("matching platform provider");
     reconcileNotification(f.store, { ...receipt, payload: { ...receipt.payload, delivery_attempt_id: claim.delivery_attempt_id } });
     expect(f.store.read().notifications[0].delivery_status).toBe("sent");
     expect(f.store.read().notifications[0].ack_status).toBe("unacknowledged");
@@ -179,5 +181,22 @@ test("bound main can claim a task notification for native forwarding without imp
     const result: any = prepareNativeNotification(f.store, { ...f.parsed, actor }, f.id, "Forward task event");
     expect(result.should_send).toBe(true);
     expect(result.tool_request.threadId).toBe(actor.thread_id);
+  } finally { f.cleanup(); }
+});
+
+test("native compatibility commands cannot report delivery without a persistent attempt and receipt", () => {
+  const f = fixture();
+  try {
+    const before = JSON.stringify(f.store.read());
+    const actor = { role: "main" as const, thread_id: f.store.read().control.owner_thread_id };
+    for (const command of ["notification-deliver", "notification-sent"]) {
+      expect(() => f.store.update(raw => apply(raw, command, { ...f.parsed, actor, request_id: command,
+        expected_revision: raw.revision, payload: { notification_id: f.id, delivery_attempt_id: "bypass", outcome: "sent",
+          provider_receipt: { provider: "codex-app-tools", evidence_ref: "unclaimed:sent" } } }))).toThrow("Native delivery");
+      expect(JSON.stringify(f.store.read())).toBe(before);
+    }
+    const claim: any = prepareNativeNotification(f.store, { ...f.parsed, actor }, f.id, "Forward once");
+    expect(claim.should_send).toBe(true);
+    expect(f.store.read().notifications[0].delivery_status).toBe("unknown");
   } finally { f.cleanup(); }
 });

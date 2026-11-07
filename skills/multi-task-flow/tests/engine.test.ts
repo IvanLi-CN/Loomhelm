@@ -2646,6 +2646,25 @@ describe("native CLI handoff contract", () => {
     expect(ledger.notifications[0].delivery_status).toBe("pending");
     expect(() => apply(ledger, "dispatch-claim", request(ledger, "duplicate-create", { task_id: "a", operation_id: "second-a" }))).toThrow();
   });
+  test("observed CLI identity cannot release the claim through failed or legacy evidence", () => {
+    const ledger = claimed();
+    apply(ledger, "dispatch-progress", request(ledger, "observed-before-failure", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
+    for (const native_tool_name of ["codex exec", "thread/start"]) {
+      const failure = resolve(ledger);
+      Object.assign(failure.payload, { outcome: "failed" });
+      Object.assign(failure.payload.native_evidence, { native_tool_name, error: "Initialization failed", process_started: false, resources_created: false });
+      expect(() => apply(ledger, "dispatch-resolve", failure)).toThrow();
+      expect(ledger.operations[0].status).toBe("unknown");
+      expect(ledger.operations[0].request.observed_thread_id).toBe("cli-thread");
+      expect(() => apply(ledger, "dispatch-claim", request(ledger, `retry-${native_tool_name}`, { task_id: "a", operation_id: "duplicate-a" }))).toThrow();
+    }
+    const unobserved = claimed();
+    const failure = resolve(unobserved);
+    Object.assign(failure.payload, { outcome: "failed" });
+    Object.assign(failure.payload.native_evidence, { error: "No event received after process start" });
+    expect(() => apply(unobserved, "dispatch-resolve", failure)).toThrow("pre-creation failure");
+    expect(unobserved.operations[0].status).toBe("unknown");
+  });
   test("development waits for owned workspace readiness and the current parent SHA, separate from initial HEAD", () => {
     const ledger = claimed();
     apply(ledger, "dispatch-progress", request(ledger, "cli-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
@@ -2670,7 +2689,7 @@ test("native group retry ignores a failed attempt and still requires a fresh mai
   const invoke = (command: string, requestId: string, payload: any, actor: Request["actor"] = main) => apply(ledger, command, request(ledger, requestId, payload, actor));
   invoke("dispatch-group-claim", "failed-cli", { group_id: "g", operation_id: "failed-cli" });
   invoke("dispatch-bind-request", "failed-bind", { operation_id: "failed-cli", native_request_id: "failed-native", creation_parameters: { title: "group", prompt: "formal", cwd: "/repo", execution_profile: ledger.config.execution_profile, transport: "codex-exec" } });
-  invoke("dispatch-resolve", "failed-resolve", { operation_id: "failed-cli", outcome: "failed", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "failed-cli", native_request_id: "failed-native", ...ledger.config.execution_profile, evidence_ref: "codex:verified-no-resource", created_at: at, error: "Reconciliation verified no resource was created" } });
+  invoke("dispatch-resolve", "failed-resolve", { operation_id: "failed-cli", outcome: "failed", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "failed-cli", native_request_id: "failed-native", ...ledger.config.execution_profile, evidence_ref: "codex:verified-no-resource", created_at: at, error: "Preflight verified process was not started and no resource was created", process_started: false, resources_created: false } });
   invoke("dispatch-group-claim", "group-cli", { group_id: "g", operation_id: "group-cli" });
   invoke("dispatch-bind-request", "group-bind", { operation_id: "group-cli", native_request_id: "group-native", creation_parameters: { title: "group", prompt: "formal", cwd: "/repo", execution_profile: ledger.config.execution_profile, transport: "codex-exec" } });
   expect(ledger.operations.at(-1)!.status).toBe("unknown");
