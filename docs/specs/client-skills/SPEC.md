@@ -100,7 +100,7 @@ FFI 路径缓冲区 MUST 在完整系统调用期间保持所有权。文件读�
 
 ## Related ADRs
 
-- [Bun 直接运行客户端与 Skills](../../adr/0020-bun-source-runtime.md)
+- [Bun 直接运行客户端与 Skills](../../adr/0021-bun-source-runtime.md)
 
 ## References
 

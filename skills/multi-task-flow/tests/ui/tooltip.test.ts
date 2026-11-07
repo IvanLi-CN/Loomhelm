@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { attachTooltip } from "../../web/tooltip";
+import { attachTooltip, installTextTooltips } from "../../web/tooltip";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 function fixture() {
@@ -59,4 +59,26 @@ test("long press opens after 500ms; movement and release cancel pending presses"
   trigger.focus();
   await pause(540);
   expect(tooltip.hidden).toBe(true);
+});
+
+
+test("project text tooltips preserve control IDs and cover disabled and dynamically replaced controls", async () => {
+  const button = document.createElement("button"); button.id = "zoom-in"; button.dataset.tooltip = "放大";
+  document.body.append(button);
+  const dispose = installTextTooltips();
+  try {
+    expect(button.id).toBe("zoom-in");
+    document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    button.focus();
+    expect(document.querySelector(".control-tooltip.is-open")?.textContent).toBe("放大");
+    button.dataset.tooltip = "更新后的说明";
+    await pause(10);
+    expect(document.querySelector(".control-tooltip.is-open")?.textContent).toBe("更新后的说明");
+    const disabled = document.createElement("button"); disabled.disabled = true; disabled.dataset.tooltip = "PR 尚未创建";
+    button.replaceWith(disabled); await pause(10);
+    expect(document.querySelectorAll(".control-tooltip").length).toBe(1);
+    pointer(disabled, "pointerenter", 0, 0, "mouse"); await pause(280);
+    expect(document.querySelector(".control-tooltip.is-open")?.textContent).toBe("PR 尚未创建");
+    expect(document.querySelector("[title]")).toBeNull();
+  } finally { dispose(); }
 });

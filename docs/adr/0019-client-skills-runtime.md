@@ -2,7 +2,7 @@
 
 ## 状态
 
-Superseded by [ADR 0020](0020-bun-source-runtime.md)。以下保留历史决策背景；当前生产仅支持 Bun 直接执行 TS。
+Superseded by [ADR 0021](0021-bun-source-runtime.md)。以下保留历史决策背景；当前生产仅支持 Bun 直接执行 TS。
 
 ## 背景
 

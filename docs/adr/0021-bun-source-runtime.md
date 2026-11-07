@@ -1,4 +1,4 @@
-# ADR 0020：Bun 直接运行客户端与 Skills
+# ADR 0021：Bun 直接运行客户端与 Skills
 
 ## 状态
 

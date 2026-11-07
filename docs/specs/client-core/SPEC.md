@@ -50,7 +50,7 @@ Task MUST 具备目标、范围、验收条件、依赖和稳定身份。相同 
 
 ## Related ADRs
 
-- [ADR 0020](../../adr/0020-bun-source-runtime.md)
+- [ADR 0021](../../adr/0021-bun-source-runtime.md)
 
 ## References
 
