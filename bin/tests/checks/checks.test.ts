@@ -542,7 +542,7 @@ describe("static contracts and behavior adapters", () => {
 
   test("archived provider Spec cannot override the project canonical Spec boundary", () => {
     expect(
-      checkSpec(fixture("docs/vendor/dot-codex/specs/bun-typescript-scripts/SPEC.md"), root),
+      checkSpec(fixture("docs/vendor/dot-codex/specs/gui-escalation-gate/SPEC.md"), root),
     ).toEqual([expect.objectContaining({code: "SPEC_PATH_INVALID"})]);
   });
 

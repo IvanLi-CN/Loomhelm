@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const target = resolve(root, 'clients/typescript/dist/toolkit');
 const manifest = JSON.parse(readFileSync(resolve(root, 'skills/source-manifest.json'), 'utf8'));
+// This exact generated directory belongs to the client build. Recreate it so
+// removed source resources cannot survive incremental packaging.
+if (existsSync(target)) {
+  if (lstatSync(target).isSymbolicLink() || realpathSync(target) !== target) throw new Error('Unsafe toolkit output directory');
+  rmSync(target, { recursive: true });
+}
 const outputs = [];
 function copy(path) {
   const output = resolve(target, path); mkdirSync(dirname(output), { recursive: true });

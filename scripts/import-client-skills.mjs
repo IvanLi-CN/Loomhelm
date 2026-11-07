@@ -16,6 +16,7 @@ for (const item of tree) {
   if (!match) throw new Error('Unsupported source tree entry');
   const [, mode, blob, path] = match;
   if (path.split('/').some(part => ['..', 'node_modules', '__pycache__', '.git'].includes(part))) throw new Error('Rejected source path');
+  if (path.startsWith('bin/fixtures/python-compatibility/') || path.startsWith('docs/specs/bun-typescript-scripts/')) continue;
   const destination = path.startsWith('docs/') ? `docs/vendor/dot-codex/${path.slice(5)}` : path;
   if (existsSync(destination)) throw new Error(`Refusing to overwrite ${destination}`);
   const content = git('cat-file', 'blob', blob);
@@ -26,5 +27,5 @@ for (const item of tree) {
 }
 const skills = files.filter(file => /^skills\/[^/]+\/SKILL\.md$/.test(file.source)).map(file => file.source.split('/')[1]).sort();
 if (skills.length !== 29) throw new Error('Source Skill count differs from approved inventory');
-writeFileSync(resolve('skills/source-manifest.json'), JSON.stringify({ schemaVersion: 1, repository: 'IvanLi-CN/dot-codex', commit, skills, files }, null, 2) + '\n', { flag: 'wx' });
+writeFileSync(resolve('skills/source-manifest.json'), JSON.stringify({ schemaVersion: 1, repository: 'IvanLi-CN/dot-codex', commit, skills, files, exclusions: [{ sourcePrefix: "bin/fixtures/python-compatibility/", reason: "Provider historical language migration audit, not client functionality" }, { sourcePrefix: "docs/specs/bun-typescript-scripts/", reason: "Provider historical language migration topic" }] }, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify({ skills: skills.length, files: files.length, commit }));

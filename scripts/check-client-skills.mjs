@@ -10,6 +10,10 @@ const refresh = process.argv.includes('--write');
 const additional = ['bin/modules/core/runtime.ts', 'bin/modules/core/posix.ts', 'bin/native/posix.c', 'bin/package.json', 'skills/multi-task-flow/tests/service-release.test.ts', 'skills/multi-task-flow/scripts/notification-delivery.ts', 'skills/multi-task-flow/tests/notification-delivery.test.ts'];
 if (refresh) manifest.additions = additional.map(path => ({ path, installedSha256: hash(readFileSync(resolve(root, path))) }));
 const findings = [];
+for (const excluded of manifest.exclusions ?? []) {
+  const installed = excluded.sourcePrefix.startsWith('docs/') ? `docs/vendor/dot-codex/${excluded.sourcePrefix.slice(5)}` : excluded.sourcePrefix;
+  if (manifest.files.some(file => file.source.startsWith(excluded.sourcePrefix)) || existsSync(resolve(root, installed))) findings.push(`excluded-resource:${installed}`);
+}
 for (const file of [...manifest.files, ...(manifest.additions ?? [])]) {
   const target = resolve(root, file.path);
   if (!target.startsWith(root + '/') || !existsSync(target)) { findings.push(`missing:${file.path}`); continue; }
