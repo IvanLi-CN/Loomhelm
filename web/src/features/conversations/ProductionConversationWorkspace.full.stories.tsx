@@ -40,6 +40,8 @@ const boundCodexConversation: CodexConversation = {
   updated_at: "2026-11-07T00:00:00Z"
 };
 
+const standaloneBoundCodexConversation: CodexConversation = { ...boundCodexConversation, bound_task_id: undefined };
+
 function EvidenceFrame({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-[var(--canvas)] p-12" data-visual-evidence-surface>
@@ -206,6 +208,26 @@ export const BoundCodexContinuity: Story = {
           projectName="Loomhelm"
           sessionId="session-demo-u03"
           task={{ goal: "确认当前 Host 与 Session 的执行边界。", id: "LH-30", state: "进行中", title: "整理远程工作区边界" }}
+        />
+      </EvidenceFrame>
+    );
+  }
+};
+
+export const StandaloneBoundCodexContinuity: Story = {
+  render: () => {
+    const api = createProductionSessionDemoApi();
+    return (
+      <EvidenceFrame>
+        <ProductionConversationWorkspace
+          api={api}
+          boundCodexConversation={standaloneBoundCodexConversation}
+          conversationTitle="独立 Codex 对话"
+          initialRunId="run-demo-u03"
+          principalId="storybook-standalone-codex"
+          projectId="loomhelm"
+          projectName="Loomhelm"
+          sessionId="session-demo-u03"
         />
       </EvidenceFrame>
     );

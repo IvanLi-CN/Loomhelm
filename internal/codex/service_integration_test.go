@@ -17,6 +17,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 )
 
 func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
@@ -247,6 +248,94 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 		t.Fatalf("reference-only Codex file chunk = %+v", refChunk)
 	}
 
+}
+
+func TestStandaloneSessionKeepsCodexHistoryVisibleAfterActivation(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		t.Fatalf("load database configuration: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "codex-standalone-user-" + suffix
+	hostID := "codex-standalone-host-" + suffix
+	sessionID := "codex-standalone-session-" + suffix
+	threadID := "codex-standalone-thread-" + suffix
+	commandID := "codex-standalone-command-" + suffix
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO auth_users (id, issuer, subject) VALUES ($1, 'test', $1)`, userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO host_registrations (id, singleton_key, name, status, owner_user_id) VALUES ($1, NULL, 'Codex standalone test', 'online', $2)`, hostID, userID); err != nil {
+		t.Fatalf("seed Host: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO codex_sync_sources (host_id, state, sync_state, as_of, updated_at) VALUES ($1, 'online', 'complete', $2, $2)`, hostID, now); err != nil {
+		t.Fatalf("seed Codex source: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO codex_threads (
+			host_id, thread_id, codex_title, conversation_title, preview, cwd,
+			source_status, history_state, files_complete, title_sync_state, imported_by,
+			as_of, last_activity_at, updated_at
+		) VALUES ($1, $2, 'Codex standalone title', 'Loomhelm standalone title', 'preview', '/workspace', 'active', 'complete', TRUE, 'unsupported', $3, $4, $4, $4)
+	`, hostID, threadID, userID, now); err != nil {
+		t.Fatalf("seed Codex thread: %v", err)
+	}
+
+	cleanup := func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = db.Pool().Exec(cleanupCtx, `UPDATE codex_threads SET bound_session_id = NULL WHERE host_id = $1 AND thread_id = $2`, hostID, threadID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM codex_sync_sources WHERE host_id = $1`, hostID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM execution_sessions WHERE id = $1`, sessionID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM host_registrations WHERE id = $1`, hostID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM auth_users WHERE id = $1`, userID)
+	}
+	t.Cleanup(cleanup)
+
+	service := codex.NewService(db.Pool(), nil, hosts.NewService(db.Pool()), projects.NewService(db.Pool(), nil))
+	store := sessions.NewStore(db.Pool(), sessions.StoreConfig{BindingReconciler: service.ReconcileSessionTaskBinding})
+	if _, err := store.CreateIntent(ctx, sessions.CreationIntentInput{
+		SessionID:     sessionID,
+		CommandID:     commandID,
+		CreatorUserID: userID,
+		HostID:        hostID,
+		Path:          protocol.SessionPathNew,
+		Parameters:    []byte(`{"path":"new"}`),
+		Summary:       "standalone Codex continuity",
+	}); err != nil {
+		t.Fatalf("create standalone Session intent: %v", err)
+	}
+	if _, err := store.ActivateIntent(ctx, sessions.ActivationInput{SessionID: sessionID, ExternalThreadRef: threadID, ExecutionGeneration: "generation-" + suffix, UpdatedAt: now.Format(time.RFC3339Nano)}); err != nil {
+		t.Fatalf("activate standalone Session: %v", err)
+	}
+
+	hostRef := hostID
+	bound := true
+	includeArchived := true
+	page, err := service.ListConversations(ctx, auth.Principal{UserID: userID}, protocol.ListCodexConversationsQuery{HostID: &hostRef, Bound: &bound, IncludeArchived: &includeArchived})
+	if err != nil {
+		t.Fatalf("list standalone Codex history: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].BoundSessionID == nil || *page.Items[0].BoundSessionID != sessionID || page.Items[0].BoundTaskID != nil {
+		t.Fatalf("standalone Codex list = %+v, want one Session-only binding", page.Items)
+	}
+	if _, err := service.GetConversation(ctx, auth.Principal{UserID: userID}, hostID, threadID); err != nil {
+		t.Fatalf("read standalone Codex history: %v", err)
+	}
 }
 
 func TestUpdateTitlePersistsPreflightFailuresForRetry(t *testing.T) {

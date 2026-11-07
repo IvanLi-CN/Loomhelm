@@ -564,8 +564,8 @@ func (s *Store) ActivateIntent(ctx context.Context, input ActivationInput) (Sess
 	`, input.SessionID, updated.ExternalThreadRef, updated.Generation, updated.State, optionalStringValue(updated.ProjectID), updated.UpdatedAt); err != nil {
 		return Session{}, fmt.Errorf("activate session intent: %w", err)
 	}
-	if taskID := strings.TrimSpace(record.Intent.TaskID); taskID != "" && s.bindingReconciler != nil {
-		if err := s.bindingReconciler(ctx, tx, input.SessionID, taskID); err != nil {
+	if s.bindingReconciler != nil {
+		if err := s.bindingReconciler(ctx, tx, input.SessionID, strings.TrimSpace(record.Intent.TaskID)); err != nil {
 			return Session{}, fmt.Errorf("reconcile Session activation: %w", err)
 		}
 	}

@@ -678,22 +678,50 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 		return protocol.CodexConversationListResponse{}, fmt.Errorf("read Codex source snapshot: %w", err)
 	}
 	args := []any{access.host.ID, principal.UserID}
-	where := `WHERE t.host_id = $1 AND (t.imported_by = $2 OR (t.bound_task_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)))`
-	if access.restricted {
-		where = `WHERE t.host_id = $1 AND t.bound_task_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)`
-	}
+	sessionProjectVisibility := `session.project_id IS NOT NULL`
 	if len(principal.ProjectScope) > 0 {
 		args = append(args, sortedProjectScopeValues(principal.ProjectScope))
-		where += fmt.Sprintf(" AND task.project_id = ANY($%d::text[])", len(args))
+		sessionProjectVisibility = fmt.Sprintf("session.project_id = ANY($%d::text[])", len(args))
+	}
+	taskVisibility := `t.bound_task_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)`
+	sessionMembership := fmt.Sprintf(`%s AND EXISTS (
+		SELECT 1 FROM project_members session_member
+		WHERE session_member.project_id = session.project_id
+		  AND session_member.user_id = $2
+	)`, sessionProjectVisibility)
+	sessionVisibility := fmt.Sprintf(`EXISTS (
+		SELECT 1
+		FROM execution_sessions AS session
+		WHERE session.host_id = t.host_id
+		  AND session.external_thread_ref = t.thread_id
+		  AND session.creation_state = 'confirmed'
+		  AND ((session.project_id IS NULL AND session.creator_user_id = $2) OR (%s))
+	)`, sessionMembership)
+	restrictedSessionVisibility := fmt.Sprintf(`EXISTS (
+		SELECT 1
+		FROM execution_sessions AS session
+		WHERE session.host_id = t.host_id
+		  AND session.external_thread_ref = t.thread_id
+		  AND session.creation_state = 'confirmed'
+		  AND %s
+		  AND EXISTS (
+			SELECT 1 FROM project_members session_member
+			WHERE session_member.project_id = session.project_id
+			  AND session_member.user_id = $2
+		  )
+	)`, sessionProjectVisibility)
+	where := fmt.Sprintf(`WHERE t.host_id = $1 AND (%s OR %s)`, taskVisibility, restrictedSessionVisibility)
+	if !access.restricted {
+		where = fmt.Sprintf(`WHERE t.host_id = $1 AND (t.imported_by = $2 OR %s OR %s)`, taskVisibility, sessionVisibility)
 	}
 	if !boolValue(query.IncludeArchived) {
 		where += " AND t.source_status = 'active'"
 	}
 	if query.Bound != nil {
 		if *query.Bound {
-			where += " AND t.bound_task_id IS NOT NULL"
+			where += " AND (t.bound_task_id IS NOT NULL OR t.bound_session_id IS NOT NULL)"
 		} else {
-			where += " AND t.source_kind = 'main' AND t.bound_task_id IS NULL AND NOT EXISTS (SELECT 1 FROM execution_sessions session WHERE session.host_id = t.host_id AND session.external_thread_ref = t.thread_id)"
+			where += " AND t.source_kind = 'main' AND t.bound_task_id IS NULL AND t.bound_session_id IS NULL AND NOT EXISTS (SELECT 1 FROM execution_sessions session WHERE session.host_id = t.host_id AND session.external_thread_ref = t.thread_id)"
 		}
 	}
 	if value := strings.TrimSpace(valueOrEmpty(query.ProjectID)); value != "" {
@@ -863,12 +891,46 @@ func (s *Service) GetConversation(ctx context.Context, principal auth.Principal,
 }
 
 // ReconcileSessionTaskBinding keeps a Codex identity aligned when a generic
-// Session is associated with a Task after the Codex snapshot was imported.
-// The caller supplies the Session/Task transaction so the visibility change
-// cannot commit without the corresponding platform binding.
+// Session is activated or associated with a Task after the Codex snapshot was
+// imported. An empty taskID reconciles a standalone Session. The caller
+// supplies the Session/Task transaction so the visibility change cannot commit
+// without the corresponding platform binding.
 func (s *Service) ReconcileSessionTaskBinding(ctx context.Context, tx pgx.Tx, sessionID, taskID string) error {
-	if s == nil || tx == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(taskID) == "" {
+	sessionID = strings.TrimSpace(sessionID)
+	taskID = strings.TrimSpace(taskID)
+	if s == nil || tx == nil || sessionID == "" {
 		return ErrInvalid
+	}
+	if taskID == "" {
+		_, err := tx.Exec(ctx, `
+			UPDATE codex_threads AS codex
+			SET bound_session_id = session.id,
+			    updated_at = GREATEST(codex.updated_at, session.updated_at)
+			FROM execution_sessions AS session
+			WHERE session.id = $1
+			  AND session.creation_state = 'confirmed'
+			  AND session.external_thread_ref IS NOT NULL
+			  AND codex.host_id = session.host_id
+			  AND codex.thread_id = session.external_thread_ref
+			  AND codex.source_kind = 'main'
+			  AND codex.source_status = 'active'
+			  AND codex.history_state = 'complete'
+			  AND codex.files_complete
+			  AND (codex.bound_session_id IS NULL OR codex.bound_session_id = session.id)
+			  AND (codex.bound_task_id IS NULL OR EXISTS (
+				  SELECT 1 FROM tasks task
+				  WHERE task.id = codex.bound_task_id AND task.session_id = session.id
+			  ))
+			  AND NOT EXISTS (
+				  SELECT 1 FROM codex_threads AS other
+				  WHERE other.bound_session_id = session.id
+				    AND (other.host_id <> codex.host_id OR other.thread_id <> codex.thread_id)
+			  )
+		`, sessionID)
+		if err != nil {
+			return fmt.Errorf("reconcile Codex Session identity: %w", err)
+		}
+		return nil
 	}
 	_, err := tx.Exec(ctx, `
 		UPDATE codex_threads AS codex
