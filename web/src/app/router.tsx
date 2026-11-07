@@ -191,7 +191,12 @@ const createConversationRoute = createRoute({
 const conversationWorkspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/conversations/$conversationId",
-  validateSearch: (search: Record<string, unknown>) => typeof search.runId === "string" ? { runId: search.runId } : {},
+  validateSearch: (search: Record<string, unknown>): { runId?: string; returnTo?: "demo-production-conversations" } => {
+    const validated: { runId?: string; returnTo?: "demo-production-conversations" } = {};
+    if (typeof search.runId === "string") validated.runId = search.runId;
+    if (search.returnTo === "demo-production-conversations") validated.returnTo = search.returnTo;
+    return validated;
+  },
   component: ConversationWorkspaceRoute
 });
 

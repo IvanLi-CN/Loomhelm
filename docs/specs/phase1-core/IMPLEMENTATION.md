@@ -183,11 +183,15 @@ The U03 candidate uses the login-free, mock-only `ui_demo` route `/demo/producti
 
 ### U05 authorized conversation index
 
-The U05 candidate uses the login-free, mock-only `ui_demo` route `/demo/production-conversations`; the page reads the same typed Session-list contract as the authenticated production route, retains project and task context, and provides refresh, search and new-session entry points. The owner-confirmed desktop `1440x1000` and narrow `393x852` captures show the page without horizontal overflow; these images establish the navigation and presentation evidence only and do not by themselves establish authenticated backend behavior, persistence or production deployment.
+The U05 candidate uses the login-free, mock-only `ui_demo` route `/demo/production-conversations`; the page reads the same typed Session-list contract as the authenticated production route, retains project and task context, and provides refresh, search and new-session entry points. For authenticated users, the formal `/conversations` route now renders imported Codex history below the Session section as an independent source, preserving Codex-scoped detail routing and partial-history read-only state without projecting imported rows as Loomhelm Sessions. The owner-confirmed desktop `1440x1000` and narrow `393x852` captures show both sources without horizontal overflow; these images establish the navigation and presentation evidence only and do not by themselves establish authenticated backend behavior, persistence or production deployment.
 
 ![U05 authorized conversation index on the desktop viewport](assets/u05-production-sessions-page-desktop-1440x1000.png)
 
 ![U05 authorized conversation index on a 393x852 mobile viewport](assets/u05-production-sessions-page-mobile-393x852.png)
+
+The owner-confirmed `storybook_canvas` state `Features/Conversations/Production Workspace — BoundCodexContinuity` verifies that a bound Session exposes its original Codex main-thread history through a stable source-scoped route without creating a duplicate conversation identity; the source-managed component surface uses a 48px outer margin and the capture is mock-only.
+
+![U05 bound Codex continuity in the production workspace](assets/u05-bound-codex-continuity-storybook.png)
 
 ## Rollout and Compatibility
 

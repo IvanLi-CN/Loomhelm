@@ -807,6 +807,15 @@ func (s *Service) CloseConnection(ctx context.Context, connection Connection) er
 		return fmt.Errorf("begin host connection close: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// Codex snapshot import locks source state before the Host row and then
+	// reconciles Session/Task bindings. Take the optional source lock first so
+	// disconnect cannot introduce a source/Host wait cycle with an import.
+	var sourceHostID string
+	if err := tx.QueryRow(ctx, `
+		SELECT host_id FROM codex_sync_sources WHERE host_id = $1 FOR UPDATE
+	`, connection.HostID).Scan(&sourceHostID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("lock Codex source during Host close: %w", err)
+	}
 	generation, err := lockHost(ctx, tx, connection.HostID)
 	if err != nil {
 		return err

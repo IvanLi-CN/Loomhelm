@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { Artifact, Event } from "@loomhelm/protocol";
+import type { Artifact, CodexConversation, Event } from "@loomhelm/protocol";
 
 import { createProductionSessionDemoApi } from "./production-session-demo-api";
 import { ProductionConversationWorkspace } from "./ProductionConversationWorkspace";
@@ -23,9 +23,28 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
+const boundCodexConversation: CodexConversation = {
+  as_of: "2026-11-07T00:00:00Z",
+  bound_session_id: "session-demo-u03",
+  bound_task_id: "LH-30",
+  conversation_title: "整理远程工作区边界",
+  files_complete: true,
+  history_state: "complete",
+  host_id: "host-default",
+  preview: "确认当前 Host 与 Session 的执行边界。",
+  read_only: true,
+  source_kind: "main",
+  source_status: "active",
+  thread_id: "thread-demo-u03",
+  title_sync_state: "unsupported",
+  updated_at: "2026-11-07T00:00:00Z"
+};
+
+const standaloneBoundCodexConversation: CodexConversation = { ...boundCodexConversation, bound_task_id: undefined };
+
 function EvidenceFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-[var(--canvas)] p-6 sm:p-10" data-visual-evidence-surface>
+    <div className="min-h-screen bg-[var(--canvas)] p-12" data-visual-evidence-surface>
       <div className="mx-auto grid w-full max-w-5xl gap-5" data-visual-evidence-target>{children}</div>
     </div>
   );
@@ -172,4 +191,45 @@ export const WaitingForApproval: Story = {
 
 export const ContentAndArtifact: Story = {
   render: () => <ProductionContentWorkspaceStory />
+};
+
+export const BoundCodexContinuity: Story = {
+  render: () => {
+    const api = createProductionSessionDemoApi();
+    return (
+      <EvidenceFrame>
+        <ProductionConversationWorkspace
+          api={api}
+          boundCodexConversation={boundCodexConversation}
+          conversationTitle="整理远程工作区边界"
+          initialRunId="run-demo-u03"
+          principalId="storybook-bound-codex"
+          projectId="loomhelm"
+          projectName="Loomhelm"
+          sessionId="session-demo-u03"
+          task={{ goal: "确认当前 Host 与 Session 的执行边界。", id: "LH-30", state: "进行中", title: "整理远程工作区边界" }}
+        />
+      </EvidenceFrame>
+    );
+  }
+};
+
+export const StandaloneBoundCodexContinuity: Story = {
+  render: () => {
+    const api = createProductionSessionDemoApi();
+    return (
+      <EvidenceFrame>
+        <ProductionConversationWorkspace
+          api={api}
+          boundCodexConversation={standaloneBoundCodexConversation}
+          conversationTitle="独立 Codex 对话"
+          initialRunId="run-demo-u03"
+          principalId="storybook-standalone-codex"
+          projectId="loomhelm"
+          projectName="Loomhelm"
+          sessionId="session-demo-u03"
+        />
+      </EvidenceFrame>
+    );
+  }
 };
