@@ -56,6 +56,31 @@ test.each([
   }
 }, 30000);
 
+test("ordinary daemon starts with production profile checks and no preview hooks", async () => {
+  const fixture = serviceFixture();
+  // Keep every resource isolated while exercising the formal profile guard.
+  const state = new ServiceState({ ...fixture.state.paths, isolated: false });
+  const release = fixtureRelease(fixture.root);
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const port = probe.port!;
+  await probe.stop(true);
+  cpSync(release.source, join(state.paths.releases, release.manifest.build_id), { recursive: true });
+  state.saveConfig({ schema_version: 1, port, registry_dir: join(fixture.root, "registry"), current_build: release.manifest.build_id, previous_build: null, agent_ttl_ms: 60000 });
+  let daemon: Awaited<ReturnType<typeof runDaemon>> | undefined;
+  try {
+    daemon = await runDaemon(state);
+    expect(state.runtime().phase).toBe("running");
+    const base = `http://127.0.0.1:${port}`;
+    expect((await fetch(base + "/api/v1/runs")).status).toBe(401);
+    const headers = { authorization: "Bearer " + new ServiceAuth(state).credential() };
+    expect((await fetch(base + "/api/v1/runs", { headers })).status).toBe(200);
+    expect((await fetch(base + "/api/v1/source", { headers })).status).toBe(404);
+  } finally {
+    await daemon?.stop();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("daemon preview exceptions cannot start an installed profile or a legacy installed package", async () => {
   const { root, state } = serviceFixture();
   const release = fixtureLegacyRelease(root);

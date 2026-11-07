@@ -246,7 +246,7 @@ export async function runDaemon(
           config.port,
           source?.revision,
           source?.name,
-          { ...source?.demoHooks, connectObserver: source?.demoHooks?.connectObserver ?? source?.connectObserver },
+          source ? { ...source.demoHooks, connectObserver: source.demoHooks?.connectObserver ?? source.connectObserver } : undefined,
         );
         return viewer;
       },
