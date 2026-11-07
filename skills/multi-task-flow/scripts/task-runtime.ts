@@ -19,7 +19,7 @@ export function observeTaskRuntime(store: LedgerStore, snapshot: OutputSnapshot)
         run_id: current.orchestration_id,
         actor: {role: "main", thread_id: current.control.owner_thread_id},
         request_id: `runtime-${randomUUID()}`, expected_revision: current.revision,
-        payload: {task_id: task.id, thread_id: output.thread_id, turn_id: output.turn_id, runtime: output.stale ? "unknown" : output.agent_state ?? "unknown", observed_at: new Date().toISOString()},
+        payload: {task_id: task.id, thread_id: output.thread_id, turn_id: output.runtime_turn_id, runtime: output.stale || (output.agent_state === "idle" && !output.runtime_turn_id) ? "unknown" : output.agent_state ?? "unknown", observed_at: new Date().toISOString()},
       });
     });
   }

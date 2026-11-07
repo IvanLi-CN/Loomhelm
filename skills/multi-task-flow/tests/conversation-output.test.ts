@@ -51,9 +51,24 @@ describe("conversation output projection", () => {
     expect(messageOutput("thread", { ...message("saved", "final"), completedAtMs: 0 })?.message_status).toBe("completed");
   });
   test("marks a confirmed completed turn as agent idle", async () => {
-    const f = fixture(async (method) => method === "thread/read" ? { thread: { status: { type: "idle" } } } : { data: [{ ...message("done", "finished"), completedAtMs: 1 }] });
+    const f = fixture(async (method) => method === "thread/read" ? { thread: { status: { type: "idle" } } } : method === "thread/turns/list" ? { data: [{ id: "latest-turn", status: "completed", items: [] }] } : { data: [{ ...message("done", "finished"), completedAtMs: 1 }] });
     try { await tick(); expect(f.provider.snapshot().outputs.a?.agent_state).toBe("idle");
+        expect(f.provider.snapshot().outputs.a?.runtime_turn_id).toBe("latest-turn");
         expect(f.provider.snapshot().outputs.a?.observed_at).toBeTruthy(); } finally { f.provider.stop(); }
+  });
+  test("idle requires the latest terminated turn, independently of older public text", async () => {
+    for (const latest of [null, { id: "latest", status: "inProgress" }, { status: "completed" }, { id: "latest", status: "unknown" }, ...["completed", "failed", "interrupted"].map(status => ({ id: "latest", status }))]) {
+      const f = fixture(async method => method === "thread/read" ? { thread: { status: { type: "idle" } } } : method === "thread/turns/list" ? { data: latest ? [latest] : [] } : { data: [{ ...message("old", "older public text"), completedAtMs: 1 }] });
+      try {
+        await tick();
+        const output = f.provider.snapshot().outputs.a!;
+        expect(output.agent_state).toBe(latest?.id && ["completed", "failed", "interrupted"].includes(latest.status!) ? "idle" : "unknown");
+        expect(output.runtime_turn_id).toBe(output.agent_state === "idle" ? "latest" : null);
+        expect(output.turn_id).toBe("turn");
+      } finally { f.provider.stop(); }
+    }
+    const f = fixture();
+    try { await tick(); f.event("thread/status/changed", { status: { type: "idle" } }); expect(f.provider.snapshot().outputs.a?.agent_state).toBe("unknown"); } finally { f.provider.stop(); }
   });
   test("terminal turn events expose idle; obsolete turns and unknown runtime do not", async () => {
     for (const status of ["completed", "interrupted", "failed"]) {

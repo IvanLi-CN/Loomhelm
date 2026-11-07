@@ -8,6 +8,7 @@ export type AgentOutput = {
   message_status: string | null;
   observed_at: string | null;
   stale: boolean;
+  runtime_turn_id?: string | null;
   agent_state?: "active" | "idle" | "unknown";
 };
 export type OutputSnapshot = { output_epoch: string; output_revision: number; outputs: Record<string, AgentOutput> };

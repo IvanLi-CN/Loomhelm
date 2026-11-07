@@ -412,7 +412,11 @@ function notificationDirective(
     "Notification recipient is not bound to this run",
     3,
   );
+  requireNotificationRecipientActive(ledger, threadId!);
   return { enabled: true, recipient_thread_id: threadId! };
+}
+function requireNotificationRecipientActive(ledger: Ledger, threadId: string): void {
+  requireCondition(!ledger.resources.some(resource => resource.kind === "conversation" && resource.target === threadId && ["closed", "archive_unknown", "unarchive_unknown", "unarchive_failed"].includes(resource.status)), "CONVERSATION_ARCHIVED", "通知接收对话已归档或归档状态未知，请先手动取消归档或完成对账", 4);
 }
 function addNotificationIntent(
   ledger: Ledger,
@@ -2269,6 +2273,7 @@ export function execute(
       requireCondition(target.thread_id === payload.thread_id, "RESOURCE_MISMATCH", "Runtime observation thread does not match task", 4);
       const runtime = z.enum(["active", "idle", "unknown"]).parse(payload.runtime);
       const observedAt = z.iso.datetime().parse(payload.observed_at);
+      if (runtime === "idle") requireCondition(typeof payload.turn_id === "string" && payload.turn_id.length > 0, "EVIDENCE_REQUIRED", "Idle observation requires a confirmed terminal turn identity", 4);
       if (target.disposition !== "active" || !["starting", "running", "agent_idle"].includes(target.state)) return { state: target.state };
       const previous = target.state;
       if (runtime === "idle" && target.state !== "agent_idle") {
@@ -4086,6 +4091,7 @@ export function execute(
       const outcome = z
         .enum(["sent", "failed", "unknown"])
         .parse(payload.outcome);
+      requireNotificationRecipientActive(ledger, notice.recipient_thread_id);
       const attemptId = parse(id, payload.delivery_attempt_id);
       requireCondition(
         !ledger.events.some(

@@ -64,6 +64,10 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 
 取消归档 MUST 只恢复对话资源，不改变任务终态或启动 turn；成功后资源为 active，并持久化 archive_policy=manual，阻止自动 sweep 立即再次归档。失败写入 unarchive_failed，未知写入 unarchive_unknown；未知请求只能通过未归档列表的正向证据对账，不能盲目重发或反向归档。
 
+### REQ-ARCHIVE-008
+
+创建通知和发起发送时，已归档对话 MUST 拒绝成为通知接收方，并提示先手动取消归档。归档未知、取消归档失败或未知同样 MUST 拒绝发送，直到明确恢复；归档明确失败可以继续既有通知流程。不得以通知发送隐式取消归档或启动 turn。
+
 ## Acceptance
 
 - Agent turn 明确结束且任务没有活跃 turn 时，dashboard 显示 `agent_idle`，任务 state 为 agent_idle，保留恢复状态和依赖事实。
@@ -81,8 +85,8 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 
 ### VER-ARCHIVE-001
 
-- covers: `REQ-ARCHIVE-001`, `REQ-ARCHIVE-002`, `REQ-ARCHIVE-003`, `REQ-ARCHIVE-005`, `REQ-ARCHIVE-007`
-- Method: `conversation-archive.test.ts` 的持锁竞争、故障注入、RPC 与正向对账测试。
+- covers: `REQ-ARCHIVE-001`, `REQ-ARCHIVE-002`, `REQ-ARCHIVE-003`, `REQ-ARCHIVE-005`, `REQ-ARCHIVE-007`, `REQ-ARCHIVE-008`
+- Method: `notification-delivery.test.ts` 的归档接收方守卫，以及 `conversation-archive.test.ts` 的持锁竞争、故障注入、RPC 与正向对账测试。
 - Pass condition: 单次归档意图可恢复，未知不盲目重发，手动恢复阻止自动重归档；任务终态与 turn 调用不变。
 
 ### VER-ARCHIVE-002

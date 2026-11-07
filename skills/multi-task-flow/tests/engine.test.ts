@@ -181,7 +181,7 @@ test("runtime observation persists the formal agent_idle task state and restores
 test("idle during startup still requires the first task-start fact", () => {
   const ledger = fixture();
   ledger.tasks[1]!.state = "starting"; ledger.tasks[1]!.thread_id = "runtime-thread";
-  apply(ledger, "task-runtime-observe", request(ledger, "startup-idle", {task_id: "b", thread_id: "runtime-thread", runtime: "idle", observed_at: at}));
+  apply(ledger, "task-runtime-observe", request(ledger, "startup-idle", {turn_id: "startup-turn", task_id: "b", thread_id: "runtime-thread", runtime: "idle", observed_at: at}));
   expect(ledger.tasks[1]!.agent_resume_state).toBe("starting");
   apply(ledger, "task-update", request(ledger, "startup-running", {task_id: "b", state: "running", occurred_at: at}, {role: "task", thread_id: "runtime-thread"}));
   expect(ledger.tasks[1]!.started_at).toBe(at);

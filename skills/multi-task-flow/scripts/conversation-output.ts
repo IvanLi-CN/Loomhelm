@@ -216,17 +216,25 @@ export class ConversationOutputs {
       await connection.subscriptions?.ensure(thread);
       if (!valid()) return;
       let runtime: "active" | "idle" | "unknown" = "unknown";
+      let runtimeTurnId: string | null = null;
       try {
         const metadata = await connection.request("thread/read", { threadId: thread, includeTurns: false });
         const status = object(object(metadata.thread)?.status)?.type;
         if (status === "active") runtime = "active";
-        if (status === "idle") runtime = "idle";
+        if (status === "idle") {
+          const page = await connection.request("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "full" });
+          const latest = Array.isArray(page.data) ? object(page.data[0]) : null;
+          if (typeof latest?.id === "string" && ["completed", "interrupted", "failed"].includes(String(latest.status))) {
+            runtime = "idle";
+            runtimeTurnId = latest.id;
+          }
+        }
       } catch { /* Runtime observation is independent of readable output history. */ }
       if (!valid()) return;
       const selected = await latestConversationOutput(thread, connection);
       if (!valid()) return;
       // Runtime status is independent of which public message wins the text fence.
-      this.set(state, { ...state.output, agent_state: runtime });
+      this.set(state, { ...state.output, agent_state: runtime, runtime_turn_id: runtimeTurnId });
       // Never replace a locally streaming item with an older persisted item.
       if (state.streamGeneration === generation) {
         if (selected?.message_id !== state.output.message_id) return;
@@ -258,7 +266,7 @@ export class ConversationOutputs {
           state: "empty",
           stale: false,
           observed_at: new Date().toISOString(),
-        }), agent_state: runtime },
+        }), agent_state: runtime, runtime_turn_id: runtimeTurnId },
       );
     } catch {
       if (valid()) {
@@ -281,7 +289,8 @@ export class ConversationOutputs {
     if (method === "thread/status/changed") {
       const status = object(params.status)?.type;
       state.version++;
-      this.set(state, { ...state.output, agent_state: status === "active" ? "active" : status === "idle" ? "idle" : "unknown", observed_at: new Date().toISOString() });
+      this.set(state, { ...state.output, agent_state: status === "active" ? "active" : status === "idle" && state.output.agent_state === "idle" && state.output.runtime_turn_id ? "idle" : "unknown", observed_at: new Date().toISOString() });
+      if (status === "idle" && this.connection) void this.load(thread, this.connection, this.generation);
       return;
     }
     if (method === "turn/started") {
@@ -298,6 +307,7 @@ export class ConversationOutputs {
       const turnStatus = object(params.turn)?.status;
       this.set(state, {
         ...state.output,
+        runtime_turn_id: object(params.turn)!.id as string,
         message_status: typeof turnStatus === "string" ? turnStatus : "completed",
         agent_state: turnStatus === undefined || ["completed", "failed", "interrupted"].includes(String(turnStatus)) ? "idle" : "unknown",
         observed_at: new Date().toISOString(),

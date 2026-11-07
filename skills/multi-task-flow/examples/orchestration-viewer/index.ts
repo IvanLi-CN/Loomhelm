@@ -55,6 +55,7 @@ export function createIdleArchiveExample(referenceTime = Date.now()) {
   const connectObserver: import("../../scripts/conversation-output").ConnectObserver = async () => ({
     request: async (method, params) => {
       if (method === "thread/read") return { thread: { status: { type: params?.threadId === idle.thread_id ? "idle" : "active" } } };
+      if (method === "thread/turns/list") return { data: [{ id: "example-terminal-turn", status: "completed", items: [] }] };
       return { data: [] };
     },
     close() {},
