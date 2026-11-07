@@ -2615,3 +2615,70 @@ describe("orchestration state", () => {
   });
 
 });
+
+describe("native CLI handoff contract", () => {
+  function claimed() {
+    const ledger = fixture(); approve(ledger);
+    apply(ledger, "dispatch-claim", request(ledger, "cli-claim", { task_id: "a", operation_id: "cli-a" }));
+    apply(ledger, "dispatch-bind-request", request(ledger, "cli-bind", { operation_id: "cli-a", native_request_id: "cli-request", creation_parameters: {
+      title: "task", prompt: "formal", cwd: "/repo", transport: "codex-exec", execution_profile: ledger.config.execution_profile,
+    } }));
+    return ledger;
+  }
+  function resolve(ledger: ReturnType<typeof fixture>, exit_code = 0) {
+    return request(ledger, "cli-resolve", { operation_id: "cli-a", outcome: "succeeded", thread_id: "cli-thread",
+      native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "cli-a", native_request_id: "cli-request",
+        ...ledger.config.execution_profile, created_at: at, evidence_ref: "codex-exec:cli-request", thread_id: "cli-thread",
+        exit_code, turn_completed: true, workspace_path: "/owned/worktree", initial_head: head } });
+  }
+  test("identity is durable before binding; failed exit cannot bind and replay cannot create again", () => {
+    const ledger = claimed();
+    expect(() => apply(ledger, "dispatch-resolve", resolve(ledger))).toThrow("observed identity");
+    const progress = request(ledger, "cli-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" });
+    apply(ledger, "dispatch-progress", progress);
+    expect(ledger.tasks[0].thread_id).toBeNull();
+    expect(ledger.operations[0].request.observed_thread_id).toBe("cli-thread");
+    expect((apply(ledger, "dispatch-progress", progress) as any).code).toBe("REPLAYED");
+    expect(() => apply(ledger, "dispatch-resolve", resolve(ledger, 1))).toThrow("CLI exit");
+    apply(ledger, "dispatch-resolve", resolve(ledger));
+    expect(ledger.tasks[0].thread_id).toBe("cli-thread");
+    expect(ledger.notifications[0].recipient_thread_id).toBe("cli-thread");
+    expect(ledger.notifications[0].delivery_status).toBe("pending");
+    expect(() => apply(ledger, "dispatch-claim", request(ledger, "duplicate-create", { task_id: "a", operation_id: "second-a" }))).toThrow();
+  });
+  test("development waits for owned workspace readiness and the current parent SHA, separate from initial HEAD", () => {
+    const ledger = claimed();
+    apply(ledger, "dispatch-progress", request(ledger, "cli-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
+    apply(ledger, "dispatch-resolve", resolve(ledger));
+    const actor = { role: "task" as const, thread_id: "cli-thread" };
+    expect(() => apply(ledger, "task-update", request(ledger, "too-early", { task_id: "a", state: "running", detail: "Start after readiness", occurred_at: at }, actor))).toThrow("baseline");
+    ledger.resources = [ { id: "wt", kind: "worktree", target: "a", status: "active", evidence_ref: "owned:cli-thread" }, { id: "br", kind: "branch", target: "task-a", status: "active", evidence_ref: "owned:branch" } ];
+    const payload = { target_type: "task", target_id: "a", stage: "workspace_ready", branch: "task-a", resource_ids: ["wt", "br"], evidence_ref: "git:clean" };
+    expect(() => apply(ledger, "lifecycle-record", request(ledger, "missing-baseline", payload, actor))).toThrow();
+    expect(() => apply(ledger, "lifecycle-record", request(ledger, "wrong-baseline", { ...payload, baseline: { sha: head, head, clean: true, source: "group:g" } }, actor))).toThrow("parent SHA");
+    expect(() => apply(ledger, "lifecycle-record", request(ledger, "dirty-baseline", { ...payload, baseline: { sha: base, head: base, clean: false, source: "group:g" } }, actor))).toThrow();
+    apply(ledger, "lifecycle-record", request(ledger, "ready-baseline", { ...payload, baseline: { sha: base, head: base, clean: true, source: "group:g" } }, actor));
+    apply(ledger, "task-update", request(ledger, "start", { task_id: "a", state: "running", detail: "Start after readiness", occurred_at: at }, actor));
+    expect(ledger.tasks[0].base_sha).toBe(base);
+    expect((ledger.operations[0].request.creation_result as any).native_evidence.initial_head).toBe(head);
+  });
+});
+
+test("native group cannot run before a fresh mainline baseline receipt", () => {
+  const ledger = fixture(); approve(ledger);
+  Object.assign(ledger.groups[0], { agent_thread_id: null, state: "planned", parent_branch: null, current_sha: null });
+  const invoke = (command: string, requestId: string, payload: any, actor: Request["actor"] = main) => apply(ledger, command, request(ledger, requestId, payload, actor));
+  invoke("dispatch-group-claim", "group-cli", { group_id: "g", operation_id: "group-cli" });
+  invoke("dispatch-bind-request", "group-bind", { operation_id: "group-cli", native_request_id: "group-native", creation_parameters: { title: "group", prompt: "formal", cwd: "/repo", execution_profile: ledger.config.execution_profile, transport: "codex-exec" } });
+  expect(ledger.operations[0].status).toBe("unknown");
+  invoke("dispatch-progress", "group-observed", { operation_id: "group-cli", native_request_id: "group-native", thread_id: "group-thread" });
+  invoke("dispatch-resolve", "group-resolved", { operation_id: "group-cli", thread_id: "group-thread", outcome: "succeeded", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "group-cli", native_request_id: "group-native", ...ledger.config.execution_profile, evidence_ref: "codex:group", created_at: at, thread_id: "group-thread", workspace_path: "/owned", initial_head: base, exit_code: 0, turn_completed: true } });
+  expect(() => invoke("group-execution-update", "early-group", { group_id: "g", state: "running" }, groupActor)).toThrow("baseline");
+  ledger.resources = [{ id: "gwt", kind: "worktree", target: "g", status: "active", evidence_ref: "owned" }, { id: "gbr", kind: "branch", target: "parent", status: "active", evidence_ref: "branch" }];
+  const payload = { target_type: "group", target_id: "g", stage: "workspace_ready", branch: "parent", resource_ids: ["gwt", "gbr"], evidence_ref: "fresh-fetch" };
+  expect(() => invoke("lifecycle-record", "no-fetch", { ...payload, baseline: { sha: head, head, clean: true, source: "remote:main" } }, groupActor)).toThrow("fresh remote fetch");
+  expect(() => invoke("lifecycle-record", "stale-fetch", { ...payload, baseline: { sha: head, head, clean: true, source: "remote:main", fetched_at: at } }, groupActor)).toThrow("fresh remote fetch");
+  invoke("lifecycle-record", "fresh-fetch", { ...payload, baseline: { sha: head, head, clean: true, source: "remote:main", fetched_at: new Date().toISOString() } }, groupActor);
+  expect(ledger.groups[0].current_sha).toBe(head);
+  invoke("group-execution-update", "group-start", { group_id: "g", state: "running" }, groupActor);
+});

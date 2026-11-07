@@ -12,5 +12,10 @@
   "skills/scripts/verify-skills-modules.mjs",
   "skills/package.json",
   "skills/package-lock.json",
-  "skills/support-manifest.json"
+  "skills/support-manifest.json",
+  "skills/multi-task-flow/scripts/codex-cli-create.ts",
+  "skills/multi-task-flow/scripts/desktop-handoff.ts",
+  "skills/multi-task-flow/tests/codex-cli-create.test.ts",
+  "skills/docs/vendor/dot-codex/adr/0046-native-worktree-desktop-handoff.md",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/native-handoff-compatibility.json"
 ]

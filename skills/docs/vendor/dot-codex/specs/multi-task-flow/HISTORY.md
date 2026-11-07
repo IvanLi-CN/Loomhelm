@@ -2,6 +2,8 @@
 
 ## Lifecycle / Compatibility
 
+- 2026-11-07：本机新创建改用 Codex CLI 原生 worktree 和短初始化；正式消息由主对话内置工具发送。创建证据与开发基线分离，历史身份和在途发送不重写。ADR 0046 继承完整 execution_profile 规则并替代旧创建传输边界。
+
 - 2026-11-05: Added the execution-profile contract: one run default, independent delivery-unit/task overrides, complete model-plus-thinking pairs, pre-creation editing with claim replacement, and CLI-owned conversation creation. Runtime changes made inside an existing conversation remain outside the orchestration ledger.
 
 - This topic introduces a separate coordinator and leaves existing legacy coordination sessions and contracts in place.

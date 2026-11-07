@@ -18,7 +18,7 @@
 
 - 运行默认值与对象完整覆盖独立解析；未迁移旧账本保持只读。推荐规则、手动来源、claim 替换和冻结原因均进入账本及投影。
 - 认证 dashboard API 与 CLI 复用 mutation contract，能力目录由 app-server 提供。网页支持完整组合、默认值、重新推荐和可见错误，保留既有 URL/筛选状态。
-- 创建命令绑定 native RPC identity、完整参数和结果，核对实际返回的模型与思考强度，并等待初始化 turn；超时、模型不匹配或不完整响应保持 unknown，须显式对账。请求回放不会再次创建对话。
+- 创建命令绑定 native attempt identity、完整参数和结果，核对实际返回的模型与思考强度，并等待初始化 turn；超时、模型不匹配或不完整响应保持 unknown，须显式对账。请求回放不会再次创建对话。
 - 本次源码交付不安装或升级正在运行的用户级 viewer，也不主动调整已创建对话的模型。
 
 ## Implementation Coverage
@@ -62,7 +62,7 @@
 
 ## Remaining Gaps
 
-- Execution profiles and CLI-owned conversation creation are specified in `REQ-ORCH-014`; schema, dashboard editing, CLI adapter, and unknown-outcome reconciliation remain implementation work.
+- 桌面实时接管必须由当前候选真实 CLI 创建、退出、原生消息回执和主人确认共同证明，不能用源码测试或历史冒烟替代。
 
 - The dashboard emits the canonical native `codex://threads/<thread_id>` links without forcing a new browser window, matching the working local dashboard pattern. The current candidate records one native-navigation observation for each fixture ID; the evidence is reused for this candidate and is not re-run by ordinary checks. This does not claim to prove host-specific browser click bridging, which is outside the Skill gate.
 - Responsive width acceptance is exercised through the real-browser runner in `skills/multi-task-flow/tests/browser/card-width-regression.mjs`, covering board/grid layouts, detail toggles, cross-layout outer widths, fixed inspector limits and maximal task-column allocation at five medium viewport widths. Local DOM/source tests cover detail interaction and URL serialization; the owner-confirmed mock-demo evidence is recorded in the Spec.
@@ -92,3 +92,11 @@
 服务预检比较当前与目标构建的读写能力，全部历史运行保留读取兼容，已有只读不要求迁移，新增写入降级绑定完整报告确认。独立维护 check/apply 覆盖合同与完整 profile，保留 owner；复用普通迁移转换、备份与 request 幂等，不改变 bound-main 权限。聚焦回归覆盖身份冲突、中断、并发、权限和只读预检；原生隔离 CI 覆盖跨合同升级、真实健康失败恢复和迁移后回滚拒绝。正式服务与运行数据不作为 fixture 或本 PR 部署目标。
 
 自定义 view manifest 通过目录项存在性检测；悬空符号链接进入 no-follow 拒绝路径。回归直接验证不兼容声明及悬空声明在状态探测或停服前拒绝，同时覆盖实际 Agent 使用租约与完成事件组合。
+
+## 原生工作区创建与交接
+
+- `codex-cli-create.ts` 使用独立参数数组、关闭 stdin、JSONL 身份持久化、工具调用拒绝、回合完成和进程退出双门禁；只读控制面核验实际配置并命名，Git 核验 Codex 所有权与独立 checkout。
+- `desktop-handoff.ts` 生成带仓库、归属、范围、基线与验收的正式指令；`orchestrate.ts` 返回它，外部 CLI 不执行正式任务。
+- `prepareNativeNotification` 返回原生工具参数，持久 unknown attempt 排除并发和重放。native 回执必须匹配 attempt，ack 保留收件人权限。
+- `lifecycle-record` 对新 CLI dispatch 保存开发基线；任务与组 running 受 readiness 门禁。历史创建证据和历史在途锁继续适用。
+- 兼容边界和停止后恢复见 `native-handoff-compatibility.json`；不运行真实账本迁移，不部署安装副本。

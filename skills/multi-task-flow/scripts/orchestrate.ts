@@ -1,3 +1,5 @@
+import { desktopHandoff } from "./desktop-handoff";
+import { createCliThread } from "./codex-cli-create";
 import { Runtime } from "../../bin/modules/core/runtime";
 import {
   effectiveProfile,
@@ -9,10 +11,7 @@ import { z, ZodError } from "zod";
 import { randomUUID } from "node:crypto";
 import { ContractError } from "./errors";
 import { apply, actorSchema, requestSchema } from "./engine";
-import {
-  createCodexThread,
-  readCodexCapabilities,
-} from "./codex-agent-api";
+import { readCodexCapabilities } from "./codex-agent-api";
 import {
   group,
   id,
@@ -28,7 +27,7 @@ import {
   DEFAULT_EXECUTION_PROFILE,
 } from "./schema";
 import { defaultRoot, LedgerStore } from "./store";
-import { deliverClaimedNotification, reconcileNotification } from "./notification-delivery";
+import { prepareNativeNotification, reconcileNotification } from "./notification-delivery";
 import { migrationCanonicalInput } from "./store-migration";
 import { buildView } from "./view";
 import { checkViewerCompatibility, renewViewerUsage } from "./service-usage";
@@ -87,6 +86,11 @@ function notificationPrompt(
 ): string {
   const event = ledger.events.find((item) => item.id === eventId);
   const payload = record(input.payload);
+  const dispatch = ledger.operations.find(op => op.request.handoff_notification_id === notificationId);
+  if (dispatch) {
+    const handoff = desktopHandoff(ledger, dispatch.id, String(record(dispatch.request.creation_parameters)?.prompt));
+    if (handoff) return `${handoff.formal_prompt}\n\nnotification_id: ${notificationId}\n处理后由当前收件会话 notification-ack 确认；发送接受不等于开工。`;
+  }
   const lines = [
     "multi-task-flow notification",
     `run_id: ${runId}`,
@@ -137,7 +141,7 @@ async function deliverNotification(
     ledger,
     input,
   );
-  return deliverClaimedNotification(store, parsed, notice.id, prompt, undefined, direct);
+  return prepareNativeNotification(store, parsed, notice.id, prompt, direct);
 }
 
 try {
@@ -332,7 +336,7 @@ try {
         },
       }),
     );
-  } else if (command === "notification-send") {
+  } else if ((command === "notification-send" || command === "notification-prepare")) {
     const parsed = requestSchema.parse(input);
     const payload = z
       .object({ notification_id: id })
@@ -373,6 +377,7 @@ try {
       prompt: payload.prompt,
       cwd: process.cwd(),
       execution_profile: profile,
+      transport: "codex-exec",
     };
     if (
       ledger.requests.some(
@@ -395,6 +400,9 @@ try {
           ok: true,
           code: "REPLAYED",
           revision: ledger.revision,
+          handoff: { ...desktopHandoff(ledger, operation.id, payload.prompt), should_send: false,
+            notification_id: operation.request.handoff_notification_id ?? null,
+            next_action: "Inspect notification; pending requires notification-prepare, unknown requires reconciliation; never resend a replay" },
           result: operation.request.creation_result ?? {
             operation_id: operation.id,
             outcome: "unknown",
@@ -428,10 +436,17 @@ try {
         },
       }),
     );
-    const creation = await createCodexThread({
+    const creation = await createCliThread({
       title: payload.title,
       prompt: payload.prompt,
       native_request_id: nativeRequestId,
+      onThreadStarted: (threadId) => {
+        const current = validateLedger(store.read());
+        store.update(raw => apply(raw, "dispatch-progress", {
+          ...parsed, request_id: `${parsed.request_id}-thread`, expected_revision: current.revision,
+          payload: { operation_id: payload.operation_id, native_request_id: nativeRequestId, thread_id: threadId },
+        }));
+      },
       ...profile,
     });
     ledger = validateLedger(store.read());
@@ -446,7 +461,8 @@ try {
           ...(creation.thread_id ? { thread_id: creation.thread_id } : {}),
           native_evidence: {
             source: "multi-task-flow-cli",
-            native_tool_name: "thread/start",
+            native_tool_name: "codex exec",
+            ...creation,
             created_at: new Date().toISOString(),
             native_request_id: nativeRequestId,
             operation_id: payload.operation_id,
@@ -458,7 +474,11 @@ try {
         },
       }),
     );
-    console.log(JSON.stringify(result));
+    const notification = notificationRequestOf(result);
+    const delivery = notification ? record(await deliverNotification(store, parsed, input, notification)) : null;
+    console.log(JSON.stringify({ ...record(result), revision: validateLedger(store.read()).revision, handoff: creation.outcome === "succeeded" ? {
+      ...desktopHandoff(validateLedger(store.read()), operation.id, payload.prompt), ...delivery,
+    } : null }));
   } else if (command === "show" || command === "view") {
     const parsed = z
       .object({

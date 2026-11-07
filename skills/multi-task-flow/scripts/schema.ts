@@ -512,6 +512,7 @@ const eventType = z.enum([
   "execution_profile_default_updated",
   "dispatch_request_bound",
   "dispatch_creation_resolved",
+  "dispatch_thread_observed",
   "resource_updated",
   "resource_closed",
   "run_completed",
