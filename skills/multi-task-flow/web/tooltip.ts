@@ -28,7 +28,7 @@ function installDocumentBinding(): void {
   }, true);
   document.addEventListener("keydown", (event) => {
     touchModality = false;
-    if (event.key === "Escape" && document.querySelector(".dependency-tooltip.is-open")) {
+    if (event.key === "Escape" && document.querySelector(".dependency-tooltip.is-open") && !document.querySelector(".resource-popover")) {
       event.preventDefault();
       event.stopImmediatePropagation();
       closeTooltips();

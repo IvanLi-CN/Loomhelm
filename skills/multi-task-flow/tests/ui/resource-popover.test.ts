@@ -1,15 +1,16 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { attachResourcePopover, closeResourcePopover, refreshResourcePopover, timingText, type ResourceSource } from "../../web/resource-popover";
 import type { View } from "../../web/model";
 const view = { nodes: [{ id: "n", kind: "task", ref_id: "task" }], planned_intervals: [{ node_id: "n", start: "2026-11-07T00:00:00Z", end: "2026-11-07T00:10:00Z" }] } as View;
 const source = (): ResourceSource => ({ kind: "task", id: "task", thread: "thread", start: "2026-11-07T00:00:00Z", end: "2026-11-07T00:15:00Z", view, output: () => ({ state: "available", text: "<unsafe>\nFull response", thread_title: "真实标题", thread_id: "thread", turn_id: "turn", message_id: "message", phase: "commentary", message_status: "in_progress", observed_at: null, stale: false }) });
+beforeEach(() => { closeResourcePopover(); document.body.replaceChildren(); });
 afterEach(() => { closeResourcePopover(); document.body.replaceChildren(); });
 test("interactive dialog supports keyboard entry and Escape without reopening or copying the response", async () => {
   const trigger = document.createElement("button"); document.body.append(trigger); attachResourcePopover(trigger, "conversation", source());
   trigger.focus();
   const panel = document.querySelector<HTMLElement>(".resource-popover")!;
   expect(panel.getAttribute("role")).toBe("dialog"); expect(panel.textContent).toContain("真实标题"); expect(panel.querySelector("unsafe")).toBeNull();
-  expect([...panel.querySelectorAll("button")].map(b => b.textContent)).toEqual(["复制对话 ID", "复制标题"]);
+  expect([...panel.querySelectorAll("button")].map(b => b.getAttribute("aria-label"))).toEqual(["复制对话 ID", "复制标题"]);
   document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
   expect(panel.contains(document.activeElement)).toBe(true);
   document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -24,7 +25,7 @@ test("stream refresh preserves response scroll and switches to the latest messag
   trigger.remove(); refreshResourcePopover(); expect(document.querySelector(".resource-popover")).toBeNull();
 });
 test("elapsed budget includes the entire recorded duration and rejects nonpositive schedules", () => {
-  expect(timingText(source())).toContain("已用150%，超出50%");
+  expect(timingText(source())).toContain("用时占比：150%\n超出排期：50%");
   const s = source(); s.view = { ...view, planned_intervals: [] }; expect(timingText(s)).toContain("用时占比：不可用");
   s.start = null; expect(timingText(s)).not.toContain("150%");
 });
@@ -54,7 +55,7 @@ test("copy controls write only their own identity value", async () => {
   try {
     const trigger = document.createElement("button"); document.body.append(trigger); attachResourcePopover(trigger, "conversation", source()); trigger.focus();
     const buttons = document.querySelectorAll<HTMLButtonElement>(".resource-popover button"); buttons[0]!.click(); buttons[1]!.click(); await Promise.resolve();
-    expect(writes).toEqual(["thread", "真实标题"]); expect(buttons[0]!.textContent).toBe("已复制");
+    expect(writes).toEqual(["thread", "真实标题"]); expect(buttons[0]!.dataset.feedback).toBe("已复制");
   } finally {
     if (clipboard) Object.defineProperty(window.navigator, "clipboard", clipboard); else Reflect.deleteProperty(window.navigator, "clipboard");
     if (previous) Object.defineProperty(globalThis, "navigator", previous); else Reflect.deleteProperty(globalThis, "navigator");
