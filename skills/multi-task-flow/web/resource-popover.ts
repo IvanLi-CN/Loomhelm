@@ -83,7 +83,8 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
         body.textContent = `${next.data.title}\n${next.data.state} · ${next.data.mergeable === "CONFLICTING" ? "存在合并冲突" : next.data.mergeable === "MERGEABLE" ? "无合并冲突" : "冲突状态未知"}\nCI：${next.data.ci}\n${next.data.checks.map(c => `${c.name || c.context || "检查"}：${c.conclusion || c.state || c.status || "未知"}`).join("\n")}\n更新时间：${next.observed_at ? fullLocalTime(next.observed_at) : "未知"}${next.stale ? "（已过期）" : ""}${next.error ? `\n${next.error}` : ""}`;
       } else body.textContent = next.error || "尚未关联 PR";
       const button = document.createElement("button"); button.type = "button"; button.textContent = "刷新"; button.addEventListener("click", () => void loadPR(true)); identity.append(button);
-    } catch { if (current === requestId && !panel.hidden) { body.textContent = `${pr?.data ? `${pr.data.title}\n${pr.data.state} · CI ${pr.data.ci}\n数据已过期\n` : ""}读取失败，请稍后重试`; } }
+    } catch { if (current === requestId && !panel.hidden) { body.textContent = `${pr?.data ? `${pr.data.title}\n${pr.data.state} · CI ${pr.data.ci}\n数据已过期\n` : ""}读取失败，请稍后重试`;
+      if (!identity.querySelector("button[data-retry]")) { const retry = document.createElement("button"); retry.type = "button"; retry.dataset.retry = "true"; retry.textContent = "重试"; retry.addEventListener("click", () => void loadPR(true)); identity.append(retry); } } }
     position();
   };
   const cancel = () => { clearTimeout(openTimer); clearTimeout(closeTimer); };

@@ -60,3 +60,15 @@ test("copy controls write only their own identity value", async () => {
     if (previous) Object.defineProperty(globalThis, "navigator", previous); else Reflect.deleteProperty(globalThis, "navigator");
   }
 });
+
+test("failed PR transport exposes retry without losing its trigger", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error("network unavailable"); }) as typeof fetch;
+  try {
+    const trigger = document.createElement("button"); document.body.append(trigger); attachResourcePopover(trigger, "pr", source()); trigger.focus();
+    await new Promise(r => setTimeout(r, 0));
+    expect(document.querySelector('.resource-body')?.textContent).toContain("读取失败");
+    expect(document.querySelector<HTMLButtonElement>('button[data-retry]')?.textContent).toBe("重试");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  } finally { globalThis.fetch = original; }
+});
