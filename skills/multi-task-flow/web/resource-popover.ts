@@ -25,11 +25,15 @@ function checkLabel(value: string): string {
   const labels: Record<string, string> = { SUCCESS: "通过", FAILURE: "失败", ERROR: "错误", CANCELLED: "已取消", TIMED_OUT: "超时", ACTION_REQUIRED: "需操作", IN_PROGRESS: "运行中", QUEUED: "排队中", PENDING: "等待中", SKIPPED: "已跳过", NEUTRAL: "中立", UNKNOWN: "未知" };
   return labels[value] ? `${labels[value]} · ${value}` : value;
 }
-function copyRow(label: string, value: string | null): HTMLElement {
+function copyRow(label: string, value: string | null, href: string | null = null): HTMLElement {
   const row = node("div", "", "resource-copy-row");
   row.dataset.field = label === "标题" ? "title" : "identifier";
   const content = node("div", "", "resource-field");
-  content.append(node("span", label, "resource-label"), node("span", value || "不可用", "resource-value"));
+  content.append(node("span", label, "resource-label"));
+  const valueNode = href && value ? document.createElement("a") : node("span", value || "不可用", "resource-value");
+  valueNode.className = "resource-value"; valueNode.textContent = value || "不可用";
+  if (href && valueNode instanceof HTMLAnchorElement) { valueNode.href = href; valueNode.target = "_blank"; valueNode.rel = "noopener noreferrer"; }
+  content.append(valueNode);
   row.append(content);
   if (value) {
     const action = `复制${label}`;
@@ -115,7 +119,11 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
   const loadPR = async (force = false) => {
     clearTimeout(refreshTimer);
     const current = ++requestId;
-    body.textContent = pr?.data ? `${pr.data.state} · CI ${pr.data.ci}\n${pr.data.title}\n刷新中…` : "加载中…";
+    const loadingHeading = node("div", "", "resource-section-heading");
+    loadingHeading.append(node("h3", pr?.data?.title || "PR 信息", "resource-pr-title"));
+    const loadingRefresh = document.createElement("button"); loadingRefresh.type = "button"; loadingRefresh.className = "resource-icon-button"; loadingRefresh.setAttribute("aria-label", "刷新 PR 信息"); loadingRefresh.append(icon("refresh")); loadingHeading.append(loadingRefresh, attachTooltip(loadingRefresh, node("span", "刷新 PR 信息"), "刷新 PR 信息"));
+    loadingRefresh.addEventListener("click", () => void loadPR(true));
+    body.replaceChildren(loadingHeading, node("p", pr?.data ? `${pr.data.state} · CI ${pr.data.ci}\n刷新中…` : "加载中…", "resource-message"));
     try {
       const response = await fetch(`api/resource-details?kind=${source.kind}&id=${encodeURIComponent(source.id)}${force ? "&refresh=1" : ""}`, { cache: "no-store" });
       if (!response.ok) throw new Error("读取失败");
@@ -124,10 +132,14 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
       pr = next; identity.replaceChildren();
       if (next.loading) refreshTimer = setTimeout(() => { if (!panel.hidden) void loadPR(); }, 1000);
       if (next.data) {
-        identity.append(copyRow("PR 编号", String(next.data.number)), copyRow("链接", next.data.url));
-        const link = document.createElement("a"); link.href = next.data.url; link.rel = "noopener noreferrer"; link.className = "resource-link-button"; link.setAttribute("aria-label", "打开 PR"); link.append(icon("external")); const linkHint = attachTooltip(link, node("span", "打开 PR"), "打开 PR"); identity.append(link, linkHint);
+        const numberRow = copyRow("PR 编号", String(next.data.number));
+        const urlRow = copyRow("链接", next.data.url, next.data.url);
+        identity.append(numberRow, urlRow);
+        const link = document.createElement("a"); link.href = next.data.url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "resource-link-button"; link.setAttribute("aria-label", "打开 PR"); link.append(icon("external")); const linkHint = attachTooltip(link, node("span", "打开 PR"), "打开 PR"); identity.append(link, linkHint);
         const data = next.data;
-        const heading = node("h3", data.title, "resource-pr-title");
+        const heading = node("div", "", "resource-section-heading");
+        heading.append(node("h3", data.title, "resource-pr-title"));
+        const refresh = document.createElement("button"); refresh.type = "button"; refresh.className = "resource-icon-button"; refresh.setAttribute("aria-label", "刷新 PR 信息"); refresh.append(icon("refresh")); heading.append(refresh, attachTooltip(refresh, node("span", "刷新 PR 信息"), "刷新 PR 信息")); refresh.addEventListener("click", () => void loadPR(true));
         const states = node("div", "", "resource-states");
         states.append(badge(data.state === "MERGED" ? "已合并" : data.state === "CLOSED" ? "已关闭" : "待合并", data.state === "MERGED" ? "positive" : "neutral"), badge(`CI ${data.ci}`, data.ci === "成功" ? "positive" : data.ci === "失败" ? "negative" : data.ci === "运行中" ? "live" : "neutral"));
         const conflict = node("p", data.mergeable === "CONFLICTING" ? "存在合并冲突" : data.mergeable === "MERGEABLE" ? "无合并冲突" : "冲突状态未知", "resource-note");
@@ -146,7 +158,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
         body.replaceChildren(heading, states, conflict, checks, updated);
         if (next.error) body.append(node("p", next.error, "resource-error"));
       } else body.textContent = next.error || "尚未关联 PR";
-      const button = document.createElement("button"); button.type = "button"; button.className = "resource-icon-button"; button.setAttribute("aria-label", "刷新 PR 信息"); button.append(icon("refresh")); const hint = attachTooltip(button, node("span", "刷新 PR 信息"), "刷新 PR 信息"); button.addEventListener("click", () => void loadPR(true)); identity.append(button, hint);
+
     } catch { if (current === requestId && !panel.hidden) { body.textContent = `${pr?.data ? `${pr.data.title}\n${pr.data.state} · CI ${pr.data.ci}\n数据已过期\n` : ""}读取失败，请稍后重试`;
       if (!identity.querySelector("button[data-retry]")) { const retry = document.createElement("button"); retry.type = "button"; retry.dataset.retry = "true"; retry.textContent = "重试"; retry.addEventListener("click", () => void loadPR(true)); identity.append(retry); } } }
     position();

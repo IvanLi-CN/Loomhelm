@@ -569,3 +569,6 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .resource-icon-button[data-feedback="已复制"] { color: var(--positive); border-color: var(--positive); }
 .resource-icon-button[data-feedback="复制失败"] { color: var(--negative); border-color: var(--negative); }
 .resource-popover .dependency-tooltip { width: auto; max-width: 180px; padding: 5px 8px; border-radius: var(--radius-chip); font-size: 11px; white-space: nowrap; }
+.resource-copy-row .resource-field a.resource-value { margin: 0; display: block; color: var(--text); font-size: 13px; overflow-wrap: anywhere; white-space: normal; }
+.resource-copy-row .resource-field a.resource-value:hover { color: var(--accent); }
+.resource-section-heading > .resource-pr-title { margin-right: auto; margin-bottom: 0; }
