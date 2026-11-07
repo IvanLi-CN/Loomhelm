@@ -112,8 +112,9 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 - [主干集成后的归档成功](assets/integrated-conversation-archived.jpg)
 - [主干集成后的手动恢复](assets/integrated-conversation-restored.jpg)
 
+![空闲任务的 runtime turn 诊断](assets/idle-runtime-turn.jpg)
+
 ## Related ADRs
 
 - [ADR 0020：以运行时观察表达 Agent 空闲，并独立记录对话归档](../../adr/0020-observational-agent-idle-and-independent-conversation-archive.md)
 
-![空闲任务的 runtime turn 诊断](assets/idle-runtime-turn.jpg)
