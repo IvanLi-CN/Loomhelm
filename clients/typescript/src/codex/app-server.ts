@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import type * as P from './protocol.js';
+import type * as P from './protocol.ts';
 
 export type RpcId = string | number;
 export interface RpcError { code: number; message: string; data?: unknown }

@@ -18,11 +18,11 @@
 
 ### REQ-SKILLS-002
 
-生产命令、计划校验与本地网页服务 MUST 在 Node.js 22/24 和 Bun 下遵守相同的输入、退出码、副作用及恢复合同。构建和原始测试允许使用 Bun；Node 生产路径不得调用 Bun 作为隐藏兜底。
+生产命令、计划校验与本地网页服务 MUST 仅使用固定 Bun 1.4.4 直接执行 TypeScript 源码，保持输入、退出码、副作用及恢复合同。生产入口 MUST NOT 依赖预生成的 JavaScript、自建 Node-API 模块或安装时 C 编译；类型检查不得发射生产 JavaScript，浏览器资源构建独立保留。
 
 ### REQ-SKILLS-003
 
-文件读写与互斥 MUST 保留目录描述符相对操作、拒绝符号链接、文件身份与权限验证、旧新进程锁互斥、原子不覆盖重命名及原有备份语义。不得以路径预检查或另一种不互斥的锁替代。
+FFI 路径缓冲区 MUST 在完整系统调用期间保持所有权。文件读写与互斥 MUST 保留目录描述符相对操作、拒绝符号链接、文件身份与权限验证、旧新进程锁互斥、原子不覆盖重命名及原有备份语义。不得以路径预检查或另一种不互斥的锁替代。
 
 ### REQ-SKILLS-004
 
@@ -30,7 +30,7 @@
 
 ### REQ-SKILLS-005
 
-任务与本地网页 MUST 使用迁入的权威运行合同；可执行后继应通过真实派发接力，交付单元阻塞不得阻止无关可执行贡献。网页 MUST 保留任务图、进度、会话链接、实时更新、鉴权、loopback 和服务所有权验证。
+任务与本地网页 MUST 使用迁入的权威运行合同；可执行后继应通过真实派发接力，交付单元阻塞不得阻止无关可执行贡献。网页 MUST 保留任务图、进度、会话链接、实时更新、鉴权、loopback 和服务所有权验证。新 viewer MUST 使用 v2 源码资源清单并验证摘要；旧 v1 包仅允许诊断，不得在 rollback 或失败恢复时作为新启动入口。
 
 ### REQ-SKILLS-006
 
@@ -50,18 +50,18 @@
 
 - covers: `REQ-SKILLS-001`
 - Method: 固定来源资源清单、路径闭包和来源隔离产物测试。
-- Pass condition: 29 套资源完整且无全局执行代码回退或外部 Skill 源包混入。
+- Pass condition: 29 套资源完整；已跟踪资源均有清单归属，实际 TS 导入闭包缺失必须失败；无全局执行代码回退或外部 Skill 源包混入。
 
 ### VER-SKILLS-002
 
 - covers: `REQ-SKILLS-002`
-- Method: Node.js 22/24 与 Bun 生产命令矩阵及迁入原始测试。
-- Pass condition: 同一合同输入结果一致，Node 路径不使用 Bun 兜底。
+- Method: Bun 纯源码隔离安装、正式入口与迁入原始测试。
+- Pass condition: 无生成服务端 JavaScript 或 posix.node 时正式命令可运行，依赖缺失准确失败，既有输入输出合同不变。
 
 ### VER-SKILLS-003
 
 - covers: `REQ-SKILLS-003`
-- Method: POSIX 安全故障注入与旧 Bun/新 Node 跨进程竞争。
+- Method: POSIX 安全故障注入、调用边界 GC 压力与旧上游 Bun/当前 Bun 跨进程竞争。
 - Pass condition: 同时至多一名合法持锁者，目标身份变化或越界失败关闭，不覆盖已存在目标。
 
 ### VER-SKILLS-004
@@ -100,10 +100,19 @@
 
 ## Related ADRs
 
-- [TypeScript 客户端运行时](../../adr/0017-typescript-client-runtime.md)
-- [迁入执行支持与 POSIX 适配](../../adr/0019-client-skills-runtime.md)
+- [Bun 直接运行客户端与 Skills](../../adr/0021-bun-source-runtime.md)
 
 ## References
 
 - [实现说明](IMPLEMENTATION.md)
 - [兼容历史](HISTORY.md)
+
+viewer 启动器先验证临时目录及祖先，再使用私有受控 Bun 配置；在任何包内 TS 或配置执行前，以启动器绑定的资源身份验证完整清单。FFI 路径拒绝嵌入 NUL，保持目录描述符边界。
+
+viewer 的导入前检查同时拒绝清单外文件与包内可写权限异常，防止扩展名省略解析加载未验证模块；sticky-root 例外仅用于包外可信祖先。
+
+Dev Plan 私有快照对每个源目录和文件检查 root/当前用户所有权及无 group/other 写权限，并对已打开描述符再次核验；嵌套模块不能绕过入口信任边界。所有 FFI 路径转换均拒绝 NUL，包括报告克隆路径。
+
+客户端与 Skills 的自有维护脚本、生成工具和测试源文件统一为 TypeScript，由 Bun 直接运行；不因 Bun 可以执行 MJS 而保留自有 JS 入口。浏览器构建产物与第三方依赖中的 JavaScript 不属于该源码转换范围。
+
+自有 TS 子进程及安装探测显式关闭 Bun 自动安装；依赖须先按声明准备，缺失时报告阻塞。安装报告独立列出本地依赖准备状态，不以祖先 checkout 的偶然依赖充当独立安装成功。

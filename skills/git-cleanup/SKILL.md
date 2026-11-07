@@ -111,8 +111,8 @@ Build `closeout_context` from live Git facts and pass it to:
 
 ```bash
 GIT_CLEANUP_SKILL_DIR="<path-to-loaded-git-cleanup-skill-dir>"
-bun "$GIT_CLEANUP_SKILL_DIR/scripts/closeout_context.ts" --repo-root "<main_worktree>" --feature-branch "<branch>" --pr-worktree-required "<yes|no|unknown>" [--codex-managed-worktree-path "<path>"] ...
-bun "$GIT_CLEANUP_SKILL_DIR/scripts/closeout_gate.ts" --input-json '<closeout_context_json>'
+bun --no-install "$GIT_CLEANUP_SKILL_DIR/scripts/closeout_context.ts" --repo-root "<main_worktree>" --feature-branch "<branch>" --pr-worktree-required "<yes|no|unknown>" [--codex-managed-worktree-path "<path>"] ...
+bun --no-install "$GIT_CLEANUP_SKILL_DIR/scripts/closeout_gate.ts" --input-json '<closeout_context_json>'
 ```
 
 - Resolve `GIT_CLEANUP_SKILL_DIR` from the actual loaded `git-cleanup` skill location. In this repository that is `skills/git-cleanup`; in an installed Codex home it may be `${LOOMHELM_TOOLKIT_ROOT}/skills/git-cleanup`.
@@ -163,8 +163,8 @@ Helper scripts:
 
 ```bash
 GIT_CLEANUP_SKILL_DIR="<path-to-loaded-git-cleanup-skill-dir>"
-bun "$GIT_CLEANUP_SKILL_DIR/scripts/local_merge_closeout_context.ts" --repo-root "<repo>" --base-branch "<base>" ...
-bun "$GIT_CLEANUP_SKILL_DIR/scripts/local_merge_closeout_gate.ts" --input-json '<closeout_context_json>'
+bun --no-install "$GIT_CLEANUP_SKILL_DIR/scripts/local_merge_closeout_context.ts" --repo-root "<repo>" --base-branch "<base>" ...
+bun --no-install "$GIT_CLEANUP_SKILL_DIR/scripts/local_merge_closeout_gate.ts" --input-json '<closeout_context_json>'
 ```
 
 ## General cleanup

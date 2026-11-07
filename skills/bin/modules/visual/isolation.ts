@@ -14,7 +14,7 @@ import { randomBytes } from "node:crypto";
 import { O_CREAT, O_EXCL, O_NOFOLLOW, O_WRONLY } from "node:constants";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { dlopen, FFIType } from "../core/posix";
+import { dlopen, FFIType } from "bun:ffi";
 import { spawnMonitoredSandbox } from "./sandbox_process";
 import {
   readRegularNoFollow,
@@ -321,6 +321,8 @@ export function runSandboxedCommand(
 }
 
 export function cloneReportFile(source: string, destination: string): void {
+  if (source.includes("\0") || destination.includes("\0"))
+    throw new Error("native path contains NUL");
   if (process.platform !== "darwin")
     throw new Error("APFS copy-on-write cloning is unavailable");
   if (!isIndependentRegularFile(source))

@@ -54,7 +54,7 @@ Connected mode 断开后必须降级为可解释的离线状态；本地可继�
 
 ## 核心模块
 
-- `runtime`：Node.js/Bun 兼容的进程、文件、信号、锁和平台适配。
+- `runtime`：Bun 1.4.4 下的进程、文件、信号、锁和平台适配。
 - `codex`：Codex app-server 生命周期、协议、事件和恢复。
 - `workflow`：Skills、工程工作流和验证阶段。
 - `tasks`：任务模型、依赖、状态机、账本和收据。
@@ -74,4 +74,4 @@ Connected mode 断开后必须降级为可解释的离线状态；本地可继�
 
 ## 验收边界
 
-第一阶段完成的标志是：Local mode 可独立运行；Codex 交互和任务辅助各有一条端到端 CLI 路径；迁移的工作流和 Multi-task Flow 测试可在 Node.js 基线下运行，并在 Bun 下通过兼容性检查；Connected mode 至少完成连接、身份绑定、事件上传和断线恢复的协议骨架。
+第一阶段完成的标志是：Local mode 可独立运行；Codex 交互和任务辅助各有一条端到端 CLI 路径；迁移的工作流和 Multi-task Flow 测试通过 Bun 直接运行 TS，验证源码分发和系统库安全；Connected mode 至少完成连接、身份绑定、事件上传和断线恢复的协议骨架。

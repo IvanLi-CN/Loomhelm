@@ -1,6 +1,6 @@
 import { lstat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { runProcess } from './runtime/process.js';
+import { runProcess } from './runtime/process.ts';
 
 export class GitAdapter {
   constructor(readonly directory: string, private timeoutMs = 30_000) {}

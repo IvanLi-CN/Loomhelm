@@ -15,7 +15,7 @@ Keep two paths distinct:
 Run the bundled helper before reading or changing dot-codex state:
 
 ```bash
-bun <loaded-skill-dir>/scripts/context.ts inspect --cwd <current-directory> --mode read
+bun --no-install <loaded-skill-dir>/scripts/context.ts inspect --cwd <current-directory> --mode read
 ```
 
 Use `--mode write` before any edit. Continue only when `write_allowed` is true. If it is false, do not edit the runtime home or an unrelated repository; use the active engineering flow and Git worktree skills to enter a linked dot-codex worktree, then inspect again.
@@ -30,7 +30,7 @@ Read-only diagnosis may compare the reported runtime home with the candidate. Ne
 4. Run the fixed current-candidate checks:
 
 ```bash
-bun <loaded-skill-dir>/scripts/context.ts validate --cwd <candidate-root>
+bun --no-install <loaded-skill-dir>/scripts/context.ts validate --cwd <candidate-root>
 ```
 
 `validate` starts only repository-owned offline checks against the current candidate. It does not redirect `CODEX_HOME`, create synthetic Git repositories or worktrees, accept arbitrary commands, invoke a model, access the network, deploy configuration, or replace task-specific validation.

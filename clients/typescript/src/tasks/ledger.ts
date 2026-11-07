@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { atomicWrite } from '../runtime/files.js';
-import { StateLock } from '../runtime/lock.js';
-import { applyOperation, emptyState, identifier, type Operation, type TaskState } from './model.js';
+import { atomicWrite } from '../runtime/files.ts';
+import { StateLock } from '../runtime/lock.ts';
+import { applyOperation, emptyState, identifier, type Operation, type TaskState } from './model.ts';
 
 export interface Receipt { sequence: number; operationId: string; at: string; operation: Operation; previousHash: string; hash: string }
 const genesis = '0'.repeat(64);

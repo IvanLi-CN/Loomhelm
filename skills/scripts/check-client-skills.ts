@@ -1,4 +1,5 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun --no-install
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -7,9 +8,20 @@ const path = resolve(root, 'skills/source-manifest.json');
 const manifest = JSON.parse(readFileSync(path, 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
 const refresh = process.argv.includes('--write');
-const additional = [...JSON.parse(readFileSync(resolve(root, 'skills/support-manifest.json'), 'utf8')), 'skills/bin/modules/core/runtime.ts', 'skills/bin/modules/core/posix.ts', 'skills/bin/native/posix.c', 'skills/bin/package.json', 'skills/multi-task-flow/tests/service-release.test.ts', 'skills/multi-task-flow/scripts/notification-delivery.ts', 'skills/multi-task-flow/tests/notification-delivery.test.ts', 'skills/multi-task-flow/scripts/conversation-archive.ts', 'skills/multi-task-flow/scripts/task-runtime.ts', 'skills/multi-task-flow/web/task-state.ts', 'skills/multi-task-flow/web/conversation-control.ts', 'skills/multi-task-flow/tests/ui/conversation-control.test.ts', 'skills/multi-task-flow/tests/task-runtime.test.ts'];
+const additional = [...JSON.parse(readFileSync(resolve(root, 'skills/support-manifest.json'), 'utf8')), 'skills/bin/modules/core/runtime.ts', 'skills/bin/package.json', 'skills/multi-task-flow/tests/service-release.test.ts', 'skills/multi-task-flow/scripts/notification-delivery.ts', 'skills/multi-task-flow/tests/notification-delivery.test.ts', 'skills/multi-task-flow/scripts/conversation-archive.ts', 'skills/multi-task-flow/scripts/task-runtime.ts', 'skills/multi-task-flow/web/task-state.ts', 'skills/multi-task-flow/web/conversation-control.ts', 'skills/multi-task-flow/tests/ui/conversation-control.test.ts', 'skills/multi-task-flow/tests/task-runtime.test.ts'];
 if (refresh) manifest.additions = additional.map(path => ({ path, installedSha256: hash(readFileSync(resolve(root, path))) }));
 const findings = [];
+const gitRoot = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd:root, encoding:'utf8' });
+if (gitRoot.status === 0 && gitRoot.stdout.trim() === root) {
+  const tracked = spawnSync('git', ['ls-files', '-z', '--', 'skills/', 'clients/typescript/'], { cwd:root, encoding:'utf8' });
+  if (tracked.status !== 0) throw new Error('Cannot verify tracked resource coverage');
+  const covered = new Set([...manifest.files,...(manifest.additions ?? [])].map(file => file.path));
+  for (const file of tracked.stdout.split('\0').filter(Boolean)) {
+    if (/\.(?:js|mjs|cjs)$/.test(file)) findings.push('owned-source-must-be-typescript:'+file);
+    if (file.startsWith('skills/') && !covered.has(file) && !['skills/source-manifest.json','skills/catalog.json'].includes(file)) findings.push('unlisted:'+file);
+  }
+}
+
 for (const excluded of manifest.exclusions ?? []) {
   const installed = excluded.sourcePrefix.startsWith('docs/') ? `skills/docs/vendor/dot-codex/${excluded.sourcePrefix.slice(5)}` : `skills/${excluded.sourcePrefix}`;
   if (manifest.files.some(file => file.source.startsWith(excluded.sourcePrefix)) || existsSync(resolve(root, installed))) findings.push(`excluded-resource:${installed}`);

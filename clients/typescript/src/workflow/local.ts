@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { GitAdapter } from '../git.js';
-import { runProcess } from '../runtime/process.js';
+import { GitAdapter } from '../git.ts';
+import { runProcess } from '../runtime/process.ts';
 
 export type LocalStage = 'durable-contracts' | 'delivery-slices' | 'validation' | 'locally-validated';
 export type FlowType = 'normal' | 'fast-track' | 'local-merge';

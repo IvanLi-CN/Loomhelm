@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "cd .. && node skills/scripts/build-skills-native.mjs && bun skills/scripts/build-client-skills.mjs && bun run --cwd skills/multi-task-flow build",
+    "build": "bun run --cwd multi-task-flow build",
     "test": "bun test ./bin/tests ./bin/native-tests",
     "skills:test": "bun test ./bin/tests ./bin/native-tests",
-    "skills:build": "cd .. && node skills/scripts/build-skills-native.mjs && bun skills/scripts/build-client-skills.mjs && bun run --cwd skills/multi-task-flow build",
+    "skills:build": "bun run --cwd multi-task-flow build",
     "test:core": "bun test ./bin/tests/core",
     "test:hosting": "bun test ./bin/tests/hosting",
     "test:flow": "bun test ./bin/tests/flow",
@@ -23,5 +23,9 @@
   "devDependencies": {
     "@types/bun": "1.4.4",
     "typescript": "5.9.3"
+  },
+  "packageManager": "bun@1.4.4",
+  "engines": {
+    "bun": "1.4.4"
   }
 }

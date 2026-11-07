@@ -1,9 +1,9 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { FakeDispatchAdapter, ThreadDispatcher, StateLock } from '../dist/index.js';
+import { FakeDispatchAdapter, ThreadDispatcher, StateLock } from '../src/index.ts';
 
 const dispatchInput = { requestId: 'request-1', title: 'worker', prompt: 'initialize' };
 

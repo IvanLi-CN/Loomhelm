@@ -1,6 +1,6 @@
 # 局部验证与通用 Skill 目录读取
 
-`workflow/index.ts` 仅提供通用 Skills 目录读取和局部验证 API；正式迁入入口由 `SkillsRuntime` 与根 `skills/` 提供。局部验证不代表完整工程交付、PR 就绪或发布完成。`workflow/cli.ts` 是独立机器可读入口，编译后可通过 Node.js 或 Bun 调用；现有客户端公共入口不因本模块改变。实现以 `docs/design/client.md` 中的 Skills 和工作流职责为边界，参考已安装 `project-engineering-workflow` 的本地阶段语义。
+`workflow/index.ts` 仅提供通用 Skills 目录读取和局部验证 API；正式迁入入口由 `SkillsRuntime` 与根 `skills/` 提供。局部验证不代表完整工程交付、PR 就绪或发布完成。`workflow/cli.ts` 是独立机器可读入口，由 Bun 1.4.4 直接调用 TS；现有客户端公共入口不因本模块改变。实现以 `docs/design/client.md` 中的 Skills 和工作流职责为边界，参考已安装 `project-engineering-workflow` 的本地阶段语义。
 
 ## Skills
 
@@ -56,12 +56,11 @@ const skill = requireSkill(catalog, 'engineering', {
 
 ## 验证入口
 
-先在 `client` 下执行 `npm ci` 和 `npm run build`。命令输出 JSON，失败退出码为 1；参数或配置错误输出 JSON 到 stderr，实际验证失败的结果输出到 stdout。
+先在 `clients/typescript/` 下执行 `bun install --frozen-lockfile` 和 `bun --no-install run build`。命令输出 JSON，失败退出码为 1；参数或配置错误输出 JSON 到 stderr，实际验证失败的结果输出到 stdout。
 
 ```sh
-node dist/workflow/cli.js skills /path/to/repo/.agents/skills /path/to/user/.agents/skills
-node dist/workflow/cli.js verify /path/to/workflow.json
-bun dist/workflow/cli.js verify /path/to/workflow.json
+bun --no-install src/workflow/cli.ts skills /path/to/repo/.agents/skills /path/to/user/.agents/skills
+bun --no-install src/workflow/cli.ts local-verify /path/to/workflow.json
 ```
 
 `verify` 清单示例：
@@ -83,11 +82,11 @@ bun dist/workflow/cli.js verify /path/to/workflow.json
   ],
   "implementation": "Implementation committed and ready for local validation",
   "validations": [
-    { "id": "tests", "command": "node", "args": ["--test", "test/feature.test.mjs"], "timeoutMs": 30000 }
+    { "id": "tests", "command": "bun", "args": ["test", "test/feature.test.ts"], "timeoutMs": 30000 }
   ]
 }
 ```
 
 `repository` 相对于清单所在目录解析，Skills 路径相对于仓库解析；`skills` 可省略。验证命令固定以仓库根目录为工作目录。建议将清单与输出放在仓库外或既有忽略的证据目录，避免验证自身产生未跟踪文件使候选变脏。输出的 `selectedSkills` 保留实际加载的内容、来源、版本与指纹；Skill 检查在执行命令前进行，不声称锁定全局 Skill 文件或检测验证期间的外部变更。
 
-行为验证使用 `npm test` 和 `npm run test:bun`。`test/workflow.test.mjs` 使用临时真实 Git 仓库和真实 Node/Bun 子进程，覆盖 Skills 覆盖与兼容性、阶段顺序、命令结果、取消、合同逃逸、合同漂移、候选污染、HEAD 变化，以及无服务端的 CLI 验证链路。
+行为验证使用 `bun --no-install run test`。`test/workflow.test.ts` 使用临时真实 Git 仓库和真实 Bun 子进程，覆盖 Skills 覆盖与兼容性、阶段顺序、命令结果、取消、合同逃逸、合同漂移、候选污染、HEAD 变化，以及无服务端的 CLI 验证链路。

@@ -27,3 +27,6 @@ node_modules/
 /skills/.cache/
 
 /skills/docs/**/*.js
+
+# Source-only client resource package; production TS remains authored source.
+/clients/typescript/toolkit/

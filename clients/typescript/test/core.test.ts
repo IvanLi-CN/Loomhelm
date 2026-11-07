@@ -1,9 +1,9 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Ledger, StateLock, runProcess, GitAdapter, loadConfig, LocalClient } from '../dist/index.js';
+import { Ledger, StateLock, runProcess, GitAdapter, loadConfig, LocalClient } from '../src/index.ts';
 
 async function temporary(fn) { const dir = await mkdtemp(join(tmpdir(), 'loomhelm-')); try { await fn(dir); } finally { await rm(dir, { recursive: true, force: true }); } }
 const task = (id, dependencies = []) => ({ type: 'task.create', task: { id, goal: 'Implement core', scope: 'Client only', acceptance: 'Tests pass', dependencies } });
@@ -153,7 +153,7 @@ test('Git worktree creation preserves existing state and refuses unsafe requests
 test('offline CLI creates, executes and queries a task without a server', () => temporary(async dir => {
   const config = join(dir, 'config.json'); await writeFile(config, JSON.stringify({ stateDir: 'state' }));
   const cli = async args => {
-    const result = await runProcess(process.execPath, [resolve('dist/cli.js'), '--config', config, ...args]);
+    const result = await runProcess(process.execPath, [resolve('src/cli.ts'), '--config', config, ...args]);
     assert.equal(result.code, 0, result.stderr); return JSON.parse(result.stdout);
   };
   await cli(['apply', 'create', JSON.stringify(task('cli-task'))]);
@@ -195,7 +195,7 @@ test('failed durable write does not publish in-memory state', () => temporary(as
 test('process crash preserves uncertain Run until explicit lock recovery', () => temporary(async dir => {
   const { spawn } = await import('node:child_process');
   const source = `
-    const {Ledger}=await import(${JSON.stringify(new URL('../dist/index.js', import.meta.url).href)});
+    const {Ledger}=await import(${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)});
     const ledger=await Ledger.open(${JSON.stringify(dir)});
     await ledger.execute('create', ${JSON.stringify(task('crashed'))});
     await ledger.execute('start', {type:'run.start',taskId:'crashed',runId:'uncertain'});

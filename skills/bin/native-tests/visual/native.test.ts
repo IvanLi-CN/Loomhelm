@@ -34,6 +34,10 @@ describe("visual native isolation adapter", () => {
     const source = join(root, "source");
     const clone = join(root, "clone");
     writeFileSync(source, "report");
+    const truncated = join(root,"unintended-clone");
+    expect(() => cloneReportFile(source,truncated+"\0suffix")).toThrow("NUL");
+    expect(() => cloneReportFile(source+"\0suffix",truncated)).toThrow("NUL");
+    expect(existsSync(truncated)).toBe(false);
     if (process.platform === "darwin") {
       expect(sandboxAvailable()).toBe(true);
       cloneReportFile(source, clone);

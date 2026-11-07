@@ -34,6 +34,6 @@ describe("launcher boundary regressions", () => {
     });
     expect(result.exitCode, result.stderr).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("repository-approved runtime");
+    expect(result.stderr).toContain("repository-approved Bun runtime");
   }, 15000);
 });

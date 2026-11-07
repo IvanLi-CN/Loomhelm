@@ -19,7 +19,7 @@ export const compatibility = {
 
 export const releaseManifestSchema = z
   .object({
-    schema_version: z.literal(1),
+    schema_version: z.union([z.literal(1), z.literal(2)]),
     build_id: z.string().regex(/^[a-f0-9]{64}$/),
     source_sha: z.string().regex(/^[a-f0-9]{40}$/),
     service_version: z.string().min(1),
@@ -34,7 +34,7 @@ export const releaseManifestSchema = z
     readable: z.array(z.string()).min(1),
     writable: z.array(z.string()).min(1),
     files: z.record(
-      z.string().regex(/^(viewer|viewer\.mjs|posix\.node|dist\/(index\.html|app\.js|app\.css))$/),
+      z.string().min(1),
       z.string().regex(/^[a-f0-9]{64}$/),
     ),
   })
