@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,4 +39,32 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
     const failed = await runInitialization(input);
     expect(failed.thread_id).toBe("partial"); expect(failed.error).toContain("attempted work"); expect(failed.exit_code).not.toBe(0);
   } finally { process.env.PATH = oldPath; rmSync(root, { recursive: true, force: true }); }
-});
+}, 10000);
+
+test("aborting initialization terminates tool descendants and closes inherited pipes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-descendants-"));
+  const oldPath = process.env.PATH;
+  let pid: number | undefined;
+  try {
+    const executable = join(root, "codex"), pidFile = join(root, "descendant.pid"), heartbeat = join(root, "heartbeat");
+    const descendant = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.on('SIGTERM',()=>{});fs.appendFileSync(${JSON.stringify(heartbeat)},'x');console.log(JSON.stringify({type:'item.started',item:{type:'command_execution'}}));setInterval(()=>fs.appendFileSync(${JSON.stringify(heartbeat)},'x'),10);`;
+    writeFileSync(executable, `#!/usr/bin/env node\nconst {spawn}=require('node:child_process');console.log(JSON.stringify({type:'thread.started',thread_id:'descendant-test'}));spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore',process.stdout,process.stderr]});setInterval(()=>{},1000);`);
+    chmodSync(executable, 0o755); process.env.PATH = `${root}:${oldPath}`;
+    const result = await runInitialization(input);
+    pid = Number(readFileSync(pidFile, "utf8"));
+    expect(result.thread_id).toBe("descendant-test");
+    expect(result.error).toContain("attempted work");
+    expect(result.exit_code).not.toBe(0);
+    const before = readFileSync(heartbeat, "utf8");
+    await new Promise(resolve => setTimeout(resolve, 350));
+    expect(readFileSync(heartbeat, "utf8")).toBe(before);
+  } finally {
+    // Only this test's recorded subprocess; the supervisor normally reaps it.
+    if (pid) { try {
+      const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      if (command.includes(root)) process.kill(pid, "SIGKILL");
+    } catch {} }
+    process.env.PATH = oldPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 10000);

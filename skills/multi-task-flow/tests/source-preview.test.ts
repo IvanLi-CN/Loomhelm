@@ -114,3 +114,45 @@ test("source fixture uses domain names consistently in run identity and referenc
   expect(JSON.stringify(run)).not.toContain('"sample/multi-task-flow"');
   expect(JSON.stringify(run)).not.toContain('"plan-1"');
 });
+
+test("installed profile rejects synthetic conversation observers", () => {
+  const { root } = serviceFixture();
+  const release = fixtureRelease(root);
+  expect(() => startSharedViewer(
+    new ServiceState(servicePaths({})), release.manifest, join(release.source, "dist"),
+    0, undefined, undefined,
+    async () => ({ request: async () => ({ data: [] }), close() {} }),
+  )).toThrow("isolated profile");
+});
+
+test("isolated single-unit preview projects synthetic conversations through the shared viewer", async () => {
+  const { createSingleDeliveryUnitLedger } = await import("../examples/single-delivery-unit/ledger");
+  const { singleDeliveryUnitObserver } = await import("../examples/single-delivery-unit/outputs");
+  const { LedgerStore } = await import("../scripts/store");
+  const { root, state } = serviceFixture();
+  const release = fixtureRelease(root);
+  const ledger = createSingleDeliveryUnitLedger();
+  new LedgerStore(state.paths.data, ledger.orchestration_id).create(ledger);
+  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "dist"), 0, () => "mock", "Mock", singleDeliveryUnitObserver(ledger));
+  const headers = { authorization: "Bearer " + new ServiceAuth(state).credential() };
+  const base = `http://127.0.0.1:${viewer.port}/runs/${ledger.orchestration_id}`;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    reader = (await fetch(base + "/api/events", { headers })).body!.getReader();
+    await reader.read();
+    let result: any;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      result = await (await fetch(base + "/api/view", { headers })).json();
+      if (result.view?.tasks.find((task: any) => task.id === "container")?.latest_agent_output.state === "available") break;
+      await Bun.sleep(10);
+    }
+    const task = result.view.tasks.find((task: any) => task.id === "container");
+    expect(task.latest_agent_output.text).toContain("健康检查");
+    expect(task.latest_agent_output.thread_id).toBe("mock-thread-container");
+    expect(result.view.groups[0].atoms.filter((atom: any) => atom.status === "completed")).toHaveLength(2);
+    expect(result.view.warnings).toEqual([]);
+  } finally {
+    await reader?.cancel();
+    await viewer.stop();
+  }
+});

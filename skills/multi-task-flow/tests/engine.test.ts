@@ -2664,13 +2664,16 @@ describe("native CLI handoff contract", () => {
   });
 });
 
-test("native group cannot run before a fresh mainline baseline receipt", () => {
+test("native group retry ignores a failed attempt and still requires a fresh mainline baseline receipt", () => {
   const ledger = fixture(); approve(ledger);
   Object.assign(ledger.groups[0], { agent_thread_id: null, state: "planned", parent_branch: null, current_sha: null });
   const invoke = (command: string, requestId: string, payload: any, actor: Request["actor"] = main) => apply(ledger, command, request(ledger, requestId, payload, actor));
+  invoke("dispatch-group-claim", "failed-cli", { group_id: "g", operation_id: "failed-cli" });
+  invoke("dispatch-bind-request", "failed-bind", { operation_id: "failed-cli", native_request_id: "failed-native", creation_parameters: { title: "group", prompt: "formal", cwd: "/repo", execution_profile: ledger.config.execution_profile, transport: "codex-exec" } });
+  invoke("dispatch-resolve", "failed-resolve", { operation_id: "failed-cli", outcome: "failed", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "failed-cli", native_request_id: "failed-native", ...ledger.config.execution_profile, evidence_ref: "codex:verified-no-resource", created_at: at, error: "Reconciliation verified no resource was created" } });
   invoke("dispatch-group-claim", "group-cli", { group_id: "g", operation_id: "group-cli" });
   invoke("dispatch-bind-request", "group-bind", { operation_id: "group-cli", native_request_id: "group-native", creation_parameters: { title: "group", prompt: "formal", cwd: "/repo", execution_profile: ledger.config.execution_profile, transport: "codex-exec" } });
-  expect(ledger.operations[0].status).toBe("unknown");
+  expect(ledger.operations.at(-1)!.status).toBe("unknown");
   invoke("dispatch-progress", "group-observed", { operation_id: "group-cli", native_request_id: "group-native", thread_id: "group-thread" });
   invoke("dispatch-resolve", "group-resolved", { operation_id: "group-cli", thread_id: "group-thread", outcome: "succeeded", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "group-cli", native_request_id: "group-native", ...ledger.config.execution_profile, evidence_ref: "codex:group", created_at: at, thread_id: "group-thread", workspace_path: "/owned", initial_head: base, exit_code: 0, turn_completed: true } });
   expect(() => invoke("group-execution-update", "early-group", { group_id: "g", state: "running" }, groupActor)).toThrow("baseline");

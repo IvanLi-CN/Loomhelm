@@ -2611,10 +2611,11 @@ export function execute(
       const state = z
         .enum(["unknown", "idle", "running", "waiting", "blocked"])
         .parse(payload.state);
-      const cliDispatch = ledger.operations.find(op => op.kind === "dispatch" && op.target_id === groupId &&
+      const cliDispatches = ledger.operations.filter(op => op.kind === "dispatch" && op.target_id === groupId &&
         op.request.target_type === "group" && (op.request.creation_parameters as any)?.transport === "codex-exec");
-      if (state === "running" && cliDispatch) requireCondition(
-        owner.lifecycle.workspace_ready === "passed" && !!cliDispatch.request.development_baseline,
+      const cliDispatch = cliDispatches.find(op => op.status === "succeeded");
+      if (state === "running" && cliDispatches.length) requireCondition(
+        owner.lifecycle.workspace_ready === "passed" && !!cliDispatch?.request.development_baseline,
         "BASELINE_REQUIRED", "Record verified group workspace baseline before running", 4);
       const executionTransitions: Record<string, string[]> = {
         unknown: ["unknown", "idle", "running", "waiting", "blocked"],

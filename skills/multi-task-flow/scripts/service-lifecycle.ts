@@ -1,3 +1,4 @@
+import type { ConnectObserver } from "./conversation-output";
 import { Runtime } from "../../bin/modules/core/runtime";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -139,6 +140,7 @@ export async function runDaemon(
     name?: string;
     assetsDir: string;
     revision: () => string;
+    connectObserver?: ConnectObserver;
   },
 ) {
   requireCondition(
@@ -239,6 +241,7 @@ export async function runDaemon(
           config.port,
           source?.revision,
           source?.name,
+          source?.connectObserver,
         );
         return viewer;
       },
