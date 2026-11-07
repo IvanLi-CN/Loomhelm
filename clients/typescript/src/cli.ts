@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { buildInfo } from './build-info.js';
 import { LocalClient } from './client.js';
 import { StateLock } from './runtime/lock.js';
 import { loadConfig } from './config.js';
@@ -11,6 +12,7 @@ import { runFlowCommand } from './cli/flow.js';
 import { fileURLToPath } from 'node:url';
 
 async function main(args: string[]): Promise<void> {
+  if (args.length === 1 && ["version", "--version"].includes(args[0]!)) { console.log(JSON.stringify(buildInfo)); return; }
   let configPath: string | undefined;
   if (args[0] === '--config') { args.shift(); configPath = args.shift(); if (!configPath) throw new Error('Missing config path'); }
   const [command, ...rest] = args;

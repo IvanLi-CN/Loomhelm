@@ -27,3 +27,5 @@ node_modules/
 /skills/.cache/
 
 /skills/docs/**/*.js
+
+__pycache__/

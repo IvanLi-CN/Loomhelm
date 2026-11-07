@@ -1,0 +1,95 @@
+"""Build one frozen product partition on its native runner, from a clean SHA."""
+import argparse
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import shutil
+import subprocess
+import tarfile
+import tempfile
+from policy import ReleaseError, canonical
+from product import ROOT, check_projections
+
+
+def run(*args, **kwargs):
+    subprocess.run(args,check=True,**kwargs)
+
+
+def archive(source, output, epoch):
+    with output.open('wb') as raw, gzip.GzipFile(fileobj=raw, mode='wb', filename='', mtime=0) as compressed, tarfile.open(fileobj=compressed, mode='w') as tar:
+        def normalize(info):
+            info.uid=info.gid=0
+            info.uname=info.gname=''
+            info.mtime=epoch
+            return info
+        tar.add(source,arcname='.',filter=normalize)
+
+
+def build(record, part, output):
+    os.chdir(ROOT)
+    sha=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+    if record['state']!='bound' or record['merge_sha']!=sha or check_projections()!=record['version']:
+        raise ReleaseError('build source/identity mismatch')
+    if subprocess.check_output(['git','status','--porcelain']):
+        raise ReleaseError('build requires a clean source checkout')
+    if output.exists(): raise ReleaseError('refusing to overwrite product output')
+    output.mkdir(parents=True)
+    epoch=int(subprocess.check_output(['git','show','-s','--format=%ct','HEAD']))
+    machine=('darwin' if platform.system()=='Darwin' else 'linux')+'-'+({'arm64':'arm64','aarch64':'arm64','x86_64':'amd64'}[platform.machine()])
+    with tempfile.TemporaryDirectory(prefix='loomhelm-product-') as tmp:
+        stage=Path(tmp)
+        if part=='server':
+            if machine!='linux-amd64': raise ReleaseError('server requires native Linux amd64')
+            candidate=stage/'candidate'
+            run('scripts/build-candidate','--source-sha',sha,'--output',str(candidate))
+            archive(candidate/'web',output/'web.tar.gz',epoch)
+            client=stage/'client';client.mkdir()
+            shutil.copy2(candidate/'bin/connector',client/'loomhelm-connector')
+            archive(client,output/'go-client-linux-amd64.tar.gz',epoch)
+            images= candidate/'images';images.mkdir()
+            receipts={}
+            for component in ('server','worker'):
+                context=stage/component;context.mkdir()
+                shutil.copy2(candidate/'bin'/component,context/component)
+                (context/'Dockerfile').write_text(f'FROM scratch\nCOPY {component} /{component}\nUSER 65532:65532\nENTRYPOINT ["/{component}"]\n')
+                path=images/(component+'.oci.tar')
+                run('docker','buildx','build','--platform','linux/amd64','--provenance=false','--output','type=oci,dest='+str(path),str(context))
+                with tarfile.open(path) as tar:
+                    index=json.load(tar.extractfile('index.json'))
+                    receipts[component]=dict(archive=path.name,manifest_digest=index['manifests'][0]['digest'],sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+                # Load the same OCI artifact for the native smoke test, no rebuild.
+            (images/'images.json').write_bytes(canonical(receipts)+b'\n')
+            archive(candidate,output/'server-linux-amd64.tar.gz',epoch)
+        elif part=='go-client':
+            if machine!='darwin-arm64': raise ReleaseError('Go macOS package requires native macOS arm64')
+            flags=f'-s -w -buildid= -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.Version={record["version"]} -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.SourceSHA={sha}'
+            run('go','build','-trimpath','-buildvcs=false','-ldflags',flags,'-o',str(stage/'loomhelm-connector'),'./cmd/connector')
+            archive(stage,output/f'go-client-{machine}.tar.gz',epoch)
+        elif part=='ts-client':
+            if machine not in ('darwin-arm64','linux-amd64'): raise ReleaseError('unsupported TS native target')
+            run('npm','ci','--prefix','skills','--ignore-scripts','--no-audit','--no-fund')
+            run('node','skills/scripts/build-skills-native.mjs')
+            run('bun','skills/scripts/build-client-skills.mjs')
+            run('bun','install','--cwd','skills/multi-task-flow','--frozen-lockfile')
+            run('bun','run','--cwd','skills/multi-task-flow','build')
+            run('npm','ci','--prefix','clients/typescript','--no-audit','--no-fund')
+            run('npm','run','build','--prefix','clients/typescript')
+            shutil.copytree(ROOT/'clients/typescript/dist',stage/'dist')
+            shutil.copy2(ROOT/'clients/typescript/package.json',stage/'package.json')
+            shutil.copy2(ROOT/'clients/typescript/package-lock.json',stage/'package-lock.json')
+            # Node module resolution from packaged toolkit climbs to package root.
+            run('npm','ci','--omit=dev','--prefix',str(stage),'--no-audit','--no-fund')
+            archive(stage,output/f'ts-client-{machine}.tar.gz',epoch)
+        else: raise ReleaseError('unknown build partition')
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser()
+    p.add_argument('--record',type=Path,required=True)
+    p.add_argument('--part',choices=['server','go-client','ts-client'],required=True)
+    p.add_argument('--output',type=Path,required=True)
+    a=p.parse_args()
+    build(json.loads(a.record.read_text()),a.part,a.output.resolve())

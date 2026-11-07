@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/IvanLi-CN/Loomhelm/internal/buildinfo"
 	"github.com/IvanLi-CN/Loomhelm/internal/hosts"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 	"github.com/coder/websocket"
@@ -83,6 +84,7 @@ func (c *Client) Connect(ctx context.Context) (*ClientConnection, error) {
 	}
 	header := make(http.Header)
 	header.Set("Authorization", "Bearer "+c.token)
+	header.Set(buildinfo.Header, buildinfo.Version)
 	httpClient := c.httpClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -90,6 +92,12 @@ func (c *Client) Connect(ctx context.Context) (*ClientConnection, error) {
 	httpClientCopy := *httpClient
 	httpClientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errGatewayRedirect
+	}
+	parsed, _ := url.Parse(c.url)
+	parsed.Scheme = "https"
+	parsed.Path = "/version"
+	if err := buildinfo.CheckServer(ctx, &httpClientCopy, parsed.String()); err != nil {
+		return nil, err
 	}
 	ws, _, err := websocket.Dial(ctx, c.url, &websocket.DialOptions{
 		HTTPClient:      &httpClientCopy,

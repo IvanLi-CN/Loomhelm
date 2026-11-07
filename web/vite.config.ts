@@ -1,4 +1,6 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import react from "@vitejs/plugin-react";
@@ -7,6 +9,7 @@ import { defineConfig, loadEnv } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 const webRoot = path.dirname(fileURLToPath(import.meta.url));
+const productBuild = { version: readFileSync(path.resolve(webRoot, "../VERSION"), "utf8").trim(), source_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: webRoot, encoding: "utf8" }).trim(), policy: "loomhelm-manual-v1" };
 const isStorybook = process.env.STORYBOOK === "true";
 
 export default defineConfig(({ mode }) => {
@@ -15,8 +18,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: "/",
+    define: { __LOOMHELM_BUILD__: JSON.stringify(isStorybook || isDemo ? { ...productBuild, version: "dev" } : productBuild) },
+
     plugins: [
       react(),
+      { name: "product-version-manifest", generateBundle() { this.emitFile({ type: "asset", fileName: "product-version.json", source: JSON.stringify(productBuild) + "\n" }); } },
       tailwindcss(),
       ...(isStorybook || isDemo
         ? []
