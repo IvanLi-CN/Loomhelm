@@ -29,7 +29,9 @@ def runtime_smoke(tags, record):
         database=owner+'-db';containers.append(database)
         subprocess.run(['docker','run','-d','--name',database,'--network',owner,'--network-alias','db','-e','POSTGRES_DB=loomhelm','-e','POSTGRES_USER=loomhelm','-e','POSTGRES_PASSWORD=package-smoke-only','postgres:17-alpine'],check=True,stdout=subprocess.DEVNULL)
         for attempt in range(60):
-            probe=subprocess.run(['docker','exec',database,'pg_isready','-U','loomhelm'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            # Unix-socket readiness can observe the entrypoint's temporary server.
+            # Require an authenticated SQL connection over the final TCP listener.
+            probe=subprocess.run(['docker','exec','-e','PGPASSWORD=package-smoke-only',database,'psql','--host=127.0.0.1','--username=loomhelm','--dbname=loomhelm','--no-password','--command=SELECT 1'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             if probe.returncode==0:break
             time.sleep(1)
         else:raise ReleaseError('native package database did not become ready')
