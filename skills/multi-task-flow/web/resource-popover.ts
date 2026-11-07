@@ -118,6 +118,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
   };
   const loadPR = async (force = false) => {
     clearTimeout(refreshTimer);
+    delete panel.dataset.compact;
     const current = ++requestId;
     const loadingHeading = node("div", "", "resource-section-heading");
     loadingHeading.append(node("h3", pr?.data?.title || "PR 信息", "resource-pr-title"));
@@ -159,9 +160,13 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
         if (next.error) body.append(node("p", next.error, "resource-error"));
       } else {
         const heading = node("div", "", "resource-section-heading");
-        heading.append(node("h3", "PR 信息", "resource-pr-title"));
-        const retry = document.createElement("button"); retry.type = "button"; retry.className = "resource-icon-button resource-refresh-button"; retry.dataset.retry = "true"; retry.setAttribute("aria-label", "重试 PR 查询"); retry.append(icon("refresh")); heading.append(retry, attachTooltip(retry, node("span", "重试 PR 查询"), "重试 PR 查询")); retry.addEventListener("click", () => void loadPR(true));
-        body.replaceChildren(heading, node("p", next.error || "尚未关联 PR", "resource-error"));
+        const empty = !next.error;
+        if (empty) panel.dataset.compact = "true";
+        heading.append(node(empty ? "span" : "h3", empty ? "尚未关联 PR" : "PR 信息", empty ? "resource-empty-label" : "resource-pr-title"));
+        const label = empty ? "刷新 PR 信息" : "重试 PR 查询";
+        const retry = document.createElement("button"); retry.type = "button"; retry.className = "resource-icon-button resource-refresh-button"; retry.dataset.retry = "true"; retry.setAttribute("aria-label", label); retry.append(icon("refresh")); heading.append(retry, attachTooltip(retry, node("span", label), label)); retry.addEventListener("click", () => void loadPR(true));
+        body.replaceChildren(heading);
+        if (next.error) body.append(node("p", next.error, "resource-error"));
       }
 
     } catch { if (current === requestId && !panel.hidden) { body.textContent = `${pr?.data ? `${pr.data.title}\n${pr.data.state} · CI ${pr.data.ci}\n数据已过期\n` : ""}读取失败，请稍后重试`;

@@ -527,7 +527,9 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .resource-value { color: var(--text); font-size: 13px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .resource-copy-row[data-field=identifier] .resource-field { display: flex; align-items: baseline; gap: 12px; }
 .resource-copy-row[data-field=identifier] .resource-value { font-variant-numeric: tabular-nums; }
-.resource-copy-row[data-field=title] .resource-value { font-size: 15px; font-weight: 600; }
+.resource-copy-row[data-field=title] .resource-field { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: baseline; gap: 12px; }
+.resource-copy-row[data-field=title] .resource-label { white-space: nowrap; }
+.resource-copy-row[data-field=title] .resource-value { display: block; font-size: 15px; font-weight: 600; overflow: visible; overflow-wrap: anywhere; }
 .resource-popover button { flex: none; min-height: 30px; border: 1px solid var(--border); border-radius: var(--radius-chip); padding: 4px 8px; font: inherit; font-size: 12px; font-weight: 400; cursor: pointer; background: transparent; color: var(--muted); }
 .resource-popover button:hover { background: var(--active); color: var(--text); border-color: var(--control); }
 .resource-popover :is(button,a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -574,3 +576,8 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .resource-copy-row .resource-field a.resource-value { margin: 0; display: block; color: var(--text); font-size: 13px; overflow-wrap: anywhere; white-space: normal; }
 .resource-copy-row .resource-field a.resource-value:hover { color: var(--accent); }
 .resource-section-heading > .resource-pr-title { margin-right: auto; margin-bottom: 0; }
+.resource-popover[data-resource=pr] .resource-identity:empty { display: none; }
+.resource-popover[data-compact=true] { width: max-content; max-width: calc(100vw - 16px); }
+.resource-popover[data-compact=true] .resource-body { padding: 6px 10px; }
+.resource-popover[data-compact=true] .resource-section-heading { flex-wrap: nowrap; margin: 0; gap: 12px; }
+.resource-empty-label { color: var(--muted); font-size: 12px; }
