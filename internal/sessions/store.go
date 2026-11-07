@@ -482,22 +482,6 @@ func (s *Store) ActivateIntent(ctx context.Context, input ActivationInput) (Sess
 		return Session{}, fmt.Errorf("begin session activation: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var hostID string
-	if err := tx.QueryRow(ctx, `
-		SELECT host_id FROM execution_sessions WHERE id = $1
-	`, input.SessionID).Scan(&hostID); errors.Is(err, pgx.ErrNoRows) {
-		return Session{}, ErrSessionNotFound
-	} else if err != nil {
-		return Session{}, fmt.Errorf("read Host for session activation: %w", err)
-	}
-	if hostID = strings.TrimSpace(hostID); hostID != "" {
-		var lockedHostID string
-		if err := tx.QueryRow(ctx, `
-			SELECT id FROM host_registrations WHERE id = $1 FOR UPDATE
-		`, hostID).Scan(&lockedHostID); err != nil {
-			return Session{}, fmt.Errorf("lock Host for session activation: %w", err)
-		}
-	}
 	record, found, err := lockIntentByID(ctx, tx, input.SessionID)
 	if err != nil {
 		return Session{}, err
@@ -579,6 +563,14 @@ func (s *Store) ActivateIntent(ctx context.Context, input ActivationInput) (Sess
 		WHERE id = $1
 	`, input.SessionID, updated.ExternalThreadRef, updated.Generation, updated.State, optionalStringValue(updated.ProjectID), updated.UpdatedAt); err != nil {
 		return Session{}, fmt.Errorf("activate session intent: %w", err)
+	}
+	if hostID := strings.TrimSpace(record.Intent.HostID); hostID != "" {
+		var lockedHostID string
+		if err := tx.QueryRow(ctx, `
+			SELECT id FROM host_registrations WHERE id = $1 FOR UPDATE
+		`, hostID).Scan(&lockedHostID); err != nil {
+			return Session{}, fmt.Errorf("lock Host for session activation: %w", err)
+		}
 	}
 	if s.bindingReconciler != nil {
 		if err := s.bindingReconciler(ctx, tx, input.SessionID, strings.TrimSpace(record.Intent.TaskID)); err != nil {

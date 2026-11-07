@@ -1380,14 +1380,6 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 		return protocol.CodexConversation{}, fmt.Errorf("begin Codex binding: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var lockedHostID string
-	if err := tx.QueryRow(ctx, `
-		SELECT id FROM host_registrations WHERE id = $1 FOR UPDATE
-	`, access.host.ID).Scan(&lockedHostID); errors.Is(err, pgx.ErrNoRows) {
-		return protocol.CodexConversation{}, ErrNotFound
-	} else if err != nil {
-		return protocol.CodexConversation{}, fmt.Errorf("lock Codex Host for binding: %w", err)
-	}
 	var conversationTitle, sourceKind, sourceStatus, historyState string
 	var codexProjectID *string
 	var filesComplete bool
@@ -1421,6 +1413,14 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 		return protocol.CodexConversation{}, auth.ErrNotFound
 	} else if err != nil {
 		return protocol.CodexConversation{}, fmt.Errorf("lock binding Task: %w", err)
+	}
+	var lockedHostID string
+	if err := tx.QueryRow(ctx, `
+		SELECT id FROM host_registrations WHERE id = $1 FOR UPDATE
+	`, access.host.ID).Scan(&lockedHostID); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, ErrNotFound
+	} else if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("lock Codex Host for binding: %w", err)
 	}
 	if err := tx.QueryRow(ctx, `
 		SELECT conversation_title, project_id, source_kind, source_status, history_state, files_complete, bound_task_id, bound_session_id, imported_by, as_of

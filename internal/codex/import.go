@@ -136,9 +136,9 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 	}
 
 	// Import coordinates with Host lifecycle and Session activation through a
-	// single lock order: source -> Host -> Session -> Task -> Codex. The Host
-	// lock is acquired before binding discovery so an activation that starts
-	// before the Codex row exists cannot permanently miss reconciliation.
+	// single lock order: source -> Session -> Task -> Host -> Codex. The
+	// binding rows are re-checked after the Host lock so an activation that
+	// starts before the Codex row exists cannot permanently miss reconciliation.
 	threadIDs := make([]string, 0, len(snapshot.Threads))
 	for _, thread := range snapshot.Threads {
 		threadID := strings.TrimSpace(thread.ThreadID)
@@ -148,6 +148,9 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		threadIDs = append(threadIDs, threadID)
 	}
 	sort.Strings(threadIDs)
+	if err := lockImportBindingRows(ctx, tx, hostID, threadIDs); err != nil {
+		return err
+	}
 	if err := tx.QueryRow(ctx, `
 		SELECT status, connection_generation FROM host_registrations WHERE id = $1 FOR UPDATE
 	`, hostID).Scan(&hostStatus, &hostGeneration); err != nil {
@@ -592,8 +595,8 @@ func (s *Service) FailSync(ctx context.Context, hostID, operationID string, sync
 	return tx.Commit(ctx)
 }
 
-// lockImportBindingRows follows the Session -> Task -> Codex lock order used
-// by Bind and Session activation before the import upserts the Codex row. All
+// lockImportBindingRows follows the Session -> Task lock order used by Bind
+// and Session activation before the import takes the Host and Codex locks. All
 // Sessions are locked before any Task so a multi-thread import cannot form a
 // Session/Task wait cycle with a concurrent single-thread binding.
 func lockImportBindingRows(ctx context.Context, tx pgx.Tx, hostID string, threadIDs []string) error {
