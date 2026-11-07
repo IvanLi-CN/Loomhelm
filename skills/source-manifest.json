@@ -14831,7 +14831,7 @@
       "path": "skills/multi-task-flow/tests/ui/details-content.test.ts",
       "sourceBlob": "bd05dc0398e199e9b5a5010ea4329af4ebf4991f",
       "sourceSha256": "e03962e6cdf54fd31b7c1d788a8b906f93fb3aaa4b8dc501733984d5a4e99bf3",
-      "installedSha256": "5ccf2e7b404a69a530381821cab4a07073ff6205999f9bf754dd41ada50be8cc",
+      "installedSha256": "ad0e853945f99cb34c3eb41bfd5def27338b44ae770af4aa9715f35dc6969ed4",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14983,7 +14983,7 @@
       "path": "skills/multi-task-flow/web/details-content.ts",
       "sourceBlob": "45e9378337970c2ecbb86811d54c69224555792a",
       "sourceSha256": "e0b8c7aefe55105b49debc173dbe3e0922bbe35db435b3be8b3476fa35594ff1",
-      "installedSha256": "01d1eb913a0b0315e77c1871462664d1c2d8290e3b65be97c7f56b1f91c68af1",
+      "installedSha256": "40b579e1775538c04c99275bab9244cd265d632c182faf01f131894d7fefc161",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15770,7 +15770,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/conversation-archive.ts",
-      "installedSha256": "ccfb6edbf8f0244b37ff45455ac9727ab1fbc0b3b1ff36396b6b3a962d248eaf"
+      "installedSha256": "09d4cb4131c382d2229916336b464a6f868e6f71c5a8b3b3f1942769cd6fc8ab"
     },
     {
       "path": "skills/multi-task-flow/scripts/task-runtime.ts",

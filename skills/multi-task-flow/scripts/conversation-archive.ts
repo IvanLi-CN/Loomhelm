@@ -63,9 +63,11 @@ async function changeConversationArchive(store: LedgerStore, taskId: string, api
     const operationId = `archive-${randomUUID()}`;
     const resource = existing ?? { id: `conversation-${key.slice(0, 32)}`, kind: "conversation" as const, target: thread, status: "pending" as const, evidence_ref: null };
     let writeSequence = 0;
-    const write = (status: "pending" | "closed" | "active" | "archive_failed" | "archive_unknown" | "unarchive_failed" | "unarchive_unknown", error: string | null, evidence: string) => {
+    const write = (status: "pending" | "closed" | "active" | "archive_failed" | "archive_unknown" | "unarchive_failed" | "unarchive_unknown", error: string | null, evidence: string, claim = false) => {
       store.update(raw => {
         const current = validateLedger(raw);
+        // Eligibility and durable intent share the ledger lock with notification claims.
+        if (claim) eligible(current, taskId);
         // Re-prove ownership and exact binding before every write.
         requireCondition(current.tasks.find(task => task.id === taskId)?.thread_id === thread, "RESOURCE_MISMATCH", "Conversation binding changed", 4);
         return apply(raw, "resource-update", {
@@ -89,7 +91,7 @@ async function changeConversationArchive(store: LedgerStore, taskId: string, api
       }
     }
     // Claim before crossing the provider boundary. Process death leaves unknown.
-    write(unknown, "Archive attempt is in progress; reconcile after interruption", `codex-app-server:${operationId}:intent`);
+    write(unknown, "Archive attempt is in progress; reconcile after interruption", `codex-app-server:${operationId}:intent`, true);
     let result;
     try { result = await (archived ? api.archive(thread, operationId) : api.unarchive!(thread, operationId)); }
     catch (error) { result = { outcome: "unknown" as const, evidence_ref: `codex-app-server:${operationId}:error`, error: String(error).slice(0, 500) }; }

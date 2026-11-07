@@ -170,7 +170,7 @@ export function createDetailContent(context: DetailContentContext) {
     if (task.state === "agent_idle") {
       const observed = task.latest_agent_output;
       if (observed?.observed_at) field(container, "运行时观察时间", renderTimestamp(observed.observed_at));
-      if (observed?.turn_id) field(container, "观察 Turn", observed.turn_id);
+      if (observed?.runtime_turn_id) field(container, "观察 Turn", observed.runtime_turn_id);
     }
     const archive = task.conversation_resource;
     if (archive && ["closed", "active", "archive_failed", "archive_unknown", "unarchive_failed", "unarchive_unknown"].includes(archive.status)) {

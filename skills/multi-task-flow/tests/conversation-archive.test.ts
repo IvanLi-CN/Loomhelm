@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { apply } from "../scripts/engine";
 import { rmSync } from "node:fs";
 import { fixtureRun, serviceFixture } from "./service-fixture";
 import { retryConversationArchive, retryConversationUnarchive, sweepConversationArchives, type ArchiveProvider } from "../scripts/conversation-archive";
@@ -123,3 +124,31 @@ test("unarchive failure retries; unknown delivery requires positive reconciliati
     expect((await retryConversationUnarchive(f.store, f.task.id, { ...noResend, isUnarchived: async () => true })).status).toBe("active");
   } finally { f.cleanup(); }
 });
+
+for (const claimed of [false, true]) {
+  test(`archive atomically rejects a notification that wins before intent (claimed=${claimed})`, async () => {
+    const f = fixture();
+    try {
+      const update = f.store.update.bind(f.store);
+      let injected = false, archiveCalls = 0;
+      f.store.update = ((callback: any) => {
+        if (!injected) {
+          injected = true;
+          update(raw => {
+            const sender = raw.tasks.find((task: any) => task.id === "deploy");
+            const actor = { role: "task", thread_id: sender.thread_id };
+            apply(raw, "task-update", { run_id: raw.orchestration_id, actor, request_id: "racing-notice", expected_revision: raw.revision, payload: { task_id: sender.id, state: "waiting", detail: "Notify before archive intent", notification: { mode: "deliver", recipient: { thread_id: f.task.thread_id } } } });
+            if (claimed) apply(raw, "notification-deliver", { run_id: raw.orchestration_id, actor, request_id: "racing-claim", expected_revision: raw.revision, payload: { notification_id: raw.notifications[0].id, delivery_attempt_id: "racing-attempt", outcome: "unknown", provider_receipt: { provider: "codex-app-server", evidence_ref: "fixture:in-flight" } } });
+          });
+        }
+        return update(callback);
+      }) as typeof f.store.update;
+      await expect(retryConversationArchive(f.store, f.task.id, { ...success, archive: async () => { archiveCalls++; return { outcome: "succeeded", evidence_ref: "must-not-archive" }; } })).rejects.toMatchObject({ code: "NOTIFICATIONS_PENDING" });
+      expect(archiveCalls).toBe(0);
+      const ledger = f.store.read();
+      expect(ledger.tasks.find((task: any) => task.id === f.task.id).state).toBe("completed");
+      expect(ledger.resources.find((resource: any) => resource.target === f.task.thread_id)?.status).not.toBe("archive_unknown");
+      expect(ledger.notifications[0].delivery_status).toBe(claimed ? "unknown" : "pending");
+    } finally { f.cleanup(); }
+  });
+}
