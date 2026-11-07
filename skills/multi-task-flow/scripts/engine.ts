@@ -484,6 +484,23 @@ function addOperation(
 function activeOperation(item: Ledger["operations"][number]): boolean {
   return item.status === "claimed" || item.status === "unknown";
 }
+function creationObservations(op: Ledger["operations"][number], payload: Record<string, any>) {
+  const observed: Record<string, any> = { ...object(op.request.creation_observations ?? {}) };
+  const previous = object(op.request.creation_result ?? {});
+  for (const report of [{ thread_id: op.request.observed_thread_id }, previous,
+    object(previous.native_evidence ?? {}), payload, object(payload.native_evidence ?? {})]) {
+    for (const key of ["thread_id", "workspace_path", "initial_head"]) {
+      const value = report[key];
+      if (typeof value !== "string" || !value) continue;
+      requireCondition(!observed[key] || observed[key] === value, "CREATION_EVIDENCE_CONFLICT",
+        "Known creation identity and resources cannot change", 5);
+      observed[key] = value;
+    }
+    if (report.turn_completed === true || report.exit_code != null ||
+      (Array.isArray(report.events) && report.events.length > 0)) observed.process_observed = true;
+  }
+  return observed;
+}
 function publicationPendingForGroup(ledger: Ledger, groupId: string): boolean {
   const taskIds = ledger.tasks
     .filter((item) => item.group_id === groupId)
@@ -1494,10 +1511,13 @@ export function execute(
           ? find(ledger.groups, (item) => item.id === op.target_id, "Group")
           : null;
       const evidence = object(payload.native_evidence ?? {});
+      const observed = creationObservations(op, payload);
+      if (outcome === "failed") requireCondition(Object.keys(observed).length === 0,
+        "UNKNOWN_REQUIRES_RECONCILIATION", "Known creation identity, resources or execution require reconciliation", 5);
       if (op.request.execution_profile && outcome !== "unknown") {
         requireCondition(
           evidence.source === "multi-task-flow-cli" &&
-            evidence.native_tool_name === "thread/start" &&
+            ["thread/start", "codex exec"].includes(String(evidence.native_tool_name)) &&
             evidence.operation_id === op.id &&
             evidence.native_request_id === op.request.native_request_id &&
             typeof op.request.native_request_id === "string" &&
@@ -1510,6 +1530,22 @@ export function execute(
           5,
         );
       }
+      if ((op.request.creation_parameters as any)?.transport === "codex-exec" && outcome !== "unknown") {
+        requireCondition(evidence.native_tool_name === "codex exec", "EVIDENCE_REQUIRED", "CLI dispatch requires real exec evidence", 5);
+        if (outcome === "failed") requireCondition(!op.request.observed_thread_id &&
+          !payload.thread_id && !evidence.thread_id && !evidence.workspace_path && !evidence.initial_head && !evidence.turn_completed &&
+          evidence.process_started === false && evidence.resources_created === false,
+          "UNKNOWN_REQUIRES_RECONCILIATION", "Only proven pre-creation failure may release a CLI dispatch; observed identities require reconciliation", 5);
+      }
+      if (evidence.native_tool_name === "codex exec" && outcome === "succeeded") {
+        requireCondition(evidence.exit_code === 0 && evidence.turn_completed === true &&
+          typeof evidence.workspace_path === "string" && evidence.workspace_path.length > 0 &&
+          typeof evidence.initial_head === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(evidence.initial_head) &&
+          op.request.observed_thread_id === payload.thread_id && evidence.thread_id === payload.thread_id,
+          "EVIDENCE_REQUIRED", "CLI exit, initialization, observed identity and workspace evidence required", 5);
+      }
+      op.request.creation_observations = observed;
+      if (outcome === "unknown" && observed.thread_id) op.request.observed_thread_id = observed.thread_id;
       op.request.creation_result = { ...payload, resolved_at: now() };
       addEvent(
         ledger,
@@ -1551,7 +1587,7 @@ export function execute(
             evidence.operation_id === op.id &&
             evidence.native_request_id === op.request.native_request_id &&
             (evidence.native_tool_name === "create_thread" ||
-              evidence.native_tool_name === "thread/start") &&
+              evidence.native_tool_name === "thread/start" || evidence.native_tool_name === "codex exec") &&
             typeof evidence.error === "string" &&
             evidence.error.length > 0,
           "EVIDENCE_REQUIRED",
@@ -1569,7 +1605,11 @@ export function execute(
         thread_id: threadId,
         group_snapshot: targetGroup ? structuredClone(targetGroup) : null,
       });
-      return { operation_id: op.id, outcome, thread_id: threadId };
+      const handoffNotice = outcome === "succeeded" && (op.request.creation_parameters as any)?.transport === "codex-exec"
+        ? addNotificationIntent(ledger, request, threadId!) : null;
+      if (handoffNotice) op.request.handoff_notification_id = handoffNotice.id;
+      return { operation_id: op.id, outcome, thread_id: threadId,
+        ...(handoffNotice ? { notification_request: notificationDeliveryRequest(handoffNotice) } : {}) };
     }
     case "execution-profile-migrate": {
       onlyMain(request.actor);
@@ -1711,6 +1751,18 @@ export function execute(
         execution_profile: profile,
       };
     }
+    case "dispatch-progress": {
+      onlyMain(request.actor);
+      const op = find(ledger.operations, item => item.id === string(payload.operation_id) && item.kind === "dispatch", "Dispatch");
+      requireCondition(activeOperation(op) && op.request.native_request_id === payload.native_request_id,
+        "NATIVE_REQUEST_CONFLICT", "Progress must match the active creation request", 3);
+      const threadId = string(payload.thread_id);
+      requireCondition(!op.request.observed_thread_id || op.request.observed_thread_id === threadId,
+        "THREAD_CONFLICT", "Creation reported conflicting thread identities", 3);
+      op.request.observed_thread_id = threadId;
+      addEvent(ledger, request, "dispatch_thread_observed", op.target_id, { operation_id: op.id, thread_id: threadId });
+      return { operation_id: op.id, thread_id: threadId };
+    }
     case "dispatch-bind-request": {
       onlyMain(request.actor);
       const op = find(
@@ -1758,19 +1810,24 @@ export function execute(
         3,
       );
       if (payload.creation_parameters !== undefined) {
-        op.request.creation_parameters = parse(
+        const parameters = parse(
           z
             .object({
               title: z.string().min(1),
               prompt: z.string().min(1),
               cwd: z.string().min(1),
               execution_profile: executionProfile,
+              transport: z.literal("codex-exec").optional(),
             })
             .strict(),
           payload.creation_parameters,
         );
+        requireCondition(!op.request.native_request_id || stable(op.request.creation_parameters) === stable(parameters),
+          "NATIVE_REQUEST_CONFLICT", "Creation parameters are frozen after native request binding", 3);
+        op.request.creation_parameters = parameters;
       }
       op.request.native_request_id = nativeId;
+      if ((op.request.creation_parameters as any)?.transport === "codex-exec") op.status = "unknown";
       addEvent(ledger, request, "dispatch_request_bound", op.target_id, {
         operation_id: op.id,
         native_request_id: nativeId,
@@ -1783,7 +1840,6 @@ export function execute(
     case "lifecycle-record": {
       const targetType = z.enum(["group", "task"]).parse(payload.target_type);
       const targetId = parse(id, payload.target_id);
-      requireDevelopmentTarget(ledger, targetType, targetId);
       const stage = z
         .enum(["workspace_ready", "workspace-ready"])
         .parse(payload.stage)
@@ -1835,6 +1891,26 @@ export function execute(
           "Workspace branch differs from the task branch",
           3,
         );
+      const cliDispatch = ledger.operations.find(op => op.kind === "dispatch" && op.target_id === targetId && (op.request.target_type ?? "task") === targetType &&
+        (op.request.creation_parameters as any)?.transport === "codex-exec" && op.status === "succeeded");
+      if (cliDispatch) {
+        const baseline = z.object({ sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+          head: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), clean: z.literal(true),
+          source: z.string().min(1), fetched_at: z.iso.datetime().optional() }).strict().parse(payload.baseline);
+        requireCondition(baseline.sha === baseline.head, "BASELINE_MISMATCH", "Align HEAD to the verified baseline before development", 4);
+        requireCondition(!cliDispatch.request.development_baseline || stable(cliDispatch.request.development_baseline) === stable(baseline),
+          "BASELINE_CONFLICT", "Creation baseline is immutable; use the explicit synchronization workflow", 4);
+        if (targetType === "group") {
+          requireCondition(!!baseline.fetched_at && Date.parse(baseline.fetched_at) >= Date.parse(cliDispatch.created_at),
+            "BASELINE_REQUIRED", "Group baseline requires a fresh remote fetch receipt after dispatch", 4);
+          if (!cliDispatch.request.development_baseline) target.current_sha = baseline.sha;
+        } else {
+          const group = find(ledger.groups, g => g.id === target.group_id, "Group");
+          requireCondition(group.current_sha === baseline.sha, "BASELINE_MISMATCH", "Task baseline must match its group parent SHA", 4);
+          target.base_sha = baseline.sha;
+        }
+        cliDispatch.request.development_baseline = baseline;
+      }
       if (targetType === "group") target.parent_branch ??= branch;
       else target.branch ??= branch;
       target.lifecycle[stage] = "passed";
@@ -2311,6 +2387,12 @@ export function execute(
         `Cannot move ${target.state} to ${state}`,
         3,
       );
+      if (state === "running" && ledger.operations.some(op => op.kind === "dispatch" && op.request.target_type !== "group" && op.target_id === taskId &&
+        (op.request.creation_parameters as any)?.transport === "codex-exec")) {
+        const op = ledger.operations.find(op => op.kind === "dispatch" && op.request.target_type !== "group" && op.target_id === taskId && op.status === "succeeded");
+        requireCondition(target.lifecycle.workspace_ready === "passed" && !!op?.request.development_baseline,
+          "BASELINE_REQUIRED", "Record verified workspace baseline before running", 4);
+      }
       const previousState = taskExecutionState(target);
       const occupiedSlot = target.state === "agent_idle";
       if (state === "running" && previousState !== "starting" && !occupiedSlot) {
@@ -2605,6 +2687,12 @@ export function execute(
       const state = z
         .enum(["unknown", "idle", "running", "waiting", "blocked"])
         .parse(payload.state);
+      const cliDispatches = ledger.operations.filter(op => op.kind === "dispatch" && op.target_id === groupId &&
+        op.request.target_type === "group" && (op.request.creation_parameters as any)?.transport === "codex-exec");
+      const cliDispatch = cliDispatches.find(op => op.status === "succeeded");
+      if (state === "running" && cliDispatches.length) requireCondition(
+        owner.lifecycle.workspace_ready === "passed" && !!cliDispatch?.request.development_baseline,
+        "BASELINE_REQUIRED", "Record verified group workspace baseline before running", 4);
       const executionTransitions: Record<string, string[]> = {
         unknown: ["unknown", "idle", "running", "waiting", "blocked"],
         idle: ["idle", "running", "waiting", "blocked"],
@@ -4071,9 +4159,10 @@ export function execute(
         "Notification event",
       );
       requireCondition(
-        original.actor_id === request.actor.thread_id,
+        original.actor_id === request.actor.thread_id || (request.actor.role === "main" &&
+          object(payload.provider_receipt).provider === "codex-app-tools"),
         "FORBIDDEN",
-        "Only the event sender can record notification delivery",
+        "Only the event sender or native main coordinator can record notification delivery",
         3,
       );
       requireCondition(
@@ -4091,6 +4180,8 @@ export function execute(
       const outcome = z
         .enum(["sent", "failed", "unknown"])
         .parse(payload.outcome);
+      requireCondition(object(payload.provider_receipt).provider !== "codex-app-tools" || outcome === "unknown",
+        "NATIVE_RECEIPT_REQUIRED", "Native delivery must claim an unknown attempt before reconciling the platform receipt", 5);
       requireNotificationRecipientActive(ledger, notice.recipient_thread_id);
       const attemptId = parse(id, payload.delivery_attempt_id);
       requireCondition(
@@ -4183,6 +4274,10 @@ export function execute(
         "Only an unknown delivery can be reconciled",
         4,
       );
+      const nativeAttempt = ledger.events.some(event => event.type === "notification_delivery_resolved" &&
+        event.data.delivery_attempt_id === notice.last_attempt_id && event.data.provider === "codex-app-tools");
+      if (nativeAttempt || payload.delivery_attempt_id !== undefined) requireCondition(payload.delivery_attempt_id === notice.last_attempt_id,
+        "ATTEMPT_MISMATCH", "Receipt must match the active delivery attempt", 3);
       const reconciliationId = parse(id, payload.reconciliation_id);
       requireCondition(
         !ledger.events.some(
@@ -4209,6 +4304,8 @@ export function execute(
         })
         .strict()
         .parse(payload.provider_receipt);
+      if (nativeAttempt || receipt.provider === "codex-app-tools") requireCondition(nativeAttempt && receipt.provider === "codex-app-tools",
+        "NATIVE_RECEIPT_REQUIRED", "Native attempt requires a matching platform provider", 5);
       notice.status = outcome;
       notice.delivery_status = outcome;
       notice.ack_status = "unacknowledged";
@@ -4243,6 +4340,8 @@ export function execute(
       };
     }
     case "notification-sent": {
+      requireCondition(object(payload.provider_receipt).provider !== "codex-app-tools",
+        "NATIVE_RECEIPT_REQUIRED", "Native delivery requires a claimed attempt and reconciled platform receipt", 5);
       const notice = find(
         ledger.notifications,
         (item) => item.id === string(payload.notification_id),
@@ -4256,7 +4355,7 @@ export function execute(
       requireCondition(
         original.actor_id === request.actor.thread_id,
         "FORBIDDEN",
-        "Only the event sender can record notification delivery",
+        "Only the event sender or native main coordinator can record notification delivery",
         3,
       );
       requireCondition(

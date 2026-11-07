@@ -88,3 +88,31 @@ export async function deliverClaimedNotification(
     });
   } finally { lock.release(); }
 }
+
+/** Claim once, release the OS lock, then let the caller use the desktop tool.
+ * An unknown durable attempt excludes every other sender until reconciliation. */
+export function prepareNativeNotification(
+  store: LedgerStore, parsed: Request, notificationId: string, prompt: string, direct = true,
+): unknown {
+  const requestId = direct ? parsed.request_id : `notification-native-${createHash("sha256").update(JSON.stringify([parsed.run_id, parsed.actor, parsed.request_id, notificationId])).digest("hex")}`;
+  const lock = flightLock(store, notificationId);
+  try {
+    return store.update(raw => {
+      const ledger = validateLedger(raw);
+      const prior = ledger.requests.find(item => item.request_id === requestId);
+      const attemptId = prior ? (prior.result as any).delivery_attempt_id : randomUUID();
+      const result: any = apply(raw, "notification-deliver", {
+        run_id: parsed.run_id, actor: parsed.actor, request_id: requestId,
+        expected_revision: direct ? parsed.expected_revision : ledger.revision,
+        payload: { notification_id: notificationId, delivery_attempt_id: attemptId, outcome: "unknown", prompt_digest: createHash("sha256").update(prompt).digest("hex"),
+          provider_receipt: { provider: "codex-app-tools", evidence_ref: `codex-app-tools:${attemptId}:intent` } },
+      });
+      const notice = validateLedger(raw).notifications.find(item => item.id === notificationId)!;
+      return { ...result, replayed: result.code === "REPLAYED", delivery_attempt_id: attemptId, should_send: result.code !== "REPLAYED",
+        next_action: result.code === "REPLAYED" ? "notification-reconcile" : "send_message_to_thread",
+        tool_request: result.code === "REPLAYED" ? null : { threadId: notice.recipient_thread_id, prompt },
+        receipt_command: "notification-reconcile",
+        receipt_identity: { notification_id: notificationId, delivery_attempt_id: attemptId } };
+    });
+  } finally { lock.release(); }
+}

@@ -186,13 +186,13 @@ type Ledger = {
 | `follow-pr-update` | `follow_pr_id`, `origin_task_id`, `origin_group_id`, `pr`, `target_branch`, `affected_task_ids` | 登记 follow PR；后续合并结果通过 `merge-resolve` 记账并保留原交付单元归属 |
 | `fact-record` | `fact` | 记录核实的非合并、非子 PR 验收事实 |
 | `notification-deliver` | `notification_id`, `delivery_attempt_id`, `outcome: 'sent' \| 'failed' \| 'unknown'`, `provider_receipt`，失败可带 `error` | 由 CLI 在 Codex Agent API 返回后写回真实结果；`ledger_status` 已提交后，失败不得回滚通知意图；同一 attempt 不得重复记账 |
-| `notification-send` | 普通请求信封，`payload.notification_id` | CLI 通过 Codex Agent API 的 `send_message_to_thread` 发送一条新尝试，并自动调用 `notification-deliver` 写回真实结果；只允许 `pending` 或明确 `failed`，`unknown` 必须先对账 |
+| `notification-send` | 普通请求信封，`payload.notification_id` | `notification-prepare` 的兼容名称：持久领取一条新尝试，返回原生发送参数；主对话发送后显式写回平台回执。只允许 `pending` 或明确 `failed`，`unknown` 必须先对账 |
 | `notification-reconcile` | 查询形式带 `run_id`, `actor`, 可选 `status`；写入形式另带 `request_id`, `expected_revision`, `notification_id`, `reconciliation_id`, `outcome`, `provider_receipt` | 查询形式列出待处理通知；写入形式只允许核对 `unknown`，不得发送消息，必须由发送方或 `main` 提交平台查询证据 |
 | `notification-ack` | `notification_id`, `handling_evidence` | 只有 `recipient_thread_id` 对应会话可以确认；`sent` 不自动变成 `acknowledged` |
 | `view` | 可选 `plan_id` | 生成只读视图，不改变调度状态 |
 | `group-close` / `run-complete` / `resource-update` | `group_id`、完成证据或 `resource`；`group-close` 可选 `notification` 或 `notify_main` | 核查交付单元和编排的完成条件，分别记录各资源收口；`group-close` 默认按原规则创建通知意图 |
 
-复合通知能力由 CLI 直接调用 Codex app-server：先执行带 `notification.mode` 的记账命令，提交 `pending` 意图；若命令产生通知请求，CLI 使用返回的 `recipient_thread_id`，通过 Unix WebSocket 控制面调用 `turn/start`；最后用 `notification-deliver` 写入带 `provider`、`evidence_ref` 和可选 `message_id` 的真实结果。CLI 不把写入 `pending` 报告为“已通知”，也不把 `sent` 报告为“已读”。`notification-send` 是恢复期间的显式新尝试入口；`notification-reconcile` 只查询或核对未知结果。对未列明的命令拒绝执行；计划、状态机和具体事件结构随 Skill 同时提供可执行 JSON Schema 和测试，而不是让 Agent 自由修改 JSON。
+复合通知通过持久领取、原生发送、回执对账完成。记账命令提交 pending 意图后领取唯一 attempt 并设 unknown，返回 should_send、tool_request 和回执 identity；只有新领取者可调用桌面内置 send_message_to_thread。随后 notification-reconcile 必须带相同 delivery_attempt_id 和真实 provider/evidence_ref/message_id，区分 sent、failed、unknown。重放 should_send=false，不重复调用平台；未知结果先对账。历史 CLI 发送的在途文件锁继续保护，原生领取不跨工具调用持有文件锁。通知发送接受不代表已读或实际开工。
 
 ### 状态与就绪判定
 
