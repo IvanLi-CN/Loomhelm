@@ -67,6 +67,6 @@ export class SkillsRuntime {
     const firstLine = (await readFile(target, 'utf8')).split('\n', 1)[0]!;
     const executable = script.endsWith('.ts') ? process.execPath : script.endsWith('.sh') ? '/bin/bash' : script.endsWith('.py') ? 'python3' : /^#!.*\bruby\b/.test(firstLine) ? 'ruby' : /^#!.*\b(bash|sh)\b/.test(firstLine) ? '/bin/bash' : undefined;
     if (!executable) throw new Error('Unsupported toolkit script interpreter');
-    return runProcess(executable, [...(executable === '/bin/bash' ? ['-p'] : []), target, ...args], options);
+    return runProcess(executable, [...(script.endsWith('.ts') ? ['--no-install'] : executable === '/bin/bash' ? ['-p'] : []), target, ...args], options);
   }
 }

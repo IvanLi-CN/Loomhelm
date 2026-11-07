@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-install
 import { readFileSync, writeFileSync } from 'node:fs';
 const manifest = JSON.parse(readFileSync('skills/source-manifest.json', 'utf8'));
 const files = manifest.files;

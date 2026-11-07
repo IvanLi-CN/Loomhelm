@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-install
 import { LocalClient } from './client.ts';
 import { StateLock } from './runtime/lock.ts';
 import { loadConfig } from './config.ts';
@@ -23,7 +23,7 @@ async function main(args: string[]): Promise<void> {
   if (command === 'workflow') {
     if (rest[0] === 'verify') throw new Error('WORKFLOW_LEGACY_COMMAND_UNSUPPORTED: use local-verify for local validation only; follow the migrated engineering Skills for delivery gates');
     if (!rest.length) throw new Error('Usage: workflow skills PROJECT_SKILLS_DIR [USER_SKILLS_DIR] | local-verify MANIFEST_JSON_PATH');
-    const result = await runProcess(process.execPath, [fileURLToPath(new URL('./workflow/cli.ts', import.meta.url)), ...rest]);
+    const result = await runProcess(process.execPath, ['--no-install', fileURLToPath(new URL('./workflow/cli.ts', import.meta.url)), ...rest]);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.code !== 0) process.exitCode = result.code ?? 1;

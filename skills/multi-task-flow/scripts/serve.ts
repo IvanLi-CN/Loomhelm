@@ -42,7 +42,7 @@ function registryJson(
   failureCode = "LEASE_OPERATION_FAILED",
 ): Record<string, unknown> {
   const result = Runtime.spawnSync(
-    [process.execPath, registry, "--json", command, ...options],
+    [process.execPath, "--no-install", registry, "--json", command, ...options],
     { stdout: "pipe", stderr: "pipe" },
   );
   const stderr = result.stderr.toString().trim();

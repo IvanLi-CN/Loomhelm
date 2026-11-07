@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-install
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, realpathSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -32,20 +32,32 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
   }
   const sourceComplete = missing.length === 0 && modified.length === 0 && escapedImports.length === 0;
   const runtime = { name: 'bun', required: '1.4.4', actual: typeof Bun === 'undefined' ? null : Bun.version, available: typeof Bun !== 'undefined' && Bun.version === '1.4.4' };
-  const entrypoints = { status: 'not_checked', results: [] };
-  if (probe && sourceComplete && runtime.available) {
+  const declared = sourceComplete ? JSON.parse(readFileSync(resolve(root,'skills/package.json'),'utf8')).dependencies ?? {} : {};
+  const dependencyRoots = [resolve(root,'skills/node_modules')];
+  // The independent client declares and prepares its packaged toolkit dependencies.
+  const clientPackage = resolve(root,'../package.json');
+  try {
+    if (sourceComplete && root.endsWith('/toolkit') && existsSync(clientPackage) && JSON.parse(readFileSync(clientPackage,'utf8')).name === '@loomhelm/client') dependencyRoots.push(resolve(root,'../node_modules'));
+  } catch { /* Invalid parent metadata cannot authorize a dependency fallback. */ }
+  const dependencyMissing = Object.entries(declared).filter(([name,version]) => !dependencyRoots.some(directory => {
+    const file=resolve(directory,name,'package.json');
+    try { return realpathSync(file).startsWith(realpathSync(directory)+'/') && JSON.parse(readFileSync(file,'utf8')).version === version; } catch { return false; }
+  })).map(([name])=>name);
+  const dependencies = { status:!sourceComplete ? 'not_checked' : dependencyMissing.length ? 'missing' : 'prepared', missing:dependencyMissing };
+  const entrypoints = { status: dependencyMissing.length ? 'blocked' : 'not_checked', results: [] };
+  if (probe && sourceComplete && runtime.available && dependencyMissing.length === 0) {
     for (const [script, args] of [['skills/bin/plan-cli.sh',['--help']], ['skills/dot-codex-development/scripts/context.ts',['--help']], ['skills/multi-task-flow/scripts/orchestrate.ts',['view','--input','-']]]) {
-      const result = spawnSync(script.endsWith('.sh') ? '/bin/bash' : process.execPath, [...(script.endsWith('.sh') ? ['-p'] : []), resolve(root,script), ...args], { cwd:root, env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0' }, input:'{}', encoding:'utf8', timeout:30000 });
+      const result = spawnSync(script.endsWith('.sh') ? '/bin/bash' : process.execPath, [...(script.endsWith('.sh') ? ['-p'] : ['--no-install']), resolve(root,script), ...args], { cwd:root, env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0' }, input:'{}', encoding:'utf8', timeout:30000 });
       const expected = script.endsWith('orchestrate.ts') ? 2 : 0;
       entrypoints.results.push({script, code:result.status, ok:!result.error && result.status === expected, error: result.error ? String(result.error) : result.status === expected ? undefined : result.stderr});
     }
     entrypoints.status = entrypoints.results.every(result => result.ok) ? 'passed' : 'failed';
   }
   return {
-    runtime, sourceComplete, entrypoints,
+    runtime, sourceComplete, dependencies, entrypoints,
     ready: sourceComplete && runtime.available && entrypoints.status === 'passed',
     ok: sourceComplete && (!probe || (runtime.available && entrypoints.status === 'passed')),
-    code: missing.length || modified.length || escapedImports.length ? 'SKILLS_INSTALLATION_INCOMPLETE' : 'SKILLS_SOURCE_LAYOUT_COMPLETE',
+    code: missing.length || modified.length || escapedImports.length ? 'SKILLS_INSTALLATION_INCOMPLETE' : probe && dependencyMissing.length ? 'SKILLS_RUNTIME_DEPENDENCY_MISSING' : 'SKILLS_SOURCE_LAYOUT_COMPLETE',
     root, skills: manifest.skills.length, missing, modified, escapedImports,
     // Host capabilities remain separate from these source and executable probes.
     scope: 'source-resource-layout',

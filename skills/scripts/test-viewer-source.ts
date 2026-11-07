@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-install
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';

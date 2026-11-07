@@ -20,7 +20,7 @@ Pick the next implementable spec when the repo still uses a **task-queue-style**
 In the target repo root:
 
 ```bash
-bun $LOOMHELM_TOOLKIT_ROOT/skills/find-next-plan/scripts/find_next_plan.ts --repo . --format json
+bun --no-install $LOOMHELM_TOOLKIT_ROOT/skills/find-next-plan/scripts/find_next_plan.ts --repo . --format json
 ```
 
 ## Selection rules

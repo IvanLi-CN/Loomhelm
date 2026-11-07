@@ -13,6 +13,12 @@ test('a source-only skills installation runs official TS entrypoints and detects
   const sources = new Set([...manifest.files,...manifest.additions].map(file => resolve(source,'..',file.path)));
   try {
     cpSync(source, join(isolated,'skills'), { recursive:true, filter:path => !['node_modules','.cache','dist'].includes(path.split('/').at(-1)) && !path.endsWith('.node') && (!path.endsWith('.js') || sources.has(path)) });
+    const unprepared = checkSkillsInstallation(isolated,{probe:true});
+    assert.equal(unprepared.sourceComplete,true);
+    assert.equal(unprepared.ready,false); assert.equal(unprepared.ok,false);
+    assert.equal(unprepared.code,'SKILLS_RUNTIME_DEPENDENCY_MISSING');
+    assert.deepEqual(unprepared.dependencies.missing.sort(),['sharp','zod']);
+    assert.equal(unprepared.entrypoints.status,'blocked');
     const install = spawnSync(process.execPath, ['install','--cwd',join(isolated,'skills'),'--frozen-lockfile','--ignore-scripts','--backend=copy'], {env:process.env,encoding:'utf8'});
     assert.equal(install.status,0,install.stderr);
     const report = checkSkillsInstallation(isolated,{probe:true});

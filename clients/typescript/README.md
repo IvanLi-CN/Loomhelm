@@ -5,12 +5,12 @@
 ```sh
 bun install --frozen-lockfile
 bun install --cwd skills/multi-task-flow --frozen-lockfile
-bun run skills:build
+bun --no-install run skills:build
 cd clients/typescript
 bun install --frozen-lockfile
-bun run check
-bun test test/*.test.mjs
-bun src/cli.ts --config config.example.json status
+bun --no-install run check
+bun --no-install run test
+bun --no-install src/cli.ts --config config.example.json status
 ```
 
 配置路径显式传入；相对 `stateDir` 相对于配置文件所在目录解析。未传配置时使用 `~/.loomhelm`。配置拒绝未知字段、未知版本及尚未实现的 Connected mode。源码从 `client/` 移入本目录后，示例配置使用 `../../client/.loomhelm`，继续读取仓库中原来的 `client/.loomhelm/`，该目录仍被根 Git 忽略规则排除。此兼容目录只保存状态，不放置客户端源码。
@@ -20,10 +20,10 @@ bun src/cli.ts --config config.example.json status
 ## 本地任务闭环
 
 ```sh
-bun src/cli.ts --config config.example.json apply create-example '{"type":"task.create","task":{"id":"example","goal":"验证客户端","scope":"本地客户端","acceptance":"验证命令退出成功","dependencies":[]}}'
-bun src/cli.ts --config config.example.json run verify-example example '["bun","--version"]'
-bun src/cli.ts --config config.example.json tasks
-bun src/cli.ts --config config.example.json receipts
+bun --no-install src/cli.ts --config config.example.json apply create-example '{"type":"task.create","task":{"id":"example","goal":"验证客户端","scope":"本地客户端","acceptance":"验证命令退出成功","dependencies":[]}}'
+bun --no-install src/cli.ts --config config.example.json run verify-example example '["bun","--version"]'
+bun --no-install src/cli.ts --config config.example.json tasks
+bun --no-install src/cli.ts --config config.example.json receipts
 ```
 
 命令输出 JSON；参数、I/O 或执行失败返回非零退出码。`run` 使用参数数组启动真实进程，将退出码、信号、有界 stdout/stderr 写入收据。Task 的可选 `repository` 指定命令工作目录，缺省继承 CLI 工作目录。相同 operation identity 和命令返回既有收据，不重复执行；改变请求内容会被拒绝。失败任务使用新的 operation identity 显式重试。`apply` 暴露底层事实接口，嵌入式使用者通过 `LocalClient`/`Ledger` 在同一个生命周期内完成 start/finish。
@@ -41,8 +41,8 @@ bun src/cli.ts --config config.example.json receipts
 ## Git/worktree
 
 ```sh
-bun src/cli.ts git-status /absolute/repository
-bun src/cli.ts worktree /absolute/repository /absolute/new-worktree feat/local-task HEAD
+bun --no-install src/cli.ts git-status /absolute/repository
+bun --no-install src/cli.ts worktree /absolute/repository /absolute/new-worktree feat/local-task HEAD
 ```
 
 适配器检查干净源目录、有效分支、新目标和已解析的提交 SHA，使用 `git worktree add -b` 创建新分支与 worktree。它不清理已有路径、不强制覆盖、不更改 remote/upstream、不提交、不推送。失败时保留 Git 返回的信息与可能产生的资源，交由调用者核对；不自动执行破坏性回滚。创建资源后源目录的并发外部变化属于调用者协调边界。
@@ -52,11 +52,11 @@ bun src/cli.ts worktree /absolute/repository /absolute/new-worktree feat/local-t
 顶层 CLI 通过自有的 Codex app-server 子进程接入 `ThreadDispatcher`；dispatch 日志和请求配置保存在 `stateDir` 下的独立目录。线程参数使用 `thread/start.model`、`thread/start.config.model_reasoning_effort`；turn 参数使用 `turn/start.input` 和 `turn/start.effort`。CLI 会等待匹配线程与 turn 的 `turn/completed` 事件，不会把 `turn/start` 响应当作任务成功。
 
 ```sh
-bun src/cli.ts --config config.example.json codex dispatch REQUEST_ID '{"title":"Local worker","prompt":"Inspect the task","cwd":"/absolute/repo","model":"gpt-6.1-sol","effort":"high"}'
-bun src/cli.ts --config config.example.json codex list
-bun src/cli.ts --config config.example.json codex reconcile DISPATCH_ID
-bun src/cli.ts --config config.example.json codex approve DISPATCH_ID
-bun src/cli.ts --config config.example.json codex retry DISPATCH_ID accept
+bun --no-install src/cli.ts --config config.example.json codex dispatch REQUEST_ID '{"title":"Local worker","prompt":"Inspect the task","cwd":"/absolute/repo","model":"gpt-6.1-sol","effort":"high"}'
+bun --no-install src/cli.ts --config config.example.json codex list
+bun --no-install src/cli.ts --config config.example.json codex reconcile DISPATCH_ID
+bun --no-install src/cli.ts --config config.example.json codex approve DISPATCH_ID
+bun --no-install src/cli.ts --config config.example.json codex retry DISPATCH_ID accept
 ```
 
 未显式提供决定时，CLI 会向 Codex 明确拒绝审批请求。可在派发 JSON 中传入 `approvalDecision`：`accept`、`decline` 或 `cancel`。重试失败或结果未知的派发前，必须先单独调用 `approve`；重试命令中的审批决定只用于处理该次重试期间出现的审批请求。RPC 明确拒绝会记为失败；响应丢失和完成等待超时会记为未知。重复使用 request ID 会读取既有日志，不会创建第二个线程。若进程在预留任务后、保存 thread ID 前退出，日志会留下未决的 `created` 记录，并对外报告为未知；由于无法证明 Codex 是否已创建线程，CLI 会禁止在缺少 thread ID 时批准或重试。
@@ -65,15 +65,15 @@ bun src/cli.ts --config config.example.json codex retry DISPATCH_ID accept
 
 完整源包位于根 `skills/`，共享支持位于根 `skills/bin/`。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度。上游合同归档在 `skills/docs/vendor/dot-codex/`，不替代本项目规范。资源打包将 TS 源码、完整资源及浏览器资产复制到 `toolkit/`，不转译、不搜索全局 dot-codex 执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
 
-所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，上游合同在 `skills/docs/vendor/dot-codex/`，维护与构建入口在 `skills/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow --frozen-lockfile` 准备声明的依赖，再执行 `bun run --cwd skills build` 仅构建浏览器 JS/CSS；本机 TS 无需编译。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
+所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，上游合同在 `skills/docs/vendor/dot-codex/`，维护与构建入口在 `skills/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow --frozen-lockfile` 准备声明的依赖，再执行 `bun --no-install run --cwd skills build` 仅构建浏览器 JS/CSS；本机 TS 无需编译。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
 
-`bun skills/scripts/check-skills-installation.ts --root <installation-root> --probe` 分别报告源码完整性、Bun 运行时及实际入口探测；宿主能力单独验收。该检查不会修改任何用户级安装或运行账本。
+`bun --no-install skills/scripts/check-skills-installation.ts --root <installation-root> --probe` 分别报告源码完整性、Bun 运行时及实际入口探测；宿主能力单独验收。该检查不会修改任何用户级安装或运行账本。
 
 ```sh
-bun src/cli.ts skills list
-bun src/cli.ts skills check project-engineering-workflow
-bun src/cli.ts skills run skills/bin/plan_contract_check.ts --plan - < plan.md
-bun src/cli.ts flow view --input - < view-request.json
+bun --no-install src/cli.ts skills list
+bun --no-install src/cli.ts skills check project-engineering-workflow
+bun --no-install src/cli.ts skills run skills/bin/plan_contract_check.ts --plan - < plan.md
+bun --no-install src/cli.ts flow view --input - < view-request.json
 ```
 
 `flow COMMAND --input -` 原样承接 Multi-task Flow 请求、JSON 输出和退出码，账本仍为 schema_version=2 / contract_version=2。生产 socket 优先级为 `--socket` / 配置 `codexAppServerSocket`、`LOOMHELM_CODEX_APP_SERVER_SOCKET`、`CODEX_APP_SERVER_SOCKET`、原 Codex 默认路径。普通 fresh dispatch 与活跃运行的 conversation-create 具有不同授权和回执合同，不能互相冒充。

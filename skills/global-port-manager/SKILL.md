@@ -68,7 +68,7 @@ Common flags:
 ### Allocate (recommended for new worktree/service)
 
 ```bash
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
   allocate \
   --scope-id <id> \
   --project <project> \
@@ -88,7 +88,7 @@ Behavior:
 ### Register (explicit port)
 
 ```bash
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
   register \
   --scope-id <id> \
   --service <service> \
@@ -107,25 +107,25 @@ Dashboard wrappers that own startup must use the registry's atomic claim-and-run
 ### Heartbeat
 
 ```bash
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
   heartbeat --scope-id <id> --service <service> [--port <port>] [--pid <pid>] [--expected-pid <pid>] [--agent-session <session-id>]
 ```
 
 ### Inspect
 
 ```bash
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json inspect
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json inspect --scope-id <id>
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json inspect --port <port>
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json inspect
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json inspect --scope-id <id>
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json inspect --port <port>
 ```
 
 ### Release
 
 ```bash
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
   release-service --scope-id <id> --service <service>
 
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json \
   release-scope --scope-id <id>
 ```
 
@@ -136,7 +136,7 @@ Compatibility:
 ### GC
 
 ```bash
-bun "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json gc
+bun --no-install "${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/global-port-manager/scripts/port_registry.ts" --json gc
 ```
 
 ## Default contract for long-lived local services

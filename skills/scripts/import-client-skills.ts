@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-install
 // Maintenance-only importer. Never reads the provider's working-tree files.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';

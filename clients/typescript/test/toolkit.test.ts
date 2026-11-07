@@ -1,6 +1,6 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, realpath, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SkillsRuntime } from '../src/index.ts';
@@ -62,4 +62,26 @@ test('canonical ledger initializes and reads unchanged schema2/contract2 state a
     assert.equal(viewed.code, 0, viewed.stdout + viewed.stderr);
     assert.equal(await readFile(path, 'utf8'), before);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('missing runtime dependencies fail without registry access or cache writes', async () => {
+  const root=await realpath(await mkdtemp(join(tmpdir(),'loomhelm-no-install-')));
+  let requests=0;
+  const registry=Bun.serve({hostname:'127.0.0.1',port:0,fetch(){requests++;return new Response('{}',{status:404});}});
+  try {
+    const script='skills/bin/no-install-probe.ts';
+    const dependency='loomhelm-missing-'+crypto.randomUUID();
+    await mkdir(join(root,'skills/bin'),{recursive:true});
+    await mkdir(join(root,'cache'));
+    await mkdir(join(root,'home'));
+    await writeFile(join(root,'package.json'),JSON.stringify({name:'loomhelm-no-install-test',type:'module',dependencies:{[dependency]:'1.0.0'}}));
+    await writeFile(join(root,'.npmrc'),'registry=http://127.0.0.1:'+registry.port+'/\n');
+    await writeFile(join(root,script),`import ${JSON.stringify(dependency)}; console.log('unexpected execution');`);
+    await writeFile(join(root,'skills/source-manifest.json'),JSON.stringify({...await runtime.manifest(),files:[{path:script,source:script,sourceSha256:''}]}));
+    // Force fallback mode to exercise absence even when the test checkout has ancestor node_modules.
+    const result=await new SkillsRuntime(root).run(script,[],{cwd:root,timeoutMs:10000,env:{...process.env,HOME:join(root,'home'),BUN_INSTALL_CACHE_DIR:join(root,'cache'),BUN_OPTIONS:'--install=fallback',BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0'}});
+    assert.notEqual(result.code,0); assert.doesNotMatch(result.stdout,/unexpected execution/);
+    assert.equal(requests,0,'runtime must not contact a registry');
+    assert.deepEqual(await readdir(join(root,'cache')),[],'runtime must not write a package cache');
+  } finally {registry.stop(true);await rm(root,{recursive:true,force:true});}
 });
