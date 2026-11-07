@@ -98,6 +98,7 @@ jobs:
   publish:
     permissions:
       contents: write
+      pull-requests: read
       checks: read
       actions: read
     needs: [resolve, build]

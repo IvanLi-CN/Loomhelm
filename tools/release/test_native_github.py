@@ -88,3 +88,9 @@ class NativeGitHubTests(unittest.TestCase):
         with self.assertRaises(ReleaseError):ledger.append(ledger.state)
         self.assertEqual(ledger.head, 'a'*40)
         self.assertEqual(ledger.original, before)
+
+    def test_storage_seed_does_not_require_notifier_pr_or_check_permissions(self):
+        api=GitHub('owner/repo')
+        api.api=Mock(side_effect=[{'sha':'a'*40,'commit':{'verification':{'verified':True}}},{'status':'ahead'}])
+        api.verify_seed('a'*40)
+        self.assertEqual([c.args[0] for c in api.api.call_args_list],['commits/'+'a'*40,'compare/'+'a'*40+'...main'])

@@ -105,6 +105,15 @@ class GitHub:
                 return result
             page += 1
 
+    def verify_seed(self, sha):
+        # The seed is storage ancestry, not released product source. It needs
+        # signed main ancestry, but no PR/check read permission in the notifier.
+        commit = self.api('commits/'+sha)
+        if commit['sha'] != sha or not commit['commit']['verification']['verified']:
+            raise ReleaseError('unverified ledger seed')
+        if self.api('compare/'+sha+'...main')['status'] not in ('ahead','identical'):
+            raise ReleaseError('ledger seed is outside main history')
+
     def verify_source(self, sha, required_checks):
         commit = self.api('commits/'+sha)
         if commit['sha'] != sha or not commit['commit']['verification']['verified']:

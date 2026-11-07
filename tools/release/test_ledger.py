@@ -69,7 +69,7 @@ class LedgerTests(unittest.TestCase):
                 self.assertEqual(ledger.read(),state)
                 self.assertEqual(ledger.read(),state)
                 api.verify_record_commit.assert_called_with(first)
-                api.verify_source.assert_called_with(seed,[])
+                api.verify_seed.assert_called_with(seed)
                 state['releases']['one']['events'].append({'sequence':2,'kind':'notification'})
                 Path('ledger.json').write_text(json.dumps(state))
                 run('add','ledger.json');run('commit','--signoff','-m','chore: fixture append')

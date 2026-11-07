@@ -41,7 +41,7 @@ class Ledger:
                 history = []
                 for sha in git('rev-list','--first-parent',self.head).stdout.decode().split():
                     if git('cat-file','-e',f'{sha}:ledger.json',check=False).returncode:
-                        self.api.verify_source(sha,[])
+                        self.api.verify_seed(sha)
                         break
                     self.api.verify_record_commit(sha)
                     history.append(json.loads(git('show',f'{sha}:ledger.json').stdout))
@@ -59,7 +59,7 @@ class Ledger:
             if content.returncode:
                 if not self.signed:
                     raise ReleaseError('ledger content missing')
-                self.api.verify_source(self.head,[])
+                self.api.verify_seed(self.head)
                 self.api.require_empty_release_history()
             else:
                 self.state = json.loads(content.stdout)
