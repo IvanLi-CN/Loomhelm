@@ -1,4 +1,6 @@
 export type AgentOutput = {
+  thread_title?: string | null;
+  sent_at?: string | null;
   state: "available" | "no_conversation" | "empty" | "unavailable";
   text: string | null;
   thread_id: string | null;

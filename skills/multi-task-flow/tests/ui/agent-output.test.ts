@@ -20,15 +20,15 @@ test("distinguishes all empty states and keeps the unavailable warning outside c
   expect(node.querySelector(".agent-output-warning")?.textContent).toContain("暂时不可用");
   expect(node.querySelector(".agent-output-text .agent-output-warning")).toBeNull();
 });
-test("updates three regions together without replacing unrelated controls or focus", () => {
+test("updates output regions while keeping task previews free of messages and preserving focus", () => {
   const button = document.createElement("button"); document.body.append(button);
   const card = renderTaskOutput(null, available("old"), "a");
-  const hover = renderTaskPreview({ title: "task", state: "执行中", kind: "开发", group: "g", startedAt: "未知", finishedAt: "未知", duration: "26分", blocker: null, latestOutput: null, output: available("old"), taskId: "a" });
+  const hover = renderTaskPreview({ title: "task", state: "执行中", kind: "开发", group: "g", startedAt: "未知", finishedAt: "未知", duration: "26分", blocker: null });
   const detail = document.createElement("div"); detail.dataset.outputTaskId = "a"; detail.dataset.outputFull = "true";
   document.body.append(card, hover, detail); button.focus();
   const before = locationSafe();
   refreshOutputNodes(document, [{ id: "a", latest_agent_output: available("new\nanswer") }]);
-  expect(card.textContent).toBe("new answer"); expect(hover.querySelector("[data-output-task-id]")?.textContent).toBe("new answer"); expect(detail.textContent).toBe("new\nanswer");
+  expect(card.textContent).toBe("new answer"); expect(hover.querySelector("[data-output-task-id]")).toBeNull(); expect(detail.textContent).toBe("new\nanswer");
   expect(document.activeElement).toBe(button); expect(locationSafe()).toBe(before);
   const text = card.firstChild; refreshOutputNodes(document, [{ id: "a", latest_agent_output: available("new\nanswer") }]); expect(card.firstChild).toBe(text);
 });

@@ -17,7 +17,6 @@ type DetailContentContext = {
   labelTask: (task: Task) => string;
   time: (value: string | null) => string;
   safeExternal: (url: string | null) => string | null;
-  groupRange: (groupId: string, tasks: Task[]) => { start: string | null; end: string | null };
   profileContext?: () => ProfileEditorContext;
   archiveConversation?: ArchiveAction;
 };
@@ -199,7 +198,6 @@ export function createDetailContent(context: DetailContentContext) {
     container.replaceChildren();
     container.className = "";
     const tasks = data.tasks.filter((task) => task.group_id === group.id);
-    const range = context.groupRange(group.id, tasks);
     const historicalTaskIds = [...new Set(data.actual_intervals.filter((row) => row.group_id === group.id).map((row) => row.task_id))];
     const executionState = groupExecutionVisualState(group.state, group.coordination_execution?.state);
     container.append(text("div", group.title, "detail-title"), text("div", context.labels[executionState] ?? executionState, "detail-state"));
@@ -219,7 +217,7 @@ export function createDetailContent(context: DetailContentContext) {
     if (group.coordination_execution?.state === "blocked") field(container, "协调阻塞", group.coordination_execution.reason ?? "未知原因");
     field(container, "任务数", `${tasks.length} 个任务`);
     if (historicalTaskIds.length) field(container, "历史执行任务", historicalTaskIds.map((id) => data.tasks.find((task) => task.id === id)?.title ?? id).join("、"));
-    field(container, "持续时间", durationValue(range.start, range.end));
+    field(container, "持续时间", durationValue(group.started_at ?? null, group.finished_at ?? null));
     if (context.profileContext) {
       const profileContext = context.profileContext();
       field(container, "执行配置", createProfileEditor(profileContext, "group", group.id, group.execution_profile ?? null, group.effective_execution_profile ?? data.orchestration.execution_profile ?? null, data.profile_read_only ? "当前视图只读或尚未迁移" : group.profile_freeze_reason ?? (group.agent_thread_id ? "对话已创建" : null)));
@@ -234,18 +232,15 @@ export function createDetailContent(context: DetailContentContext) {
     const data = context.getData();
     const group = data?.groups.find((item) => item.id === task.group_id);
     const executionGroups = [...new Set(data?.actual_intervals.filter((row) => row.task_id === task.id).map((row) => row.group_id) ?? [])].map((id) => data?.groups.find((item) => item.id === id)?.title ?? id);
-    return renderTaskPreview({ title: task.title, state: context.labelTask(task), kind: taskKindLabel(task.kind), group: group?.title ?? task.group_id, startedAt: task.started_at ?? "", finishedAt: task.finished_at ?? "", duration: formatDuration(task.started_at, task.finished_at), blocker: task.blocker, latestOutput: task.latest_output?.trim() || null, output: task.latest_agent_output ?? initialOutput(task.thread_id), taskId: task.id, ...(executionGroups.length > 1 ? { executionGroups: executionGroups.join("、") } : {}) });
+    return renderTaskPreview({ title: task.title, state: context.labelTask(task), kind: taskKindLabel(task.kind), group: group?.title ?? task.group_id, startedAt: task.started_at ?? "", finishedAt: task.finished_at ?? "", duration: formatDuration(task.started_at, task.finished_at), blocker: task.blocker, ...(executionGroups.length > 1 ? { executionGroups: executionGroups.join("、") } : {}) });
   };
 
   const groupPreview = (group: Group): HTMLElement => {
-    const data = context.getData();
-    const tasks = data?.tasks.filter((task) => task.group_id === group.id) ?? [];
-    const range = context.groupRange(group.id, tasks);
     const executionState = groupExecutionVisualState(group.state, group.coordination_execution?.state);
     const atoms = group.atoms ?? group.planned_atoms ?? [];
     const atom = atoms.find((item) => item.status === "running" || item.status === "blocked") ?? atoms.find((item) => item.status === "planned");
     const progress = atoms.length === 0 ? "未配置原子任务" : atoms.every((item) => item.status === "completed") ? `${atoms.length}/${atoms.length} · 已完成` : atom ? `${atoms.indexOf(atom) + 1}/${atoms.length} · ${atom.title}` : `0/${atoms.length} · 待开始`;
-    return renderGroupPreview({ title: group.title, state: context.labels[executionState] ?? executionState, atomProgress: progress, duration: formatDuration(range.start, range.end), conversation: group.delivery_unit_kind === "bootstrap" ? "主对话" : group.agent_thread_id ? "已创建" : "尚未创建", parentPr: context.safeExternal(group.parent_pr?.url ?? null) ? "已关联" : "尚未创建" });
+    return renderGroupPreview({ title: group.title, state: context.labels[executionState] ?? executionState, atomProgress: progress, duration: formatDuration(group.started_at ?? null, group.finished_at ?? null), conversation: group.delivery_unit_kind === "bootstrap" ? "主对话" : group.agent_thread_id ? "已创建" : "尚未创建", parentPr: context.safeExternal(group.parent_pr?.url ?? null) ? "已关联" : "尚未创建" });
   };
   return { clearDetails, showTask, showGroup, taskPreview, groupPreview };
 }

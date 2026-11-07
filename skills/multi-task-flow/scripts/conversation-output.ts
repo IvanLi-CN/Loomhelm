@@ -1,3 +1,4 @@
+import { messageSentAt } from "./conversation-history";
 import { latestConversationOutput } from "./conversation-history";
 export { messageOutput } from "./conversation-history";
 import { randomUUID } from "node:crypto";
@@ -28,7 +29,7 @@ type ThreadState = {
   activeTurnId: string | null;
   items: Map<
     string,
-    { rank: number; text: string; phase: string | null; done: boolean }
+    { rank: number; text: string; phase: string | null; done: boolean; sent_at: string | null }
   >;
   rank: number;
   selectedRank: number;
@@ -39,6 +40,9 @@ type ThreadState = {
 };
 /** Latest output is ephemeral and independent of ledger revision. */
 export class ConversationOutputs {
+  private titles = new Map<string, string | null>();
+  private titleReads = new Set<string>();
+  private titleReadAt = new Map<string, number>();
   private bindings = new Map<string, string | null>();
   private threads = new Map<string, ThreadState>();
   private connection: Connection | null = null;
@@ -62,12 +66,7 @@ export class ConversationOutputs {
       output_epoch: this.epoch,
       output_revision: this.revision,
       outputs: Object.fromEntries(
-        [...this.bindings].map(([id, thread]) => [
-          id,
-          thread
-            ? (this.threads.get(thread)?.output ?? initialOutput(thread))
-            : initialOutput(null),
-        ]),
+        [...this.bindings].flatMap(([id, thread]) => { const output = thread ? ({ ...(this.threads.get(thread)?.output ?? initialOutput(thread)), thread_title: this.titles.get(thread) ?? null }) : initialOutput(null); return id.startsWith("task:") ? [[id, output], [id.slice(5), output]] : [[id, output]]; }),
       ),
     };
   }
@@ -79,7 +78,7 @@ export class ConversationOutputs {
     const wanted = new Set([...next.values()].filter((t): t is string => !!t));
     this.connection?.subscriptions?.retain(wanted);
     for (const thread of this.threads.keys())
-      if (!wanted.has(thread)) this.threads.delete(thread);
+      if (!wanted.has(thread)) { this.threads.delete(thread); this.titles.delete(thread); this.titleReads.delete(thread); this.titleReadAt.delete(thread); }
     for (const thread of wanted)
       if (!this.threads.has(thread)) {
         this.threads.set(thread, {
@@ -213,29 +212,38 @@ export class ConversationOutputs {
       this.threads.get(thread) === state &&
       state.version === version;
     try {
-      await connection.subscriptions?.ensure(thread);
-      if (!valid()) return;
-      let runtime: "active" | "idle" | "unknown" = "unknown";
-      let runtimeTurnId: string | null = null;
-      try {
-        const metadata = await connection.request("thread/read", { threadId: thread, includeTurns: false });
-        const status = object(object(metadata.thread)?.status)?.type;
-        if (status === "active") runtime = "active";
-        if (status === "idle") {
-          const page = await connection.request("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "full" });
-          const latest = Array.isArray(page.data) ? object(page.data[0]) : null;
-          if (typeof latest?.id === "string" && ["completed", "interrupted", "failed"].includes(String(latest.status))) {
-            runtime = "idle";
-            runtimeTurnId = latest.id;
+      // Runtime metadata and title reads must not hold up public message history.
+      const metadataRead = connection.request("thread/read", { threadId: thread, includeTurns: false });
+      void metadataRead.then(metadata => {
+        if (!valid()) return;
+        const title = object(metadata.thread)?.name;
+        const next = typeof title === "string" && title.trim() ? title : null;
+        if (this.titles.get(thread) !== next) { this.titles.set(thread, next); this.changed(true); }
+      }).catch(() => {});
+      void (async () => {
+        let runtime: "active" | "idle" | "unknown" = "unknown";
+        let runtimeTurnId: string | null = null;
+        try {
+          const metadata = await metadataRead;
+          const status = object(object(metadata.thread)?.status)?.type;
+          if (status === "active") runtime = "active";
+          if (status === "idle") {
+            const page = await connection.request("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "full" });
+            const latest = Array.isArray(page.data) ? object(page.data[0]) : null;
+            if (typeof latest?.id === "string" && latest.id.trim() && ["completed", "interrupted", "failed"].includes(String(latest.status))) {
+              runtime = "idle";
+              runtimeTurnId = latest.id;
+            }
           }
-        }
-      } catch { /* Runtime observation is independent of readable output history. */ }
+        } catch { /* Runtime observation is independent of readable output history. */ }
+        if (!valid()) return;
+        state.activeTurnId = runtimeTurnId;
+        this.set(state, { ...state.output, agent_state: runtime, runtime_turn_id: runtimeTurnId });
+      })();
+      await connection.subscriptions?.ensure(thread);
       if (!valid()) return;
       const selected = await latestConversationOutput(thread, connection);
       if (!valid()) return;
-      state.activeTurnId = runtimeTurnId;
-      // Runtime status is independent of which public message wins the text fence.
-      this.set(state, { ...state.output, agent_state: runtime, runtime_turn_id: runtimeTurnId });
       // Never replace a locally streaming item with an older persisted item.
       if (state.streamGeneration === generation) {
         if (selected?.message_id !== state.output.message_id) return;
@@ -255,6 +263,7 @@ export class ConversationOutputs {
           text: selected.text!,
           phase: selected.phase,
           done: selected.message_status === "completed",
+          sent_at: selected.sent_at ?? known?.sent_at ?? null,
         });
         state.selectedRank = state.items.get(identity)!.rank;
       }
@@ -267,7 +276,7 @@ export class ConversationOutputs {
           state: "empty",
           stale: false,
           observed_at: new Date().toISOString(),
-        }), agent_state: runtime, runtime_turn_id: runtimeTurnId },
+        }), agent_state: state.output.agent_state, runtime_turn_id: state.output.runtime_turn_id },
       );
     } catch {
       if (valid()) {
@@ -330,9 +339,10 @@ export class ConversationOutputs {
     const identity = key(params.turnId, id);
     let entry = state.items.get(identity);
     if (!entry) {
-      entry = { rank: ++state.rank, text: "", phase: null, done: false };
+      entry = { rank: ++state.rank, text: "", phase: null, done: false, sent_at: null };
       state.items.set(identity, entry);
     }
+    entry.sent_at = messageSentAt(item?.startedAtMs ?? params.startedAtMs) ?? entry.sent_at;
     state.version++;
     state.streamGeneration = this.generation;
     if (delta) {
@@ -352,6 +362,7 @@ export class ConversationOutputs {
       {
         state: "available",
         text: entry.text,
+        sent_at: entry.sent_at,
         thread_id: thread,
         turn_id: params.turnId,
         message_id: id,

@@ -1,11 +1,26 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createDetailContent } from "../../web/details-content";
+import type { Group, View } from "../../web/model";
 
 beforeEach(() => {
   document.body.innerHTML = `<div id="details-content"></div>`;
 });
 
 describe("dashboard details content", () => {
+  test("group details and previews use only group execution times", () => {
+    const group = { id: "core", title: "核心", state: "closed", agent_thread_id: null, parent_pr: { url: null }, started_at: "2026-01-01T10:00:00Z", finished_at: "2026-01-01T10:30:00Z" } as Group;
+    const view = { groups: [group], tasks: [{ id: "task", title: "贡献任务", group_id: "core", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T08:00:00Z" }], actual_intervals: [{ task_id: "task", group_id: "core", start: "2026-01-01T00:00:00Z", end: "2026-01-01T08:00:00Z" }] } as unknown as View;
+    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    const duration = (preview: HTMLElement) => [...preview.querySelectorAll(".hover-preview-row")].find(row => row.querySelector(".hover-preview-label")?.textContent === "持续时间")?.querySelector(".hover-preview-value")?.textContent;
+    details.showGroup(group);
+    expect(document.querySelector(".detail-duration")?.textContent).toBe("30分");
+    expect(document.querySelector("#details-content")?.textContent).toContain("历史执行任务贡献任务");
+    expect(duration(details.groupPreview(group))).toBe("30分");
+    group.started_at = null; group.finished_at = null;
+    details.showGroup(group);
+    expect(document.querySelector(".detail-duration")?.textContent).toBe("未知");
+    expect(duration(details.groupPreview(group))).toBe("未知");
+  });
   test("keeps an explicit empty state when selection is invalid or absent", () => {
     const details = createDetailContent({
       getData: () => null,
@@ -13,7 +28,6 @@ describe("dashboard details content", () => {
       labelTask: () => "",
       time: () => "",
       safeExternal: () => null,
-      groupRange: () => ({ start: null, end: null }),
     });
 
     const empty = details.clearDetails();
@@ -41,10 +55,9 @@ describe("dashboard details content", () => {
       labelTask: () => "执行中",
       time: () => "未知",
       safeExternal: () => null,
-      groupRange: () => ({ start: null, end: null }),
     });
 
-    const profileDetails = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "任务", time: () => "未知", safeExternal: () => null, groupRange: () => ({ start: null, end: null }), profileContext: () => ({ capabilities: [{ model: "gpt-6.1-sol", thinking: ["medium", "high"] }], update: async () => {} }) });
+    const profileDetails = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "任务", time: () => "未知", safeExternal: () => null, profileContext: () => ({ capabilities: [{ model: "gpt-6.1-sol", thinking: ["medium", "high"] }], update: async () => {} }) });
     profileDetails.showTask(view.tasks[0]!);
     expect(document.querySelectorAll(".execution-profile-editor")).toHaveLength(1);
     expect(document.querySelector('select[aria-label="运行默认模型"]')).toBeNull();
@@ -92,7 +105,6 @@ describe("dashboard details content", () => {
       labelTask: () => "执行中",
       time: () => "未知",
       safeExternal: () => null,
-      groupRange: () => ({ start: null, end: null }),
     });
 
     details.showTask(view.tasks[0]!);

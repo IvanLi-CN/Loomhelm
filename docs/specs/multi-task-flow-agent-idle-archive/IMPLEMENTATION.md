@@ -41,3 +41,5 @@ CLI 在终态更新和相关通知/操作对账后触发 sweep；dashboard 启�
 真实源码服务使用 `bun run --cwd skills/multi-task-flow preview:idle-archive`，命名示例提供合成对话、受控观察器和归档/取消归档 provider，通过实际 dashboard API 验证交互，不操作真实 Codex 对话。
 
 通知创建与发送均拒绝已归档或归档状态未知的接收方，要求先手动恢复；运行时 idle 使用最新 turn 的独立身份和明确终态，不复用较旧公开消息的 turn identity。
+
+主线卡片资源浮层与运行时观察并行集成：标题、运行时元数据和消息读取互不阻塞，同一 thread 的任务与交付单元绑定复用观察器；最新 turn 终止证据独立保留。集成验证通过 271 项运行时测试、81 项 UI 测试及 dashboard 构建，受控示例复核归档重试、取消归档和零原生按钮 title 提示。

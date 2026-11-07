@@ -41,9 +41,6 @@ export type TaskPreviewContent = {
   finishedAt: string;
   duration: string;
   blocker: string | null;
-  latestOutput: string | null;
-  output?: AgentOutput;
-  taskId?: string;
   executionGroups?: string;
 };
 
@@ -53,9 +50,6 @@ export function renderTaskPreview(task: TaskPreviewContent): HTMLElement {
   content.append(row({ label: "所属交付单元", value: task.group }), row({ label: "类型", value: task.kind }), row({ label: "开始时间", value: task.startedAt }), row({ label: "完成时间", value: task.finishedAt }), row({ label: "持续时间", value: task.duration }));
   if (task.executionGroups) content.append(row({ label: "执行交付单元历史", value: task.executionGroups }));
   if (task.blocker) content.append(row({ label: "等待原因", value: task.blocker }));
-  const output = renderTaskOutput(task.latestOutput, task.output, task.taskId);
-  output.classList.remove("task-card-output"); output.classList.add("hover-preview-output");
-  content.append(output);
   return content;
 }
 

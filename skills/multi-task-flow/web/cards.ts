@@ -1,4 +1,6 @@
 import { renderConversationControl, type ArchiveAction } from "./conversation-control";
+import { bindPRStatus } from "./pr-status";
+import { attachResourcePopover, closeResourcePopover, type ResourceSource } from "./resource-popover";
 import { initialOutput } from "./agent-output";
 import { conversationUrl } from "./links";
 import { formatDuration } from "./time";
@@ -15,7 +17,6 @@ type CardContext = {
   getSelectedGroup: () => string | null;
   labels: Record<string, string>;
   safeExternal: (url: string | null) => string | null;
-  groupRange: (groupId: string, tasks: Task[]) => { start: string | null; end: string | null };
   selectTask: (id: string) => void;
   selectGroup: (id: string) => void;
   setKeyboardSelection: () => void;
@@ -86,7 +87,7 @@ function iconAction(label: string, iconName: string, url: string | null, externa
   const button = document.createElement("button");
   button.type = "button";
   button.className = "resource-action icon-button";
-  button.disabled = true;
+  button.setAttribute("aria-disabled", "true");
   button.dataset.tooltip = label;
   button.setAttribute("aria-label", label);
   const icon = document.createElement("i");
@@ -96,10 +97,28 @@ function iconAction(label: string, iconName: string, url: string | null, externa
 }
 
 function durationValue(start: string | null, end: string | null): HTMLElement {
-  const value = text("strong", formatDuration(start, end), "task-card-duration");
+  const value = text("button", formatDuration(start, end), "task-card-duration");
+  value.setAttribute("type", "button");
   value.dataset.durationStart = start ?? "";
   value.dataset.durationEnd = end ?? "";
   return value;
+}
+
+function resources(actions: HTMLElement, meta: HTMLElement | null, kind: "task" | "group", id: string, context: CardContext): void {
+  const view = context.getData(); if (!view) return;
+  const task = view.tasks.find(t => t.id === id), group = view.groups.find(g => g.id === id);
+  const thread = kind === "task" ? task?.thread_id ?? null : group?.delivery_unit_kind === "bootstrap" ? view.orchestration.owner_thread_id ?? null : group?.agent_thread_id ?? null;
+  const source: ResourceSource = { kind, id, view, thread, output: () => kind === "task" ? task?.latest_agent_output : group?.latest_agent_output, start: kind === "task" ? task?.started_at ?? null : group?.started_at ?? null, end: kind === "task" ? task?.finished_at ?? null : group?.finished_at ?? null };
+  const triggers = actions.children;
+  if (triggers[0] && !(triggers[0] as HTMLElement).classList.contains("conversation-control")) attachResourcePopover(triggers[0] as HTMLElement, "conversation", source);
+  if (triggers[1]) {
+    const prTrigger = triggers[1] as HTMLElement;
+    attachResourcePopover(prTrigger, "pr", source);
+    const prUrl = kind === "task" ? task?.pr?.url : group?.parent_pr?.url;
+    if (prUrl) bindPRStatus(prTrigger, kind, id, prUrl);
+  }
+  const time = meta?.firstElementChild as HTMLElement | null;
+  if (time) attachResourcePopover(time, "time", source);
 }
 
 function taskCard(task: Task, context: CardContext): HTMLElement {
@@ -128,6 +147,7 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   head.append(actions);
   const meta = text("div", "", "task-card-meta");
   meta.append(durationValue(task.started_at, task.finished_at));
+  resources(actions, meta, "task", task.id, context);
   card.append(head, meta, renderTaskOutput(task.latest_output, task.latest_agent_output ?? initialOutput(task.thread_id), task.id));
   card.addEventListener("click", (event) => { if ((event.target as HTMLElement).closest("a, button")) return; context.selectTask(task.id); });
   context.bindTaskHover(card, task);
@@ -159,10 +179,11 @@ function groupCard(group: Group, context: CardContext): HTMLElement {
   actions.append(iconAction(pr ? "打开交付单元 PR" : "交付单元 PR 尚未创建", "git-pull-request", pr, true));
   head.append(actions);
   const groupTasks = data.tasks.filter((task) => task.group_id === group.id);
-  const range = context.groupRange(group.id, groupTasks);
+  const range = { start: group.started_at ?? null, end: group.finished_at ?? null };
   const meta = text("div", "", "task-card-meta");
   meta.append(durationValue(range.start, range.end));
   const summary = text("p", `${group.delivery_unit_kind === "bootstrap" ? "引导交付单元" : "普通交付单元"} · ${groupAtomProgress(group)}`, "task-card-summary", "group-card-summary");
+  resources(actions, meta, "group", group.id, context);
   card.append(head, meta, summary);
   card.addEventListener("click", (event) => { if ((event.target as HTMLElement).closest("a, button")) return; context.selectGroup(group.id); });
   context.bindGroupHover(card, group);
@@ -171,6 +192,7 @@ function groupCard(group: Group, context: CardContext): HTMLElement {
 
 export function createCardRenderer(context: CardContext): { renderList: (tasks: Task[]) => void; renderGroups: () => void } {
   const renderList = (tasks: Task[]): void => {
+    closeResourcePopover();
     const list = element<HTMLElement>("task-list");
     list.replaceChildren();
     list.className = `task-list task-cards task-layout-${context.getLayout()}`;
@@ -201,7 +223,10 @@ export function createCardRenderer(context: CardContext): { renderList: (tasks: 
       actions.append(iconAction(pr ? "打开交付单元 PR" : "交付单元 PR 尚未创建", "git-pull-request", pr, true));
       const progress = text("span", groupAtomProgress(group), "task-column-count");
       progress.dataset.tooltip = groupAtomProgress(group);
-      heading.append(select, progress, actions);
+      const meta = text("div", "", "task-card-meta task-column-time");
+      meta.append(durationValue(group.started_at ?? null, group.finished_at ?? null));
+      resources(actions, meta, "group", group.id, context);
+      heading.append(select, progress, actions, meta);
       const cards = text("div", "", "task-column-list");
       cards.setAttribute("role", "list");
       for (const task of groupTasks) cards.append(taskCard(task, context));
@@ -213,6 +238,7 @@ export function createCardRenderer(context: CardContext): { renderList: (tasks: 
   const renderGroups = (): void => {
     const data = context.getData();
     if (!data) return;
+    closeResourcePopover();
     const list = element<HTMLElement>("group-list");
     list.replaceChildren();
     list.className = "task-list task-cards group-cards";

@@ -1,5 +1,6 @@
 import { installTextTooltips } from "./tooltip";
 import { runtimeTaskState } from "./task-state";
+import { refreshResourcePopover } from "./resource-popover";
 import { OutputSnapshots, initialOutput, refreshOutputNodes, type OutputSnapshot } from "./agent-output";
 import { createProfileEditor } from "./profile-editor";
 import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
@@ -19,7 +20,6 @@ import { installViewStateNavigation } from "./navigation";
 import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-preview";
 import { formatDuration, formatLocalTime } from "./time";
 import { renderTimestamp, refreshTimestamps } from "./timestamp";
-import { rangeFromIntervals } from "./execution-range";
 import { taskKindLabel, STATE_LABELS } from "./labels";
 import { DEFAULT_VIEW_STATE, defaultTaskLayout, hasValidLayoutParam, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
 const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw };
@@ -42,7 +42,7 @@ function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void 
   let idleChanged = false;
   for (const task of data.tasks) {
     const previousState = task.state;
-    const output = outputSnapshot.outputs[task.id];
+    const output = outputSnapshot.outputs[`task:${task.id}`] ?? outputSnapshot.outputs[task.id];
     task.latest_agent_output = output?.thread_id === task.thread_id ? output : initialOutput(task.thread_id);
     const observedState = runtimeTaskState(task, task.latest_agent_output);
     if (observedState === "agent_idle" && previousState !== "agent_idle") task.agent_resume_state = previousState as "starting" | "running";
@@ -50,8 +50,14 @@ function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void 
     if (observedState !== "agent_idle") delete task.agent_resume_state;
     idleChanged ||= previousState !== task.state;
   }
+  for (const group of data.groups) {
+    const thread = group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id;
+    const output = outputSnapshot.outputs[`group:${group.id}`];
+    group.latest_agent_output = output?.thread_id === thread ? output : initialOutput(thread ?? null);
+  }
   refreshOutputNodes(document, data.tasks);
   if (hydrated && idleChanged) render();
+  refreshResourcePopover();
 }
 let viewState: ViewState = parseViewState(window.location.search);
 let selectedTask: string | null = viewState.selected?.kind === "task" ? viewState.selected.id : null;
@@ -193,6 +199,7 @@ function renderSummary(): void {
 }
 function refreshCardDurations(): void {
   refreshTimestamps();
+  refreshResourcePopover();
   for (const element of document.querySelectorAll<HTMLElement>("[data-duration-start]")) {
     const start = element.dataset.durationStart || null;
     const end = element.dataset.durationEnd || null;
@@ -246,7 +253,6 @@ const cardRenderer = createCardRenderer({
   labels,
   safeExternal,
   archiveConversation,
-  groupRange,
   selectTask: (id) => selectTask(id),
   selectGroup: (id) => selectGroup(id),
   setKeyboardSelection: () => { keyboardSelection = true; },
@@ -257,13 +263,6 @@ const cardRenderer = createCardRenderer({
 const { renderList, renderGroups } = cardRenderer;
 function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
 function safeExternal(url: string | null): string | null { if (!url || !data) return null; try { const parsed = new URL(url); return parsed.protocol === "https:" && parsed.hostname === data.orchestration.repository.host && !parsed.port && !parsed.username && !parsed.password ? parsed.href : null; } catch { return null; } }
-function taskRange(tasks: Task[]): { start: string | null; end: string | null } {
-  return rangeFromIntervals(tasks.map((task) => ({ start: task.started_at, end: task.finished_at })));
-}
-function groupRange(groupId: string, tasks: Task[]): { start: string | null; end: string | null } {
-  const historical = data?.actual_intervals.filter((interval) => interval.group_id === groupId) ?? [];
-  return historical.length ? rangeFromIntervals(historical) : taskRange(tasks);
-}
 let profileCapabilities: ProfileCapabilities | null = null;
 let profileCapabilityError = "正在读取模型能力…";
 async function loadProfileCapabilities(): Promise<void> {
@@ -282,7 +281,7 @@ async function updateProfile(targetType: ProfileTarget, targetId: string, profil
   if (!response.ok) throw new Error(result.message ?? result.error ?? "配置保存失败");
   await refresh();
 }
-const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, groupRange, archiveConversation, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
+const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, archiveConversation, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
 const { clearDetails, showTask, showGroup, taskPreview, groupPreview } = detailContent;
 const hasSelectedObject = (): boolean => Boolean(
   (selectedTask && data?.tasks.some((task) => task.id === selectedTask))
@@ -477,7 +476,7 @@ async function refresh(): Promise<void> {
       result = await response.json() as ViewResponse;
     }
     if (serial !== requestSerial || result.revision < revision) return;
-    const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries(data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)])) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
+    const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries([...data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)]), ...data.groups.map(g => [`group:${g.id}`, g.latest_agent_output ?? initialOutput(g.agent_thread_id)])]) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
     if (!hydrated && !userChangedTab && !hasValidTabParam(window.location.search)) viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
     if (!hasValidLayoutParam(window.location.search)) viewState = { ...viewState, layout: defaultTaskLayout(data.groups.length) };
     viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
