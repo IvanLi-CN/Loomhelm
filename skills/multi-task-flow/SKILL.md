@@ -55,7 +55,7 @@ Use `dispatch-group-claim` or `dispatch-claim`, then invoke `conversation-create
 
 `conversation-create` payload 为 `{ operation_id, title, prompt }`。CLI 使用参数数组和关闭的 stdin 启动 `codex exec -C <repository> --worktree --json -m <model> -c 'model_reasoning_effort="<thinking>"' <固定初始化提示词>`，完整透传已锁定配置；工作区由 Codex 创建，脚本不调用 `git worktree add`。`prompt` 是兼容保留的正式任务，只在成功结果的 `handoff.formal_prompt` 返回，首轮不执行它。收到 `thread.started` 立即记录身份；必须核验独立工作区、Codex 归属元数据、实际配置、初始 HEAD、初始化回合完成和进程正常退出后才能绑定。`project_id` 为空不单独失败。标题通过 `thread/name/set` 写入，不另开回合。绑定后创建正式派发通知并领取持久 attempt；主对话仅在 `handoff.should_send: true` 时调用内置 `send_message_to_thread`，使用返回的 `tool_request` 并对账平台回执。创建请求重放返回 `should_send: false`，不得再次派发。超时、创建后错误或证据冲突保留 unknown 和已知资源，先对账，不重复创建。只有没有已观察线程身份且回执明确 `process_started: false`、`resources_created: false` 的创建前失败才允许释放 claim；新 exec 请求不能使用历史 `thread/start` 失败回执。历史 `thread/start` 与 `create_thread` 证据继续读取，不重建已有线程或中断在途 CLI。
 
-native request ID 一旦绑定，配置即冻结；明确失败且已对账的请求才允许修正配置并重新 claim。未绑定 native request 的 claim 遇到配置变化会终止旧 claim，审计记录保留旧 profile、原因和新 claim 要求。
+native request ID 一旦绑定，完整创建参数（含 transport、cwd、prompt、title 和 execution_profile）即冻结；相同内容可再次绑定，不同内容复用 ID 必须拒绝。已知线程、工作区、初始 HEAD 和执行事实通过 `creation_observations` 单调保留，后续空 unknown 回执不能遗忘它们；failed 门禁不能依赖可变 transport。明确失败且已对账的请求才允许修正配置并重新 claim。未绑定 native request 的 claim 遇到配置变化会终止旧 claim，审计记录保留旧 profile、原因和新 claim 要求。
 
 旧账本缺少默认 profile 时保持只读。先完成原有 schema 迁移，再由绑定主会话显式调用 `execution-profile-migrate`，带 request ID、expected revision 和完整默认 pair。此操作保留账本上一快照，不推断旧对象的模型。历史 `create_thread` 证据可读；新增创建通过 CLI 证据解析。
 
@@ -63,7 +63,7 @@ native request ID 一旦绑定，配置即冻结；明确失败且已对账的�
 
 记账命令可以在 `payload.notification` 中提供 `{ "mode": "auto" | "deliver" | "none", "recipient": "owner" | { "thread_id": "..." } }`。`auto` 保留各命令现有的默认通知规则，`deliver` 明确创建主动投递意图，`none` 禁止主动投递；旧字段 `notify_main: true` 继续等价于向 `owner` 投递。
 
-记账命令先提交通知事实，再领取唯一持久 `delivery_attempt_id`，返回 `should_send`、`tool_request` 和回执身份。`notification-prepare` 与兼容名称 `notification-send` 都只领取意图，不调用 CLI `thread/resume + turn/start`。仅当 `should_send: true` 时，主对话调用内置 `send_message_to_thread`；随后用 `notification-reconcile` 写回真实平台结果，payload 包含 `notification_id`、相同 `delivery_attempt_id`、唯一 `reconciliation_id`、`outcome` 和 `provider_receipt: { provider: "codex-app-tools", evidence_ref, message_id? }`。没有回执保持 unknown；只有证实未投递才可记 failed。`codex-app-tools` 直接 `notification-deliver` 只允许领取 unknown，不能直接记录 sent/failed；兼容 `notification-sent` 不接受该 provider，原生对账必须匹配 attempt 和 provider。`sent` 表示平台接受，不能推断已读、处理或开工。
+记账命令先提交通知事实，再领取唯一持久 `delivery_attempt_id`，返回 `should_send`、`tool_request` 和回执身份。`notification-prepare` 与兼容名称 `notification-send` 都只领取意图，不调用 CLI `thread/resume + turn/start`。仅当 `should_send: true` 时，主对话调用内置 `send_message_to_thread`；随后用 `notification-reconcile` 写回真实平台结果，payload 包含 `notification_id`、相同 `delivery_attempt_id`、唯一 `reconciliation_id`、`outcome` 和 `provider_receipt: { provider: "codex-app-tools", evidence_ref, message_id? }`。没有回执保持 unknown；只有证实未投递才可记 failed。`codex-app-tools` 直接 `notification-deliver` 只允许领取 unknown，不能直接记录 sent/failed；兼容 `notification-sent` 不接受该 provider，原生对账必须匹配 attempt 和 provider，历史 provider attempt 不能直接套用原生回执。`sent` 表示平台接受，不能推断已读、处理或开工。
 
 相同请求重放返回 `should_send: false`，不能再发送。持久 unknown attempt 跨工具调用占用通知，不依赖常驻文件锁。并发领取或未解决 attempt 禁止再次发送；unknown 必须先对账。历史外部发送的文件锁仍保护其在途回合，遇到 `NOTIFICATION_IN_FLIGHT` 不得改写状态解锁。只有收件会话可调用 `notification-ack`，main 不能代确认。使用 `notification-reconcile --input -` 的查询形式恢复 pending、failed、unknown 和长期未确认的 sent；明确 failed 才可创建新 attempt。
 

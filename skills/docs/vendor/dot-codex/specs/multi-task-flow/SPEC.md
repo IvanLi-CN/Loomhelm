@@ -143,12 +143,12 @@
 - dashboard 必须允许编辑尚未创建对话的交付单元和任务的完整执行配置，并显示当前解析值与默认值来源。详情面板只编辑当前对象；模型与思考强度放在可展开的 dropdown 面板内，分别使用模型列表下拉框与离散滑动选择器。运行默认配置使用详情外的独立入口。已有线程或已提交 native 创建请求的对象必须冻结编辑。
 - 已有未完成 dispatch claim 的对象发生配置修改时，系统必须取消旧 claim、记录旧值与原因并要求重新 claim；不得让旧 claim 使用过期配置。
 - 对话创建必须通过 multi-task-flow CLI 的领域命令完成。CLI 必须读取当前配置、调用受支持的 native 创建能力、记录 native request ID 与真实 thread ID，并以完整配置证据完成 dispatch resolve；Agent 内置会话创建工具不属于正式创建路径。
-- 创建请求必须使用账本绑定的 native request ID 作为外部进程 attempt identity，并保留创建参数与最终结果；重复的同内容请求不得创建第二个对话，不同内容复用 ID 必须被拒绝。
+- 创建请求必须使用账本绑定的 native request ID 作为外部进程 attempt identity，并保留创建参数与最终结果；重复的同内容请求不得创建第二个对话，不同内容复用 ID 必须被拒绝，包括使用新 request_id 覆盖同一 native ID 的 transport、cwd、prompt、title 或配置。
 - CLI 与 dashboard 都必须根据当前能力验证完整模型/思考强度组合。创建结果为 `unknown` 时必须先按 native request ID 对账，禁止直接重复创建；创建失败保留配置事实，修正后才能重新 claim。
 - 本机创建使用独立 `codex exec --worktree --json` 进程，工作区由 Codex 创建；stdin 关闭，首轮只确认初始化，不执行正式任务。线程身份一经收到立即持久化，实际配置、归属、独立工作区、初始 HEAD、回合完成及正常退出全部核验后才绑定成功。`project_id` 空值不单独失败。
 - 创建、绑定、平台消息接受、基线就绪和实际开工分别记录。绑定后主对话通过内置 `send_message_to_thread` 发送正式任务与调度消息；CLI 不以 `thread/resume + turn/start` 发起这些回合。
-- 新 exec 请求只有未观察到线程且证明进程未启动、未创建资源的前置失败才可 failed；已观察身份不能被旧失败回执释放并重新 claim。
-- 原生发送使用持久 attempt 领取、内置工具发送、真实回执对账三步。重放不得再次发送，unknown 必须先对账，旧发送的在途文件锁保护继续生效。原生 provider 不能通过兼容命令直接记录成功或失败，对账须匹配当前 attempt 和 provider。
+- 新 exec 请求只有未观察到线程且证明进程未启动、未创建资源的前置失败才可 failed；所有已持久化的线程、工作区、初始 HEAD 和执行事实必须单调保留；后续空 unknown 或历史 transport 回执不能遗忘它们或释放 claim。
+- 原生发送使用持久 attempt 领取、内置工具发送、真实回执对账三步。重放不得再次发送，unknown 必须先对账，旧发送的在途文件锁保护继续生效。原生 provider 不能通过兼容命令直接记录成功或失败，对账须匹配当前 attempt 和 provider，不能用原生回执对账历史 provider attempt。
 - 开工前组 fetch 已核验远端主干并固定 SHA；子任务继承组父分支 SHA。只在本次新建且归属可核验的干净工作区对齐基线，失败即阻塞。现有 workspace readiness 还须核验开发基线，初始 HEAD 不替代它；通过后才能 running。
 - 尚未发起的创建使用新方式；历史 `thread/start`、`create_thread` 证据继续可读，不重建已有对话、不打断在途回合。桌面接管须以当前候选真实交接实证验收，无法观察不得宣称通过。
 

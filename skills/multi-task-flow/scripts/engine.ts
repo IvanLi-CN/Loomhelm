@@ -480,6 +480,23 @@ function addOperation(
 function activeOperation(item: Ledger["operations"][number]): boolean {
   return item.status === "claimed" || item.status === "unknown";
 }
+function creationObservations(op: Ledger["operations"][number], payload: Record<string, any>) {
+  const observed: Record<string, any> = { ...object(op.request.creation_observations ?? {}) };
+  const previous = object(op.request.creation_result ?? {});
+  for (const report of [{ thread_id: op.request.observed_thread_id }, previous,
+    object(previous.native_evidence ?? {}), payload, object(payload.native_evidence ?? {})]) {
+    for (const key of ["thread_id", "workspace_path", "initial_head"]) {
+      const value = report[key];
+      if (typeof value !== "string" || !value) continue;
+      requireCondition(!observed[key] || observed[key] === value, "CREATION_EVIDENCE_CONFLICT",
+        "Known creation identity and resources cannot change", 5);
+      observed[key] = value;
+    }
+    if (report.turn_completed === true || report.exit_code != null ||
+      (Array.isArray(report.events) && report.events.length > 0)) observed.process_observed = true;
+  }
+  return observed;
+}
 function publicationPendingForGroup(ledger: Ledger, groupId: string): boolean {
   const taskIds = ledger.tasks
     .filter((item) => item.group_id === groupId)
@@ -1485,6 +1502,9 @@ export function execute(
           ? find(ledger.groups, (item) => item.id === op.target_id, "Group")
           : null;
       const evidence = object(payload.native_evidence ?? {});
+      const observed = creationObservations(op, payload);
+      if (outcome === "failed") requireCondition(Object.keys(observed).length === 0,
+        "UNKNOWN_REQUIRES_RECONCILIATION", "Known creation identity, resources or execution require reconciliation", 5);
       if (op.request.execution_profile && outcome !== "unknown") {
         requireCondition(
           evidence.source === "multi-task-flow-cli" &&
@@ -1515,6 +1535,8 @@ export function execute(
           op.request.observed_thread_id === payload.thread_id && evidence.thread_id === payload.thread_id,
           "EVIDENCE_REQUIRED", "CLI exit, initialization, observed identity and workspace evidence required", 5);
       }
+      op.request.creation_observations = observed;
+      if (outcome === "unknown" && observed.thread_id) op.request.observed_thread_id = observed.thread_id;
       op.request.creation_result = { ...payload, resolved_at: now() };
       addEvent(
         ledger,
@@ -1779,7 +1801,7 @@ export function execute(
         3,
       );
       if (payload.creation_parameters !== undefined) {
-        op.request.creation_parameters = parse(
+        const parameters = parse(
           z
             .object({
               title: z.string().min(1),
@@ -1791,6 +1813,9 @@ export function execute(
             .strict(),
           payload.creation_parameters,
         );
+        requireCondition(!op.request.native_request_id || stable(op.request.creation_parameters) === stable(parameters),
+          "NATIVE_REQUEST_CONFLICT", "Creation parameters are frozen after native request binding", 3);
+        op.request.creation_parameters = parameters;
       }
       op.request.native_request_id = nativeId;
       if ((op.request.creation_parameters as any)?.transport === "codex-exec") op.status = "unknown";
@@ -4231,7 +4256,7 @@ export function execute(
         })
         .strict()
         .parse(payload.provider_receipt);
-      if (nativeAttempt) requireCondition(receipt.provider === "codex-app-tools",
+      if (nativeAttempt || receipt.provider === "codex-app-tools") requireCondition(nativeAttempt && receipt.provider === "codex-app-tools",
         "NATIVE_RECEIPT_REQUIRED", "Native attempt requires a matching platform provider", 5);
       notice.status = outcome;
       notice.delivery_status = outcome;

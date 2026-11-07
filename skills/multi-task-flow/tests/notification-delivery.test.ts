@@ -200,3 +200,23 @@ test("native compatibility commands cannot report delivery without a persistent 
     expect(f.store.read().notifications[0].delivery_status).toBe("unknown");
   } finally { f.cleanup(); }
 });
+
+test("a legacy unknown attempt cannot be reinterpreted as a native platform receipt", async () => {
+  const f = fixture();
+  try {
+    await deliverClaimedNotification(f.store, f.parsed, f.id, "Legacy task", async () => ({
+      outcome: "unknown", provider_receipt: { provider: "codex-app-server", evidence_ref: "legacy:uncertain" },
+    }));
+    const before = JSON.stringify(f.store.read());
+    for (const identity of [{}, { delivery_attempt_id: f.store.read().notifications[0].last_attempt_id }]) {
+      expect(() => reconcileNotification(f.store, { ...f.parsed, request_id: `cross-provider-${Object.keys(identity).length}`,
+        expected_revision: f.store.read().revision, payload: { notification_id: f.id, reconciliation_id: "cross-provider",
+          outcome: "sent", ...identity, provider_receipt: { provider: "codex-app-tools", evidence_ref: "native:unmatched" } } })).toThrow("matching platform provider");
+      expect(JSON.stringify(f.store.read())).toBe(before);
+    }
+    reconcileNotification(f.store, { ...f.parsed, request_id: "legacy-reconcile", expected_revision: f.store.read().revision,
+      payload: { notification_id: f.id, reconciliation_id: "legacy-query", outcome: "failed",
+        provider_receipt: { provider: "codex-app-server", evidence_ref: "legacy:no-delivery" } } });
+    expect(f.store.read().notifications[0].delivery_status).toBe("failed");
+  } finally { f.cleanup(); }
+});

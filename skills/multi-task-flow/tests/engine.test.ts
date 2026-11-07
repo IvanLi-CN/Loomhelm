@@ -2662,8 +2662,65 @@ describe("native CLI handoff contract", () => {
     const failure = resolve(unobserved);
     Object.assign(failure.payload, { outcome: "failed" });
     Object.assign(failure.payload.native_evidence, { error: "No event received after process start" });
-    expect(() => apply(unobserved, "dispatch-resolve", failure)).toThrow("pre-creation failure");
+    expect(() => apply(unobserved, "dispatch-resolve", failure)).toThrow("require reconciliation");
     expect(unobserved.operations[0].status).toBe("unknown");
+  });
+  test("same native request freezes every creation parameter, including transport", () => {
+    const ledger = claimed();
+    const parameters = structuredClone(ledger.operations[0].request.creation_parameters) as any;
+    for (const change of [{ transport: undefined }, { cwd: "/another-repo" }, { prompt: "different task" },
+      { title: "different title" }, { execution_profile: { model: "gpt-6-luna", thinking: "low" } }]) {
+      const before = JSON.stringify(ledger);
+      expect(() => apply(ledger, "dispatch-bind-request", request(ledger, `rebind-${Object.keys(change)[0]}`, {
+        operation_id: "cli-a", native_request_id: "cli-request", creation_parameters: { ...parameters, ...change },
+      }))).toThrow("frozen");
+      expect(JSON.stringify(ledger)).toBe(before);
+    }
+    apply(ledger, "dispatch-bind-request", request(ledger, "identical-rebind", {
+      operation_id: "cli-a", native_request_id: "cli-request", creation_parameters: parameters,
+    }));
+    apply(ledger, "dispatch-bind-request", request(ledger, "identity-only-rebind", {
+      operation_id: "cli-a", native_request_id: "cli-request",
+    }));
+    expect(ledger.operations[0].request.creation_parameters).toEqual(parameters);
+    expect(ledger.operations[0].status).toBe("unknown");
+  });
+  test("unknown reports retain creation facts across later empty reports and cannot release retry protection", () => {
+    for (const report of [{ thread_id: "cli-thread" }, { native_evidence: { workspace_path: "/allocated" } },
+      { native_evidence: { initial_head: head } }, { native_evidence: { exit_code: 1 } },
+      { native_evidence: { turn_completed: true } }, { native_evidence: { events: ["turn.started"] } }]) {
+      const ledger = claimed();
+      apply(ledger, "dispatch-resolve", request(ledger, "known-unknown", { operation_id: "cli-a", outcome: "unknown", ...report }));
+      const observed = structuredClone(ledger.operations[0].request.creation_observations);
+      expect(Object.keys(observed as object).length).toBeGreaterThan(0);
+      apply(ledger, "dispatch-resolve", request(ledger, "empty-unknown", { operation_id: "cli-a", outcome: "unknown" }));
+      expect(ledger.operations[0].request.creation_observations).toEqual(observed);
+      const failure = request(ledger, "false-preflight", { operation_id: "cli-a", outcome: "failed", native_evidence: {
+        source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "cli-a", native_request_id: "cli-request",
+        ...ledger.config.execution_profile, created_at: at, evidence_ref: "preflight:incorrect", error: "No resources",
+        process_started: false, resources_created: false,
+      } });
+      expect(() => apply(ledger, "dispatch-resolve", failure)).toThrow("require reconciliation");
+      expect(ledger.operations[0].status).toBe("unknown");
+      expect(() => apply(ledger, "dispatch-claim", request(ledger, "retry-known", { task_id: "a", operation_id: "duplicate-a" }))).toThrow();
+    }
+  });
+  test("historical unknown identity blocks failed resolution even without exec transport or progress event", () => {
+    const ledger = claimed();
+    delete (ledger.operations[0].request.creation_parameters as any).transport;
+    ledger.operations[0].request.creation_result = { outcome: "unknown", thread_id: "prior-cli-thread" };
+    const before = JSON.stringify(ledger);
+    const failure = request(ledger, "historical-failure", { operation_id: "cli-a", outcome: "failed", native_evidence: {
+      source: "multi-task-flow-cli", native_tool_name: "thread/start", operation_id: "cli-a", native_request_id: "cli-request",
+      ...ledger.config.execution_profile, created_at: at, evidence_ref: "legacy:failure", error: "Failed",
+    } });
+    expect(() => apply(ledger, "dispatch-resolve", failure)).toThrow("require reconciliation");
+    expect(JSON.stringify(ledger)).toBe(before);
+    apply(ledger, "dispatch-resolve", request(ledger, "retain-history", { operation_id: "cli-a", outcome: "unknown" }));
+    expect(ledger.operations[0].request.observed_thread_id).toBe("prior-cli-thread");
+    expect(() => apply(ledger, "dispatch-resolve", request(ledger, "replace-known-id", {
+      operation_id: "cli-a", outcome: "unknown", thread_id: "contradictory-thread",
+    }))).toThrow("cannot change");
   });
   test("development waits for owned workspace readiness and the current parent SHA, separate from initial HEAD", () => {
     const ledger = claimed();
