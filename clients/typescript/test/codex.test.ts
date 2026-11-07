@@ -1,11 +1,11 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { CodexAppServer, CodexRequestError } from '../dist/codex/index.js';
-const fixture = fileURLToPath(new URL('./fixtures/codex-server.mjs', import.meta.url));
+import { CodexAppServer, CodexRequestError } from '../src/codex/index.ts';
+const fixture = fileURLToPath(new URL('./fixtures/codex-server.ts', import.meta.url));
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function start(mode = 'normal', options = {}) {
-  return CodexAppServer.start({ command: 'node', args: [fixture, mode], shutdownGraceMs: 40, requestTimeoutMs: 3000, ...options });
+  return CodexAppServer.start({ command: process.execPath, args: [fixture, mode], shutdownGraceMs: 40, requestTimeoutMs: 3000, ...options });
 }
 async function using(mode, fn, options) {
   const client = await start(mode, options);

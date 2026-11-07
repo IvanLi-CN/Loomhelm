@@ -1,18 +1,18 @@
-#!/usr/bin/env node
-import { buildInfo } from './build-info.js';
-import { LocalClient } from './client.js';
-import { StateLock } from './runtime/lock.js';
-import { loadConfig } from './config.js';
-import { GitAdapter } from './git.js';
-import { runProcess } from './runtime/process.js';
-import type { Operation } from './tasks/model.js';
-import { runCodexCommand } from './cli/codex.js';
-import { runSkillsCommand } from './cli/skills.js';
-import { runFlowCommand } from './cli/flow.js';
+#!/usr/bin/env -S bun --no-install
+import { buildInfo } from './build-info.ts';
+import { LocalClient } from './client.ts';
+import { StateLock } from './runtime/lock.ts';
+import { loadConfig } from './config.ts';
+import { GitAdapter } from './git.ts';
+import { runProcess } from './runtime/process.ts';
+import type { Operation } from './tasks/model.ts';
+import { runCodexCommand } from './cli/codex.ts';
+import { runSkillsCommand } from './cli/skills.ts';
+import { runFlowCommand } from './cli/flow.ts';
 import { fileURLToPath } from 'node:url';
 
 async function main(args: string[]): Promise<void> {
-  if (args.length === 1 && ["version", "--version"].includes(args[0]!)) { console.log(JSON.stringify(buildInfo)); return; }
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "version")) { console.log(JSON.stringify(buildInfo)); return; }
   let configPath: string | undefined;
   if (args[0] === '--config') { args.shift(); configPath = args.shift(); if (!configPath) throw new Error('Missing config path'); }
   const [command, ...rest] = args;
@@ -25,7 +25,7 @@ async function main(args: string[]): Promise<void> {
   if (command === 'workflow') {
     if (rest[0] === 'verify') throw new Error('WORKFLOW_LEGACY_COMMAND_UNSUPPORTED: use local-verify for local validation only; follow the migrated engineering Skills for delivery gates');
     if (!rest.length) throw new Error('Usage: workflow skills PROJECT_SKILLS_DIR [USER_SKILLS_DIR] | local-verify MANIFEST_JSON_PATH');
-    const result = await runProcess(process.execPath, [fileURLToPath(new URL('./workflow/cli.js', import.meta.url)), ...rest]);
+    const result = await runProcess(process.execPath, ['--no-install', fileURLToPath(new URL('./workflow/cli.ts', import.meta.url)), ...rest]);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.code !== 0) process.exitCode = result.code ?? 1;

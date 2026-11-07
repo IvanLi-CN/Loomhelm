@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { atomicWrite } from '../runtime/files.js';
-import { StateLock } from '../runtime/lock.js';
+import { atomicWrite } from '../runtime/files.ts';
+import { StateLock } from '../runtime/lock.ts';
 
 export interface StartThreadRequest {
   requestId: string;

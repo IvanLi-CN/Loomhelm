@@ -1,14 +1,14 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runProcess } from '../dist/runtime/process.js';
+import { runProcess } from '../src/runtime/process.ts';
 
-const cliPath = resolve('dist/cli.js');
-const fixturePath = resolve('test/fixtures/cli-codex-server.mjs');
+const cliPath = resolve('src/cli.ts');
+const fixturePath = resolve('test/fixtures/cli-codex-server.ts');
 async function temporary(fn) {
   const dir = await mkdtemp(join(tmpdir(), 'loomhelm-cli-'));
   try { await fn(dir); } finally { await rm(dir, { recursive: true, force: true }); }
@@ -16,7 +16,7 @@ async function temporary(fn) {
 async function setup(dir, mode = 'complete') {
   const bin = join(dir, 'bin'); await mkdir(bin);
   const codex = join(bin, 'codex');
-  await writeFile(codex, `#!/usr/bin/env node\nimport ${JSON.stringify(fixturePath)};\n`);
+  await writeFile(codex, `#!${process.execPath}\nimport ${JSON.stringify(fixturePath)};\n`);
   await chmod(codex, 0o755);
   const config = join(dir, 'config.json');
   await writeFile(config, JSON.stringify({ schemaVersion: 1, stateDir: join(dir, 'state'), processTimeoutMs: 3000 }));

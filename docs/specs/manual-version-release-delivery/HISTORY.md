@@ -25,3 +25,7 @@ Owner 确认首批保证同版本组合；旧客户端与缓存页面仅在明�
 统一发版实现采用签名追加 Git ledger 与 draft Release 原件存储；发布准备仍走正常 PR。产品发布记录格式初始为 schema 1，只新增发布侧状态；没有业务数据库、Go journal 或 TS 本地账本的数据迁移。未知 ledger schema 必须拒绝读取，不自动转换或回退。
 
 旧 Go 独立发版和候选独立公开入口改为提示进入统一入口；历史产物和 tag 保留，不重写、不当作统一产品 baseline。后续程序必须识别既有发布状态并向前修复，不能通过回滚程序撤销已公开资产或 reservation。
+
+## 与 Bun 源码运行合同对齐
+
+Owner 确认沿用主干 PR #76 与 ADR 0021 的 Bun-only 决定，将 TypeScript 成品安装验收从 Node 22／24 改为 Bun 1.4.4 直接执行源码及包内 FFI 行为验证。双平台、完整依赖与 Skills 资源、统一版本和原身份恢复要求保留；旧 Node 名称 required checks 仅沿用主干的兼容标识，不证明 Node 支持。

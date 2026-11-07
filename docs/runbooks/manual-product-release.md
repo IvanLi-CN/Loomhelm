@@ -20,7 +20,7 @@ main 必须要求 PR、签名提交与仓库 quality-gates 声明的检查。rel
 
 工作流占用唯一身份并创建版本准备 PR；按正常质量门禁审核与合并，随后从 main 运行 Release，传入已有 reservation ID。入口自动读取准确合并 SHA，检查源码在准备期间没有混入业务改动。没有显式 target 时不得默认 patch。
 
-Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 / Linux amd64、Web 均为必需产物。TS 包携带完整 toolkit/native 资源，无需源码仓库；需要 Node 22 或 24。包内 --version 报告构建版本和 SHA，正式程序拒绝运行配置覆盖身份。
+Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 / Linux amd64、Web 均为必需产物。TS 包携带 TypeScript 源码、完整 toolkit、依赖与 Bun FFI 资源，无需源码仓库；仅支持固定 Bun 1.4.4，保留主干 ADR 0021 的源码运行合同，不再支持 Node。Bun 根 lock 不保存根包版本，冻结安装验证依赖一致性；package.json 与包内源码 stamp 负责产品版本投影。包内 --version 报告构建版本和 SHA，正式程序拒绝运行配置覆盖身份。
 
 服务端包在 candidate/ 子目录保留原 schema 2 bundle，images/ 子目录保存离线 OCI images，images/images.json 绑定 archive SHA256 和 OCI manifest digest。安装工具必须验证后导入原 OCI 内容；不得通过生产机器重建获取镜像。预览 candidate schema 2 的既有晋级验证保持有效，产品级发布 manifest 额外绑定完整组件集合及版本。
 
@@ -49,7 +49,7 @@ Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 /
 
 ## 验收边界
 
-PR 的 Product Release Contract 覆盖版本规则、实际裸 Git CAS、状态机和故障注入；Product Package 的 Linux/macOS 任务观察冻结包及 Node 22/24 运行。真实 GitHub publication、Issue 投递、权限和恢复演练必须在实际 Merge Receipt 与 owner 首发 target 授权后完成；本地模拟不能替代。
+PR 的 Product Release Contract 覆盖版本规则、实际裸 Git CAS、状态机和故障注入；Product Package 的 Linux/macOS 任务观察冻结包及 Bun 1.4.4 源码运行和实际 FFI 行为。真实 GitHub publication、Issue 投递、权限和恢复演练必须在实际 Merge Receipt 与 owner 首发 target 授权后完成；本地模拟不能替代。
 
 ## Ledger 状态兼容
 

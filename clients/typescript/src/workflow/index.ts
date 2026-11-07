@@ -1,2 +1,2 @@
-export * from './skills.js';
-export * from './local.js';
+export * from './skills.ts';
+export * from './local.ts';

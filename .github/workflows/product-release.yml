@@ -108,9 +108,6 @@ jobs:
         run: python3 tools/release/build_part.py --record "$RUNNER_TEMP/release-record/identity.json" --part "$PART" --output "$RUNNER_TEMP/product"
       - name: Smoke test frozen package bytes
         run: python3 tools/release/smoke.py --record "$RUNNER_TEMP/release-record/identity.json" --directory "$RUNNER_TEMP/product"
-      - name: Verify frozen TypeScript package on supported Node versions
-        if: matrix.part == 'ts-client'
-        run: python3 tools/release/node_matrix.py --record "$RUNNER_TEMP/release-record/identity.json" --directory "$RUNNER_TEMP/product"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: product-${{ matrix.part }}-${{ matrix.runner }}

@@ -14,7 +14,7 @@ import { ServiceAuth } from "./service-auth";
 import { startSharedViewer, agentLease } from "./service-http";
 import { requireApi } from "./service-contract";
 import { startUserService } from "./service-launchd";
-import { verifyRelease } from "./service-release";
+import { verifyRelease, requireSourceRelease } from "./service-release";
 import { requireCondition, ContractError } from "./errors";
 import { serviceLog } from "./service-log";
 
@@ -74,6 +74,7 @@ export async function ensureService(
       const manifest = verifyRelease(
         join(state.paths.releases, config.current_build),
       );
+      requireSourceRelease(manifest);
       requireCondition(
         manifest.api_versions.includes(input.api_version),
         "INCOMPATIBLE_API",
@@ -154,6 +155,9 @@ export async function runDaemon(
   const manifest =
     source?.manifest ??
     verifyRelease(join(state.paths.releases, config.current_build));
+  // Isolated live-source previews use metadata, not an installed release package.
+  // Installed services must still reject legacy executable bundles.
+  if (!source) requireSourceRelease(manifest);
   const lifetime = tryLockFile(join(state.paths.state, "instance.lock"));
   requireCondition(
     lifetime,
@@ -238,7 +242,7 @@ export async function runDaemon(
           state,
           manifest,
           source?.assetsDir ??
-            join(state.paths.releases, config.current_build, "dist"),
+            join(state.paths.releases, config.current_build, "skills/multi-task-flow/dist"),
           config.port,
           source?.revision,
           source?.name,

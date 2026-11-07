@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'bun:test';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,9 +9,9 @@ test('released network gate rejects mismatch before business mutation and preser
   const directory = await mkdtemp(join(tmpdir(), 'loomhelm-version-'));
   try {
     await writeFile(join(directory, 'package.json'), '{"type":"module"}');
-    await writeFile(join(directory, 'version.js'), await readFile(new URL('../dist/version.js', import.meta.url)));
-    await writeFile(join(directory, 'build-info.js'), 'export const buildInfo=Object.freeze({version:"1.2.3",source_sha:"'+'a'.repeat(40)+'",policy:"loomhelm-manual-v1"});');
-    const { versionedFetch } = await import(pathToFileURL(join(directory, 'version.js')).href);
+    await writeFile(join(directory, 'version.ts'), await readFile(new URL('../src/version.ts', import.meta.url)));
+    await writeFile(join(directory, 'build-info.ts'), 'export const buildInfo=Object.freeze({version:"1.2.3",source_sha:"'+'a'.repeat(40)+'",policy:"loomhelm-manual-v1"});');
+    const { versionedFetch } = await import(pathToFileURL(join(directory, 'version.ts')).href);
     const calls = [];
     const mismatch = async (url, init) => { calls.push([String(url), init]); return Response.json({ version:'1.2.4',policy:'loomhelm-manual-v1' }); };
     await assert.rejects(versionedFetch('https://example.invalid', '/api/v1/tasks', {method:'POST'}, mismatch), /Update the client/);

@@ -1,10 +1,71 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { startSharedViewer } from "../scripts/service-http";
 import { ServiceAuth } from "../scripts/service-auth";
 import { ServiceState } from "../scripts/service-state";
 import { servicePaths } from "../scripts/service-paths";
-import { serviceFixture, fixtureRelease, fixtureRun } from "./service-fixture";
+import { runDaemon } from "../scripts/service-lifecycle";
+import { serviceFixture, fixtureRelease, fixtureLegacyRelease, fixtureRun } from "./service-fixture";
+
+test.each([
+  ["default", []],
+  ["idle archive", ["--scenario", "agent-idle-archive"]],
+  ["single delivery unit", ["--single-delivery-unit"]],
+] as const)("source preview %s starts through the daemon lifecycle", async (_name, args) => {
+  const { root } = serviceFixture();
+  for (const name of ["home", "codex", "tmp", "cache"]) mkdirSync(join(root, name));
+  const child = Bun.spawn([process.execPath, "--no-install", join(import.meta.dir, "../scripts/preview-source.ts"), ...args], {
+    cwd: root,
+    env: { ...process.env, HOME: join(root, "home"), CODEX_HOME: join(root, "codex"), TMPDIR: join(root, "tmp"), BUN_INSTALL_CACHE_DIR: join(root, "cache") },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const stderr = new Response(child.stderr).text();
+  const reader = child.stdout.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const readiness = (async () => {
+      let text = "";
+      const decoder = new TextDecoder();
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error("Preview exited before readiness: " + await stderr);
+        text += decoder.decode(chunk.value, { stream: true });
+        const lines = text.split("\n");
+        text = lines.pop()!;
+        for (const line of lines) {
+          if (line.startsWith('{"mode":"source-preview"')) return JSON.parse(line);
+        }
+      }
+    })();
+    const ready = await Promise.race([readiness, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Preview startup timed out")), 20000);
+    })]);
+    const url = new URL(ready.url);
+    expect(url.hostname).toBe("127.0.0.1");
+    expect((await fetch(url.origin + "/api/v1/runs")).status).toBe(401);
+  } finally {
+    clearTimeout(timer);
+    child.kill("SIGTERM");
+    const forceStop = setTimeout(() => child.kill("SIGKILL"), 5000);
+    await child.exited;
+    clearTimeout(forceStop);
+    await reader.cancel();
+    await stderr;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30000);
+
+test("daemon preview exceptions cannot start an installed profile or a legacy installed package", async () => {
+  const { root, state } = serviceFixture();
+  const release = fixtureLegacyRelease(root);
+  await expect(runDaemon(new ServiceState(servicePaths({})), {
+    manifest: release.manifest, assetsDir: join(release.source, "dist"), revision: () => "source",
+  })).rejects.toThrow("isolated service profile");
+  cpSync(release.source, join(state.paths.releases, release.manifest.build_id), { recursive: true });
+  state.saveConfig({ schema_version: 1, port: 12000, registry_dir: join(root, "registry"), current_build: release.manifest.build_id, previous_build: null, agent_ttl_ms: 60000 });
+  await expect(runDaemon(state)).rejects.toThrow("diagnostic-only");
+});
 
 test("source reload uses production authentication and is absent in ordinary viewers", async () => {
   const { root, state } = serviceFixture();
@@ -14,14 +75,14 @@ test("source reload uses production authentication and is absent in ordinary vie
   const source = await startSharedViewer(
     state,
     release.manifest,
-    join(release.source, "dist"),
+    join(release.source, "skills/multi-task-flow/dist"),
     0,
     () => revision,
   );
   const ordinary = await startSharedViewer(
     state,
     release.manifest,
-    join(release.source, "dist"),
+    join(release.source, "skills/multi-task-flow/dist"),
     0,
   );
   const headers = {
@@ -75,7 +136,7 @@ test("installed production profile rejects source reload overrides", () => {
     startSharedViewer(
       state,
       release.manifest,
-      join(release.source, "dist"),
+      join(release.source, "skills/multi-task-flow/dist"),
       0,
       () => "source",
     ),
@@ -119,7 +180,7 @@ test("installed profile rejects synthetic conversation observers", () => {
   const { root } = serviceFixture();
   const release = fixtureRelease(root);
   expect(() => startSharedViewer(
-    new ServiceState(servicePaths({})), release.manifest, join(release.source, "dist"),
+    new ServiceState(servicePaths({})), release.manifest, join(release.source, "skills/multi-task-flow/dist"),
     0, undefined, undefined,
     async () => ({ request: async () => ({ data: [] }), close() {} }),
   )).toThrow("isolated profile");
@@ -133,7 +194,7 @@ test("isolated single-unit preview projects synthetic conversations through the 
   const release = fixtureRelease(root);
   const ledger = createSingleDeliveryUnitLedger();
   new LedgerStore(state.paths.data, ledger.orchestration_id).create(ledger);
-  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "dist"), 0, () => "mock", "Mock", singleDeliveryUnitObserver(ledger));
+  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0, () => "mock", "Mock", singleDeliveryUnitObserver(ledger));
   const headers = { authorization: "Bearer " + new ServiceAuth(state).credential() };
   const base = `http://127.0.0.1:${viewer.port}/runs/${ledger.orchestration_id}`;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;

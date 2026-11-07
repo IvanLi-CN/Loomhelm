@@ -1,11 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CodexAppServer, CodexRequestError, type ServerCall } from '../codex/index.js';
-import { DispatchUncertainError, ThreadDispatcher, type DispatchAdapter, type DispatchInput, type DispatchRecord, type ReadThreadResult, type StartThreadRequest, type StartTurnRequest, type TurnResult } from '../dispatch/index.js';
-import { atomicWrite } from '../runtime/files.js';
-import { StateLock } from '../runtime/lock.js';
-import { loadConfig } from '../config.js';
+import { CodexAppServer, CodexRequestError, type ServerCall } from '../codex/index.ts';
+import { DispatchUncertainError, ThreadDispatcher, type DispatchAdapter, type DispatchInput, type DispatchRecord, type ReadThreadResult, type StartThreadRequest, type StartTurnRequest, type TurnResult } from '../dispatch/index.ts';
+import { atomicWrite } from '../runtime/files.ts';
+import { StateLock } from '../runtime/lock.ts';
+import { loadConfig } from '../config.ts';
 
 type ApprovalDecision = 'accept' | 'decline' | 'cancel';
 interface CodexRequest extends DispatchInput {

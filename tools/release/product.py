@@ -15,7 +15,7 @@ from ledger import Ledger, event, git, transition
 from github import GitHub
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECTIONS = ('VERSION','clients/typescript/package.json','clients/typescript/package-lock.json','web/package.json','bun.lock')
+PROJECTIONS = ('VERSION','clients/typescript/package.json','web/package.json','bun.lock')
 
 
 def contract():
@@ -33,12 +33,10 @@ def contract():
 def project(version):
     Version(version)
     (ROOT/'VERSION').write_text(version+'\n')
-    for name in PROJECTIONS[1:4]:
+    for name in PROJECTIONS[1:3]:
         path = ROOT/name
         obj = json.loads(path.read_text())
         obj['version'] = version
-        if name.endswith('package-lock.json'):
-            obj['packages']['']['version'] = version
         path.write_text(json.dumps(obj,indent=2)+'\n')
     path = ROOT/'bun.lock'
     text, count = re.subn(r'("web":\s*\{\s*"name":\s*"@loomhelm/web",\s*"version":\s*")[^"]+', lambda m:m[1]+version, path.read_text(),count=1)
@@ -52,9 +50,9 @@ def check_projections():
     if version == 'dev':
         return version
     Version(version)
-    for name in PROJECTIONS[1:4]:
+    for name in PROJECTIONS[1:3]:
         obj = json.loads((ROOT/name).read_text())
-        if obj['version'] != version or (name.endswith('package-lock.json') and obj['packages']['']['version'] != version):
+        if obj['version'] != version:
             raise ReleaseError('version projection drift: '+name)
     if not re.search(r'"web":\s*\{\s*"name":\s*"@loomhelm/web",\s*"version":\s*"'+re.escape(version)+'"', (ROOT/'bun.lock').read_text()):
         raise ReleaseError('Bun workspace version drift')

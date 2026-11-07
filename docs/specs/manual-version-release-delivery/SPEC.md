@@ -44,7 +44,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 ### REQ-MVR-009：必需平台
 
-正式交付 MUST 包含服务端 Linux amd64、Go 客户端、TypeScript 客户端及 Web/PWA；客户端平台目标为 macOS arm64 与 Linux amd64，验收矩阵 MUST 分别覆盖两种实现。所有必需平台 MUST 验证通过；编译成功不能替代运行与安装可用性验证。不得因某个平台失败而缩减该次产物清单或宣布整体成功。
+正式交付 MUST 包含服务端 Linux amd64、Go 客户端、TypeScript 客户端及 Web/PWA；客户端平台目标为 macOS arm64 与 Linux amd64，验收矩阵 MUST 分别覆盖两种实现。TypeScript 客户端遵循 ADR 0021，仅支持 Bun 1.4.4 直接运行源码；包 MUST 包含源码、完整 Skills、依赖和 Bun FFI 所需资源，分别解包运行并验证版本及 SHA，不再要求 Node 22／24。所有必需平台 MUST 验证通过；编译成功不能替代运行与安装可用性验证。不得因某个平台失败而缩减该次产物清单或宣布整体成功。
 
 ### REQ-MVR-010：产物保留
 
@@ -125,7 +125,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 ## Related ADRs
 
 - [不可变候选与蓝绿](../../adr/0002-immutable-candidates-and-blue-green.md)
-- [统一产品版本与可恢复发布身份](../../adr/0021-unified-manual-product-release.md)
+- [统一产品版本与可恢复发布身份](../../adr/0022-unified-manual-product-release.md)
 
 ## References
 

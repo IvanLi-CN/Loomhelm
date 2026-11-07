@@ -83,13 +83,13 @@ It derives the projection only after that check passes, validates the projection
 skills/bin/plan-cli.sh --input <raw-plan.md>
 ```
 
-The launcher is the trusted boundary: it clears Bun and Node preload environment variables and selects `skills/bin/plan_bunfig.toml`. Direct `bun run skills/bin/plan_review_view.ts` remains a development-only diagnostic path and is not a secure interface for untrusted candidate input.
+The launcher is the trusted boundary: it clears Bun and Node preload environment variables and selects `skills/bin/plan_bunfig.toml`. Direct `bun --no-install run skills/bin/plan_review_view.ts` remains a development-only diagnostic path and is not a secure interface for untrusted candidate input.
 
 The finalizer has one public result: `pass` emits the projection and permits the explicit plan response; `reject` emits stable findings, no compliant projection, and blocks execution.
 
 The `$dev-plan` response wraps a passing projection in exactly one `<proposed_plan>` block.
 
-Use `bun run skills/bin/plan_contract_check.ts --plan -` only for focused raw-contract diagnostics or fixture tests.
+Use `bun --no-install run skills/bin/plan_contract_check.ts --plan -` only for focused raw-contract diagnostics or fixture tests.
 
 Its standalone `PASS` is not an explicit `$dev-plan` finalization result.
 

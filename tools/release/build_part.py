@@ -101,25 +101,27 @@ def build(record, part, output):
             archive(stage,output/f'go-client-{machine}.tar.gz',epoch)
         elif part=='ts-client':
             if machine not in ('darwin-arm64','linux-amd64'): raise ReleaseError('unsupported TS native target')
-            run('npm','ci','--prefix','skills','--ignore-scripts','--no-audit','--no-fund')
-            run('node','skills/scripts/build-skills-native.mjs')
-            run('bun','skills/scripts/build-client-skills.mjs')
-            run('bun','install','--cwd','skills/multi-task-flow','--frozen-lockfile')
+            run('bun','install','--cwd','skills','--frozen-lockfile','--ignore-scripts','--backend=copy')
+            run('bun','install','--cwd','skills/multi-task-flow','--frozen-lockfile','--ignore-scripts','--backend=copy')
             run('bun','run','--cwd','skills/multi-task-flow','build')
-            run('npm','ci','--prefix','clients/typescript','--no-audit','--no-fund')
-            run('npm','run','build','--prefix','clients/typescript')
-            shutil.copytree(ROOT/'clients/typescript/dist',stage/'dist')
+            run('bun','install','--cwd','clients/typescript','--frozen-lockfile','--ignore-scripts','--backend=copy')
+            run('bun','run','--cwd','clients/typescript','build')
+            shutil.copytree(ROOT/'clients/typescript/src',stage/'src')
+            shutil.copytree(ROOT/'clients/typescript/toolkit',stage/'toolkit')
             shutil.copy2(ROOT/'clients/typescript/package.json',stage/'package.json')
-            shutil.copy2(ROOT/'clients/typescript/package-lock.json',stage/'package-lock.json')
+            shutil.copy2(ROOT/'clients/typescript/bun.lock',stage/'bun.lock')
+            metadata=json.loads((stage/'package.json').read_text())
             if fixture:
-                # Keep fixture package metadata consistent without changing source.
-                for filename in ('package.json','package-lock.json'):
-                    path=stage/filename
-                    metadata=json.loads(path.read_text());metadata['version']=record['version']
-                    if filename=='package-lock.json':metadata['packages']['']['version']=record['version']
-                    path.write_text(json.dumps(metadata,indent=2)+'\n')
-            # Node module resolution from packaged toolkit climbs to package root.
-            run('npm','ci','--omit=dev','--prefix',str(stage),'--no-audit','--no-fund')
+                metadata['version']=record['version']
+                (stage/'package.json').write_text(json.dumps(metadata,indent=2)+'\n')
+            info=dict(version=record['version'],source_sha=sha,policy='loomhelm-manual-v1')
+            # Freeze identity into the delivered TS source, never edit the checkout.
+            (stage/'src/build-info.ts').write_text('export const buildInfo = Object.freeze('+json.dumps(info)+');\n')
+            # Bun's root lock omits the root package version. Frozen install proves
+            # dependency consistency; package.json and source stamp own identity.
+            run('bun','install','--cwd',str(stage),'--frozen-lockfile','--production','--ignore-scripts','--backend=copy')
+            for relative in ('skills/node_modules','skills/multi-task-flow/node_modules'):
+                shutil.copytree(ROOT/relative,stage/'toolkit'/relative)
             archive(stage,output/f'ts-client-{machine}.tar.gz',epoch)
         else: raise ReleaseError('unknown build partition')
 

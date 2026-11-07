@@ -10,7 +10,7 @@ Loomhelm 是面向个人与小型团队的自部署项目管理与 Codex 协作�
 
 产品端名称固定为**服务端**、**客户端**和 **Web App**，见[术语表](GLOSSARY.md)。客户端有两种并存的实现：现有 Go 实现保留在 `cmd/connector/` 与 `internal/connector/`；新增 TypeScript 实现独立放在 `clients/typescript/`。新增实现不替换 Go 入口、协议、发行包或现有服务端。
 
-TypeScript 客户端提供 Local mode 下的 Codex app-server 交互、Skills/工作流、Dispatch 和持久任务流；Connected mode 尚未实现。安装和使用见 [TypeScript 客户端](clients/typescript/README.md)。仓库统一验证入口为 `scripts/checks client`，包本身仍可独立使用 Node.js 安装和运行，不依赖根目录 Bun workspace。
+TypeScript 客户端提供 Local mode 下的 Codex app-server 交互、Skills/工作流、Dispatch 和持久任务流；Connected mode 尚未实现。安装和使用见 [TypeScript 客户端](clients/typescript/README.md)。仓库统一验证入口为 `scripts/checks client`，包使用 Bun 1.4.4 准备依赖并直接运行 TypeScript 源码，不依赖服务端或根目录 Bun workspace；Node.js 与预编译 JS 入口不再受支持。
 
 ## Architecture
 
@@ -45,7 +45,7 @@ LOOMHELM_CONNECTOR_BASE_URL=https://loomhelm.ivanli.cc "$HOME/.local/loomhelm/lo
 
 Markdown 工具已提供固定版本入口：首次运行 `python3 tools/markdown.py setup`，检查使用 `python3 tools/markdown.py check`，格式修复使用 `python3 tools/markdown.py fix`。Lefthook 配置使用相同的固定工具检查暂存 Markdown，并使用锁定版本的 React Doctor 检查暂存 React 文件；安装提交钩子必须显式选择 `python3 tools/markdown.py setup --install-hooks`，并保留已有钩子配置。
 
-统一质量检查入口是 `scripts/checks`：`quality` 检查质量声明、dprint、脚本和部署配置，`generated` 检查 Go/TypeScript 与 sqlc 漂移，`source` 检查 Go 测试/race/shuffle/vet，`database` 检查真实 PostgreSQL 与 River 作业，`client` 检查独立 TS 客户端的安装、类型与 Node.js/Bun 测试，`web` 检查前端安装、类型和构建，`react` 检查 React Doctor，`all` 汇总所有失败并以非零状态退出。数据库检查要求显式的 `LOOMHELM_DATABASE_URL`，不会把缺少数据库误报为通过。
+统一质量检查入口是 `scripts/checks`：`quality` 检查质量声明、dprint、脚本和部署配置，`generated` 检查 Go/TypeScript 与 sqlc 漂移，`source` 检查 Go 测试/race/shuffle/vet，`database` 检查真实 PostgreSQL 与 River 作业，`client` 检查独立 TS 客户端的安装、类型与 Bun 源码测试，`web` 检查前端安装、类型和构建，`react` 检查 React Doctor，`all` 汇总所有失败并以非零状态退出。数据库检查要求显式的 `LOOMHELM_DATABASE_URL`，不会把缺少数据库误报为通过。
 
 完整产品需求与一期验收见 [PRD](docs/PRD.md)，V01 联合验收操作见 [V01 验收手册](docs/phase1-v01-acceptance.md)，已确定的工程合同见 [项目规范](docs/specs/phase1-core/SPEC.md)，部署控制与目录约定见 [部署控制](docs/deployment.md) 和 [部署目录结构](docs/deployment-layout.md)，工程边界见 [AGENTS.md](AGENTS.md)。PRD 及相关业务规则须经主人明确确认后才能实施功能，产品 UI 还需完整设计确认；工程骨架、基础设施、能力验证和现有设计讨论可以并行。源码目录按职责组织为 `cmd/`、`internal/`、`web/`、`packages/`、`api/`、`protocol/`、`deploy/` 和 `tests/`；各目录在对应实现加入时创建。
 

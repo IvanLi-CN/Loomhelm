@@ -1,4 +1,4 @@
-import { buildInfo } from './build-info.js';
+import { buildInfo } from './build-info.ts';
 export { buildInfo };
 export const versionHeader = 'X-Loomhelm-Version';
 export class ProductVersionError extends Error {

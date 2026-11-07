@@ -89,23 +89,24 @@ def smoke(directory,record):
                 run_version([str(root/'loomhelm-connector'),'--version'],record)
             elif path.name.startswith('ts-client-'):
                 package=json.loads((root/'package.json').read_text())
-                lock=json.loads((root/'package-lock.json').read_text())
-                if package['version']!=record['version'] or lock['version']!=record['version'] or lock['packages']['']['version']!=record['version']:
-                    raise ReleaseError('TS package/lock identity differs from compiled version')
-                manifest=json.loads((root/'dist/toolkit/artifact-manifest.json').read_text())
-                if manifest['candidateSha']!=record['merge_sha'] or manifest['dirty']:
+                if package['version']!=record['version'] or package['engines'].get('bun')!='1.4.4' or not (root/'bun.lock').is_file():
+                    raise ReleaseError('TS package/runtime identity differs from source stamp')
+                if subprocess.check_output(['bun','--version'],text=True).strip()!='1.4.4':
+                    raise ReleaseError('TS package requires the pinned Bun runtime')
+                manifest=json.loads((root/'toolkit/artifact-manifest.json').read_text())
+                if manifest['candidateSha']!=record['merge_sha'] or manifest['dirty'] or manifest['schemaVersion']!=2 or manifest['runtime']!='bun@1.4.4':
                     raise ReleaseError('TS resource provenance differs from clean Candidate')
                 for resource in manifest['files']:
                     relative=Path(resource['path'])
                     if relative.is_absolute() or '..' in relative.parts:
                         raise ReleaseError('unsafe TS resource path')
-                    payload=root/'dist/toolkit'/relative
+                    payload=root/'toolkit'/relative
                     if not payload.is_file() or hashlib.sha256(payload.read_bytes()).hexdigest()!=resource['sha256']:
                         raise ReleaseError('incomplete or altered TS resource: '+str(relative))
                 print(json.dumps(dict(observation='typescript-resource-inventory',files=len(manifest['files']),candidate_sha=manifest['candidateSha'])),flush=True)
-                subprocess.run(['node','-e','require(process.argv[1])',str(root/'dist/toolkit/skills/bin/native/posix.node')],check=True)
-                run_version(['node',str(root/'dist/cli.js'),'--version'],record)
-                subprocess.run(['node',str(root/'dist/cli.js'),'skills','list'],check=True,stdout=subprocess.DEVNULL)
+                subprocess.run(['bun','--no-install',str(root/'toolkit/skills/scripts/test-skills-native.ts')],check=True)
+                run_version(['bun','--no-install',str(root/'src/cli.ts'),'--version'],record)
+                subprocess.run(['bun','--no-install',str(root/'src/cli.ts'),'skills','list'],check=True,stdout=subprocess.DEVNULL)
             elif path.name.startswith('web'):
                 info=json.loads((root/'product-version.json').read_text())
                 if info['version']!=record['version'] or info['source_sha']!=record['merge_sha']:raise ReleaseError('Web build identity mismatch')
