@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -10,11 +10,17 @@ export function checkSkillsInstallation(root) {
   const inventory = resolve(root, 'skills/source-manifest.json');
   if (!existsSync(inventory)) return { ok: false, code: 'SKILLS_INVENTORY_MISSING', root, missing: ['skills/source-manifest.json'] };
   const manifest = JSON.parse(readFileSync(inventory, 'utf8'));
+  const contained = path => {
+    const file = resolve(root, path);
+    if (!existsSync(file)) return false;
+    const stat = lstatSync(file);
+    return stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && realpathSync(file).startsWith(realpathSync(resolve(root, 'skills')) + '/');
+  };
   const missing = [...manifest.files, ...(manifest.additions ?? [])]
-    .map(file => file.path).filter(path => !path.startsWith('skills/') || path.split('/').includes('..') || !existsSync(resolve(root, path)));
+    .map(file => file.path).filter(path => !path.startsWith('skills/') || path.split('/').includes('..') || !contained(path));
   const escapedImports = [];
   for (const file of [...manifest.files, ...(manifest.additions ?? [])]) {
-    if (!/\.(ts|mjs)$/.test(file.path) || !file.path.startsWith('skills/') || file.path.split('/').includes('..') || !existsSync(resolve(root, file.path))) continue;
+    if (!/\.(ts|mjs)$/.test(file.path) || !file.path.startsWith('skills/') || file.path.split('/').includes('..') || !contained(file.path)) continue;
     const text = readFileSync(resolve(root, file.path), 'utf8');
     for (const match of text.matchAll(/(?:from\s*|import\s*\(?\s*)["'](\.[^"']+)["']/g)) {
       const target = resolve(root, dirname(file.path), match[1]);

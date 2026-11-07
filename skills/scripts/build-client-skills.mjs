@@ -6,8 +6,9 @@ import { dirname, join, resolve } from 'node:path';
 
 function walk(root) {
   return readdirSync(root, { withFileTypes: true }).flatMap(entry => {
-    if (['node_modules', '.cache', 'docs', 'dist', 'tests', 'native-tests', 'fixtures', 'examples', 'references', 'assets'].includes(entry.name)) return [];
+    if (['node_modules', '.cache', 'dist', 'tests', 'native-tests', 'fixtures', 'examples', 'references', 'assets'].includes(entry.name)) return [];
     const path = join(root, entry.name);
+    if (resolve(path) === resolve('skills/docs')) return [];
     return entry.isDirectory() ? walk(path) : [path];
   });
 }

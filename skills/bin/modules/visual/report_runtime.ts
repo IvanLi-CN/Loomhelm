@@ -119,7 +119,7 @@ export const runRegCli: RunRegCli = (directory, command = REG_CLI_COMMAND) => {
       basename(npm) !== "npm-cli.js" ||
       [npmBin, npmPackage, npmNodeModules, nodeLib]
         .map((path) => basename(path))
-        .join("/") !== "skills/bin/npm/node_modules/lib"
+        .join("/") !== "bin/npm/node_modules/lib"
     )
       throw new Error(
         "npm installation layout is unsupported; refusing to run unsandboxed",

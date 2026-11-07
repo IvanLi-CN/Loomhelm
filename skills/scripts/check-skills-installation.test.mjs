@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -35,6 +35,13 @@ test('only skills/ supplies source, compiled entries, native support and contrac
       assert.equal(invalid.status, 2, invalid.stderr);
       assert.equal(JSON.parse(invalid.stdout).code, 'INVALID_INPUT');
     }
+    const contextPath = join(isolated, 'skills/dot-codex-development/scripts/context.ts');
+    const saved = join(isolated, 'context.ts');
+    renameSync(contextPath, saved);
+    symlinkSync(saved, contextPath);
+    assert.equal(checkSkillsInstallation(isolated).ok, false);
+    rmSync(contextPath);
+    renameSync(saved, contextPath);
     // Recreate the original packaging mistake and require a specific failure.
     renameSync(join(isolated, 'skills/bin'), join(isolated, 'bin'));
     const broken = checkSkillsInstallation(isolated);
