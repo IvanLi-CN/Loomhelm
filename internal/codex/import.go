@@ -228,6 +228,10 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 		if json.Valid(thread.RawThread) && len(thread.RawThread) > 0 {
 			metadata = thread.RawThread
 		}
+		sourceKind, sourceKindErr := normalizeSourceKind(thread.SourceKind)
+		if sourceKindErr != nil {
+			return sourceKindErr
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO codex_threads (
 				host_id, thread_id, project_id, parent_thread_id, source_kind, codex_title,
@@ -255,7 +259,7 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 				last_activity_at = GREATEST(codex_threads.last_activity_at, EXCLUDED.last_activity_at),
 				updated_at = GREATEST(codex_threads.updated_at, EXCLUDED.updated_at),
 				metadata = CASE WHEN EXCLUDED.metadata <> '{}'::jsonb THEN EXCLUDED.metadata ELSE codex_threads.metadata END
-			`, hostID, threadID, projectIDValue, nullableString(thread.ParentThreadID), sourceKindOrDefault(thread.SourceKind), nullableString(thread.CodexTitle), conversationTitle, strings.TrimSpace(thread.Preview), strings.TrimSpace(thread.CWD), sourceStatusOrDefault(thread.SourceStatus), threadHistoryState(thread, threadStatus), threadStatus.Complete && filesCompleteForThread(thread), titleState, snapshot.AsOf, lastActivity, metadata); err != nil {
+			`, hostID, threadID, projectIDValue, nullableString(thread.ParentThreadID), sourceKind, nullableString(thread.CodexTitle), conversationTitle, strings.TrimSpace(thread.Preview), strings.TrimSpace(thread.CWD), sourceStatusOrDefault(thread.SourceStatus), threadHistoryState(thread, threadStatus), threadStatus.Complete && filesCompleteForThread(thread), titleState, snapshot.AsOf, lastActivity, metadata); err != nil {
 			return fmt.Errorf("persist Codex thread snapshot: %w", err)
 		}
 
@@ -403,8 +407,13 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			  AND codex.thread_id = $2
 			  AND session.host_id = $1
 			  AND session.external_thread_ref = $2
-			  AND codex.bound_task_id IS NULL
-			  AND codex.bound_session_id IS NULL
+			  AND session.creation_state = 'confirmed'
+			  AND codex.source_kind = 'main'
+			  AND codex.source_status = 'active'
+			  AND codex.history_state = 'complete'
+			  AND codex.files_complete
+			  AND (codex.bound_task_id IS NULL OR codex.bound_task_id = task.id)
+			  AND (codex.bound_session_id IS NULL OR codex.bound_session_id = session.id)
 			  AND (task.id IS NULL OR NOT EXISTS (
 				  SELECT 1 FROM codex_threads AS other
 				  WHERE other.bound_task_id = task.id
@@ -686,14 +695,14 @@ func threadHistoryComplete(thread protocol.CodexSourceThreadSnapshot, status sna
 	return threadHistoryState(thread, status) == protocol.CodexHistoryStateComplete
 }
 
-func sourceKindOrDefault(value protocol.CodexThreadSourceKind) protocol.CodexThreadSourceKind {
+func normalizeSourceKind(value protocol.CodexThreadSourceKind) (protocol.CodexThreadSourceKind, error) {
 	if value == "" || value == protocol.CodexThreadSourceKindMain {
-		return protocol.CodexThreadSourceKindMain
+		return protocol.CodexThreadSourceKindMain, nil
 	}
 	if value == protocol.CodexThreadSourceKindSubagent {
-		return value
+		return value, nil
 	}
-	return protocol.CodexThreadSourceKindMain
+	return "", ErrInvalid
 }
 
 func sourceStatusOrDefault(value protocol.CodexSourceStatus) protocol.CodexSourceStatus {

@@ -192,7 +192,11 @@ func decodeBody(request *http.Request, target any) error {
 
 func parseProjectQuery(request *http.Request) (protocol.ListCodexProjectsQuery, error) {
 	values := request.URL.Query()
-	query := protocol.ListCodexProjectsQuery{HostID: optionalQuery(values.Get("host_id")), AfterCursor: optionalQuery(values.Get("after_cursor"))}
+	afterCursor, err := optionalCursorQuery(values)
+	if err != nil {
+		return protocol.ListCodexProjectsQuery{}, err
+	}
+	query := protocol.ListCodexProjectsQuery{HostID: optionalQuery(values.Get("host_id")), AfterCursor: afterCursor}
 	limit, err := parseLimit(values.Get("limit"))
 	if err != nil {
 		return query, err
@@ -203,12 +207,16 @@ func parseProjectQuery(request *http.Request) (protocol.ListCodexProjectsQuery, 
 
 func parseConversationQuery(request *http.Request) (protocol.ListCodexConversationsQuery, error) {
 	values := request.URL.Query()
+	afterCursor, err := optionalCursorQuery(values)
+	if err != nil {
+		return protocol.ListCodexConversationsQuery{}, err
+	}
 	query := protocol.ListCodexConversationsQuery{
 		HostID:            optionalQuery(values.Get("host_id")),
 		ProjectID:         optionalQuery(values.Get("project_id")),
 		LoomhelmProjectID: optionalQuery(values.Get("loomhelm_project_id")),
 		Search:            optionalQuery(values.Get("search")),
-		AfterCursor:       optionalQuery(values.Get("after_cursor")),
+		AfterCursor:       afterCursor,
 	}
 	limit, err := parseLimit(values.Get("limit"))
 	if err != nil {
@@ -277,6 +285,18 @@ func optionalQuery(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func optionalCursorQuery(values map[string][]string) (*string, error) {
+	raw, present := values["after_cursor"]
+	if !present {
+		return nil, nil
+	}
+	if len(raw) == 0 || strings.TrimSpace(raw[0]) == "" {
+		return nil, fmt.Errorf("%w: after_cursor must not be blank", ErrInvalid)
+	}
+	value := strings.TrimSpace(raw[0])
+	return &value, nil
 }
 
 func (s *Service) writeError(writer http.ResponseWriter, request *http.Request, err error, message string) {

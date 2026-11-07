@@ -21,15 +21,23 @@ var (
 )
 
 type StoreConfig struct {
-	Now func() time.Time
+	Now               func() time.Time
+	BindingReconciler BindingReconciler
 }
+
+// BindingReconciler lets the application composition layer reconcile a
+// domain-specific identity while the Session/Task transaction is still open.
+// The sessions package deliberately owns only the generic transaction hook;
+// Codex-specific rules remain in internal/codex.
+type BindingReconciler func(context.Context, pgx.Tx, string, string) error
 
 // Store is the durable Session boundary. All lifecycle transitions lock the
 // row before applying the pure state machine so a replacement generation
 // cannot race a disconnect or reconciliation update.
 type Store struct {
-	pool *pgxpool.Pool
-	now  func() time.Time
+	pool              *pgxpool.Pool
+	now               func() time.Time
+	bindingReconciler BindingReconciler
 }
 
 func NewStore(pool *pgxpool.Pool, configs ...StoreConfig) *Store {
@@ -37,7 +45,11 @@ func NewStore(pool *pgxpool.Pool, configs ...StoreConfig) *Store {
 	if len(configs) > 0 && configs[0].Now != nil {
 		now = configs[0].Now
 	}
-	return &Store{pool: pool, now: now}
+	var bindingReconciler BindingReconciler
+	if len(configs) > 0 {
+		bindingReconciler = configs[0].BindingReconciler
+	}
+	return &Store{pool: pool, now: now, bindingReconciler: bindingReconciler}
 }
 
 func (s *Store) Create(ctx context.Context, input NewInput) (Session, error) {
@@ -552,6 +564,11 @@ func (s *Store) ActivateIntent(ctx context.Context, input ActivationInput) (Sess
 	`, input.SessionID, updated.ExternalThreadRef, updated.Generation, updated.State, optionalStringValue(updated.ProjectID), updated.UpdatedAt); err != nil {
 		return Session{}, fmt.Errorf("activate session intent: %w", err)
 	}
+	if taskID := strings.TrimSpace(record.Intent.TaskID); taskID != "" && s.bindingReconciler != nil {
+		if err := s.bindingReconciler(ctx, tx, input.SessionID, taskID); err != nil {
+			return Session{}, fmt.Errorf("reconcile Session activation: %w", err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Session{}, fmt.Errorf("commit session activation: %w", err)
 	}
@@ -970,6 +987,11 @@ func (s *Store) bindTask(ctx context.Context, sessionID string, request BindRequ
 	if optionalStringValue(current.TaskID) == "" {
 		if _, err := tx.Exec(ctx, `UPDATE tasks SET session_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, request.TaskID, sessionID); err != nil {
 			return Session{}, fmt.Errorf("assign task session during binding: %w", err)
+		}
+	}
+	if s.bindingReconciler != nil {
+		if err := s.bindingReconciler(ctx, tx, sessionID, request.TaskID); err != nil {
+			return Session{}, fmt.Errorf("reconcile Session binding: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

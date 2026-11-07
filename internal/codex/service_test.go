@@ -3,8 +3,12 @@ package codex
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
 )
 
 func TestConversationCursorRoundTripPreservesSnapshotFence(t *testing.T) {
@@ -23,7 +27,20 @@ func TestConversationCursorRoundTripPreservesSnapshotFence(t *testing.T) {
 	}
 }
 
-func TestConversationCursorDecodeAcceptsLegacyCursorWithoutSnapshotFence(t *testing.T) {
+func TestNormalizeSourceKindRejectsUnknownValues(t *testing.T) {
+	if _, err := normalizeSourceKind(protocol.CodexThreadSourceKind("future-agent")); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("normalizeSourceKind() error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestConversationQueryRejectsBlankCursor(t *testing.T) {
+	request := httptest.NewRequest("GET", "/api/v1/codex/conversations?after_cursor=%20", nil)
+	if _, err := parseConversationQuery(request); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("parseConversationQuery() error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestConversationCursorDecodeRejectsLegacyCursorWithoutSnapshotFence(t *testing.T) {
 	data, err := json.Marshal(map[string]string{
 		"updated_at": "2026-11-07T08:09:10.123456789Z",
 		"thread_id":  "thread-legacy",
@@ -33,10 +50,7 @@ func TestConversationCursorDecodeAcceptsLegacyCursorWithoutSnapshotFence(t *test
 	}
 
 	decoded := decodeConversationCursor(base64.RawURLEncoding.EncodeToString(data))
-	if decoded == nil {
-		t.Fatal("decodeConversationCursor() rejected a legacy cursor")
-	}
-	if decoded.ThreadID != "thread-legacy" || !decoded.SnapshotAsOf.IsZero() {
-		t.Fatalf("decoded legacy cursor = %+v", *decoded)
+	if decoded != nil {
+		t.Fatalf("decodeConversationCursor() accepted legacy cursor: %+v", *decoded)
 	}
 }

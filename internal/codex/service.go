@@ -59,6 +59,10 @@ type TitleWriter interface {
 	SetTitle(context.Context, string, string, string) error
 }
 
+type operationTitleWriter interface {
+	SetTitleWithOperation(context.Context, string, string, string, string) error
+}
+
 type Service struct {
 	pool        *pgxpool.Pool
 	principal   auth.PrincipalResolver
@@ -264,10 +268,11 @@ func (s *Service) UpsertThread(ctx context.Context, input UpsertThreadInput) err
 	if strings.TrimSpace(input.HostID) == "" || strings.TrimSpace(input.ThreadID) == "" {
 		return ErrInvalid
 	}
-	if input.SourceKind == "" {
-		input.SourceKind = protocol.CodexThreadSourceKindMain
+	normalizedSourceKind, err := normalizeSourceKind(input.SourceKind)
+	if err != nil {
+		return err
 	}
-	input.SourceKind = sourceKindOrDefault(input.SourceKind)
+	input.SourceKind = normalizedSourceKind
 	if input.SourceStatus == "" {
 		input.SourceStatus = protocol.CodexSourceStatusActive
 	}
@@ -298,7 +303,7 @@ func (s *Service) UpsertThread(ctx context.Context, input UpsertThreadInput) err
 	if input.CodexTitle != nil && strings.TrimSpace(*input.CodexTitle) != "" {
 		titleState = protocol.CodexTitleSyncStateSynced
 	}
-	_, err := s.pool.Exec(ctx, `
+	_, err = s.pool.Exec(ctx, `
 		INSERT INTO codex_threads (
 			host_id, thread_id, project_id, parent_thread_id, source_kind, codex_title,
 			conversation_title, preview, cwd, source_status, history_state, files_complete,
@@ -688,7 +693,7 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 		if *query.Bound {
 			where += " AND t.bound_task_id IS NOT NULL"
 		} else {
-			where += " AND t.bound_task_id IS NULL AND NOT EXISTS (SELECT 1 FROM execution_sessions session WHERE session.host_id = t.host_id AND session.external_thread_ref = t.thread_id)"
+			where += " AND t.source_kind = 'main' AND t.bound_task_id IS NULL AND NOT EXISTS (SELECT 1 FROM execution_sessions session WHERE session.host_id = t.host_id AND session.external_thread_ref = t.thread_id)"
 		}
 	}
 	if value := strings.TrimSpace(valueOrEmpty(query.ProjectID)); value != "" {
@@ -838,7 +843,7 @@ func (s *Service) GetConversation(ctx context.Context, principal auth.Principal,
 		}
 	}
 	item.ReadOnly, item.CanEditTitle = true, boolPointer(false)
-	if item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && capabilityContains(capabilities, "thread/name/set") {
+	if item.SourceKind == protocol.CodexThreadSourceKindMain && item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && capabilityContains(capabilities, "thread/name/set") {
 		allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
 		if authorizeErr != nil {
 			return protocol.CodexConversationDetail{}, authorizeErr
@@ -855,6 +860,50 @@ func (s *Service) GetConversation(ctx context.Context, principal auth.Principal,
 		return protocol.CodexConversationDetail{}, err
 	}
 	return protocol.CodexConversationDetail{Conversation: item, History: history, Files: files}, nil
+}
+
+// ReconcileSessionTaskBinding keeps a Codex identity aligned when a generic
+// Session is associated with a Task after the Codex snapshot was imported.
+// The caller supplies the Session/Task transaction so the visibility change
+// cannot commit without the corresponding platform binding.
+func (s *Service) ReconcileSessionTaskBinding(ctx context.Context, tx pgx.Tx, sessionID, taskID string) error {
+	if s == nil || tx == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(taskID) == "" {
+		return ErrInvalid
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE codex_threads AS codex
+		SET bound_task_id = task.id,
+			bound_session_id = session.id,
+			updated_at = GREATEST(codex.updated_at, session.updated_at, task.updated_at)
+		FROM execution_sessions AS session
+		JOIN tasks AS task ON task.session_id = session.id
+		WHERE session.id = $1
+		  AND task.id = $2
+		  AND session.creation_state = 'confirmed'
+		  AND session.external_thread_ref IS NOT NULL
+		  AND codex.host_id = session.host_id
+		  AND codex.thread_id = session.external_thread_ref
+		  AND codex.source_kind = 'main'
+		  AND codex.source_status = 'active'
+		  AND codex.history_state = 'complete'
+		  AND codex.files_complete
+		  AND (codex.bound_session_id IS NULL OR codex.bound_session_id = session.id)
+		  AND (codex.bound_task_id IS NULL OR codex.bound_task_id = task.id)
+		  AND NOT EXISTS (
+			SELECT 1 FROM codex_threads AS other
+			WHERE other.bound_task_id = task.id
+			  AND (other.host_id <> codex.host_id OR other.thread_id <> codex.thread_id)
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM codex_threads AS other
+			WHERE other.bound_session_id = session.id
+			  AND (other.host_id <> codex.host_id OR other.thread_id <> codex.thread_id)
+		  )
+	`, sessionID, taskID)
+	if err != nil {
+		return fmt.Errorf("reconcile Codex Session/Task identity: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) GetConversationFile(ctx context.Context, principal auth.Principal, hostID, threadID string, query protocol.GetCodexConversationFileQuery) (protocol.CodexFileContentResponse, error) {
@@ -1109,7 +1158,12 @@ func (s *Service) UpdateTitle(ctx context.Context, principal auth.Principal, hos
 		return protocol.CodexConversation{}, fmt.Errorf("persist Loomhelm conversation title: %w", err)
 	}
 	if s.titleWriter != nil {
-		writeErr := s.titleWriter.SetTitle(ctx, hostID, threadID, operationDesired)
+		var writeErr error
+		if writer, ok := s.titleWriter.(operationTitleWriter); ok {
+			writeErr = writer.SetTitleWithOperation(ctx, operationID, hostID, threadID, operationDesired)
+		} else {
+			writeErr = s.titleWriter.SetTitle(ctx, hostID, threadID, operationDesired)
+		}
 		titleTx, txErr := s.pool.Begin(ctx)
 		if txErr != nil {
 			err = errors.Join(writeErr, fmt.Errorf("begin Codex title result: %w", txErr))
@@ -1245,6 +1299,33 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	var importedBy *string
 	var snapshotAsOf time.Time
 	if err := tx.QueryRow(ctx, `
+		SELECT 1 FROM codex_threads WHERE host_id = $1 AND thread_id = $2
+	`, access.host.ID, threadID).Scan(new(int)); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, ErrNotFound
+	} else if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("read Codex conversation: %w", err)
+	}
+	var existingSessionID string
+	var sessionTaskID *string
+	var sessionProjectID *string
+	sessionLookupErr := tx.QueryRow(ctx, `
+		SELECT session.id, session.project_id, task.id
+		FROM execution_sessions AS session
+		LEFT JOIN tasks AS task ON task.session_id = session.id
+		WHERE session.host_id = $1 AND session.external_thread_ref = $2
+		FOR UPDATE OF session
+	`, access.host.ID, threadID).Scan(&existingSessionID, &sessionProjectID, &sessionTaskID)
+	if sessionLookupErr != nil && !errors.Is(sessionLookupErr, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, fmt.Errorf("read existing Codex Session: %w", sessionLookupErr)
+	}
+	var taskProjectID string
+	var taskSessionID *string
+	if err := tx.QueryRow(ctx, `SELECT project_id, session_id FROM tasks WHERE id = $1 FOR UPDATE`, request.TaskID).Scan(&taskProjectID, &taskSessionID); errors.Is(err, pgx.ErrNoRows) {
+		return protocol.CodexConversation{}, auth.ErrNotFound
+	} else if err != nil {
+		return protocol.CodexConversation{}, fmt.Errorf("lock binding Task: %w", err)
+	}
+	if err := tx.QueryRow(ctx, `
 		SELECT conversation_title, project_id, source_kind, source_status, history_state, files_complete, bound_task_id, bound_session_id, imported_by, as_of
 		FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE
 	`, access.host.ID, threadID).Scan(&conversationTitle, &codexProjectID, &sourceKind, &sourceStatus, &historyState, &filesComplete, &existingTask, &existingSession, &importedBy, &snapshotAsOf); errors.Is(err, pgx.ErrNoRows) {
@@ -1254,13 +1335,6 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	}
 	if sourceKind != string(protocol.CodexThreadSourceKindMain) {
 		return protocol.CodexConversation{}, ErrInvalid
-	}
-	var taskProjectID string
-	var taskSessionID *string
-	if err := tx.QueryRow(ctx, `SELECT project_id, session_id FROM tasks WHERE id = $1 FOR UPDATE`, request.TaskID).Scan(&taskProjectID, &taskSessionID); errors.Is(err, pgx.ErrNoRows) {
-		return protocol.CodexConversation{}, auth.ErrNotFound
-	} else if err != nil {
-		return protocol.CodexConversation{}, fmt.Errorf("lock binding Task: %w", err)
 	}
 	allowed, err := s.projects.CanWriteProjectTx(ctx, tx, principal, taskProjectID)
 	if err != nil {
@@ -1317,19 +1391,6 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 		return s.readProjectedConversation(ctx, access, principal, threadID)
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return protocol.CodexConversation{}, fmt.Errorf("read binding idempotency record: %w", err)
-	}
-	var existingSessionID string
-	var sessionTaskID *string
-	var sessionProjectID *string
-	sessionLookupErr := tx.QueryRow(ctx, `
-		SELECT session.id, session.project_id, task.id
-		FROM execution_sessions AS session
-		LEFT JOIN tasks AS task ON task.session_id = session.id
-		WHERE session.host_id = $1 AND session.external_thread_ref = $2
-		FOR UPDATE OF session
-	`, access.host.ID, threadID).Scan(&existingSessionID, &sessionProjectID, &sessionTaskID)
-	if sessionLookupErr != nil && !errors.Is(sessionLookupErr, pgx.ErrNoRows) {
-		return protocol.CodexConversation{}, fmt.Errorf("read existing Codex Session: %w", sessionLookupErr)
 	}
 	if existingSession != nil {
 		if errors.Is(sessionLookupErr, pgx.ErrNoRows) || *existingSession != existingSessionID {
@@ -1527,11 +1588,12 @@ func decodeConversationCursor(value string) *conversationCursor {
 		return nil
 	}
 	var snapshotAsOf time.Time
-	if decoded.SnapshotAsOf != "" {
-		snapshotAsOf, err = time.Parse(time.RFC3339Nano, decoded.SnapshotAsOf)
-		if err != nil {
-			return nil
-		}
+	if decoded.SnapshotAsOf == "" {
+		return nil
+	}
+	snapshotAsOf, err = time.Parse(time.RFC3339Nano, decoded.SnapshotAsOf)
+	if err != nil {
+		return nil
 	}
 	return &conversationCursor{UpdatedAt: updated, ThreadID: decoded.ThreadID, SnapshotAsOf: snapshotAsOf}
 }
