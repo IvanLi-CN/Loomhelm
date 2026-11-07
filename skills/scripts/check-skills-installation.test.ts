@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, renameSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'bun:test';
-import { checkSkillsInstallation } from './check-skills-installation.mjs';
+import { checkSkillsInstallation } from './check-skills-installation.ts';
 
 test('a source-only skills installation runs official TS entrypoints and detects missing resources', () => {
   const isolated = realpathSync(mkdtempSync(join(tmpdir(), 'loomhelm-skills-only-')));

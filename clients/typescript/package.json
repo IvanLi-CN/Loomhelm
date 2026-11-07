@@ -14,9 +14,9 @@
   },
   "types": "src/index.ts",
   "scripts": {
-    "build": "bun ../../skills/scripts/package-client-skills.mjs",
+    "build": "bun ../../skills/scripts/package-client-skills.ts",
     "check": "bun x --no-install tsc -p tsconfig.json --noEmit",
-    "test": "bun run build && bun test test/*.test.mjs"
+    "test": "bun run build && bun test test/*.test.ts"
   },
   "devDependencies": {
     "typescript": "5.9.3",

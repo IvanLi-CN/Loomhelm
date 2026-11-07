@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { runProcess } from '../src/runtime/process.ts';
 
 const cliPath = resolve('src/cli.ts');
-const fixturePath = resolve('test/fixtures/cli-codex-server.mjs');
+const fixturePath = resolve('test/fixtures/cli-codex-server.ts');
 async function temporary(fn) {
   const dir = await mkdtemp(join(tmpdir(), 'loomhelm-cli-'));
   try { await fn(dir); } finally { await rm(dir, { recursive: true, force: true }); }

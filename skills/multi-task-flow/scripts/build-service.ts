@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { compatibility } from "./service-contract";
 import { buildId, digest, verifyRelease } from "./service-release";
 import { requireCondition } from "./errors";
-import { copySkillSources } from "../../scripts/package-source.mjs";
+import { copySkillSources } from "../../scripts/package-source.ts";
 
 const args = process.argv.slice(2);
 const option = (name: string) => args[args.indexOf(name) + 1];

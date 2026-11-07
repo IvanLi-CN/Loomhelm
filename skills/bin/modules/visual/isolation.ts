@@ -321,6 +321,8 @@ export function runSandboxedCommand(
 }
 
 export function cloneReportFile(source: string, destination: string): void {
+  if (source.includes("\0") || destination.includes("\0"))
+    throw new Error("native path contains NUL");
   if (process.platform !== "darwin")
     throw new Error("APFS copy-on-write cloning is unavailable");
   if (!isIndependentRegularFile(source))
