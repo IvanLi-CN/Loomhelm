@@ -57,3 +57,5 @@ Task MUST 具备目标、范围、验收条件、依赖和稳定身份。相同 
 - [客户端设计](../../design/client.md)
 - [实现说明](IMPLEMENTATION.md)
 - [历史](HISTORY.md)
+
+viewer 启动器先验证临时目录及祖先，再使用私有受控 Bun 配置；在任何包内 TS 或配置执行前，以启动器绑定的资源身份验证完整清单。FFI 路径拒绝嵌入 NUL，保持目录描述符边界。

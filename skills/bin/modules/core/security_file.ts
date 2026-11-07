@@ -79,6 +79,7 @@ export async function readRegularNoFollow(path: string): Promise<Uint8Array> {
   if (process.platform !== "darwin" && process.platform !== "linux") {
     throw new Error("native_path_unavailable");
   }
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const parent = await open(
     dirname(absolute),
@@ -136,6 +137,7 @@ export function tryLockFile(
     throw new Error("native_lock_unavailable");
   }
   const api = loadPosix();
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const parentFd = openSync(
     dirname(absolute),

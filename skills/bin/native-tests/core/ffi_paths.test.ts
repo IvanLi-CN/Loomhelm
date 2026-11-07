@@ -24,6 +24,15 @@ if (process.env.FFI_PATH_TEST_CHILD === "1") {
     const safe = await import("../../modules/visual/secure_io");
     const security = await import("../../modules/core/security_file");
     const snapshots = await import("../../modules/plan/private_snapshot");
+    const outside = join(root,"outside"); fs.writeFileSync(outside,"preserved");
+    const trustedRoot = join(root,"trusted"); fs.mkdirSync(trustedRoot);
+    for (const path of [join(trustedRoot,"..\0suffix","outside"),join(trustedRoot,"leaf\0suffix")]) {
+      assert.throws(()=>safe.writeAtomicNoFollow(path,"unsafe",trustedRoot),/NUL/);
+      assert.throws(()=>safe.readRegularNoFollow(path,trustedRoot),/NUL/);
+      assert.throws(()=>safe.unlinkNoFollow(path,trustedRoot),/NUL/);
+    }
+    assert.throws(()=>safe.renameNoReplace(outside,join(root,"target\0suffix"),root),/NUL/);
+    assert.equal(fs.readFileSync(outside,"utf8"),"preserved");
     for (let index=0;index<12;index++) {
       await io.writeCandidateText(join(root,"candidate"),String(index),root);
       assert.equal(await io.readCandidateText(join(root,"candidate"),root),String(index));

@@ -56,7 +56,7 @@ const skill = requireSkill(catalog, 'engineering', {
 
 ## 验证入口
 
-先在 `client` 下执行 `npm ci` 和 `npm run build`。命令输出 JSON，失败退出码为 1；参数或配置错误输出 JSON 到 stderr，实际验证失败的结果输出到 stdout。
+先在 `clients/typescript/` 下执行 `bun install --frozen-lockfile` 和 `bun run build`。命令输出 JSON，失败退出码为 1；参数或配置错误输出 JSON 到 stderr，实际验证失败的结果输出到 stdout。
 
 ```sh
 bun src/workflow/cli.ts skills /path/to/repo/.agents/skills /path/to/user/.agents/skills

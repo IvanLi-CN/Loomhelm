@@ -65,7 +65,9 @@ function openDirectoryNoFollow(
   stopAt?: string,
   expectedIdentity?: DirectoryIdentity,
 ): { descriptor: number; canonicalPath: string } {
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
+  if (stopAt?.includes("\0")) throw new Error("native path contains NUL");
   const requestedRoot = resolve(stopAt ?? sep);
   if (stopAt && !isWithin(requestedRoot, absolute))
     throw new Error("path is outside its trusted root");
@@ -152,6 +154,7 @@ export function readRegularNoFollow(
 ): Buffer {
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("platform lacks no-follow path opening");
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const parent = dirname(absolute);
   const leaf = basename(absolute);
@@ -199,6 +202,7 @@ export function writeExclusiveNoFollow(
 ): void {
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("sandbox log path lacks no-follow support");
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   if (!basename(absolute) || basename(absolute) === sep)
     throw new Error("sandbox log path must be a file");
@@ -255,6 +259,7 @@ export function createDirectoryNoFollow(
     throw new Error(
       "directory creation without symlink traversal is unavailable",
     );
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const directory = openDirectoryNoFollow(
     dirname(absolute),
@@ -309,6 +314,7 @@ export function copyFileExclusiveNoFollow(
   }
 }
 export function unlinkNoFollow(path: string, stopAt?: string): void {
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const directory = openDirectoryNoFollow(dirname(absolute), stopAt);
   const name = new TextEncoder().encode(`${basename(absolute)}\0`);
@@ -328,6 +334,7 @@ export function writeAtomicNoFollow(
 ): void {
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("atomic no-follow write is unavailable");
+  if (path.includes("\0")) throw new Error("native path contains NUL");
   const absolute = resolve(path);
   const directory = openDirectoryNoFollow(
     dirname(absolute),
@@ -411,6 +418,7 @@ export function renameNoReplace(
 ): void {
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("atomic no-replace rename is unavailable");
+  if (source.includes("\0") || destination.includes("\0")) throw new Error("native path contains NUL");
   const sourcePath = resolve(source);
   const destinationPath = resolve(destination);
   const sourceParent = dirname(sourcePath);

@@ -71,6 +71,7 @@ function loadPosix(): PosixLibrary {
 
 // Pass the owning buffer to Bun FFI; a bare pointer cannot keep it alive.
 function cString(value: string): Uint8Array {
+  if (value.includes("\0")) throw new Error("native path contains NUL");
   return new TextEncoder().encode(value + "\0");
 }
 

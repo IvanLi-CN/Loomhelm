@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,6 +21,17 @@ try {
   const invoke=spawnSync(join(output,'viewer'),['invalid','--input','-'],{cwd:temporary,env:{...env,NODE_OPTIONS:'--import='+preload,BUN_OPTIONS:'--preload='+preload,BUN_INSPECT_PRELOAD:preload},input:'{}',encoding:'utf8',timeout:30000});
   assert.notEqual(invoke.status,0); assert.equal(JSON.parse(invoke.stderr).code,'INVALID_COMMAND');
   assert.equal(existsSync(marker),false);
+  const unsafe = join(temporary,'unsafe-temp'); mkdirSync(unsafe); chmodSync(unsafe,0o777);
+  const unsafeInvoke=spawnSync(join(output,'viewer'),['invalid'],{env:{...env,TMPDIR:unsafe},encoding:'utf8',timeout:30000});
+  assert.notEqual(unsafeInvoke.status,0); assert.match(unsafeInvoke.stderr,/VIEWER_TEMP_UNTRUSTED/);
+  chmodSync(unsafe,0o700);
+  for (const resource of ['skills/bin/plan_bunfig.toml','skills/multi-task-flow/scripts/service.ts']) {
+    const path=join(output,resource), original=readFileSync(path);
+    writeFileSync(path,resource.endsWith('.toml') ? 'preload = ['+JSON.stringify(preload)+']\n' : `await Bun.write(${JSON.stringify(marker)},'unsafe');`);
+    const rejected=spawnSync(join(output,'viewer'),['invalid'],{env,encoding:'utf8',timeout:30000});
+    assert.notEqual(rejected.status,0); assert.match(rejected.stderr,/VIEWER_RESOURCE_CHECKSUM/); assert.equal(existsSync(marker),false);
+    writeFileSync(path,original);
+  }
   const { verifyRelease }=await import(pathToFileURL(join(output,'skills/multi-task-flow/scripts/service-release.ts')));
   verifyRelease(output);
   // Actual packaged TS modules own an isolated HTTP lifecycle, never user services.
