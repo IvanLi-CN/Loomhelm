@@ -1,6 +1,6 @@
 // Diagnostic only: preserve the exact fixed-check sandbox and its failure code.
 import { resolve } from "node:path";
-import { createCandidateSandbox } from "../../../bin/modules/workspace/candidate_sandbox";
+import { createCandidateSandbox } from "../../bin/modules/workspace/candidate_sandbox";
 
 const candidate = resolve(process.argv[2]!);
 const sandbox = createCandidateSandbox(candidate, process.env);

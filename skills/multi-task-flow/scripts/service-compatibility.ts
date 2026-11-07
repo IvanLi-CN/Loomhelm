@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { readRegularNoFollow } from "../../../bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "../../bin/modules/visual/secure_io";
 import { ServiceState } from "./service-state";
 import { verifyRelease, digest } from "./service-release";
 import { ledgerContract, type ReleaseManifest } from "./service-contract";

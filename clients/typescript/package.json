@@ -14,7 +14,7 @@
   },
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json && node ../../scripts/package-client-skills.mjs",
+    "build": "tsc -p tsconfig.json && node ../../skills/scripts/package-client-skills.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:bun": "npm run build && bun test test/*.test.mjs"

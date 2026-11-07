@@ -42,7 +42,7 @@ Read a reference only when entering its phase:
 
 The release decision reference describes runtime behavior at the Step 5C boundary. It does not add a plan schema: ordinary workflow execution reads the target repository policy and current PR facts, returns the Agent default card, and keeps post-merge release facts owned by their existing contract.
 
-The references own delivery criteria and return cards. `${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/bin/flow_receipt.ts --repo <candidate>` is validation/lifecycle audit infrastructure; it does not schedule, validate, or gate code review. Callers must not restate the references.
+The references own delivery criteria and return cards. `${LOOMHELM_TOOLKIT_ROOT:?set packaged toolkit root}/skills/bin/flow_receipt.ts --repo <candidate>` is validation/lifecycle audit infrastructure; it does not schedule, validate, or gate code review. Callers must not restate the references.
 
 The shared workflow owns formal review directly through the shared review-proof contract. There is no separate review-loop Skill in the delivery path.
 

@@ -1,1 +1,1 @@
-import "../../../bin/tests/workspace/workspace.test.ts";
+import "../../bin/tests/workspace/workspace.test.ts";

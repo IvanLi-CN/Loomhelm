@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { PortRegistry } from "../../../bin/modules/workspace/port_registry";
+import { PortRegistry } from "../../bin/modules/workspace/port_registry";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 import { LedgerStore } from "../scripts/store";
 

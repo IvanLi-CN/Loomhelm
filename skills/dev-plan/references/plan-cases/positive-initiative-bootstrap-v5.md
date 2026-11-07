@@ -39,7 +39,7 @@
 
 ## Acceptance & Validation
 
-- A1 [contract/direct] Bootstrap contract | evidence=`bin/plan_contract_check.ts` | assertions=`V5 schema and branch-push check are fixed,bootstrap has no native task budget`
+- A1 [contract/direct] Bootstrap contract | evidence=`skills/bin/plan_contract_check.ts` | assertions=`V5 schema and branch-push check are fixed,bootstrap has no native task budget`
 
 ## Assumptions/Defaults
 

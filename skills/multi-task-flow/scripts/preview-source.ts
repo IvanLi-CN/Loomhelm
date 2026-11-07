@@ -25,7 +25,7 @@ import { LedgerStore } from "./store";
 import {
   PortRegistry,
   defaultRegistryDir,
-} from "../../../bin/modules/workspace/port_registry";
+} from "../../bin/modules/workspace/port_registry";
 
 const moduleRoot = resolve(import.meta.dir, "..");
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-source-preview-")));

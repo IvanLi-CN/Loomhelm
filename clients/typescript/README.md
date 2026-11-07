@@ -63,12 +63,16 @@ node dist/cli.js --config config.example.json codex retry DISPATCH_ID accept
 
 ## Skills 与正式任务流
 
-完整源包位于根 `skills/`，共享支持位于根 `bin/`。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度。上游合同归档在 `docs/vendor/dot-codex/`，不替代本项目规范。构建把这些资源、生产 JavaScript、原生适配与网页打入 `dist/toolkit/`，执行时不搜索全局 dot-codex 代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根，原 `.ts` 命令可通过 `skills run` 执行其编译入口。
+完整源包位于根 `skills/`，共享支持位于根 `skills/bin/`。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度。上游合同归档在 `skills/docs/vendor/dot-codex/`，不替代本项目规范。构建把这些资源、生产 JavaScript、原生适配与网页打入 `dist/toolkit/`，执行时不搜索全局 dot-codex 代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根，原 `.ts` 命令可通过 `skills run` 执行其编译入口。
+
+所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，上游合同在 `skills/docs/vendor/dot-codex/`，维护与构建入口在 `skills/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `npm ci --prefix skills` 与 `bun install --cwd skills/multi-task-flow --frozen-lockfile` 准备声明的依赖，再执行 `bun run --cwd skills build` 构建当前平台原生模块与生产入口。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
+
+`node skills/scripts/check-skills-installation.mjs --root <installation-root>` 只读检查源资源完整性；平台构建和宿主能力分别验收。该检查不会修改任何用户级安装或运行账本。
 
 ```sh
 node dist/cli.js skills list
 node dist/cli.js skills check project-engineering-workflow
-node dist/cli.js skills run bin/plan_contract_check.ts --plan - < plan.md
+node dist/cli.js skills run skills/bin/plan_contract_check.ts --plan - < plan.md
 node dist/cli.js flow view --input - < view-request.json
 ```
 

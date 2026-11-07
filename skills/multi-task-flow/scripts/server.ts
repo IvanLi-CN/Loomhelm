@@ -1,5 +1,5 @@
 import { PRDetailsCache } from "./pr-details";
-import { Runtime } from "../../../bin/modules/core/runtime";
+import { Runtime } from "../../bin/modules/core/runtime";
 import {
   ConversationOutputs,
   type ConnectObserver,
@@ -25,7 +25,6 @@ import {
   readSafeFile,
   safeCompare,
 } from "./server-files";
-
 export { dashboardHeaders, type DashboardOptions } from "./server-contract";
 import {
   dashboardHeaders,

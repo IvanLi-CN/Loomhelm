@@ -1,1 +1,1 @@
-import "../../../bin/tests/visual/visual.test.ts";
+import "../../bin/tests/visual/visual.test.ts";
