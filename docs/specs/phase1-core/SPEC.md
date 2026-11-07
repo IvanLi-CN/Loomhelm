@@ -124,6 +124,10 @@ Concurrent draft edits and reconnection conflicts MUST automatically converge on
 
 Submitted-operation reconciliation notices MUST synchronize across the owner's active clients by affected resource scope. When a client receives a remote notice removal, it MUST establish a refreshing barrier before removing the local barrier, refetch the complete affected project, membership, task and relationship state, and release the barrier only after a complete successful read. A complete read means that the project query succeeds while idle with defined data, membership data exists for every project returned by that query, and task plus relationship data exists for every task returned by those reads; missing, denied, failed, partial or in-flight data MUST retain the barrier. A failed or incomplete refresh MUST retain the reconciliation barrier; unrelated project and task scopes MUST remain writable.
 
+浏览器普通焦点与可见性恢复 MUST 在后台校验会话；同主体成功结果 MUST 保留 authenticated assembly、绑定客户端、真实鉴权 generation、当前导航及视图状态，不得经过全屏 loading 或整体缓存清空。重复恢复事件 MUST 合并，晚到校验 MUST NOT 覆盖后续登出或新主体。明确失效、主体变化、401 与资源级 403 MUST 保留既有主体清理和撤权保证；网络失败 MUST 提供可恢复提示，不得伪装成鉴权成功或自动重放 mutation。
+
+TanStack Query 缓存 MUST 按主体、真实鉴权 generation 与资源读取范围隔离，并在同主体普通后台刷新时保留已成功数据。项目分页、成员、任务详情关系及图读取 MUST 按实际消费范围加载；共享 source 的消费者 MUST NOT 建立重复生产订阅。普通按需读取 MUST NOT 替代上述完整 reconciliation 屏障。后端关系读取优化 MUST 保持现有 REST 形状、项目权限和 credential scope，不得通过缓存授权结果扩大访问范围。ADR 0019 定义这些边界。
+
 ### REQ-LH-012
 
 The system MUST allow an authorized user to create and operate a standalone conversation without first choosing a Task or Project, and later associate it with a task. A projectless conversation MUST initially be private to its creator. Binding MUST require that creator's explicit confirmation that historical messages, execution and files will follow the target project's permissions. A previously projectless conversation MUST join that task's project; a project-associated conversation MUST bind only within the same project. The binding and visibility change MUST remain consistent, and unsent drafts MUST remain private to the creator's own clients.
@@ -203,6 +207,8 @@ REST and MCP MUST expose the same source discovery, project mapping, conversatio
 - Method: concurrent authorized desktop/mobile clients, draft changes and explicit send, competing approvals, reconnect, navigation changes and scoped view-preference reloads.
 - covers: `REQ-LH-003`, `REQ-LH-004`, `REQ-LH-006`, `REQ-LH-008`, `REQ-LH-011`
 - Pass condition: clients observe shared durable work and private same-user draft state without device takeover; draft conflicts converge to the last modification, sending preserves newer input, and synchronization/recovery alone never executes work. Conflicting or uncertain commands retain their defined results and each client's current navigation and reading position remain independent.
+- Method: 同主体 focus/visibility 连续事件、后台恢复、网络故障、主体切换、跨窗口登出、401/403 与晚响应竞态；统计固定数据规模下项目、成员、任务与关系请求，并执行局部及完整刷新。
+- Pass condition: 同主体恢复保持页面挂载、选择、筛选和滚动；请求合并且资源按需加载；撤权或主体切换不能接受旧响应、保留被撤销内容或重放写入；局部读取和失败刷新不能提前解除完整 reconciliation 屏障。
 
 ### VER-LH-011
 
@@ -259,6 +265,7 @@ The owner-confirmed button-color correction is additionally recorded against rep
 - [Immutable browser principal binding](../../adr/0013-immutable-browser-principal-binding.md)
 - [Connector browser enrollment](../../adr/0014-connector-browser-enrollment.md)
 - [Host ownership and explicit sharing](../../adr/0015-host-ownership-and-explicit-sharing.md)
+- [浏览器恢复与分层缓存](../../adr/0019-browser-resume-and-layered-query-cache.md)
 
 ## References
 

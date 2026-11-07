@@ -197,6 +197,12 @@ RD02 adds migration `00002_worker_leases` for a monotonic durable Worker lease k
 
 ## Remaining Gaps
 
+浏览器恢复与分层缓存遵循 ADR 0019 和 REQ-LH-011。Provider/API client 已将同主体 focus/visibility 恢复改为合并的后台会话校验，保留 assembly、client 和 session generation；显式登出、401/403、主体变化及跨窗口失效继续走真实失效隔离，并阻止旧请求结果恢复已失效会话。查询 source 已使用按主体、generation、项目范围隔离的 TanStack Query 缓存与任务分页；成员只按当前任务范围读取，关系只在图谱需要时读取，查询 key 的引用保持稳定，避免存储同步 effect 重装形成更新循环；任务读取明确失去权限时不再投影成功缓存中的旧图谱，普通网络故障仍保留最近成功数据。写入后的完整 reconciliation 屏障仍独立保留。后端关系读取改为请求内批量项目鉴权，固定规模回归的 pool acquire 从 10 次降至 4 次，并覆盖项目 scope 与成员撤权。相应子 PR 的 CI 已通过；这些结果不构成生产部署或真实页面焦点稳定性的证明。
+
+ProductShell 根层共享 ProjectTaskSourceProvider，同主体恢复保留壳层与 Outlet；认证仍有效但后台校验失败时展示可恢复提示，继续呈现已授权内容。ProductionBoundary Storybook 使用真实 AppProviders、生产路由组件与 ProductShell，并由本地 mock client 驱动 REST/session。完整交互回归已覆盖独立 focus、独立 visibilitychange、并发请求合并、壳层与 Outlet 的 DOM identity 和挂载计数，以及项目上下文、搜索、筛选、视图和实际滚动容器状态保留；离线保留、任务 403、关系 403、图谱态项目撤权、主体切换与 401 登录恢复均有执行断言。桌面与窄屏视觉证据来自同一组件链路的 mock-only 恢复预览；纯 TaskExplorer 状态 gallery 仅作为局部展示证据。这些受控验证不构成真实认证服务或生产部署证明，父分支交接仍以匹配提交的 CI 和综合审查为准。
+
+会话校验、成员读取和任务读取同时因离线失败时，分层提示会叠加；后续可聚合为一条离线摘要，并保留资源状态和相应恢复入口，以减少窄屏提示占用。
+
 All product requirements still require the implementation and observations described by their VER entries. In particular, business-state persistence, authenticated business APIs, production deployment and final release policy remain incomplete; existing active desktop-session control has not been proven, and D01's approved design package does not by itself establish production UI or business acceptance. Platform short-job infrastructure and branch-preview evidence are not evidence of those business capabilities.
 
 The approved product boundaries require authorized Host routing without a browser Host-management surface, top-level Workbench/Tasks entries, a projectless Conversations group and project/conversation tree, conversation-context files, shared drafts and task relationships. All Conversations remains accessible from Workbench. Their presence in the specification is not evidence of backend support. Structural prototype checks do not establish real Codex, persistence, cross-client synchronization or PWA acceptance.

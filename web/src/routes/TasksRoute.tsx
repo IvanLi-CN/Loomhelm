@@ -4,12 +4,16 @@ import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
 import { ProjectForm } from "@/features/projects/ProjectForm";
-import { useOptionalProjectTaskSource } from "@/features/tasks/source";
+import { ProjectTaskSourceProvider, useProjectTaskSourceContext } from "@/features/tasks/source";
 import { TaskExplorer } from "@/components/product/TaskViews";
 import { queueOwnedFocusRestore } from "@/lib/focus-ownership";
 
 export function TasksRoute() {
-  const source = useOptionalProjectTaskSource();
+  return <ProjectTaskSourceProvider><TasksRouteContent /></ProjectTaskSourceProvider>;
+}
+
+function TasksRouteContent() {
+  const source = useProjectTaskSourceContext() ?? null;
   const [creatingProject, setCreatingProject] = useState(false);
   const [projectFeedback, setProjectFeedback] = useState<string | null>(null);
   const createProjectButtonRef = useRef<HTMLButtonElement>(null);
@@ -28,7 +32,7 @@ export function TasksRoute() {
       {!source.canCreateProjects && <div className="inline-state inline-state-warning" role="status"><span aria-hidden="true">!</span>当前身份或连接状态不能创建项目，已有项目仍按各自成员权限控制。</div>}
       {projectFeedback && <div className="inline-state inline-state-success mb-5" role="status">{projectFeedback}</div>}
       {creatingProject && <div className="mb-5"><ProjectForm source={source} mode="create" focusOwnerRef={createProjectFormRef} onCancelled={() => { closeProjectForm(); setProjectFeedback("已取消创建项目。"); }} onSaved={(_, focusWasOwned) => { closeProjectForm(focusWasOwned); setProjectFeedback("项目已创建。"); }} /></div>}
-      <TaskExplorer source={source} />
+      <TaskExplorer />
     </section>
   );
 }

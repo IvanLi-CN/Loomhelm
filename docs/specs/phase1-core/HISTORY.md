@@ -2,6 +2,8 @@
 
 ## Lifecycle / Compatibility
 
+浏览器恢复与分层缓存整改采用 ADR 0019：区分同主体后台恢复与真实鉴权替换，保留不可变主体绑定与完整 reconciliation 屏障。此边界不新增 REST/MCP 接口、tRPC 或持久格式；同主体页面稳定性及按需读取的实现覆盖另记于 IMPLEMENTATION.md。会话恢复、分层查询、后端关系鉴权分别通过子 PR [#65](https://github.com/IvanLi-CN/Loomhelm/pull/65)、[#67](https://github.com/IvanLi-CN/Loomhelm/pull/67)、[#66](https://github.com/IvanLi-CN/Loomhelm/pull/66) 集成到父 PR [#64](https://github.com/IvanLi-CN/Loomhelm/pull/64)；查询稳定性与图谱权限补修通过 [#69](https://github.com/IvanLi-CN/Loomhelm/pull/69) 集成；UI 子 PR [#68](https://github.com/IvanLi-CN/Loomhelm/pull/68) 完成真实组件恢复回归与可恢复提示，父 PR 最终合并由主人控制。
+
 The active topic was established on 2026-10-18 from the approved initial product scope. It does not replace an earlier repository topic. There is no previously deployed state or public interface compatibility promise.
 
 ## Background
