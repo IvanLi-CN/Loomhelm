@@ -210,7 +210,7 @@ function Breadcrumb({ pathname }: { pathname: string }) {
   if (pathname.startsWith("/tasks") && task) return <span>任务 / {task.id}</span>;
   if (pathname.startsWith("/tasks")) return <span>任务 / 全部项目</span>;
   if (pathname.startsWith("/conversations") && conversation) return <span>对话 / {conversation.title}</span>;
-  if (pathname.startsWith("/conversations")) return <span>对话 / 全部项目</span>;
+  if (pathname.startsWith("/conversations")) return <span>对话 / 全部对话</span>;
   if (project) return <span>{project.name} / 对话</span>;
   return <span>工作台</span>;
 }
@@ -303,7 +303,7 @@ function ProductionBreadcrumb({ pathname, source }: { pathname: string; source: 
   if (pathname.startsWith("/tasks")) return <span>任务 / 全部项目</span>;
   if (project) return <span>{project.name} / 任务</span>;
   if (pathname.startsWith("/projects/")) return <span>项目 / 当前范围</span>;
-  if (pathname.startsWith("/conversations")) return <span>对话 / 服务尚未接通</span>;
+  if (pathname.startsWith("/conversations")) return <span>对话 / 全部对话</span>;
   return <span>工作台</span>;
 }
 
