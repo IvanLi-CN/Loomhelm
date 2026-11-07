@@ -4,6 +4,10 @@
 
 - 2026-11-07：本机新创建改用 Codex CLI 原生 worktree 和短初始化；正式消息由主对话内置工具发送。创建证据与开发基线分离，历史身份和在途发送不重写。ADR 0046 继承完整 execution_profile 规则并替代旧创建传输边界。
 
+- 依赖图布局集成保留卡片资源浮层交互；合成示例的对话按钮只提供详情，不提供原生会话跳转。
+
+- 卡片普通悬浮预览不再重复对话正文，改为280px紧凑任务信息；对话、PR、时间保留独立触发区。消息时间为可选只读投影，既有账本无需迁移。交付单元详情及预览不再借用贡献任务用时；浏览器 PR 状态增加请求／观察顺序保护，关闭普通预览后残留动画帧不再重新显示它。
+
 - 2026-11-05: Added the execution-profile contract: one run default, independent delivery-unit/task overrides, complete model-plus-thinking pairs, pre-creation editing with claim replacement, and CLI-owned conversation creation. Runtime changes made inside an existing conversation remain outside the orchestration ledger.
 
 - This topic introduces a separate coordinator and leaves existing legacy coordination sessions and contracts in place.
@@ -40,3 +44,10 @@ Accepted the per-user, on-demand singleton design in ADR 0042. The implementatio
 - 共享展示兼容检查与业务写入合同分离；历史只读运行不再强制迁移。主人授权维护迁移保留 owner 和真实操作审计，不要求恢复原主会话；普通 main 迁移权限不变。架构取舍记录于 ADR 0045。
 
 - 自定义 view 声明的路径校验覆盖悬空符号链接，避免将不安全声明当成缺失；兼容回归直接证明拒绝发生于服务状态探测和停止之前。
+
+## 卡片悬浮信息
+
+- 统一任务和交付单元的对话、PR、计时浮层；时间保持覆盖正文的悬浮布局，移除底部预留空间。
+- 新增已认证的绑定 PR 只读查询，扩展临时对话投影及交付单元自身执行计时；保持旧账本兼容，不执行数据迁移。
+
+- 看板交付单元列头补齐独立用时入口，保留原有列头高度；缺少自身执行事实时明确显示时间未知。

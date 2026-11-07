@@ -8,7 +8,7 @@ function fixture(read: (method: string, params: JsonRecord) => Promise<JsonRecor
   let lost!: () => void;
   let closed = 0;
   let connections = 0;
-  const connect: ConnectObserver = async (n, c) => { notify = n; lost = c; connections++; return { request: read, close: () => { closed++; c(); } }; };
+  const connect: ConnectObserver = async (n, c) => { notify = n; lost = c; connections++; return { request: (method, params) => method === "thread/read" ? Promise.resolve({ thread: { name: "真实对话标题" } }) : read(method, params), close: () => { closed++; c(); } }; };
   const published: unknown[] = [];
   const provider = new ConversationOutputs(s => published.push(s), connect, 20);
   provider.bind([{ id: "a", thread_id: "thread" }, { id: "b", thread_id: "thread" }, { id: "none", thread_id: null }]);
@@ -21,6 +21,12 @@ describe("conversation output projection", () => {
     for (const phase of ["commentary", "final_answer"]) expect(messageOutput("thread", message("a", "hello", phase))?.text).toBe("hello");
     for (const type of ["reasoning", "userMessage", "commandExecution", "system"]) expect(messageOutput("thread", { item: { id: "a", type, text: "private" } })).toBeNull();
     expect(messageOutput("thread", message("a", " \n"))).toBeNull();
+  });
+  test("uses only the actual assistant item timestamp, never the observation time", () => {
+    const startedAtMs = Date.parse("2026-11-07T01:02:03Z");
+    expect(messageOutput("thread", { ...message("a", "hello"), startedAtMs })?.sent_at).toBe("2026-11-07T01:02:03.000Z");
+    expect(messageOutput("thread", message("a", "hello"))?.sent_at).toBeNull();
+    expect(messageOutput("thread", { ...message("a", "hello"), startedAtMs: Infinity })?.sent_at).toBeNull();
   });
   test("paginates past tools and whitespace, deduplicates bound threads", async () => {
     const calls: JsonRecord[] = [];
@@ -121,4 +127,18 @@ describe("conversation output projection", () => {
     const f = fixture();
     try { await tick(); f.event("item/completed", { ...message("a", "unrelated"), threadId: "unbound" }); expect(f.provider.snapshot().outputs.a?.state).toBe("empty"); } finally { f.provider.stop(); }
   });
+});
+
+test("namespaced task and group bindings share one observer while preserving task aliases", async () => {
+  let metadataReads = 0, itemReads = 0;
+  const provider = new ConversationOutputs(() => {}, async () => ({ request: async method => { if (method === "thread/read") { metadataReads++; return { thread: { name: "真实主对话" } }; } itemReads++; return { data: [message("latest", "shared reply")] }; }, close() {} }), 10000);
+  provider.bind([{ id: "task:same", thread_id: "thread" }, { id: "group:same", thread_id: "thread" }]); provider.start();
+  try { await tick(); const outputs = provider.snapshot().outputs; expect(outputs["task:same"]).toEqual(outputs.same); expect(outputs["group:same"]?.text).toBe("shared reply"); expect(outputs["group:same"]?.thread_title).toBe("真实主对话"); expect(metadataReads).toBe(1); expect(itemReads).toBe(1); } finally { provider.stop(); }
+});
+
+test("pending title metadata never delays latest message catch-up", async () => {
+  let finish!: (value: JsonRecord) => void;
+  const provider = new ConversationOutputs(() => {}, async () => ({ request: async method => method === "thread/read" ? new Promise<JsonRecord>(resolve => { finish = resolve; }) : { data: [message("latest", "message without title")] }, close() {} }), 10000);
+  provider.bind([{ id: "a", thread_id: "thread" }]); provider.start();
+  try { await tick(); expect(provider.snapshot().outputs.a?.text).toBe("message without title"); provider.stop(); finish({ thread: { name: "late title" } }); await tick(); expect(provider.snapshot().outputs.a?.thread_title).toBeNull(); } finally { provider.stop(); }
 });

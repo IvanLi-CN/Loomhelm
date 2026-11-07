@@ -102,3 +102,12 @@ describe("timeline projections", () => {
     ]);
   });
 });
+
+test("group timing uses its own events and output binding, never contribution intervals", () => {
+  const ledger = createDemoLedger(1_767_200_000_000), group = ledger.groups[0]!;
+  const find = () => buildView(ledger).groups.find(g => g.id === group.id)!;
+  expect(find().started_at).toBeNull();
+  ledger.events.push({ id: "own-start", type: "group_execution_updated", subject_id: group.id, actor_id: "owner", occurred_at: at, recorded_at: at, data: { group_id: group.id, state: "running" } });
+  ledger.events.push({ id: "own-finish", type: "group_updated", subject_id: group.id, actor_id: "owner", occurred_at: "2026-01-01T00:15:00.000Z", recorded_at: at, data: { group_id: group.id, state: "closed" } });
+  expect(find().started_at).toBe(at); expect(find().finished_at).toBe("2026-01-01T00:15:00.000Z");
+});

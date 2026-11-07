@@ -5,6 +5,10 @@
 - Implementation: Shared viewer candidate implemented; current-head acceptance remains CI-bound.
 - Lifecycle: PR readiness requires current-candidate validation, formal review and applicable CI evidence.
 
+## 卡片预览边界
+
+普通卡片悬浮预览移除助手正文与输出空状态，宽度上限280px，字段标签保持完整、长值可换行。对话全文保留在对话图标浮层；消息头显示气泡图标和真实消息开始时间。普通卡片区域恢复宽屏悬浮，三个专用触发区抑制普通预览。时间显示日期和秒，隐藏时区名称。组件覆盖卡片专用触发区互斥、生成更新保留阅读位置、复制范围、键盘关闭、跨间隙移入与关闭后的动画帧取消。PR 图标拒绝旧观察结果，并阻止较早的卡片请求覆盖浮层更新。交付单元卡片、详情及普通预览都只使用自身执行时间，缺失时显示未知；历史贡献任务仍单独列出。合成 `ui_demo` 提供桌面与移动端浏览器证据，真实触屏事件验证500ms长按打开及外部关闭；真实 `gh` 和 Codex 元数据／消息流仅作宿主只读实证。候选交付仍要求当前头的 CI 与正式审查结果。
+
 ## Shared Viewer Coverage
 
 - User-root paths, explicit build/API/frontend/ledger compatibility and isolated profiles.
@@ -100,3 +104,15 @@
 - `prepareNativeNotification` 返回原生工具参数，持久 unknown attempt 排除并发和重放。native 回执必须匹配 attempt，ack 保留收件人权限。
 - `lifecycle-record` 对新 CLI dispatch 保存开发基线；任务与组 running 受 readiness 门禁，明确失败后重派只读取成功 attempt 的基线。历史创建证据和历史在途锁继续适用。
 - 兼容边界和停止后恢复见 `native-handoff-compatibility.json`；不运行真实账本迁移，不部署安装副本。
+
+## 卡片资源信息
+
+卡片通过 `resource-popover.ts` 提供独立的对话、PR 和用时浮层，并移除正文为时间预留的底部 padding。浮层支持指针跨区、键盘、长按、上下身份区换序及回答滚动保留；既有卡片预览在资源浮层打开时让出展示位置。
+
+`ConversationOutputs` 接入任务及交付单元绑定，以命名空间隔离身份，兼容保留任务旧键。同线程共用观察，读取真实 thread 名称及最新助手消息；临时输出沿用 epoch/revision，不增加持久化 schema。交付单元时间只从自身运行与收口事件投影。
+
+`pr-details.ts` 由认证 run dashboard 路由调用，校验绑定 PR 的 HTTPS、host、仓库和编号，再以 argv 查询 gh。缓存、并发合并、2秒限流、10秒超时、CI 分类及失败保留均有定向测试。静态 demo 增加模拟标题、交付单元消息与 PR 状态；mock 不替代宿主只读集成实证。
+
+卡片资源浮层与 React Flow／ELK 依赖图共用现有任务投影，互不接管布局。单交付单元合成示例的对话入口保留可聚焦的只读详情，但不产生原生对话链接；组件回归同时覆盖网格和看板。
+
+看板交付单元列头复用同一资源控制器提供用时入口，时间绝对定位于现有列头间隙，不增加列头高度。网格与看板均覆盖交付单元自身时间及缺失事实的组件回归；缺失执行事实时浮层显示“时间未知”。

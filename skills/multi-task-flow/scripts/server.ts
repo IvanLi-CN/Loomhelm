@@ -1,3 +1,4 @@
+import { PRDetailsCache } from "./pr-details";
 import { Runtime } from "../../bin/modules/core/runtime";
 import {
   ConversationOutputs,
@@ -75,11 +76,13 @@ export function createRunDashboard(options: DashboardOptions) {
       }
     }
   };
+  const prDetails = new PRDetailsCache();
+  const bindOutputs = (ledger: ReturnType<typeof validateLedger>) => outputs.bind([...ledger.tasks.map(t => ({ id: `task:${t.id}`, thread_id: t.thread_id ?? null })), ...ledger.groups.map(g => ({ id: `group:${g.id}`, thread_id: g.delivery_unit_kind === "bootstrap" ? ledger.control.owner_thread_id : g.agent_thread_id }))]);
   const outputs = new ConversationOutputs(
     (snapshot) => publish("agent-output", snapshot),
     options.connectObserver,
   );
-  outputs.bind(validateLedger(store.read()).tasks);
+  bindOutputs(validateLedger(store.read()));
   let watcher: FSWatcher | null = null;
   const closeWatcher = (): void => {
     if (!watcher) return;
@@ -93,7 +96,7 @@ export function createRunDashboard(options: DashboardOptions) {
         if (!name || name.toString() === "ledger.json") {
           try {
             const ledger = validateLedger(store.read());
-            outputs.bind(ledger.tasks);
+            bindOutputs(ledger);
             if (subscribers.size) outputs.start();
             lastRevision = ledger.revision;
             watching = watchHealthy;
@@ -127,7 +130,7 @@ export function createRunDashboard(options: DashboardOptions) {
       if (!watchHealthy) watchDirectory();
       try {
         const ledger = validateLedger(store.read());
-        outputs.bind(ledger.tasks);
+        bindOutputs(ledger);
         if (subscribers.size) outputs.start();
         const revision = ledger.revision;
         const recovered = !watching && watchHealthy;
@@ -211,11 +214,24 @@ export function createRunDashboard(options: DashboardOptions) {
             },
           },
         );
+      if (path === "/api/resource-details") {
+        if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers });
+        const kind = url.searchParams.get("kind"), id = url.searchParams.get("id");
+        if ((kind !== "task" && kind !== "group") || !id || [...url.searchParams.keys()].some(k => !["kind", "id", "refresh"].includes(k))) return new Response("Invalid request", { status: 400, headers });
+        const ledger = validateLedger(store.read());
+        const object = kind === "task" ? ledger.tasks.find(t => t.id === id) : ledger.groups.find(g => g.id === id);
+        if (!object) return new Response("Not found", { status: 404, headers });
+        const pr = kind === "task" ? (object as typeof ledger.tasks[number]).pr : (object as typeof ledger.groups[number]).parent_pr;
+        if (!pr?.url) return Response.json({ data: null, observed_at: null, stale: false, loading: false, error: null }, { headers: responseHeaders });
+        if (ledger.repository.provider !== "github") return Response.json({ error: "此 PR 查询仅支持 GitHub" }, { status: 400, headers: responseHeaders });
+        try { return Response.json(await prDetails.read(ledger.repository, pr.url, url.searchParams.get("refresh") === "1"), { headers: responseHeaders }); }
+        catch { return Response.json({ error: "PR 与当前仓库不匹配" }, { status: 400, headers: responseHeaders }); }
+      }
       if (path === "/api/view") {
         const selected = url.searchParams.get("plan") ?? undefined;
         if (selected) safeId(selected);
         const ledger = validateLedger(store.read());
-        outputs.bind(ledger.tasks);
+        bindOutputs(ledger);
         if (subscribers.size) outputs.start();
         const snapshot = outputs.snapshot();
         return Response.json(
