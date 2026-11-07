@@ -19,7 +19,7 @@ const Card = memo(function Card({data}: NodeProps) {
 const Routed = memo(function Routed(props: EdgeProps) { return <BaseEdge id={props.id} path={String(props.data?.path ?? '')} markerEnd={props.markerEnd} style={props.style} interactionWidth={16} />; });
 const nodeTypes = {card: Card}, edgeTypes = {routed: Routed};
 
-export function createGraphController(context: GraphContext) {
+export function createGraphController(context: GraphContext, calculateLayout = layoutProjection) {
   const container = context.element('graph');
   const root = createRoot(container);
   let projection: GraphProjection | null = null, instance: ReactFlowInstance | null = null;
@@ -60,10 +60,10 @@ export function createGraphController(context: GraphContext) {
     const warning=context.element('graph-projection-warning');warning.hidden=!next.warnings.length;warning.textContent=next.warnings.join(' ');
     projection=next;renderAccessibleNodes(next,context);
     const key=JSON.stringify([direction,next.nodes.map(n=>[n.id,n.parentId,n.title]),next.edges.map(e=>[e.id,e.source,e.target])]);
-    if(key===signature && layout){const byId=new Map(next.nodes.map(n=>[n.id,n]));layout={...layout,nodes:layout.nodes.map(p=>({...p,node:byId.get(p.node.id)!}))};highlightSelection();return;}
-    signature=key;const serial=++generation;pending=true;error='';update?.();
-    layoutProjection(next,direction).then(result=>{
-      if(serial!==generation)return;layout=result;pending=false;container.style.height = `${Math.max(420,result.height+80)}px`;update?.();
+    if(key===signature){if(layout){const byId=new Map(next.nodes.map(n=>[n.id,n]));layout={...layout,nodes:layout.nodes.map(p=>({...p,node:byId.get(p.node.id)!}))};}highlightSelection();return;}
+    signature=key;layout=null;const serial=++generation;pending=true;error='';update?.();
+    calculateLayout(next,direction).then(result=>{
+      if(serial!==generation)return;const byId=new Map(projection!.nodes.map(n=>[n.id,n]));layout={...result,nodes:result.nodes.map(p=>({...p,node:byId.get(p.node.id)!}))};pending=false;container.style.height = `${Math.max(420,result.height+80)}px`;update?.();
       requestAnimationFrame(()=>{if(serial!==generation)return;if(!viewportInitialized){instance?.setViewport({x:Math.max(24,(container.clientWidth-result.width)/2),y:24,zoom:1});context.setZoom(1);viewportInitialized=true;} highlightSelection();});
     }).catch(e=>{if(serial!==generation)return;pending=false;error=`依赖图布局失败：${e instanceof Error?e.message:String(e)}`;signature='';update?.();});
   }

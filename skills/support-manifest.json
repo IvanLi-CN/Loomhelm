@@ -19,5 +19,6 @@
   "skills/multi-task-flow/tests/graph-layout.test.ts",
   "skills/multi-task-flow/tests/single-delivery-unit.test.ts",
   "skills/multi-task-flow/web/graph-layout.ts",
-  "skills/multi-task-flow/web/graph-view.tsx"
+  "skills/multi-task-flow/web/graph-view.tsx",
+  "skills/multi-task-flow/tests/ui/graph-controller.test.tsx"
 ]

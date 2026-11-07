@@ -44,6 +44,6 @@ vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、
 
 依赖图使用 MIT 许可的 React Flow 与 EPL-2.0 许可的 elkjs，保留现有投影、悬浮预览、详情与可访问节点列表。ELK 同时计算卡片位置与正交连线路径，按 edge container 转换坐标；默认横向，标题字号 15px，卡片按标题长度取 136–184px 宽度，状态更新复用结构布局。任务网格默认值按交付单元数量决定，并通过 URL 保留显式布局选择。
 
-`skills/multi-task-flow/examples/single-delivery-unit/` 提供文档检索服务的独立合成快照。源码预览与静态预览共享该数据，合成输出通过内存适配器投影；正式服务配置拒绝该适配器。示例入口和命令见该目录 README。回归覆盖 `graph-layout.test.ts`、`view-state.test.ts`、`single-delivery-unit.test.ts`、`source-preview.test.ts`；执行 `bun run --cwd skills/multi-task-flow verify` 验证。
+`skills/multi-task-flow/examples/single-delivery-unit/` 提供文档检索服务的独立合成快照。源码预览与静态预览共享该数据，合成输出通过内存适配器投影；正式服务配置拒绝该适配器。示例入口和命令见该目录 README。合成对话只显示 Mock 标识，不生成原生应用链接。控制器回归验证布局计算期间重复刷新、最新状态合并与过期结果丢弃。回归覆盖 `tests/ui/graph-controller.test.tsx`、`graph-layout.test.ts`、`view-state.test.ts`、`single-delivery-unit.test.ts`、`source-preview.test.ts`；执行 `bun run --cwd skills/multi-task-flow verify` 验证。
 
 新增图布局模块、React 卡片渲染器、独立示例与回归文件同时登记在 `skills/support-manifest.json`，由来源校验脚本刷新安装摘要；维护者修改这些资源后需要同步来源摘要，再通过安装闭包检查。
