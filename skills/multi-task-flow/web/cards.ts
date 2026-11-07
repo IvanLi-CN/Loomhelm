@@ -1,7 +1,7 @@
 import { initialOutput } from "./agent-output";
 import { conversationUrl } from "./links";
 import { formatDuration } from "./time";
-import { groupExecutionVisualState, stateIconName } from "./labels";
+import { groupExecutionVisualState, stateIconName, STATE_LABELS } from "./labels";
 import { renderTaskOutput } from "./preview-content";
 import type { Group, Task, View } from "./model";
 import type { TaskLayout } from "./view-state";
@@ -109,7 +109,7 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   const select = document.createElement("button");
   select.type = "button";
   select.className = "task-card-select";
-  select.setAttribute("aria-label", selectionAriaLabel("任务", task.title, task.is_ready && task.state === "planned" ? "ready" : task.state, context.labels));
+  select.setAttribute("aria-label", selectionAriaLabel("任务", task.title, task.agent_idle ? "agent_idle" : task.is_ready && task.state === "planned" ? "ready" : task.state, context.labels));
   select.setAttribute("aria-pressed", String(context.getSelectedTask() === task.id));
   select.append(statusIcon(task.state, task.is_ready), text("span", task.title, "task-card-title"));
   (select.lastElementChild as HTMLElement).title = task.title;
@@ -129,6 +129,11 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   actions.append(iconAction(pr ? "打开任务 PR" : "任务 PR 尚未创建", "git-pull-request", pr, true));
   head.append(actions);
   const meta = text("div", "", "task-card-meta");
+  if (task.agent_idle) {
+    const idle = text("span", STATE_LABELS.agent_idle, "task-runtime-state", "is-idle");
+    idle.setAttribute("aria-label", "任务状态：Agent 空闲");
+    meta.append(idle);
+  }
   meta.append(durationValue(task.started_at, task.finished_at));
   card.append(head, meta, renderTaskOutput(task.latest_output, task.latest_agent_output ?? initialOutput(task.thread_id), task.id));
   card.addEventListener("click", (event) => { if ((event.target as HTMLElement).closest("a, button")) return; context.selectTask(task.id); });
