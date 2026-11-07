@@ -26,6 +26,7 @@ const key = (turn: unknown, item: unknown) => JSON.stringify([turn, item]);
 type ThreadState = {
   output: AgentOutput;
   version: number;
+  activeTurnId: string | null;
   items: Map<
     string,
     { rank: number; text: string; phase: string | null; done: boolean; sent_at: string | null }
@@ -83,6 +84,7 @@ export class ConversationOutputs {
         this.threads.set(thread, {
           output: initialOutput(thread),
           version: 0,
+          activeTurnId: null,
           items: new Map(),
           rank: 0,
           selectedRank: 0,
@@ -146,7 +148,7 @@ export class ConversationOutputs {
       this.connection = null;
       clearTimeout(this.pollTimer);
       for (const state of this.threads.values())
-        this.set(state, { ...state.output, state: "unavailable", stale: true });
+        this.set(state, { ...state.output, state: "unavailable", stale: true, agent_state: "unknown" });
       this.timer = setTimeout(() => void this.open(), this.backoff);
       this.backoff = Math.min(this.backoff * 2, 30000);
     };
@@ -210,18 +212,34 @@ export class ConversationOutputs {
       this.threads.get(thread) === state &&
       state.version === version;
     try {
-      if (!this.titleReads.has(thread) && Date.now() - (this.titleReadAt.get(thread) ?? -Infinity) >= 30_000) {
-        this.titleReads.add(thread);
-        this.titleReadAt.set(thread, Date.now());
-        // Metadata must never delay message catch-up or streaming attachment.
-        void connection.request("thread/read", { threadId: thread, includeTurns: false }).then(metadata => {
-          if (this.active && generation === this.generation && this.threads.get(thread) === state) {
-            const title = object(metadata.thread)?.name;
-            const next = typeof title === "string" && title.trim() ? title : null;
-            if (this.titles.get(thread) !== next) { this.titles.set(thread, next); this.changed(true); }
+      // Runtime metadata and title reads must not hold up public message history.
+      const metadataRead = connection.request("thread/read", { threadId: thread, includeTurns: false });
+      void metadataRead.then(metadata => {
+        if (!valid()) return;
+        const title = object(metadata.thread)?.name;
+        const next = typeof title === "string" && title.trim() ? title : null;
+        if (this.titles.get(thread) !== next) { this.titles.set(thread, next); this.changed(true); }
+      }).catch(() => {});
+      void (async () => {
+        let runtime: "active" | "idle" | "unknown" = "unknown";
+        let runtimeTurnId: string | null = null;
+        try {
+          const metadata = await metadataRead;
+          const status = object(object(metadata.thread)?.status)?.type;
+          if (status === "active") runtime = "active";
+          if (status === "idle") {
+            const page = await connection.request("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "full" });
+            const latest = Array.isArray(page.data) ? object(page.data[0]) : null;
+            if (typeof latest?.id === "string" && latest.id.trim() && ["completed", "interrupted", "failed"].includes(String(latest.status))) {
+              runtime = "idle";
+              runtimeTurnId = latest.id;
+            }
           }
-        }).catch(() => {}).finally(() => { if (this.threads.get(thread) === state) this.titleReads.delete(thread); });
-      }
+        } catch { /* Runtime observation is independent of readable output history. */ }
+        if (!valid()) return;
+        state.activeTurnId = runtimeTurnId;
+        this.set(state, { ...state.output, agent_state: runtime, runtime_turn_id: runtimeTurnId });
+      })();
       await connection.subscriptions?.ensure(thread);
       if (!valid()) return;
       const selected = await latestConversationOutput(thread, connection);
@@ -253,19 +271,19 @@ export class ConversationOutputs {
       state.retryAt = 0;
       this.set(
         state,
-        selected ?? {
+        { ...(selected ?? {
           ...initialOutput(thread),
           state: "empty",
           stale: false,
           observed_at: new Date().toISOString(),
-        },
+        }), agent_state: state.output.agent_state, runtime_turn_id: state.output.runtime_turn_id },
       );
     } catch {
       if (valid()) {
         state.retryAt =
           Date.now() +
           Math.min(1000 * 2 ** Math.min(state.failures++, 5), 30000);
-        this.set(state, { ...state.output, state: "unavailable", stale: true });
+        this.set(state, { ...state.output, state: "unavailable", stale: true, agent_state: "unknown" });
       }
     } finally {
       state.reading = false;
@@ -278,12 +296,34 @@ export class ConversationOutputs {
     const state = this.threads.get(thread);
     if (!state) return;
     const method = event.method;
+    if (method === "thread/status/changed") {
+      const status = object(params.status)?.type;
+      state.version++;
+      state.activeTurnId = null;
+      this.set(state, { ...state.output, agent_state: status === "active" ? "active" : "unknown", runtime_turn_id: null, observed_at: new Date().toISOString() });
+      if (status === "idle" && this.connection) void this.load(thread, this.connection, this.generation);
+      return;
+    }
+    if (method === "turn/started") {
+      state.version++;
+      state.activeTurnId = typeof object(params.turn)?.id === "string" ? object(params.turn)!.id as string : null;
+      this.set(state, { ...state.output, agent_state: "active", turn_id: typeof object(params.turn)?.id === "string" ? object(params.turn)!.id as string : state.output.turn_id });
+      return;
+    }
     if (
-      method === "turn/completed" &&
-      object(params.turn)?.id === state.output.turn_id
+      ["turn/completed", "turn/failed", "turn/interrupted"].includes(String(method)) &&
+      typeof state.activeTurnId === "string" && object(params.turn)?.id === state.activeTurnId
     ) {
       state.version++;
-      this.set(state, { ...state.output, message_status: "completed" });
+      const turnStatus = object(params.turn)?.status;
+      this.set(state, {
+        ...state.output,
+        runtime_turn_id: object(params.turn)!.id as string,
+        message_status: typeof turnStatus === "string" ? turnStatus : "completed",
+        agent_state: turnStatus === undefined || ["completed", "failed", "interrupted"].includes(String(turnStatus)) ? "idle" : "unknown",
+        observed_at: new Date().toISOString(),
+        stale: false,
+      });
       return;
     }
     const delta = method === "item/agentMessage/delta";
@@ -328,6 +368,7 @@ export class ConversationOutputs {
         message_id: id,
         phase: entry.phase,
         message_status: entry.done ? "completed" : "in_progress",
+        agent_state: "active",
         observed_at: new Date().toISOString(),
         stale: false,
       },

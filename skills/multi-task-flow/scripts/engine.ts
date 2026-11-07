@@ -6,7 +6,7 @@ import {
   RECOMMENDATION_VERSION,
 } from "./execution-profile";
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ContractError, requireCondition } from "./errors";
 import {
   changeReason,
@@ -412,7 +412,11 @@ function notificationDirective(
     "Notification recipient is not bound to this run",
     3,
   );
+  requireNotificationRecipientActive(ledger, threadId!);
   return { enabled: true, recipient_thread_id: threadId! };
+}
+function requireNotificationRecipientActive(ledger: Ledger, threadId: string): void {
+  requireCondition(!ledger.resources.some(resource => resource.kind === "conversation" && resource.target === threadId && ["closed", "archive_unknown", "unarchive_unknown", "unarchive_failed"].includes(resource.status)), "CONVERSATION_ARCHIVED", "通知接收对话已归档或归档状态未知，请先手动取消归档或完成对账", 4);
 }
 function addNotificationIntent(
   ledger: Ledger,
@@ -723,10 +727,15 @@ function ownerOfTask(ledger: Ledger, request: Request, taskId: string): void {
   }
 }
 
+function taskExecutionState(task: { state: string; agent_resume_state?: "starting" | "running" }): string {
+  return task.state === "agent_idle" ? task.agent_resume_state ?? "running" : task.state;
+}
+
 function taskRuntimeState(task: Task): Record<string, unknown> {
   return {
     thread_id: task.thread_id,
     state: task.state,
+    agent_resume_state: task.agent_resume_state,
     disposition: task.disposition,
     superseded_by_task_id: task.superseded_by_task_id,
     atoms: task.atoms,
@@ -1401,7 +1410,7 @@ export function execute(
         4,
       );
       const running = ledger.tasks.filter((item) =>
-        ["starting", "running"].includes(item.state),
+        ["starting", "running", "agent_idle"].includes(item.state),
       ).length;
       const pending = ledger.operations.filter(
         (item) =>
@@ -1886,7 +1895,7 @@ export function execute(
       requireCondition(
         targetType === "group"
           ? target.state === "active"
-          : target.state === "running",
+          : taskExecutionState(target) === "running",
         "TARGET_NOT_ACTIVE",
         "Publication target is not active",
         4,
@@ -2065,7 +2074,7 @@ export function execute(
       requireCondition(
         targetType === "group"
           ? target.state === "active"
-          : target.state === "running",
+          : taskExecutionState(target) === "running",
         "TARGET_NOT_ACTIVE",
         "Publication target is not active",
         4,
@@ -2258,6 +2267,25 @@ export function execute(
       });
       return { operation_id: op.id, outcome };
     }
+    case "task-runtime-observe": {
+      onlyMain(request.actor);
+      const target = find(ledger.tasks, item => item.id === parse(id, payload.task_id), "Task");
+      requireCondition(target.thread_id === payload.thread_id, "RESOURCE_MISMATCH", "Runtime observation thread does not match task", 4);
+      const runtime = z.enum(["active", "idle", "unknown"]).parse(payload.runtime);
+      const observedAt = z.iso.datetime().parse(payload.observed_at);
+      if (runtime === "idle") requireCondition(typeof payload.turn_id === "string" && payload.turn_id.length > 0, "EVIDENCE_REQUIRED", "Idle observation requires a confirmed terminal turn identity", 4);
+      if (target.disposition !== "active" || !["starting", "running", "agent_idle"].includes(target.state)) return { state: target.state };
+      const previous = target.state;
+      if (runtime === "idle" && target.state !== "agent_idle") {
+        target.agent_resume_state = target.state as "starting" | "running";
+        target.state = "agent_idle";
+      } else if (runtime !== "idle" && target.state === "agent_idle") {
+        target.state = target.agent_resume_state ?? "running";
+        delete target.agent_resume_state;
+      }
+      if (previous !== target.state) addEvent(ledger, request, "task_runtime_observed", target.id, { task_id: target.id, thread_id: target.thread_id, turn_id: payload.turn_id ?? null, observed_at: observedAt, runtime, state: target.state, previous_state: previous });
+      return { state: target.state };
+    }
     case "task-update": {
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
@@ -2268,6 +2296,7 @@ export function execute(
       const allowed: Record<string, string[]> = {
         starting: ["running", "waiting", "blocked"],
         running: ["waiting", "blocked"],
+        agent_idle: ["running", "waiting", "blocked"],
         waiting: ["running"],
         blocked: ["running"],
         integrated: ["closed"],
@@ -2277,13 +2306,14 @@ export function execute(
         allowed[target.state]?.includes(state) ||
           (state === "completed" &&
             !isContributionKind(target.kind) &&
-            target.state === "running"),
+            taskExecutionState(target) === "running"),
         "INVALID_TRANSITION",
         `Cannot move ${target.state} to ${state}`,
         3,
       );
-      const previousState = target.state;
-      if (state === "running" && previousState !== "starting") {
+      const previousState = taskExecutionState(target);
+      const occupiedSlot = target.state === "agent_idle";
+      if (state === "running" && previousState !== "starting" && !occupiedSlot) {
         requireCondition(
           ready(ledger, target.id),
           "DEPENDENCIES_PENDING",
@@ -2292,7 +2322,7 @@ export function execute(
         );
         const used =
           ledger.tasks.filter((item) =>
-            ["starting", "running"].includes(item.state),
+            ["starting", "running", "agent_idle"].includes(item.state),
           ).length +
           ledger.operations.filter(
             (item) =>
@@ -2339,6 +2369,7 @@ export function execute(
           );
       }
       target.state = state;
+      delete target.agent_resume_state;
       target.blocker =
         state === "blocked" || state === "waiting"
           ? string(payload.detail)
@@ -2353,6 +2384,22 @@ export function execute(
         target.finished_at = payload.occurred_at
           ? z.iso.datetime({ offset: false }).parse(payload.occurred_at)
           : null;
+      if ((state === "completed" || state === "closed") && target.thread_id) {
+        const resourceId = `conversation-${createHash("sha256").update(target.thread_id).digest("hex").slice(0, 32)}`;
+        const resource = ledger.resources.find((item) => item.kind === "conversation" && item.target === target.thread_id);
+        if (!resource) {
+          ledger.resources.push({
+            id: resourceId,
+            kind: "conversation",
+            target: target.thread_id,
+            status: "pending",
+            evidence_ref: null,
+            error: null,
+            last_attempt_at: null,
+            operation_id: null,
+          });
+        }
+      }
       const eventType =
         state === "running"
           ? previousState === "starting"
@@ -2402,7 +2449,7 @@ export function execute(
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
       requireCondition(
-        request.actor.role === "task" && target.state === "running",
+        request.actor.role === "task" && taskExecutionState(target) === "running",
         "FORBIDDEN",
         "The running task owner updates its atoms",
         3,
@@ -2898,7 +2945,7 @@ export function execute(
       const pr = parse(externalRef, payload.pr);
       checkPR(ledger, pr);
       requireCondition(
-        target.state === "running" &&
+        taskExecutionState(target) === "running" &&
           (!target.pr || stable(target.pr) === stable(pr)),
         "PR_MISMATCH",
         "Task PR cannot be replaced",
@@ -2970,7 +3017,7 @@ export function execute(
       requireOwner(ledger, request, "group", target.group_id);
       requireCondition(
         target.pr &&
-          target.state === "running" &&
+          taskExecutionState(target) === "running" &&
           (legacyLedger(ledger) || target.lifecycle.pr_created === "passed"),
         "PR_NOT_READY",
         "Task PR must be provider-published and running",
@@ -3126,7 +3173,7 @@ export function execute(
         requireCondition(
           target.group_id === groupId &&
             isContributionKind(target.kind) &&
-            target.state === "running" &&
+            taskExecutionState(target) === "running" &&
             target.pr,
           "TASK_MISMATCH",
           "Active contribution task must belong to the target delivery unit",
@@ -3854,7 +3901,7 @@ export function execute(
       );
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
       requireCondition(
-        target.state === "running" &&
+        taskExecutionState(target) === "running" &&
           (action === "release"
             ? target.kind === "release"
             : target.kind === "deployment"),
@@ -4044,6 +4091,7 @@ export function execute(
       const outcome = z
         .enum(["sent", "failed", "unknown"])
         .parse(payload.outcome);
+      requireNotificationRecipientActive(ledger, notice.recipient_thread_id);
       const attemptId = parse(id, payload.delivery_attempt_id);
       requireCondition(
         !ledger.events.some(
@@ -4292,7 +4340,10 @@ export function execute(
           3,
         );
         requireCondition(
-          existing.status !== "closed" && existing.status !== "not_applicable",
+          existing.status !== "closed" && existing.status !== "not_applicable" ||
+            existing.kind === "conversation" && existing.status === "closed" &&
+            incoming.status === "unarchive_unknown" && incoming.archive_policy === "manual" &&
+            !!incoming.operation_id && incoming.operation_id !== existing.operation_id && !!incoming.evidence_ref,
           "RESOURCE_TERMINAL",
           "Resource is already terminal",
           3,

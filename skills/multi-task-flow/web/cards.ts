@@ -1,3 +1,4 @@
+import { renderConversationControl, type ArchiveAction } from "./conversation-control";
 import { bindPRStatus } from "./pr-status";
 import { attachResourcePopover, closeResourcePopover, type ResourceSource } from "./resource-popover";
 import { initialOutput } from "./agent-output";
@@ -9,6 +10,7 @@ import type { Group, Task, View } from "./model";
 import type { TaskLayout } from "./view-state";
 
 type CardContext = {
+  archiveConversation?: ArchiveAction;
   getData: () => View | null;
   getLayout: () => TaskLayout;
   getSelectedTask: () => string | null;
@@ -69,7 +71,7 @@ function iconLink(label: string, iconName: string, url: string, external = false
   const anchor = document.createElement("a");
   anchor.className = "resource-action icon-button";
   anchor.href = url;
-  anchor.title = label;
+  anchor.dataset.tooltip = label;
   anchor.setAttribute("aria-label", label);
   if (external) anchor.rel = "noopener noreferrer";
   const icon = document.createElement("i");
@@ -86,7 +88,7 @@ function iconAction(label: string, iconName: string, url: string | null, externa
   button.type = "button";
   button.className = "resource-action icon-button";
   button.setAttribute("aria-disabled", "true");
-  button.title = label;
+  button.dataset.tooltip = label;
   button.setAttribute("aria-label", label);
   const icon = document.createElement("i");
   icon.dataset.lucide = iconName;
@@ -108,7 +110,7 @@ function resources(actions: HTMLElement, meta: HTMLElement | null, kind: "task" 
   const thread = kind === "task" ? task?.thread_id ?? null : group?.delivery_unit_kind === "bootstrap" ? view.orchestration.owner_thread_id ?? null : group?.agent_thread_id ?? null;
   const source: ResourceSource = { kind, id, view, thread, output: () => kind === "task" ? task?.latest_agent_output : group?.latest_agent_output, start: kind === "task" ? task?.started_at ?? null : group?.started_at ?? null, end: kind === "task" ? task?.finished_at ?? null : group?.finished_at ?? null };
   const triggers = actions.children;
-  if (triggers[0]) attachResourcePopover(triggers[0] as HTMLElement, "conversation", source);
+  if (triggers[0] && !(triggers[0] as HTMLElement).classList.contains("conversation-control")) attachResourcePopover(triggers[0] as HTMLElement, "conversation", source);
   if (triggers[1]) {
     const prTrigger = triggers[1] as HTMLElement;
     attachResourcePopover(prTrigger, "pr", source);
@@ -132,11 +134,14 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   select.setAttribute("aria-label", selectionAriaLabel("任务", task.title, task.is_ready && task.state === "planned" ? "ready" : task.state, context.labels));
   select.setAttribute("aria-pressed", String(context.getSelectedTask() === task.id));
   select.append(statusIcon(task.state, task.is_ready), text("span", task.title, "task-card-title"));
-  (select.lastElementChild as HTMLElement).title = task.title;
+  (select.lastElementChild as HTMLElement).dataset.tooltip = task.title;
   select.addEventListener("click", (event) => { event.stopPropagation(); if (event.detail === 0) context.setKeyboardSelection(); context.selectTask(task.id); });
   head.append(select);
   const actions = text("div", "", "task-card-actions");
-  actions.append(iconAction(task.thread_id ? "打开任务对话" : "任务对话尚未创建", "message-circle", task.thread_id ? conversationUrl(task.thread_id) : null));
+  const archiveStatus = task.conversation_resource?.status;
+  if (archiveStatus && ["closed", "archive_failed", "archive_unknown", "unarchive_failed", "unarchive_unknown"].includes(archiveStatus) || task.conversation_resource?.archive_policy === "manual") {
+    actions.append(renderConversationControl(task, context.archiveConversation, context.getData()?.profile_read_only === true));
+  } else actions.append(iconAction(task.thread_id ? task.state === "agent_idle" ? "Agent 已停止工作，打开任务对话" : "打开任务对话" : "任务对话尚未创建", "message-circle", task.thread_id ? conversationUrl(task.thread_id) : null));
   const pr = context.safeExternal(task.pr?.url ?? null);
   actions.append(iconAction(pr ? "打开任务 PR" : "任务 PR 尚未创建", "git-pull-request", pr, true));
   head.append(actions);
@@ -165,7 +170,7 @@ function groupCard(group: Group, context: CardContext): HTMLElement {
   select.setAttribute("aria-label", selectionAriaLabel("交付单元", group.title, visualState, context.labels));
   select.setAttribute("aria-pressed", String(context.getSelectedGroup() === group.id));
   select.append(statusIcon(visualState), text("span", group.title, "task-card-title"));
-  (select.lastElementChild as HTMLElement).title = group.title;
+  (select.lastElementChild as HTMLElement).dataset.tooltip = group.title;
   select.addEventListener("click", (event) => { event.stopPropagation(); if (event.detail === 0) context.setKeyboardSelection(); context.selectGroup(group.id); });
   head.append(select);
   const actions = text("div", "", "task-card-actions");
@@ -217,7 +222,7 @@ export function createCardRenderer(context: CardContext): { renderList: (tasks: 
       const pr = context.safeExternal(group.parent_pr?.url ?? null);
       actions.append(iconAction(pr ? "打开交付单元 PR" : "交付单元 PR 尚未创建", "git-pull-request", pr, true));
       const progress = text("span", groupAtomProgress(group), "task-column-count");
-      progress.title = groupAtomProgress(group);
+      progress.dataset.tooltip = groupAtomProgress(group);
       const meta = text("div", "", "task-card-meta task-column-time");
       meta.append(durationValue(group.started_at ?? null, group.finished_at ?? null));
       resources(actions, meta, "group", group.id, context);

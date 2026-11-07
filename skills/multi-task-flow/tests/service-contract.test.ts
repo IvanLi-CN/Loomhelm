@@ -60,3 +60,16 @@ test("expiry fences generations and refuses renewals during exit", () => {
   state.stopped("current");
   expect(state.runtime().phase).toBe("stopped");
 });
+
+
+test("schema2/contract2 ledgers without idle or archive diagnostics remain readable", async () => {
+  const { createDemoLedger } = await import("../examples/orchestration-viewer/ledger");
+  const { validateLedger } = await import("../scripts/schema");
+  const ledger = JSON.parse(JSON.stringify(createDemoLedger()));
+  ledger.contract_version = 2;
+  for (const task of ledger.tasks) delete task.agent_resume_state;
+  for (const resource of ledger.resources) for (const key of ["archive_policy", "error", "last_attempt_at", "operation_id"]) delete resource[key];
+  expect(validateLedger(ledger).schema_version).toBe(2);
+  expect(validateLedger(ledger).contract_version).toBe(2);
+  expect(() => requireLedgerCompatibility(ledger)).not.toThrow();
+});

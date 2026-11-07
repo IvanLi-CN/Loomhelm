@@ -148,3 +148,27 @@ test("atomic claim rejects an intervening write after the caller's read", async 
     expect(calls).toBe(0); expect(JSON.stringify(f.store.read())).toBe(before);
   } finally { f.cleanup(); }
 });
+
+for (const status of ["closed", "archive_unknown", "unarchive_unknown", "unarchive_failed"] as const) {
+  test(`notification ${status} recipient is rejected before provider delivery and after manual restore can send`, async () => {
+    const f = fixture();
+    try {
+      f.store.update(raw => { raw.resources.push({ id: "recipient-archive", kind: "conversation", target: raw.notifications[0].recipient_thread_id, status, evidence_ref: "fixture:archive" }); });
+      const before = JSON.stringify(f.store.read());
+      let calls = 0;
+      await expect(deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => { calls++; return sent; })).rejects.toThrow("请先手动取消归档");
+      expect(calls).toBe(0); expect(JSON.stringify(f.store.read())).toBe(before);
+      f.store.update(raw => { raw.resources.find((r: any) => r.id === "recipient-archive").status = "active"; });
+      await deliverClaimedNotification(f.store, f.parsed, f.id, "Notice", async () => { calls++; return sent; });
+      expect(calls).toBe(1);
+    } finally { f.cleanup(); }
+  });
+}
+test("notification creation rejects an archived bound task recipient", () => {
+  const ledger = createDemoLedger();
+  const target = ledger.tasks.find(t => t.id === "model")!;
+  ledger.resources.push({ id: "archived-task", kind: "conversation", target: target.thread_id!, status: "closed", evidence_ref: "fixture:archive" });
+  const sender = ledger.tasks.find(t => t.id === "deploy")!;
+  expect(() => apply(ledger, "task-update", { run_id: ledger.orchestration_id, actor: { role: "task", thread_id: sender.thread_id! }, request_id: "archived-recipient", expected_revision: ledger.revision, payload: { task_id: sender.id, state: "waiting", detail: "Notify archived recipient", notification: { mode: "deliver", recipient: { thread_id: target.thread_id } } } })).toThrow("请先手动取消归档");
+  expect(ledger.notifications).toHaveLength(0);
+});
