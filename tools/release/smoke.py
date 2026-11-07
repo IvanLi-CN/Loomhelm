@@ -65,6 +65,11 @@ def runtime_smoke(tags, record):
                 except urllib.error.HTTPError as error:
                     if error.code!=426:raise ReleaseError('server did not reject missing product version')
                 else:raise ReleaseError('server accepted a versionless business operation')
+    except BaseException:
+        # Disposable smoke database only; retain initialization/migration failure
+        # evidence before task-owned cleanup. No production URL or credentials.
+        subprocess.run(['docker','logs',database],check=False)
+        raise
     finally:
         for name in reversed(containers):
             subprocess.run(['docker','rm','-f',name],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
