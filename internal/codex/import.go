@@ -136,9 +136,10 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 	}
 
 	// Import coordinates with Host lifecycle and Session activation through a
-	// single lock order: source -> Session -> Task -> Host -> Codex. The
-	// binding rows are re-checked after the Host lock so an activation that
-	// starts before the Codex row exists cannot permanently miss reconciliation.
+	// single lock order: source -> Session -> Task -> Host -> Codex. Per-thread
+	// reconciliation runs after the Codex row upsert, so an activation that
+	// starts before the Codex row exists is resolved by whichever transaction
+	// reaches the Host lock second.
 	threadIDs := make([]string, 0, len(snapshot.Threads))
 	for _, thread := range snapshot.Threads {
 		threadID := strings.TrimSpace(thread.ThreadID)
@@ -171,9 +172,6 @@ func (s *Service) ImportSnapshot(ctx context.Context, snapshot protocol.CodexSou
 			return err
 		}
 		return errStaleSnapshot
-	}
-	if err := lockImportBindingRows(ctx, tx, hostID, threadIDs); err != nil {
-		return err
 	}
 
 	if _, err := tx.Exec(ctx, `

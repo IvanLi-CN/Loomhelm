@@ -1422,6 +1422,12 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	} else if err != nil {
 		return protocol.CodexConversation{}, fmt.Errorf("lock Codex Host for binding: %w", err)
 	}
+	if err := s.hosts.AuthorizeUserTx(ctx, tx, principal.UserID, access.host.ID); err != nil {
+		if errors.Is(err, hosts.ErrForbidden) || errors.Is(err, hosts.ErrNotFound) {
+			return protocol.CodexConversation{}, auth.ErrNotFound
+		}
+		return protocol.CodexConversation{}, fmt.Errorf("authorize Codex binding Host: %w", err)
+	}
 	if err := tx.QueryRow(ctx, `
 		SELECT conversation_title, project_id, source_kind, source_status, history_state, files_complete, bound_task_id, bound_session_id, imported_by, as_of
 		FROM codex_threads WHERE host_id = $1 AND thread_id = $2 FOR UPDATE
@@ -1474,8 +1480,12 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 		return protocol.CodexConversation{}, ErrIncompleteHistory
 	}
 	confirmShare := request.ConfirmShare != nil && *request.ConfirmShare
-	if sessionLookupErr == nil && sessionProjectID == nil {
-		if sessionCreatorUserID == nil || *sessionCreatorUserID != principal.UserID || !confirmShare {
+	if sessionLookupErr == nil {
+		if sessionProjectID == nil {
+			if sessionCreatorUserID == nil || *sessionCreatorUserID != principal.UserID || !confirmShare {
+				return protocol.CodexConversation{}, ErrForbidden
+			}
+		} else if !confirmShare {
 			return protocol.CodexConversation{}, ErrForbidden
 		}
 	} else if importedBy == nil || *importedBy != principal.UserID || !confirmShare {
