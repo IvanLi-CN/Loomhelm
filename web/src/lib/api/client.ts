@@ -30,6 +30,19 @@ export interface ProductionApiAssemblyOptions {
   clientOptions?: WebApiClientOptions;
 }
 
+export function withProductionAuthMessage(assembly: ProductionApiAssembly, message?: string): ProductionApiAssembly {
+  const auth = { ...assembly.auth };
+  if (message === undefined) {
+    delete auth.message;
+  } else {
+    auth.message = message;
+  }
+  return {
+    ...assembly,
+    auth
+  };
+}
+
 export interface WebApiClientOptions {
   baseUrl?: string;
   fetch?: AuthenticatedApiClientOptions["fetch"];

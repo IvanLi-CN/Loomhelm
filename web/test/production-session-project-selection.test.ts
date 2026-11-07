@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 
 import { normalizeProjectSelection, shouldPreserveProjectSelection, shouldRetainSessionCreationIntent } from "../src/features/conversations/ProductionConversationWorkspace";
 import { listAllSessions } from "../src/features/conversations/session-list";
+import { resolveProjectTaskSourceProviderValue } from "../src/features/tasks/source";
+import type { ProjectTaskSource } from "../src/features/tasks/types";
 
 describe("production session project selection", () => {
   test("falls back to a projectless session when the source is loading or unavailable", () => {
@@ -24,6 +26,15 @@ describe("production session project selection", () => {
   test("preserves a project selection while a creation request is pending", () => {
     expect(shouldPreserveProjectSelection(true, false)).toBe(true);
     expect(normalizeProjectSelection("project-a", undefined, [], shouldPreserveProjectSelection(true, false))).toBe("project-a");
+  });
+
+  test("reuses the inherited project source while a route provider reloads", () => {
+    const inherited = { status: "loading" } as unknown as ProjectTaskSource;
+    const fallback = { status: "ready" } as unknown as ProjectTaskSource;
+
+    expect(resolveProjectTaskSourceProviderValue(undefined, inherited, fallback)).toBe(inherited);
+    expect(resolveProjectTaskSourceProviderValue(undefined, undefined, fallback)).toBe(fallback);
+    expect(resolveProjectTaskSourceProviderValue(null, inherited, fallback)).toBeNull();
   });
 
   test("retains an uncertain creation intent when its original Host is no longer authorized", () => {
