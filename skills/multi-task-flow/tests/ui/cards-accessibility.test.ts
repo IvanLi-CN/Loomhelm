@@ -15,3 +15,27 @@ describe("dashboard card accessibility", () => {
     expect(groupExecutionVisualState("closed", "waiting")).toBe("closed");
   });
 });
+
+test("synthetic task and unit conversations never expose native links", async () => {
+  const { createCardRenderer } = await import("../../web/cards");
+  const { createDetailContent } = await import("../../web/details-content");
+  const { createSingleDeliveryUnitLedger } = await import("../../examples/single-delivery-unit/ledger");
+  const { buildView } = await import("../../scripts/view");
+  const view = buildView(createSingleDeliveryUnitLedger()) as import("../../web/model").View;
+  document.body.innerHTML = '<div id="task-list"></div><div id="group-list"></div><div id="details-content"></div>';
+  const common = { getData: () => view, labels: {}, safeExternal: () => null };
+  let layout: "grid" | "board" = "grid";
+  const cards = createCardRenderer({ ...common, getLayout: () => layout, getSelectedTask: () => null, getSelectedGroup: () => null, selectTask: () => {}, selectGroup: () => {}, setKeyboardSelection: () => {}, updateTaskLayoutControls: () => {}, bindTaskHover: () => {}, bindGroupHover: () => {} });
+  const details = createDetailContent({ ...common, labelTask: () => "", time: () => "" });
+  for (const mode of ["grid", "board"] as const) {
+    layout = mode; cards.renderList(view.tasks); cards.renderGroups();
+    expect(document.querySelectorAll('a[href^="codex:"]')).toHaveLength(0);
+    expect(document.querySelectorAll('button[aria-label="示例对话（Mock）"][aria-disabled="true"][data-resource-trigger="conversation"]').length).toBeGreaterThan(0);
+  }
+  details.showTask(view.tasks[0]!);
+  expect(document.getElementById("details-content")!.textContent).toContain("示例对话（Mock）");
+  expect(document.querySelectorAll('a[href^="codex:"]')).toHaveLength(0);
+  details.showGroup(view.groups[0]!);
+  expect(document.getElementById("details-content")!.textContent).toContain("示例对话（Mock）");
+  expect(document.querySelectorAll('a[href^="codex:"]')).toHaveLength(0);
+});

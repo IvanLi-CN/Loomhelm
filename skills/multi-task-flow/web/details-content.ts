@@ -52,7 +52,8 @@ function emptyOutput(): HTMLElement {
   return value;
 }
 
-function link(label: string, url: string): HTMLAnchorElement {
+function link(label: string, url: string | null): HTMLElement {
+  if (url === null) return text("span", "示例对话（Mock）");
   const anchor = document.createElement("a");
   anchor.textContent = label;
   anchor.href = url;

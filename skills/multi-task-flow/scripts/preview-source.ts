@@ -11,6 +11,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { singleDeliveryUnitObserver } from "../examples/single-delivery-unit/outputs";
+import { createSingleDeliveryUnitLedger, singleDeliveryUnitName } from "../examples/single-delivery-unit/ledger";
 import {
   createViewerValidationLedger,
   viewerValidationName,
@@ -65,14 +67,17 @@ const state = new ServiceState(
 state.initialize();
 const auth = new ServiceAuth(state);
 auth.initialize();
-const run = createViewerValidationLedger();
+const singleUnit = process.argv.includes("--single-delivery-unit");
+const run = singleUnit ? createSingleDeliveryUnitLedger() : createViewerValidationLedger();
+if (!singleUnit) {
 // Exercise the authenticated PR query against the actual candidate alongside unbound cards.
 run.repository = { ...run.repository, host: "github.com", owner: "IvanLi-CN", name: "Loomhelm" };
 const prExample = run.tasks.find(task => task.id === "ledger");
 if (prExample) prExample.pr = { provider: "github", repository: "IvanLi-CN/Loomhelm", id: "71", url: "https://github.com/IvanLi-CN/Loomhelm/pull/71" };
+}
 const store = new LedgerStore(state.paths.data, run.orchestration_id);
 store.create(run);
-cpSync(
+if (!singleUnit) cpSync(
   join(moduleRoot, "examples", "orchestration-viewer", "requirements"),
   join(store.runPath, "requirements"),
   { recursive: true },
@@ -130,9 +135,10 @@ state.renew(
 let revision = createHash("sha256").update(JSON.stringify(files)).digest("hex");
 const daemon = await runDaemon(state, {
   manifest,
-  name: viewerValidationName,
+  name: singleUnit ? singleDeliveryUnitName : viewerValidationName,
   assetsDir,
   revision: () => revision,
+  connectObserver: singleUnit ? singleDeliveryUnitObserver(run) : undefined,
 });
 let pending = false,
   building = false;
@@ -187,7 +193,7 @@ process.once("SIGINT", stop);
 console.log(
   JSON.stringify({
     mode: "source-preview",
-    name: viewerValidationName,
+    name: singleUnit ? singleDeliveryUnitName : viewerValidationName,
     run_id: run.orchestration_id,
     root,
     pid: process.pid,

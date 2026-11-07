@@ -81,6 +81,7 @@ function iconLink(label: string, iconName: string, url: string, external = false
 
 function iconAction(label: string, iconName: string, url: string | null, external = false): HTMLElement {
   if (url) return iconLink(label, iconName, url, external);
+  if (label.startsWith("打开") && iconName === "message-circle") label = "示例对话（Mock）";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "resource-action icon-button";

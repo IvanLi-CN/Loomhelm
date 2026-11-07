@@ -27,7 +27,7 @@ describe("dashboard example", () => {
     expect(verification.results).toHaveLength(ids.length);
     expect(new Set(verification.results.filter((result) => result.navigated).map((result) => result.thread_id))).toEqual(new Set(ids));
     for (const id of ids) {
-      const url = new URL(conversationUrl(id));
+      const url = new URL(conversationUrl(id)!);
       expect(url.protocol).toBe("codex:");
       expect(url.hostname).toBe("threads");
       expect(url.pathname).toMatch(/^\/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -36,6 +36,10 @@ describe("dashboard example", () => {
   test("uses same-document native conversation links like the working dashboard", () => {
     expect(conversationUrl("01a18bf3-feb7-7d52-98b3-dc25f8549f69")).toBe("codex://threads/01a18bf3-feb7-7d52-98b3-dc25f8549f69");
     expect(conversationUrl(" 01a18bf3-feb7-7d52-98b3-dc25f8549f69 ")).toBe("codex://threads/01a18bf3-feb7-7d52-98b3-dc25f8549f69");
+  });
+  test("does not build native URLs for synthetic conversation IDs", () => {
+    expect(conversationUrl("mock-thread-task-reader")).toBeNull();
+    expect(conversationUrl(" mock-thread-search-service ")).toBeNull();
   });
   test("keeps the cut history and post-merge work in the right groups", () => {
     const ledger = createDemoLedger(Date.parse("2026-10-31T00:00:00.000Z"));
