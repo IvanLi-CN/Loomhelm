@@ -132,3 +132,22 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 - [实现状态](IMPLEMENTATION.md)
 - [合同历史](HISTORY.md)
 - [决策说明](DECISIONS.md)
+
+## Visual Evidence
+
+![版本不兼容提示与未提交输入](assets/product-version-mismatch.png)
+
+- source_type: storybook_canvas
+- target_program: mock-only
+- capture_scope: element
+- requested_viewport: 393x852
+- viewport_strategy: storybook-viewport
+- margin_policy: require_margin
+- evidence_surface: component
+- surface_selector: `[data-visual-evidence-surface]`
+- target_selector: `[data-visual-evidence-target]`
+- sensitive_exclusion: N/A
+- story_id_or_title: PWA/PwaStatusBanner/ProductVersionMismatch
+- state: 版本不兼容，保留未提交输入
+- submission_gate: approved
+- evidence_note: 展示联网操作暂停及受控升级提示；输入保留，不自动刷新或重发。Owner 已确认该 mock 截图并授权纳入当前 PR。

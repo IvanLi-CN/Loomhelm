@@ -28,7 +28,7 @@ Implementation: 已实现统一合同与验证入口，正在进行当前 Candid
 
 ## Remaining Gaps
 
-平台只读核验时，Release App／签名变量和 secret 名称列表为空，main required checks 尚未包含本次新增三项。真实发布需 owner 配置签名、App、ledger 与 tag 保护。平台漂移不是可忽略的 waiver，不因代码检查通过而推断已对齐。
+平台只读核验时，Release App／签名变量和 secret 名称列表为空，main required checks 已在 owner 单独授权后追加本次三项，保留原八项、strict 与其余保护；追加前已观察三项检查全部通过。真实发布需 owner 配置签名、App、ledger 与 tag 保护。平台漂移不是可忽略的 waiver，不因代码检查通过而推断已对齐。
 
 A6 等待真实 Merge Receipt、owner 首发 target 和授权后执行。没有完整统一产品 baseline 时，必须输入完整版本；本次未选择首发版本。
 
