@@ -683,11 +683,17 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 		args = append(args, sortedProjectScopeValues(principal.ProjectScope))
 		sessionProjectVisibility = fmt.Sprintf("session.project_id = ANY($%d::text[])", len(args))
 	}
-	taskVisibility := `t.bound_task_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)`
+	taskVisibility := `t.bound_task_id IS NOT NULL AND t.history_state = 'complete' AND t.files_complete AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = task.project_id AND pm.user_id = $2)`
+	if len(principal.ProjectScope) > 0 {
+		taskVisibility += fmt.Sprintf(" AND task.project_id = ANY($%d::text[])", len(args))
+	}
 	sessionMembership := fmt.Sprintf(`%s AND EXISTS (
 		SELECT 1 FROM project_members session_member
 		WHERE session_member.project_id = session.project_id
 		  AND session_member.user_id = $2
+		  AND t.bound_session_id = session.id
+		  AND t.history_state = 'complete'
+		  AND t.files_complete
 	)`, sessionProjectVisibility)
 	sessionVisibility := fmt.Sprintf(`EXISTS (
 		SELECT 1
@@ -708,11 +714,23 @@ func (s *Service) ListConversations(ctx context.Context, principal auth.Principa
 			SELECT 1 FROM project_members session_member
 			WHERE session_member.project_id = session.project_id
 			  AND session_member.user_id = $2
+			  AND t.bound_session_id = session.id
+			  AND t.history_state = 'complete'
+			  AND t.files_complete
 		  )
 	)`, sessionProjectVisibility)
-	where := fmt.Sprintf(`WHERE t.host_id = $1 AND (%s OR %s)`, taskVisibility, restrictedSessionVisibility)
+	privateSessionVisibility := `NOT EXISTS (
+		SELECT 1
+		FROM execution_sessions AS private_session
+		WHERE private_session.host_id = t.host_id
+		  AND private_session.external_thread_ref = t.thread_id
+		  AND private_session.creation_state = 'confirmed'
+		  AND private_session.project_id IS NULL
+		  AND private_session.creator_user_id IS DISTINCT FROM $2
+	)`
+	where := fmt.Sprintf(`WHERE t.host_id = $1 AND %s AND (%s OR %s)`, privateSessionVisibility, taskVisibility, restrictedSessionVisibility)
 	if !access.restricted {
-		where = fmt.Sprintf(`WHERE t.host_id = $1 AND (t.imported_by = $2 OR %s OR %s)`, taskVisibility, sessionVisibility)
+		where = fmt.Sprintf(`WHERE t.host_id = $1 AND %s AND (t.imported_by = $2 OR %s OR %s)`, privateSessionVisibility, taskVisibility, sessionVisibility)
 	}
 	if !boolValue(query.IncludeArchived) {
 		where += " AND t.source_status = 'active'"
@@ -1369,14 +1387,15 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	}
 	var existingSessionID string
 	var sessionTaskID *string
-	var sessionProjectID *string
+	var sessionProjectID, sessionCreatorUserID *string
 	sessionLookupErr := tx.QueryRow(ctx, `
-		SELECT session.id, session.project_id, task.id
+		SELECT session.id, session.project_id, session.creator_user_id, task.id
 		FROM execution_sessions AS session
 		LEFT JOIN tasks AS task ON task.session_id = session.id
 		WHERE session.host_id = $1 AND session.external_thread_ref = $2
+		  AND session.creation_state = 'confirmed'
 		FOR UPDATE OF session
-	`, access.host.ID, threadID).Scan(&existingSessionID, &sessionProjectID, &sessionTaskID)
+	`, access.host.ID, threadID).Scan(&existingSessionID, &sessionProjectID, &sessionCreatorUserID, &sessionTaskID)
 	if sessionLookupErr != nil && !errors.Is(sessionLookupErr, pgx.ErrNoRows) {
 		return protocol.CodexConversation{}, fmt.Errorf("read existing Codex Session: %w", sessionLookupErr)
 	}
@@ -1438,7 +1457,12 @@ func (s *Service) Bind(ctx context.Context, principal auth.Principal, hostID, th
 	if historyState != string(protocol.CodexHistoryStateComplete) || !filesComplete {
 		return protocol.CodexConversation{}, ErrIncompleteHistory
 	}
-	if importedBy == nil || *importedBy != principal.UserID || request.ConfirmShare == nil || !*request.ConfirmShare {
+	confirmShare := request.ConfirmShare != nil && *request.ConfirmShare
+	if sessionLookupErr == nil && sessionProjectID == nil {
+		if sessionCreatorUserID == nil || *sessionCreatorUserID != principal.UserID || !confirmShare {
+			return protocol.CodexConversation{}, ErrForbidden
+		}
+	} else if importedBy == nil || *importedBy != principal.UserID || !confirmShare {
 		return protocol.CodexConversation{}, ErrForbidden
 	}
 	var linkedTask, linkedSession string
