@@ -4,9 +4,9 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCodexThread, sendCodexMessage } from "../scripts/codex-agent-api";
+import { createCodexThread, sendCodexMessage, archiveCodexThread, archivedCodexThread, unarchiveCodexThread, unarchivedCodexThread } from "../scripts/codex-agent-api";
 
-async function withControlServer(scenario: "success" | "mismatch" | "reject" | "timeout" | "missing-id" | "send" | "resume-reject" | "send-missing-id" | "send-resume-timeout", verify: (calls: any[], result: Awaited<ReturnType<typeof createCodexThread>> | Awaited<ReturnType<typeof sendCodexMessage>>, completed: boolean) => void) {
+async function withControlServer(scenario: "unarchive-success" | "unarchive-reject" | "unarchive-timeout" | "unarchive-list" | "archive-success" | "archive-active" | "archive-reject" | "archive-timeout" | "archive-list" | "success" | "mismatch" | "reject" | "timeout" | "missing-id" | "send" | "resume-reject" | "send-missing-id" | "send-resume-timeout", verify: (calls: any[], result: Awaited<ReturnType<typeof createCodexThread>> | Awaited<ReturnType<typeof sendCodexMessage>> | Awaited<ReturnType<typeof archiveCodexThread>> | boolean, completed: boolean) => void) {
   const dir = mkdtempSync(join(tmpdir(), "mtf-rpc-"));
   const path = join(dir, "rpc.sock");
   const calls: any[] = [];
@@ -40,9 +40,9 @@ async function withControlServer(scenario: "success" | "mismatch" | "reject" | "
         buffer = buffer.subarray(offset + 4 + length);
         for (let i = 0; i < bytes.length; i++) bytes[i] = bytes[i]! ^ mask[i % 4]!;
         const call = JSON.parse(bytes.toString()); calls.push(call);
-        const result = call.method === "thread/start" ? { thread: scenario === "missing-id" ? {} : { id: "test-thread" }, model: scenario === "mismatch" ? "other-model" : "gpt-6.1-sol", reasoningEffort: "medium" } : call.method === "turn/start" ? { turn: scenario === "send-missing-id" ? {} : { id: "test-turn" } } : {};
-        if ((call.method === "thread/start" && scenario === "timeout") || (call.method === "thread/resume" && scenario === "send-resume-timeout")) continue;
-        send((call.method === "thread/start" && scenario === "reject") || (call.method === "thread/resume" && scenario === "resume-reject") ? { id: call.id, error: { message: "unsupported profile" } } : { id: call.id, result });
+        const result = call.method === "thread/read" ? { thread: { status: { type: scenario === "archive-active" ? "active" : "idle" } } } : call.method === "thread/list" ? { data: call.params.cursor ? [{id: "test-thread"}] : [], nextCursor: call.params.cursor ? null : "second" } : call.method === "thread/start" ? { thread: scenario === "missing-id" ? {} : { id: "test-thread" }, model: scenario === "mismatch" ? "other-model" : "gpt-6.1-sol", reasoningEffort: "medium" } : call.method === "turn/start" ? { turn: scenario === "send-missing-id" ? {} : { id: "test-turn" } } : {};
+        if (((call.method === "thread/archive" || call.method === "thread/unarchive") && scenario.endsWith("-timeout")) || (call.method === "thread/start" && scenario === "timeout") || (call.method === "thread/resume" && scenario === "send-resume-timeout")) continue;
+        send(((call.method === "thread/archive" || call.method === "thread/unarchive") && scenario.endsWith("-reject")) || (call.method === "thread/start" && scenario === "reject") || (call.method === "thread/resume" && scenario === "resume-reject") ? { id: call.id, error: { message: "unsupported profile" } } : { id: call.id, result });
         if (call.method === "turn/start") setTimeout(() => {
           completed = true;
           send({ method: "turn/completed", params: { threadId: "test-thread", turn: { id: "test-turn", status: "completed" } } });
@@ -56,7 +56,7 @@ async function withControlServer(scenario: "success" | "mismatch" | "reject" | "
   process.env.MULTI_TASK_FLOW_CODEX_AGENT_TIMEOUT_MS = "1000";
   process.env.CODEX_APP_SERVER_SOCKET = path;
   try {
-    const result = scenario === "send" || scenario === "resume-reject" || scenario === "send-missing-id" || scenario === "send-resume-timeout"
+    const result = scenario === "unarchive-list" ? await unarchivedCodexThread("test-thread") : scenario.startsWith("unarchive-") ? await unarchiveCodexThread("test-thread", "test-unarchive") : scenario === "archive-list" ? await archivedCodexThread("test-thread") : scenario.startsWith("archive-") ? await archiveCodexThread("test-thread", "test-archive") : scenario === "send" || scenario === "resume-reject" || scenario === "send-missing-id" || scenario === "send-resume-timeout"
       ? await sendCodexMessage({recipient_thread_id:"test-thread",prompt:"Continue"})
       : await createCodexThread({ title: "Test", prompt: "Reply OK", model: "gpt-6.1-sol", thinking: "medium" });
     verify(calls, result, completed);
@@ -123,5 +123,37 @@ test("a timeout before notification input is submitted is a definite failure", a
   await withControlServer("send-resume-timeout", (calls, result) => {
     expect(result.outcome).toBe("failed");
     expect(calls.map(c => c.method)).toEqual(["initialize", "thread/resume"]);
+  });
+});
+
+for (const [scenario, outcome] of [["archive-success", "succeeded"], ["archive-active", "deferred"], ["archive-reject", "failed"], ["archive-timeout", "unknown"]] as const) {
+  test(`archive RPC ${scenario} retains provider facts without executing a turn`, async () => {
+    await withControlServer(scenario, (calls, result) => {
+      expect((result as any).outcome).toBe(outcome);
+      expect(calls.map(c => c.method)).toEqual(scenario === "archive-active" ? ["initialize", "thread/read"] : ["initialize", "thread/read", "thread/archive"]);
+    });
+  });
+}
+test("archive reconciliation paginates archived threads only", async () => {
+  await withControlServer("archive-list", (calls, result) => {
+    expect(result).toBe(true);
+    expect(calls.filter(c => c.method === "thread/list").map(c => c.params)).toEqual([{ archived: true, limit: 100 }, { archived: true, limit: 100, cursor: "second" }]);
+  });
+});
+
+for (const [scenario, outcome] of [["unarchive-success", "succeeded"], ["unarchive-reject", "failed"], ["unarchive-timeout", "unknown"]] as const) {
+  test(`unarchive RPC ${scenario} restores only the archive resource`, async () => {
+    await withControlServer(scenario, (calls, result) => {
+      expect(result.outcome).toBe(outcome);
+      expect(calls.map(call => call.method)).toEqual(["initialize", "thread/unarchive"]);
+      expect(calls[1].params).toEqual({ threadId: "test-thread" });
+    });
+  });
+}
+test("unarchive reconciliation requires a positive unarchived listing", async () => {
+  await withControlServer("unarchive-list", (calls, result) => {
+    expect(result).toBe(true);
+    expect(calls.filter(call => call.method === "thread/list").every(call => call.params.archived === false)).toBe(true);
+    expect(calls.some(call => call.method === "turn/start" || call.method === "thread/unarchive")).toBe(false);
   });
 });

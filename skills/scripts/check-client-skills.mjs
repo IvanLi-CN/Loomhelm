@@ -7,7 +7,7 @@ const path = resolve(root, 'skills/source-manifest.json');
 const manifest = JSON.parse(readFileSync(path, 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
 const refresh = process.argv.includes('--write');
-const additional = [...JSON.parse(readFileSync(resolve(root, 'skills/support-manifest.json'), 'utf8')), 'skills/bin/modules/core/runtime.ts', 'skills/bin/modules/core/posix.ts', 'skills/bin/native/posix.c', 'skills/bin/package.json', 'skills/multi-task-flow/tests/service-release.test.ts', 'skills/multi-task-flow/scripts/notification-delivery.ts', 'skills/multi-task-flow/tests/notification-delivery.test.ts'];
+const additional = [...JSON.parse(readFileSync(resolve(root, 'skills/support-manifest.json'), 'utf8')), 'skills/bin/modules/core/runtime.ts', 'skills/bin/modules/core/posix.ts', 'skills/bin/native/posix.c', 'skills/bin/package.json', 'skills/multi-task-flow/tests/service-release.test.ts', 'skills/multi-task-flow/scripts/notification-delivery.ts', 'skills/multi-task-flow/tests/notification-delivery.test.ts', 'skills/multi-task-flow/scripts/conversation-archive.ts', 'skills/multi-task-flow/scripts/task-runtime.ts', 'skills/multi-task-flow/web/task-state.ts', 'skills/multi-task-flow/web/conversation-control.ts', 'skills/multi-task-flow/tests/ui/conversation-control.test.ts', 'skills/multi-task-flow/tests/task-runtime.test.ts'];
 if (refresh) manifest.additions = additional.map(path => ({ path, installedSha256: hash(readFileSync(resolve(root, path))) }));
 const findings = [];
 for (const excluded of manifest.exclusions ?? []) {

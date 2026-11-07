@@ -158,6 +158,52 @@ function approve(ledger: ReturnType<typeof fixture>) {
   );
 }
 
+test("runtime observation persists the formal agent_idle task state and restores it", () => {
+  const ledger = fixture();
+  const task = ledger.tasks[1]!;
+  task.state = "running"; task.thread_id = "runtime-thread";
+  const observe = (runtime: string, requestId: string) => apply(ledger, "task-runtime-observe", request(ledger, requestId, {task_id: task.id, thread_id: task.thread_id, runtime, turn_id: "turn", observed_at: at}));
+  observe("idle", "idle-1");
+  expect(task.id).toBe(ledger.tasks[1]!.id);
+  expect(ledger.tasks[1]!.state).toBe("agent_idle");
+  expect(ledger.tasks[1]!.agent_resume_state).toBe("running");
+  expect(validateLedger(ledger).tasks[1]!.state).toBe("agent_idle");
+  observe("unknown", "unknown-1");
+  expect(ledger.tasks[1]!.state).toBe("running");
+  observe("idle", "idle-2");
+  observe("active", "active-1");
+  expect(ledger.tasks[1]!.state).toBe("running");
+  ledger.tasks[1]!.state = "waiting";
+  observe("idle", "waiting-idle");
+  expect(ledger.tasks[1]!.state).toBe("waiting");
+});
+
+test("idle during startup still requires the first task-start fact", () => {
+  const ledger = fixture();
+  ledger.tasks[1]!.state = "starting"; ledger.tasks[1]!.thread_id = "runtime-thread";
+  apply(ledger, "task-runtime-observe", request(ledger, "startup-idle", {turn_id: "startup-turn", task_id: "b", thread_id: "runtime-thread", runtime: "idle", observed_at: at}));
+  expect(ledger.tasks[1]!.agent_resume_state).toBe("starting");
+  apply(ledger, "task-update", request(ledger, "startup-running", {task_id: "b", state: "running", occurred_at: at}, {role: "task", thread_id: "runtime-thread"}));
+  expect(ledger.tasks[1]!.started_at).toBe(at);
+  expect(ledger.events.at(-1)?.type).toBe("task_started");
+  expect(ledger.tasks[1]!.agent_resume_state).toBeUndefined();
+});
+
+test("terminal task creates a pending conversation archive resource", () => {
+  const ledger = fixture();
+  const task = ledger.tasks[1]!;
+  task.kind = "verification";
+  task.thread_id = "task-b-thread";
+  task.state = "running";
+  apply(ledger, "task-update", request(ledger, "complete-b", {
+    task_id: task.id,
+    state: "completed",
+    evidence: "verification complete",
+    occurred_at: at,
+  }, { role: "task", thread_id: task.thread_id }));
+  expect(ledger.resources).toContainEqual(expect.objectContaining({ kind: "conversation", target: "task-b-thread", status: "pending" }));
+});
+
 function v2Fixture() {
   const ledger: any = structuredClone(fixture());
   ledger.schema_version = 2;
@@ -2728,6 +2774,12 @@ describe("native CLI handoff contract", () => {
     apply(ledger, "dispatch-resolve", resolve(ledger));
     const actor = { role: "task" as const, thread_id: "cli-thread" };
     expect(() => apply(ledger, "task-update", request(ledger, "too-early", { task_id: "a", state: "running", detail: "Start after readiness", occurred_at: at }, actor))).toThrow("baseline");
+    apply(ledger, "task-runtime-observe", request(ledger, "initial-idle", {
+      task_id: "a", thread_id: "cli-thread", runtime: "idle", turn_id: "completed-initialization", observed_at: new Date().toISOString(),
+    }));
+    expect(ledger.tasks[0].state).toBe("agent_idle");
+    expect(() => apply(ledger, "task-update", request(ledger, "idle-too-early", { task_id: "a", state: "running", detail: "Resume after readiness", occurred_at: at }, actor))).toThrow("baseline");
+    ledger.config.max_running_tasks = 1;
     ledger.resources = [ { id: "wt", kind: "worktree", target: "a", status: "active", evidence_ref: "owned:cli-thread" }, { id: "br", kind: "branch", target: "task-a", status: "active", evidence_ref: "owned:branch" } ];
     const payload = { target_type: "task", target_id: "a", stage: "workspace_ready", branch: "task-a", resource_ids: ["wt", "br"], evidence_ref: "git:clean" };
     expect(() => apply(ledger, "lifecycle-record", request(ledger, "missing-baseline", payload, actor))).toThrow();

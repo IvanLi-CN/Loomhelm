@@ -1,3 +1,4 @@
+import { runtimeTaskState } from "../web/task-state";
 import { planWarnings } from "./view-warnings";
 export { planWarnings, type PlanWarning } from "./view-warnings";
 import { createAtomProjection } from "./view-atoms";
@@ -142,6 +143,7 @@ export function actualIntervals(ledger: Ledger): {
               ([
                 "task_started",
                 "task_resumed",
+                "task_runtime_observed",
                 "task_waiting",
                 "task_blocked",
                 "task_completed",
@@ -170,6 +172,8 @@ export function actualIntervals(ledger: Ledger): {
       }
       if (typeof event.data.group_id === "string")
         groupId = event.data.group_id;
+      if (event.type === "task_runtime_observed" && ["running", "agent_idle"].includes(String(event.data.state)))
+        current = { task_id: task.id, group_id: groupId, state: String(event.data.state), start: time, end: null };
       if (["task_started", "task_resumed"].includes(event.type))
         current = {
           task_id: task.id,
@@ -264,6 +268,8 @@ export function buildView(
         : [];
       return {
         ...task,
+        state: runtimeTaskState(task, outputs[task.id]),
+        ...(runtimeTaskState(task, outputs[task.id]) === "agent_idle" && task.state !== "agent_idle" ? { agent_resume_state: task.state } : {}),
         atoms: atoms.map((atom) => ({
           ...atom,
           completed_at: atomTime(task.id, atom),
@@ -274,6 +280,12 @@ export function buildView(
         hold_reason: isHeld ? "等待高影响计划修订批准" : null,
         latest_agent_output: outputs[task.id] ?? initialOutput(task.thread_id),
         latest_output: outputs[task.id]?.text ?? null,
+        conversation_resource: task.thread_id
+          ? ledger.resources.find(
+              (resource) =>
+                resource.kind === "conversation" && resource.target === task.thread_id,
+            ) ?? null
+          : null,
       };
     });
   const planSummary = ledger.plans.map((item) => ({

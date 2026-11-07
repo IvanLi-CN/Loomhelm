@@ -112,3 +112,23 @@ describe("dashboard example", () => {
     } finally { await server.stop(); rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+test("idle/archive example is synthetic and supports real archive reconciliation", async () => {
+  const { createIdleArchiveExample } = await import("../examples/orchestration-viewer");
+  const { retryConversationArchive } = await import("../scripts/conversation-archive");
+  const example = createIdleArchiveExample();
+  expect(example.ledger.tasks.find(t => t.id === "dashboard-ui")?.state).toBe("agent_idle");
+  expect(example.ledger.tasks.every(t => !t.thread_id || t.thread_id.startsWith("example-thread-"))).toBe(true);
+  const connection = await example.dashboard.connectObserver(() => {}, () => {});
+  const thread = example.ledger.tasks.find(t => t.id === "dashboard-ui")!.thread_id;
+  expect(await connection.request("thread/read", {threadId: thread})).toMatchObject({thread: {status: {type: "idle"}}});
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "idle-archive-example-test-"));
+  try {
+    const store = new LedgerStore(root, example.ledger.orchestration_id); store.create(example.ledger);
+    for (const taskId of ["model", "ledger"]) {
+      const state = store.read().tasks.find((t: any) => t.id === taskId).state;
+      expect((await retryConversationArchive(store, taskId, example.dashboard.archiveProvider)).status).toBe("closed");
+      expect(store.read().tasks.find((t: any) => t.id === taskId).state).toBe(state);
+    }
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});

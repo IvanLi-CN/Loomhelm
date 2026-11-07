@@ -10,6 +10,8 @@ export type AgentOutput = {
   message_status: string | null;
   observed_at: string | null;
   stale: boolean;
+  runtime_turn_id?: string | null;
+  agent_state?: "active" | "idle" | "unknown";
 };
 export type OutputSnapshot = { output_epoch: string; output_revision: number; outputs: Record<string, AgentOutput> };
 export function initialOutput(thread: string | null): AgentOutput {
@@ -36,7 +38,7 @@ export function paintOutput(node: HTMLElement, output: AgentOutput, full = false
       const warning = document.createElement("span"); warning.className = "agent-output-warning"; warning.textContent = `（${label}）`; node.append(warning);
     }
   }
-  node.title = content ?? label;
+  node.dataset.tooltip = content ?? label;
 }
 /** Fence GETs by their starting epoch; retire replaced instances across both channels. */
 export class OutputSnapshots {

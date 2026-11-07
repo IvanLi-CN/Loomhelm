@@ -1,3 +1,4 @@
+import { archivePresentation, renderArchiveAction, type ArchiveAction } from "./conversation-control";
 import { initialOutput, paintOutput } from "./agent-output";
 import { createProfileEditor, type ProfileEditorContext } from "./profile-editor";
 import { conversationUrl } from "./links";
@@ -17,6 +18,7 @@ type DetailContentContext = {
   time: (value: string | null) => string;
   safeExternal: (url: string | null) => string | null;
   profileContext?: () => ProfileEditorContext;
+  archiveConversation?: ArchiveAction;
 };
 
 function text(tag: string, value: string, ...classNames: string[]): HTMLElement {
@@ -164,6 +166,21 @@ export function createDetailContent(context: DetailContentContext) {
     output.dataset.outputTaskId = task.id; output.dataset.outputFull = "true";
     paintOutput(output, task.latest_agent_output ?? initialOutput(task.thread_id), true);
     field(container, "最新 Agent 输出", output);
+    if (task.state === "agent_idle") field(container, "运行时提示", "Agent 当前没有活跃 turn，可能需要人工恢复");
+    if (task.state === "agent_idle") {
+      const observed = task.latest_agent_output;
+      if (observed?.observed_at) field(container, "运行时观察时间", renderTimestamp(observed.observed_at));
+      if (observed?.runtime_turn_id) field(container, "观察 Turn", observed.runtime_turn_id);
+    }
+    const archive = task.conversation_resource;
+    if (archive && ["closed", "active", "archive_failed", "archive_unknown", "unarchive_failed", "unarchive_unknown"].includes(archive.status)) {
+      const presentation = archivePresentation(task);
+      field(container, "对话归档", presentation.label);
+      field(container, archive.status.endsWith("failed") || archive.status.endsWith("unknown") ? "对话归档问题" : "归档说明", presentation.description);
+      if (archive.last_attempt_at) field(container, "最近归档尝试", renderTimestamp(archive.last_attempt_at));
+      if (archive.evidence_ref) field(container, "归档证据", archive.evidence_ref);
+      field(container, "归档操作", renderArchiveAction(task, context.archiveConversation, data.profile_read_only === true));
+    } else if (archive?.status === "pending") field(container, "对话归档", "等待归档");
     field(container, "任务对话", task.thread_id ? link("打开对话", conversationUrl(task.thread_id)) : "尚未创建");
     const pr = context.safeExternal(task.pr?.url ?? null);
     if (pr) field(container, "子 PR", link("查看 PR", pr));

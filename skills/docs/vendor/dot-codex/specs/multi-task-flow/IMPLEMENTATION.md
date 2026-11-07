@@ -102,7 +102,7 @@
 - `codex-cli-create.ts` 使用独立参数数组、关闭 stdin、JSONL 身份持久化、工具调用拒绝、共享进程树监督与中止清理、回合完成和进程退出双门禁；只读控制面核验实际配置并命名，Git 核验 Codex 所有权与独立 checkout。
 - `desktop-handoff.ts` 生成带仓库、归属、范围、基线与验收的正式指令；`orchestrate.ts` 返回它，外部 CLI 不执行正式任务。
 - `prepareNativeNotification` 返回原生工具参数，持久 unknown attempt 排除并发和重放。native 回执必须双向匹配 attempt/provider，不能转换历史 provider attempt；ack 保留收件人权限。
-- `lifecycle-record` 对新 CLI dispatch 保存开发基线；任务与组 running 受 readiness 门禁，明确失败后重派只读取成功 attempt 的基线。创建参数首次绑定后不可覆盖；`creation_observations` 累积已知身份、资源与执行事实，failed 门禁独立于 transport。历史创建证据和历史在途锁继续适用。
+- `lifecycle-record` 对新 CLI dispatch 保存开发基线；任务与组 running 受 readiness 门禁，明确失败后重派只读取成功 attempt 的基线。创建参数首次绑定后不可覆盖；`creation_observations` 累积已知身份、资源与执行事实，failed 门禁独立于 transport。历史创建证据和历史在途锁继续适用。初始化后投影为 `agent_idle` 的任务仍须先通过基线门禁；原生通知领取遵守收件人归档保护，手动恢复后才可发送。
 - 兼容边界和停止后恢复见 `native-handoff-compatibility.json`；不运行真实账本迁移，不部署安装副本。
 
 ## 卡片资源信息

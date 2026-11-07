@@ -9,6 +9,7 @@
     "build": "bun run scripts/build.ts",
     "verify": "bun run test:all && bun run build",
     "demo:static": "bun run build && bun run scripts/demo-static.ts",
+    "preview:idle-archive": "bun run scripts/preview-source.ts --scenario agent-idle-archive",
     "preview:source": "bun run scripts/preview-source.ts",
     "demo:single-delivery-unit": "bun run build && bun run scripts/demo-static.ts --single-delivery-unit",
     "preview:single-delivery-unit": "bun run scripts/preview-source.ts --single-delivery-unit"

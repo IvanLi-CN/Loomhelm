@@ -10,11 +10,12 @@ function text(tag: string, value: string, ...classNames: string[]): HTMLElement 
 }
 
 function closeTooltips(except: HTMLElement | null = null): void {
-  for (const tooltip of document.querySelectorAll<HTMLElement>("[role=tooltip].dependency-tooltip.is-open")) {
+  for (const tooltip of document.querySelectorAll<HTMLElement>(".dependency-tooltip.is-open")) {
     const triggerId = tooltip.dataset.triggerId;
     if (except && (tooltip.contains(except) || (triggerId && document.getElementById(triggerId) === except))) continue;
     tooltip.classList.remove("is-open");
     tooltip.hidden = true;
+    if (triggerId) document.getElementById(triggerId)?.setAttribute("aria-expanded", "false");
   }
 }
 
@@ -45,17 +46,23 @@ function positionTooltip(trigger: HTMLElement, tooltip: HTMLElement): void {
   tooltip.style.top = `${Math.max(8, top)}px`;
 }
 
-export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label: string): HTMLElement {
+export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label: string, options: { interactive?: boolean } = {}): HTMLElement {
   installDocumentBinding();
   trigger.classList.add("dependency-tooltip-anchor");
   trigger.setAttribute("aria-label", label);
   const triggerId = `dependency-trigger-${++tooltipSerial}`;
   const tooltip = text("div", "", "dependency-tooltip");
   const tooltipId = `dependency-tooltip-${tooltipSerial}`;
-  trigger.id = triggerId;
+  trigger.id ||= triggerId;
   tooltip.id = tooltipId;
-  tooltip.dataset.triggerId = triggerId;
-  tooltip.setAttribute("role", "tooltip");
+  tooltip.dataset.triggerId = trigger.id;
+  tooltip.setAttribute("role", options.interactive ? "dialog" : "tooltip");
+  if (options.interactive) {
+    tooltip.setAttribute("aria-label", label);
+    trigger.setAttribute("aria-haspopup", "dialog");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.setAttribute("aria-controls", tooltipId);
+  }
   tooltip.hidden = true;
   tooltip.append(content);
   trigger.setAttribute("aria-describedby", tooltipId);
@@ -73,15 +80,18 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
   };
   const open = (): void => {
     cancelTimers();
+    if (!trigger.isConnected) return;
     closeTooltips(trigger);
     tooltip.hidden = false;
     tooltip.classList.add("is-open");
     positionTooltip(trigger, tooltip);
+    if (options.interactive) trigger.setAttribute("aria-expanded", "true");
   };
   const close = (): void => {
     cancelTimers();
     tooltip.classList.remove("is-open");
     tooltip.hidden = true;
+    if (options.interactive) trigger.setAttribute("aria-expanded", "false");
   };
   const scheduleClose = (): void => {
     if (closeTimer) clearTimeout(closeTimer);
@@ -111,10 +121,59 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
   });
   trigger.addEventListener("pointercancel", () => { pointerStart = null; cancelTimers(); });
   trigger.addEventListener("focus", () => { if (!touchModality) open(); });
+  if (options.interactive) trigger.addEventListener("click", event => {
+    event.stopPropagation();
+    open();
+  });
+  tooltip.addEventListener("click", event => event.stopPropagation());
+  tooltip.addEventListener("focusout", event => {
+    const next = event.relatedTarget as Node | null;
+    if (next !== trigger && !tooltip.contains(next)) close();
+  });
   trigger.addEventListener("blur", () => {
     window.setTimeout(() => {
-      if (document.activeElement !== trigger && !tooltip.matches(":hover")) close();
+      if (document.activeElement !== trigger && !tooltip.contains(document.activeElement) && !tooltip.matches(":hover")) close();
     }, 0);
   });
   return tooltip;
+}
+
+
+/** Bind plain hints to the same project tooltip used by timestamps/dependencies.
+ * Observe dynamic cards and text updates; remove portals when their controls leave.
+ */
+export function installTextTooltips(root: HTMLElement = document.body): () => void {
+  const bindings = new Map<HTMLElement, { tooltip: HTMLElement; content: HTMLElement }>();
+  const sync = (): void => {
+    for (const [trigger, { tooltip }] of bindings) {
+      if (!root.contains(trigger)) {
+        tooltip.remove();
+        bindings.delete(trigger);
+      }
+    }
+    for (const trigger of root.querySelectorAll<HTMLElement>("[data-tooltip]")) {
+      const label = trigger.dataset.tooltip ?? "";
+      const existing = bindings.get(trigger);
+      if (existing) {
+        if (existing.content.textContent !== label) existing.content.textContent = label;
+        continue;
+      }
+      const content = text("span", label);
+      const tooltip = attachTooltip(trigger, content, trigger.getAttribute("aria-label") ?? label);
+      tooltip.classList.add("control-tooltip");
+      root.append(tooltip);
+      bindings.set(trigger, { tooltip, content });
+    }
+  };
+  sync();
+  const observer = new window.MutationObserver(sync);
+  observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-tooltip"] });
+  return () => {
+    observer.disconnect();
+    for (const [trigger, { tooltip }] of bindings) {
+      if (trigger.getAttribute("aria-describedby") === tooltip.id) trigger.removeAttribute("aria-describedby");
+      tooltip.remove();
+    }
+    bindings.clear();
+  };
 }
