@@ -133,6 +133,24 @@ class BoundaryTests(unittest.TestCase):
             with patch('product.ROOT', root):
                 self.assertNotEqual(policy_hash(), before)
 
+    def test_inventory_rejects_a_different_build_run_or_attempt(self):
+        from assemble import assemble
+        from product import inventory
+        record = dict(frozen(),state='bound',build_source={'run_id':'101','attempt':'1'})
+        record['intent']['policy_hash'] = policy_hash()
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for name in contract()['artifacts']:
+                (directory/name).write_bytes(('original:'+name).encode())
+            assemble(directory,record)
+            path = directory/'release-manifest.json'
+            original = json.loads(path.read_text())
+            for field,value in (('build_run_id','102'),('build_attempt','2')):
+                manifest = dict(original,**{field:value})
+                path.write_text(json.dumps(manifest))
+                with self.subTest(field=field), self.assertRaisesRegex(ReleaseError,'original build claim'):
+                    inventory(directory,record)
+
     def test_stage_receipt_is_immutable_and_does_not_follow_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'receipt'

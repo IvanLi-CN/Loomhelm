@@ -11,6 +11,22 @@ from product import prerequisites
 
 
 class NativeGitHubTests(unittest.TestCase):
+    def test_ordinary_release_topic_refs_do_not_block_initialization(self):
+        api = GitHub('owner/repo')
+        for ref in ('refs/heads/th/release-prerequisite-followup','refs/heads/th/release-fix-abcdef012345','refs/heads/th/release-1.0.0-abc','refs/heads/th/release-01.0.0-abcdef012345'):
+            with self.subTest(ref=ref):
+                api.api = Mock(side_effect=[[],[{'ref':ref}]])
+                api.require_empty_release_history()
+
+    def test_exact_preparation_refs_and_product_history_still_block_initialization(self):
+        api = GitHub('owner/repo')
+        for version in ('1.0.0','1.2.0-rc.1','2.0.0-beta-with-hyphens.2'):
+            api.api = Mock(side_effect=[[],[{'ref':'refs/heads/th/release-'+version+'-abcdef012345'}]])
+            with self.subTest(version=version), self.assertRaises(ReleaseError):
+                api.require_empty_release_history()
+        api.api = Mock(return_value=[{'body':'Loomhelm release identity: occupied'}])
+        with self.assertRaises(ReleaseError):api.require_empty_release_history()
+
     def branch(self):
         return dict(name='main',protected=True,protection={'required_status_checks':dict(enforcement_level='everyone',contexts=self.protection()['requiredStatusCheckContexts'])})
 

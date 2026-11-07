@@ -3,10 +3,11 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
-from policy import ReleaseError
+from policy import ReleaseError, Version
 
 
 class GitHub:
@@ -66,7 +67,14 @@ class GitHub:
                 break
             page += 1
         refs = self.api('git/matching-refs/heads/th/release-')
-        if refs:
+        for ref in refs:
+            match = re.fullmatch(r'refs/heads/th/release-(.+)-[0-9a-f]{12}', ref['ref'])
+            if not match:
+                continue
+            try:
+                Version(match[1])
+            except ReleaseError:
+                continue
             raise ReleaseError('ledger missing but preparation refs exist; restore records, never bootstrap')
 
     def release(self, version):

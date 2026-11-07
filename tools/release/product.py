@@ -135,6 +135,9 @@ def inventory(directory, record):
         raise ReleaseError('PR fixtures cannot be published')
     if (manifest['version'],manifest['source_sha'],manifest['identity'],manifest['policy_hash']) != (record['version'],record['merge_sha'],record['id'],record['intent']['policy_hash']):
         raise ReleaseError('product manifest identity mismatch')
+    source = record.get('build_source',{})
+    if (manifest.get('build_run_id'),manifest.get('build_attempt')) != (source.get('run_id'),source.get('attempt')):
+        raise ReleaseError('product manifest differs from the original build claim')
     result = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     if manifest['artifacts'] != {k:v for k,v in result.items() if k not in ('release-manifest.json','SHA256SUMS')}:
         raise ReleaseError('product digest drift')
@@ -146,8 +149,11 @@ def inventory(directory, record):
 
 def publish(api, ledger, record, directory):
     if record['state'] == 'bound':
+        source = record.get('build_source') or {}
+        if set(source) != {'run_id','attempt'} or any(not isinstance(v,str) or not v.isdigit() for v in source.values()):
+            raise ReleaseError('publication requires the durable original build claim')
         frozen = inventory(directory,record)
-        transition(record,'staged',artifacts=frozen,build_run_id=record.get('build_source',{}).get('run_id',os.environ.get('GITHUB_RUN_ID')),inventory_run_id=os.environ.get('GITHUB_RUN_ID'))
+        transition(record,'staged',artifacts=frozen,build_run_id=source['run_id'],inventory_run_id=os.environ.get('GITHUB_RUN_ID'))
         ledger.append(ledger.state)
     if record['state'] not in ('staged','frozen','completed'):
         raise ReleaseError('identity is not frozen')
