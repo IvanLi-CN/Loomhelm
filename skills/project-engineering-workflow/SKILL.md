@@ -5,7 +5,7 @@ description: "Single source of truth for software delivery flow."
 
 # Project engineering workflow
 
-This is the deep shared module for the direct stages of `normal`, `fast-track`, and `local-merge`. Flow entry skills provide authorization and stop conditions; this skill owns shared stages. `multi-task-flow` is also an active top-level route, but it enters this module only for a task-local direct PR. The parent coordinator owns the task graph, ledger, parent PR, and group closeout.
+This is the deep shared module for the direct stages of `normal`, `fast-track`, and `local-merge`. Flow entry skills provide authorization and stop conditions; this skill owns shared stages. `multi-task-flow` is also an active top-level route, but it enters this module only for a task-local direct PR. The 主 Agent（main Agent） owns the task graph, ledger, parent PR, and delivery-unit closeout.
 
 ## Interface
 

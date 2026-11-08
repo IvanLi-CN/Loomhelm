@@ -3,7 +3,7 @@
 ## Summary
 
 - 固定一个由三个独立任务组成的依赖图，验证 `multi-task-flow` 作为顶层 flow_type 时保留任务边界、依赖和按范围验收事实。
-- 任务内部的 direct PR 收口由运行时 task agent 进入 `$fast-flow`，不改变本计划的顶层 flow_type。
+- 任务内部的 direct PR 收口由运行时任务 Agent（Task Agent）进入 `$fast-flow`，不改变本计划的顶层 flow_type。
 
 ## Flow Decision
 
