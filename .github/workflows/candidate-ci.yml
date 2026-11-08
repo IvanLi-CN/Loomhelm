@@ -8,6 +8,11 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      cache_state:
+        type: choice
+        options: [warm, partial]
+        default: warm
 
 permissions:
   contents: read
@@ -17,7 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  CANDIDATE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+  CANDIDATE_SOURCE_SHA: 49cfcd1bc2d88d761b3d0a0a29d1000eff1be853
 
 jobs:
   quality-gates:
@@ -48,10 +53,15 @@ jobs:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Isolate control cache key
+        run: |
+          mkdir -p .tmp/ci-cache-isolation
+          echo 'loomhelm-ci-performance-v2-control-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
+          cache-dependency-path: .tmp/ci-cache-isolation/key
           cache: true
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
@@ -115,10 +125,15 @@ jobs:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Isolate control cache key
+        run: |
+          mkdir -p .tmp/ci-cache-isolation
+          echo 'loomhelm-ci-performance-v2-control-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
+          cache-dependency-path: .tmp/ci-cache-isolation/key
           cache: true
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
@@ -208,10 +223,15 @@ jobs:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Isolate control cache key
+        run: |
+          mkdir -p .tmp/ci-cache-isolation
+          echo 'loomhelm-ci-performance-v2-control-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
+          cache-dependency-path: .tmp/ci-cache-isolation/key
           cache: true
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
@@ -255,10 +275,15 @@ jobs:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Isolate control cache key
+        run: |
+          mkdir -p .tmp/ci-cache-isolation
+          echo 'loomhelm-ci-performance-v2-control-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
+          cache-dependency-path: .tmp/ci-cache-isolation/key
           cache: true
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
@@ -295,9 +320,14 @@ jobs:
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
+      - name: Isolate control cache key
+        run: |
+          mkdir -p .tmp/ci-cache-isolation
+          echo 'loomhelm-ci-performance-v2-control-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
           go-version-file: go.mod
+          cache-dependency-path: .tmp/ci-cache-isolation/key
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
         with:
           bun-version: 1.4.4
