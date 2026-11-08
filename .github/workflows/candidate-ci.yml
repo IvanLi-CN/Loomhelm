@@ -8,6 +8,11 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      cache_state:
+        type: choice
+        options: [warm, partial]
+        default: warm
 
 permissions:
   contents: read
@@ -17,7 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  CANDIDATE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+  CANDIDATE_SOURCE_SHA: a4150938677cc316428e2471ae5dc2963e596d3c
 
 jobs:
   quality-gates:
@@ -51,7 +56,7 @@ jobs:
       - name: Isolate baseline cache key
         run: |
           mkdir -p .tmp/ci-cache-isolation
-          echo loomhelm-ci-performance-199a0d2-baseline > .tmp/ci-cache-isolation/key
+          echo 'loomhelm-ci-performance-199a0d2-baseline-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -123,7 +128,7 @@ jobs:
       - name: Isolate baseline cache key
         run: |
           mkdir -p .tmp/ci-cache-isolation
-          echo loomhelm-ci-performance-199a0d2-baseline > .tmp/ci-cache-isolation/key
+          echo 'loomhelm-ci-performance-199a0d2-baseline-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -221,7 +226,7 @@ jobs:
       - name: Isolate baseline cache key
         run: |
           mkdir -p .tmp/ci-cache-isolation
-          echo loomhelm-ci-performance-199a0d2-baseline > .tmp/ci-cache-isolation/key
+          echo 'loomhelm-ci-performance-199a0d2-baseline-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -273,7 +278,7 @@ jobs:
       - name: Isolate baseline cache key
         run: |
           mkdir -p .tmp/ci-cache-isolation
-          echo loomhelm-ci-performance-199a0d2-baseline > .tmp/ci-cache-isolation/key
+          echo 'loomhelm-ci-performance-199a0d2-baseline-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -318,7 +323,7 @@ jobs:
       - name: Isolate baseline cache key
         run: |
           mkdir -p .tmp/ci-cache-isolation
-          echo loomhelm-ci-performance-199a0d2-baseline > .tmp/ci-cache-isolation/key
+          echo 'loomhelm-ci-performance-199a0d2-baseline-${{ inputs.cache_state }}' > .tmp/ci-cache-isolation/key
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
           go-version-file: go.mod
