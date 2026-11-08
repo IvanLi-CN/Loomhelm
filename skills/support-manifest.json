@@ -36,6 +36,7 @@
   "skills/multi-task-flow/web/unbound-pr-hint.ts",
   "skills/bin/native-tests/core/ffi_paths.test.ts",
   "skills/multi-task-flow/tests/conversation-archive.test.ts",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
   "skills/multi-task-flow/tests/service-lifecycle.test.ts",
   "skills/multi-task-flow/scripts/conversation-eligibility.ts",
   "skills/multi-task-flow/scripts/demo-archive.ts",

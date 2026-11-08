@@ -68,3 +68,19 @@ test("allows same-epoch catch-up and a restart first discovered by a fresh GET",
   expect(store.accept(snapshot("next", 1), "first")?.output_epoch).toBe("next");
   expect(store.accept(snapshot("first", 100))?.output_epoch).toBe("next");
 });
+
+
+test("output summaries, full messages and empty states have no text tooltip", () => {
+  for (const projection of [available("answer"), initialOutput(null), initialOutput("thread")]) {
+    const summary = renderTaskOutput(null, projection, "a");
+    const detail = document.createElement("div"); paintOutput(detail, projection, true);
+    for (const node of [summary, detail]) {
+      expect(node.hasAttribute("data-tooltip")).toBe(false);
+      expect(node.hasAttribute("title")).toBe(false);
+      expect(node.hasAttribute("aria-label")).toBe(true);
+    }
+    paintOutput(summary, available("streamed update"));
+    expect(summary.hasAttribute("data-tooltip")).toBe(false);
+  }
+  expect(renderTaskOutput("legacy output").hasAttribute("data-tooltip")).toBe(false);
+});

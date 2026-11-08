@@ -7,16 +7,20 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
+from http.client import IncompleteRead
 import io
 import json
 import os
 from pathlib import Path
 import platform
+import socket
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
+from urllib.error import HTTPError, URLError
 import urllib.request
 import zipfile
 
@@ -25,6 +29,9 @@ MANIFEST = ASSETS / "toolchain.json"
 CACHE = Path(".tmp/markdown-tools")
 HOOK_MARKER = "# markdown-style-managed-hook"
 GIT_COMPAT = ASSETS / "scripts/git-compat.py"
+RETRYABLE_HTTP_STATUS = frozenset((408, 429, 500, 502, 503, 504))
+DOWNLOAD_RETRY_DELAYS = (1, 2, 4, 8)
+DOWNLOAD_ATTEMPTS = len(DOWNLOAD_RETRY_DELAYS) + 1
 
 
 class ToolError(Exception):
@@ -77,9 +84,26 @@ def expected_hash(resource: dict) -> str:
     return resource.get("binary_sha256", resource["sha256"])
 
 
-def download(resource: dict) -> bytes:
-    with urllib.request.urlopen(resource["url"], timeout=30) as response:
-        archive = response.read()
+def download(resource: dict, *, opener=None, sleeper=None) -> bytes:
+    opener = urllib.request.urlopen if opener is None else opener
+    sleeper = time.sleep if sleeper is None else sleeper
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with opener(resource["url"], timeout=30) as response:
+                archive = response.read()
+            break
+        except HTTPError as error:
+            try:
+                if error.code not in RETRYABLE_HTTP_STATUS or attempt == DOWNLOAD_ATTEMPTS:
+                    noun = "attempt" if attempt == 1 else "attempts"
+                    raise ToolError(f"Official download failed after {attempt} {noun}: {error}") from error
+            finally:
+                error.close()
+        except (IncompleteRead, URLError, TimeoutError, socket.timeout) as error:
+            if attempt == DOWNLOAD_ATTEMPTS:
+                noun = "attempt" if attempt == 1 else "attempts"
+                raise ToolError(f"Official download failed after {attempt} {noun}: {error}") from error
+        sleeper(DOWNLOAD_RETRY_DELAYS[attempt - 1])
     if digest(archive) != resource["sha256"]:
         raise ToolError("Official download SHA256 mismatch; no tool was installed")
     if resource.get("format") == "zip":
@@ -162,27 +186,28 @@ def validate_config(root: Path) -> None:
 
 
 def install_hooks(root: Path) -> None:
-    configured = subprocess.run(["git", "config", "--get", "core.hooksPath"], cwd=root, capture_output=True)
-    if configured.returncode == 0:
-        raise ToolError("Existing core.hooksPath is preserved; integrate the Markdown command with that hook manager")
-    hook = Path(os.fsdecode(git(root, "rev-parse", "--git-path", "hooks/pre-commit")).strip())
-    if not hook.is_absolute():
-        hook = root / hook
-    if hook.is_symlink():
-        raise ToolError("Existing pre-commit symlink is preserved; integrate the Markdown command manually")
-    if hook.exists():
-        if HOOK_MARKER in hook.read_text(encoding="utf-8"):
-            print("Repository Markdown hook is already installed.")
-            return
-        raise ToolError("Existing pre-commit hook is preserved; integrate the Markdown command manually")
-    if not (root / "lefthook.yml").is_file():
-        raise ToolError("Add the reviewed lefthook.yml before installing hooks")
-    ready(root)
-    result = subprocess.run([str(root / CACHE / "lefthook"), "install", "pre-commit"], cwd=root)
-    if result.returncode:
-        raise ToolError("Lefthook installation failed; existing hooks were not forcibly replaced")
-    with hook.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n{HOOK_MARKER}\n")
+    with pre_commit_lock(root):
+        configured = subprocess.run(["git", "config", "--get", "core.hooksPath"], cwd=root, capture_output=True)
+        if configured.returncode == 0:
+            raise ToolError("Existing core.hooksPath is preserved; integrate the Markdown command with that hook manager")
+        hook = Path(os.fsdecode(git(root, "rev-parse", "--git-path", "hooks/pre-commit")).strip())
+        if not hook.is_absolute():
+            hook = root / hook
+        if hook.is_symlink():
+            raise ToolError("Existing pre-commit symlink is preserved; integrate the Markdown command manually")
+        if hook.exists():
+            if HOOK_MARKER in hook.read_text(encoding="utf-8"):
+                print("Repository Markdown hook is already installed.")
+                return
+            raise ToolError("Existing pre-commit hook is preserved; integrate the Markdown command manually")
+        if not (root / "lefthook.yml").is_file():
+            raise ToolError("Add the reviewed lefthook.yml before installing hooks")
+        ready(root)
+        result = subprocess.run([str(root / CACHE / "lefthook"), "install", "pre-commit"], cwd=root)
+        if result.returncode:
+            raise ToolError("Lefthook installation failed; existing hooks were not forcibly replaced")
+        with hook.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n{HOOK_MARKER}\n")
 
 
 def selected_files(root: Path, staged: bool) -> list[str]:
