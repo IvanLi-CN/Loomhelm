@@ -13895,7 +13895,7 @@
       "path": "skills/multi-task-flow/SKILL.md",
       "sourceBlob": "708e77c1572d4c7271e294984151eae1e11c0894",
       "sourceSha256": "e3ec7fceef4c5cbd8650e17603ed261e59fc06dafa9d18c85a0e2966b0d9a298",
-      "installedSha256": "ad37784e76e57fc9215387ee22cf7921b0f13a45c52a2b949be19826be916d77",
+      "installedSha256": "3f167a846d35dbdfee4e43f30017d29f0d26df307edc2ec3e02d497d7637b6f1",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -13919,7 +13919,7 @@
       "path": "skills/multi-task-flow/examples/README.md",
       "sourceBlob": "06949191536d90dac154ea89d79bab114d5bfad5",
       "sourceSha256": "6b2abefab0dd151277f5590d7fc0fded0107f8e414e5de45d732e0815932e940",
-      "installedSha256": "4a0d07964cf0d278dff0ef2dce001a8832f7ef957463c0ceb3ba05e718f8d85a",
+      "installedSha256": "1850cedd1da8b11c993e6fe403058336e58c5865cb64cc8dc5a85879affe2391",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
