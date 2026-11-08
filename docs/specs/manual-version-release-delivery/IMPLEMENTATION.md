@@ -18,6 +18,8 @@ Implementation: 统一合同及原生包验证入口已由 PR #77 合并，合�
 
 缺失 ledger 时只将包含完整正式版或预发布版本及身份后缀的准备分支视为发布历史，普通开发分支不会阻断首发。正式发布从 bound 进入 staged 前必须已有持久构建 claim，manifest 的 run 与 attempt 必须与该来源一致；缺失或不符在上传前拒绝。
 
+准备阶段的 reconcile 以实际 diff、owner、理由和证据核验原发版意图，签名追加 preparation_revisions，不覆盖原始 reservation。main 的历史 VERSION 和已合并 PR 决定版本是否固定，不把缺失 bound 回执或 main 后来换版本当作可换源码的许可。bind 和 Release 适配读取最新已核验准备修订；临时 Git 历史测试覆盖重复接续、原身份恢复、意图外拒绝、投影字节及主干绑定边界。
+
 ## Verification
 
 - `python3 -m unittest discover -s tools/release -p 'test_*.py'`

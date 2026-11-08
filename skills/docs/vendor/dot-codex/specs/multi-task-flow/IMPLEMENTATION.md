@@ -31,6 +31,8 @@
 
 ## Implementation Coverage
 
+- REQ-ORCH-012 的浏览器交付指令明确覆盖 ChatGPT Desktop 与 Codex Desktop，先发现宿主能力，再验证渲染页面中的 run ID／revision；能力缺失、登录失败与升级授权分别处理。此项为 Agent 指令修正，不改变 viewer、账本或服务生命周期。
+
 - REQ-ORCH-015：bootstrap 的 owner 通过 run 主线程解析；schema 完整账本校验、运行时生命周期/合并/收口、计划身份保护及 dashboard readiness 使用相同边界。legacy 字段默认 regular/group，不自动转换历史运行；当前未提供 group 原地迁移命令。
 
 - 合成界面证据通过 `bun skills/multi-task-flow/scripts/demo-static.ts --bootstrap` 生成，仅修改展示 fixture，不转换真实账本。[交付单元类型展示](./assets/bootstrap-ownership.png) 对照首个 bootstrap 与后续 regular 卡片。
