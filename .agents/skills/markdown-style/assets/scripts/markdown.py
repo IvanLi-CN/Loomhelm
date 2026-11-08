@@ -7,6 +7,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
+from http.client import IncompleteRead
 import io
 import json
 import os
@@ -28,7 +29,7 @@ CACHE = Path(".tmp/markdown-tools")
 HOOK_MARKER = "# markdown-style-managed-hook"
 GIT_COMPAT = ASSETS / "scripts/git-compat.py"
 RETRYABLE_HTTP_STATUS = frozenset((408, 429, 500, 502, 503, 504))
-DOWNLOAD_RETRY_DELAYS = (1, 2)
+DOWNLOAD_RETRY_DELAYS = (1, 2, 4, 8)
 DOWNLOAD_ATTEMPTS = len(DOWNLOAD_RETRY_DELAYS) + 1
 
 
@@ -97,7 +98,7 @@ def download(resource: dict, *, opener=None, sleeper=None) -> bytes:
                     raise ToolError(f"Official download failed after {attempt} {noun}: {error}") from error
             finally:
                 error.close()
-        except (URLError, TimeoutError) as error:
+        except (IncompleteRead, URLError, TimeoutError) as error:
             if attempt == DOWNLOAD_ATTEMPTS:
                 noun = "attempt" if attempt == 1 else "attempts"
                 raise ToolError(f"Official download failed after {attempt} {noun}: {error}") from error

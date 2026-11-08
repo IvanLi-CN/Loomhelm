@@ -1,6 +1,7 @@
 """Exercise pinned Markdown download retries and fail-closed validation."""
 
 import hashlib
+from http.client import IncompleteRead
 import importlib.util
 import io
 from pathlib import Path
@@ -56,7 +57,7 @@ class MarkdownDownloadTests(unittest.TestCase):
 
     def test_transient_http_failure_is_retried(self):
         payload = b"verified tool archive"
-        outcomes = [self.http_error(504), Response(payload)]
+        outcomes = [self.http_error(504) for _ in range(4)] + [Response(payload)]
         calls = []
         sleeps = []
 
@@ -74,8 +75,8 @@ class MarkdownDownloadTests(unittest.TestCase):
             MARKDOWN.download(self.resource(payload), opener=opener, sleeper=sleeps.append),
             payload,
         )
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(sleeps, [1])
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(sleeps, [1, 2, 4, 8])
 
     def test_exhausted_transient_failure_propagates(self):
         calls = []
@@ -84,9 +85,9 @@ class MarkdownDownloadTests(unittest.TestCase):
             calls.append((url, timeout))
             self.raise_http_error(504)
 
-        with self.assertRaisesRegex(MARKDOWN.ToolError, r"after 3 attempts"):
+        with self.assertRaisesRegex(MARKDOWN.ToolError, r"after 5 attempts"):
             MARKDOWN.download(self.resource(b"never received"), opener=opener, sleeper=lambda _: None)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 5)
 
     def test_permanent_http_failure_is_not_retried(self):
         calls = []
@@ -98,6 +99,24 @@ class MarkdownDownloadTests(unittest.TestCase):
         with self.assertRaisesRegex(MARKDOWN.ToolError, r"HTTP Error 404"):
             MARKDOWN.download(self.resource(b"not found"), opener=opener, sleeper=lambda _: None)
         self.assertEqual(len(calls), 1)
+
+    def test_truncated_response_is_retried(self):
+        payload = b"verified after truncation"
+        outcomes = [IncompleteRead(b"partial"), Response(payload)]
+        calls = []
+
+        def opener(url, timeout):
+            calls.append((url, timeout))
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        self.assertEqual(
+            MARKDOWN.download(self.resource(payload), opener=opener, sleeper=lambda _: None),
+            payload,
+        )
+        self.assertEqual(len(calls), 2)
 
     def test_archive_hash_mismatch_remains_fail_closed(self):
         payload = b"unexpected archive"
