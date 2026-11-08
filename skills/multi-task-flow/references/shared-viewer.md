@@ -44,3 +44,7 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 安全顺序是先显式升级至同时可读源/目标合同的 viewer，再批准单 run 合同迁移，再按需单独批准完整 profile 迁移。服务未安装或不支持目标时 apply 拒绝；不为历史展示补造模型或完成事实。维护锁、run 锁覆盖复核和原子提交，完整旧文件写入 `ledger.maintenance-<request_id>.json`，真实维护身份和批准引用保留于账本 request result。每次变更 revision 增加 1；同请求同内容重放，异内容拒绝。
 
 备份后中断可用相同请求恢复，提交后响应丢失可安全重放。冲突保留双方证据，不覆盖备份或账本。代码健康失败恢复原构建和租约期限；新数据不被旧备份覆盖。迁移后旧构建不可读时 rollback 拒绝，采用兼容过渡构建或向前修复。合作锁不能防止同用户手工改文件或不遵守协议的旧写入器，主人必须确认这些写入已暂停。
+
+## 停服诊断
+
+`viewer.jsonl` 中 `stopping` 记录关闭入口，`stopped` 记录完成；`stop_started_at` 和 `stop_completed_at` 分别表示两个阶段。原因区分 `SIGTERM`、`SIGINT`、`leases_expired`、`lease_state_error`、`registry_heartbeat_error`、`startup_error` 和 `requested`。旧构建的 `signal` 也可能来自内部异常，不能据此推断 OS 信号或发送者。注册表锁超时以固定错误码 `REGISTRY_LOCK_TIMEOUT` 记录：前两次失败保留监听，第三次关闭；成功心跳产生恢复事件并清零。其他未知错误及所有权变化立即关闭。日志不输出异常消息、路径或凭据，诊断写入失败只输出固定提示。
