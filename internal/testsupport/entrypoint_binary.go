@@ -55,13 +55,15 @@ func (b *EntrypointBinary) Path(t testing.TB) string {
 }
 
 // Run keeps the binary alive through every test and its cleanup, then removes
-// only this fixture's temporary directory. Each go test invocation owns a new
-// fixture, including the normal, race and shuffled verification rounds.
-func (b *EntrypointBinary) Run(m *testing.M) int {
+// only the fixtures' temporary directories. Each go test invocation owns new
+// fixtures, including the normal, race and shuffled verification rounds.
+func (b *EntrypointBinary) Run(m *testing.M, companions ...*EntrypointBinary) int {
 	code := m.Run()
-	if err := b.cleanup(); err != nil {
-		fmt.Fprintf(os.Stderr, "clean up entrypoint binary: %v\n", err)
-		return 1
+	for _, binary := range append([]*EntrypointBinary{b}, companions...) {
+		if err := binary.cleanup(); err != nil {
+			fmt.Fprintf(os.Stderr, "clean up entrypoint binary: %v\n", err)
+			code = 1
+		}
 	}
 	return code
 }

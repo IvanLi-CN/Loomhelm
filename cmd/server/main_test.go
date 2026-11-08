@@ -20,9 +20,10 @@ import (
 )
 
 var serverEntrypoint = testsupport.NewEntrypointBinary(repositoryRoot(), "./cmd/server")
+var workerEntrypoint = testsupport.NewEntrypointBinary(repositoryRoot(), "./cmd/worker")
 
 func TestMain(m *testing.M) {
-	os.Exit(serverEntrypoint.Run(m))
+	os.Exit(serverEntrypoint.Run(m, workerEntrypoint))
 }
 
 func TestServerEntrypointExitsOnSignal(t *testing.T) {
