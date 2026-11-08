@@ -11,6 +11,8 @@
 
 输出正文、空状态、任务与交付单元标题、进度文字已移除通用文字 tooltip 绑定；对话与 PR 图标仅使用专用资源浮层。通用文字提示扫描仅接受显式标记的图标按钮或图标链接。UI 回归覆盖动态输出、空状态、普通文字拒绝绑定及网格／看板卡片，保留可访问名称与既有依赖、时间提示。
 
+分发清单同步绑定整改后的源码、测试、规范与截图摘要，确保 TypeScript 客户端打包携带同一实现。
+
 ## Shared Viewer Coverage
 
 - User-root paths, explicit build/API/frontend/ledger compatibility and isolated profiles.

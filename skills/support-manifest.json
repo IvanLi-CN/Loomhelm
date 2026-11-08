@@ -35,5 +35,6 @@
   "skills/multi-task-flow/web/resource-popover.ts",
   "skills/multi-task-flow/web/unbound-pr-hint.ts",
   "skills/bin/native-tests/core/ffi_paths.test.ts",
-  "skills/multi-task-flow/tests/conversation-archive.test.ts"
+  "skills/multi-task-flow/tests/conversation-archive.test.ts",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png"
 ]
