@@ -8,6 +8,11 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      cache_state:
+        type: choice
+        options: [warm, partial]
+        default: warm
 
 permissions:
   contents: read
@@ -17,7 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  CANDIDATE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+  CANDIDATE_SOURCE_SHA: e9a996e2005a7b86850520b58e421d29c865f0f0
 
 jobs:
   quality-gates:
@@ -122,6 +127,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Simulate build-input cache invalidation
+        if: inputs.cache_state == 'partial'
+        run: |
+          mkdir -p .tmp/ci-performance
+          echo '// cache-key-only diagnostic input' > .tmp/ci-performance/invalidate.go
       - name: Restore explicit Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -224,6 +234,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Simulate build-input cache invalidation
+        if: inputs.cache_state == 'partial'
+        run: |
+          mkdir -p .tmp/ci-performance
+          echo '// cache-key-only diagnostic input' > .tmp/ci-performance/invalidate.go
       - name: Restore explicit Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -298,6 +313,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Simulate build-input cache invalidation
+        if: inputs.cache_state == 'partial'
+        run: |
+          mkdir -p .tmp/ci-performance
+          echo '// cache-key-only diagnostic input' > .tmp/ci-performance/invalidate.go
       - name: Restore explicit Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -341,6 +361,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Simulate build-input cache invalidation
+        if: inputs.cache_state == 'partial'
+        run: |
+          mkdir -p .tmp/ci-performance
+          echo '// cache-key-only diagnostic input' > .tmp/ci-performance/invalidate.go
       - name: Restore explicit Go caches
         uses: ./.github/actions/go-cache
         with:
