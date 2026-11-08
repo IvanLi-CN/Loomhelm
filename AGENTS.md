@@ -30,6 +30,7 @@ Business feature implementation and public business contract finalization requir
 ## Verification and runtime
 
 - Use a session-owned Agent VM for Linux, Docker/Compose, image builds, integration/E2E and heavy validation. Local Docker is disabled. Follow the installed agent-vm protocol and lease contract; each task session owns its own VM.
+- Multi-task-flow dashboard delivery and inspection use the current host’s available built-in browser first, including ChatGPT Desktop and Codex Desktop. This specific route overrides the generic ego-browser preference for this dashboard only; follow `skills/multi-task-flow/SKILL.md` for capability checks, fallback and delivery verification.
 - Lease and register ports before starting long-lived local services. Never reuse or stop an unrelated listener.
 - UI components and reusable states require Storybook coverage; full-page evidence prefers a deterministic, login-free `ui_demo`. Follow ui-visual-evidence for controlled capture, immutable chat snapshots and owner confirmation. Real-program screenshots require explicit target and scope authorization.
 - Codex verification uses disposable test directories and sessions. Keep Codex credentials on the host. Do not equate reading history, resuming a copy or opening another process with controlling an existing active desktop session.
