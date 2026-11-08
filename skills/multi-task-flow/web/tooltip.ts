@@ -144,15 +144,30 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
  * Observe dynamic controls and text updates; remove portals when their controls leave.
  */
 export function installTextTooltips(root: HTMLElement = document.body): () => void {
-  const bindings = new Map<HTMLElement, { tooltip: HTMLElement; content: HTMLElement }>();
+  type Binding = {
+    tooltip: HTMLElement;
+    content: HTMLElement;
+    previousAriaDescribedBy: string | null;
+    hadAnchorClass: boolean;
+  };
+  const bindings = new Map<HTMLElement, Binding>();
+  const removeBinding = (trigger: HTMLElement, binding: Binding): void => {
+    if (trigger.getAttribute("aria-describedby") === binding.tooltip.id) {
+      if (binding.previousAriaDescribedBy === null) trigger.removeAttribute("aria-describedby");
+      else trigger.setAttribute("aria-describedby", binding.previousAriaDescribedBy);
+    }
+    if (!binding.hadAnchorClass) trigger.classList.remove("dependency-tooltip-anchor");
+    binding.tooltip.remove();
+  };
   const sync = (): void => {
-    for (const [trigger, { tooltip }] of bindings) {
-      if (!root.contains(trigger)) {
-        tooltip.remove();
+    const eligible = new Set(root.querySelectorAll<HTMLElement>("button.icon-button[data-tooltip], a.icon-button[data-tooltip], a.brand-mark[data-tooltip]"));
+    for (const [trigger, binding] of bindings) {
+      if (!root.contains(trigger) || !eligible.has(trigger)) {
+        removeBinding(trigger, binding);
         bindings.delete(trigger);
       }
     }
-    for (const trigger of root.querySelectorAll<HTMLElement>("button.icon-button[data-tooltip], a.icon-button[data-tooltip], a.brand-mark[data-tooltip]")) {
+    for (const trigger of eligible) {
       const label = trigger.dataset.tooltip ?? "";
       const existing = bindings.get(trigger);
       if (existing) {
@@ -160,20 +175,21 @@ export function installTextTooltips(root: HTMLElement = document.body): () => vo
         continue;
       }
       const content = text("span", label);
+      const previousAriaDescribedBy = trigger.getAttribute("aria-describedby");
+      const hadAnchorClass = trigger.classList.contains("dependency-tooltip-anchor");
       const tooltip = attachTooltip(trigger, content, trigger.getAttribute("aria-label") ?? label);
       tooltip.classList.add("control-tooltip");
       root.append(tooltip);
-      bindings.set(trigger, { tooltip, content });
+      bindings.set(trigger, { tooltip, content, previousAriaDescribedBy, hadAnchorClass });
     }
   };
   sync();
   const observer = new window.MutationObserver(sync);
-  observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-tooltip"] });
+  observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "data-tooltip"] });
   return () => {
     observer.disconnect();
-    for (const [trigger, { tooltip }] of bindings) {
-      if (trigger.getAttribute("aria-describedby") === tooltip.id) trigger.removeAttribute("aria-describedby");
-      tooltip.remove();
+    for (const [trigger, binding] of bindings) {
+      removeBinding(trigger, binding);
     }
     bindings.clear();
   };

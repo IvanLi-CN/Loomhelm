@@ -110,3 +110,25 @@ test("keeps the explicit brand mark hint", () => {
 
   dispose();
 });
+
+test("cleans up a control when its tooltip eligibility is removed", async () => {
+  const button = document.createElement("button");
+  button.className = "icon-button";
+  button.dataset.tooltip = "放大";
+  document.body.append(button);
+  const dispose = installTextTooltips();
+  try {
+    button.focus();
+    expect(button.classList.contains("dependency-tooltip-anchor")).toBe(true);
+    expect(button.hasAttribute("aria-describedby")).toBe(true);
+    button.removeAttribute("data-tooltip");
+    await pause(10);
+    expect(document.querySelector(".control-tooltip")).toBeNull();
+    expect(button.classList.contains("dependency-tooltip-anchor")).toBe(false);
+    expect(button.hasAttribute("aria-describedby")).toBe(false);
+    button.dataset.tooltip = "再次显示";
+    button.classList.remove("icon-button");
+    await pause(10);
+    expect(document.querySelector(".control-tooltip")).toBeNull();
+  } finally { dispose(); }
+});

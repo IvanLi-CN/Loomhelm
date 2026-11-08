@@ -186,27 +186,28 @@ def validate_config(root: Path) -> None:
 
 
 def install_hooks(root: Path) -> None:
-    configured = subprocess.run(["git", "config", "--get", "core.hooksPath"], cwd=root, capture_output=True)
-    if configured.returncode == 0:
-        raise ToolError("Existing core.hooksPath is preserved; integrate the Markdown command with that hook manager")
-    hook = Path(os.fsdecode(git(root, "rev-parse", "--git-path", "hooks/pre-commit")).strip())
-    if not hook.is_absolute():
-        hook = root / hook
-    if hook.is_symlink():
-        raise ToolError("Existing pre-commit symlink is preserved; integrate the Markdown command manually")
-    if hook.exists():
-        if HOOK_MARKER in hook.read_text(encoding="utf-8"):
-            print("Repository Markdown hook is already installed.")
-            return
-        raise ToolError("Existing pre-commit hook is preserved; integrate the Markdown command manually")
-    if not (root / "lefthook.yml").is_file():
-        raise ToolError("Add the reviewed lefthook.yml before installing hooks")
-    ready(root)
-    result = subprocess.run([str(root / CACHE / "lefthook"), "install", "pre-commit"], cwd=root)
-    if result.returncode:
-        raise ToolError("Lefthook installation failed; existing hooks were not forcibly replaced")
-    with hook.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n{HOOK_MARKER}\n")
+    with pre_commit_lock(root):
+        configured = subprocess.run(["git", "config", "--get", "core.hooksPath"], cwd=root, capture_output=True)
+        if configured.returncode == 0:
+            raise ToolError("Existing core.hooksPath is preserved; integrate the Markdown command with that hook manager")
+        hook = Path(os.fsdecode(git(root, "rev-parse", "--git-path", "hooks/pre-commit")).strip())
+        if not hook.is_absolute():
+            hook = root / hook
+        if hook.is_symlink():
+            raise ToolError("Existing pre-commit symlink is preserved; integrate the Markdown command manually")
+        if hook.exists():
+            if HOOK_MARKER in hook.read_text(encoding="utf-8"):
+                print("Repository Markdown hook is already installed.")
+                return
+            raise ToolError("Existing pre-commit hook is preserved; integrate the Markdown command manually")
+        if not (root / "lefthook.yml").is_file():
+            raise ToolError("Add the reviewed lefthook.yml before installing hooks")
+        ready(root)
+        result = subprocess.run([str(root / CACHE / "lefthook"), "install", "pre-commit"], cwd=root)
+        if result.returncode:
+            raise ToolError("Lefthook installation failed; existing hooks were not forcibly replaced")
+        with hook.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n{HOOK_MARKER}\n")
 
 
 def selected_files(root: Path, staged: bool) -> list[str]:
