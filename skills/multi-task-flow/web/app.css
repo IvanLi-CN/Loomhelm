@@ -640,3 +640,9 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 
 .detail-conversation-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .detail-conversation-notice { margin: 6px 0 0; color: var(--warning); font-size: 12px; }
+.task-context-menu, .task-context-submenu { position: fixed; z-index: 10000; min-width: 220px; max-width: min(460px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow-y: auto; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface, var(--panel)); color: var(--text); box-shadow: 0 12px 32px #0004; }
+.task-context-menu button { display: flex; gap: 16px; align-items: center; justify-content: space-between; width: 100%; padding: 9px 12px; border: 0; border-radius: 4px; background: transparent; color: inherit; text-align: left; font: inherit; overflow-wrap: anywhere; cursor: pointer; }
+.task-context-menu button:hover, .task-context-menu button:focus-visible { background: var(--control); outline: 2px solid var(--accent); outline-offset: -2px; }
+.task-context-menu button[aria-disabled=true] { color: var(--muted); cursor: default; }
+.task-context-menu small { font-size: 11px; }
+.task-copy-feedback { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 10001; padding: 10px 16px; background: var(--raised); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 20px #0003; }

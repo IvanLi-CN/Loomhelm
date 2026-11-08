@@ -5,7 +5,7 @@ export const DETAILS_PANEL_WIDTH = 336;
 export const DETAILS_PANEL_GAP = 20;
 export const MIN_DETAILS_CANVAS_WIDTH = 1000;
 
-export const DETAIL_INTERACTION_SELECTOR = "#details, .task-card, .task-column, .task-row, #graph, #graph-a11y, .timeline-view";
+export const DETAIL_INTERACTION_SELECTOR = ".task-context-menu, #details, .task-card, .task-column, .task-row, #graph, #graph-a11y, .timeline-view";
 
 export type DetailSurfaceContext = {
   selected: boolean;

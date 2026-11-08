@@ -123,6 +123,7 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   const card = document.createElement("article");
   card.className = "task-card";
   card.dataset.taskId = task.id;
+  card.dataset.contextTask = task.id;
   card.setAttribute("role", "listitem");
   card.setAttribute("aria-current", String(context.getSelectedTask() === task.id));
   const head = text("div", "", "task-card-head");
