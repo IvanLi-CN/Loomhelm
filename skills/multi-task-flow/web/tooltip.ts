@@ -152,7 +152,7 @@ export function installTextTooltips(root: HTMLElement = document.body): () => vo
         bindings.delete(trigger);
       }
     }
-    for (const trigger of root.querySelectorAll<HTMLElement>("button.icon-button[data-tooltip], a.icon-button[data-tooltip]")) {
+    for (const trigger of root.querySelectorAll<HTMLElement>("button.icon-button[data-tooltip], a.icon-button[data-tooltip], a.brand-mark[data-tooltip]")) {
       const label = trigger.dataset.tooltip ?? "";
       const existing = bindings.get(trigger);
       if (existing) {

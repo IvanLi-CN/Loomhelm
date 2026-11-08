@@ -101,3 +101,12 @@ test("plain text never gains a tooltip even if it carries a legacy hint", async 
     }
   } finally { dispose(); }
 });
+
+test("keeps the explicit brand mark hint", () => {
+  document.body.innerHTML = '<a class="brand-mark" data-tooltip="全部编排运行" aria-label="全部编排运行"></a>';
+  const dispose = installTextTooltips();
+
+  expect(document.querySelector(".control-tooltip")?.textContent).toBe("全部编排运行");
+
+  dispose();
+});
