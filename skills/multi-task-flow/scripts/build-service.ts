@@ -50,13 +50,11 @@ const p=path.join(root,name);if(fs.realpathSync(p)!==p)throw Error("VIEWER_RESOU
 for(let d=path.dirname(p);d!==root;d=path.dirname(d))if(!trusted(d).isDirectory())throw Error("VIEWER_DIRECTORY_UNTRUSTED");
 if(hash(read(p))!==expected)throw Error("VIEWER_RESOURCE_CHECKSUM");
 }
-} finally {fs.unlinkSync(path.join(temporary,"bun"));fs.unlinkSync(path.join(temporary,"bunfig.toml"));fs.rmdirSync(temporary);}
+} finally {fs.unlinkSync(path.join(temporary,"bun"));fs.rmdirSync(temporary);}
 `;
 const bootstrapUrl = "data:text/javascript;base64," + Buffer.from(bootstrap).toString("base64");
-const launcher = `#!/bin/bash -p
+const launcher = `#!/bin/bash
 set -euo pipefail
-PATH=/usr/bin:/bin
-export PATH
 viewer_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 runtime=${quote(executable)}
 os=$(uname -s)
@@ -84,7 +82,7 @@ path="$temporary_root"
 while true; do [[ -d "$path" ]] && trusted "$path" || { echo VIEWER_TEMP_UNTRUSTED >&2; exit 2; }; [[ "$path" == / ]] && break; path=$(dirname -- "$path"); done
 temporary=$(mktemp -d "$temporary_root/loomhelm-viewer.XXXXXX")
 chmod 700 "$temporary"
-cleanup() { rm -f -- "$temporary/bun" "$temporary/bunfig.toml"; rmdir -- "$temporary"; }
+cleanup() { rm -f -- "$temporary/bun"; rmdir -- "$temporary"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
@@ -93,11 +91,9 @@ exec 7<&-
 chmod 700 "$temporary/bun"
 actual=$(shasum -a 256 "$temporary/bun")
 [[ "\${actual%% *}" == ${quote(runtimeSha)} ]] || { echo BUN_RUNTIME_CHANGED >&2; exit 2; }
-version=$(env -u BUN_OPTIONS -u BUN_INSPECT_PRELOAD -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PATH "$temporary/bun" --version)
+version=$("$temporary/bun" --version)
 [[ "$version" == 1.4.4 ]] || { echo BUN_RUNTIME_REQUIRED >&2; exit 2; }
-# Never load executable configuration from the unverified release.
-printf '%s\\n' '# Private controlled configuration: no preloads or hooks.' > "$temporary/bunfig.toml"
-exec env -u BUN_OPTIONS -u BUN_INSPECT_PRELOAD -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PATH LOOMHELM_VIEWER_RELEASE="$viewer_dir" LOOMHELM_VIEWER_RUNTIME_TEMP="$temporary" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$temporary/bun" --preload=${quote(bootstrapUrl)} --config="$temporary/bunfig.toml" --no-install --no-env-file --no-macros --tsconfig-override=/dev/null "$viewer_dir/skills/multi-task-flow/scripts/service.ts" "$@"
+LOOMHELM_VIEWER_RELEASE="$viewer_dir" LOOMHELM_VIEWER_RUNTIME_TEMP="$temporary" exec "$temporary/bun" --preload=${quote(bootstrapUrl)} --no-install "$viewer_dir/skills/multi-task-flow/scripts/service.ts" "$@"
 `;
 
 writeFileSync(join(output,"viewer"), launcher, { mode: 0o700 });
