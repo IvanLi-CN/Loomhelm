@@ -2734,7 +2734,8 @@ describe("native CLI handoff contract", () => {
   test("unknown reports retain creation facts across later empty reports and cannot release retry protection", () => {
     for (const report of [{ thread_id: "cli-thread" }, { native_evidence: { workspace_path: "/allocated" } },
       { native_evidence: { initial_head: head } }, { native_evidence: { exit_code: 1 } },
-      { native_evidence: { turn_completed: true } }, { native_evidence: { events: ["turn.started"] } }]) {
+      { native_evidence: { turn_completed: true } }, { native_evidence: { events: ["turn.started"] } },
+      { native_evidence: { process_started: true } }, { native_evidence: { resources_created: true } }]) {
       const ledger = claimed();
       apply(ledger, "dispatch-resolve", request(ledger, "known-unknown", { operation_id: "cli-a", outcome: "unknown", ...report }));
       const observed = structuredClone(ledger.operations[0].request.creation_observations);

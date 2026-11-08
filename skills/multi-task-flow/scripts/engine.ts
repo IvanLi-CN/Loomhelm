@@ -440,6 +440,10 @@ function addNotificationIntent(
   ledger.notifications.push(created);
   return created;
 }
+function requiresNativeDelivery(ledger: Ledger, notificationId: string): boolean {
+  return ledger.operations.some(op => op.request.handoff_notification_id === notificationId) ||
+    ledger.events.some(event => event.data.notification_id === notificationId && event.data.provider === "codex-app-tools");
+}
 function notificationDeliveryRequest(
   notice: Ledger["notifications"][number] | null,
 ): Record<string, string> | null {
@@ -496,7 +500,8 @@ function creationObservations(op: Ledger["operations"][number], payload: Record<
         "Known creation identity and resources cannot change", 5);
       observed[key] = value;
     }
-    if (report.turn_completed === true || report.exit_code != null ||
+    if (report.process_started === true || report.resources_created === true ||
+      report.turn_completed === true || report.exit_code != null ||
       (Array.isArray(report.events) && report.events.length > 0)) observed.process_observed = true;
   }
   return observed;
@@ -4180,7 +4185,8 @@ export function execute(
       const outcome = z
         .enum(["sent", "failed", "unknown"])
         .parse(payload.outcome);
-      requireCondition(object(payload.provider_receipt).provider !== "codex-app-tools" || outcome === "unknown",
+      requireCondition((!requiresNativeDelivery(ledger, notice.id) || object(payload.provider_receipt).provider === "codex-app-tools") &&
+        (object(payload.provider_receipt).provider !== "codex-app-tools" || outcome === "unknown"),
         "NATIVE_RECEIPT_REQUIRED", "Native delivery must claim an unknown attempt before reconciling the platform receipt", 5);
       requireNotificationRecipientActive(ledger, notice.recipient_thread_id);
       const attemptId = parse(id, payload.delivery_attempt_id);
@@ -4347,6 +4353,8 @@ export function execute(
         (item) => item.id === string(payload.notification_id),
         "Notification",
       );
+      requireCondition(!requiresNativeDelivery(ledger, notice.id), "NATIVE_RECEIPT_REQUIRED",
+        "Native delivery requires a claimed attempt and reconciled platform receipt", 5);
       const original = find(
         ledger.events,
         (item) => item.id === notice.event_id,

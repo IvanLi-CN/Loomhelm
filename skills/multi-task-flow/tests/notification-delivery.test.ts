@@ -257,3 +257,33 @@ test("notification creation rejects an archived bound task recipient", () => {
   expect(() => apply(ledger, "task-update", { run_id: ledger.orchestration_id, actor: { role: "task", thread_id: sender.thread_id! }, request_id: "archived-recipient", expected_revision: ledger.revision, payload: { task_id: sender.id, state: "waiting", detail: "Notify archived recipient", notification: { mode: "deliver", recipient: { thread_id: target.thread_id } } } })).toThrow("请先手动取消归档");
   expect(ledger.notifications).toHaveLength(0);
 });
+
+for (const provenance of ["handoff", "prior-native-failure"]) {
+  test(`native provenance rejects provider omission and substitution: ${provenance}`, () => {
+    const f = fixture();
+    try {
+      f.store.update(raw => {
+        const event = raw.events.find(e => e.id === raw.notifications[0].event_id)!;
+        event.actor_id = raw.control.owner_thread_id;
+        if (provenance === "handoff") {
+          raw.operations[0].request.handoff_notification_id = f.id;
+        } else {
+          raw.events.push({ ...event, id: "native-failure", type: "notification_delivery_resolved",
+            data: { notification_id: f.id, provider: "codex-app-tools", outcome: "failed" } });
+          raw.notifications[0].delivery_status = "failed";
+          raw.notifications[0].status = "failed";
+        }
+      });
+      const before = JSON.stringify(f.store.read());
+      for (const provider_receipt of [undefined, {}, { provider: "legacy", evidence_ref: "substitution" }]) {
+        for (const command of ["notification-sent", "notification-deliver"]) {
+          expect(() => f.store.update(raw => apply(raw, command, { ...f.parsed,
+            actor: { role: "main", thread_id: raw.control.owner_thread_id }, request_id: `bypass-${command}`,
+            expected_revision: raw.revision, payload: { notification_id: f.id, outcome: "sent",
+              delivery_attempt_id: "unclaimed", provider_receipt } }))).toThrow();
+          expect(JSON.stringify(f.store.read())).toBe(before);
+        }
+      }
+    } finally { f.cleanup(); }
+  });
+}
