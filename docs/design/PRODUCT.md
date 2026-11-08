@@ -62,7 +62,7 @@ The current UI scope includes global Workbench and Tasks, the projectless Conver
 
 Task business states are To do (待办), In progress (进行中), Blocked (阻塞), Done (完成) and Cancelled (取消), distinct from execution status. A completed run does not automatically complete its task. Offline control commands are never queued or automatically replayed. Existing active desktop-session control requires evidence from the actual same instance and remains unproven at this design baseline.
 
-Autonomous master/project/task Agent orchestration is a future capability. The initial design must represent the verified capabilities of the current product.
+Autonomous 主 Agent（main Agent）/项目 Agent（project Agent）/任务 Agent（Task Agent） orchestration is a future capability. The initial design must represent the verified capabilities of the current product.
 
 ## Brand Commitments
 

@@ -9,7 +9,7 @@
 ## 术语与接口
 
 - 领域术语定义在根目录 `GLOSSARY.md`。
-- 主 Agent 直接控制整个编排。交付单元是共享父分支和父 PR 路径的子任务虚拟整合单元；为兼容账本而保留的内部字段 `group_id` 只表达分类和验收范围，不表示原生会话父级或管理权转移。交付单元会话与任务会话仍是由主 Agent 直接管理的平级会话。交付协调 Agent 只承担获授权的协调职责，不是第二个主 Agent。
+- 主 Agent（main Agent） 直接控制整个编排。交付单元是共享父分支和父 PR 路径的子任务虚拟整合单元；为兼容账本而保留的内部字段 `group_id` 只表达分类和验收范围，不表示原生会话父级或管理权转移。交付单元会话与任务会话仍是由主 Agent（main Agent） 直接管理的平级会话。交付协调者（Delivery coordinator） 只承担获授权的协调职责，不是第二个主 Agent（main Agent）。
 - Skill 负责本地 Bun/TypeScript 命令接口、JSON 账本和账本投影的 loopback dashboard。共享 viewer 可以保存服务认证、使用租约和明确的全局 UI 主题偏好，但可通过认证 API 写入明确支持的执行配置及对话归档资源回执，其他编排事实保持只读。
 
 ## Requirements
@@ -67,7 +67,7 @@
 ### REQ-ORCH-004
 
 - 系统必须区分任务集成、任务收口、交付单元完成和资源清理，并保留需要调度处理的通知直到收到确认。
-- 普通任务或交付单元阻塞应记录在其所属会话中，只有影响调度时才需要通知主 Agent。
+- 普通任务或交付单元阻塞应记录在其所属会话中，只有影响调度时才需要通知主 Agent（main Agent）。
 
 ### REQ-ORCH-005
 
@@ -89,7 +89,7 @@
 ### REQ-ORCH-014
 
 - The runtime MUST model delivery-unit atoms independently from contribution-task atoms. A plan MAY define ordered `group_atoms`; a runtime `Group.atoms` preserves stable IDs, ownership, purpose, output, lifecycle bindings and `planned`/`running`/`blocked`/`completed` state, while the existing `Task.atoms` and task dependency semantics remain unchanged. New delivery units default to prepare parent branch, create parent PR, verify integration, merge parent PR and closeout, with lifecycle bindings for `workspace_ready`, `pr_created`, `pr_merged` and `closed`; release and deployment work MUST NOT be duplicated automatically.
-- `group-atom-update` MUST be idempotent, revision-checked and serialized like other mutations, and may be called only by the bound delivery coordinator or main Agent. Atoms execute in order; lifecycle-bound completion requires the matching passed lifecycle evidence, and generic `group-update` MUST NOT overwrite atom or coordination execution state. Closing a group MUST complete its final closeout atom in the same transaction. Dynamic cuts MUST create an independent planned atom list without copying execution history.
+- `group-atom-update` MUST be idempotent, revision-checked and serialized like other mutations, and may be called only by the bound 交付协调者（Delivery coordinator） or 主 Agent（main Agent）. Atoms execute in order; lifecycle-bound completion requires the matching passed lifecycle evidence, and generic `group-update` MUST NOT overwrite atom or coordination execution state. Closing a group MUST complete its final closeout atom in the same transaction. Dynamic cuts MUST create an independent planned atom list without copying execution history.
 - A delivery unit MUST expose separate `coordination_execution` state (`unknown`, `idle`, `running`, `waiting`, `blocked`), reason and waiting contribution-task IDs. `group-execution-update` MUST be explicit, owner-authorized and reject invalid task references; waiting on contribution work requires a valid task ID and reason, and the dashboard MUST NOT infer coordination state from unfinished-task counts. Merged units may perform closeout; closed units cannot execute again.
 - Delivery-unit cards and details MUST show only their own atom progress and existing delivery-unit fields, while task cards and details show their own atoms and output. Dependency tooltips MUST list dependency names and status with hover, focus and long-press access, viewport clamping, scrolling, Escape/outside-click close and accessible tooltip semantics. Waiting for contribution work MUST use a non-rotating hourglass with a 1.8s opacity pulse, static under reduced motion; only explicit coordination execution uses the running spinner.
 - New writes MUST use `schema_version=2`/`contract_version=2`; legacy contracts remain read-only until explicit migration. Plan selection MUST join execution facts by stable IDs and ownership, and missing atom configuration MUST remain an explicit unconfigured state rather than fabricating history.

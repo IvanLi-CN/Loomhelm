@@ -1688,7 +1688,7 @@ describe("orchestration state", () => {
         "merge-claim",
         request(ledger, "task-parent-claim", parentClaim, taskActor),
       ),
-    ).toThrow("delivery coordinator");
+    ).toThrow("Delivery coordinator");
 
     ledger.groups[0]!.state = "merged";
     ledger.groups[0]!.merge_sha = merge;
@@ -1709,7 +1709,7 @@ describe("orchestration state", () => {
         "group-close",
         request(ledger, "task-group-close", { group_id: "g" }, taskActor),
       ),
-    ).toThrow("delivery coordinator");
+    ).toThrow("Delivery coordinator");
     expect(ledger.groups[0]!.state).toBe("merged");
   });
 

@@ -4,17 +4,17 @@
 
 ## 组件与职责
 
-### 主 Agent 的首次交付顺序
+### 主 Agent（main Agent） 的首次交付顺序
 
-收到明确的任务编排请求后，主 Agent 先核对当前会话是否绑定未完成 run；若没有，则构造并校验 planned 任务图，调用 `orchestrate.ts init` 写入正式账本。随后调用 `service.ts ensure` 和 `service.ts login`，按 `skills/multi-task-flow/SKILL.md` 的 Dashboard browser route 使用当前宿主可用的内置浏览器打开对应 run 页面，确认真实 revision、任务节点和依赖。任务保持 `planned`，除非主人另行授权派发或外部操作。
+收到明确的任务编排请求后，主 Agent（main Agent） 先核对当前会话是否绑定未完成 run；若没有，则构造并校验 planned 任务图，调用 `orchestrate.ts init` 写入正式账本。随后调用 `service.ts ensure` 和 `service.ts login`，按 `skills/multi-task-flow/SKILL.md` 的 Dashboard browser route 使用当前宿主可用的内置浏览器打开对应 run 页面，确认真实 revision、任务节点和依赖。任务保持 `planned`，除非主人另行授权派发或外部操作。
 
 proposal、Markdown requirements 和 Mermaid 只能作为输入或补充材料，不能作为首次交付。任一步骤失败都必须报告具体阶段、命令结果和阻塞。
 
 ```mermaid
 flowchart LR
-    U[主人] --> MAIN[主 Agent：调度与记账]
-    MAIN --> GROUP[交付协调 Agent：父 PR 与子 PR 验收]
-    MAIN --> TASK[任务 Agent：贡献或交付子任务]
+    U[主人] --> MAIN[主 Agent（main Agent）：调度与记账]
+    MAIN --> GROUP[交付协调者（Delivery coordinator）：父 PR 与子 PR 验收]
+    MAIN --> TASK[任务 Agent（Task Agent）：贡献或交付子任务]
     GROUP --> SCRIPT[Bun + TypeScript 固定脚本]
     TASK --> SCRIPT
     MAIN --> SCRIPT
@@ -25,7 +25,7 @@ flowchart LR
     TASK --> PLATFORM
 ```
 
-主 Agent 创建和直接管理交付协调 Agent、任务 Agent，维护全局依赖、归属和收口。交付协调 Agent 只是主 Agent 委派的交付单元级协调者，负责父 PR、贡献子 PR 的验收及合并条件；任务 Agent 负责所属子任务和相关 follow PR。贡献、发布、部署、验证和协调任务都按需调度；非贡献任务无需强制创建 PR。交付单元是虚拟整合边界，不是原生会话层级，也不转移主 Agent 的直接管理权。
+主 Agent（main Agent） 创建和直接管理交付协调者（Delivery coordinator）、任务 Agent（Task Agent），维护全局依赖、归属和收口。交付协调者（Delivery coordinator） 只是主 Agent（main Agent） 委派的交付单元级协调者，负责父 PR、贡献子 PR 的验收及合并条件；任务 Agent（Task Agent） 负责所属子任务和相关 follow PR。贡献、发布、部署、验证和协调任务都按需调度；非贡献任务无需强制创建 PR。交付单元是虚拟整合边界，不是原生会话层级，也不转移主 Agent（main Agent） 的直接管理权。
 
 实际 PR、CI、发布和部署状态以对应平台事实为准。账本记录计划、协调状态与证据引用，不因记录一条事件就自行证明外部操作成功。
 
@@ -63,7 +63,7 @@ JSON 必须通过固定脚本读取和修改，Agent 不直接编辑。脚本提
 
 ## 合并与动态切割的协调
 
-同一编排中的任务 Agent 和交付协调 Agent，无论执行什么 PR 合并，都要先通过固定脚本检查账本、目标和状态，取得相应操作占用；需要等待时登记等待或通知需求。
+同一编排中的任务 Agent（Task Agent） 和交付协调者（Delivery coordinator），无论执行什么 PR 合并，都要先通过固定脚本检查账本、目标和状态，取得相应操作占用；需要等待时登记等待或通知需求。
 
 ```mermaid
 sequenceDiagram
@@ -77,23 +77,23 @@ sequenceDiagram
     A->>L: 记录外部结果并结束占用
 ```
 
-动态切割使用同一协调机制：先阻止新的相关合并占用，等待已登记的相关合并得到明确结果，核对父分支 SHA，再原子记录切割、实际归属和下一交付单元待办；尚未完成的贡献任务转入下一交付单元，已切出的交付单元的发布、部署和验证等后续任务留在原交付单元。任务继续执行，下一父分支按编排方案在主干合并后建立。外部状态若与账本不符，暂停受影响操作并核实。若代码托管平台因 update-branch 推进同一父分支，交付协调 Agent 必须通过 `group-base-reconcile` 提供旧 SHA、新 SHA、同一父 PR、分支、provider 和 update-branch 证据；该记录不会伪装成 merge/follow PR，受影响任务仍需按新的 `current_sha` 重新建立基线。
+动态切割使用同一协调机制：先阻止新的相关合并占用，等待已登记的相关合并得到明确结果，核对父分支 SHA，再原子记录切割、实际归属和下一交付单元待办；尚未完成的贡献任务转入下一交付单元，已切出的交付单元的发布、部署和验证等后续任务留在原交付单元。任务继续执行，下一父分支按编排方案在主干合并后建立。外部状态若与账本不符，暂停受影响操作并核实。若代码托管平台因 update-branch 推进同一父分支，交付协调者（Delivery coordinator） 必须通过 `group-base-reconcile` 提供旧 SHA、新 SHA、同一父 PR、分支、provider 和 update-branch 证据；该记录不会伪装成 merge/follow PR，受影响任务仍需按新的 `current_sha` 重新建立基线。
 
 锁和协调仅覆盖同一个编排，不对其他编排或项目建立全局限制。即使如此，执行前仍须核对实时平台状态，处理目标分支漂移或代码冲突。
 
 ## 通知、阻塞与用户介入
 
-需要通知主 Agent 的关键事件先记到账本，之后发送，并记录处理确认。包括会话创建成功、PR 合入、任务完成，以及需要调度的其他变化。通知失败或会话中断时，待处理通知保留；恢复后按事件 ID 去重处理。
+需要通知主 Agent（main Agent） 的关键事件先记到账本，之后发送，并记录处理确认。包括会话创建成功、PR 合入、任务完成，以及需要调度的其他变化。通知失败或会话中断时，待处理通知保留；恢复后按事件 ID 去重处理。
 
-一般阻塞不必主动通知主 Agent：交付协调 Agent 或任务 Agent 将状态和原因写入账本，在自己的对话中等待主人；主人可从 HTML 或 Agent 界面进入相应会话处理。确实需要主 Agent 重新调度时，才通知主 Agent。等待期间可释放执行名额，但依赖它的后继不能因此启动。
+一般阻塞不必主动通知主 Agent（main Agent）：交付协调者（Delivery coordinator） 或任务 Agent（Task Agent） 将状态和原因写入账本，在自己的对话中等待主人；主人可从 HTML 或 Agent 界面进入相应会话处理。确实需要主 Agent（main Agent） 重新调度时，才通知主 Agent（main Agent）。等待期间可释放执行名额，但依赖它的后继不能因此启动。
 
-主人可直接在交付单元或任务对话中作决定。若变更影响其他任务的范围、依赖、验收或调度，相关 Agent 先记账并通知主 Agent 协调；仅影响本任务内部执行的决定由该 Agent 处理。交付协调 Agent 的验收职责来自主 Agent 委派，不改变主 Agent 的直接管理权。
+主人可直接在交付单元或任务对话中作决定。若变更影响其他任务的范围、依赖、验收或调度，相关 Agent 先记账并通知主 Agent（main Agent） 协调；仅影响本任务内部执行的决定由该 Agent 处理。交付协调者（Delivery coordinator） 的验收职责来自主 Agent（main Agent） 委派，不改变主 Agent（main Agent） 的直接管理权。
 
-follow PR 合入后，负责它的 Agent 通知主 Agent；主 Agent 再通知受影响且尚未完成的任务 Agent 更新基线。任务“已集成”与“已收口”分开记录：前者可解锁后继，后者要求相关检查和已知 follow PR 结束后才归档会话、清理资源。
+follow PR 合入后，负责它的 Agent 通知主 Agent（main Agent）；主 Agent（main Agent） 再通知受影响且尚未完成的任务 Agent（Task Agent） 更新基线。任务“已集成”与“已收口”分开记录：前者可解锁后继，后者要求相关检查和已知 follow PR 结束后才归档会话、清理资源。
 
 ## 页面与本机服务
 
-Skill 提供以 daisyUI 和 Tailwind CSS 为基础的模板，尽量使用单个 HTML 和少量 JS、CSS。图形依赖及是否使用前端框架由实现时按实际需要选择。每次编排从共享模板生成自己的页面，主 Agent 可按项目调整外观和展示；模板保持不变，页面不能隐藏依赖、阻塞和实际进度等关键信息。
+Skill 提供以 daisyUI 和 Tailwind CSS 为基础的模板，尽量使用单个 HTML 和少量 JS、CSS。图形依赖及是否使用前端框架由实现时按实际需要选择。每次编排从共享模板生成自己的页面，主 Agent（main Agent） 可按项目调整外观和展示；模板保持不变，页面不能隐藏依赖、阻塞和实际进度等关键信息。
 
 由 Bun 启动只监听本机的只读服务，从账本提供当前视图并推送后续更新。服务使用端口租约；`serve.ts` 在 registry 锁内原子校验预分配租约，拒绝已有 owner 的重复启动，持锁绑定 listener，并只在 listener 确认后登记自身 PID，运行期间心跳，退出时只释放自身服务租约。连接中断时页面明确显示，不能把旧信息冒充实时信息。页面支持流程图、理论和实际甘特图、筛选、详情，以及对话、PR 和要求文档链接。技术实现须验证各类链接在实际运行环境中可打开。
 
@@ -103,7 +103,7 @@ Agent/host 负责取得并保留真正的 Codex native background session；Skil
 
 ## 绑定、完成与清理
 
-编排 ID 独立于会话 ID。fork 或恢复后，如果可验证的信息不足以确定是继续原编排、转移控制权还是开始独立编排，实际需要使用账本时询问主人；控制权不明确期间暂停派发、切割和合并，避免两个主 Agent 同时驱动同一编排。
+编排 ID 独立于会话 ID。fork 或恢复后，如果可验证的信息不足以确定是继续原编排、转移控制权还是开始独立编排，实际需要使用账本时询问主人；控制权不明确期间暂停派发、切割和合并，避免两个主 Agent（main Agent） 同时驱动同一编排。
 
 交付单元完成需满足父 PR 合并、相关 CI、计划中的后续任务和已知 follow PR；全部交付单元和主任务条件完成后才报告全部完成。完成后先保留账本和页面供主人查看；主人确认查看或明确执行收口时，停止服务并只清理该编排的数据目录。未完成或需要恢复的记录保留，其他编排不受影响。
 

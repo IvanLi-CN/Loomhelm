@@ -230,7 +230,7 @@ function requireOwner(
         (target as Ledger["tasks"][number]).thread_id ===
           request.actor.thread_id,
       "FORBIDDEN",
-      "Task publication belongs to its task Agent",
+      "Task publication belongs to its Task Agent",
       3,
     );
 }
@@ -2594,7 +2594,7 @@ export function execute(
           (request.actor.role === "group" &&
             owner.agent_thread_id === request.actor.thread_id),
         "FORBIDDEN",
-        "Only the delivery coordinator or main conversation can update delivery-unit atoms",
+        "Only the Delivery coordinator or main conversation can update delivery-unit atoms",
         3,
       );
       requireCondition(
@@ -2688,7 +2688,7 @@ export function execute(
           (request.actor.role === "group" &&
             owner.agent_thread_id === request.actor.thread_id),
         "FORBIDDEN",
-        "Only the delivery coordinator or main conversation can update execution state",
+        "Only the Delivery coordinator or main conversation can update execution state",
         3,
       );
       requireCondition(
@@ -2988,7 +2988,7 @@ export function execute(
       requireCondition(
         ownsGroup(ledger, request.actor, owner),
         "FORBIDDEN",
-        "Only the bound delivery coordinator can reconcile its parent branch",
+        "Only the bound Delivery coordinator can reconcile its parent branch",
         3,
       );
       requireCondition(
@@ -3369,7 +3369,7 @@ export function execute(
         requireCondition(
           ownsGroup(ledger, request.actor, owner),
           "FORBIDDEN",
-          "The delivery coordinator owns parent PR integration",
+          "The Delivery coordinator owns parent PR integration",
           3,
         );
         requireCondition(
@@ -3972,7 +3972,7 @@ export function execute(
       if (owner && request.actor.role === "task")
         throw new ContractError(
           "FORBIDDEN",
-          "Delivery-unit facts belong to the delivery coordinator",
+          "Delivery-unit facts belong to the Delivery coordinator",
           3,
         );
       if (owner && observed.kind === "ci_passed")
@@ -4565,7 +4565,7 @@ export function execute(
       requireCondition(
         ownsGroup(ledger, request.actor, owner),
         "FORBIDDEN",
-        "The delivery coordinator owns delivery-unit closeout",
+        "The Delivery coordinator owns delivery-unit closeout",
         3,
       );
       requireCondition(
