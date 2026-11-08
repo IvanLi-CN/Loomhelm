@@ -50,7 +50,7 @@ Agent 租约按主会话 ID 与 run ID 区分，默认 TTL 为 60 分钟且可�
 
 ## URL 与本地访问
 
-正式编排交付要求 Agent 使用内置浏览器打开对应 run 页面。页面通过 SSE revision 事件和 heartbeat 重新取得完整快照；正常 ledger 修订保持同一页面和 URL 上下文即可显示新 revision。只有连接中断、服务重启或登录会话过期时才重新连接或导航，并明确显示 stale/disconnected 状态。
+正式编排交付要求 Agent 按 `skills/multi-task-flow/SKILL.md` 的 Dashboard browser route 使用当前宿主可用的内置浏览器打开对应 run 页面。页面通过 SSE revision 事件和 heartbeat 重新取得完整快照；正常 ledger 修订保持同一页面和 URL 上下文即可显示新 revision。只有连接中断、服务重启或登录会话过期时才重新连接或导航，并明确显示 stale/disconnected 状态。
 
 使用固定 loopback 端口，首页列出所有正式运行；运行路径为 `/runs/<run_id>/`，指定计划使用 `?plan=<plan_id>`，默认计划省略该参数。端口冲突时明确报错，不自动改端口，也不接管其他进程。服务退出后须先调用 ensure 再访问旧链接，不另设常驻网页启动器。
 

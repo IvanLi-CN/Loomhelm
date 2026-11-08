@@ -12,7 +12,25 @@ GitHub 原生 `createCommitOnBranch` 为发布记录和版本投影生成平台�
 
 从 main 运行 Manual Release，只填写一个 release_target：patch、minor、major 或完整 final/prerelease 版本。不支持 build metadata。首次没有合法 completed final baseline 时必须填写完整版本；历史 connector-v* tag 不自动转换为产品 baseline。
 
-工作流占用唯一身份并生成签名版本准备分支；保留仓库当前禁止 Actions 创建 PR 的设置。owner 或已获授权的 agent 用现有 gh 身份打开普通版本准备 PR，链接由 Actions summary 提供。按正常质量门禁审核与合并，随后从 main 运行 Release，传入已有 reservation ID。入口自动读取准确合并 SHA，检查源码在准备期间没有混入业务改动。没有显式 target 时不得默认 patch。
+工作流占用唯一身份并生成签名版本准备分支；保留仓库当前禁止 Actions 创建 PR 的设置。owner 或已获授权的 agent 用现有 gh 身份打开普通版本准备 PR，链接由 Actions summary 提供。按正常质量门禁审核与合并，随后从 main 运行 Release，传入已有 reservation ID。入口读取准确合并 SHA，核验源码与最后一次已批准的准备修订一致。没有显式 target 时不得默认 patch。
+
+## main 前进时继续同一版本
+
+main 正常更新不是版本作废条件。先根据实际代码 diff 判断变更是否超过原发版意图；只有版本尚未固定在 main、没有 build claim、资产、tag 或 Release，且实际变更仍在原意图内时，才允许继续使用同一版本及 reservation。已固定版本只发布对应代码，不能因当前 VERSION 后来变化或 bound 回执尚未写入而换源码。
+
+owner 或获授权 agent 先评估完整增量，再以普通 PR 更新流程将最新 main 合入原准备分支，保留 Git 历史、签名和正常门禁，不强推。若版本投影冲突，解决后必须仍与新 main 的精确版本投影一致；不得把依赖更新隐藏在 lock 投影中。随后使用现有 owner gh 身份运行内部恢复入口：
+
+```sh
+GITHUB_REPOSITORY=IvanLi-CN/Loomhelm scripts/product-release reconcile \
+  --identity <existing-reservation> \
+  --source-sha <verified-current-main-sha> \
+  --preparation-sha <current-preparation-pr-head> \
+  --assessment <release-intent-assessment.json>
+```
+
+assessment 是操作方对实际变更的核验记录，不是第二套版本输入。它包含 version、previous_source_sha、source_sha、verdict（必须为 within-intent）、operator（原 release owner）、完整 changed_paths、reason 和 evidence（非空证据列表）。例如，修复原有功能而未扩大已批准首发能力的增量，可以在说明代码行为、关联 PR 与验证后认定仍在原意图内；不能仅凭文件名或同为 0.x 就认定可复用。超出意图、证据缺失或 source 已变化则拒绝，明确交由 owner 调整意图或版本，不自动分配 successor。
+
+reconcile 只追加 pre-main-intent-v1 准备修订，保留原 intent、版本和 preparation_sha。它检查 main 第一父链 VERSION 历史、已合并准备 PR、实际 source/head、完整变更清单和精确投影，再以 CAS 写入；重复相同请求不追加新记录。更新后的 PR 须完成新 head 的正常检查后才可合并。main 再次前进时重复评估实际增量，不自动烧掉版本。显式终止过但版本未落 main 的准备身份也可以依此显式恢复，不删除旧终止记录。
 
 Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 / Linux amd64、Web 均为必需产物。TS 包携带 TypeScript 源码、完整 toolkit、依赖与 Bun FFI 资源，无需源码仓库；仅支持固定 Bun 1.4.4，保留主干 ADR 0021 的源码运行合同，不再支持 Node。Bun 根 lock 不保存根包版本，冻结安装验证依赖一致性；package.json 与包内源码 stamp 负责产品版本投影。包内 --version 报告构建版本和 SHA，正式程序拒绝运行配置覆盖身份。
 
