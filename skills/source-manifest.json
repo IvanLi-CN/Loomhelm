@@ -7415,7 +7415,7 @@
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/SPEC.md",
       "sourceBlob": "f4e72fdb1a7aaf5cca7335831d56f8df87053116",
       "sourceSha256": "cba676fa0c3a349556fed5e30bd66ffa98fa66176f1a5aa9e8cd4ed69a4111b0",
-      "installedSha256": "b9b12bb6bd4baa41e6cae29f296fe9abac646f41d6514b56691bc8a898f604d5",
+      "installedSha256": "3f8e81c6674552bf09da59b25efd154bb8dc76ffefb2c3dcbae0cfd8871f16a9",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15698,7 +15698,7 @@
     },
     {
       "path": "skills/support-manifest.json",
-      "installedSha256": "21cace5c7d28556628df1872f9d0a262acc4c56e7b1c5c8dda59bcac3f86a568"
+      "installedSha256": "470d45c714d2fe7f9ee20de024b31a0996a52bb9088532fa324665e79fad42be"
     },
     {
       "path": "skills/multi-task-flow/examples/single-delivery-unit/README.md",
@@ -15799,6 +15799,18 @@
     {
       "path": "skills/multi-task-flow/tests/conversation-archive.test.ts",
       "installedSha256": "f19da64cad7a4d3fe44e6e0f08865c4a938120bca327c7c52f6b0c40e284abec"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-desktop.png",
+      "installedSha256": "6731f965c28ad9159c980e0e59308ecba26f55eb2ef391760f4aa8e50cdc20bd"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-medium.png",
+      "installedSha256": "16d1e6df486855f1fc8502fc3380931f57d3119c5471ef90ea17ea970bc1a42f"
+    },
+    {
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-mobile.png",
+      "installedSha256": "5cc96abd8c8a620c5b6b8a7abd8eddc60c13ab8a28d8a6b60af3fe1ab59f5f05"
     },
     {
       "path": "skills/bin/modules/core/runtime.ts",
