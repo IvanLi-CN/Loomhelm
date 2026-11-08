@@ -17,6 +17,14 @@ Business feature implementation and public business contract finalization requir
 - Keep new topic requirements in `docs/specs/<topic>/SPEC.md` with `IMPLEMENTATION.md` and `HISTORY.md`. Record hard-to-reverse architecture decisions in `docs/adr/`. Do not commit orchestration manifests, task boards, conversation state or temporary implementation plans.
 - Keep each Markdown prose paragraph on one source line. Formatting uses the installed markdown-style Policy, pinned dprint and the canonical Lefthook path; do not infer a paragraph width from formatter settings.
 
+## Skill 源码维护
+
+- 在本仓库中请求优化、修复或补充本项目提供的 Skill 时，默认维护目标是当前工作区内的源码。用户通过 `$skill-name`、Skill 链接或绝对路径引用全局安装版本，只表示要处理的 Skill 身份；即使 Agent 自动加载了全局 `SKILL.md`，也不代表授权编辑该安装副本。例如，引用全局 `fast-flow/SKILL.md` 请求优化时，应定位本仓库 `skills/fast-flow/`。
+- 写入前先按 Skill 名称、`skills/README.md`、`skills/catalog.json`、`skills/source-manifest.json` 和实际内容核实源码映射，再读取仓库内对应 `SKILL.md` 及受影响的关联资源。全局版本可用于识别和比较；若版本有差异，以仓库当前合同为修改基线，不能把安装副本整份覆盖回仓库，也不能仅凭全局文档中的相对路径或运行根目录决定编辑位置。
+- 修改应落在 `skills/<skill-name>/` 及确有影响的 `skills/bin/`、模板、references、资源清单或检查入口，并遵循仓库已有的资源登记、摘要更新和验证要求。修改前解析符号链接并确认实际写入路径位于当前仓库工作区；不得通过链接意外写入全局安装目录、vendor checkout 或其他工作区。
+- 区分根 `skills/` 的自有源包、`.agents/skills/` 的项目 Policy 安装面，以及由其他仓库维护的外部 Skill；同名不等于同源。若本仓库没有对应维护源或映射存在歧义，先报告已确认的来源与缺失信息，再由主人确认目标，不得猜测路径或直接改全局版本。
+- 源码优化与安装升级是独立操作。更新、重装全局 Skill，或同步用户级脚本、服务和运行资源，须有覆盖该操作的主人明确授权。交付时说明实际修改的仓库路径、验证结果，以及全局安装版本是否已更新；只完成源码修改时，不得声称用户正在使用的全局版本已经生效。
+
 ## Policy routing
 
 - Markdown edits and hooks: `.agents/skills/markdown-style/SKILL.md`.
