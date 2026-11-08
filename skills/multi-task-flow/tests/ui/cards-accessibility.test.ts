@@ -30,6 +30,7 @@ test("synthetic task and unit conversations never expose native links", async ()
   for (const mode of ["grid", "board"] as const) {
     layout = mode; cards.renderList(view.tasks); cards.renderGroups();
     expect(document.querySelectorAll('a[href^="codex:"]')).toHaveLength(0);
+    expect(document.querySelector(".task-card-title[data-tooltip], .task-card-output[data-tooltip], .task-column-count[data-tooltip], [data-resource-trigger][data-tooltip]")).toBeNull();
     expect(document.querySelectorAll('button[aria-label="示例对话（Mock）"][aria-disabled="true"][data-resource-trigger="conversation"]').length).toBeGreaterThan(0);
   }
   details.showTask(view.tasks[0]!);

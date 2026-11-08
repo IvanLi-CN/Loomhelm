@@ -38,7 +38,6 @@ export function paintOutput(node: HTMLElement, output: AgentOutput, full = false
       const warning = document.createElement("span"); warning.className = "agent-output-warning"; warning.textContent = `（${label}）`; node.append(warning);
     }
   }
-  node.dataset.tooltip = content ?? label;
 }
 /** Fence GETs by their starting epoch; retire replaced instances across both channels. */
 export class OutputSnapshots {

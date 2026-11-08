@@ -139,8 +139,9 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
 }
 
 
-/** Bind plain hints to the same project tooltip used by timestamps/dependencies.
- * Observe dynamic cards and text updates; remove portals when their controls leave.
+/** Bind explicit icon-control hints to the project tooltip.
+ * Body text, titles, progress and output use their dedicated preview/detail surfaces.
+ * Observe dynamic controls and text updates; remove portals when their controls leave.
  */
 export function installTextTooltips(root: HTMLElement = document.body): () => void {
   const bindings = new Map<HTMLElement, { tooltip: HTMLElement; content: HTMLElement }>();
@@ -151,7 +152,7 @@ export function installTextTooltips(root: HTMLElement = document.body): () => vo
         bindings.delete(trigger);
       }
     }
-    for (const trigger of root.querySelectorAll<HTMLElement>("[data-tooltip]")) {
+    for (const trigger of root.querySelectorAll<HTMLElement>("button.icon-button[data-tooltip], a.icon-button[data-tooltip]")) {
       const label = trigger.dataset.tooltip ?? "";
       const existing = bindings.get(trigger);
       if (existing) {
