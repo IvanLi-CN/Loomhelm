@@ -7,11 +7,11 @@
     "version_impact": "由 owner 的 release_target 决定，本文不分配版本"
   },
   "durable_state": {
-    "description": "reservation、版本墓碑、冻结 digest、公开完成与通知回执",
+    "description": "reservation、追加准备修订、主干版本绑定、冻结 digest、公开完成与通知回执",
     "storage_implementation": "release-ledger Git ref；现有认证调用 GitHub 原生平台签名和 expectedHeadOid CAS，追加 JSON 事件",
     "source_compatibility_range": {
       "from_program_versions": "无 ledger（原子初始化）或 ledger schema 1",
-      "to_program_version": "支持 ledger schema 1 的本实现；产品版本尚未选择",
+      "to_program_version": "支持 schema 1 与可选 preparation_revisions 的本实现；旧记录无需回填",
       "direct_major_skips_supported": false
     }
   },
@@ -26,6 +26,7 @@
     "operation_sequence": [
       "reserve",
       "prepare",
+      "optional-pre-main-intent-reconciliation",
       "bind",
       "build_claim",
       "stage",
@@ -42,7 +43,8 @@
       "逐项 artifact digest",
       "公开状态",
       "completion",
-      "不可撤销公开意图；此后只能原身份恢复，不允许终止"
+      "不可撤销公开意图；此后只能原身份恢复，不允许终止",
+      "preparation_reconciled / pre-main-intent-v1，实际 diff 与 owner 意图核验；落主干后禁止换源码"
     ],
     "pause_points": [
       "每个成功追加的阶段之后；仅沿原 identity 接续"
@@ -61,7 +63,11 @@
       "未知 schema 拒绝",
       "历史事件与冻结 inventory 不可改写",
       "公开后 completion 丢失修复",
-      "终止版本不释放"
+      "已落主干版本不得换源码；未落主干的终止准备身份经意图核验可恢复",
+      "旧 schema 1 无修订正常读取",
+      "准备修订及对应事件只能追加",
+      "main 第一父链 VERSION 历史与已合并 PR 阻止版本转移",
+      "旧程序绑定前不能将修订 head 当作原 head"
     ]
   }
 }
