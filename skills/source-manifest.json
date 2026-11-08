@@ -7407,7 +7407,7 @@
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/IMPLEMENTATION.md",
       "sourceBlob": "674d6568111f525c1691bc08e3ac6af4e640ab72",
       "sourceSha256": "9f0f5beaa5409b17983d4df88866ac0ec5a099d10f62fa43dc28e9db69165813",
-      "installedSha256": "20a68da6781370d50d60de550ad9da7a75b138e9bec2428e0e4d78778af4c211",
+      "installedSha256": "cf7e8ce0b638997d1e3d44910b9a106a982673ff524e7c6835aebdc2c7785349",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14079,7 +14079,7 @@
       "path": "skills/multi-task-flow/references/shared-viewer.md",
       "sourceBlob": "18c9a36650878f6efba59b1de02374924059c9be",
       "sourceSha256": "6eb1d49ba26914c0b6ee349d2a64636db6d75345771ba73e5be5c3cd8d68ba16",
-      "installedSha256": "8391952c8fb1c7a344a97cb21a4367f671b4e8d3e3f0d2b7bd8f28556b0bcb5d",
+      "installedSha256": "0f03069c56c55bef8f4d1c9191a1fb92fcac9951f69a2708475e24e7412d925c",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14087,7 +14087,7 @@
       "path": "skills/multi-task-flow/scripts/build-service.ts",
       "sourceBlob": "ca672ad72649091d21a78504664d60e6060c88d5",
       "sourceSha256": "6161f53430c5bd6f5665a2f77129c87cfe937d5c244f3df0eab8533bbecf17c4",
-      "installedSha256": "13626e59d69df93c95ec42be8befdde6170b4d48c2809cd31f3d7513a48eff04",
+      "installedSha256": "5151c821fd5dd60c8cb9538d656f7c5d838930e44220da47d86311fc8b72949e",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14399,7 +14399,7 @@
       "path": "skills/multi-task-flow/scripts/service-launchd.ts",
       "sourceBlob": "a5d5eb2c2dcca7ab900f5826114ea0c661e01854",
       "sourceSha256": "4c613f9d5d699124c6ad0f38965eb5ccbc0da17251b2df54320e1a9759f9f7b6",
-      "installedSha256": "15145985f99b9aaf97a735e56d925db9d3b53f075a94df415062e0951eabc221",
+      "installedSha256": "f1d9c5a4a2a61d1fd519cd46d0f429c507ede5b4248e56031cd69ab669f7e26a",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14767,7 +14767,7 @@
       "path": "skills/multi-task-flow/tests/shared-service.test.ts",
       "sourceBlob": "ec1f11437aae62a1a95ee37da6aba33726b4095b",
       "sourceSha256": "ec28a45c302aaa4acfa4b8cf25a8e7fbf6079b72ab7afdc38e1bc5280d17bba7",
-      "installedSha256": "75f916cda6b06c4f1aec417f06d3670743c7b87d0744cf6aa0c4e46ca16db61f",
+      "installedSha256": "fdaf954a8d7d011a06457065977b093160d62d53ad5c84b42898d2a1242f95b5",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15738,7 +15738,7 @@
     },
     {
       "path": "skills/scripts/test-viewer-source.ts",
-      "installedSha256": "d4cea7a0c68fde91f494d53bb810e942a3e56632dee2ae702c9e460fae4a6f95"
+      "installedSha256": "d97929ac0194124a23de93c0a8e1185d531e444a6dba68c5f9dc1c550c34fcfb"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/card-hover-board-group-time-desktop.png",
