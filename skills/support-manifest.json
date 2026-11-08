@@ -48,5 +48,8 @@
   "skills/scripts/test-skills-native.ts",
   "skills/scripts/test-viewer-source.ts",
   "skills/scripts/verify-skills-modules.ts",
-  "skills/support-manifest.json"
+  "skills/support-manifest.json",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
+  "skills/multi-task-flow/web/task-context-menu.ts",
+  "skills/multi-task-flow/tests/ui/task-context-menu.test.ts"
 ]

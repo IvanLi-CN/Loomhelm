@@ -49,6 +49,13 @@ test("old read-only runs do not block regardless of completion events and usage 
   }
   writeFileSync(f.store.ledgerPath,bytes);
 });
+test("compatibility report exposes migration guides for affected contracts",()=>{
+  const f=setup();
+  const guide={id:"1.9.0-ledger-contract-3",path:"docs/migrations/1.9.0/from-contract-2.md",sha256:"a".repeat(64),required_for:["schema-2/contract-1"],operation:"ledger-maintenance-apply"};
+  const target=releaseFor(f.state,"guide",{migration_guides:[guide]});
+  const report=compatibilityReport(f.state,target.manifest);
+  expect(report.runs[0]?.migration_guides).toEqual([guide.id]);
+});
 test("new write loss needs exact approval; changes invalidate it",()=>{
   const f=setup();const old=releaseFor(f.state,"old",{writable:["schema-2/contract-1"]});f.state.saveConfig({...f.state.config(),current_build:old.manifest.build_id});
   const report=compatibilityReport(f.state,f.release.manifest);expect(report.write_downgrades).toEqual(["demo-run"]);

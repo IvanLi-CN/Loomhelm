@@ -35,8 +35,24 @@ export function compatibilityReport(
     target_readable: boolean;
     target_writable: boolean;
     custom_view_sha256: string | null;
+    migration_guides: string[];
   }[] = [];
   const root = join(state.paths.data, "runs");
+  const releaseWindowErrors: { run_id: string; capability: string; code: string }[] = [];
+  if (existsSync(state.paths.releases)) {
+    const prior = readdirSync(state.paths.releases, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => { try { return verifyRelease(join(state.paths.releases, entry.name)); } catch { return null; } })
+      .filter((manifest): manifest is ReleaseManifest => Boolean(manifest) && manifest.schema_version === 2 && manifest.build_id !== target.build_id)
+      .sort((left, right) => right.service_version.localeCompare(left.service_version))
+      .slice(0, 4);
+    for (const release of prior) {
+      for (const contract of release.writable) {
+        if (!target.readable.includes(contract)) releaseWindowErrors.push({ run_id: `release:${release.service_version}`, capability: "release_window", code: "INCOMPATIBLE_RELEASE_WINDOW" });
+      }
+    }
+  }
+  errors.push(...releaseWindowErrors);
   if (existsSync(root))
     for (const entry of readdirSync(root, { withFileTypes: true }).sort(
       (a, b) => a.name.localeCompare(b.name),
@@ -52,6 +68,7 @@ export function compatibilityReport(
         target_readable: false,
         target_writable: false,
         custom_view_sha256: null as string | null,
+        migration_guides: [] as string[],
       };
       runs.push(row);
       try {
@@ -81,6 +98,7 @@ export function compatibilityReport(
           current?.writable.includes(row.contract) ?? false;
         row.target_readable = target.readable.includes(row.contract);
         row.target_writable = target.writable.includes(row.contract);
+        row.migration_guides = (target.migration_guides ?? []).filter((guide) => guide.required_for.includes(row.contract!)).map((guide) => guide.id);
         if (!row.target_readable)
           errors.push({
             run_id: entry.name,

@@ -31,6 +31,7 @@ export function servicePaths(env: NodeJS.ProcessEnv = process.env) {
     config: join(root, "config"),
     state: join(root, "state"),
     releases: join(root, "releases"),
+    candidates: join(root, "candidates"),
     logs: join(root, "logs"),
     label: "cc.ivanli.loomhelm.multi-task-flow.viewer" + suffix,
     scope: "multi-task-flow--user-" + String(process.getuid?.() ?? 0) + suffix,

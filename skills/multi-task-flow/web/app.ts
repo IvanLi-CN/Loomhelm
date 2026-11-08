@@ -1,3 +1,4 @@
+import { installTaskContextMenu } from "./task-context-menu";
 import { hasArchiveAction } from "./conversation-control";
 import { installTextTooltips } from "./tooltip";
 import { runtimeTaskState } from "./task-state";
@@ -74,8 +75,10 @@ let themeWriteQueue: Promise<void> = Promise.resolve();
 let phase: DisplayPhase | null = null;
 let phaseTransition = false;
 let hydrated = false;
+let missingLinkedTask: string | null = null;
 let userChangedTab = hasValidTabParam(window.location.search);
 let lastFocus: HTMLElement | null = null;
+let lastScrollTop: number | null = null;
 let focusDetailsOnNextRender = false;
 let keyboardSelection = false;
 let hoverBridge: HoverPreviewBridge | null = null;
@@ -251,6 +254,7 @@ function setTaskLayout(layout: TaskLayout): void {
   syncUrl();
   if (data) { hideHoverPreview(); hoverBridge?.resetTargets(); renderList(filteredTasks()); syncStableGridCardWidth(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); }
 }
+const taskContextMenu = installTaskContextMenu({ getData: () => data, beforeOpen: () => { hideHoverPreview(); closeMenus(); } });
 const cardRenderer = createCardRenderer({
   getData: () => data,
   getLayout: () => viewState.layout,
@@ -321,6 +325,7 @@ function updateDetailsSurface(open: boolean, focus = false): ReturnType<typeof r
   return surface;
 }
 const timelineController = createTimelineController({
+  taskContextMenu: (event, id, target) => taskContextMenu.open(event, id, target),
   getData: () => data,
   getViewState: () => viewState,
   setViewState: (next) => { viewState = next; },
@@ -383,8 +388,9 @@ function refreshResponsiveDetails(): void {
   }
 }
 function restoreSelectedFocus(selection: { kind: "task" | "group"; id: string }): void { const selector = selectedObjectFocusSelector(selection); focusAfterRerender(lastFocus, selector ? firstVisibleElement(document, selector) : null); }
-function selectGroup(id: string): void { if (!data) return; if (selectedGroup === id && viewState.detail) { closeDetails(); return; } const group = data.groups.find((item) => item.id === id); if (!group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; selectedGroup = id; selectedTask = null; viewState = { ...viewState, selected: { kind: "group", id }, detail: true }; syncUrl(); showGroup(group); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "group", id }); showCurrentSelectionPreview(); }
-function selectTask(id: string): void { if (!data) return; if (selectedTask === id && viewState.detail) { closeDetails(); return; } const task = data.tasks.find((item) => item.id === id); if (!task) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; selectedTask = id; selectedGroup = null; viewState = { ...viewState, selected: { kind: "task", id }, detail: true }; syncUrl(); showTask(task); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "task", id }); showCurrentSelectionPreview(); }
+function dismissTaskLinkNotice(): void { missingLinkedTask = null; const notice = document.getElementById("task-link-notice"); if (notice) notice.hidden = true; }
+function selectGroup(id: string): void { if (!data) return; dismissTaskLinkNotice(); if (selectedGroup === id && viewState.detail) { closeDetails(); return; } const group = data.groups.find((item) => item.id === id); if (!group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedGroup = id; selectedTask = null; viewState = { ...viewState, selected: { kind: "group", id }, detail: true }; syncUrl(); showGroup(group); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "group", id }); showCurrentSelectionPreview(); }
+function selectTask(id: string): void { if (!data) return; dismissTaskLinkNotice(); if (selectedTask === id && viewState.detail) { closeDetails(); return; } const task = data.tasks.find((item) => item.id === id); if (!task) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedTask = id; selectedGroup = null; viewState = { ...viewState, selected: { kind: "task", id }, detail: true }; syncUrl(); showTask(task); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "task", id }); showCurrentSelectionPreview(); }
 function applyStateToControls(): void { $<HTMLInputElement>("search").value = viewState.query; setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); }
 type ListFocus = { kind: "task" | "group"; id: string; href: string | null } | null;
 function captureListFocus(): ListFocus {
@@ -436,6 +442,7 @@ function render(): void {
   const runProfileControl = document.getElementById("run-profile-control");
   if (runProfileControl && data) runProfileControl.replaceChildren(createProfileEditor({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }, "run", data.orchestration.id, data.orchestration.execution_profile ?? null, data.orchestration.execution_profile ?? null, data.profile_read_only ? "当前视图只读或尚未迁移" : null));
   if (!data) return;
+  taskContextMenu.close();
   const listFocus = captureListFocus();
   const menuFocus = captureMenuFocus();
   const detailFocus = captureDetailFocus();
@@ -480,8 +487,21 @@ async function refresh(): Promise<void> {
     const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries([...data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)]), ...data.groups.map(g => [`group:${g.id}`, g.latest_agent_output ?? initialOutput(g.agent_thread_id)])]) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
     if (!hydrated && !userChangedTab && !hasValidTabParam(window.location.search)) viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
     if (!hasValidLayoutParam(window.location.search)) viewState = { ...viewState, layout: defaultTaskLayout(data.groups.length) };
+    const requestedTask = viewState.selected?.kind === "task" ? viewState.selected.id : missingLinkedTask;
+    const missingTask = requestedTask && !data.tasks.some(task => task.id === requestedTask);
+    missingLinkedTask = missingTask ? requestedTask : null;
+    let taskNotice = document.getElementById("task-link-notice");
+    if (!taskNotice) { taskNotice = document.createElement("div"); taskNotice.id = "task-link-notice"; taskNotice.className = "notice notice-warning"; taskNotice.role = "status"; $("connection-notice").after(taskNotice); }
+    taskNotice.hidden = !missingTask;
+    taskNotice.textContent = missingTask ? `任务 ${requestedTask} 不存在或已不可用。` : "";
+    if (!hydrated && requestedTask && !missingTask && viewState.detail) viewState = { ...viewState, query: "", group: "", kind: "", state: "" };
     viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
     if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true; phase = currentPhase; const shouldFocusRestoredDetails = !hydrated && viewState.detail; hydrated = true; if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true; syncUrl(); connection(deriveConnectionStatus(connected, result.watching)); $("load-error").hidden = true; render();
+    if (shouldFocusRestoredDetails && selectedTask) {
+      const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(selectedTask)}"]`);
+      card?.scrollIntoView({ block: "center", inline: "center" });
+      card?.querySelector<HTMLElement>(".task-card-select")?.focus({ preventScroll: true });
+    }
   } catch (error) { if (serial !== requestSerial) return; connection("stale"); if (!data) { $("load-error").hidden = false; $("load-error").textContent = `首次加载失败：${error instanceof Error ? error.message : "无法读取数据"}`; } }
 }
 async function loadTheme(): Promise<void> { const serial = ++themeRequestSerial; await themeWriteQueue; try { const response = await fetch("api/preferences", { cache: "no-store" }); if (!response.ok) return; const loaded = (await response.json() as { theme: Theme }).theme; if (serial === themeRequestSerial) applyTheme(loaded); } catch {} }
