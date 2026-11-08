@@ -47,10 +47,12 @@ export function applyDetailSurface(elements: DetailSurfaceElements, surface: Det
 export function installDetailViewport(details: HTMLElement): void {
   const slot = details.closest<HTMLElement>(".details-slot")!;
   const topbar = document.querySelector<HTMLElement>(".topbar");
+  const workspace = details.closest<HTMLElement>(".workspace");
   const update = (): void => {
     if (details.hidden || window.innerWidth < 768) return;
     const bounds = slot.getBoundingClientRect();
-    const top = Math.min(Math.max(16, (topbar?.getBoundingClientRect().bottom ?? 0) + 16), Math.max(16, window.innerHeight - 160));
+    // Start below the overview, then pin to the viewport as the workspace scrolls.
+    const top = Math.min(Math.max(16, (workspace?.getBoundingClientRect().top ?? 16), (topbar?.getBoundingClientRect().bottom ?? 0) + 16), Math.max(16, window.innerHeight - 160));
     details.style.setProperty("--details-left", `${bounds.left}px`);
     details.style.setProperty("--details-width", `${bounds.width}px`);
     details.style.setProperty("--details-top", `${top}px`);
@@ -61,7 +63,10 @@ export function installDetailViewport(details: HTMLElement): void {
     scheduled = true;
     window.requestAnimationFrame(() => { scheduled = false; update(); });
   };
-  new ResizeObserver(schedule).observe(slot);
+  const resizeObserver = new ResizeObserver(schedule);
+  resizeObserver.observe(slot);
+  if (workspace) resizeObserver.observe(workspace);
+  if (topbar) resizeObserver.observe(topbar);
   new MutationObserver(update).observe(details, { attributes: true, attributeFilter: ["hidden", "class"] });
   window.addEventListener("scroll", schedule, { passive: true });
   window.addEventListener("resize", schedule);
