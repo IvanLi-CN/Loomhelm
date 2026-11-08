@@ -13,9 +13,9 @@ from pathlib import Path
 from policy import ReleaseError, Version, canonical, digest, reserve
 from ledger import Ledger, event, git, transition
 from github import GitHub
+from preparation import PROJECTIONS, current_preparation, projected_files, reconcile
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECTIONS = ('VERSION','clients/typescript/package.json','web/package.json','bun.lock')
 
 
 def contract():
@@ -45,18 +45,8 @@ def claim_build(ledger, record, run_id, attempt):
 
 
 def project(version):
-    Version(version)
-    (ROOT/'VERSION').write_text(version+'\n')
-    for name in PROJECTIONS[1:3]:
-        path = ROOT/name
-        obj = json.loads(path.read_text())
-        obj['version'] = version
-        path.write_text(json.dumps(obj,indent=2)+'\n')
-    path = ROOT/'bun.lock'
-    text, count = re.subn(r'("web":\s*\{\s*"name":\s*"@loomhelm/web",\s*"version":\s*")[^"]+', lambda m:m[1]+version, path.read_text(),count=1)
-    if count != 1:
-        raise ReleaseError('unknown Bun workspace projection shape')
-    path.write_text(text)
+    for name,data in projected_files({name:(ROOT/name).read_bytes() for name in PROJECTIONS},version).items():
+        (ROOT/name).write_bytes(data)
 
 
 def check_projections():
@@ -107,18 +97,19 @@ def trusted_baseline(api, records):
 
 
 def bind(api, record, merge_sha):
+    prepared = current_preparation(record)
     pulls = api.api('commits/'+merge_sha+'/pulls?per_page=100')
-    matches = [p for p in pulls if p['merged_at'] and p['merge_commit_sha'] == merge_sha and p['base']['ref'] == 'main' and p['head']['sha'] == record['preparation_sha'] and p['head']['ref'] == record['branch']]
+    matches = [p for p in pulls if p['merged_at'] and p['merge_commit_sha'] == merge_sha and p['base']['ref'] == 'main' and p['head']['sha'] == prepared['preparation_sha'] and p['head']['ref'] == prepared['branch']]
     if len(matches) != 1:
         raise ReleaseError('missing exact-head merged preparation PR')
     git('fetch','--no-tags','origin',merge_sha)
-    git('fetch','--no-tags','origin',record['intent']['source_sha'])
+    git('fetch','--no-tags','origin',prepared['source_sha'])
     # Merge must contain precisely the approved version projections, no hidden code.
-    changed = git('diff','--name-only',record['intent']['source_sha'],merge_sha).stdout.decode().splitlines()
+    changed = git('diff','--name-only',prepared['source_sha'],merge_sha).stdout.decode().splitlines()
     if not set(changed) <= set(PROJECTIONS):
         raise ReleaseError('source boundary drift during version preparation')
     for name in PROJECTIONS:
-        if git('show',f'{merge_sha}:{name}').stdout != git('show',f'{record["preparation_sha"]}:{name}').stdout:
+        if git('show',f'{merge_sha}:{name}').stdout != git('show',f'{prepared["preparation_sha"]}:{name}').stdout:
             raise ReleaseError('version projection changed at merge')
     transition(record,'bound',merge_sha=merge_sha,pr=matches[0]['number'])
 
@@ -203,12 +194,14 @@ def publish(api, ledger, record, directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=['check','audit','project','reserve','prepare','bind','inspect','verify','publish','notify','terminate','claim-build'])
+    parser.add_argument('action',choices=['check','audit','project','reserve','prepare','reconcile','bind','inspect','verify','publish','notify','terminate','claim-build'])
     parser.add_argument('--target')
     parser.add_argument('--identity')
     parser.add_argument('--source-sha')
     parser.add_argument('--directory',type=Path)
     parser.add_argument('--reason')
+    parser.add_argument('--preparation-sha')
+    parser.add_argument('--assessment',type=Path)
     args = parser.parse_args()
     os.chdir(ROOT)
     if args.action == 'check':
@@ -270,8 +263,9 @@ def main():
                     raise ReleaseError('existing preparation branch differs from reserved intent')
                 transition(record,'prepared',branch=branch,preparation_sha=sha)
                 ledger.append(ledger.state)
-            prs = api.api('pulls?state=all&head='+repo.split('/')[0]+':'+record['branch'])
-            matching = [p for p in prs if p['head']['sha'] == record['preparation_sha'] and p['base']['ref'] == 'main']
+            prepared = current_preparation(record)
+            prs = api.api('pulls?state=all&head='+repo.split('/')[0]+':'+prepared['branch'])
+            matching = [p for p in prs if p['head']['sha'] == prepared['preparation_sha'] and p['base']['ref'] == 'main']
             if not matching:
                 if os.environ.get('GITHUB_ACTIONS') == 'true':
                     # Keep the repository's existing ban on workflow-created PRs.
@@ -283,6 +277,10 @@ def main():
                             output.write('Open the [version preparation PR](https://github.com/'+repo+'/compare/main...'+record['branch']+'?expand=1), complete its checks, and merge it before running Release with identity `'+record['id']+'`.\n')
                 else:
                     api.api('pulls','POST',dict(title='chore(release): prepare '+record['version'],head=record['branch'],base='main',body='Manual product release identity: '+record['id']+'\nTarget: '+record['intent']['target']))
+        elif args.action == 'reconcile':
+            if not args.assessment:
+                raise ReleaseError('an explicit release-intent assessment is required')
+            reconcile(api,ledger,record,args.source_sha,args.preparation_sha,json.loads(args.assessment.read_text()),checks)
         elif args.action == 'bind':
             if record['state'] == 'prepared':
                 api.verify_source(args.source_sha,checks)
