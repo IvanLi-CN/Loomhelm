@@ -204,7 +204,6 @@ export async function switchRelease(
           } catch {
             throw new Error("New build did not become healthy");
           }
-          state.release("maintenance");
           return { build_id: manifest.build_id, changed: true };
         } catch (error) {
           control.unload(state);
@@ -235,11 +234,7 @@ export async function switchRelease(
               control.start(state);
               await waitForServiceHealth(() => control.status(state), startupTimeoutMs);
               recovered = true;
-            } catch {
-              // Preserve the public recovery error after releasing the temporary lease.
-            } finally {
-              state.release("maintenance");
-            }
+            } catch {}
             requireCondition(
               recovered,
               "ROLLBACK_HEALTH_FAILED",
@@ -247,6 +242,8 @@ export async function switchRelease(
             );
           }
           throw error;
+        } finally {
+          state.release("maintenance");
         }
       },
     ),

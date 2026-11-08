@@ -113,6 +113,20 @@ test("maintenance lease covers the readiness window and startup failure removes 
   await expect(switchRelease(state, fixtureRelease(root, "lease-window").source, false, control)).rejects.toThrow("controlled startup failure");
   expect(state.runtime().leases).toEqual(before);
 });
+test("failed recovery unload still releases the maintenance lease without extending users", async () => {
+  const { root, state } = fixture();
+  await installRelease(state, fixtureRelease(root).source);
+  state.renew({ id: "existing-agent", kind: "agent", run_id: null, thread_id: null }, 180_000);
+  const before = state.runtime().leases;
+  let unloads = 0;
+  const control = {
+    ...nativeServiceControl,
+    unload: () => { if (++unloads > 1) throw new Error("controlled unload failure"); },
+    start: () => { throw new Error("controlled startup failure"); },
+  };
+  await expect(switchRelease(state, fixtureRelease(root, "unload-failure").source, false, control)).rejects.toThrow("controlled unload failure");
+  expect(state.runtime().leases).toEqual(before);
+});
 test("import seals old writes, retains backup and is idempotent", async () => {
   const { root, state } = fixture(); await installRelease(state, fixtureRelease(root).source);
   const source = join(root, "legacy"); const { store } = fixtureRun(source);
