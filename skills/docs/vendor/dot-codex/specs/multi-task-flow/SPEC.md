@@ -32,6 +32,7 @@
 
 ### REQ-ORCH-012
 
+- Dashboard 交付与检查必须先检查当前宿主实际暴露的浏览器能力；在 ChatGPT Desktop 或 Codex Desktop 中优先使用可用的宿主内置浏览器，此场景优先于通用 ego-browser 默认路由。内置能力缺失时才按获准的 ego-browser 路由回退；打开或登录失败须先诊断，Chrome／Computer Use 与真实截图仍遵循原有授权门禁。交付完成必须以渲染页面核实目标 run ID 和当前 revision，并保持页面打开；无可用路径时报告 blocker，不能仅凭打开工具成功宣告交付。
 - 一个 OS 用户的所有项目和 `CODEX_HOME` 安装必须共用一个生产 viewer。viewer 必须能在无需管理员权限时按需启动，使用相互独立且会过期的 Agent/browser 租约，在所有租约过期后退出，并保留每次 run。Agent 租约默认 60 分钟，browser 租约默认 5 分钟且每 60 秒续租；未完成的 run 本身不得使服务常驻。
 - 生产状态必须位于独立于安装代码和 worktree 的 `~/.local/share/multi-task-flow/`。开发和测试实例必须显式隔离数据、服务身份、端口和凭据；只有已订阅的 run 可以持有实时 watcher。
 - 服务必须提供固定的 loopback 入口 `/runs/<run_id>/` 和可选的 `?plan=<plan_id>`，run 链接不得包含凭据。首次安装必须分配并持久化端口；冲突必须失败，不能修改端口或接管其他进程。
