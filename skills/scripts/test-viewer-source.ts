@@ -16,11 +16,19 @@ try {
   assert.equal(manifest.schema_version,2);
   assert.equal(existsSync(join(output,'viewer.mjs')),false);
   assert.equal(existsSync(join(output,'posix.node')),false);
-  const marker=join(temporary,'hostile-marker');
-  const preload=join(temporary,'preload.ts'); writeFileSync(preload,`await Bun.write(${JSON.stringify(marker)},'unsafe');`);
-  const invoke=spawnSync(join(output,'viewer'),['invalid','--input','-'],{cwd:temporary,env:{...env,NODE_OPTIONS:'--import='+preload,BUN_OPTIONS:'--preload='+preload,BUN_INSPECT_PRELOAD:preload},input:'{}',encoding:'utf8',timeout:30000});
+  const marker=join(temporary,'environment-marker');
+  const tools=join(temporary,'caller-tools'); mkdirSync(tools);
+  const gh=join(tools,'gh');
+  writeFileSync(gh, `#!/bin/sh\nprintf '%s' '{"number":42,"title":"fixture","url":"https://github.com/owner/repo/pull/42","state":"MERGED","mergedAt":null,"statusCheckRollup":[]}'\n`); chmodSync(gh,0o700);
+  const preload=join(temporary,'preload.ts');
+  writeFileSync(preload,`import {PRDetailsCache} from ${JSON.stringify(join(output,'skills/multi-task-flow/scripts/pr-details.ts'))}; const snapshot=await new PRDetailsCache().read({host:"github.com",owner:"owner",name:"repo"},"https://github.com/owner/repo/pull/42"); await Bun.write(${JSON.stringify(marker)},JSON.stringify({snapshot,path:process.env.PATH,option:process.env.NODE_OPTIONS}));`);
+  const callerPath=tools+':'+process.env.PATH;
+  const invoke=spawnSync(join(output,'viewer'),['invalid','--input','-'],{cwd:temporary,env:{...env,PATH:callerPath,NODE_OPTIONS:'--trace-warnings',BUN_OPTIONS:'--preload='+preload},input:'{}',encoding:'utf8',timeout:30000});
   assert.notEqual(invoke.status,0); assert.equal(JSON.parse(invoke.stderr).code,'INVALID_COMMAND');
-  assert.equal(existsSync(marker),false);
+  const inherited=JSON.parse(readFileSync(marker,'utf8'));
+  assert.equal(inherited.path,callerPath); assert.equal(inherited.option,'--trace-warnings');
+  assert.equal(inherited.snapshot.data?.state,'MERGED'); assert.equal(inherited.snapshot.stale,false); assert.equal(inherited.snapshot.error,null);
+  rmSync(marker);
   const unsafe = join(temporary,'unsafe-temp'); mkdirSync(unsafe); chmodSync(unsafe,0o777);
   const unsafeInvoke=spawnSync(join(output,'viewer'),['invalid'],{env:{...env,TMPDIR:unsafe},encoding:'utf8',timeout:30000});
   assert.notEqual(unsafeInvoke.status,0); assert.match(unsafeInvoke.stderr,/VIEWER_TEMP_UNTRUSTED/);
@@ -53,5 +61,5 @@ try {
   } finally { await viewer.stop(); }
   writeFileSync(join(output,'skills/multi-task-flow/dist/app.js'),'tampered');
   assert.throws(()=>verifyRelease(output),/checksum/);
-  console.log(JSON.stringify({ok:true,schemaVersion:2,runtime:'bun@1.4.4',sourceEntry:true,preloadRejected:true,isolatedHttp:true,checksums:true,resources:Object.keys(manifest.files).length}));
+  console.log(JSON.stringify({ok:true,schemaVersion:2,runtime:'bun@1.4.4',sourceEntry:true,environmentPreserved:true,isolatedHttp:true,checksums:true,resources:Object.keys(manifest.files).length}));
 } finally { rmSync(temporary,{recursive:true,force:true}); }

@@ -181,3 +181,18 @@ test("future ledger contracts are refused before read or write", () => {
   expect(() => store.update(value => { value.revision++; })).toThrow("not supported");
   expect(readFileSync(store.ledgerPath, "utf8")).toBe(bytes);
 });
+
+
+test("launchd definition preserves the installing caller PATH without assuming tool locations", async () => {
+  const { writeLaunchdDefinition } = await import("../scripts/service-launchd");
+  const { readFileSync } = await import("node:fs");
+  const { root, state } = fixture();
+  await installRelease(state, fixtureRelease(root).source);
+  const previous = process.env.PATH;
+  try {
+    process.env.PATH = "/caller/tools&extensions:/usr/bin";
+    const xml = readFileSync(writeLaunchdDefinition(state), "utf8");
+    expect(xml).toContain("<key>PATH</key><string>/caller/tools&amp;extensions:/usr/bin</string>");
+    expect(xml).not.toContain("<string>/usr/bin:/bin</string>");
+  } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+});
