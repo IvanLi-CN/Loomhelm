@@ -133,6 +133,7 @@
 - runtime 的 owned-surface 比较是词法的、仓库相对的，不得声称解析 host 文件系统的大小写折叠或 symlink alias；当 host 等价 alias 重要时，批准边界必须提供 canonical repository-relative path。
 - 初始 group/task runtime identity 字段必须为空：初始化前不得预置绑定会话、branch、PR、SHA、时间戳、blocker、requirements path 或 assignment history。
 - dashboard launcher 必须在绑定 listener 前原子校验并 claim 当前预分配租约；遇到已有 PID 或已监听的重复实例必须拒绝，不能视为转移授权；绑定 listener 时持有 registry lock，仅在 listener 确认后记录自身 PID，运行中 heartbeat 该服务租约，关闭时只释放该服务租约。Heartbeat 和 release 必须以检查到的 port 与预期 PID 状态为护栏，避免旧进程修改被替换的租约。Registry 必须区分被记录的 PID 与 expected owner PID：首次绑定可以要求 PID 为空，已有 PID 必须匹配 expected owner guard。
+- 共享 viewer 的注册表心跳仅对明确的 `REGISTRY_LOCK_TIMEOUT` 允许有限重试：前两次连续失败保持监听，第三次关闭；成功后清零。所有权不符及其他未知错误立即关闭，不得以重试绕过 PID/port 护栏。关闭日志必须区分实际 `SIGTERM`、`SIGINT`、租约到期、租约状态读取失败、注册表心跳失败、启动失败和显式请求，并分别记录关闭开始与完成时间；只记录固定错误码，不记录异常消息或凭据。诊断日志写入失败不得触发业务关闭。发布资源与新增回归必须登记在 toolkit 资源清单，并同步安装摘要，避免源码修复未进入可校验的分发包。
 - 明确安装的共享 viewer 必须使用用户级系统服务所有权和 PID 绑定的活动端口租约。临时主人预览必须使用 Codex host 提供的 native background session；Skill 只能接受 host 提供的 session identifier，不得创建、推断或替代为可见终端或前台 exec session。没有受支持的 host background route 时，URL 只能作为 live preview，handoff 必须阻塞。
 
 ### REQ-ORCH-013
