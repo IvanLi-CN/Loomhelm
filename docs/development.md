@@ -54,4 +54,4 @@ Candidate CI 与 Blue-Green Baseline 验证 PR 及 main 提交。Branch Preview�
 
 Candidate CI 保留普通、race、shuffle 三轮串行 Go 测试及真实 PostgreSQL、Windows 编译、macOS 与 Web 验证。Go 依赖缓存和编译缓存分别管理：Repository Verification 唯一写入依赖及 repository 编译缓存，Candidate Producer 唯一写入 candidate 编译缓存，其他消费者只恢复。缓存 key 包含工具链、平台及适用输入摘要；新源码可从同用途旧编译缓存恢复，再保存新的不可变 key。恢复编译缓存后执行 `go clean -testcache`，复用编译输入而不复用之前的测试成功结果；恢复失败仍执行完整验证；依赖缓存超过 500 MiB、单份编译缓存超过 1 GiB 时不保存。
 
-Candidate Producer 在质量检查后与其余验证重叠执行，上传的 artifact 只是未获认可的构建结果。必需检查 Candidate Build 在 producer 和原有依赖全部成功后才通过；失败、取消、缺失或跳过均不能认可候选。正式发布仍按同 source SHA 核验必需检查，Branch Preview 和 V01 Acceptance 使用各自独立构建路径。回退时恢复原构建依赖和缓存配置，不删除已有缓存或改变分支保护。
+Candidate Producer 在质量检查后与其余验证重叠执行，上传的 artifact 只是未获认可的构建结果。可重复构建与原生包验证等待 producer 完成并保存编译缓存后再恢复，冷启动也能复用同次运行的 Linux 编译输入；macOS 编译缓存仍按平台隔离，不能复用 Linux 缓存。Repository Verification 保持独立并行。必需检查 Candidate Build 在 producer 和原有依赖全部成功后才通过；失败、取消、缺失或跳过均不能认可候选。正式发布仍按同 source SHA 核验必需检查，Branch Preview 和 V01 Acceptance 使用各自独立构建路径。回退时恢复原构建依赖和缓存配置，不删除已有缓存或改变分支保护。

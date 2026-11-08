@@ -15,7 +15,7 @@ runs:
       shell: bash
       env:
         PURPOSE: ${{ inputs.purpose }}
-        SOURCE_HASH: ${{ hashFiles('**/*.go', 'go.mod', 'go.sum', 'scripts/**', 'tools/release/**', '.github/actions/go-cache/**') }}
+        SOURCE_HASH: ${{ hashFiles('**/*.go', 'go.mod', 'go.sum', 'db/migrations/*.sql', 'scripts/**', 'tools/release/**', '.github/actions/go-cache/**') }}
       run: |
         set -euo pipefail
         case "$PURPOSE" in repository|candidate) ;; *) exit 1 ;; esac

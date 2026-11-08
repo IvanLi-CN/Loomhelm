@@ -46,6 +46,16 @@ class CandidateWorkflowTests(unittest.TestCase):
         for command in ('go test -p=1 ./...', 'go test -p=1 -race ./...', 'go test -p=1 -shuffle=on ./...', 'go vet ./...'):
             self.assertIn(command, checks)
 
+    def test_cold_consumers_wait_for_producer(self):
+        for name in ('candidate-reproducibility', 'product-package-smoke'):
+            chunk = self.workflow.split('  ' + name + ':\n', 1)[1]
+            chunk = re.split(r'^  [a-z][a-z-]+:\n', chunk, maxsplit=1, flags=re.M)[0]
+            self.assertIn('    needs: candidate-producer\n', chunk)
+            self.assertIn('purpose: candidate', chunk)
+            self.assertNotIn('operation: save', chunk)
+        repository = self.workflow.split('  repository-verification:\n', 1)[1].split('  typescript-client-bun:', 1)[0]
+        self.assertNotIn('candidate-producer', repository)
+
     def test_single_writers_and_bounds(self):
         chunks = re.split(r'^  ([a-z][a-z-]+):\n', self.workflow, flags=re.M)
         writers = [chunks[i] for i in range(1, len(chunks), 2) if 'operation: save' in chunks[i+1]]
