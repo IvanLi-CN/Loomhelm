@@ -15,6 +15,12 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/testsupport"
 )
 
+var workerEntrypoint = testsupport.NewEntrypointBinary(repositoryRoot(), "./cmd/worker")
+
+func TestMain(m *testing.M) {
+	os.Exit(workerEntrypoint.Run(m))
+}
+
 func TestWorkerEntrypointExitsOnSignal(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -119,13 +125,7 @@ func databaseEnvironmentForTest(t *testing.T) map[string]string {
 
 func buildWorkerEntrypoint(t *testing.T) string {
 	t.Helper()
-	outputPath := filepath.Join(t.TempDir(), "worker")
-	command := exec.Command("go", "build", "-o", outputPath, "./cmd/worker")
-	command.Dir = repositoryRoot()
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build worker: %v\n%s", err, output)
-	}
-	return outputPath
+	return workerEntrypoint.Path(t)
 }
 
 func repositoryRoot() string {

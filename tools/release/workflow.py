@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 from github import GitHub
 from policy import ReleaseError
+from preparation import current_preparation
 
 
 def original_build(record, run_id, attempt):
@@ -41,7 +42,8 @@ def main():
     if a.action=='bind' and r['state']=='prepared':
         api=GitHub(os.environ['GITHUB_REPOSITORY'])
         owner=os.environ['GITHUB_REPOSITORY'].split('/')[0]
-        matches=[v for v in api.api('pulls?state=closed&head='+owner+':'+r['branch']) if v['merged_at'] and v['head']['sha']==r['preparation_sha']]
+        prepared=current_preparation(r)
+        matches=[v for v in api.api('pulls?state=closed&head='+owner+':'+prepared['branch']) if v['merged_at'] and v['head']['sha']==prepared['preparation_sha']]
         if len(matches)!=1:raise ReleaseError('preparation PR not exactly merged')
         subprocess.run(['scripts/product-release','bind','--identity',r['id'],'--source-sha',matches[0]['merge_commit_sha']],check=True)
     elif a.action=='outputs':

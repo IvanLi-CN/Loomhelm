@@ -22,6 +22,8 @@
 
 不可逆发布副作用前 MUST 建立 durable reservation，绑定产品、canonical version、policy identity、source boundary、owner 与唯一 claim key；最终源码与产物固定后 MUST 绑定 merge SHA、各 digest 和 publication targets。原子条件更新 MUST 防止竞争占用；不同身份争抢相同版本 MUST 显式冲突。不得依靠短期 workflow artifact 或静默取消旧 run 保证唯一性。
 
+版本是否可继续使用 MUST 根据实际变更是否超过原发版意图判断，不得仅因 main 前进而作废。版本尚未固定到 main，且未产生构建 claim 或发布产物时，MAY 在原 identity 内通过 owner 或获授权 agent 对实际 diff 的有证据核验，追加准备修订并继续同一版本；原 intent 和历史 MUST 保留，MUST NOT 静默换源码。意图外变更 MUST 拒绝接续并请求 owner 调整意图或版本。版本已固定到 main 时，MUST 仅绑定并发布该对应代码，即使 ledger 尚未写入 bound 或 main 后来已更换 VERSION。
+
 ### REQ-MVR-004：受保护源码与质量门禁
 
 发布源码 MUST 经过受保护 PR、verified commit、适用 review 与 required checks，并验证 exact-head merge；工作流 MUST NOT 直接写 main。reservation、Release、Deploy 边界 MUST 重验权威源码、权限、policy、产物和目标身份；缺失证明 MUST fail closed。仓库质量声明与平台规则 MUST 对齐。MUST 识别项目现有的原生分支保护，不得把采用特定 Rulesets 或新增 App、私钥作为额外强制条件；发布自动化复用现有认证，版本准备仍经过普通 PR。
@@ -48,7 +50,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 ### REQ-MVR-010：产物保留
 
-正式发布产物、manifest、校验和 MUST 长期保留；未完成发布的冻结产物 MUST 保留至恢复完成或维护者显式终止。保留合同 MUST 不依赖 Actions artifact 的短期有效期。原产物丢失 MUST 阻断该身份恢复，不能通过重建冒充原产物。终止 MUST 留存可审计状态，不自动释放已占用版本供另一身份复用。公开前 MUST 用原子更新持久化公开意图；此前允许取消，此后即使失败也只能恢复原身份完成，MUST NOT 再终止。
+正式发布产物、manifest、校验和 MUST 长期保留；未完成发布的冻结产物 MUST 保留至恢复完成或维护者显式终止。保留合同 MUST 不依赖 Actions artifact 的短期有效期。原产物丢失 MUST 阻断该身份恢复，不能通过重建冒充原产物。终止 MUST 留存可审计状态；版本未固定到 main 时 MAY 经明确意图核验恢复原身份使用原版本，不自动释放给不同意图；版本已固定到 main 时 MUST NOT 重新分配给不同代码。公开前 MUST 用原子更新持久化公开意图；此前允许取消，此后即使失败也只能恢复原身份完成，MUST NOT 再终止。
 
 ### REQ-MVR-011：GitHub Issue 失败通知
 
@@ -126,6 +128,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 - [不可变候选与蓝绿](../../adr/0002-immutable-candidates-and-blue-green.md)
 - [现有认证与平台签名](../../adr/0023-native-release-authentication.md)
+- [主干版本绑定前的发版意图核验](../../adr/0024-release-intent-before-main-binding.md)
 
 ## References
 

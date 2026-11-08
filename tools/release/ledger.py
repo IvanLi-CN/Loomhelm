@@ -77,12 +77,33 @@ class Ledger:
             new = state['releases'].get(identity)
             if new is None or new['events'][:len(old['events'])] != old['events']:
                 raise ReleaseError('ledger history cannot be removed or rewritten')
+            revisions = new.get('preparation_revisions',[])
+            prefix = old.get('preparation_revisions',[])
+            if revisions[:len(prefix)] != prefix:
+                raise ReleaseError('preparation revision history cannot be rewritten')
+            additions = revisions[len(prefix):]
+            events = [e for e in new['events'][len(old['events']):] if e['kind']=='preparation_reconciled']
+            if [e.get('revision') for e in events] != additions:
+                raise ReleaseError('preparation revisions require matching append-only events')
+            if additions:
+                if any(new.get(k) for k in ('merge_sha','build_source','artifacts','publication_intent')):
+                    raise ReleaseError('source reconciliation cannot bind or build in the same update')
+                from preparation import validate_revision
+                cursor = copy.deepcopy(old)
+                for revision in additions:
+                    validate_revision(cursor,revision)
+                    cursor.setdefault('preparation_revisions',[]).append(revision)
+                    cursor['state']='prepared'
+                if new['state'] != 'prepared':
+                    raise ReleaseError('source reconciliation must remain unbound')
             for field in ('id','version','intent','merge_sha','preparation_sha','branch','publication_intent','build_source'):
                 if field in old and old[field] != new.get(field):
                     raise ReleaseError('reserved identity field cannot change: '+field)
             if old.get('state') in ('staged','frozen','completed','terminated') and old.get('artifacts') != new.get('artifacts'):
                 raise ReleaseError('frozen inventory cannot change')
-        for record in state['releases'].values():
+        for identity,record in state['releases'].items():
+            if identity not in (self.original if previous is None else previous)['releases'] and record.get('preparation_revisions'):
+                raise ReleaseError('preparation revisions require an existing reservation')
             if any(e.get('sequence') != i+1 for i,e in enumerate(record['events'])):
                 raise ReleaseError('invalid append-only event sequence')
     def append(self, state):
@@ -139,12 +160,18 @@ def transition(record, kind, **fields):
         'publication_intent': ('frozen',),
         'completed': ('frozen',), 'terminated': ('reserved','prepared','bound','staged','frozen'),
         'build_claim': ('bound',),
+        'preparation_reconciled': ('prepared','terminated'),
         'notification': ('reserved','prepared','bound','staged','frozen','completed','terminated'),
     }
     if kind not in allowed or record['state'] not in allowed[kind]:
         raise ReleaseError('invalid release state transition')
     if kind == 'terminated' and record.get('publication_intent'):
         raise ReleaseError('publication started; reconcile the same identity, never terminate')
+    if kind == 'preparation_reconciled':
+        from preparation import validate_revision
+        validate_revision(record,fields['revision'])
+        record.setdefault('preparation_revisions',[]).append(copy.deepcopy(fields['revision']))
+        record['state']='prepared'
     if kind == 'publication_intent':
         if record.get('publication_intent'):
             raise ReleaseError('publication intent already recorded')

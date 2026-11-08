@@ -39,5 +39,8 @@
   "skills/multi-task-flow/scripts/conversation-eligibility.ts",
   "skills/multi-task-flow/scripts/demo-archive.ts",
   "skills/multi-task-flow/tests/demo-archive.test.ts",
-  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/archive-compact.png"
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/archive-compact.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-desktop.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-medium.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-mobile.png"
 ]
