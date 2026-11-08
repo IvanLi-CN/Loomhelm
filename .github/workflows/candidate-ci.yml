@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  CANDIDATE_SOURCE_SHA: e9a996e2005a7b86850520b58e421d29c865f0f0
+  CANDIDATE_SOURCE_SHA: 04d15b5f03b6449171fa027d3d37b5fba455c770
 
 jobs:
   quality-gates:
