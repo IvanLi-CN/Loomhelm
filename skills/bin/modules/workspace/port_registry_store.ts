@@ -80,7 +80,7 @@ export class PortRegistryStore {
         return handle;
       }
       if (Date.now() >= deadline)
-        throw new RegistryError(`timed out waiting for lock: ${this.lockPath}`);
+        throw new RegistryError(`timed out waiting for lock: ${this.lockPath}`, "REGISTRY_LOCK_TIMEOUT");
       await this.options.sleep(LOCK_WAIT_INTERVAL_MS);
     }
   }
