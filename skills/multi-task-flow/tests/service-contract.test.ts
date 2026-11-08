@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { servicePaths, orchestrationRoot } from "../scripts/service-paths";
@@ -103,7 +103,7 @@ test("ordinary startup rejects the legacy plist before calling launchctl", async
 });
 
 test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "true" || !process.env.LOOMHELM_VIEWER_LABEL_BEFORE || !process.env.LOOMHELM_VIEWER_LABEL_AFTER)("native launchd label transition preserves port and retires legacy registration", async () => {
-  const { installRelease, switchRelease } = await import("../scripts/service-maintenance");
+  const { installRelease, switchRelease, nativeServiceControl } = await import("../scripts/service-maintenance");
   const { writeLaunchdDefinition, startUserService, unloadUserService, launchdDomain, launchctl } = await import("../scripts/service-launchd");
   const { serviceStatus } = await import("../scripts/service-lifecycle");
   const { processAlive } = await import("../../bin/modules/workspace/port_registry");
@@ -113,12 +113,21 @@ test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "tru
   const legacyLabel = state.paths.label.replace("cc.ivanli.loomhelm.multi-task-flow.viewer", "cn.ivan.multi-task-flow.viewer");
   const legacyState = new ServiceState({ ...state.paths, label: legacyLabel });
   const domain = launchdDomain();
+  const stderr = join(state.paths.logs, "native-startup-stderr.log");
+  const startWithDiagnostics = (instance: ServiceState) => {
+    const plist = join(instance.paths.config, "viewer.plist");
+    writeFileSync(plist, readFileSync(plist, "utf8").replace(
+      "<key>StandardErrorPath</key><string>/dev/null</string>",
+      `<key>StandardErrorPath</key><string>${stderr}</string>`,
+    ));
+    startUserService(instance);
+  };
   try {
     const installed = await installRelease(state, process.env.LOOMHELM_VIEWER_LABEL_BEFORE!);
     state.renew({ id: "native-label", kind: "agent", run_id: null, thread_id: null }, 180_000);
     // Reproduce the legacy registration independently of program build identity.
     writeLaunchdDefinition(legacyState);
-    startUserService(legacyState);
+    startWithDiagnostics(legacyState);
     let healthy = false;
     for (let attempt = 0; attempt < 200; attempt++) {
       try { await serviceStatus(state); healthy = true; break; } catch { await Bun.sleep(100); }
@@ -126,13 +135,24 @@ test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "tru
     expect(healthy).toBe(true);
     const previousPid = state.runtime().pid;
     expect(launchctl(["print", `${domain}/${legacyLabel}`], true)).toBe(true);
-    await switchRelease(state, process.env.LOOMHELM_VIEWER_LABEL_AFTER!);
+    await switchRelease(state, process.env.LOOMHELM_VIEWER_LABEL_AFTER!, false, {
+      ...nativeServiceControl,
+      start: startWithDiagnostics,
+    });
     await serviceStatus(state);
     expect(state.config().port).toBe(installed.port);
     expect(state.config().current_build).not.toBe(installed.build_id);
     expect(state.runtime().pid).not.toBe(previousPid);
     expect(launchctl(["print", `${domain}/${legacyLabel}`], true)).toBe(false);
     expect(launchctl(["print", `${domain}/${state.paths.label}`], true)).toBe(true);
+  } catch (error) {
+    // Only this disposable CI instance is inspected; never print credentials or environment.
+    const runtime = state.runtime();
+    console.error("native label diagnostics", JSON.stringify({ phase: runtime.phase, pid: runtime.pid }));
+    for (const path of [stderr, join(state.paths.state, "startup-failure.json"), join(state.paths.logs, "viewer.jsonl")]) {
+      if (existsSync(path)) console.error(path, readFileSync(path, "utf8").slice(-8000));
+    }
+    throw error;
   } finally {
     const pid = state.runtime().pid;
     unloadUserService(state);
