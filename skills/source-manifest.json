@@ -14247,7 +14247,7 @@
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourceBlob": "81c6ce8ba1c8183231b632b141b63fc4f95c9a42",
       "sourceSha256": "fd5e4c54b33a6e7e1bdff96d4eb01cdbed02484dabde36fc52abb91c05b6a6e7",
-      "installedSha256": "88de656a874ef7f78974dc004f70b29154792a8fe6071dc2c6c01483c89b5ccf",
+      "installedSha256": "7c07f759f604f842ff34101ef8901e99a048618bf4130dc08cb61aed6ba22d4d",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {

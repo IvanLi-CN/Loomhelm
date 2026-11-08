@@ -22,11 +22,11 @@
     "TypeScript Client (Node 24)",
     "Product Release Contract",
     "Product Package (ubuntu-24.04)",
-    "Product Package (macos-15)"
+    "Product Package (macos-15)",
+    "Skills Native macOS"
   ],
   "informational_checks": [
-    "Candidate Reproducibility",
-    "Skills Native macOS"
+    "Candidate Reproducibility"
   ],
   "waivers": [],
   "expected_pr_workflows": [
@@ -38,6 +38,7 @@
         "React Doctor",
         "Repository Verification",
         "Candidate Build",
+        "Skills Native macOS",
         "Candidate Reproducibility",
         "TypeScript Client (Node 22)",
         "TypeScript Client (Node 24)",

@@ -1,5 +1,5 @@
 import { desktopHandoff } from "./desktop-handoff";
-import { createCliThread } from "./codex-cli-create";
+import { createCliThread, verifyRepositoryIdentity } from "./codex-cli-create";
 import { sweepConversationArchives } from "./conversation-archive";
 import { Runtime } from "../../bin/modules/core/runtime";
 import {
@@ -419,6 +419,15 @@ try {
       JSON.stringify(effectiveProfile(ledger, target))
     )
       throw new ContractError("PROFILE_CONFLICT", "Claim profile changed");
+    try {
+      verifyRepositoryIdentity(creationParameters.cwd, ledger.repository);
+    } catch (error) {
+      throw new ContractError(
+        "REPOSITORY_MISMATCH",
+        `Creation source does not match the ledger repository: ${String(error)}`,
+        5,
+      );
+    }
     if (operation.status !== "claimed" || operation.request.native_request_id)
       throw new ContractError(
         "CREATION_PENDING",
