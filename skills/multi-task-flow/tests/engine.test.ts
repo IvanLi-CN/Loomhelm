@@ -1420,6 +1420,49 @@ describe("orchestration state", () => {
     expect(() => apply(ledger, "group-execution-update", request(ledger, "group-bad-wait", { group_id: "g", state: "waiting", reason: "missing", waiting_for_task_ids: ["missing"] }, groupActor))).toThrow("contribution tasks");
   });
 
+  test("active delivery units cannot become idle while a contribution task is ready", () => {
+    const ledger = fixture();
+    approve(ledger);
+    ledger.groups[0].coordination_execution = {
+      state: "running",
+      reason: null,
+      waiting_for_task_ids: [],
+    };
+    expect(ready(ledger, "a")).toBe(true);
+    expect(() =>
+      apply(
+        ledger,
+        "group-execution-update",
+        request(ledger, "group-idle-with-ready-task", {
+          group_id: "g",
+          state: "idle",
+          reason: null,
+          waiting_for_task_ids: [],
+        }, groupActor),
+      ),
+    ).toThrow("ready contribution task");
+  });
+
+  test("group activation cannot carry idle coordination with a ready contribution task", () => {
+    const ledger = fixture();
+    approve(ledger);
+    ledger.groups[0].state = "planned";
+    ledger.groups[0].coordination_execution = {
+      state: "idle",
+      reason: null,
+      waiting_for_task_ids: [],
+    };
+    const incoming = structuredClone(ledger.groups[0]);
+    incoming.state = "active";
+    expect(() =>
+      apply(
+        ledger,
+        "group-update",
+        request(ledger, "group-active-idle-with-ready-task", { group: incoming }, groupActor),
+      ),
+    ).toThrow("ready contribution task");
+  });
+
   test("migrated contract2 does not bypass atom lifecycle evidence", () => {
     const ledger = v2Fixture();
     ledger.contract_version = 2;

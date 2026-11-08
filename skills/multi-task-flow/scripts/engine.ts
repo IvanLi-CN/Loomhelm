@@ -2751,6 +2751,23 @@ export function execute(
         "Blocked execution requires a reason",
         3,
       );
+      requireCondition(
+        !(
+          state === "idle" &&
+          owner.state === "active" &&
+          ledger.tasks.some(
+            (task) =>
+              task.group_id === groupId &&
+              isContributionKind(task.kind) &&
+              ["planned", "ready"].includes(task.state) &&
+              ready(ledger, task.id) &&
+              !task.thread_id,
+          )
+        ),
+        "ACTIVE_GROUP_IDLE",
+        "An active delivery unit with a ready contribution task must be running, waiting, or blocked",
+        3,
+      );
       owner.coordination_execution = {
         state,
         reason:
@@ -2855,6 +2872,23 @@ export function execute(
         "GROUP_NOT_READY",
         "Active regular delivery unit requires a group conversation",
         4,
+      );
+      requireCondition(
+        !(
+          incoming.state === "active" &&
+          incoming.coordination_execution.state === "idle" &&
+          ledger.tasks.some(
+            (task) =>
+              task.group_id === incoming.id &&
+              isContributionKind(task.kind) &&
+              ["planned", "ready"].includes(task.state) &&
+              ready(ledger, task.id) &&
+              !task.thread_id,
+          )
+        ),
+        "ACTIVE_GROUP_IDLE",
+        "An active delivery unit with a ready contribution task must be running, waiting, or blocked",
+        3,
       );
       Object.assign(current, incoming);
       addEvent(ledger, request, "group_updated", current.id, {
