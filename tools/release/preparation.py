@@ -29,6 +29,8 @@ def current_preparation(record):
 def validate_revision(record, revision):
     previous = current_preparation(record)
     assessment = revision.get('assessment', {})
+    if not isinstance(assessment,dict):
+        raise ReleaseError('release-intent assessment must be an object')
     if revision.get('policy_revision') != 'pre-main-intent-v1':
         raise ReleaseError('unsupported preparation reconciliation policy')
     if record['state'] not in ('prepared','terminated') or any(record.get(k) for k in ('merge_sha','build_source','artifacts','publication_intent')):
@@ -70,7 +72,7 @@ def reconcile(api, ledger, record, source_sha, head_sha, assessment, checks):
     if api.release(record['version']) or api.api('git/ref/tags/v'+record['version'],missing=True):
         raise ReleaseError('publication identity already exists; never change its source')
     pulls = api.api('pulls?state=all&head='+api.repo.split('/')[0]+':'+record['branch'])
-    if any(p.get('merged_at') for p in pulls) or len([p for p in pulls if p['state']=='open' and p['base']['ref']=='main' and p['head']['sha']==head_sha]) != 1:
+    if any(p.get('merged_at') and p['base']['ref']=='main' for p in pulls) or len([p for p in pulls if p['state']=='open' and p['base']['ref']=='main' and p['head']['sha']==head_sha]) != 1:
         raise ReleaseError('an exact open preparation PR is required; merged versions cannot be reassigned')
     api.verify_record_commit(head_sha)
     paths = git('diff','--name-only',current_preparation(record)['source_sha'],source_sha).stdout.decode().splitlines()
