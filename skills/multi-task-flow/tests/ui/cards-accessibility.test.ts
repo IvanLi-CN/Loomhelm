@@ -22,7 +22,7 @@ test("synthetic task and unit conversations never expose native links", async ()
   const { createSingleDeliveryUnitLedger } = await import("../../examples/single-delivery-unit/ledger");
   const { buildView } = await import("../../scripts/view");
   const view = buildView(createSingleDeliveryUnitLedger()) as import("../../web/model").View;
-  document.body.innerHTML = '<div id="task-list"></div><div id="group-list"></div><div id="details-content"></div>';
+  document.body.innerHTML = '<div id="task-list"></div><div id="group-list"></div><div id="details-summary"></div><div id="details-content"></div>';
   const common = { getData: () => view, labels: {}, safeExternal: () => null };
   let layout: "grid" | "board" = "grid";
   const cards = createCardRenderer({ ...common, getLayout: () => layout, getSelectedTask: () => null, getSelectedGroup: () => null, selectTask: () => {}, selectGroup: () => {}, setKeyboardSelection: () => {}, updateTaskLayoutControls: () => {}, bindTaskHover: () => {}, bindGroupHover: () => {} });

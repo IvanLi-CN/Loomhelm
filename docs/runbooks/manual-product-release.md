@@ -49,6 +49,7 @@ Server/Worker 的 Linux amd64、Go 和 TS 两种客户端各自的 macOS arm64 /
 | Release 已公开但 completion 丢失 | 查询原 tag、SHA 与资产集合，通过后补记 |
 | tag 或资产被另一身份占用 | 停止，不改写、不自动选择 successor |
 | 通知失败 | 独立记录失败，重跑通知流程；不修改发布或部署结果 |
+| reservation 前失败且身份附件为空 | 按可信 workflow run marker 对账 Issue，不编造 release identity；非空但损坏的附件拒绝执行 |
 | 显式终止 | 开始公开前可取消并保留墓碑；公开意图已写入后只能恢复完成，不再允许终止 |
 
 正式发布资产、manifest 与校验和长期保留；未完成发布的冻结原件保留至恢复完成或显式终止。Actions retention 仅是传输窗口。

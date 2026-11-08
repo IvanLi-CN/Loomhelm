@@ -36,5 +36,8 @@
   "skills/multi-task-flow/web/unbound-pr-hint.ts",
   "skills/bin/native-tests/core/ffi_paths.test.ts",
   "skills/multi-task-flow/tests/conversation-archive.test.ts",
-  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png"
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-desktop.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-medium.png",
+  "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-mobile.png"
 ]

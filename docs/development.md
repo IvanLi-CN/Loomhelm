@@ -1,5 +1,7 @@
 # Development
 
+开发期间的页面与组件预览见[开发预览](development-preview.md)，包含 multi-task-flow 当前工作树源码服务的入口与交付约定。
+
 Run `scripts/setup` from the repository root to verify the required Git, Go `1.27.2`, Bun `1.4.4`, Python 3.9+, and sqlc `1.31.1` toolchain, prepare the pinned Markdown tools, copy `.env.example` only when `.env.local` is missing, and install frontend dependencies. `SQLC_BIN=/path/to/sqlc scripts/setup` supports a repo-local or user-selected verified binary without changing global PATH; the official URL and SHA256 come from `tools/database-toolchain.json`. Docker and Compose are optional setup dependencies for the PostgreSQL workflow, while `scripts/dev` requires them when used; Goose and River are Go module dependencies rather than standalone setup binaries.
 
 Setup aggregates missing tools, version mismatches, manifest errors, environment-file conflicts, Markdown setup failures, and Bun install failures before exiting nonzero with a recovery hint. A regular `.env.local` or a valid symlink to a regular file is preserved; directories and dangling symlinks are rejected without following or overwriting external targets. Setup never installs hooks or changes global PATH, proxy, or authentication settings; install Lefthook explicitly when the local workflow calls for it.
@@ -49,3 +51,11 @@ The canonical bootstrap entrypoint is `scripts/setup`; it does not depend on his
 Go 客户端继续使用 `cmd/connector/` 和既有构建、安装方式。TS 客户端位于 `clients/typescript/`，使用独立 `bun.lock`；它不加入根 Bun workspace，根锁文件只管理既有 Web 与共享包。客户端与 Skills 使用 Bun 1.4.4 直接运行 TypeScript，不再支持 Node.js 或预编译 JS 入口。`scripts/checks client` 从根目录依次准备 Skills、网页资源和客户端的固定依赖，执行不发射代码的类型检查、Bun 源码测试及独立源码包验证。独立使用方式见[客户端说明](../clients/typescript/README.md)，不要求先安装 Web App 依赖。
 
 Candidate CI 与 Blue-Green Baseline 验证 PR 及 main 提交。Branch Preview、Connector Release、Release Candidate 和 V01 联合验收保持显式手动入口，并验证 main 的来源与候选身份。仓库合流不代表已发布版本、部署环境或完成全部一期业务验收。
+
+## CI 缓存与候选认可
+
+Candidate CI 保留普通、race、shuffle 三轮串行 Go 测试及真实 PostgreSQL、Windows 编译、macOS 与 Web 验证。Go 依赖缓存和编译缓存分别管理：Repository Verification 唯一写入 repository 编译缓存，Candidate Producer 在成功后唯一写入依赖及 candidate 编译缓存，其他消费者只恢复。缓存 key 包含工具链、平台及适用输入摘要；新源码可从同用途旧编译缓存恢复，再保存新的不可变 key。恢复编译缓存后执行 `go clean -testcache`，复用编译输入而不复用之前的测试成功结果；恢复失败仍执行完整验证；依赖缓存超过 500 MiB、单份编译缓存超过 1 GiB 时不保存。
+
+Candidate Producer 在质量检查后与其余验证重叠执行，上传的 artifact 只是未获认可的构建结果。可重复构建与原生包验证等待 producer 完成并保存编译缓存后再恢复，冷启动也能复用同次运行的 Linux 编译输入；macOS 无对应缓存写入者，跳过无法命中的 Go 缓存恢复，继续完整构建和验证。Repository Verification 在 Quality Gates 后直接开始，不等待 Bootstrap Verification；三轮 Go 测试保持串行。生成物、真实数据库及 Web 检查在独立 PostgreSQL 服务的 Repository Contracts job 中并行执行，避免与 source 检查共享可变数据库状态。Candidate Build 同时要求 Repository Verification 和 Repository Contracts 成功；Bootstrap Verification 仍是必需依赖。必需检查 Candidate Build 在 producer 和原有依赖全部成功后才通过；失败、取消、缺失或跳过均不能认可候选。正式发布仍按同 source SHA 核验必需检查，Branch Preview 和 V01 Acceptance 使用各自独立构建路径。回退时恢复原构建依赖和缓存配置，不删除已有缓存或改变分支保护。
+
+CI 的执行目标为 10 分钟内完成完整检查；GitHub runner 排队独立于仓库执行时间，不能由 workflow 保证。调整未经过新的运行验证时不得宣称已达到该目标，也不以设置超时或取消检查代替成功完成。
