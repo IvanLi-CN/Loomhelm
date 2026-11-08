@@ -58,7 +58,7 @@ class NativeGitHubTests(unittest.TestCase):
         self.assertEqual(api.signed_commit('release-ledger','a'*40,{'ledger.json':data},'chore(release): append'), 'b'*40)
         payload = api.graphql.call_args.args[1]['input']
         self.assertEqual(payload['expectedHeadOid'], 'a'*40)
-        self.assertEqual(payload['branch'], dict(repositoryNameWithOwner='owner/repo',refName='release-ledger'))
+        self.assertEqual(payload['branch'], dict(repositoryNameWithOwner='owner/repo',branchName='release-ledger'))
         self.assertEqual(base64.b64decode(payload['fileChanges']['additions'][0]['contents']),data)
         self.assertFalse({'author','committer','signature'} & set(payload))
         api.verify_record_commit.assert_called_once_with('b'*40)

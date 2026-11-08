@@ -42,7 +42,7 @@ class GitHub:
         if os.environ.get('GITHUB_ACTIONS') != 'true':
             result = subprocess.run(['git','var','GIT_COMMITTER_IDENT'],text=True,capture_output=True,check=True)
             signoff = result.stdout.strip().rsplit('>',1)[0]+'>'
-        value = self.graphql(query, {'input': dict(branch=dict(repositoryNameWithOwner=self.repo,refName=branch),expectedHeadOid=expected,fileChanges=dict(additions=[dict(path=name,contents=base64.b64encode(data).decode()) for name,data in files.items()]),message=dict(headline=message,body='Signed-off-by: '+signoff))})['createCommitOnBranch']['commit']
+        value = self.graphql(query, {'input': dict(branch=dict(repositoryNameWithOwner=self.repo,branchName=branch),expectedHeadOid=expected,fileChanges=dict(additions=[dict(path=name,contents=base64.b64encode(data).decode()) for name,data in files.items()]),message=dict(headline=message,body='Signed-off-by: '+signoff))})['createCommitOnBranch']['commit']
         if not (value.get('signature') or {}).get('isValid'):
             raise ReleaseError('platform commit signature unavailable; stop and reconcile')
         self.verify_record_commit(value['oid'])
