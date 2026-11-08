@@ -19,6 +19,12 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/testsupport"
 )
 
+var serverEntrypoint = testsupport.NewEntrypointBinary(repositoryRoot(), "./cmd/server")
+
+func TestMain(m *testing.M) {
+	os.Exit(serverEntrypoint.Run(m))
+}
+
 func TestServerEntrypointExitsOnSignal(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -230,18 +236,7 @@ func TestServerEntrypointRejectsMissingDatabase(t *testing.T) {
 
 func buildServerEntrypoint(t *testing.T) string {
 	t.Helper()
-	return buildEntrypoint(t, "./cmd/server", "server")
-}
-
-func buildEntrypoint(t *testing.T, packagePath, name string) string {
-	t.Helper()
-	outputPath := filepath.Join(t.TempDir(), name)
-	command := exec.Command("go", "build", "-o", outputPath, packagePath)
-	command.Dir = repositoryRoot()
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build %s: %v\n%s", packagePath, err, output)
-	}
-	return outputPath
+	return serverEntrypoint.Path(t)
 }
 
 func repositoryRoot() string {

@@ -57,3 +57,5 @@ Candidate CI 保留普通、race、shuffle 三轮串行 Go 测试及真实 Postg
 Candidate Producer 在质量检查后与其余验证重叠执行，上传的 artifact 只是未获认可的构建结果。可重复构建与原生包验证等待 producer 完成并保存编译缓存后再恢复，冷启动也能复用同次运行的 Linux 编译输入；macOS 无对应缓存写入者，跳过无法命中的 Go 缓存恢复，继续完整构建和验证。Repository Verification 在 Quality Gates 后直接开始，不等待 Bootstrap Verification；三轮 Go 测试保持串行。生成物、真实数据库及 Web 检查在独立 PostgreSQL 服务的 Repository Contracts job 中并行执行，避免与 source 检查共享可变数据库状态。Candidate Build 同时要求 Repository Verification 和 Repository Contracts 成功；Bootstrap Verification 仍是必需依赖。必需检查 Candidate Build 在 producer 和原有依赖全部成功后才通过；失败、取消、缺失或跳过均不能认可候选。正式发布仍按同 source SHA 核验必需检查，Branch Preview 和 V01 Acceptance 使用各自独立构建路径。回退时恢复原构建依赖和缓存配置，不删除已有缓存或改变分支保护。
 
 CI 的执行目标为 10 分钟内完成完整检查；GitHub runner 排队独立于仓库执行时间，不能由 workflow 保证。调整未经过新的运行验证时不得宣称已达到该目标，也不以设置超时或取消检查代替成功完成。
+
+Server 和 Worker 的入口测试在每个测试进程内按需构建一次二进制，所有用例和清理结束后由 `TestMain` 删除该进程拥有的临时构建目录。普通、race 和 shuffle 轮次分别构建，不跨轮复用测试结果或二进制；每个用例仍启动独立子进程，使用独立日志及原有隔离数据库。数据库 fixture 继续执行完整迁移、回填、验证、索引构建和切换，不复用可变业务数据。
