@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { PortRegistry } from "../../bin/modules/workspace/port_registry";
@@ -112,6 +112,40 @@ test("maintenance lease covers the readiness window and startup failure removes 
   };
   await expect(switchRelease(state, fixtureRelease(root, "lease-window").source, false, control)).rejects.toThrow("controlled startup failure");
   expect(state.runtime().leases).toEqual(before);
+});
+for (const recover of [false, true]) test(`slow native ${recover ? "recovery" : "startup"} renews maintenance coverage without extending users`, async () => {
+  const { root, state } = fixture();
+  await installRelease(state, fixtureRelease(root).source);
+  const original = state.config().current_build;
+  state.renew({ id: "agent:slow:run", kind: "agent", run_id: "run", thread_id: "slow" }, 180_000);
+  const before = state.runtime().leases;
+  state.transaction(runtime => { runtime.phase = "running"; runtime.pid = process.pid; runtime.generation = "slow-test"; });
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let starts = 0;
+  let remaining = 0;
+  const control = {
+    unload: () => state.transaction(runtime => { runtime.phase = "stopped"; runtime.pid = null; }),
+    start: () => {
+      starts++;
+      now += 75_000;
+      if (recover && starts === 1) throw new Error("controlled slow startup failure");
+      state.transaction(runtime => { runtime.phase = "running"; runtime.pid = process.pid; });
+    },
+    status: async () => {
+      if (starts > 0) remaining = state.runtime().leases.find(lease => lease.id === "maintenance")!.expires_at - now;
+      return { ok: true, build_id: state.config().current_build, source_sha: "a".repeat(40), compatibility: { api_versions: [1] }, generation: "slow-test", pid: process.pid, port: state.config().port };
+    },
+  };
+  try {
+    const operation = switchRelease(state, fixtureRelease(root, `slow-${recover}`).source, false, control);
+    if (recover) await expect(operation).rejects.toThrow("controlled slow startup failure");
+    else await operation;
+    expect(starts).toBe(recover ? 2 : 1);
+    expect(remaining).toBe(90_000);
+    expect(state.runtime().leases).toEqual(before);
+    expect(state.config().current_build === original).toBe(recover);
+  } finally { clock.mockRestore(); }
 });
 test("failed recovery unload still releases the maintenance lease without extending users", async () => {
   const { root, state } = fixture();

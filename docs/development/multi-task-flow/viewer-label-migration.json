@@ -27,7 +27,7 @@
       "目标 bundle 维护 CLI 预检",
       "卸载当前 profile 的新旧 label，等待停止",
       "切换构建，原子写新 label plist",
-      "启动和健康检查：单调时钟 60 秒预算，单次 HTTP 探测最多另占 1.5 秒；维护租约 90 秒"
+      "启动和健康检查：单调时钟 60 秒预算，单次 HTTP 探测最多另占 1.5 秒；维护租约在原生启动前后分别续租 90 秒"
     ],
     "progress_signals": [
       "精确 launchd domain/label",

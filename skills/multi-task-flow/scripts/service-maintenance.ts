@@ -199,6 +199,12 @@ export async function switchRelease(
             startupTimeoutMs + 30_000,
           );
           control.start(state);
+          // Native launchctl calls have their own bounded runtime. Refresh the
+          // temporary lease so readiness receives its complete health window.
+          state.renew(
+            { id: "maintenance", kind: "agent", thread_id: null, run_id: null },
+            startupTimeoutMs + 30_000,
+          );
           try {
             await waitForServiceHealth(() => control.status(state), startupTimeoutMs);
           } catch {
@@ -232,6 +238,10 @@ export async function switchRelease(
             let recovered = false;
             try {
               control.start(state);
+              state.renew(
+                { id: "maintenance", kind: "agent", thread_id: null, run_id: null },
+                startupTimeoutMs + 30_000,
+              );
               await waitForServiceHealth(() => control.status(state), startupTimeoutMs);
               recovered = true;
             } catch {}
