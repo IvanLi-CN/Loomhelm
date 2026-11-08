@@ -14407,7 +14407,7 @@
       "path": "skills/multi-task-flow/scripts/service-lifecycle.ts",
       "sourceBlob": "7743b89f0a031b21505aee2a2ecb6e8cc8a318ca",
       "sourceSha256": "a5051822b942b5a7de8dc730a73bd8ace21582ecea77d1f84a4787783a87d0c6",
-      "installedSha256": "52d6a94929cbf827edd0315c3a1a724f368d18ad507a0c5f23468b7195f54f14",
+      "installedSha256": "e8392fa737f110b8e3d1d6116c046f5071262edecc1903847ad02ef4cff46a45",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15802,7 +15802,7 @@
     },
     {
       "path": "skills/multi-task-flow/tests/service-lifecycle.test.ts",
-      "installedSha256": "5be272bb7196aed2a96559abffb314c6c2ba4cbd212939ece1be9b2031275293"
+      "installedSha256": "9b7957a3b85952037520b3eb2ea46644ef62101bd5265ff7a70b0a52dc8b0a78"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-desktop.png",

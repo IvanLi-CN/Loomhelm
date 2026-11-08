@@ -99,6 +99,19 @@ test.each(["SIGTERM", "SIGINT"] as const)("%s gets its own shutdown reason", asy
   } finally { await f.daemon.stop(); }
 });
 
+test("public stop cannot inject lifecycle diagnostics", async () => {
+  const f = await fixture();
+  try {
+    expect(f.daemon.stop.length).toBe(0);
+    const stopWithArguments = f.daemon.stop as unknown as (...args: string[]) => Promise<void>;
+    await stopWithArguments("sensitive path", "SECRET");
+    const records = f.logs();
+    expect(records.find((event) => event.event === "stopped").stop_reason).toBe("requested");
+    expect(JSON.stringify(records)).not.toContain("sensitive path");
+    expect(JSON.stringify(records)).not.toContain("SECRET");
+  } finally { await f.daemon.stop(); }
+});
+
 test("actual lease expiry closes with leases_expired", async () => {
  const f=await fixture();
  try {

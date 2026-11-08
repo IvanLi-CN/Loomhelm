@@ -177,7 +177,16 @@ export async function runDaemon(
     try { serviceLog(state.paths, event, generation, manifest.build_id, details); }
     catch { console.error("VIEWER_DIAGNOSTIC_WRITE_FAILED"); }
   };
-  const shutdown = (reason = "requested", errorCode?: string) => {
+  type ShutdownReason =
+    | "requested"
+    | "SIGTERM"
+    | "SIGINT"
+    | "leases_expired"
+    | "lease_state_error"
+    | "registry_heartbeat_error"
+    | "startup_error";
+  type ShutdownErrorCode = "REGISTRY_LOCK_TIMEOUT" | "INTERNAL_ERROR";
+  const shutdown = (reason: ShutdownReason = "requested", errorCode?: ShutdownErrorCode) => {
     if (stopping) return stopping;
     const stopStartedAt = new Date().toISOString();
     stopping = (async () => {
@@ -313,7 +322,7 @@ export async function runDaemon(
     }, 30_000);
     process.once("SIGTERM", terminate);
     process.once("SIGINT", interrupt);
-    return { generation, pid: process.pid, stop: shutdown };
+    return { generation, pid: process.pid, stop: () => shutdown() };
   } catch (error) {
     await shutdown("startup_error", errorCode(error));
     throw error;
