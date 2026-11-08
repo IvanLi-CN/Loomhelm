@@ -14751,7 +14751,7 @@
       "path": "skills/multi-task-flow/tests/service-contract.test.ts",
       "sourceBlob": "e63a1f85f916390955dcbd352c411997fd9c6f78",
       "sourceSha256": "aac6b3dadd9aeecc26cb1a705d483da8ef27387becf0e0dd6ab39731f27b713e",
-      "installedSha256": "281ca25a36d2a3a1e105989359039828bf941c80c709debb120611997fe9d804",
+      "installedSha256": "f561aaabf2046b8f2ceec604bd1c393c25dab6b7a1d328a17f1133b278945ea5",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {

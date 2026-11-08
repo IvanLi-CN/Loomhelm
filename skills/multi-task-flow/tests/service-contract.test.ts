@@ -149,6 +149,13 @@ test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "tru
     // Only this disposable CI instance is inspected; never print credentials or environment.
     const runtime = state.runtime();
     console.error("native label diagnostics", JSON.stringify({ phase: runtime.phase, pid: runtime.pid }));
+    for (const label of [legacyLabel, state.paths.label]) {
+      const result = Bun.spawnSync(["/bin/launchctl", "print", `${domain}/${label}`]);
+      const text = result.stdout.toString();
+      console.error("native launchd diagnostics", label, text.split("\n").filter(line => /^\s*(state|pid|runs|last exit code|last terminating signal) =/.test(line)).join("\n"));
+      const pid = text.match(/^\s*pid = (\d+)$/m)?.[1];
+      if (pid) console.error("native process diagnostics", Bun.spawnSync(["/bin/ps", "-p", pid, "-o", "pid=,ppid=,etime=,comm="]).stdout.toString());
+    }
     for (const path of [stderr, join(state.paths.state, "startup-failure.json"), join(state.paths.logs, "viewer.jsonl")]) {
       if (existsSync(path)) console.error(path, readFileSync(path, "utf8").slice(-8000));
     }
