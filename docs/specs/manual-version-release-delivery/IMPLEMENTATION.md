@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Implementation: 统一合同及原生包验证入口已由 PR #77 合并，合并提交 c45218ad238ef4f56621f832fcfb086bb2bc679e 的主干 CI 已通过。后续修正使用现有认证、GitHub 原生签名提交和 main 保护审计；当前 follow-up 仍需其自身的 CI 与正式审查。真实首发、通知及恢复尚未验收。
+Implementation: 统一发布合同及原生包入口已实现。Owner 指定并授权的 [0.1.0 正式发布](https://github.com/IvanLi-CN/Loomhelm/releases/tag/v0.1.0) 已完成，准确源码为 f2d268f462f7dd91d5b7bbeda45873c18d82b7f6，完整八项资产与 [签名 completion](https://github.com/IvanLi-CN/Loomhelm/blob/226c90f00f2daae22be274c01a98f3b43488cd44/ledger.json) 一致。[真实 Release run 42450011670](https://github.com/IvanLi-CN/Loomhelm/actions/runs/42450011670) 的四个原生构建与发布任务成功。已完成身份的只读恢复实际下载复核全部资产，ledger head 保持不变；这不冒充部分上传中断或故障通知演练。
 
 ## Implementation Coverage
 
@@ -20,6 +20,8 @@ Implementation: 统一合同及原生包验证入口已由 PR #77 合并，合�
 
 准备阶段的 reconcile 以实际 diff、owner、理由和证据核验原发版意图，签名追加 preparation_revisions，不覆盖原始 reservation。main 的历史 VERSION 和已合并 PR 决定版本是否固定，不把缺失 bound 回执或 main 后来换版本当作可换源码的许可。bind 和 Release 适配读取最新已核验准备修订；临时 Git 历史测试覆盖重复接续、原身份恢复、意图外拒绝、投影字节及主干绑定边界。
 
+准备分支合入其他 base 不等于版本落 main；主干历史和已合并 main PR 的拒绝条件继续有效。非 object 的 assessment 在 provider 或 ledger 写入前返回受控错误。失败 sidecar 将缺失或空的身份附件按可信 workflow-run 元数据通知，非空但损坏的附件继续拒绝；既有 run marker 查询防止重复 Issue，不编造产品身份。
+
 ## Verification
 
 - `python3 -m unittest discover -s tools/release -p 'test_*.py'`
@@ -36,7 +38,7 @@ main 已有原生分支保护，required checks 共十一项，strict、签名�
 
 仓库当前禁止 Actions 创建 PR；保持该设置，版本准备分支由工作流创建，普通 PR 由 owner 或已获授权的 agent 用现有 gh 身份打开。内置令牌不能读取管理员级保护详情；CI 只验证可见 protected 与 required contexts，完整配置由 owner 现有 gh 审计并保留证据。发布运行另外拒绝无精确 main 合并 PR、无签名或检查不通过的真实源码。写权限与平台签名的真实行为必须在授权发布时观察；PR fixtures 不能证明真实发布成功。
 
-A6 已有真实 Merge Receipt；owner 已将真实首发纳入后续执行，但完整版本目标与明确发布授权仍待提供，不自动选择 patch 或完整版本。GitHub API 返回不可见或无权限时，记录 unknown，而非宣称资源不存在。
+A6 的完整版本输入、授权、准确 Merge Receipt、真实首发和完成后同身份只读恢复已有证据。部分上传中断恢复、公开后丢失 completion 的真实故障注入及产品身份 Issue 投递仍未演练，不能因 fixtures 或成功首发而记为全部通过。旧 Manual Release run 42437677675 的空附件通知曾失败于 JSON 解析，独立修复补充回归测试；实际通知重试须另记平台结果。后续产品发版仍需 owner 指定 target，不自动选择 patch。GitHub API 不可见或无权限时保留 unknown。
 
 ## Compatibility
 
