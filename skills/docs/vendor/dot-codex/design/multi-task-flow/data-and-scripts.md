@@ -296,7 +296,7 @@ flowchart TD
 
 `execution-profile-update`、`execution-profile-default-update`、`execution-profile-recommend` 与 `execution-profile-migrate` 使用标准 request/revision/owner envelope。CLI 与认证 dashboard 的 `/api/execution-profile` 共用 mutation contract，能力组合来自 app-server `model/list`。缺失默认 pair 的旧运行可以读取，写入须先显式迁移。
 
-`dispatch-claim` / `dispatch-group-claim` 捕获完整有效 profile，`conversation-create` 绑定唯一 native request ID，再调用 app-server 创建、命名和初始化线程。创建 adapter 必须核对返回的实际模型与思考强度；返回值不是请求配置的自我回显。只有真实 thread ID 与匹配 request/operation/profile 的 CLI 证据才能成功绑定。unknown 保留 claim 和已观察到的 thread ID，对账通过 `dispatch-resolve` 记录匹配证据；禁止自动重复创建。初始化首条消息应确认并等待绑定，CLI 当前等待初始化 turn 完成后结束连接。
+`dispatch-claim` / `dispatch-group-claim` 捕获完整有效 profile，`conversation-create` 绑定唯一 native request ID，再通过独立的 `codex exec --worktree --json` 进程创建、命名和初始化线程。创建 adapter 必须核对返回的实际模型与思考强度；返回值不是请求配置的自我回显。只有真实 thread ID 与匹配 request/operation/profile 的 CLI 证据才能成功绑定。unknown 保留 claim 和已观察到的 thread ID，对账通过 `dispatch-resolve` 记录匹配证据；禁止自动重复创建。初始化首条消息只确认握手并在进程退出后由主对话通过内置 `send_message_to_thread` 发送正式任务。
 
 已有 thread 或尚未明确失败的 native request ID 都冻结对象配置。编辑无 native request 的 claim 时保留旧 pair 与原因、终止旧 claim，并要求重新 claim；运行默认值更新保留已冻结对象的原有效配置。对话创建后的会话内模型调整不进入该账本。
 

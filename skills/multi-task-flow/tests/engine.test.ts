@@ -2768,6 +2768,7 @@ describe("native CLI handoff contract", () => {
   test("historical unknown identity blocks failed resolution even without exec transport or progress event", () => {
     const ledger = claimed();
     delete (ledger.operations[0].request.creation_parameters as any).transport;
+    ledger.operations[0].status = "claimed";
     ledger.operations[0].request.creation_result = { outcome: "unknown", thread_id: "prior-cli-thread" };
     const before = JSON.stringify(ledger);
     const failure = request(ledger, "historical-failure", { operation_id: "cli-a", outcome: "failed", native_evidence: {
@@ -2781,6 +2782,18 @@ describe("native CLI handoff contract", () => {
     expect(() => apply(ledger, "dispatch-resolve", request(ledger, "replace-known-id", {
       operation_id: "cli-a", outcome: "unknown", thread_id: "contradictory-thread",
     }))).toThrow("cannot change");
+  });
+  test("codex exec failure requires explicit pre-creation evidence even without stored transport", () => {
+    const ledger = claimed();
+    delete (ledger.operations[0].request.creation_parameters as any).transport;
+    ledger.operations[0].status = "claimed";
+    expect(() => apply(ledger, "dispatch-resolve", request(ledger, "unsafe-exec-failure", {
+      operation_id: "cli-a", outcome: "failed", native_evidence: {
+        source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "cli-a", native_request_id: "cli-request",
+        ...ledger.config.execution_profile, created_at: at, evidence_ref: "codex:ambiguous", error: "failed",
+      },
+    }))).toThrow("pre-creation failure");
+    expect(ledger.operations[0].status).toBe("claimed");
   });
   test("development waits for owned workspace readiness and the current parent SHA, separate from initial HEAD", () => {
     const ledger = claimed();

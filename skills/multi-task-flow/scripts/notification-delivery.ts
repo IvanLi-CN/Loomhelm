@@ -101,18 +101,19 @@ export function prepareNativeNotification(
       const ledger = validateLedger(raw);
       const prior = ledger.requests.find(item => item.request_id === requestId);
       const attemptId = prior ? (prior.result as any).delivery_attempt_id : randomUUID();
+      const notice = ledger.notifications.find(item => item.id === notificationId)!;
+      const promptDigest = createHash("sha256").update(prompt).digest("hex");
       const result: any = apply(raw, "notification-deliver", {
         run_id: parsed.run_id, actor: parsed.actor, request_id: requestId,
         expected_revision: direct ? parsed.expected_revision : ledger.revision,
-        payload: { notification_id: notificationId, delivery_attempt_id: attemptId, outcome: "unknown", prompt_digest: createHash("sha256").update(prompt).digest("hex"),
-          provider_receipt: { provider: "codex-app-tools", evidence_ref: `codex-app-tools:${attemptId}:intent` } },
+        payload: { notification_id: notificationId, delivery_attempt_id: attemptId, outcome: "unknown", prompt_digest: promptDigest,
+        provider_receipt: { provider: "codex-app-tools", evidence_ref: `codex-app-tools:${attemptId}:intent`, recipient_thread_id: notice.recipient_thread_id, prompt_digest: promptDigest } },
       });
-      const notice = validateLedger(raw).notifications.find(item => item.id === notificationId)!;
       return { ...result, replayed: result.code === "REPLAYED", delivery_attempt_id: attemptId, should_send: result.code !== "REPLAYED",
         next_action: result.code === "REPLAYED" ? "notification-reconcile" : "send_message_to_thread",
         tool_request: result.code === "REPLAYED" ? null : { threadId: notice.recipient_thread_id, prompt },
         receipt_command: "notification-reconcile",
-        receipt_identity: { notification_id: notificationId, delivery_attempt_id: attemptId } };
+        receipt_identity: { notification_id: notificationId, delivery_attempt_id: attemptId, recipient_thread_id: notice.recipient_thread_id, prompt_digest: promptDigest } };
     });
   } finally { lock.release(); }
 }

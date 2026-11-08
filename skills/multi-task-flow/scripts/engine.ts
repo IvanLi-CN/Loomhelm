@@ -1538,13 +1538,12 @@ export function execute(
           5,
         );
       }
-      if ((op.request.creation_parameters as any)?.transport === "codex-exec" && outcome !== "unknown") {
+      if ((op.request.creation_parameters as any)?.transport === "codex-exec" && outcome !== "unknown")
         requireCondition(evidence.native_tool_name === "codex exec", "EVIDENCE_REQUIRED", "CLI dispatch requires real exec evidence", 5);
-        if (outcome === "failed") requireCondition(!op.request.observed_thread_id &&
-          !payload.thread_id && !evidence.thread_id && !evidence.workspace_path && !evidence.initial_head && !evidence.turn_completed &&
-          evidence.process_started === false && evidence.resources_created === false,
-          "UNKNOWN_REQUIRES_RECONCILIATION", "Only proven pre-creation failure may release a CLI dispatch; observed identities require reconciliation", 5);
-      }
+      if (evidence.native_tool_name === "codex exec" && outcome === "failed") requireCondition(!op.request.observed_thread_id &&
+        !payload.thread_id && !evidence.thread_id && !evidence.workspace_path && !evidence.initial_head && !evidence.turn_completed &&
+        evidence.process_started === false && evidence.resources_created === false,
+        "UNKNOWN_REQUIRES_RECONCILIATION", "Only proven pre-creation failure may release a CLI dispatch; observed identities require reconciliation", 5);
       if (evidence.native_tool_name === "codex exec" && outcome === "succeeded") {
         requireCondition(evidence.exit_code === 0 && evidence.turn_completed === true &&
           typeof evidence.workspace_path === "string" && evidence.workspace_path.length > 0 &&
@@ -4215,9 +4214,15 @@ export function execute(
           provider: z.string().min(1),
           evidence_ref: z.string().min(1),
           message_id: z.string().min(1).nullable().optional(),
+          recipient_thread_id: z.string().min(1).optional(),
+          prompt_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
         })
         .strict()
         .parse(payload.provider_receipt);
+      if (receipt.provider === "codex-app-tools") {
+        requireCondition(receipt.recipient_thread_id === notice.recipient_thread_id && !!receipt.prompt_digest,
+          "NATIVE_RECEIPT_REQUIRED", "Native delivery must bind the claimed recipient and prompt", 5);
+      }
       notice.status = outcome;
       notice.delivery_status = outcome;
       notice.ack_status = "unacknowledged";
@@ -4243,6 +4248,8 @@ export function execute(
           provider: receipt.provider,
           evidence_ref: receipt.evidence_ref,
           message_id: receipt.message_id ?? null,
+          recipient_thread_id: receipt.recipient_thread_id ?? null,
+          prompt_digest: receipt.prompt_digest ?? null,
         },
       );
       return {
@@ -4283,8 +4290,9 @@ export function execute(
         "Only an unknown delivery can be reconciled",
         4,
       );
-      const nativeAttempt = ledger.events.some(event => event.type === "notification_delivery_resolved" &&
-        event.data.delivery_attempt_id === notice.last_attempt_id && event.data.provider === "codex-app-tools");
+      const nativeClaim = ledger.events.find(event => event.type === "notification_delivery_resolved" &&
+        event.data.delivery_attempt_id === notice.last_attempt_id && event.data.provider === "codex-app-tools" && event.data.outcome === "unknown");
+      const nativeAttempt = !!nativeClaim;
       if (nativeAttempt || payload.delivery_attempt_id !== undefined) requireCondition(payload.delivery_attempt_id === notice.last_attempt_id,
         "ATTEMPT_MISMATCH", "Receipt must match the active delivery attempt", 3);
       const reconciliationId = parse(id, payload.reconciliation_id);
@@ -4310,11 +4318,17 @@ export function execute(
           provider: z.string().min(1),
           evidence_ref: z.string().min(1),
           message_id: z.string().min(1).nullable().optional(),
+          recipient_thread_id: z.string().min(1).optional(),
+          prompt_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
         })
         .strict()
         .parse(payload.provider_receipt);
       if (nativeAttempt || receipt.provider === "codex-app-tools") requireCondition(nativeAttempt && receipt.provider === "codex-app-tools",
         "NATIVE_RECEIPT_REQUIRED", "Native attempt requires a matching platform provider", 5);
+      if (nativeClaim?.data.prompt_digest) requireCondition(
+        receipt.recipient_thread_id === nativeClaim.data.recipient_thread_id &&
+        receipt.prompt_digest === nativeClaim.data.prompt_digest,
+        "NATIVE_RECEIPT_REQUIRED", "Platform receipt does not match the claimed recipient and prompt", 5);
       notice.status = outcome;
       notice.delivery_status = outcome;
       notice.ack_status = "unacknowledged";
@@ -4338,6 +4352,8 @@ export function execute(
           provider: receipt.provider,
           evidence_ref: receipt.evidence_ref,
           message_id: receipt.message_id ?? null,
+          recipient_thread_id: receipt.recipient_thread_id ?? null,
+          prompt_digest: receipt.prompt_digest ?? null,
         },
       );
       return {

@@ -162,7 +162,7 @@ test("native delivery claims once without a provider process and requires the ma
     expect(() => prepareNativeNotification(f.store, f.parsed, f.id, "Changed task")).toThrow("different content");
     expect(() => prepareNativeNotification(f.store, { ...f.parsed, request_id: "another-sender", expected_revision: f.store.read().revision }, f.id, "Native task")).toThrow("reconciled");
     const receipt = { ...f.parsed, request_id: "native-receipt", expected_revision: f.store.read().revision,
-      payload: { notification_id: f.id, reconciliation_id: "native-result", outcome: "sent", provider_receipt: { provider: "codex-app-tools", evidence_ref: "native:accepted", message_id: "accepted-message" } } };
+      payload: { notification_id: f.id, reconciliation_id: "native-result", outcome: "sent", provider_receipt: { provider: "codex-app-tools", evidence_ref: "native:accepted", message_id: "accepted-message", recipient_thread_id: claim.receipt_identity.recipient_thread_id, prompt_digest: claim.receipt_identity.prompt_digest } } };
     expect(() => reconcileNotification(f.store, receipt)).toThrow("active delivery attempt");
     expect(() => reconcileNotification(f.store, { ...receipt, payload: { ...receipt.payload, delivery_attempt_id: claim.delivery_attempt_id,
       provider_receipt: { ...receipt.payload.provider_receipt, provider: "codex-app-server" } } })).toThrow("matching platform provider");

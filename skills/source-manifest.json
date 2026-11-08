@@ -3031,7 +3031,7 @@
       "path": "skills/docs/vendor/dot-codex/design/multi-task-flow/data-and-scripts.md",
       "sourceBlob": "d74ef9fd234727b0c4d986b7d42c8183b0ca429c",
       "sourceSha256": "f7303b567bc0ca47e54d362c3ddbf8ea429ff1279069280b18eb2ae1138f53fe",
-      "installedSha256": "6f4989e372a4becebfc66c99c9852c7653264701985fa8ba35a94a06b9b25983",
+      "installedSha256": "9cb138a6cc52cbc530572c4ffa05b993d1e6d54a3df36c808005ecfec9ba0764",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -13895,7 +13895,7 @@
       "path": "skills/multi-task-flow/SKILL.md",
       "sourceBlob": "708e77c1572d4c7271e294984151eae1e11c0894",
       "sourceSha256": "e3ec7fceef4c5cbd8650e17603ed261e59fc06dafa9d18c85a0e2966b0d9a298",
-      "installedSha256": "d0327cc43a485156dcc20ee2d79722562e308c1f48d02b17384c304cfda04c09",
+      "installedSha256": "335a4621f952ab8f38188baf0c2971b1ceb26b3e936ca7bc3964124a02b75eec",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14199,7 +14199,7 @@
       "path": "skills/multi-task-flow/scripts/engine.ts",
       "sourceBlob": "ffd435e1e2211f7aecadab3004a909ff2828df07",
       "sourceSha256": "a4d00c849601abdbe2e08ccb26978fba04ca4042b33213e46c1206aa47273a8b",
-      "installedSha256": "f1cda3bd2c473b660d42b237deb83aa9c06750abe3df7e48c4ca7c06570a9df3",
+      "installedSha256": "a60073ef69f4cd0c52a574c2b99ac13c67af65ddc08b7e9bc8a186e6d1a24205",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14631,7 +14631,7 @@
       "path": "skills/multi-task-flow/tests/engine.test.ts",
       "sourceBlob": "211c5f1c5aa29985081f46b57abafdd3fa6b754a",
       "sourceSha256": "d5b24f927769c659fad43d83bf3ef9dd6e2df68339ccdc29be7cfa695c817361",
-      "installedSha256": "3f75c955c3717af3234845526661ed3cc8c29cdcd9f1d7fa2e19ef301d4d50ef",
+      "installedSha256": "75b077f3d5db29dc9b788bb68090c150bac11a7b38e6589c29bea5a71afb2ba4",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15866,11 +15866,11 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/notification-delivery.ts",
-      "installedSha256": "fe3545c62900af8ed11b8423d884602cb1ee7316a763a3a1eb350d8f5e6984e3"
+      "installedSha256": "afb40eece28e21a8672c84c2a789a9b0488eb14bf0d847fbee566a501098ba2e"
     },
     {
       "path": "skills/multi-task-flow/tests/notification-delivery.test.ts",
-      "installedSha256": "9ea4dc9ef14001d40d275a9cb6e10794ab986f0bd132f4034a9866c9d3e4951a"
+      "installedSha256": "280382874534ca3b30e279bad1df4c4337cb1a10a513da5459664e04b8011bb2"
     },
     {
       "path": "skills/multi-task-flow/scripts/conversation-archive.ts",
