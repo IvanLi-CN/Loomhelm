@@ -1,4 +1,4 @@
-import { archivePresentation, renderArchiveAction, type ArchiveAction } from "./conversation-control";
+import { hasArchiveAction, archivePresentation, renderArchiveAction, type ArchiveAction } from "./conversation-control";
 import { initialOutput, paintOutput } from "./agent-output";
 import { createProfileEditor, type ProfileEditorContext } from "./profile-editor";
 import { conversationUrl } from "./links";
@@ -30,7 +30,10 @@ function text(tag: string, value: string, ...classNames: string[]): HTMLElement 
 
 function clearDetails(): HTMLElement {
   const container = document.getElementById("details-content")!;
+  document.getElementById("details-summary")?.replaceChildren();
+  delete container.dataset.selection;
   container.replaceChildren();
+  container.scrollTop = 0;
   container.className = "details-empty";
   const rule = text("span", "", "empty-rule");
   rule.setAttribute("aria-hidden", "true");
@@ -123,13 +126,21 @@ function dependenciesFor(projection: ReturnType<typeof buildGraphProjection>, no
 }
 
 export function createDetailContent(context: DetailContentContext) {
+  function begin(kind: "task" | "group", id: string, title: string, state: string) {
+    const container = document.getElementById("details-content")!;
+    const selection = `${kind}:${id}`;
+    const top = container.dataset.selection === selection ? container.scrollTop : 0;
+    container.dataset.selection = selection;
+    container.replaceChildren();
+    container.className = "";
+    const summary = document.getElementById("details-summary")!;
+    summary.replaceChildren(text("div", title, "detail-title"), text("div", state, "detail-state"));
+    return { container, restore: () => { container.scrollTop = top; } };
+  }
   const showTask = (task: Task): void => {
     const data = context.getData();
     if (!data) return;
-    const container = clearDetails();
-    container.replaceChildren();
-    container.className = "";
-    container.append(text("div", task.title, "detail-title"), text("div", context.labelTask(task), "detail-state"));
+    const { container, restore } = begin("task", task.id, task.title, context.labelTask(task));
     const currentGroup = data.groups.find((group) => group.id === task.group_id)?.title ?? task.group_id;
     const executionGroups = [...new Set(data.actual_intervals.filter((row) => row.task_id === task.id).map((row) => row.group_id))].map((id) => data.groups.find((group) => group.id === id)?.title ?? id);
     field(container, "所属交付单元", currentGroup);
@@ -172,16 +183,17 @@ export function createDetailContent(context: DetailContentContext) {
       if (observed?.observed_at) field(container, "运行时观察时间", renderTimestamp(observed.observed_at));
       if (observed?.runtime_turn_id) field(container, "观察 Turn", observed.runtime_turn_id);
     }
+    const conversation = text("div", "", "detail-conversation");
+    const conversationActions = text("div", "", "detail-conversation-actions");
+    conversationActions.append(task.thread_id ? link("打开对话", conversationUrl(task.thread_id)) : text("span", "尚未创建"));
+    if (hasArchiveAction(task)) conversationActions.append(renderArchiveAction(task, context.archiveConversation, data.profile_read_only === true));
+    conversation.append(conversationActions);
     const archive = task.conversation_resource;
-    if (archive && ["closed", "active", "archive_failed", "archive_unknown", "unarchive_failed", "unarchive_unknown"].includes(archive.status)) {
+    if (archive?.error || archive?.status.endsWith("failed") || archive?.status.endsWith("unknown")) {
       const presentation = archivePresentation(task);
-      field(container, "对话归档", presentation.label);
-      field(container, archive.status.endsWith("failed") || archive.status.endsWith("unknown") ? "对话归档问题" : "归档说明", presentation.description);
-      if (archive.last_attempt_at) field(container, "最近归档尝试", renderTimestamp(archive.last_attempt_at));
-      if (archive.evidence_ref) field(container, "归档证据", archive.evidence_ref);
-      field(container, "归档操作", renderArchiveAction(task, context.archiveConversation, data.profile_read_only === true));
-    } else if (archive?.status === "pending") field(container, "对话归档", "等待归档");
-    field(container, "任务对话", task.thread_id ? link("打开对话", conversationUrl(task.thread_id)) : "尚未创建");
+      conversation.append(text("p", `${presentation.label}：${presentation.description}`, "detail-conversation-notice"));
+    }
+    field(container, "任务对话", conversation);
     const pr = context.safeExternal(task.pr?.url ?? null);
     if (pr) field(container, "子 PR", link("查看 PR", pr));
     if (task.requirements_path) field(container, "任务要求", link("查看 Markdown", `api/document/task-${encodeURIComponent(task.id)}`));
@@ -189,18 +201,16 @@ export function createDetailContent(context: DetailContentContext) {
       const url = context.safeExternal(follow.pr.url);
       field(container, "Follow PR", url ? link(context.labels[follow.state] ?? follow.state, url) : context.labels[follow.state] ?? follow.state);
     }
+    restore();
   };
 
   const showGroup = (group: Group): void => {
     const data = context.getData();
     if (!data) return;
-    const container = clearDetails();
-    container.replaceChildren();
-    container.className = "";
     const tasks = data.tasks.filter((task) => task.group_id === group.id);
     const historicalTaskIds = [...new Set(data.actual_intervals.filter((row) => row.group_id === group.id).map((row) => row.task_id))];
     const executionState = groupExecutionVisualState(group.state, group.coordination_execution?.state);
-    container.append(text("div", group.title, "detail-title"), text("div", context.labels[executionState] ?? executionState, "detail-state"));
+    const { container, restore } = begin("group", group.id, group.title, context.labels[executionState] ?? executionState);
     const groupAtoms = group.atoms ?? group.planned_atoms;
     field(container, "原子任务", atomList(groupAtoms, (index) => {
       const atom = groupAtoms![index]!;
@@ -226,6 +236,7 @@ export function createDetailContent(context: DetailContentContext) {
     const pr = context.safeExternal(group.parent_pr?.url ?? null);
     field(container, "父 PR", pr ? link("查看 PR", pr) : "尚未创建");
     if (group.requirements_path) field(container, "交付单元要求", link("查看 Markdown", `api/document/group-${encodeURIComponent(group.id)}`));
+    restore();
   };
 
   const taskPreview = (task: Task): HTMLElement => {

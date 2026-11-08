@@ -10,9 +10,18 @@
 
 - 领域术语定义在根目录 `GLOSSARY.md`。
 - 主 Agent 直接控制整个编排。交付单元是共享父分支和父 PR 路径的子任务虚拟整合单元；为兼容账本而保留的内部字段 `group_id` 只表达分类和验收范围，不表示原生会话父级或管理权转移。交付单元会话与任务会话仍是由主 Agent 直接管理的平级会话。交付协调 Agent 只承担获授权的协调职责，不是第二个主 Agent。
-- Skill 负责本地 Bun/TypeScript 命令接口、JSON 账本和账本投影的 loopback dashboard。共享 viewer 可以保存服务认证、使用租约和明确的全局 UI 主题偏好，但可通过认证 API 写入明确支持的执行配置，其他编排事实保持只读。
+- Skill 负责本地 Bun/TypeScript 命令接口、JSON 账本和账本投影的 loopback dashboard。共享 viewer 可以保存服务认证、使用租约和明确的全局 UI 主题偏好，但可通过认证 API 写入明确支持的执行配置及对话归档资源回执，其他编排事实保持只读。
 
 ## Requirements
+
+### 对话归档资格与操作
+
+- `integrated` 仅表示贡献 PR 合入，不使对话满足归档资格；归档资格要求任务为 `completed`、`closed` 或 disposition 为 `abandoned`、`superseded`，没有相关未决操作、未合并 follow PR、未确认通知，也没有其他未结束任务共用对话。主对话及交付协调对话不作为子任务归档。
+- 自动与手动归档共用资格规则，执行前在账本锁内重验；平台提交前必须确认对话 idle。资格失效时不提交归档，页面刷新资格并说明本次操作未完成的原因。不得为显示入口而修改任务状态。
+- 页面仅在账本资格满足且当前非 stale 的对话观察确认 idle 时显示“归档”；首次入口不依赖已有 conversation resource。明确失败且仍满足资格时显示“重试归档”，资格不满足时隐藏归档及重试入口，但已有失败状态说明保留。
+- 归档结果未知时保留“归档对账”，仅查询上次结果，不重复提交；已归档时保留“取消归档”，恢复失败或结果未知时分别显示恢复重试或对账。恢复和对账不受归档资格限制，仍验证真实任务绑定和对话资源身份。
+- 详情页将打开对话和当前可用归档操作集中在单一“任务对话”区域；正常状态不额外展示归档状态、说明、操作等重复 label，仅失败、结果未知或实际阻塞时附加简短提示。
+- 自动归档继续运行；人工取消归档后保持 `archive_policy=manual`，不再自动归档，满足资格时允许人工再次归档。自动与手动操作共用对话锁，防止重复提交；外部 source viewer 保持只读。
 
 ### REQ-ORCH-015
 
@@ -73,6 +82,7 @@
 - dashboard 必须根据真实任务 `started_at` 事实推导单调的 planning/implementation 展示阶段，保留三个权威视图，并在不改变用户当前上下文的情况下显示非阻塞过渡提示。
 - dashboard 必须通过 URL 参数（`tab`、`layout`、`q`、`group`、`state`、`kind`、`plan`、`selected`、`detail`、`plannedStart`、`plannedEnd`、`actualStart`、`actualEnd`）编码可分享的视图上下文，省略默认值，忽略无效 ID，且不得包含任务数据、凭据或服务 token。`layout=board` 是默认值并省略，`layout=grid` 可分享。图表缩放必须只保留在交互状态中，新生成 URL 不得序列化缩放；可以读取旧缩放参数。
 - dashboard 必须在页头展示当前计划版本。版本选择必须使用原生 hyperlink 以保留浏览器新窗口行为；选择非默认版本时 URL 写入 `plan=<id>`，当前/默认版本则省略 `plan`。
+- 任务与交付单元详情必须限定在当前可用视口内并随窗口高度调整；桌面保留详情列，中屏保留图表全宽布局，窄屏保留浮层或底部抽屉。打开、关闭和切换详情不得主动移动背景页面；当前页面已滚动时，详情标题和首项内容仍须立即可见。标题、状态与关闭按钮固定在正文滚动区外，字段、输出与链接共用一个纵向滚动区，边界滚动不得传递至背景。切换对象时正文回到顶部；同一对象刷新或窗口变化时保留阅读位置，超出有效范围时收敛。
 - dashboard 必须提示数据过期或断开，刷新时保留上一次有效快照和当前视图上下文，并在桌面与移动端提供可访问的响应式详情界面。
 - dashboard 必须采用清晰的 developer control-plane 层次：技术范围栏、明确的 planning/implementation 阶段轨迹、分隔的状态摘要、带下划线的 view tabs、紧凑筛选控件、带边框的时间线/图表表面和结构化 inspector。视觉系统采用 data-terminal 方向：选择使用单条强调线，数字使用技术等宽字体，色彩只用于数据和状态标记而非 chrome；浅色和深色主题共享层次，并排除渐变、玻璃、装饰 orb 和营销式 hero。详情表面必须遵循 `docs/design/multi-task-flow/web-template.md` 的宽度矩阵：宽屏可以使用右侧 inspector，中屏必须让图表在任务区和 inspector 上方占满宽度，窄屏使用响应式底部 drawer。中屏的 grid task card 与 board group column 必须共享 243–360px 的外宽，嵌套 board task card 自然扣除 group padding 和 border，显示/隐藏详情不得改变宽度。Inspector 最小/最大宽度必须固定为 243px/740px，取自 task card 设计限制而不是当前卡片宽度；任务区应在保留 inspector 最小宽度的前提下尽量显示完整列，剩余空间交给 inspector。布局控件必须与首个可见 section heading 对齐，并提供 hover/keyboard-focus 提示。
 
@@ -123,6 +133,7 @@
 - runtime 的 owned-surface 比较是词法的、仓库相对的，不得声称解析 host 文件系统的大小写折叠或 symlink alias；当 host 等价 alias 重要时，批准边界必须提供 canonical repository-relative path。
 - 初始 group/task runtime identity 字段必须为空：初始化前不得预置绑定会话、branch、PR、SHA、时间戳、blocker、requirements path 或 assignment history。
 - dashboard launcher 必须在绑定 listener 前原子校验并 claim 当前预分配租约；遇到已有 PID 或已监听的重复实例必须拒绝，不能视为转移授权；绑定 listener 时持有 registry lock，仅在 listener 确认后记录自身 PID，运行中 heartbeat 该服务租约，关闭时只释放该服务租约。Heartbeat 和 release 必须以检查到的 port 与预期 PID 状态为护栏，避免旧进程修改被替换的租约。Registry 必须区分被记录的 PID 与 expected owner PID：首次绑定可以要求 PID 为空，已有 PID 必须匹配 expected owner guard。
+- 共享 viewer 的注册表心跳仅对明确的 `REGISTRY_LOCK_TIMEOUT` 允许有限重试：前两次连续失败保持监听，第三次关闭；成功后清零。所有权不符及其他未知错误立即关闭，不得以重试绕过 PID/port 护栏。关闭日志必须区分实际 `SIGTERM`、`SIGINT`、租约到期、租约状态读取失败、注册表心跳失败、启动失败和显式请求，并分别记录关闭开始与完成时间；只记录固定错误码，不记录异常消息或凭据。诊断日志写入失败不得触发业务关闭。发布资源与新增回归必须登记在 toolkit 资源清单，并同步安装摘要，避免源码修复未进入可校验的分发包。
 - 明确安装的共享 viewer 必须使用用户级系统服务所有权和 PID 绑定的活动端口租约。临时主人预览必须使用 Codex host 提供的 native background session；Skill 只能接受 host 提供的 session identifier，不得创建、推断或替代为可见终端或前台 exec session。没有受支持的 host background route 时，URL 只能作为 live preview，handoff 必须阻塞。
 
 ### REQ-ORCH-013
@@ -235,6 +246,16 @@
 
 ## Visual Evidence
 
+### 详情视口与独立滚动
+
+桌面详情从顶部统计栏下方的工作区开始，随页面滚动贴住视口；标题与关闭按钮保持可见，正文独立滚动且滚动条贴近面板边缘。中屏沿用完整图表与详情列，手机沿用底部抽屉。以下均为无登录、无真实后端的合成预览。
+
+![桌面详情与统计栏间距](assets/detail-viewport-desktop.png)
+
+![中屏详情独立滚动](assets/detail-viewport-medium.png)
+
+![手机详情抽屉](assets/detail-viewport-mobile.png)
+
 ### 执行配置
 
 执行配置使用与现有主题一致的下拉菜单和离散滑杆；滑杆仅显示当前强度。详情只编辑当前任务或交付单元，全局默认配置使用页头独立入口，保存按钮右对齐。选中对象后直接以对象名称作为详情标题，不显示空态引导文案。
@@ -326,3 +347,9 @@
 认证 run dashboard 提供只读 `GET api/resource-details?kind=task|group&id=<id>&refresh=1`，只解析该 run 中对象已绑定的 GitHub PR，拒绝任意目标参数，其他托管平台明确报告不支持。服务通过参数数组执行 `gh pr view` 获取编号、标题、链接、合并与冲突状态、CI 汇总和逐项结果，编号和链接可复制。CI 不将未知视为成功。缓存30秒，同 PR 查询合并，强制刷新至少间隔2秒，命令超时10秒；先显示已有缓存，过期查询和失败保留旧数据并标注状态。关闭浮层停止前端刷新，不改变 PR 或检查状态。
 
 时间浮层宽度上限288px且不超出视口，标签列60px、列间距12px，避免通用资源浮层宽度造成中间空白。计时使用首次实际开始至当前或实际结束的经过时间，包含等待、阻塞和暂停。交付单元只使用自身 `group_execution_updated` 开始及 `group_updated` 收口事实，缺失时不从贡献任务推断。排期取计划节点区间，非正或缺失排期不计算比例；用时占比与超出比例取整数。绝对时间采用浏览器时区，含日期和秒，不显示时区名称。所有新增字段均为可选读取投影，旧账本无需迁移。
+
+### 紧凑对话操作
+
+任务对话区域将打开对话与符合资格的归档操作并排显示；其他状态沿用同一区域，仅异常时补充提示。
+
+![任务对话与归档操作](assets/archive-compact.png)

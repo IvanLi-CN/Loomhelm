@@ -12,7 +12,7 @@
 
 服务端、Go 客户端、TypeScript 客户端和 Web/PWA 属于同一产品发布单元，共用人工 target、canonical version 和最终 source SHA，保留不同产物 digest。Go 客户端现有 connector 源码标识保留，不形成第四个产品端，也不是废弃或迁移依据。
 
-采用受保护、签名且追加的 release-ledger Git 分支，以精确 ref CAS 完成 reservation 和状态推进。产品一次只允许一个未结束身份。正常 PR 保护 main；版本准备 PR 固定源码边界，最终绑定精确合并身份，不能在重试时替换源码或重新分配版本。
+采用受保护、签名且追加的 release-ledger Git 分支，以精确 ref CAS 完成 reservation 和状态推进。产品一次只允许一个未结束身份。正常 PR 保护 main；最终绑定精确合并身份，不能在已绑定后的重试中替换源码或重新分配版本。准备阶段的源码及版本复用边界由 [ADR 0024](0024-release-intent-before-main-binding.md) 接续：版本未落 main 时允许经实际意图核验追加准备修订，不能因 main 正常推进自动作废版本。
 
 GitHub draft Release 持久保存冻结产物。全部下载复核完成后才公开，并追加 completion；只有公开状态、完整 digest 和 completion 一致时才作为正式 baseline。公开成功但回执写入失败，恢复通过查询原身份补记。生产部署独立消费冻结产物，不参与版本分配。
 

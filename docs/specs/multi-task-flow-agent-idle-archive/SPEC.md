@@ -38,7 +38,7 @@
 
 ### REQ-ARCHIVE-001
 
-子任务进入明确终态后，系统 SHOULD 及时发起绑定对话归档；归档前 MUST 确认不存在未解决操作、通知或其他在途事实。
+子任务进入明确终态后，系统 SHOULD 及时发起绑定对话归档。归档资格 MUST 要求任务为 `completed`、`closed` 或 disposition 为 `abandoned`、`superseded`；`integrated` 本身不满足资格。归档前 MUST 确认没有相关未解决操作、未合并 follow PR、未确认通知或其他未结束任务共用对话，且不是主对话或交付协调对话；执行前在账本锁内重验资格，并确认平台对话 idle。
 
 ### REQ-ARCHIVE-002
 
@@ -50,15 +50,15 @@
 
 ### REQ-ARCHIVE-004
 
-dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；对话入口 MUST 保留聊天气泡，并叠加可区分归档失败、未知、成功的状态标记；浮层和详情显示问题、最近尝试和可用证据。
+dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；卡片对话入口 MUST 保留聊天气泡，并叠加可区分归档失败、未知、成功的状态标记。详情 MUST 将打开对话与当前可用操作集中在单一“任务对话”区域；正常状态不增加重复的归档状态、说明或操作 label，仅异常时显示简短提示。最近尝试和证据继续保留在资源事实及卡片浮层中。
 
 ### REQ-ARCHIVE-005
 
-任务详情 MUST 提供“重新归档”操作。该操作只重试归档或执行归档对账，不得自动发送任务消息、重试任务执行或改变任务业务状态。
+任务详情和卡片浮层 MUST 仅在归档资格满足且匹配当前对话的非 stale 观察确认 idle 时显示“归档”或“重试归档”；首次归档不要求已有 conversation resource。资格不满足时 MUST 隐藏归档与重试入口。未知结果 MUST 保留“归档对账”，只查询上次结果而不重复提交。恢复和对账不受归档资格限制，仍 MUST 验证真实绑定与资源身份；操作不得发送任务消息、重试任务执行或改变任务业务状态。
 
 ### REQ-ARCHIVE-006
 
-归档状态入口 MUST 支持悬浮、键盘聚焦、点击和触屏长按打开项目 UI 浮层，说明当前状态，并提供带图标和文字的“重新归档”“归档对账”或“取消归档”按钮。所有控件提示 MUST 使用项目 Tooltip，不使用浏览器原生 title。
+归档状态入口 MUST 支持悬浮、键盘聚焦、点击和触屏长按打开项目 UI 浮层，说明当前状态，并提供带图标和文字的“归档”“重试归档”“归档对账”或“取消归档”按钮。所有控件提示 MUST 使用项目 Tooltip，不使用浏览器原生 title。
 
 ### REQ-ARCHIVE-007
 
@@ -72,7 +72,7 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 
 - Agent turn 明确结束且任务没有活跃 turn 时，dashboard 显示 `agent_idle`，任务 state 为 agent_idle，保留恢复状态和依赖事实。
 - Agent 连接或观察未知时，dashboard 显示独立资源异常，不显示 `agent_idle`。
-- 子任务完成后自动发起归档；明确失败和未知均可在详情中看到并通过“重新归档”恢复。
+- 子任务完成后自动发起归档；明确失败和未知均可在详情中看到并通过符合资格的重试或未知结果对账恢复。
 - 归档异常不会把已完成任务改回运行中，也不会触发重复任务执行。
 
 ## Verification
@@ -93,7 +93,7 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 
 - covers: `REQ-ARCHIVE-004`, `REQ-ARCHIVE-006`
 - Method: UI tooltip/conversation-control 测试及隔离 `preview:idle-archive` 浏览器交互。
-- Pass condition: 聊天气泡角标、原因、时间、操作按钮正确，原生 title 数量为零，归档与取消归档均只更新资源。
+- Pass condition: 聊天气泡角标和浮层诊断正确；详情仅单一任务对话区域，不满足资格时隐藏归档及重试按钮；异常保留短提示，恢复与对账独立可用；原生 title 数量为零，归档与取消归档均只更新资源。
 
 ## Visual Evidence
 
@@ -113,6 +113,10 @@ dashboard 的任务卡片和任务详情 MUST 显示对话资源归档异常；�
 - [主干集成后的手动恢复](assets/integrated-conversation-restored.jpg)
 
 ![空闲任务的 runtime turn 诊断](assets/idle-runtime-turn.jpg)
+
+主人已确认紧凑任务对话布局；首次归档按钮与打开对话并排显示，其他状态复用同一区域。
+
+![紧凑任务对话与归档操作](../../../skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/archive-compact.png)
 
 ## Related ADRs
 

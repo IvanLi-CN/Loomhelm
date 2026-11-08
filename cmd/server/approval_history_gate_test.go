@@ -19,7 +19,7 @@ import (
 func TestServerAndWorkerEntrypointsFailClosedBeforeApprovalHistoryCutover(t *testing.T) {
 	databaseURL := isolatedEntrypointDatabase(t)
 	serverBinary := buildServerEntrypoint(t)
-	workerBinary := buildEntrypoint(t, "./cmd/worker", "worker")
+	workerBinary := workerEntrypoint.Path(t)
 	serverLogPath := t.TempDir() + "/server.log"
 	workerLogPath := t.TempDir() + "/worker.log"
 	serverLog, err := os.Create(serverLogPath)

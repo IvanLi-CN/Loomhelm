@@ -35,6 +35,7 @@ export type Task = {
   latest_output?: string | null;
   latest_agent_output?: AgentOutput;
   agent_resume_state?: "starting" | "running";
+  conversation_archive?: { eligible: boolean; reason: string | null };
   conversation_resource?: {
     id: string;
     kind: "conversation";

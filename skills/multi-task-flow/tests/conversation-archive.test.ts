@@ -152,3 +152,37 @@ for (const claimed of [false, true]) {
     } finally { f.cleanup(); }
   });
 }
+
+test("integrated tasks stay ineligible in the view and manual archive path", async () => {
+  const f = fixture();
+  try {
+    const { buildView } = await import("../scripts/view");
+    f.store.update(raw => { raw.tasks.find((t: any) => t.id === f.task.id).state = "integrated"; });
+    expect(buildView(f.store.read()).tasks.find(t => t.id === f.task.id)?.conversation_archive.eligible).toBe(false);
+    await expect(retryConversationArchive(f.store, f.task.id, success)).rejects.toMatchObject({ code: "TASK_NOT_TERMINAL" });
+  } finally { f.cleanup(); }
+});
+
+test("eligible terminal task projects first archive without a conversation resource", async () => {
+  const f = fixture();
+  try {
+    const { buildView } = await import("../scripts/view");
+    const task = buildView(f.store.read()).tasks.find(t => t.id === f.task.id)!;
+    expect(task.conversation_resource).toBeNull();
+    expect(task.conversation_archive).toEqual({ eligible: true, reason: null });
+  } finally { f.cleanup(); }
+});
+
+test("reconciliation and restoration survive lost archive eligibility", async () => {
+  const f = fixture();
+  try {
+    let sends = 0;
+    await retryConversationArchive(f.store, f.task.id, { ...success, archive: async () => ({ outcome: "unknown", evidence_ref: "fixture:lost" }) });
+    f.store.update(raw => { raw.tasks.find((t: any) => t.id === f.task.id).state = "running"; });
+    const api: ArchiveProvider = { ...success, archive: async () => { throw Error("must not resend"); }, unarchive: async () => { sends++; return { outcome: "succeeded", evidence_ref: "fixture:restored" }; }, isUnarchived: async () => true };
+    expect((await retryConversationArchive(f.store, f.task.id, api)).status).toBe("closed");
+    expect((await retryConversationUnarchive(f.store, f.task.id, api)).status).toBe("active");
+    expect(sends).toBe(1);
+    expect(f.store.read().tasks.find((t: any) => t.id === f.task.id).state).toBe("running");
+  } finally { f.cleanup(); }
+});
