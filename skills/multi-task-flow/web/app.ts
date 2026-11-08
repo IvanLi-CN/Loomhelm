@@ -14,7 +14,7 @@ import { createDetailContent } from "./details-content";
 import { deriveConnectionStatus, type Task, type View, type ViewResponse, type Theme } from "./model";
 import { defaultTabForPhase, derivePhase, type DisplayPhase } from "./phase";
 import { DETAILS_PANEL_BREAKPOINT, detailsPanelFits, isDetailInteraction, resolveDetailSurface, selectedObjectFocusSelector } from "./interaction-policy";
-import { applyDetailSurface } from "./detail-surface";
+import { applyDetailSurface, installDetailViewport } from "./detail-surface";
 import { firstVisibleElement, focusAfterRerender } from "./focus";
 import { installViewStateNavigation } from "./navigation";
 import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-preview";
@@ -28,6 +28,7 @@ createIcons({ icons: ICONS });
 moment.defineLocale("zh-task", { parentLocale: "en", months: "一月_二月_三月_四月_五月_六月_七月_八月_九月_十月_十一月_十二月".split("_"), monthsShort: "1月_2月_3月_4月_5月_6月_7月_8月_9月_10月_11月_12月".split("_"), weekdays: "星期日_星期一_星期二_星期三_星期四_星期五_星期六".split("_"), weekdaysShort: "周日_周一_周二_周三_周四_周五_周六".split("_"), weekdaysMin: "日_一_二_三_四_五_六".split("_") });
 moment.locale("zh-task");
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+installDetailViewport($("details"));
 const palette = ["#1b6c80", "#2f70bb", "#a86f0c", "#6f7880", "#1e7b4f", "#8a6470"];
 const labels = STATE_LABELS;
 const statusColors: Record<string, string> = { agent_idle: "#a86f0c", planned: "#8a9295", ready: "#2f70bb", starting: "#2f70bb", running: "#2f70bb", waiting: "#a86f0c", blocked: "#c4242a", integrated: "#1e7b4f", completed: "#1e7b4f", closed: "#71797d", merged: "#1e7b4f" };
@@ -73,7 +74,6 @@ let phaseTransition = false;
 let hydrated = false;
 let userChangedTab = hasValidTabParam(window.location.search);
 let lastFocus: HTMLElement | null = null;
-let lastScrollTop: number | null = null;
 let focusDetailsOnNextRender = false;
 let keyboardSelection = false;
 let hoverBridge: HoverPreviewBridge | null = null;
@@ -352,11 +352,6 @@ function restoreClosedDetails(): void {
   const selection = selectedTask ? { kind: "task" as const, id: selectedTask } : selectedGroup ? { kind: "group" as const, id: selectedGroup } : null;
   const fallback = selectedObjectFocusSelector(selection);
   focusAfterRerender(lastFocus, (fallback ? firstVisibleElement(document, fallback) : null) ?? $("search"));
-  if (lastScrollTop !== null) {
-    const scrollTop = lastScrollTop;
-    window.requestAnimationFrame(() => window.scrollTo({ top: scrollTop, left: window.scrollX, behavior: "auto" }));
-    lastScrollTop = null;
-  }
 }
 function closeDetails(): void { hideHoverPreview(); keyboardSelection = false; viewState = { ...viewState, detail: false }; syncUrl(); updateDetailsSurface(false); syncStableGridCardWidth(); restoreClosedDetails(); }
 function trapDetailsFocus(event: KeyboardEvent): void {
@@ -372,7 +367,7 @@ function trapDetailsFocus(event: KeyboardEvent): void {
 function refreshResponsiveDetails(): void {
   hideHoverPreview();
   if (!data) return;
-  const surface = updateDetailsSurface(viewState.detail, viewState.detail);
+  const surface = updateDetailsSurface(viewState.detail);
   if (surface === "hover-preview" && viewState.detail) {
     const selection = selectedTask ? { kind: "task" as const, id: selectedTask } : selectedGroup ? { kind: "group" as const, id: selectedGroup } : null;
     const selector = selectedObjectFocusSelector(selection);
@@ -382,8 +377,8 @@ function refreshResponsiveDetails(): void {
   }
 }
 function restoreSelectedFocus(selection: { kind: "task" | "group"; id: string }): void { const selector = selectedObjectFocusSelector(selection); focusAfterRerender(lastFocus, selector ? firstVisibleElement(document, selector) : null); }
-function selectGroup(id: string): void { if (!data) return; if (selectedGroup === id && viewState.detail) { closeDetails(); return; } const group = data.groups.find((item) => item.id === id); if (!group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedGroup = id; selectedTask = null; viewState = { ...viewState, selected: { kind: "group", id }, detail: true }; syncUrl(); showGroup(group); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "group", id }); showCurrentSelectionPreview(); }
-function selectTask(id: string): void { if (!data) return; if (selectedTask === id && viewState.detail) { closeDetails(); return; } const task = data.tasks.find((item) => item.id === id); if (!task) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedTask = id; selectedGroup = null; viewState = { ...viewState, selected: { kind: "task", id }, detail: true }; syncUrl(); showTask(task); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "task", id }); showCurrentSelectionPreview(); }
+function selectGroup(id: string): void { if (!data) return; if (selectedGroup === id && viewState.detail) { closeDetails(); return; } const group = data.groups.find((item) => item.id === id); if (!group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; selectedGroup = id; selectedTask = null; viewState = { ...viewState, selected: { kind: "group", id }, detail: true }; syncUrl(); showGroup(group); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "group", id }); showCurrentSelectionPreview(); }
+function selectTask(id: string): void { if (!data) return; if (selectedTask === id && viewState.detail) { closeDetails(); return; } const task = data.tasks.find((item) => item.id === id); if (!task) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; selectedTask = id; selectedGroup = null; viewState = { ...viewState, selected: { kind: "task", id }, detail: true }; syncUrl(); showTask(task); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "task", id }); showCurrentSelectionPreview(); }
 function applyStateToControls(): void { $<HTMLInputElement>("search").value = viewState.query; setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); }
 type ListFocus = { kind: "task" | "group"; id: string; href: string | null } | null;
 function captureListFocus(): ListFocus {
@@ -402,7 +397,7 @@ function restoreListFocus(focus: ListFocus): void {
     ?? (container ? container.querySelector<HTMLElement>("button") : null)
     ?? firstVisibleElement(document, ".task-card-select, .task-column-select")
     ?? $("search");
-  target.focus();
+  target.focus({ preventScroll: true });
 }
 type MenuFocus = { id: MenuId; value: string } | null;
 function captureMenuFocus(): MenuFocus {

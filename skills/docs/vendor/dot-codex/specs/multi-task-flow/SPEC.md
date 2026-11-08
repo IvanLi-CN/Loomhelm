@@ -73,6 +73,7 @@
 - dashboard 必须根据真实任务 `started_at` 事实推导单调的 planning/implementation 展示阶段，保留三个权威视图，并在不改变用户当前上下文的情况下显示非阻塞过渡提示。
 - dashboard 必须通过 URL 参数（`tab`、`layout`、`q`、`group`、`state`、`kind`、`plan`、`selected`、`detail`、`plannedStart`、`plannedEnd`、`actualStart`、`actualEnd`）编码可分享的视图上下文，省略默认值，忽略无效 ID，且不得包含任务数据、凭据或服务 token。`layout=board` 是默认值并省略，`layout=grid` 可分享。图表缩放必须只保留在交互状态中，新生成 URL 不得序列化缩放；可以读取旧缩放参数。
 - dashboard 必须在页头展示当前计划版本。版本选择必须使用原生 hyperlink 以保留浏览器新窗口行为；选择非默认版本时 URL 写入 `plan=<id>`，当前/默认版本则省略 `plan`。
+- 任务与交付单元详情必须限定在当前可用视口内并随窗口高度调整；桌面保留详情列，中屏保留图表全宽布局，窄屏保留浮层或底部抽屉。打开、关闭和切换详情不得主动移动背景页面；当前页面已滚动时，详情标题和首项内容仍须立即可见。标题、状态与关闭按钮固定在正文滚动区外，字段、输出与链接共用一个纵向滚动区，边界滚动不得传递至背景。切换对象时正文回到顶部；同一对象刷新或窗口变化时保留阅读位置，超出有效范围时收敛。
 - dashboard 必须提示数据过期或断开，刷新时保留上一次有效快照和当前视图上下文，并在桌面与移动端提供可访问的响应式详情界面。
 - dashboard 必须采用清晰的 developer control-plane 层次：技术范围栏、明确的 planning/implementation 阶段轨迹、分隔的状态摘要、带下划线的 view tabs、紧凑筛选控件、带边框的时间线/图表表面和结构化 inspector。视觉系统采用 data-terminal 方向：选择使用单条强调线，数字使用技术等宽字体，色彩只用于数据和状态标记而非 chrome；浅色和深色主题共享层次，并排除渐变、玻璃、装饰 orb 和营销式 hero。详情表面必须遵循 `docs/design/multi-task-flow/web-template.md` 的宽度矩阵：宽屏可以使用右侧 inspector，中屏必须让图表在任务区和 inspector 上方占满宽度，窄屏使用响应式底部 drawer。中屏的 grid task card 与 board group column 必须共享 243–360px 的外宽，嵌套 board task card 自然扣除 group padding 和 border，显示/隐藏详情不得改变宽度。Inspector 最小/最大宽度必须固定为 243px/740px，取自 task card 设计限制而不是当前卡片宽度；任务区应在保留 inspector 最小宽度的前提下尽量显示完整列，剩余空间交给 inspector。布局控件必须与首个可见 section heading 对齐，并提供 hover/keyboard-focus 提示。
 
@@ -228,6 +229,16 @@
 - 通过条件：历史只读合同升级不改文件；新增写入降级需准确报告确认；不可读和过期确认在停服前拒绝；合同与 profile 维护独立授权、保留 owner、完整备份、幂等恢复；claimed/unknown 操作和并发变化拒绝，真实服务健康失败恢复原构建与租约，迁移后不兼容回滚拒绝。
 
 ## Visual Evidence
+
+### 详情视口与独立滚动
+
+桌面详情从顶部统计栏下方的工作区开始，随页面滚动贴住视口；标题与关闭按钮保持可见，正文独立滚动且滚动条贴近面板边缘。中屏沿用完整图表与详情列，手机沿用底部抽屉。以下均为无登录、无真实后端的合成预览。
+
+![桌面详情与统计栏间距](assets/detail-viewport-desktop.png)
+
+![中屏详情独立滚动](assets/detail-viewport-medium.png)
+
+![手机详情抽屉](assets/detail-viewport-mobile.png)
 
 ### 执行配置
 
