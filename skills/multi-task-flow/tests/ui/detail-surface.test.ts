@@ -11,7 +11,7 @@ beforeEach(() => {
     <header id="app-header"><button>主题</button></header>
     <section class="workspace">
       <main id="background-content"></main>
-      <aside id="details" aria-hidden="true"><div id="details-content">已选详情</div></aside>
+      <div class="details-slot" hidden><aside id="details" aria-hidden="true"><div id="details-content">已选详情</div></aside></div>
       <div id="details-backdrop" hidden></div>
     </section>
     <div id="hover-preview" hidden></div>
@@ -34,6 +34,7 @@ describe("dashboard detail surface DOM", () => {
 
     expect(surface).toBe("none");
     expect(elements.details.hidden).toBe(true);
+    expect(elements.details.closest<HTMLElement>(".details-slot")?.hidden).toBe(true);
     expect(elements.workspace.classList.contains("has-details")).toBe(false);
     expect(canShowHoverPreview({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe(true);
   });
@@ -44,6 +45,7 @@ describe("dashboard detail surface DOM", () => {
 
     expect(surface).toBe("desktop-inspector");
     expect(elements.details.hidden).toBe(false);
+    expect(elements.details.closest<HTMLElement>(".details-slot")?.hidden).toBe(false);
     expect(elements.workspace.classList.contains("has-details")).toBe(true);
   });
 
