@@ -55,6 +55,8 @@ Record the run identity in the conversation. Formal data lives only at `~/.local
 
 Use `dispatch-group-claim` or `dispatch-claim`, then invoke `conversation-create` through this Skill’s CLI. The command binds the native request identity, creates and initializes the conversation through app-server, and resolves its real thread ID with the captured execution profile. An initial group/task thread ID is invalid, and an unknown result retains its claim and capacity; reconcile using actual native evidence before retrying, and ask the owner if the result cannot be established. Do not invent a thread ID or duplicate a creation. `task-update` records actual execution, waiting, blockers, and completion; `atom-update` records atoms sequentially. Ordinary blockers stay in the responsible conversation and ledger. Record key progress as a pending notification and deliver or acknowledge it using the permitted native communication tools; sent and acknowledged are distinct.
 
+An active delivery unit cannot be recorded as idle while it still has a ready, unbound contribution task; record running, waiting with task references, or blocked with a reason, then dispatch or reconcile the task.
+
 ## 执行配置与 CLI 创建
 
 运行只有一个完整的 `config.execution_profile = { model, thinking }`。交付单元和任务独立覆盖；未覆盖时各自使用运行默认值。新对象按 `kind-v1` 推荐表物化配置，手动修改后保持原值；`execution-profile-recommend` 只在主人显式要求重新推荐时执行。创建后的对话内调整属于会话运行时，不回写账本，也不主动重设。
