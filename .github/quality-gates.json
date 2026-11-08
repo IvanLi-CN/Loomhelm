@@ -22,8 +22,7 @@
     "TypeScript Client (Node 24)",
     "Product Release Contract",
     "Product Package (ubuntu-24.04)",
-    "Product Package (macos-15)",
-    "Skills Native macOS"
+    "Product Package (macos-15)"
   ],
   "informational_checks": [
     "Candidate Reproducibility"
