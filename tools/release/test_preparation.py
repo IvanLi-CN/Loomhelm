@@ -106,6 +106,23 @@ class PreparationTests(unittest.TestCase):
             del self.record[field]
         self.ledger.append.assert_not_called()
 
+    def test_malformed_assessment_fails_before_provider_or_ledger_writes(self):
+        for value in (None,[], 'within-intent',42):
+            self.assessment=value
+            with self.subTest(value=value),self.assertRaisesRegex(ReleaseError,'must be an object'):self.apply()
+        self.api.graphql.assert_not_called()
+        self.api.api.assert_not_called()
+        self.ledger.append.assert_not_called()
+
+    def test_non_main_merged_pr_does_not_fix_the_product_version(self):
+        provider=self.provider
+        pulls=[dict(merged_at='now',state='closed',base={'ref':'develop'},head={'sha':self.head}),*provider('pulls?')]
+        self.api.api.side_effect=lambda path,*a,**kw:pulls if path.startswith('pulls?') else provider(path,*a,**kw)
+        self.apply()
+        self.assertEqual(self.record['version'],'0.1.0')
+        self.assertEqual(current_preparation(self.record)['source_sha'],self.source)
+        self.ledger.append.assert_called_once()
+
     def test_version_previously_fixed_on_main_cannot_be_reused_even_if_version_later_changes(self):
         self.run_git('checkout','--detach',self.source)
         self.project();self.commit('fixture version landed on main')
