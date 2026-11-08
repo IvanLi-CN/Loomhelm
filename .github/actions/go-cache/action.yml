@@ -71,9 +71,9 @@ runs:
             with open(os.environ["GITHUB_OUTPUT"], "a") as output:
                 output.write(f"{name.lower()}={str(0 < size <= limit).lower()}\n")
         PYTHON
-    - name: Save dependency cache from repository writer
+    - name: Save dependency cache from candidate producer
       if: >-
-        inputs.operation == 'save' && inputs.purpose == 'repository' && success() &&
+        inputs.operation == 'save' && inputs.purpose == 'candidate' && success() &&
         steps.sizes.outputs.module == 'true' &&
         (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))

@@ -56,6 +56,19 @@ class CandidateWorkflowTests(unittest.TestCase):
         repository = self.workflow.split('  repository-verification:\n', 1)[1].split('  typescript-client-bun:', 1)[0]
         self.assertNotIn('candidate-producer', repository)
 
+    def test_repository_work_is_isolated_and_gated(self):
+        source = self.workflow.split('  repository-verification:\n', 1)[1].split('  repository-contracts:', 1)[0]
+        contracts = self.workflow.split('  repository-contracts:\n', 1)[1].split('  typescript-client-bun:', 1)[0]
+        self.assertIn('needs: quality-gates\n', source)
+        self.assertIn('needs: quality-gates\n', contracts)
+        self.assertIn('scripts/checks source', source)
+        self.assertNotIn('scripts/checks source', contracts)
+        for group in ('generated', 'database', 'web'):
+            self.assertNotIn('scripts/checks ' + group, source)
+            self.assertIn('scripts/checks ' + group, contracts)
+        self.assertNotIn('operation: save', contracts)
+        self.assertIn('repository-contracts', self.needs)
+
     def test_single_writers_and_bounds(self):
         chunks = re.split(r'^  ([a-z][a-z-]+):\n', self.workflow, flags=re.M)
         writers = [chunks[i] for i in range(1, len(chunks), 2) if 'operation: save' in chunks[i+1]]
@@ -65,7 +78,7 @@ class CandidateWorkflowTests(unittest.TestCase):
         self.assertIn('500 * 1024**2', action)
         self.assertIn('1024**3', action)
         self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', action)
-        self.assertIn("inputs.purpose == 'repository'", action)
+        self.assertIn("inputs.purpose == 'candidate'", action)
         self.assertIn('continue-on-error: true', action)
 
 
