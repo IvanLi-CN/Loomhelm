@@ -1,4 +1,4 @@
-import { hasArchiveAction, hasConversationControl, archivePresentation, renderArchiveAction, type ArchiveAction } from "./conversation-control";
+import { hasArchiveAction, archivePresentation, renderArchiveAction, type ArchiveAction } from "./conversation-control";
 import { initialOutput, paintOutput } from "./agent-output";
 import { createProfileEditor, type ProfileEditorContext } from "./profile-editor";
 import { conversationUrl } from "./links";
@@ -172,16 +172,17 @@ export function createDetailContent(context: DetailContentContext) {
       if (observed?.observed_at) field(container, "运行时观察时间", renderTimestamp(observed.observed_at));
       if (observed?.runtime_turn_id) field(container, "观察 Turn", observed.runtime_turn_id);
     }
+    const conversation = text("div", "", "detail-conversation");
+    const conversationActions = text("div", "", "detail-conversation-actions");
+    conversationActions.append(task.thread_id ? link("打开对话", conversationUrl(task.thread_id)) : text("span", "尚未创建"));
+    if (hasArchiveAction(task)) conversationActions.append(renderArchiveAction(task, context.archiveConversation, data.profile_read_only === true));
+    conversation.append(conversationActions);
     const archive = task.conversation_resource;
-    if (hasConversationControl(task)) {
+    if (archive?.error || archive?.status.endsWith("failed") || archive?.status.endsWith("unknown")) {
       const presentation = archivePresentation(task);
-      field(container, "对话归档", presentation.label);
-      field(container, archive?.status.endsWith("failed") || archive?.status.endsWith("unknown") ? "对话归档问题" : "归档说明", presentation.description);
-      if (archive?.last_attempt_at) field(container, "最近归档尝试", renderTimestamp(archive.last_attempt_at));
-      if (archive?.evidence_ref) field(container, "归档证据", archive.evidence_ref);
-      if (hasArchiveAction(task)) field(container, "归档操作", renderArchiveAction(task, context.archiveConversation, data.profile_read_only === true));
+      conversation.append(text("p", `${presentation.label}：${presentation.description}`, "detail-conversation-notice"));
     }
-    field(container, "任务对话", task.thread_id ? link("打开对话", conversationUrl(task.thread_id)) : "尚未创建");
+    field(container, "任务对话", conversation);
     const pr = context.safeExternal(task.pr?.url ?? null);
     if (pr) field(container, "子 PR", link("查看 PR", pr));
     if (task.requirements_path) field(container, "任务要求", link("查看 Markdown", `api/document/task-${encodeURIComponent(task.id)}`));
